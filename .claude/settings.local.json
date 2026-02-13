@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run mypy:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(gh repo view:*)",
+      "Bash(git -C /Users/jfreeman/Coding/mcp-message remote:*)",
+      "Bash(pdflatex:*)",
+      "Bash(fuzz:*)",
+      "mcp__plugin_github_github__create_repository",
+      "Bash(git clone:*)",
+      "Bash(chmod:*)",
+      "Bash(bash:*)",
+      "Bash(git commit:*)",
+      "Bash(git add:*)",
+      "Bash(pdfinfo:*)",
+      "Bash(gh repo rename:*)",
+      "Bash(git -C /Users/jfreeman/Coding/working-backwards remote set-url:*)",
+      "Bash(git -C /Users/jfreeman/Coding/working-backwards remote -v)",
+      "Bash(ln:*)",
+      "Bash(git -C /Users/jfreeman/Coding/working-backwards status)",
+      "Bash(git -C /Users/jfreeman/Coding/working-backwards log --oneline -5)",
+      "Bash(git -C /Users/jfreeman/Coding/working-backwards log --oneline)",
+      "Bash(git -C /Users/jfreeman/Coding/working-backwards push)",
+      "Bash(git -C /Users/jfreeman/Coding/prfaq status)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:entire.io)",
+      "Bash(mdls:*)",
+      "Bash(open:*)",
+      "Bash(git -C /Users/jfreeman/Coding/mcp-message add .gitignore prfaq.tex .claude/)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "claude-flow"
+  ],
+  "disabledMcpjsonServers": []
+}

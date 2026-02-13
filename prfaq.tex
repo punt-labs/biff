@@ -1,0 +1,743 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ── Geometry ──────────────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+
+% ── Pagination ────────────────────────────────────────────────────────────────
+\widowpenalty=10000          % No widow lines (last line alone at page top)
+\clubpenalty=10000           % No orphan lines (first line alone at page bottom)
+\brokenpenalty=10000         % No hyphenated words across page breaks
+\raggedbottom                % Allow uneven page bottoms rather than stretching
+
+% ── Fonts ─────────────────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage{newpxtext}     % Palatino-based serif (TeX Gyre Pagella)
+\usepackage{newpxmath}     % Matching math font
+
+% ── Colors ────────────────────────────────────────────────────────────────────
+\usepackage[dvipsnames]{xcolor}
+\definecolor{SectionBlue}{HTML}{1B3A5C}
+\definecolor{AccentGray}{HTML}{4A4A4A}
+\definecolor{QuoteBorder}{HTML}{8B9DAF}
+\definecolor{RiskRed}{HTML}{C0392B}
+\definecolor{RiskAmber}{HTML}{E67E22}
+\definecolor{RiskGreen}{HTML}{27AE60}
+\definecolor{BoxBg}{HTML}{F7F8FA}
+
+% ── Tables ────────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{tabularx}
+
+% ── Boxes ─────────────────────────────────────────────────────────────────────
+\usepackage[framemethod=tikz]{mdframed}
+
+% ── Lists ─────────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+
+% ── Hyperlinks ────────────────────────────────────────────────────────────────
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=SectionBlue,
+  urlcolor=SectionBlue,
+  pdfauthor={Jim Freeman},
+  pdftitle={biff — PR/FAQ},
+  pdfsubject={Working Backwards — CLI Communication for Engineers},
+}
+
+% ── Section styling ───────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}
+  {\Large\bfseries\color{SectionBlue}}
+  {}
+  {0pt}
+  {}
+  [\vspace{-0.5em}\textcolor{QuoteBorder}{\rule{\textwidth}{0.4pt}}]
+
+\titleformat{\subsection}
+  {\large\bfseries\color{AccentGray}}
+  {}
+  {0pt}
+  {}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Custom environments
+% ══════════════════════════════════════════════════════════════════════════════
+
+% ── \prsection{title} — styled press release section header ──────────────────
+\newcommand{\prsection}[1]{%
+  \vspace{1em}%
+  {\large\bfseries\color{SectionBlue}#1}%
+  \vspace{0.3em}\par%
+}
+
+% ── customerquote — indented, italic customer quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=QuoteBorder,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{customerquote}
+
+% ── spokespersonquote — indented spokesperson quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=SectionBlue,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{spokespersonquote}
+
+% ── faqpair — Q&A pair with bold question ────────────────────────────────────
+\newenvironment{faqpair}[1]{%
+  \vspace{0.5em}%
+  \noindent\textbf{\color{SectionBlue}Q: #1}\par%
+  \vspace{0.2em}%
+  \begin{adjustwidth}{1em}{0pt}%
+}{%
+  \end{adjustwidth}%
+  \vspace{0.5em}%
+}
+
+% ── riskitem — description-style risk entry (avoids table margin issues) ─────
+\newcommand{\riskitem}[2]{%
+  \vspace{0.4em}%
+  \noindent\textbf{\color{SectionBlue}#1}\par%
+  \vspace{0.1em}%
+  \begin{adjustwidth}{1em}{0pt}%
+    #2%
+  \end{adjustwidth}%
+}
+
+% ── adjustwidth (for faqpair indentation) ────────────────────────────────────
+\usepackage{changepage}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Document
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{document}
+
+% ── Title block ───────────────────────────────────────────────────────────────
+\begin{center}
+  {\LARGE\bfseries\color{SectionBlue} biff} \\[0.5em]
+  {\large\color{AccentGray} Team communication for engineers who never leave the terminal} \\[1.5em]
+  {\small\color{AccentGray} February 2026 \quad|\quad Jim Freeman \quad|\quad punt-labs}
+\end{center}
+
+\vspace{1em}
+\textcolor{QuoteBorder}{\rule{\textwidth}{0.8pt}}
+\vspace{1em}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% PRESS RELEASE
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Press Release}
+
+\prsection{Summary}
+
+San Francisco, CA --- Today, punt-labs announced \textbf{biff}, an open-source
+communication tool that lets software engineers message teammates, share
+context, and coordinate work without leaving their terminal. Unlike Slack and
+Discord, which demand a separate window and constant attention, biff runs
+inside the engineer's existing Claude Code session as MCP-native slash
+commands. Engineers type \texttt{/mesg @kai} the same way they type
+\texttt{git push} --- in flow, with intent, and then move on.
+
+\prsection{Problem}
+
+Software engineers using AI-assisted coding tools like Claude Code are
+experiencing a step change in productivity. Entire features that once took
+days now take hours. But every time these engineers need to coordinate with a
+teammate --- asking a question, sharing a diff, requesting a code review ---
+they context-switch to Slack or Discord, tools designed for managers and
+all-day-online knowledge workers, not for makers in deep focus.
+
+The cost is not hypothetical. Research consistently shows that a single
+context switch costs 15--25 minutes of deep work recovery. For an engineer
+shipping three features a day with AI assistance, three Slack interruptions
+can erase an entire feature's worth of productive time. Slack's always-on
+presence model compounds the problem: even \emph{checking} for messages
+breaks flow, and the social expectation of quick replies creates anxiety that
+degrades concentration even when no message arrives.
+
+As Thomas Dohmke, former CEO of GitHub, observed when launching Entire in
+February 2026: ``The terminal is becoming the new center of gravity, as
+developers prompt fleets of agents across multiple terminal windows at
+once.'' The engineers building the future of software --- the ones spending
+their entire day inside a terminal, collaborating with AI agents, iterating
+at speeds that would have seemed absurd two years ago --- have no
+communication tool that matches how they actually work.
+
+\prsection{Solution}
+
+Biff brings communication into the terminal as slash commands borrowed from
+the BSD Unix utilities that shipped with every workstation in the 1980s ---
+\texttt{talk}, \texttt{wall}, \texttt{finger}, \texttt{who},
+and \texttt{mesg} --- updated for the MCP era. A typical morning might look
+like this:
+
+\begin{quote}
+\ttfamily
+\small
+/plan ``refactoring the auth layer'' \\
+/mesg @kai ``auth module is ready for review'' \\
+/cr @kai \\
+/hive @kai @eric @jim \\
+/wall ``I'm pulling the auth changes into the feature branch'' \\
+\textnormal{\textit{...thirty minutes of focused work later...}} \\
+/hive off
+\end{quote}
+
+Every command implies intent. There are no channels to monitor, no threads to
+catch up on, no emoji reactions to parse. Communication is pull-based: when
+someone sends you a message, your session notifies you, and you decide when
+to read it. When you need deeper collaboration, \texttt{/pair @kai} invites a
+teammate to send input to your Claude Code session --- and they can only join
+when you explicitly consent. When a problem needs three people for thirty
+minutes, \texttt{/hive} creates a temporary group that dissolves when the
+work is done. The full command reference is in Appendix~A.
+
+Because biff speaks MCP, it does not distinguish between a human session and
+an agent session. An autonomous coding agent can join a \texttt{/hive},
+announce progress via \texttt{/wall}, or \texttt{/mesg} a human when it needs
+a decision. Agents can coordinate with other agents the same way. Biff is not
+just communication for engineers --- it is the communication layer for the
+entire hive of humans and agents building software together.
+
+\prsection{Customer Quote}
+
+\begin{customerquote}
+\textit{``I used to mass-quit my Slack channels once a month out of
+frustration and then guiltily rejoin them. With biff, I just set
+\texttt{/biff off} when I'm deep in a problem and \texttt{/biff on} when I
+come up for air. My teammates can \texttt{/finger @priya} to see what I'm on
+without interrupting. Last week I shipped more in three days than I used to
+ship in two weeks, and I didn't miss a single important message.''}
+
+\raggedleft --- \textbf{Priya Chandrasekaran}, Senior Engineer at a Series B
+startup
+\end{customerquote}
+
+\prsection{Getting Started}
+
+Getting started with biff takes one command:
+\texttt{pip install biff-mcp}. Biff registers itself as an MCP server in
+your Claude Code session. Team configuration lives in a \texttt{.biff} file
+committed to your git repository --- it contains the relay URL and
+whitelisted member IDs. When you clone a repo that has a \texttt{.biff} file,
+biff automatically connects you to the right team. There is no account to
+create, no workspace to configure, and no browser to open. Type
+\texttt{/who} to see your teammates. Within five minutes of installation, you
+can send your first message, see your team's presence, and set your plan.
+
+\prsection{Spokesperson Quote}
+
+\begin{spokespersonquote}
+``We built biff because we watched the best engineers in the world
+disappear into their terminals --- shipping at speeds that make the old
+sprint-and-standup cadence look quaint --- and then lose hours every day to
+communication tools designed for a different era. Slack was built for the
+open-office, always-online workplace. Biff is built for the deep-focus,
+AI-accelerated one. We didn't add a chat feature to the terminal. We
+resurrected the Unix communication vocabulary --- \texttt{talk},
+\texttt{wall}, \texttt{finger}, \texttt{mesg} --- because those commands
+understood something Slack forgot: communication should be purposeful, not
+ambient.''
+
+\raggedleft --- \textbf{Jim Freeman}, Founder, punt-labs
+\end{spokespersonquote}
+
+\prsection{Call to Action}
+
+Biff is open source and available today at
+\href{https://github.com/punt-labs/biff}{github.com/punt-labs/biff}.
+Install with \texttt{pip install biff-mcp}. The core tool is free and always
+will be. For teams that want hosted relay, presence guarantees, and audit
+logs, biff teams will be available in Q3 2026.
+
+\newpage
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FREQUENTLY ASKED QUESTIONS
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Frequently Asked Questions}
+
+% ── External FAQs (Customer-facing) ──────────────────────────────────────────
+
+\subsection*{External FAQs}
+
+\begin{faqpair}{What is biff and who is it for?}
+  Biff is a terminal-native communication tool for software engineers who
+  use Claude Code or other MCP-compatible systems. If you spend your working
+  day in a terminal and resent switching to a browser to talk to your team,
+  biff is for you. It provides eleven slash commands covering messaging,
+  presence, collaboration, and code review --- all without leaving your
+  session. See Appendix~A for the full command reference.
+\end{faqpair}
+
+\begin{faqpair}{How is biff different from Slack?}
+  Slack is a workplace chat platform designed around channels, threads, and
+  continuous presence. It assumes you are watching. Biff is a communication
+  tool designed around intent and focus. It assumes you are working. In
+  Slack, the default state is ``available and monitoring.'' In biff, the
+  default state is ``heads down; interrupt me if it matters.'' Slack is
+  optimized for managers who need visibility. Biff is optimized for
+  engineers who need concentration.
+
+  Structurally, biff runs inside your existing development environment as
+  MCP slash commands. There is no separate app, no browser tab, no
+  notification center. Communication happens where your code already lives.
+\end{faqpair}
+
+\begin{faqpair}{How is biff different from Discord?}
+  Discord is a community platform built around persistent voice and text
+  channels. It works well for open-source communities and gaming. Biff is a
+  team tool built around directed messages and explicit intent. Discord is
+  for hanging out. Biff is for getting things done. Biff also runs natively
+  inside your AI coding session --- there is no alt-tab.
+\end{faqpair}
+
+\begin{faqpair}{How do I get started?}
+  Run \texttt{pip install biff-mcp}. Biff auto-registers as an MCP server
+  in your Claude Code session. If your repo has a \texttt{.biff} file
+  (committed by a teammate), biff picks up the relay URL and team roster
+  automatically. Type \texttt{/who} to see your team. No account creation,
+  no workspace to configure. You are communicating within five minutes.
+\end{faqpair}
+
+\begin{faqpair}{What happens to my messages? Is communication private?}
+  Messages are end-to-end encrypted in transit. In the open-source
+  self-hosted mode, messages route through your own infrastructure and
+  nothing is stored by punt-labs. In the hosted relay mode (biff teams),
+  messages are encrypted at rest and subject to a retention policy you
+  configure. Biff never reads, analyzes, or trains on your messages.
+\end{faqpair}
+
+\begin{faqpair}{Does biff work without Claude Code?}
+  Biff is built on the Model Context Protocol (MCP), which is an open
+  standard. Any MCP-compatible client can use biff. Claude Code is the
+  primary target today because it has the largest population of engineers
+  living in the terminal. As other MCP clients mature, biff will work there
+  too.
+\end{faqpair}
+
+\begin{faqpair}{What does ``pairing'' mean? Can someone control my session?}
+  When a teammate invokes \texttt{/pair @you}, they are requesting to send
+  input to your Claude Code session --- not the other way around. You see
+  the request and explicitly accept or decline. If you accept, the
+  teammate can type prompts that are sent to your Claude, but you retain
+  full control and can see everything they send. You can end the pairing
+  at any time. No one can read your session, execute commands, or modify
+  your files without your explicit, per-session consent.
+
+  This is different from \texttt{/talk}, which is a simple real-time text
+  conversation between two terminals --- no session access involved.
+\end{faqpair}
+
+\begin{faqpair}{Can agents use biff?}
+  Yes. Because biff is an MCP server, any MCP-compatible agent can use it
+  the same way a human does. An autonomous coding agent can join a
+  \texttt{/hive}, broadcast status via \texttt{/wall}, send artifacts via
+  \texttt{/send}, or message a human when it needs a decision. Agents can
+  also communicate with other agents --- coordinating work, handing off
+  tasks, or requesting reviews. Biff does not distinguish between human
+  and agent sessions. If it speaks MCP, it can participate.
+\end{faqpair}
+
+% ── Internal FAQs (Business-facing) ──────────────────────────────────────────
+
+\subsection*{Internal FAQs}
+
+\subsubsection*{Value \& Market}
+
+\begin{faqpair}{What is the total addressable market?}
+  The immediate market is engineers using AI coding assistants inside
+  terminals. GitHub reports over 100 million developers on the platform.
+  AI-assisted coding adoption is growing rapidly --- GitHub Copilot alone
+  surpassed 1.8 million paid subscribers by late 2024, and Claude Code
+  launched to strong adoption in early 2025. The subset of engineers who
+  work primarily in the terminal with MCP-compatible tools is small today
+  (estimated tens of thousands) but growing fast as MCP becomes the
+  standard protocol for AI tool integration.
+
+  Bottoms-up: if 50,000 engineers adopt biff in year one, and 20\% of them
+  are on teams that convert to the paid hosted relay at \$10/user/month,
+  that represents \$1.2M ARR. The real opportunity scales in two
+  dimensions: as MCP adoption grows, the human addressable market
+  multiplies; and as autonomous agents become standard members of
+  engineering teams, the number of sessions that need coordination grows
+  faster than headcount.
+\end{faqpair}
+
+\begin{faqpair}{What evidence do we have that customers want this?}
+  Four categories of evidence:
+
+  \begin{enumerate}[leftmargin=1.5em]
+    \item \textbf{Behavioral signal:} The explosive growth of CLI-native
+    tooling (Claude Code, Cursor's terminal mode, Warp, Ghostty) demonstrates
+    that engineers are consolidating their workflow into the terminal. The
+    ecosystem of MCP servers, Claude Code plugins, and slash commands exists
+    precisely because engineers want to \emph{stay in flow}. Communication
+    is the last major activity that forces them out.
+
+    \item \textbf{Cultural signal:} Steve Yegge's February 2026 article
+    ``The Anthropic Hive
+    Mind''\footnote{\url{https://steve-yegge.medium.com/the-anthropic-hive-mind-d01f768f3d7b}}
+    describes Anthropic's internal engineering culture where teams ``swarm
+    around campfires'' and ``the whole team is pair programming at once''
+    --- all happening inside Claude Code sessions. He reports engineers
+    achieving 10--100x productivity gains, but notes that ``you need full
+    transparency at all times, at their speeds, or nobody will ever see
+    what you are doing.'' This is exactly the problem biff solves:
+    visibility and coordination at AI speed, inside the tool.
+
+    \item \textbf{Investment signal:} Thomas Dohmke, former CEO of GitHub,
+    launched Entire in February 2026 with a \$60M seed round --- the largest
+    seed investment ever for a developer tools
+    startup.\footnote{\url{https://entire.io/blog/hello-entire-world/}}
+    His thesis: ``the entire software ecosystem is being bottlenecked by a
+    manual system of production'' and ``the terminal is becoming the new
+    center of gravity.'' Entire focuses on the code context layer (how AI
+    changes get reviewed and governed). Biff focuses on the human
+    coordination layer (how engineers communicate while working at AI
+    speed). The same tectonic shift creates both opportunities.
+
+    \item \textbf{Historical precedent:} The original BSD Unix included
+    \texttt{write}, \texttt{talk}, \texttt{wall}, \texttt{finger}, and
+    \texttt{mesg} as standard utilities because the designers understood
+    that engineers who share a system need lightweight, intentional
+    communication. Those tools died when engineers left the terminal for
+    GUIs. Now that engineers are returning to the terminal, the need has
+    returned with them.
+  \end{enumerate}
+\end{faqpair}
+
+\begin{faqpair}{Who are the competitors and why will we win?}
+  \textbf{Slack} is the dominant team communication tool but is
+  increasingly resented by engineers for its interruption-driven model.
+  Slack could build a CLI client, but its revenue depends on engagement
+  metrics (messages sent, channels monitored, time-in-app) that are
+  fundamentally opposed to biff's focus-first model. Slack's incentives
+  make it structurally unable to optimize for fewer interruptions.
+
+  \textbf{Discord} serves developer communities well but is not a team
+  coordination tool. Its voice-channel model does not map to directed,
+  intentional engineering communication.
+
+  \textbf{GitHub} has discussions, issues, and PR comments --- all
+  web-based, all requiring a browser. The \texttt{gh} CLI covers some
+  workflows but offers no real-time messaging or presence.
+
+  \textbf{Zulip} and \textbf{Mattermost} are open-source Slack
+  alternatives with the same fundamental model: channels, threads, browser
+  or desktop app. They solve the vendor-lock-in problem but not the
+  context-switch problem.
+
+  Biff wins by refusing to play Slack's game. It is not a chat app with a
+  CLI client. It is a communication protocol native to the environment
+  where engineers already work. The moat is the MCP ecosystem: as more
+  tools adopt MCP, biff's integration surface grows without additional
+  development.
+\end{faqpair}
+
+\subsubsection*{Technical}
+
+\begin{faqpair}{What are the major technical risks?}
+  \begin{enumerate}[leftmargin=1.5em]
+    \item \textbf{MCP protocol maturity (medium risk).} MCP is young. The
+    spec may change in ways that require rearchitecture. Mitigation: biff
+    wraps MCP interactions behind an internal abstraction layer, and
+    punt-labs actively tracks the MCP spec evolution.
+
+    \item \textbf{Message relay infrastructure (low risk).} Routing
+    messages between engineers on different machines requires a relay
+    server. This is well-understood infrastructure (WebSocket/SSE relay).
+    The self-hosted option reduces dependency on punt-labs infrastructure.
+
+    \item \textbf{Security of pairing (medium risk).} The \texttt{/pair}
+    feature, which allows one engineer to send input to another's Claude
+    Code session, requires careful permission design. Mitigation: explicit
+    per-session consent, all input visible to the session owner, all
+    interactions logged, session owner retains kill switch.
+
+    \item \textbf{Adoption chicken-and-egg (high risk).} Biff is only
+    useful if your teammates also use it. Mitigation: the \texttt{.biff}
+    file committed to the repo means the second person on a team only
+    needs \texttt{pip install biff-mcp} --- the configuration is already
+    there. The \texttt{/plan}, \texttt{/finger}, and \texttt{/who}
+    commands provide value to individual users even without teammates.
+    The \texttt{/send} and \texttt{/cr} commands provide enough value in
+    pairs to bootstrap adoption within a team.
+  \end{enumerate}
+\end{faqpair}
+
+\begin{faqpair}{What dependencies exist on other teams or systems?}
+  Biff depends on the MCP protocol (maintained by Anthropic), Claude Code
+  as the primary host client (also Anthropic), and Python packaging
+  infrastructure (PyPI). There are no dependencies on other punt-labs
+  products. The relay server is self-contained and can be self-hosted.
+\end{faqpair}
+
+\begin{faqpair}{What is the estimated development timeline?}
+  \begin{description}[leftmargin=1.5em, labelwidth=6em, font=\bfseries]
+    \item[Phase 1 (4 weeks)] Core MCP server with \texttt{/mesg},
+    \texttt{/who}, \texttt{/plan}, \texttt{/finger}, \texttt{/biff on/off}.
+    Local relay for same-machine communication. Single-user value from
+    \texttt{/plan} and session awareness.
+    \item[Phase 2 (4 weeks)] Network relay for cross-machine messaging.
+    \texttt{/wall}, \texttt{/hive}, \texttt{/send}, \texttt{/cr}. Team
+    communication functional end-to-end.
+    \item[Phase 3 (4 weeks)] \texttt{/talk} real-time conversation,
+    \texttt{/pair} with permission model. End-to-end encryption. Security
+    audit.
+    \item[Phase 4 (4 weeks)] Hosted relay service (biff teams).
+    Admin controls, audit logs, retention policies. Billing integration.
+  \end{description}
+
+  Total: approximately 16 weeks to full product with hosted offering. Phase
+  1 delivers usable value and can be released as a public beta.
+\end{faqpair}
+
+\begin{faqpair}{What is the scaling story?}
+  The relay server is a stateless WebSocket router. Horizontal scaling is
+  straightforward --- add more relay nodes behind a load balancer. The
+  bottleneck at scale is presence: broadcasting \texttt{/who} status across
+  thousands of users requires a gossip protocol or presence service. This
+  is a solved problem (XMPP, Matrix) and is not needed until biff reaches
+  thousands of concurrent users.
+\end{faqpair}
+
+\subsubsection*{Business}
+
+\begin{faqpair}{What is the revenue model?}
+  Open core. The biff CLI tool and self-hosted relay are free and open
+  source (MIT license). Revenue comes from \textbf{biff teams}, a hosted
+  relay service priced at \$10/user/month, offering:
+
+  \begin{itemize}[leftmargin=1.5em]
+    \item Managed relay with 99.9\% uptime SLA
+    \item End-to-end encryption with key management
+    \item Audit logs and compliance exports
+    \item Team admin controls (permissions, onboarding, offboarding)
+    \item Priority support
+  \end{itemize}
+
+  This model is proven by GitLab, Sentry, PostHog, and other
+  developer-tools companies. Engineers adopt the free tool; their companies
+  pay for the managed version when the team exceeds 5--10 people and needs
+  reliability guarantees.
+\end{faqpair}
+
+\begin{faqpair}{What are the key metrics for success?}
+  \begin{description}[leftmargin=1.5em, labelwidth=10em, font=\bfseries]
+    \item[Weekly active users] Target: 1,000 WAU within 6 months of
+    launch. Measures adoption.
+    \item[Messages per user/week] Target: 15+ messages/week for active
+    users. Measures engagement without rewarding noise --- biff's
+    intentional model should show \emph{fewer} messages per user than
+    Slack but higher signal-to-noise.
+    \item[Team conversion rate] Target: 10\% of teams with 3+ active free
+    users convert to biff teams within 90 days.
+    \item[Retention (D30)] Target: 40\% of installers still active after
+    30 days. CLI tools typically see high install-and-forget rates; 40\%
+    retention indicates genuine workflow integration.
+  \end{description}
+
+  Decision threshold: if WAU has not reached 500 within 4 months of
+  public launch, revisit the go-to-market strategy. If D30 retention is
+  below 20\%, the product is not sticky enough and needs fundamental
+  rethinking.
+\end{faqpair}
+
+\begin{faqpair}{Why now? What has changed?}
+  Three things changed simultaneously, and the convergence is visible in
+  real dollars and real behavior:
+
+  \begin{enumerate}[leftmargin=1.5em]
+    \item \textbf{Engineers returned to the terminal.} After two decades of
+    IDE dominance, AI coding tools brought engineers back to the command
+    line. Claude Code, Cursor's terminal mode, and the MCP ecosystem mean
+    the terminal is once again the primary workspace for a growing
+    population of engineers. Dohmke calls this ``the new center of
+    gravity'' and bet \$60M on it. Yegge describes Anthropic engineers who
+    ``never leave their terminal sessions.''
+
+    \item \textbf{MCP created a standard protocol.} Before MCP, building a
+    communication tool inside a coding environment meant integrating with
+    every editor separately. MCP provides a single integration point that
+    works across any compatible client. Biff integrates once and works
+    everywhere MCP does.
+
+    \item \textbf{AI-accelerated engineers outgrew Slack.} When engineers
+    ship 3--5x faster, the communication overhead that was tolerable at the
+    old pace becomes the bottleneck. Slack's interruption model was
+    designed for a world where shipping a feature took a sprint. In a world
+    where shipping a feature takes a morning, Slack's model actively
+    harms productivity.
+  \end{enumerate}
+\end{faqpair}
+
+\begin{faqpair}{What are we not building?}
+  Biff is not building:
+  \begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Persistent channels.} Biff has \texttt{/hive} for
+    temporary groups that dissolve when the work is done, not channels that
+    accumulate forever. There is no concept of a persistent room.
+    \item \textbf{Message history or search.} Messages are ephemeral by
+    default. If you need a record, use \texttt{/send} to send an artifact
+    to a durable store (git, GitHub Issues). Biff is not a system of
+    record.
+    \item \textbf{Video or voice.} Biff is text. If you need a video call,
+    use the tool built for video calls.
+    \item \textbf{Project management.} No tasks, no boards, no sprints.
+    Biff is communication, not coordination. Use beads, Linear, or GitHub
+    Issues for project tracking.
+    \item \textbf{A mobile app.} Biff is for engineers at their terminals.
+    If you are on your phone, you are not in the target workflow.
+  \end{itemize}
+\end{faqpair}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FOUR RISKS ASSESSMENT
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Risk Assessment}
+
+\begin{mdframed}[
+  linewidth=0.5pt,
+  linecolor=QuoteBorder,
+  backgroundcolor=BoxBg,
+  innerleftmargin=10pt,
+  innerrightmargin=10pt,
+  innertopmargin=10pt,
+  innerbottommargin=10pt,
+]
+{\bfseries\color{SectionBlue}Four Risks Assessment}\par
+\vspace{0.5em}
+
+\riskitem{Value}{%
+  \textbf{Medium risk.} Strong circumstantial evidence (CLI adoption trend,
+  MCP ecosystem growth, Yegge's observations about AI-speed collaboration)
+  but no direct customer validation yet. The risk is not ``do engineers
+  dislike Slack?'' (they do) but ``is the pain severe enough to adopt a new
+  tool?'' Slack's network effects are powerful --- even engineers who hate
+  Slack use it because their team does. Biff must provide enough standalone
+  value (\texttt{/plan}, \texttt{/finger}) to bootstrap adoption before
+  network effects kick in. The artisanal approach --- building for ourselves
+  first --- provides an honest signal: if we do not use it daily, no one
+  else will either.}
+
+\riskitem{Usability}{%
+  \textbf{Low risk.} The slash-command interface mirrors patterns engineers
+  already use (git commands, Unix utilities, Claude Code slash commands).
+  Installation is a single \texttt{pip install}. Time-to-value is under five
+  minutes. The primary usability risk is discoverability: new users need to
+  learn the command vocabulary. Mitigation: the vocabulary is small (11
+  commands), the names are intuitive (borrowed from Unix), and
+  \texttt{/help} documents everything inline.}
+
+\riskitem{Feasibility}{%
+  \textbf{Low-to-medium risk.} The core technology --- MCP servers,
+  WebSocket relay, message routing --- is well-understood. The team has
+  direct experience with MCP server development and Python CLI tooling.
+  The highest-risk component is the \texttt{/pair} feature,
+  which requires careful permission design for session input sharing. This is scoped to Phase 3,
+  giving time for the security model to mature. No component requires
+  novel technology.}
+
+\riskitem{Viability}{%
+  \textbf{Medium risk.} The open-core model is proven in developer tools,
+  but biff's intentional low-volume communication model means engagement
+  metrics will look different from typical SaaS. Investors and boards
+  accustomed to Slack-style engagement numbers may question whether ``15
+  messages per user per week'' constitutes a healthy product. The counter:
+  biff's value is measured in time saved, not messages sent. The hosted
+  relay's value proposition (uptime, encryption, compliance) is clear for
+  teams above 5--10 people. The risk is reaching that critical mass of
+  team adoption quickly enough to demonstrate the conversion funnel.}
+
+\end{mdframed}
+
+\newpage
+
+% ══════════════════════════════════════════════════════════════════════════════
+% APPENDIX A: COMMAND REFERENCE
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Appendix A: Command Reference}
+
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+  \toprule
+  \textbf{Command} & \textbf{Origin} & \textbf{Description} \\
+  \midrule
+
+  \texttt{/mesg @user ``text''} & BSD \texttt{mesg} &
+  Send a one-way message to a user. Asynchronous --- the recipient reads
+  it when they choose. \\
+
+  \texttt{/talk @user} & BSD \texttt{talk} &
+  Open a real-time bidirectional conversation. Both users type and read
+  in their own terminals. Either side can end the session. \\
+
+  \texttt{/wall ``text''} & BSD \texttt{wall} &
+  Broadcast a message. If you are in a \texttt{/hive}, the message goes
+  to hive members. Otherwise it goes to your full team. \\
+
+  \texttt{/finger @user} & BSD \texttt{finger} &
+  Read a user's plan (set via \texttt{/plan}) and current status.
+  Non-intrusive --- the target is not notified. \\
+
+  \texttt{/who} & BSD \texttt{who} &
+  List all active sessions. Shows who is online, their availability
+  (\texttt{/biff on/off}), and their current plan. \\
+
+  \texttt{/plan ``text''} & BSD \texttt{.plan} &
+  Set your status message. Visible to anyone who runs \texttt{/finger}
+  or \texttt{/who}. Update it as your work changes. \\
+
+  \texttt{/biff on} | \texttt{off} & BSD \texttt{biff} &
+  Control whether you receive messages. When off, incoming messages are
+  queued until you turn it back on. \\
+
+  \texttt{/hive @a @b @c} & --- &
+  Create a temporary group with the named users. All members see each
+  other's messages. Use \texttt{/wall} to broadcast within the hive.
+  \texttt{/hive off} dissolves the group. \\
+
+  \texttt{/pair @user} & --- &
+  Invite a user to send input to your Claude Code session. Requires
+  explicit acceptance. The session owner sees all input and retains full
+  control. \\
+
+  \texttt{/send @user} & --- &
+  Send a diff, file, or code snippet to a user with full context.
+  The recipient receives the artifact inline in their session. \\
+
+  \texttt{/cr @user} & --- &
+  Request a code review. Automatically attaches the relevant changes
+  from your current branch. The reviewer receives the diff and can
+  respond with comments. \\
+
+  \bottomrule
+\end{tabularx}
+
+\end{document}
