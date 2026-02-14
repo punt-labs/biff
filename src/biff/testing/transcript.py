@@ -45,7 +45,7 @@ def _format_command(entry: TranscriptEntry) -> str:
     if tool == "send_message" and "to" in args and "message" in args:
         to = args["to"]
         at_to = to if str(to).startswith("@") else f"@{to}"
-        return f'{prefix}> /write {at_to} "{args["message"]}"'
+        return f'{prefix}> /mesg {at_to} "{args["message"]}"'
     if tool == "check_messages":
         return f"{prefix}> /check"
     if tool == "who":

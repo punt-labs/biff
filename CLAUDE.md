@@ -176,7 +176,7 @@ Biff resurrects the UNIX communication vocabulary as MCP-native slash commands f
 
 | Command | Mode | Unix Ancestor | Purpose |
 |---------|------|---------------|---------|
-| `/write @user` | Async, one-way | `write` | Send a purposeful message |
+| `/mesg @user` | Async, one-way | `mesg` | Send a purposeful message |
 | `/talk @user` | Sync, two-way | `talk` | Real-time conversation |
 | `/wall` | Team broadcast | `wall` | Announce to the team |
 | `/finger @user` | Status query | `finger` | Check what someone is working on |
