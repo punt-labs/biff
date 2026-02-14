@@ -244,11 +244,13 @@ Getting started with biff takes one command:
 \texttt{pip install biff-mcp}. Biff registers itself as an MCP server in
 your Claude Code session. Team configuration lives in a \texttt{.biff} file
 committed to your git repository --- it contains the relay URL and
-whitelisted member IDs. When you clone a repo that has a \texttt{.biff} file,
-biff automatically connects you to the right team. There is no account to
-create, no workspace to configure, and no browser to open. Type
+team member list. When you clone a repo that has a \texttt{.biff} file,
+biff automatically connects you to the right team. Encryption keys are
+generated silently on first use --- there is no account to create, no
+workspace to configure, no keys to manage, and no browser to open. Type
 \texttt{/who} to see your teammates. Within five minutes of installation, you
-can send your first message, see your team's presence, and set your plan.
+can send your first encrypted message, see your team's presence, and set
+your plan.
 
 \prsection{Spokesperson Quote}
 
@@ -271,9 +273,10 @@ ambient.''
 
 Biff is open source and available today at
 \href{https://github.com/punt-labs/biff}{github.com/punt-labs/biff}.
-Install with \texttt{pip install biff-mcp}. The core tool is free and always
-will be. For teams that want hosted relay, presence guarantees, and audit
-logs, biff teams will be available in Q3 2026.
+Install with \texttt{pip install biff-mcp}. The core tool --- including
+end-to-end encryption --- is free and always will be. The hosted relay is
+free for teams of up to five. For larger teams that need uptime guarantees,
+audit logs, and admin controls, biff teams will be available in Q3 2026.
 
 \newpage
 
@@ -322,16 +325,23 @@ logs, biff teams will be available in Q3 2026.
   Run \texttt{pip install biff-mcp}. Biff auto-registers as an MCP server
   in your Claude Code session. If your repo has a \texttt{.biff} file
   (committed by a teammate), biff picks up the relay URL and team roster
-  automatically. Type \texttt{/who} to see your team. No account creation,
-  no workspace to configure. You are communicating within five minutes.
+  automatically. Encryption keys are generated and registered
+  transparently --- you never see them. Type \texttt{/who} to see your
+  team. No account creation, no workspace to configure. You are
+  communicating securely within five minutes.
 \end{faqpair}
 
 \begin{faqpair}{What happens to my messages? Is communication private?}
-  Messages are end-to-end encrypted in transit. In the open-source
-  self-hosted mode, messages route through your own infrastructure and
-  nothing is stored by punt-labs. In the hosted relay mode (biff teams),
-  messages are encrypted at rest and subject to a retention policy you
-  configure. Biff never reads, analyzes, or trains on your messages.
+  All messages are end-to-end encrypted. Direct messages (\texttt{/mesg})
+  are encrypted with the recipient's public key --- the relay stores
+  ciphertext it cannot read. Team messages (\texttt{/wall}, \texttt{/plan})
+  use a shared team key. Encryption is automatic and invisible: keypairs
+  are generated silently on first use, and the relay manages key
+  distribution. The relay follows a POP mail model: messages are held
+  only until the recipient reads them, then discarded. Biff is not a
+  system of record. In the self-hosted mode, messages route through your
+  own infrastructure and nothing touches punt-labs. Biff never reads,
+  analyzes, or trains on your messages.
 \end{faqpair}
 
 \begin{faqpair}{Does biff work without Claude Code?}
@@ -485,9 +495,12 @@ logs, biff teams will be available in Q3 2026.
     live count. This is a proven pattern but requires per-terminal setup.
 
     \item \textbf{Message relay infrastructure (low risk).} Routing
-    messages between engineers on different machines requires a relay
-    server. This is well-understood infrastructure (WebSocket/SSE relay).
-    The self-hosted option reduces dependency on punt-labs infrastructure.
+    messages between engineers on different machines requires a relay.
+    The relay follows a POP mail model: messages are stored on the relay
+    only until the recipient reads them, then discarded. Biff is not a
+    system of record. The relay is a NATS JetStream instance hosted by
+    punt-labs; teams that want data sovereignty can self-host the same
+    single-binary server.
 
     \item \textbf{Security of pairing (medium risk).} The \texttt{/pair}
     feature, which allows one engineer to send input to another's Claude
@@ -509,9 +522,36 @@ logs, biff teams will be available in Q3 2026.
 
 \begin{faqpair}{What dependencies exist on other teams or systems?}
   Biff depends on the MCP protocol (maintained by Anthropic), Claude Code
-  as the primary host client (also Anthropic), and Python packaging
-  infrastructure (PyPI). There are no dependencies on other punt-labs
-  products. The relay server is self-contained and can be self-hosted.
+  as the primary host client (also Anthropic), Python packaging
+  infrastructure (PyPI), and NATS for the message relay. There are no
+  dependencies on other punt-labs products. The relay server is a single
+  NATS binary and can be self-hosted.
+\end{faqpair}
+
+\begin{faqpair}{Where does data live?}
+  All data lives on the relay, encrypted. The relay serves three
+  durability tiers:
+
+  \textbf{Persistent}: \texttt{/plan} status is stored on the relay,
+  encrypted with the team key. Like the original BSD
+  \texttt{\textasciitilde/.plan} file, it survives sessions, disconnects,
+  and restarts. \texttt{/finger} reads the persistent plan and combines
+  it with live presence.
+
+  \textbf{Store-and-forward}: \texttt{/mesg} follows a POP mail model
+  --- messages are encrypted with the recipient's public key, held on
+  the relay until read, then discarded. The relay cannot read them.
+
+  \textbf{Ephemeral}: \texttt{/wall} is a broadcast --- if you are not
+  connected when it happens, you miss it, just like BSD \texttt{wall}.
+  \texttt{/who} and \texttt{/biff on/off} are live presence state.
+  \texttt{/hive}, \texttt{/talk}, and \texttt{/pair} are sessions that
+  exist only for their duration.
+
+  The \texttt{.biff} file in the repository contains the relay URL and
+  team member list. It is the root of trust: adding your username to
+  \texttt{.biff} and committing it proves you have commit access to the
+  repo, which is what makes you a team member.
 \end{faqpair}
 
 \begin{faqpair}{What is the estimated development timeline?}
@@ -526,14 +566,15 @@ logs, biff teams will be available in Q3 2026.
     \texttt{/who}, \texttt{/plan}, \texttt{/finger}, \texttt{/biff on/off}.
     Local relay for same-machine communication. Single-user value from
     \texttt{/plan} and session awareness. Architecture validated by spike.
-    \item[Phase 2 (4 weeks)] Network relay for cross-machine messaging.
-    \texttt{/wall}, \texttt{/hive}, \texttt{/send}, \texttt{/cr}. Team
-    communication functional end-to-end.
+    \item[Phase 2 (4 weeks)] NATS-based relay for cross-machine messaging.
+    POP-model store-and-forward for \texttt{/mesg}. Ephemeral broadcast
+    for \texttt{/wall}. \texttt{/hive}, \texttt{/send}, \texttt{/cr}.
+    Team communication functional end-to-end.
     \item[Phase 3 (4 weeks)] \texttt{/talk} real-time conversation,
-    \texttt{/pair} with permission model. End-to-end encryption. Security
-    audit. Note: the spike found that direct subprocess handoff is not
-    viable in MCP; \texttt{/talk} will use model-mediated message
-    exchange.
+    \texttt{/pair} with permission model. Security audit of the
+    encryption and permission models. Note: the spike found that direct
+    subprocess handoff is not viable in MCP; \texttt{/talk} will use
+    model-mediated message exchange.
     \item[Phase 4 (4 weeks)] Hosted relay service (biff teams).
     Admin controls, audit logs, retention policies. Billing integration.
   \end{description}
@@ -543,33 +584,38 @@ logs, biff teams will be available in Q3 2026.
 \end{faqpair}
 
 \begin{faqpair}{What is the scaling story?}
-  The relay server is a stateless WebSocket router. Horizontal scaling is
-  straightforward --- add more relay nodes behind a load balancer. The
-  bottleneck at scale is presence: broadcasting \texttt{/who} status across
-  thousands of users requires a gossip protocol or presence service. This
-  is a solved problem (XMPP, Matrix) and is not needed until biff reaches
-  thousands of concurrent users.
+  The relay is a NATS JetStream instance --- a single Go binary that
+  handles 100,000+ messages per second on one node. Horizontal scaling
+  is straightforward: NATS supports clustering with Raft-based
+  replication. The bottleneck at scale is presence: broadcasting
+  \texttt{/who} status across thousands of users requires a gossip
+  protocol. This is a solved problem and is not needed until biff reaches
+  thousands of concurrent users. For the POP-model message relay, NATS
+  JetStream consumers with acknowledge-and-delete provide exactly the
+  retrieve-and-discard semantics biff requires.
 \end{faqpair}
 
 \subsubsection*{Business}
 
 \begin{faqpair}{What is the revenue model?}
-  Open core. The biff CLI tool and self-hosted relay are free and open
-  source (MIT license). Revenue comes from \textbf{biff teams}, a hosted
-  relay service priced at \$10/user/month, offering:
+  Open core. The biff CLI tool, self-hosted relay, and end-to-end
+  encryption are free and open source (MIT license). Revenue comes from
+  \textbf{biff teams}, a hosted relay service priced at
+  \$10/user/month for teams above the free tier:
 
   \begin{itemize}[leftmargin=1.5em]
-    \item Managed relay with 99.9\% uptime SLA
-    \item End-to-end encryption with key management
+    \item Free tier: up to 5 team members on the hosted relay
+    \item Paid tier: unlimited team members with 99.9\% uptime SLA
     \item Audit logs and compliance exports
     \item Team admin controls (permissions, onboarding, offboarding)
     \item Priority support
   \end{itemize}
 
-  This model is proven by GitLab, Sentry, PostHog, and other
-  developer-tools companies. Engineers adopt the free tool; their companies
-  pay for the managed version when the team exceeds 5--10 people and needs
-  reliability guarantees.
+  Encryption is not a paid feature --- it is a baseline for every user.
+  The paid tier is about team size and operational guarantees. This model
+  is proven by GitLab, Sentry, PostHog, and other developer-tools
+  companies. Engineers adopt the free tool; their companies pay for the
+  managed version when the team grows and needs reliability guarantees.
 \end{faqpair}
 
 \begin{faqpair}{What are the key metrics for success?}
@@ -686,11 +732,14 @@ logs, biff teams will be available in Q3 2026.
   descriptions via \texttt{notifications/tools/list\_changed}, and
   model-visible message awareness in Claude Code. The MCP notification
   mechanism --- the highest-uncertainty component --- works as designed.
-  The remaining technology (WebSocket relay, message routing, file-based
-  storage) is well-understood. The highest-risk component is the
-  \texttt{/pair} feature, which requires careful permission design for
-  session input sharing. This is scoped to Phase~3, giving time for the
-  security model to mature. No component requires novel technology.}
+  The remaining technology is well-understood: NATS JetStream for the
+  message relay, NaCl/libsodium (Curve25519 + XSalsa20-Poly1305) for
+  end-to-end encryption, and PyNaCl for the Python implementation. These
+  are the same cryptographic primitives used by Signal, WireGuard, and
+  age. The highest-risk component is the \texttt{/pair} feature, which
+  requires careful permission design for session input sharing. This is
+  scoped to Phase~3, giving time for the security model to mature. No
+  component requires novel technology.}
 
 \riskitem{Viability}{%
   \textbf{Medium risk.} The open-core model is proven in developer tools,
@@ -698,10 +747,12 @@ logs, biff teams will be available in Q3 2026.
   metrics will look different from typical SaaS. Investors and boards
   accustomed to Slack-style engagement numbers may question whether ``15
   messages per user per week'' constitutes a healthy product. The counter:
-  biff's value is measured in time saved, not messages sent. The hosted
-  relay's value proposition (uptime, encryption, compliance) is clear for
-  teams above 5--10 people. The risk is reaching that critical mass of
-  team adoption quickly enough to demonstrate the conversion funnel.}
+  biff's value is measured in time saved, not messages sent. The free-to-paid
+  conversion trigger is team size (free for up to 5, paid beyond that),
+  which aligns with natural adoption: one engineer installs, teammates
+  follow, and the team hits the threshold organically. The risk is
+  reaching that critical mass of team adoption quickly enough to
+  demonstrate the conversion funnel.}
 
 \end{mdframed}
 

@@ -6,24 +6,34 @@ tools registered. The returned server is run via ``mcp.run(transport=...)``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastmcp import FastMCP
 
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
+from biff.server.tools._descriptions import poll_inbox
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:
     """Create a FastMCP server with all biff tools registered.
 
     The returned server is ready to run via ``mcp.run(transport=...)``.
+    Starts a background inbox poller that keeps the tool description
+    and status file in sync with incoming messages.
     """
 
     @asynccontextmanager
-    async def lifespan(_mcp: FastMCP[ServerState]) -> AsyncIterator[ServerState]:
-        yield state
+    async def lifespan(mcp: FastMCP[ServerState]) -> AsyncIterator[ServerState]:
+        task = asyncio.create_task(poll_inbox(mcp, state))
+        try:
+            yield state
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     mcp: FastMCP[ServerState] = FastMCP(
         "biff",

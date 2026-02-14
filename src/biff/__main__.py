@@ -47,7 +47,7 @@ def serve(
 ) -> None:
     """Start the biff MCP server."""
     config = BiffConfig(user=user)
-    state = create_state(config, data_dir)
+    state = create_state(config, data_dir, unread_path=data_dir / "unread.json")
     mcp = create_server(state)
 
     if transport == "http":
