@@ -1,7 +1,6 @@
 """Status set tool — ``/plan "msg"``.
 
 Sets the current user's plan (what they're working on).
-Stub implementation for the server scaffold.
 """
 
 from __future__ import annotations

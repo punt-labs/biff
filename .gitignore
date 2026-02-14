@@ -30,6 +30,7 @@ htmlcov/
 
 # pytest
 .pytest_cache/
+tests/transcripts/
 
 # ruff
 .ruff_cache/

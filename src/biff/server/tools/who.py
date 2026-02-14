@@ -1,7 +1,6 @@
 """Presence list tool — ``/who``.
 
 Lists all active sessions within the TTL window.
-Stub implementation for the server scaffold.
 """
 
 from __future__ import annotations
