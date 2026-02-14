@@ -20,7 +20,7 @@ class TestCreateServer:
     def test_registers_all_tools(self, state: ServerState) -> None:
         mcp = create_server(state)
         tool_names = {t.name for t in mcp._tool_manager._tools.values()}
-        assert "mesg" in tool_names
+        assert "biff" in tool_names
         assert "finger" in tool_names
         assert "who" in tool_names
         assert "plan" in tool_names

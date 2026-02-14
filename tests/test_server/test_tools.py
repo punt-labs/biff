@@ -23,9 +23,9 @@ def _get_tool_fn(state: ServerState, tool_name: str):
     return tool.fn
 
 
-class TestMesgTool:
+class TestBiffToggleTool:
     def test_disable_messages(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "mesg")
+        fn = _get_tool_fn(state, "biff")
         result = fn(enabled=False)
         assert "off" in result
         session = state.sessions.get_user("kai")
@@ -34,7 +34,7 @@ class TestMesgTool:
 
     def test_enable_messages(self, state: ServerState) -> None:
         state.sessions.update(UserSession(user="kai", biff_enabled=False))
-        fn = _get_tool_fn(state, "mesg")
+        fn = _get_tool_fn(state, "biff")
         result = fn(enabled=True)
         assert "on" in result
         session = state.sessions.get_user("kai")
@@ -43,14 +43,14 @@ class TestMesgTool:
 
     def test_creates_session_if_missing(self, state: ServerState) -> None:
         assert state.sessions.get_user("kai") is None
-        fn = _get_tool_fn(state, "mesg")
+        fn = _get_tool_fn(state, "biff")
         fn(enabled=True)
         assert state.sessions.get_user("kai") is not None
 
     def test_updates_last_active(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
         state.sessions.update(UserSession(user="kai", last_active=old_time))
-        fn = _get_tool_fn(state, "mesg")
+        fn = _get_tool_fn(state, "biff")
         fn(enabled=False)
         session = state.sessions.get_user("kai")
         assert session is not None
@@ -156,10 +156,10 @@ class TestToolInteractions:
         result = finger_fn(user="kai")
         assert "refactoring auth" in result
 
-    def test_mesg_off_then_finger_shows_unavailable(self, state: ServerState) -> None:
-        mesg_fn = _get_tool_fn(state, "mesg")
+    def test_biff_off_then_finger_shows_unavailable(self, state: ServerState) -> None:
+        biff_fn = _get_tool_fn(state, "biff")
         finger_fn = _get_tool_fn(state, "finger")
-        mesg_fn(enabled=False)
+        biff_fn(enabled=False)
         result = finger_fn(user="kai")
         assert "messages off" in result
 
