@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Claude Code status line script for biff unread messages.
 #
-# Reads ~/.biff/data/unread.json and appends an unread count to
-# whatever status information Claude Code pipes in via stdin.
+# Reads ~/.biff/data/unread.json and prints an unread count.
+# When there are no unread messages, prints nothing.
 #
 # Setup — add to ~/.claude/settings.json:
 #
@@ -14,8 +14,7 @@ set -euo pipefail
 
 UNREAD_FILE="${BIFF_UNREAD_PATH:-$HOME/.biff/data/unread.json}"
 
-# Read stdin (Claude Code session JSON) — unused for now but
-# available for combining with other status info.
+# Drain stdin (Claude Code pipes session JSON; unused here).
 cat > /dev/null
 
 if [[ ! -f "$UNREAD_FILE" ]]; then

@@ -69,7 +69,7 @@ def _write_unread_file(path: Path, summary: UnreadSummary) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {"count": summary.count, "preview": summary.preview}
         tmp.write_text(json.dumps(data, indent=2) + "\n")
-        tmp.rename(path)
+        tmp.replace(path)
     except OSError:
         logger.warning("Failed to write unread status file %s", path, exc_info=True)
         tmp.unlink(missing_ok=True)
