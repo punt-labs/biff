@@ -2,7 +2,6 @@
 
 Shows what a user is working on, when they were last active,
 and whether they're accepting messages.
-Stub implementation for the server scaffold.
 """
 
 from __future__ import annotations
