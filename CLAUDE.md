@@ -13,7 +13,7 @@ I am a principal engineer. Every change I make leaves the codebase in a better s
 - **`from __future__ import annotations`** in every Python file. Full type annotations on every function signature.
 - **Immutable data models.** `@dataclass(frozen=True)` or pydantic with immutability.
 - **Latest Python.** Target 3.13+. Use modern PEP conventions (`Annotated`, `type` statements, `X | Y` unions).
-- **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`. Zero violations, zero errors, all tests green.
+- **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`. Zero violations, zero errors, all tests green.
 - **Double quotes.** Line length 88. Ruff with comprehensive rules.
 
 ## Development Workflow
@@ -98,7 +98,7 @@ Before creating a PR, verify:
 
 - [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
 - [ ] **CHANGELOG entry** added for notable changes
-- [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`
+- [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`
 
 ### Pull Request and Code Review Workflow
 
@@ -109,7 +109,7 @@ Do **not** merge immediately after creating a PR. The full flow is:
 3. **Wait for feedback** — Allow time for review comments and suggestions.
 4. **Evaluate feedback** — Read each comment; decide which are valid and actionable.
 5. **Address valid issues** — Commit fixes; push; ensure quality gates pass on each change.
-6. **Merge only when** — All review feedback has been evaluated (addressed or explicitly declined), GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`) run clean.
+6. **Merge only when** — All review feedback has been evaluated (addressed or explicitly declined), GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`) run clean.
 
 **Quality gates apply at every step:** Each commit that addresses review feedback must pass both local checks and GitHub Actions. Do not merge if any CI check is failing.
 

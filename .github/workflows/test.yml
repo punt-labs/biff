@@ -18,4 +18,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/ tests/
+      - run: uv run pyright
       - run: uv run python -m pytest -m "not slow"
