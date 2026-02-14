@@ -40,6 +40,10 @@ class TestServeCommand:
             transport="http", host="127.0.0.1", port=8419
         )
 
+    def test_invalid_transport_rejected(self) -> None:
+        result = runner.invoke(app, ["--user", "kai", "--transport", "htp"])
+        assert result.exit_code != 0
+
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
     def test_custom_host_port(

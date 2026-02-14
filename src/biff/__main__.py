@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
+import click
 import typer
 
 from biff.models import BiffConfig
@@ -26,7 +27,11 @@ def serve(
         Path, typer.Option(help="Data directory for messages and sessions.")
     ] = _DEFAULT_DATA_DIR,
     transport: Annotated[
-        str, typer.Option(help="Transport: 'stdio' or 'http'.")
+        str,
+        typer.Option(
+            help="Transport: 'stdio' or 'http'.",
+            click_type=click.Choice(["stdio", "http"]),
+        ),
     ] = "stdio",
     host: Annotated[
         str, typer.Option(help="HTTP host (http transport only).")

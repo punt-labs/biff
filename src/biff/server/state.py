@@ -1,7 +1,7 @@
 """Server state container for biff MCP tools.
 
-All shared state lives in a frozen dataclass passed through FastMCP's
-lifespan mechanism. Tools receive it via ``ctx.request_context.lifespan_context``.
+All shared state lives in a frozen dataclass. Tool closures capture it
+directly during registration; it is also available as the lifespan context.
 """
 
 from __future__ import annotations

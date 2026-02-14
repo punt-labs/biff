@@ -76,6 +76,13 @@ class TestFingerTool:
         result = fn(user="eric")
         assert "messages off" in result
 
+    def test_strips_at_prefix(self, state: ServerState) -> None:
+        state.sessions.update(UserSession(user="eric", plan="coding"))
+        fn = _get_tool_fn(state, "finger")
+        result = fn(user="@eric")
+        assert "coding" in result
+        assert "@eric" in result
+
 
 class TestWhoTool:
     def test_no_active_sessions(self, state: ServerState) -> None:

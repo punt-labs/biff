@@ -1,8 +1,7 @@
 """FastMCP application factory.
 
 ``create_server`` builds a fully configured FastMCP instance with all
-tools registered. ``run_server`` is the entry point for both stdio
-and HTTP transports.
+tools registered. The returned server is run via ``mcp.run(transport=...)``.
 """
 
 from __future__ import annotations

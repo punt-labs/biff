@@ -24,13 +24,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     def finger(user: str) -> str:
         """Query a user's session and presence info."""
-        session = state.sessions.get_user(user)
+        bare = user.lstrip("@")
+        session = state.sessions.get_user(bare)
         if session is None:
-            return f"@{user} has no active session."
+            return f"@{bare} has no active session."
         status = "accepting messages" if session.biff_enabled else "messages off"
         plan_line = f"  Plan: {session.plan}" if session.plan else "  No plan set."
         return (
-            f"@{user} — {status}\n"
+            f"@{bare} — {status}\n"
             f"  Last active: {session.last_active.isoformat()}\n"
             f"{plan_line}"
         )
