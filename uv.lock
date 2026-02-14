@@ -76,6 +76,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "claude-agent-sdk" },
     { name = "mypy" },
     { name = "pyright" },
     { name = "pytest" },
@@ -84,13 +85,9 @@ dev = [
     { name = "ruff" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "claude-agent-sdk" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "claude-agent-sdk", marker = "extra == 'dev'", specifier = ">=0.1.36" },
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -104,9 +101,6 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15.0" },
 ]
 provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "claude-agent-sdk", specifier = ">=0.1.36" }]
 
 [[package]]
 name = "cachetools"
