@@ -44,9 +44,12 @@ def _make_check_tool(description: str) -> None:
         preview = _unread_preview
         _unread_count = 0
         _unread_preview = ""
-        asyncio.get_event_loop().call_soon(
-            lambda: _update_description("Check for new messages")
-        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _update_description("Check for new messages")
+        else:
+            loop.call_soon(lambda: _update_description("Check for new messages"))
         return f"You had {count} messages:\n{preview}"
 
 
