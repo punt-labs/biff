@@ -12,13 +12,11 @@ from typing import Annotated
 import click
 import typer
 
-from biff.models import BiffConfig
+from biff.config import load_config
 from biff.server.app import create_server
 from biff.server.state import create_state
 
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
-
-_DEFAULT_DATA_DIR = Path.home() / ".biff" / "data"
 
 
 @app.command()
@@ -29,10 +27,18 @@ def version() -> None:
 
 @app.command()
 def serve(
-    user: Annotated[str, typer.Option(help="Your username.")],
+    user: Annotated[
+        str | None,
+        typer.Option(help="Your username. Auto-detected from 'git config biff.user'."),
+    ] = None,
     data_dir: Annotated[
-        Path, typer.Option(help="Data directory for messages and sessions.")
-    ] = _DEFAULT_DATA_DIR,
+        Path | None,
+        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
+    ] = None,
+    prefix: Annotated[
+        Path,
+        typer.Option(help="Base path for data directory (default: /tmp)."),
+    ] = Path("/tmp"),  # noqa: S108
     transport: Annotated[
         str,
         typer.Option(
@@ -46,8 +52,16 @@ def serve(
     port: Annotated[int, typer.Option(help="HTTP port (http transport only).")] = 8419,
 ) -> None:
     """Start the biff MCP server."""
-    config = BiffConfig(user=user)
-    state = create_state(config, data_dir, unread_path=data_dir / "unread.json")
+    resolved = load_config(
+        user_override=user,
+        data_dir_override=data_dir,
+        prefix=prefix,
+    )
+    state = create_state(
+        resolved.config,
+        resolved.data_dir,
+        unread_path=resolved.data_dir / "unread.json",
+    )
     mcp = create_server(state)
 
     if transport == "http":
