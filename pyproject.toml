@@ -133,6 +133,10 @@ typeCheckingMode = "strict"
 include = ["src", "tests"]
 
 [[tool.pyright.executionEnvironments]]
+root = "src/biff/server/tools"
+reportUnusedFunction = false
+
+[[tool.pyright.executionEnvironments]]
 root = "tests"
 reportPrivateUsage = false
 
