@@ -30,7 +30,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     def send_message(to: str, message: str) -> str:
         """Send a message to another user's inbox."""
         update_current_session(state)
-        bare = to.lstrip("@")
+        bare = to.strip().lstrip("@")
         msg = Message(
             from_user=state.config.user,
             to_user=bare,
