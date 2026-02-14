@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from mcp.types import TextContent
+
 if TYPE_CHECKING:
     from fastmcp import Client
 
@@ -52,7 +54,7 @@ class Transcript:
 
     title: str
     description: str = ""
-    entries: list[TranscriptEntry] = field(default_factory=list)
+    entries: list[TranscriptEntry] = field(default_factory=list[TranscriptEntry])
 
     def add(
         self,
@@ -100,18 +102,10 @@ class RecordingClient:
     async def call(self, tool_name: str, **kwargs: object) -> str:
         """Call a tool and record the interaction in the transcript."""
         result = await self.client.call_tool(tool_name, kwargs)
-        text = "(no output)"
-        is_error = False
-
-        if hasattr(result, "is_error"):
-            is_error = bool(result.is_error)
-
-        if hasattr(result, "content"):
-            text_parts = [
-                block.text for block in result.content if hasattr(block, "text")
-            ]
-            if text_parts:
-                text = "\n".join(text_parts)
-
+        is_error = bool(result.is_error)
+        text_parts = [
+            block.text for block in result.content if isinstance(block, TextContent)
+        ]
+        text = "\n".join(text_parts) if text_parts else "(no output)"
         self.transcript.add(tool_name, dict(kwargs), text, is_error=is_error)
         return text

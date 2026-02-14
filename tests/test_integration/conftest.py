@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastmcp import Client
@@ -44,10 +44,11 @@ def transcript(request: pytest.FixtureRequest) -> Generator[Transcript]:
     t = Transcript(title="")
     yield t
     # After test completes, write transcript if marked and non-empty
-    marker = request.node.get_closest_marker("transcript")
+    node = cast("pytest.Item", request.node)  # pyright: ignore[reportUnknownMemberType]
+    marker = node.get_closest_marker("transcript")
     if marker and t.entries:
         _TRANSCRIPT_DIR.mkdir(exist_ok=True)
-        slug = request.node.name.replace("[", "_").replace("]", "")
+        slug = node.name.replace("[", "_").replace("]", "")
         path = _TRANSCRIPT_DIR / f"{slug}.txt"
         path.write_text(t.render())
 
