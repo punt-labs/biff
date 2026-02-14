@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff.server.tools._session import update_current_session
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
@@ -26,10 +28,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     def plan(message: str) -> str:
         """Update the current user's plan."""
-        session = state.sessions.get_user(state.config.user)
-        if session is None:
-            state.sessions.heartbeat(state.config.user)
-            session = state.sessions.get_user(state.config.user)
-            assert session is not None  # noqa: S101
-        state.sessions.update(session.model_copy(update={"plan": message}))
+        update_current_session(state, plan=message)
         return f"Plan updated: {message}"
