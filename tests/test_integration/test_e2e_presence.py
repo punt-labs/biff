@@ -8,9 +8,24 @@ The shared data directory simulates two users in the same git repo.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import pytest
 
 from biff.testing import RecordingClient
+
+if TYPE_CHECKING:
+    from fastmcp import Client
+
+
+async def _check_description(client: Client[Any]) -> str:
+    """Get the check_messages tool description from an MCP client."""
+    tools = await client.list_tools()
+    for tool in tools:
+        if tool.name == "check_messages":
+            assert tool.description is not None
+            return tool.description
+    raise AssertionError("check_messages tool not found")
 
 
 class TestCrossUserVisibility:
@@ -209,3 +224,39 @@ class TestCrossUserMessaging:
         result = await eric.call("check_messages")
         assert "@kai" in result
         assert "urgent fix needed" in result
+
+
+class TestCrossUserDynamicDescriptions:
+    """check_messages description reflects unread state across users."""
+
+    async def test_description_updates_after_incoming_message(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """eric sends kai a message; kai's next tool call updates description."""
+        await eric.call("send_message", to="kai", message="auth module ready")
+        # kai calls any tool — triggers description refresh
+        await kai.call("plan", message="working")
+        desc = await _check_description(kai.client)
+        assert "1 unread" in desc
+        assert "@eric" in desc
+
+    async def test_description_reverts_after_check(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """After checking messages, description reverts to base."""
+        await eric.call("send_message", to="kai", message="hello")
+        await kai.call("plan", message="working")
+        desc = await _check_description(kai.client)
+        assert "1 unread" in desc
+        # Check clears unread
+        await kai.call("check_messages")
+        desc = await _check_description(kai.client)
+        assert "unread" not in desc
+
+    async def test_sender_description_unaffected(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Sending a message doesn't add unread to sender's description."""
+        await kai.call("send_message", to="eric", message="hey")
+        desc = await _check_description(kai.client)
+        assert "unread" not in desc

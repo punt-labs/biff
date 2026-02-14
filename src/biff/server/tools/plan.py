@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff.server.tools._descriptions import refresh_check_messages
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -28,4 +29,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     def plan(message: str) -> str:
         """Update the current user's plan."""
         update_current_session(state, plan=message)
+        refresh_check_messages(mcp, state)
         return f"Plan updated: {message}"

@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from biff.server.tools._descriptions import refresh_check_messages
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
@@ -46,6 +48,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     def finger(user: str) -> str:
         """Query a user's session and presence info."""
+        refresh_check_messages(mcp, state)
         bare = user.strip().lstrip("@")
         session = state.sessions.get_user(bare)
         if session is None:

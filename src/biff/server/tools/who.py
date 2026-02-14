@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff.server.tools._descriptions import refresh_check_messages
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
@@ -24,6 +26,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     def who() -> str:
         """List active sessions."""
+        refresh_check_messages(mcp, state)
         active = state.sessions.get_active(ttl=_DEFAULT_TTL)
         if not active:
             return "No active sessions."
