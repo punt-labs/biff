@@ -43,6 +43,7 @@ htmlcov/
 *.out
 *.toc
 *.pdf
+!prfaq.pdf
 
 # OS
 .DS_Store

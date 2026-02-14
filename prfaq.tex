@@ -207,12 +207,15 @@ like this:
 
 Every command implies intent. There are no channels to monitor, no threads to
 catch up on, no emoji reactions to parse. Communication is pull-based: when
-someone sends you a message, your session notifies you, and you decide when
-to read it. When you need deeper collaboration, \texttt{/pair @kai} invites a
-teammate to send input to your Claude Code session --- and they can only join
-when you explicitly consent. When a problem needs three people for thirty
-minutes, \texttt{/hive} creates a temporary group that dissolves when the
-work is done. The full command reference is in Appendix~A.
+someone sends you a message, your session notifies you --- your AI assistant
+mentions it naturally (``You have 2 unread messages from @kai. Want me to read
+them?'') and your terminal's status bar shows a live unread count. You decide
+when to engage. When you need deeper
+collaboration, \texttt{/pair @kai} invites a teammate to send input to your
+Claude Code session --- and they can only join when you explicitly consent.
+When a problem needs three people for thirty minutes, \texttt{/hive} creates a
+temporary group that dissolves when the work is done. The full command
+reference, organized by priority tier, is in Appendix~A.
 
 Because biff speaks MCP, it does not distinguish between a human session and
 an agent session. An autonomous coding agent can join a \texttt{/hive},
@@ -462,10 +465,24 @@ logs, biff teams will be available in Q3 2026.
 
 \begin{faqpair}{What are the major technical risks?}
   \begin{enumerate}[leftmargin=1.5em]
-    \item \textbf{MCP protocol maturity (medium risk).} MCP is young. The
-    spec may change in ways that require rearchitecture. Mitigation: biff
-    wraps MCP interactions behind an internal abstraction layer, and
-    punt-labs actively tracks the MCP spec evolution.
+    \item \textbf{MCP notification mechanism (low risk, validated).} A
+    spike validated that Claude Code acts on
+    \texttt{notifications/tools/list\_changed} sent over SSE: when the
+    biff server updates a tool description (e.g., ``Check messages (1
+    unread: @kai about auth)''), the model sees the change and can
+    proactively mention it to the user. The full chain --- message
+    arrival, tool re-registration, SSE notification, model awareness ---
+    has been tested end-to-end. The remaining MCP spec maturity risk is
+    mitigated by wrapping all MCP interactions behind an internal
+    abstraction layer.
+
+    \item \textbf{User-visible notification gap (medium risk).} Dynamic
+    tool descriptions are visible to the AI model but not directly to the
+    human user in the Claude Code UI. There is no badge, popup, or
+    inline notification for the user. Mitigation: the terminal status bar
+    is a configurable shell command that can read local files. Biff will
+    write unread state to a file, and the status bar script displays a
+    live count. This is a proven pattern but requires per-terminal setup.
 
     \item \textbf{Message relay infrastructure (low risk).} Routing
     messages between engineers on different machines requires a relay
@@ -476,7 +493,8 @@ logs, biff teams will be available in Q3 2026.
     feature, which allows one engineer to send input to another's Claude
     Code session, requires careful permission design. Mitigation: explicit
     per-session consent, all input visible to the session owner, all
-    interactions logged, session owner retains kill switch.
+    interactions logged, session owner retains kill switch. This is scoped
+    to Phase~3, giving time for the security model to mature.
 
     \item \textbf{Adoption chicken-and-egg (high risk).} Biff is only
     useful if your teammates also use it. Mitigation: the \texttt{.biff}
@@ -497,17 +515,25 @@ logs, biff teams will be available in Q3 2026.
 \end{faqpair}
 
 \begin{faqpair}{What is the estimated development timeline?}
+  A technical spike has validated the core architecture: HTTP transport with
+  SSE for server-push notifications, dynamic tool descriptions via
+  \texttt{notifications/tools/list\_changed}, and end-to-end message
+  awareness in Claude Code. The architecture is proven; what remains is
+  implementation.
+
   \begin{description}[leftmargin=1.5em, labelwidth=6em, font=\bfseries]
     \item[Phase 1 (4 weeks)] Core MCP server with \texttt{/mesg},
     \texttt{/who}, \texttt{/plan}, \texttt{/finger}, \texttt{/biff on/off}.
     Local relay for same-machine communication. Single-user value from
-    \texttt{/plan} and session awareness.
+    \texttt{/plan} and session awareness. Architecture validated by spike.
     \item[Phase 2 (4 weeks)] Network relay for cross-machine messaging.
     \texttt{/wall}, \texttt{/hive}, \texttt{/send}, \texttt{/cr}. Team
     communication functional end-to-end.
     \item[Phase 3 (4 weeks)] \texttt{/talk} real-time conversation,
     \texttt{/pair} with permission model. End-to-end encryption. Security
-    audit.
+    audit. Note: the spike found that direct subprocess handoff is not
+    viable in MCP; \texttt{/talk} will use model-mediated message
+    exchange.
     \item[Phase 4 (4 weeks)] Hosted relay service (biff teams).
     Admin controls, audit logs, retention policies. Billing integration.
   \end{description}
@@ -655,13 +681,16 @@ logs, biff teams will be available in Q3 2026.
   \texttt{/help} documents everything inline.}
 
 \riskitem{Feasibility}{%
-  \textbf{Low-to-medium risk.} The core technology --- MCP servers,
-  WebSocket relay, message routing --- is well-understood. The team has
-  direct experience with MCP server development and Python CLI tooling.
-  The highest-risk component is the \texttt{/pair} feature,
-  which requires careful permission design for session input sharing. This is scoped to Phase 3,
-  giving time for the security model to mature. No component requires
-  novel technology.}
+  \textbf{Low risk (validated).} A technical spike has confirmed the core
+  architecture end-to-end: HTTP transport with SSE, dynamic tool
+  descriptions via \texttt{notifications/tools/list\_changed}, and
+  model-visible message awareness in Claude Code. The MCP notification
+  mechanism --- the highest-uncertainty component --- works as designed.
+  The remaining technology (WebSocket relay, message routing, file-based
+  storage) is well-understood. The highest-risk component is the
+  \texttt{/pair} feature, which requires careful permission design for
+  session input sharing. This is scoped to Phase~3, giving time for the
+  security model to mature. No component requires novel technology.}
 
 \riskitem{Viability}{%
   \textbf{Medium risk.} The open-core model is proven in developer tools,
@@ -684,49 +713,55 @@ logs, biff teams will be available in Q3 2026.
 
 \section*{Appendix A: Command Reference}
 
+Commands are organized by priority tier using the MoSCoW framework.
+\textbf{Must Have} commands ship in Phase~1 and deliver standalone value.
+\textbf{Should Have} commands ship in Phase~2 and enable team workflows.
+\textbf{Could Have} commands ship in Phase~3 and require additional
+architecture work identified during technical spikes.
+
+\subsection*{Must Have --- Phase 1: Core Communication}
+
 \renewcommand{\arraystretch}{1.4}
 \begin{tabularx}{\textwidth}{@{}l l X@{}}
   \toprule
   \textbf{Command} & \textbf{Origin} & \textbf{Description} \\
   \midrule
 
-  \texttt{/mesg @user ``text''} & BSD \texttt{mesg} &
-  Send a one-way message to a user. Asynchronous --- the recipient reads
-  it when they choose. \\
-
-  \texttt{/talk @user} & BSD \texttt{talk} &
-  Open a real-time bidirectional conversation. Both users type and read
-  in their own terminals. Either side can end the session. \\
-
-  \texttt{/wall ``text''} & BSD \texttt{wall} &
-  Broadcast a message. If you are in a \texttt{/hive}, the message goes
-  to hive members. Otherwise it goes to your full team. \\
-
-  \texttt{/finger @user} & BSD \texttt{finger} &
-  Read a user's plan (set via \texttt{/plan}) and current status.
-  Non-intrusive --- the target is not notified. \\
+  \texttt{/plan ``text''} & BSD \texttt{.plan} &
+  Set your status message. Visible to anyone who runs \texttt{/finger}
+  or \texttt{/who}. Update it as your work changes. Provides single-user
+  value without teammates. \\
 
   \texttt{/who} & BSD \texttt{who} &
   List all active sessions. Shows who is online, their availability
   (\texttt{/biff on/off}), and their current plan. \\
 
-  \texttt{/plan ``text''} & BSD \texttt{.plan} &
-  Set your status message. Visible to anyone who runs \texttt{/finger}
-  or \texttt{/who}. Update it as your work changes. \\
+  \texttt{/finger @user} & BSD \texttt{finger} &
+  Read a user's plan and current status.
+  Non-intrusive --- the target is not notified. \\
+
+  \texttt{/mesg @user ``text''} & BSD \texttt{mesg} &
+  Send a one-way message to a user. Asynchronous --- the recipient reads
+  it when they choose. Core validated by technical spike. \\
 
   \texttt{/biff on} | \texttt{off} & BSD \texttt{biff} &
   Control whether you receive messages. When off, incoming messages are
   queued until you turn it back on. \\
 
-  \texttt{/hive @a @b @c} & --- &
-  Create a temporary group with the named users. All members see each
-  other's messages. Use \texttt{/wall} to broadcast within the hive.
-  \texttt{/hive off} dissolves the group. \\
+  \bottomrule
+\end{tabularx}
 
-  \texttt{/pair @user} & --- &
-  Invite a user to send input to your Claude Code session. Requires
-  explicit acceptance. The session owner sees all input and retains full
-  control. \\
+\subsection*{Should Have --- Phase 2: Team Communication}
+
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+  \toprule
+  \textbf{Command} & \textbf{Origin} & \textbf{Description} \\
+  \midrule
+
+  \texttt{/wall ``text''} & BSD \texttt{wall} &
+  Broadcast a message. If you are in a \texttt{/hive}, the message goes
+  to hive members. Otherwise it goes to your full team. \\
 
   \texttt{/send @user} & --- &
   Send a diff, file, or code snippet to a user with full context.
@@ -736,6 +771,32 @@ logs, biff teams will be available in Q3 2026.
   Request a code review. Automatically attaches the relevant changes
   from your current branch. The reviewer receives the diff and can
   respond with comments. \\
+
+  \texttt{/hive @a @b @c} & --- &
+  Create a temporary group with the named users. All members see each
+  other's messages. Use \texttt{/wall} to broadcast within the hive.
+  \texttt{/hive off} dissolves the group. \\
+
+  \bottomrule
+\end{tabularx}
+
+\subsection*{Could Have --- Phase 3: Real-Time \& Pairing}
+
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+  \toprule
+  \textbf{Command} & \textbf{Origin} & \textbf{Description} \\
+  \midrule
+
+  \texttt{/talk @user} & BSD \texttt{talk} &
+  Open a real-time bidirectional conversation. The technical spike found
+  that direct subprocess handoff is not viable in MCP; this command will
+  use model-mediated message exchange instead. \\
+
+  \texttt{/pair @user} & --- &
+  Invite a user to send input to your Claude Code session. Requires
+  explicit acceptance. The session owner sees all input and retains full
+  control. Highest security design complexity. \\
 
   \bottomrule
 \end{tabularx}
