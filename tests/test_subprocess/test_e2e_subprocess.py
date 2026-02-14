@@ -144,3 +144,43 @@ class TestPresenceLifecycle:
         finger_result = await eric.call("finger", user="@kai")
         assert "accepting messages" in finger_result
         assert "auth refactor done" in finger_result
+
+
+class TestCrossProcessMessaging:
+    """Message delivery across subprocesses via shared filesystem."""
+
+    @pytest.mark.transcript
+    async def test_send_and_check(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """kai sends a message; eric receives it across processes."""
+        kai.transcript.title = "Subprocess: send and check messages"
+        kai.transcript.description = (
+            "Cross-process messaging over real stdio subprocesses."
+        )
+
+        result = await kai.call("send_message", to="@eric", message="PR is ready")
+        assert "@eric" in result
+
+        result = await eric.call("check_messages")
+        assert "@kai" in result
+        assert "PR is ready" in result
+
+    @pytest.mark.transcript
+    async def test_bidirectional_messaging(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Both users exchange messages across processes."""
+        kai.transcript.title = "Subprocess: bidirectional messaging"
+        kai.transcript.description = (
+            "Two subprocesses exchange messages through shared filesystem."
+        )
+
+        await kai.call("send_message", to="eric", message="review my PR?")
+        await eric.call("send_message", to="kai", message="sure, on it")
+
+        kai_inbox = await kai.call("check_messages")
+        eric_inbox = await eric.call("check_messages")
+
+        assert "sure, on it" in kai_inbox
+        assert "review my PR?" in eric_inbox

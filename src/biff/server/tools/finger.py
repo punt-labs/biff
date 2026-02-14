@@ -46,7 +46,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     def finger(user: str) -> str:
         """Query a user's session and presence info."""
-        bare = user.lstrip("@")
+        bare = user.strip().lstrip("@")
         session = state.sessions.get_user(bare)
         if session is None:
             return f"@{bare} has no active session."

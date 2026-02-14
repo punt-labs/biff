@@ -146,6 +146,90 @@ class TestPlanTool:
         assert session.last_active > old_time
 
 
+class TestSendMessageTool:
+    def test_sends_message(self, state: ServerState) -> None:
+        fn = _get_tool_fn(state, "send_message")
+        result = fn(to="eric", message="hey, PR is ready")
+        assert "@eric" in result
+        unread = state.messages.get_unread("eric")
+        assert len(unread) == 1
+        assert unread[0].from_user == "kai"
+        assert unread[0].body == "hey, PR is ready"
+
+    def test_strips_at_prefix(self, state: ServerState) -> None:
+        fn = _get_tool_fn(state, "send_message")
+        fn(to="@eric", message="hello")
+        unread = state.messages.get_unread("eric")
+        assert len(unread) == 1
+        assert unread[0].to_user == "eric"
+
+    def test_delivers_when_biff_off(self, state: ServerState) -> None:
+        state.sessions.update(UserSession(user="eric", biff_enabled=False))
+        fn = _get_tool_fn(state, "send_message")
+        result = fn(to="eric", message="urgent fix needed")
+        assert "@eric" in result
+        unread = state.messages.get_unread("eric")
+        assert len(unread) == 1
+
+    def test_multiple_messages(self, state: ServerState) -> None:
+        fn = _get_tool_fn(state, "send_message")
+        fn(to="eric", message="first")
+        fn(to="eric", message="second")
+        unread = state.messages.get_unread("eric")
+        assert len(unread) == 2
+
+
+class TestCheckMessagesTool:
+    def test_no_messages(self, state: ServerState) -> None:
+        fn = _get_tool_fn(state, "check_messages")
+        result = fn()
+        assert "No new messages" in result
+
+    def test_shows_unread(self, state: ServerState) -> None:
+        from biff.models import BiffConfig
+        from biff.server.state import create_state
+
+        eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
+        eric_send = _get_tool_fn(eric_state, "send_message")
+        eric_send(to="kai", message="review my PR please")
+
+        check_fn = _get_tool_fn(state, "check_messages")
+        result = check_fn()
+        assert "@eric" in result
+        assert "review my PR please" in result
+
+    def test_marks_as_read(self, state: ServerState) -> None:
+        from biff.models import BiffConfig
+        from biff.server.state import create_state
+
+        eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
+        eric_send = _get_tool_fn(eric_state, "send_message")
+        eric_send(to="kai", message="hello")
+
+        check_fn = _get_tool_fn(state, "check_messages")
+        check_fn()
+
+        # Second check should show no new messages
+        result = check_fn()
+        assert "No new messages" in result
+
+    def test_multiple_senders(self, state: ServerState) -> None:
+        from biff.models import BiffConfig
+        from biff.server.state import create_state
+
+        eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
+        priya_state = create_state(BiffConfig(user="priya"), state.messages._data_dir)
+        _get_tool_fn(eric_state, "send_message")(to="kai", message="from eric")
+        _get_tool_fn(priya_state, "send_message")(to="kai", message="from priya")
+
+        check_fn = _get_tool_fn(state, "check_messages")
+        result = check_fn()
+        assert "@eric" in result
+        assert "@priya" in result
+        assert "from eric" in result
+        assert "from priya" in result
+
+
 class TestToolInteractions:
     """Cross-tool integration tests verifying shared state."""
 

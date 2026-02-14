@@ -42,6 +42,12 @@ def _format_command(entry: TranscriptEntry) -> str:
     if tool == "biff" and "enabled" in args:
         state = "on" if args["enabled"] else "off"
         return f"{prefix}> /biff {state}"
+    if tool == "send_message" and "to" in args and "message" in args:
+        to = args["to"]
+        at_to = to if str(to).startswith("@") else f"@{to}"
+        return f'{prefix}> /write {at_to} "{args["message"]}"'
+    if tool == "check_messages":
+        return f"{prefix}> /check"
     if tool == "who":
         return f"{prefix}> /who"
 
