@@ -11,9 +11,16 @@ from biff.__main__ import app
 runner = CliRunner()
 
 
+class TestVersionCommand:
+    def test_prints_version(self) -> None:
+        result = runner.invoke(app, ["version"])
+        assert result.exit_code == 0
+        assert "biff" in result.output
+
+
 class TestServeCommand:
     def test_requires_user_option(self) -> None:
-        result = runner.invoke(app, [])
+        result = runner.invoke(app, ["serve"])
         assert result.exit_code != 0
 
     @patch("biff.__main__.create_server")
@@ -23,7 +30,7 @@ class TestServeCommand:
     ) -> None:
         mock_mcp = MagicMock()
         mock_server.return_value = mock_mcp
-        result = runner.invoke(app, ["--user", "kai"])
+        result = runner.invoke(app, ["serve", "--user", "kai"])
         assert result.exit_code == 0
         mock_mcp.run.assert_called_once_with(transport="stdio")
 
@@ -34,14 +41,14 @@ class TestServeCommand:
     ) -> None:
         mock_mcp = MagicMock()
         mock_server.return_value = mock_mcp
-        result = runner.invoke(app, ["--user", "kai", "--transport", "http"])
+        result = runner.invoke(app, ["serve", "--user", "kai", "--transport", "http"])
         assert result.exit_code == 0
         mock_mcp.run.assert_called_once_with(
             transport="http", host="127.0.0.1", port=8419
         )
 
     def test_invalid_transport_rejected(self) -> None:
-        result = runner.invoke(app, ["--user", "kai", "--transport", "htp"])
+        result = runner.invoke(app, ["serve", "--user", "kai", "--transport", "htp"])
         assert result.exit_code != 0
 
     @patch("biff.__main__.create_server")
@@ -54,6 +61,7 @@ class TestServeCommand:
         result = runner.invoke(
             app,
             [
+                "serve",
                 "--user",
                 "kai",
                 "--transport",

@@ -1,10 +1,11 @@
 """Biff CLI entry point.
 
-Provides ``biff serve`` for running the MCP server with stdio or HTTP transport.
+Provides ``biff serve`` and ``biff version``.
 """
 
 from __future__ import annotations
 
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Annotated
 
@@ -18,6 +19,12 @@ from biff.server.state import create_state
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 
 _DEFAULT_DATA_DIR = Path.home() / ".biff" / "data"
+
+
+@app.command()
+def version() -> None:
+    """Print the biff version."""
+    print(f"biff {pkg_version('biff-mcp')}")
 
 
 @app.command()
