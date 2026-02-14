@@ -23,29 +23,31 @@ class TranscriptEntry:
     arguments: dict[str, object]
     result: str
     is_error: bool = False
+    user: str = ""
 
 
 def _format_command(entry: TranscriptEntry) -> str:
     """Format a transcript entry as a terminal-style command."""
     tool = entry.tool
     args = entry.arguments
+    prefix = f"@{entry.user} " if entry.user else ""
 
     # Map tool names to their slash-command syntax
     if tool == "plan" and "message" in args:
-        return f'> /plan "{args["message"]}"'
+        return f'{prefix}> /plan "{args["message"]}"'
     if tool == "finger" and "user" in args:
         user = args["user"]
         at_user = user if str(user).startswith("@") else f"@{user}"
-        return f"> /finger {at_user}"
+        return f"{prefix}> /finger {at_user}"
     if tool == "biff" and "enabled" in args:
         state = "on" if args["enabled"] else "off"
-        return f"> /biff {state}"
+        return f"{prefix}> /biff {state}"
     if tool == "who":
-        return "> /who"
+        return f"{prefix}> /who"
 
     # Fallback: generic tool call
     arg_str = " ".join(f"{k}={v!r}" for k, v in args.items())
-    return f"> /{tool} {arg_str}".rstrip()
+    return f"{prefix}> /{tool} {arg_str}".rstrip()
 
 
 @dataclass
@@ -63,6 +65,7 @@ class Transcript:
         result: str,
         *,
         is_error: bool = False,
+        user: str = "",
     ) -> None:
         """Record a tool call and its response."""
         self.entries.append(
@@ -71,6 +74,7 @@ class Transcript:
                 arguments=arguments,
                 result=result,
                 is_error=is_error,
+                user=user,
             )
         )
 
@@ -98,6 +102,7 @@ class RecordingClient:
 
     client: Client[Any]
     transcript: Transcript
+    user: str = ""
 
     async def call(self, tool_name: str, **kwargs: object) -> str:
         """Call a tool and record the interaction in the transcript."""
@@ -107,5 +112,7 @@ class RecordingClient:
             block.text for block in result.content if isinstance(block, TextContent)
         ]
         text = "\n".join(text_parts) if text_parts else "(no output)"
-        self.transcript.add(tool_name, dict(kwargs), text, is_error=is_error)
+        self.transcript.add(
+            tool_name, dict(kwargs), text, is_error=is_error, user=self.user
+        )
         return text
