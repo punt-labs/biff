@@ -26,6 +26,7 @@ def _make_transport(user: str, data_dir: Path) -> StdioTransport:
         args=[
             "run",
             "biff",
+            "serve",
             "--user",
             user,
             "--data-dir",
