@@ -1,7 +1,6 @@
-"""Message availability tool — ``/mesg on|off``.
+"""Availability toggle — ``/biff on|off``.
 
-Controls whether the current user accepts messages.
-Stub implementation for the server scaffold.
+Controls whether the current user accepts messages and appears active.
 """
 
 from __future__ import annotations
@@ -17,16 +16,16 @@ if TYPE_CHECKING:
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
-    """Register the mesg tool."""
+    """Register the biff toggle tool."""
 
     @mcp.tool(
-        name="mesg",
+        name="biff",
         description=(
             "Control message reception. "
             "Use 'on' to accept messages, 'off' to block them."
         ),
     )
-    def mesg(enabled: bool) -> str:  # noqa: FBT001
+    def biff(enabled: bool) -> str:  # noqa: FBT001
         """Toggle message reception for the current user."""
         update_current_session(state, biff_enabled=enabled)
         status = "on" if enabled else "off"
