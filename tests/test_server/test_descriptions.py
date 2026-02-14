@@ -1,9 +1,12 @@
-"""Tests for dynamic tool description updates."""
+"""Tests for dynamic tool description updates and inbox polling."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import suppress
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -12,8 +15,12 @@ from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import (
     _CHECK_MESSAGES_BASE,
+    poll_inbox,
     refresh_check_messages,
 )
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
 
 
 @pytest.fixture
@@ -138,3 +145,107 @@ class TestUnreadFile:
         mcp = create_server(state)
         refresh_check_messages(mcp, state)
         assert nested.exists()
+
+
+class TestPollInbox:
+    """Verify the background inbox poller detects changes and refreshes."""
+
+    _FAST_INTERVAL = 0.01
+
+    @pytest.fixture
+    def state_with_path(self, tmp_path: Path) -> ServerState:
+        return create_state(
+            BiffConfig(user="kai"),
+            tmp_path,
+            unread_path=tmp_path / "unread.json",
+        )
+
+    async def _run_poller(
+        self,
+        mcp: FastMCP[ServerState],
+        state: ServerState,
+        *,
+        cycles: int = 5,
+    ) -> None:
+        """Run the poller for a few cycles then cancel it."""
+        task = asyncio.create_task(poll_inbox(mcp, state, interval=self._FAST_INTERVAL))
+        await asyncio.sleep(self._FAST_INTERVAL * cycles)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    async def test_initial_refresh_writes_file(
+        self, state_with_path: ServerState
+    ) -> None:
+        """Poller forces a refresh on its first cycle (last_count=-1)."""
+        mcp = create_server(state_with_path)
+        await self._run_poller(mcp, state_with_path)
+        assert state_with_path.unread_path is not None
+        data = json.loads(state_with_path.unread_path.read_text())
+        assert data["count"] == 0
+
+    async def test_detects_new_message(self, state_with_path: ServerState) -> None:
+        """Poller picks up a message added between poll cycles."""
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(
+            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
+        )
+        # Let initial cycle run
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        # Inject a message
+        state_with_path.messages.append(
+            Message(from_user="eric", to_user="kai", body="PR ready")
+        )
+        # Let poller detect the change
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert state_with_path.unread_path is not None
+        data = json.loads(state_with_path.unread_path.read_text())
+        assert data["count"] == 1
+        assert "@eric" in data["preview"]
+
+    async def test_updates_tool_description(self, state_with_path: ServerState) -> None:
+        """Poller updates the check_messages tool description."""
+        mcp = create_server(state_with_path)
+        state_with_path.messages.append(
+            Message(from_user="eric", to_user="kai", body="lunch?")
+        )
+        await self._run_poller(mcp, state_with_path)
+        tool = mcp._tool_manager._tools.get("check_messages")
+        assert tool is not None
+        assert "1 unread" in (tool.description or "")
+
+    async def test_skips_refresh_when_unchanged(
+        self, state_with_path: ServerState
+    ) -> None:
+        """Poller does not rewrite the file when count is stable."""
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(
+            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
+        )
+        # Let initial refresh write the file
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        assert state_with_path.unread_path is not None
+        mtime_after_initial = state_with_path.unread_path.stat().st_mtime_ns
+        # Let several more cycles run — count stays at 0
+        await asyncio.sleep(self._FAST_INTERVAL * 10)
+        mtime_after_stable = state_with_path.unread_path.stat().st_mtime_ns
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        assert mtime_after_stable == mtime_after_initial
+
+    async def test_cancellation_is_clean(self, state_with_path: ServerState) -> None:
+        """Cancelling the poller task does not raise."""
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(
+            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
+        )
+        await asyncio.sleep(self._FAST_INTERVAL * 2)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        assert task.done()

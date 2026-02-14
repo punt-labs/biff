@@ -1,8 +1,9 @@
-"""Dynamic tool description updates.
+"""Dynamic tool description updates and inbox polling.
 
 Refreshes tool descriptions based on current server state.
-Called after every tool execution so that the next ``tools/list``
-response reflects the latest state.
+Called after every tool execution (belt) and by a background
+poller (suspenders) so notifications stay fresh even between
+tool calls.
 
 Also writes an ``unread.json`` status file (when configured) so that
 external tools like the Claude Code status bar can display a live
@@ -11,6 +12,7 @@ unread count without querying the MCP server.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CHECK_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
+
+_DEFAULT_POLL_INTERVAL = 2.0
 
 
 def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -55,6 +59,31 @@ def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> Non
         )
     if state.unread_path is not None:
         _write_unread_file(state.unread_path, summary)
+
+
+async def poll_inbox(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    *,
+    interval: float = _DEFAULT_POLL_INTERVAL,
+) -> None:
+    """Background task: poll inbox and refresh notifications on change.
+
+    Runs for the lifetime of the MCP server. Detects new or read
+    messages by comparing the unread count against the last known
+    value, then calls :func:`refresh_check_messages` to update both
+    the tool description and the status file.
+
+    In Phase 2 the relay will push notifications directly, replacing
+    the polling loop. The refresh mechanism stays the same.
+    """
+    last_count = -1  # Force initial refresh
+    while True:
+        await asyncio.sleep(interval)
+        summary = state.messages.get_unread_summary(state.config.user)
+        if summary.count != last_count:
+            last_count = summary.count
+            refresh_check_messages(mcp, state)
 
 
 def _write_unread_file(path: Path, summary: UnreadSummary) -> None:
