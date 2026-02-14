@@ -7,17 +7,26 @@ the registered closure, verifying it reads/writes state correctly.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fastmcp.tools.tool import FunctionTool
 
-from biff.models import UserSession
+from biff.models import BiffConfig, Message, UserSession
 from biff.server.app import create_server
-from biff.server.state import ServerState
+from biff.server.state import ServerState, create_state
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+
+def _create_mcp(state: ServerState) -> FastMCP[ServerState]:
+    """Create a fully configured MCP server for testing."""
+    return create_server(state)
 
 
 def _get_tool_fn(state: ServerState, tool_name: str):
     """Get the callable for a registered tool by name."""
-    mcp = create_server(state)
+    mcp = _create_mcp(state)
     tool = mcp._tool_manager._tools[tool_name]
     assert isinstance(tool, FunctionTool)
     return tool.fn
@@ -186,9 +195,6 @@ class TestCheckMessagesTool:
         assert "No new messages" in result
 
     def test_shows_unread(self, state: ServerState) -> None:
-        from biff.models import BiffConfig
-        from biff.server.state import create_state
-
         eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
         eric_send = _get_tool_fn(eric_state, "send_message")
         eric_send(to="kai", message="review my PR please")
@@ -199,9 +205,6 @@ class TestCheckMessagesTool:
         assert "review my PR please" in result
 
     def test_marks_as_read(self, state: ServerState) -> None:
-        from biff.models import BiffConfig
-        from biff.server.state import create_state
-
         eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
         eric_send = _get_tool_fn(eric_state, "send_message")
         eric_send(to="kai", message="hello")
@@ -214,9 +217,6 @@ class TestCheckMessagesTool:
         assert "No new messages" in result
 
     def test_multiple_senders(self, state: ServerState) -> None:
-        from biff.models import BiffConfig
-        from biff.server.state import create_state
-
         eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
         priya_state = create_state(BiffConfig(user="priya"), state.messages._data_dir)
         _get_tool_fn(eric_state, "send_message")(to="kai", message="from eric")
@@ -254,3 +254,99 @@ class TestToolInteractions:
         result = who_fn()
         assert "@kai" in result
         assert "working on tests" in result
+
+
+def _tool_description(mcp: FastMCP[ServerState], name: str) -> str:
+    """Get a tool's current description from the MCP instance."""
+    tool = mcp._tool_manager._tools.get(name)
+    assert tool is not None
+    assert tool.description is not None
+    return tool.description
+
+
+class TestDynamicDescriptions:
+    """Verify check_messages description updates after tool calls."""
+
+    def test_default_description_when_no_messages(self, state: ServerState) -> None:
+        mcp = _create_mcp(state)
+        desc = _tool_description(mcp, "check_messages")
+        assert desc == "Check your inbox for new messages. Marks all as read."
+
+    def test_description_shows_unread_after_send(self, state: ServerState) -> None:
+        mcp = _create_mcp(state)
+        # eric sends kai a message (write directly to shared inbox)
+        state.messages.append(
+            Message(from_user="eric", to_user="kai", body="auth ready")
+        )
+        # kai calls any tool — triggers description refresh
+        plan_tool = mcp._tool_manager._tools["plan"]
+        assert isinstance(plan_tool, FunctionTool)
+        plan_tool.fn(message="working")
+        desc = _tool_description(mcp, "check_messages")
+        assert "1 unread" in desc
+        assert "@eric" in desc
+        assert "auth ready" in desc
+
+    def test_description_reverts_after_check(self, state: ServerState) -> None:
+        mcp = _create_mcp(state)
+        state.messages.append(Message(from_user="eric", to_user="kai", body="hello"))
+        # Trigger refresh via plan
+        plan_tool = mcp._tool_manager._tools["plan"]
+        assert isinstance(plan_tool, FunctionTool)
+        plan_tool.fn(message="working")
+        assert "1 unread" in _tool_description(mcp, "check_messages")
+        # Now check messages — should clear the description
+        check_tool = mcp._tool_manager._tools["check_messages"]
+        assert isinstance(check_tool, FunctionTool)
+        check_tool.fn()
+        desc = _tool_description(mcp, "check_messages")
+        assert desc == "Check your inbox for new messages. Marks all as read."
+
+    def test_description_shows_multiple_senders(self, state: ServerState) -> None:
+        mcp = _create_mcp(state)
+        state.messages.append(
+            Message(from_user="eric", to_user="kai", body="PR approved")
+        )
+        state.messages.append(
+            Message(from_user="priya", to_user="kai", body="tests pass")
+        )
+        # Trigger via who
+        who_tool = mcp._tool_manager._tools["who"]
+        assert isinstance(who_tool, FunctionTool)
+        who_tool.fn()
+        desc = _tool_description(mcp, "check_messages")
+        assert "2 unread" in desc
+        assert "@eric" in desc
+        assert "@priya" in desc
+
+    def test_send_message_triggers_refresh(self, state: ServerState) -> None:
+        mcp = _create_mcp(state)
+        # Another user sends to kai first
+        state.messages.append(Message(from_user="eric", to_user="kai", body="hello"))
+        # kai sends a message — should also refresh description
+        send_tool = mcp._tool_manager._tools["send_message"]
+        assert isinstance(send_tool, FunctionTool)
+        send_tool.fn(to="eric", message="hey back")
+        desc = _tool_description(mcp, "check_messages")
+        assert "1 unread" in desc
+
+    def test_finger_triggers_refresh(self, state: ServerState) -> None:
+        mcp = _create_mcp(state)
+        state.sessions.update(UserSession(user="eric", plan="coding"))
+        state.messages.append(
+            Message(from_user="eric", to_user="kai", body="look at this")
+        )
+        finger_tool = mcp._tool_manager._tools["finger"]
+        assert isinstance(finger_tool, FunctionTool)
+        finger_tool.fn(user="eric")
+        desc = _tool_description(mcp, "check_messages")
+        assert "1 unread" in desc
+
+    def test_biff_toggle_triggers_refresh(self, state: ServerState) -> None:
+        mcp = _create_mcp(state)
+        state.messages.append(Message(from_user="eric", to_user="kai", body="urgent"))
+        biff_tool = mcp._tool_manager._tools["biff"]
+        assert isinstance(biff_tool, FunctionTool)
+        biff_tool.fn(enabled=False)
+        desc = _tool_description(mcp, "check_messages")
+        assert "1 unread" in desc

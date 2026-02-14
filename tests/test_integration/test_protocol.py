@@ -157,3 +157,48 @@ class TestCheckMessagesProtocol:
         # Second call shows no new messages
         result = await biff_client.call_tool("check_messages", {})
         assert "No new messages" in _text(result)
+
+
+class TestDynamicDescriptionProtocol:
+    """Verify check_messages description updates through MCP protocol."""
+
+    async def _get_check_description(self, client: Client[Any]) -> str:
+        tools = await client.list_tools()
+        for tool in tools:
+            if tool.name == "check_messages":
+                assert tool.description is not None
+                return tool.description
+        raise AssertionError("check_messages tool not found")
+
+    async def test_default_description(self, biff_client: Client[Any]) -> None:
+        desc = await self._get_check_description(biff_client)
+        assert "Check your inbox" in desc
+
+    async def test_shows_unread_after_tool_call(
+        self, biff_client: Client[Any], state: ServerState
+    ) -> None:
+        from biff.models import Message
+
+        state.messages.append(
+            Message(from_user="eric", to_user="kai", body="auth module ready")
+        )
+        # Call any tool to trigger refresh
+        await biff_client.call_tool("plan", {"message": "working"})
+        desc = await self._get_check_description(biff_client)
+        assert "1 unread" in desc
+        assert "@eric" in desc
+
+    async def test_reverts_after_check(
+        self, biff_client: Client[Any], state: ServerState
+    ) -> None:
+        from biff.models import Message
+
+        state.messages.append(Message(from_user="eric", to_user="kai", body="hello"))
+        await biff_client.call_tool("plan", {"message": "working"})
+        desc = await self._get_check_description(biff_client)
+        assert "1 unread" in desc
+        # Check messages clears unread
+        await biff_client.call_tool("check_messages", {})
+        desc = await self._get_check_description(biff_client)
+        assert "Check your inbox" in desc
+        assert "unread" not in desc

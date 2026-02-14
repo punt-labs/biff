@@ -123,3 +123,46 @@ class TestCrossProcessState:
         text = _text(result)
         assert "@kai" in text
         assert "cross-process msg" in text
+
+
+class TestDynamicDescriptionOverStdio:
+    """check_messages description updates via stdio transport."""
+
+    @staticmethod
+    async def _check_desc(client: Client[Any]) -> str:
+        tools = await client.list_tools()
+        for t in tools:
+            if t.name == "check_messages":
+                assert t.description is not None
+                return t.description
+        raise AssertionError("check_messages not found")
+
+    async def test_description_updates_after_message(
+        self,
+        kai_client: Client[Any],
+        eric_client: Client[Any],
+    ) -> None:
+        """kai sends to eric; eric's description shows unread."""
+        await kai_client.call_tool(
+            "send_message", {"to": "eric", "message": "subprocess test"}
+        )
+        # eric calls any tool to trigger refresh
+        await eric_client.call_tool("plan", {"message": "working"})
+        desc = await self._check_desc(eric_client)
+        assert "1 unread" in desc
+        assert "@kai" in desc
+
+    async def test_description_reverts_after_check(
+        self,
+        kai_client: Client[Any],
+        eric_client: Client[Any],
+    ) -> None:
+        """After checking, description reverts to base."""
+        await kai_client.call_tool("send_message", {"to": "eric", "message": "hello"})
+        await eric_client.call_tool("plan", {"message": "working"})
+        desc = await self._check_desc(eric_client)
+        assert "1 unread" in desc
+        # Check clears it
+        await eric_client.call_tool("check_messages", {})
+        desc = await self._check_desc(eric_client)
+        assert "unread" not in desc

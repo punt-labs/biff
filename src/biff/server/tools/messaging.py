@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.models import Message
+from biff.server.tools._descriptions import refresh_check_messages
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -37,6 +38,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             body=message,
         )
         state.messages.append(msg)
+        refresh_check_messages(mcp, state)
         return f"Message sent to @{bare}."
 
     @mcp.tool(
@@ -48,7 +50,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         update_current_session(state)
         unread = state.messages.get_unread(state.config.user)
         if not unread:
+            refresh_check_messages(mcp, state)
             return "No new messages."
         state.messages.mark_read([m.id for m in unread])
+        refresh_check_messages(mcp, state)
         lines = [f"@{m.from_user}: {m.body}" for m in unread]
         return "\n".join(lines)
