@@ -65,13 +65,26 @@ All server-side mechanisms confirmed working:
 - Streamable HTTP uses POST for RPC calls, GET SSE stream for server-push notifications
 - Server advertises `"tools": {"listChanged": true}` in capabilities
 
-### Remaining validation
+### Claude Code end-to-end validation (2026-02-13)
 
-Claude Code end-to-end test (registering biff-spike as an MCP server in a new
-Claude Code session) not yet performed — requires session restart. Server-side
-protocol behavior is fully validated.
+Registered biff-spike in `.mcp.json` with `"type": "http"`, restarted Claude Code.
+
+| Test | Result | Evidence |
+|------|--------|---------|
+| Claude Code connects to HTTP MCP server | **YES** | Tools visible in session |
+| `simulate_message` triggers description update | **YES** | Description changed to "Check messages (1 unread: @jess about tests passing)" |
+| Claude (model) sees updated description | **YES** | Model can read updated tool description in its tool definitions |
+| User sees status bar notification | **NO** | No user-visible indicator — description is model-only |
+| `check_messages` returns accumulated messages | **YES** | Returns unread messages correctly |
+
+### UX constraint discovered
+
+The dynamic tool description is visible to the **model** but not to the **user** in the
+Claude Code UI. There is no status bar badge, no pop-up, no visual notification.
+Message awareness is model-mediated: Claude knows about messages and can mention them
+proactively, but the user relies on Claude to surface this information.
 
 ## Exit Criteria
 
-- **YES**: Server-side mechanism works → proceed with HTTP transport architecture
-- Remaining: Confirm Claude Code client acts on `list_changed` (needs new session)
+- **YES**: Full chain validated — proceed with HTTP transport architecture
+- UX note: Message awareness is model-mediated, not user-visible
