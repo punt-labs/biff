@@ -38,20 +38,40 @@ Biff auto-registers as an MCP server. If your repo has a `.biff` file, it picks 
 
 Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can join a `/hive`, broadcast via `/wall`, or `/mesg` a human when it needs a decision. Biff is the communication layer for the entire hive of humans and agents building software together.
 
-## Configuration
+## Setup
 
-Team configuration lives in a `.biff` file committed to your git repo:
+### 1. Set your identity
 
+```bash
+git config biff.user your-handle
 ```
-relay = wss://relay.example.com
-members = @kai @eric @jim
+
+### 2. Create a `.biff` file
+
+Commit a `.biff` file in your repo root (TOML format):
+
+```toml
+[team]
+members = ["kai", "eric", "priya"]
+
+[relay]
+url = "nats://localhost:4222"
 ```
 
-Clone the repo, install biff, you're connected. No account to create, no workspace to configure.
+### 3. Start the server
+
+```bash
+biff serve                              # auto-discovers user, repo, data dir
+biff serve --user kai                   # override user
+biff serve --prefix /var/spool          # persistent data dir: /var/spool/biff/{repo}/
+biff serve --data-dir /custom/path      # explicit data dir
+```
+
+The data directory defaults to `/tmp/biff/{repo-name}/`. Two users on the same machine sharing a prefix share state through the local relay.
 
 ## Status Bar
 
-Biff writes unread message state to `~/.biff/data/unread.json` so external tools can display a live notification count. The file is updated after every tool call:
+Biff writes unread message state to `{data-dir}/unread.json` so external tools can display a live notification count. The file is updated after every tool call:
 
 ```json
 {"count": 2, "preview": "@eric about auth module, @kai about lunch"}
