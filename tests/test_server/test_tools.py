@@ -7,6 +7,7 @@ the registered closure, verifying it reads/writes state correctly.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastmcp.tools.tool import FunctionTool
@@ -37,31 +38,31 @@ class TestBiffToggleTool:
         fn = _get_tool_fn(state, "biff")
         result = fn(enabled=False)
         assert "off" in result
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is False
 
     def test_enable_messages(self, state: ServerState) -> None:
-        state.sessions.update(UserSession(user="kai", biff_enabled=False))
+        state.relay.update_session(UserSession(user="kai", biff_enabled=False))
         fn = _get_tool_fn(state, "biff")
         result = fn(enabled=True)
         assert "on" in result
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is True
 
     def test_creates_session_if_missing(self, state: ServerState) -> None:
-        assert state.sessions.get_user("kai") is None
+        assert state.relay.get_session("kai") is None
         fn = _get_tool_fn(state, "biff")
         fn(enabled=True)
-        assert state.sessions.get_user("kai") is not None
+        assert state.relay.get_session("kai") is not None
 
     def test_updates_last_active(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
-        state.sessions.update(UserSession(user="kai", last_active=old_time))
+        state.relay.update_session(UserSession(user="kai", last_active=old_time))
         fn = _get_tool_fn(state, "biff")
         fn(enabled=False)
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.last_active > old_time
 
@@ -73,20 +74,20 @@ class TestFingerTool:
         assert "no active session" in result
 
     def test_shows_plan(self, state: ServerState) -> None:
-        state.sessions.update(UserSession(user="eric", plan="refactoring auth"))
+        state.relay.update_session(UserSession(user="eric", plan="refactoring auth"))
         fn = _get_tool_fn(state, "finger")
         result = fn(user="eric")
         assert "refactoring auth" in result
         assert "@eric" in result
 
     def test_shows_availability(self, state: ServerState) -> None:
-        state.sessions.update(UserSession(user="eric", biff_enabled=False))
+        state.relay.update_session(UserSession(user="eric", biff_enabled=False))
         fn = _get_tool_fn(state, "finger")
         result = fn(user="eric")
         assert "messages off" in result
 
     def test_strips_at_prefix(self, state: ServerState) -> None:
-        state.sessions.update(UserSession(user="eric", plan="coding"))
+        state.relay.update_session(UserSession(user="eric", plan="coding"))
         fn = _get_tool_fn(state, "finger")
         result = fn(user="@eric")
         assert "coding" in result
@@ -100,8 +101,8 @@ class TestWhoTool:
         assert "No active sessions" in result
 
     def test_lists_active_users(self, state: ServerState) -> None:
-        state.sessions.update(UserSession(user="kai", plan="coding"))
-        state.sessions.update(UserSession(user="eric", plan="reviewing"))
+        state.relay.update_session(UserSession(user="kai", plan="coding"))
+        state.relay.update_session(UserSession(user="eric", plan="reviewing"))
         fn = _get_tool_fn(state, "who")
         result = fn()
         assert "@kai" in result
@@ -112,8 +113,8 @@ class TestWhoTool:
     def test_excludes_stale_sessions(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=121)
         recent_time = datetime.now(UTC) - timedelta(seconds=119)
-        state.sessions.update(UserSession(user="stale", last_active=old_time))
-        state.sessions.update(UserSession(user="recent", last_active=recent_time))
+        state.relay.update_session(UserSession(user="stale", last_active=old_time))
+        state.relay.update_session(UserSession(user="recent", last_active=recent_time))
         fn = _get_tool_fn(state, "who")
         result = fn()
         assert "@recent" in result
@@ -125,32 +126,32 @@ class TestPlanTool:
         fn = _get_tool_fn(state, "plan")
         result = fn(message="refactoring auth")
         assert "refactoring auth" in result
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.plan == "refactoring auth"
 
     def test_updates_existing_plan(self, state: ServerState) -> None:
-        state.sessions.update(UserSession(user="kai", plan="old plan"))
+        state.relay.update_session(UserSession(user="kai", plan="old plan"))
         fn = _get_tool_fn(state, "plan")
         fn(message="new plan")
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.plan == "new plan"
 
     def test_creates_session_if_missing(self, state: ServerState) -> None:
-        assert state.sessions.get_user("kai") is None
+        assert state.relay.get_session("kai") is None
         fn = _get_tool_fn(state, "plan")
         fn(message="starting fresh")
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.plan == "starting fresh"
 
     def test_updates_last_active(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
-        state.sessions.update(UserSession(user="kai", last_active=old_time))
+        state.relay.update_session(UserSession(user="kai", last_active=old_time))
         fn = _get_tool_fn(state, "plan")
         fn(message="new work")
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.last_active > old_time
 
@@ -160,7 +161,7 @@ class TestSendMessageTool:
         fn = _get_tool_fn(state, "send_message")
         result = fn(to="eric", message="hey, PR is ready")
         assert "@eric" in result
-        unread = state.messages.get_unread("eric")
+        unread = state.relay.fetch("eric")
         assert len(unread) == 1
         assert unread[0].from_user == "kai"
         assert unread[0].body == "hey, PR is ready"
@@ -168,23 +169,23 @@ class TestSendMessageTool:
     def test_strips_at_prefix(self, state: ServerState) -> None:
         fn = _get_tool_fn(state, "send_message")
         fn(to="@eric", message="hello")
-        unread = state.messages.get_unread("eric")
+        unread = state.relay.fetch("eric")
         assert len(unread) == 1
         assert unread[0].to_user == "eric"
 
     def test_delivers_when_biff_off(self, state: ServerState) -> None:
-        state.sessions.update(UserSession(user="eric", biff_enabled=False))
+        state.relay.update_session(UserSession(user="eric", biff_enabled=False))
         fn = _get_tool_fn(state, "send_message")
         result = fn(to="eric", message="urgent fix needed")
         assert "@eric" in result
-        unread = state.messages.get_unread("eric")
+        unread = state.relay.fetch("eric")
         assert len(unread) == 1
 
     def test_multiple_messages(self, state: ServerState) -> None:
         fn = _get_tool_fn(state, "send_message")
         fn(to="eric", message="first")
         fn(to="eric", message="second")
-        unread = state.messages.get_unread("eric")
+        unread = state.relay.fetch("eric")
         assert len(unread) == 2
 
 
@@ -194,8 +195,8 @@ class TestCheckMessagesTool:
         result = fn()
         assert "No new messages" in result
 
-    def test_shows_unread(self, state: ServerState) -> None:
-        eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
+    def test_shows_unread(self, state: ServerState, tmp_path: Path) -> None:
+        eric_state = create_state(BiffConfig(user="eric"), tmp_path)
         eric_send = _get_tool_fn(eric_state, "send_message")
         eric_send(to="kai", message="review my PR please")
 
@@ -204,8 +205,8 @@ class TestCheckMessagesTool:
         assert "@eric" in result
         assert "review my PR please" in result
 
-    def test_marks_as_read(self, state: ServerState) -> None:
-        eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
+    def test_marks_as_read(self, state: ServerState, tmp_path: Path) -> None:
+        eric_state = create_state(BiffConfig(user="eric"), tmp_path)
         eric_send = _get_tool_fn(eric_state, "send_message")
         eric_send(to="kai", message="hello")
 
@@ -216,9 +217,9 @@ class TestCheckMessagesTool:
         result = check_fn()
         assert "No new messages" in result
 
-    def test_multiple_senders(self, state: ServerState) -> None:
-        eric_state = create_state(BiffConfig(user="eric"), state.messages._data_dir)
-        priya_state = create_state(BiffConfig(user="priya"), state.messages._data_dir)
+    def test_multiple_senders(self, state: ServerState, tmp_path: Path) -> None:
+        eric_state = create_state(BiffConfig(user="eric"), tmp_path)
+        priya_state = create_state(BiffConfig(user="priya"), tmp_path)
         _get_tool_fn(eric_state, "send_message")(to="kai", message="from eric")
         _get_tool_fn(priya_state, "send_message")(to="kai", message="from priya")
 
@@ -275,9 +276,7 @@ class TestDynamicDescriptions:
     def test_description_shows_unread_after_send(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
         # eric sends kai a message (write directly to shared inbox)
-        state.messages.append(
-            Message(from_user="eric", to_user="kai", body="auth ready")
-        )
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="auth ready"))
         # kai calls any tool — triggers description refresh
         plan_tool = mcp._tool_manager._tools["plan"]
         assert isinstance(plan_tool, FunctionTool)
@@ -289,7 +288,7 @@ class TestDynamicDescriptions:
 
     def test_description_reverts_after_check(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
-        state.messages.append(Message(from_user="eric", to_user="kai", body="hello"))
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="hello"))
         # Trigger refresh via plan
         plan_tool = mcp._tool_manager._tools["plan"]
         assert isinstance(plan_tool, FunctionTool)
@@ -304,10 +303,10 @@ class TestDynamicDescriptions:
 
     def test_description_shows_multiple_senders(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
-        state.messages.append(
+        state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="PR approved")
         )
-        state.messages.append(
+        state.relay.deliver(
             Message(from_user="priya", to_user="kai", body="tests pass")
         )
         # Trigger via who
@@ -322,7 +321,7 @@ class TestDynamicDescriptions:
     def test_send_message_triggers_refresh(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
         # Another user sends to kai first
-        state.messages.append(Message(from_user="eric", to_user="kai", body="hello"))
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="hello"))
         # kai sends a message — should also refresh description
         send_tool = mcp._tool_manager._tools["send_message"]
         assert isinstance(send_tool, FunctionTool)
@@ -332,8 +331,8 @@ class TestDynamicDescriptions:
 
     def test_finger_triggers_refresh(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
-        state.sessions.update(UserSession(user="eric", plan="coding"))
-        state.messages.append(
+        state.relay.update_session(UserSession(user="eric", plan="coding"))
+        state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="look at this")
         )
         finger_tool = mcp._tool_manager._tools["finger"]
@@ -344,7 +343,7 @@ class TestDynamicDescriptions:
 
     def test_biff_toggle_triggers_refresh(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
-        state.messages.append(Message(from_user="eric", to_user="kai", body="urgent"))
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="urgent"))
         biff_tool = mcp._tool_manager._tools["biff"]
         assert isinstance(biff_tool, FunctionTool)
         biff_tool.fn(enabled=False)

@@ -27,7 +27,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     def who() -> str:
         """List active sessions."""
         refresh_check_messages(mcp, state)
-        active = state.sessions.get_active(ttl=_DEFAULT_TTL)
+        active = state.relay.get_active_sessions(ttl=_DEFAULT_TTL)
         if not active:
             return "No active sessions."
         lines = [f"@{s.user} — {s.plan or '(no plan)'}" for s in active]

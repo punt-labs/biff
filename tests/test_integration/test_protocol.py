@@ -48,7 +48,7 @@ class TestPlanToolProtocol:
     async def test_set_plan(self, biff_client: Client[Any], state: ServerState) -> None:
         result = await biff_client.call_tool("plan", {"message": "refactoring auth"})
         assert "refactoring auth" in _text(result)
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.plan == "refactoring auth"
 
@@ -57,7 +57,7 @@ class TestPlanToolProtocol:
     ) -> None:
         await biff_client.call_tool("plan", {"message": "first plan"})
         await biff_client.call_tool("plan", {"message": "second plan"})
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.plan == "second plan"
 
@@ -66,7 +66,7 @@ class TestBiffToggleProtocol:
     async def test_disable(self, biff_client: Client[Any], state: ServerState) -> None:
         result = await biff_client.call_tool("biff", {"enabled": False})
         assert "off" in _text(result)
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is False
 
@@ -74,7 +74,7 @@ class TestBiffToggleProtocol:
         await biff_client.call_tool("biff", {"enabled": False})
         result = await biff_client.call_tool("biff", {"enabled": True})
         assert "on" in _text(result)
-        session = state.sessions.get_user("kai")
+        session = state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is True
 
@@ -87,7 +87,7 @@ class TestFingerProtocol:
     async def test_shows_plan(
         self, biff_client: Client[Any], state: ServerState
     ) -> None:
-        state.sessions.update(UserSession(user="eric", plan="reviewing PRs"))
+        state.relay.update_session(UserSession(user="eric", plan="reviewing PRs"))
         result = await biff_client.call_tool("finger", {"user": "eric"})
         text = _text(result)
         assert "reviewing PRs" in text
@@ -96,7 +96,7 @@ class TestFingerProtocol:
     async def test_at_prefix(
         self, biff_client: Client[Any], state: ServerState
     ) -> None:
-        state.sessions.update(UserSession(user="eric", plan="coding"))
+        state.relay.update_session(UserSession(user="eric", plan="coding"))
         result = await biff_client.call_tool("finger", {"user": "@eric"})
         assert "coding" in _text(result)
 
@@ -109,8 +109,8 @@ class TestWhoProtocol:
     async def test_lists_active(
         self, biff_client: Client[Any], state: ServerState
     ) -> None:
-        state.sessions.update(UserSession(user="kai", plan="coding"))
-        state.sessions.update(UserSession(user="eric", plan="reviewing"))
+        state.relay.update_session(UserSession(user="kai", plan="coding"))
+        state.relay.update_session(UserSession(user="eric", plan="reviewing"))
         result = await biff_client.call_tool("who", {})
         text = _text(result)
         assert "@kai" in text
@@ -123,7 +123,7 @@ class TestSendMessageProtocol:
             "send_message", {"to": "eric", "message": "PR is ready"}
         )
         assert "@eric" in _text(result)
-        unread = state.messages.get_unread("eric")
+        unread = state.relay.fetch("eric")
         assert len(unread) == 1
         assert unread[0].body == "PR is ready"
 
@@ -131,7 +131,7 @@ class TestSendMessageProtocol:
         self, biff_client: Client[Any], state: ServerState
     ) -> None:
         await biff_client.call_tool("send_message", {"to": "@eric", "message": "hello"})
-        unread = state.messages.get_unread("eric")
+        unread = state.relay.fetch("eric")
         assert len(unread) == 1
         assert unread[0].to_user == "eric"
 
@@ -146,7 +146,7 @@ class TestCheckMessagesProtocol:
     ) -> None:
         from biff.models import Message
 
-        state.messages.append(
+        state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="check this out")
         )
         result = await biff_client.call_tool("check_messages", {})
@@ -179,7 +179,7 @@ class TestDynamicDescriptionProtocol:
     ) -> None:
         from biff.models import Message
 
-        state.messages.append(
+        state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth module ready")
         )
         # Call any tool to trigger refresh
@@ -193,7 +193,7 @@ class TestDynamicDescriptionProtocol:
     ) -> None:
         from biff.models import Message
 
-        state.messages.append(Message(from_user="eric", to_user="kai", body="hello"))
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="hello"))
         await biff_client.call_tool("plan", {"message": "working"})
         desc = await self._get_check_description(biff_client)
         assert "1 unread" in desc

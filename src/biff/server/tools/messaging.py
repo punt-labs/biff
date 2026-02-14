@@ -37,7 +37,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             to_user=bare,
             body=message,
         )
-        state.messages.append(msg)
+        state.relay.deliver(msg)
         refresh_check_messages(mcp, state)
         return f"Message sent to @{bare}."
 
@@ -48,11 +48,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     def check_messages() -> str:
         """Retrieve unread messages and mark them as read."""
         update_current_session(state)
-        unread = state.messages.get_unread(state.config.user)
+        unread = state.relay.fetch(state.config.user)
         if not unread:
             refresh_check_messages(mcp, state)
             return "No new messages."
-        state.messages.mark_read([m.id for m in unread])
+        state.relay.mark_read(state.config.user, [m.id for m in unread])
         refresh_check_messages(mcp, state)
         lines = [f"@{m.from_user}: {m.body}" for m in unread]
         return "\n".join(lines)

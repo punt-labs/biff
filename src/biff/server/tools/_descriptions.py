@@ -49,7 +49,7 @@ def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> Non
     tool = mcp._tool_manager._tools.get("check_messages")  # pyright: ignore[reportPrivateUsage]
     if tool is None:
         return
-    summary = state.messages.get_unread_summary(state.config.user)
+    summary = state.relay.get_unread_summary(state.config.user)
     if summary.count == 0:
         tool.description = _CHECK_MESSAGES_BASE
     else:
@@ -80,7 +80,7 @@ async def poll_inbox(
     last_count = -1  # Force initial refresh
     while True:
         await asyncio.sleep(interval)
-        summary = state.messages.get_unread_summary(state.config.user)
+        summary = state.relay.get_unread_summary(state.config.user)
         if summary.count != last_count:
             last_count = summary.count
             refresh_check_messages(mcp, state)

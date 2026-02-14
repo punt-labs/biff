@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from biff.models import BiffConfig
-from biff.storage import MessageStore, SessionStore
+from biff.relay import LocalRelay, Relay
 
 
 @dataclass(frozen=True)
@@ -18,8 +18,7 @@ class ServerState:
     """Immutable container for all server-wide shared state."""
 
     config: BiffConfig
-    messages: MessageStore
-    sessions: SessionStore
+    relay: Relay
     unread_path: Path | None = None
 
 
@@ -32,7 +31,6 @@ def create_state(
     """Create a ``ServerState`` from config and data directory."""
     return ServerState(
         config=config,
-        messages=MessageStore(data_dir=data_dir),
-        sessions=SessionStore(data_dir=data_dir),
+        relay=LocalRelay(data_dir=data_dir),
         unread_path=unread_path,
     )
