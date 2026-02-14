@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -50,13 +50,31 @@ class TestMessage:
         with pytest.raises(ValidationError, match="body"):
             Message(from_user="kai", to_user="eric", body="")
 
+    def test_whitespace_body_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="body"):
+            Message(from_user="kai", to_user="eric", body="   ")
+
     def test_empty_from_user_rejected(self) -> None:
         with pytest.raises(ValidationError, match="from_user"):
             Message(from_user="", to_user="eric", body="hello")
 
+    def test_whitespace_from_user_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="from_user"):
+            Message(from_user="  ", to_user="eric", body="hello")
+
     def test_empty_to_user_rejected(self) -> None:
         with pytest.raises(ValidationError, match="to_user"):
             Message(from_user="kai", to_user="", body="hello")
+
+    def test_whitespace_to_user_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="to_user"):
+            Message(from_user="kai", to_user="  ", body="hello")
+
+    def test_strings_are_stripped(self) -> None:
+        msg = Message(from_user="  kai  ", to_user="  eric  ", body="  hi  ")
+        assert msg.from_user == "kai"
+        assert msg.to_user == "eric"
+        assert msg.body == "hi"
 
     def test_json_round_trip(self) -> None:
         msg = Message(from_user="kai", to_user="eric", body="hello")
@@ -67,6 +85,18 @@ class TestMessage:
     def test_timestamp_is_utc(self) -> None:
         msg = Message(from_user="kai", to_user="eric", body="hello")
         assert msg.timestamp.tzinfo == UTC
+
+    def test_non_utc_timestamp_normalized(self) -> None:
+        eastern = timezone(timedelta(hours=-5))
+        ts = datetime(2026, 2, 13, 12, 0, tzinfo=eastern)
+        msg = Message(from_user="kai", to_user="eric", body="hi", timestamp=ts)
+        assert msg.timestamp.tzinfo is UTC or msg.timestamp.utcoffset() == timedelta(0)
+        assert msg.timestamp == ts.astimezone(UTC)
+
+    def test_naive_timestamp_rejected(self) -> None:
+        naive = datetime(2026, 2, 13, 12, 0)
+        with pytest.raises(ValidationError, match="timezone"):
+            Message(from_user="kai", to_user="eric", body="hi", timestamp=naive)
 
 
 class TestUserSession:
@@ -94,11 +124,30 @@ class TestUserSession:
         with pytest.raises(ValidationError, match="user"):
             UserSession(user="")
 
+    def test_whitespace_user_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="user"):
+            UserSession(user="   ")
+
     def test_json_round_trip(self) -> None:
         session = UserSession(user="kai", plan="working on tests")
         json_str = session.model_dump_json()
         restored = UserSession.model_validate_json(json_str)
         assert restored == session
+
+    def test_last_active_is_utc(self) -> None:
+        session = UserSession(user="kai")
+        assert session.last_active.tzinfo == UTC
+
+    def test_non_utc_last_active_normalized(self) -> None:
+        eastern = timezone(timedelta(hours=-5))
+        ts = datetime(2026, 2, 13, 12, 0, tzinfo=eastern)
+        session = UserSession(user="kai", last_active=ts)
+        assert session.last_active == ts.astimezone(UTC)
+
+    def test_naive_last_active_rejected(self) -> None:
+        naive = datetime(2026, 2, 13, 12, 0)
+        with pytest.raises(ValidationError, match="timezone"):
+            UserSession(user="kai", last_active=naive)
 
 
 class TestBiffConfig:
@@ -129,6 +178,10 @@ class TestBiffConfig:
     def test_empty_user_rejected(self) -> None:
         with pytest.raises(ValidationError, match="user"):
             BiffConfig(user="")
+
+    def test_whitespace_user_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="user"):
+            BiffConfig(user="   ")
 
     def test_json_round_trip(self) -> None:
         config = BiffConfig(

@@ -2,14 +2,17 @@
 
 All models are immutable (frozen) pydantic models with full type annotations.
 Serialization to/from JSON is handled by pydantic for JSONL storage.
+
+All string fields are stripped of leading/trailing whitespace at parse time.
+All datetime fields are normalized to UTC; naive datetimes are rejected.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def _utc_now() -> datetime:
@@ -20,6 +23,21 @@ def _new_id() -> uuid.UUID:
     return uuid.uuid4()
 
 
+def _ensure_utc(v: datetime) -> datetime:
+    """Normalize a tz-aware datetime to UTC. Reject naive datetimes."""
+    if v.tzinfo is None:
+        msg = "Naive datetimes are not allowed; provide a timezone"
+        raise ValueError(msg)
+    if v.tzinfo is not UTC and not _is_utc(v.tzinfo):
+        return v.astimezone(UTC)
+    return v
+
+
+def _is_utc(tz: tzinfo) -> bool:
+    """Check if a tzinfo is effectively UTC."""
+    return tz.utcoffset(None) == UTC.utcoffset(None)
+
+
 class Message(BaseModel):
     """A single async message between two users.
 
@@ -28,7 +46,7 @@ class Message(BaseModel):
     rather than by mutating the message in place.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     id: uuid.UUID = Field(default_factory=_new_id)
     from_user: str = Field(min_length=1)
@@ -36,6 +54,11 @@ class Message(BaseModel):
     body: str = Field(min_length=1)
     timestamp: datetime = Field(default_factory=_utc_now)
     read: bool = False
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _normalize_timestamp(cls, v: datetime) -> datetime:
+        return _ensure_utc(v)
 
 
 class UserSession(BaseModel):
@@ -47,12 +70,17 @@ class UserSession(BaseModel):
     against a TTL (default 120s).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     user: str = Field(min_length=1)
     plan: str = ""
     last_active: datetime = Field(default_factory=_utc_now)
     biff_enabled: bool = True
+
+    @field_validator("last_active", mode="after")
+    @classmethod
+    def _normalize_last_active(cls, v: datetime) -> datetime:
+        return _ensure_utc(v)
 
 
 class BiffConfig(BaseModel):
@@ -63,7 +91,7 @@ class BiffConfig(BaseModel):
     holds the validated result.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     user: str = Field(min_length=1)
     relay_url: str | None = None
@@ -77,7 +105,7 @@ class UnreadSummary(BaseModel):
     ``"Check messages (2 unread: @kai about auth, @eric about lunch)"``.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     count: int = Field(default=0, ge=0)
     preview: str = ""
