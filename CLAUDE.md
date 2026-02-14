@@ -16,6 +16,42 @@ I am a principal engineer. Every change I make leaves the codebase in a better s
 - **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`. Zero violations, zero errors, all tests green.
 - **Double quotes.** Line length 88. Ruff with comprehensive rules.
 
+## Testing Pyramid
+
+Four tiers, each testing a different boundary. New features should have tests at tiers 1-2 minimum; tiers 3-4 for integration-critical paths.
+
+| Tier | Directory | Transport | What It Tests | Speed |
+|------|-----------|-----------|---------------|-------|
+| **1. Unit** | `tests/test_server/`, `tests/test_storage/` | Direct function calls | Tool logic, storage, data models | ~1s total |
+| **2. Integration** | `tests/test_integration/` | `FastMCPTransport` (in-memory) | MCP protocol, tool discovery, cross-user state | ~2s total |
+| **3. Subprocess** | `tests/test_subprocess/` | `StdioTransport` (stdio pipes) | Wire protocol, CLI args, process lifecycle | ~5s total |
+| **4. SDK** | `tests/test_sdk/` | Claude Agent SDK (real Claude sessions) | End-to-end: Claude discovers tools, decides what to call, results flow back | ~30s per test, costs ~$0.02/call |
+
+### Running Tests
+
+```bash
+uv run pytest                          # Tiers 1-2 only (default, fast)
+uv run pytest -m subprocess            # Tier 3: subprocess tests
+uv run pytest -m sdk                   # Tier 4: SDK tests (requires ANTHROPIC_API_KEY)
+uv run pytest -m "subprocess or sdk"   # Tiers 3-4 together
+```
+
+### Test Fixtures by Tier
+
+Each tier provides `kai` and `eric` fixtures representing two users sharing a `tmp_path` data directory:
+
+| Tier | Fixture Type | Import | Key Method |
+|------|-------------|--------|------------|
+| Integration | `RecordingClient` | `biff.testing` | `await kai.call("plan", message="...")` |
+| Subprocess | `RecordingClient` | `biff.testing` | `await kai.call("plan", message="...")` |
+| SDK | `SDKClient` | `tests/test_sdk/_client.py` | `await kai.prompt('Call the "plan" tool...')` |
+
+`RecordingClient` wraps a FastMCP `Client` with transcript capture. `SDKClient` wraps the Claude Agent SDK `query()` with structured result parsing and transcript capture.
+
+### Transcripts
+
+Tests marked `@pytest.mark.transcript` auto-save human-readable transcripts to `tests/transcripts/`. These serve as demo output showing tool interactions.
+
 ## Development Workflow
 
 ### Branch Discipline

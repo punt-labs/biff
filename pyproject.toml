@@ -32,6 +32,7 @@ dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=6.0.0",
+    "claude-agent-sdk>=0.1.36",
 ]
 
 [project.scripts]
@@ -142,12 +143,13 @@ reportPrivateUsage = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow (run with -m slow)",
     "subprocess: marks tests that spawn biff subprocesses (run with -m subprocess)",
+    "sdk: marks tests that require Claude Agent SDK and an API key (run with -m sdk)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
 ]
 
