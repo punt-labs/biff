@@ -43,12 +43,19 @@ class MessageStore:
     def mark_read(self, message_ids: Sequence[uuid.UUID]) -> None:
         """Mark messages as read by ID. Rewrites the file atomically."""
         ids = set(message_ids)
+        if not ids:
+            return
         messages = self._read_all()
-        updated = [
-            msg.model_copy(update={"read": True}) if msg.id in ids else msg
-            for msg in messages
-        ]
-        self._write_all(updated)
+        updated: list[Message] = []
+        changed = False
+        for msg in messages:
+            if msg.id in ids and not msg.read:
+                updated.append(msg.model_copy(update={"read": True}))
+                changed = True
+            else:
+                updated.append(msg)
+        if changed:
+            self._write_all(updated)
 
     def get_unread_summary(self, user: str) -> UnreadSummary:
         """Build an unread summary for dynamic tool descriptions."""
@@ -83,7 +90,11 @@ class MessageStore:
         """Atomically rewrite the inbox file."""
         self._data_dir.mkdir(parents=True, exist_ok=True)
         tmp = self._inbox_path.with_suffix(".tmp")
-        with tmp.open("w") as f:
-            for msg in messages:
-                f.write(msg.model_dump_json() + "\n")
-        tmp.rename(self._inbox_path)
+        try:
+            with tmp.open("w") as f:
+                for msg in messages:
+                    f.write(msg.model_dump_json() + "\n")
+            tmp.rename(self._inbox_path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise

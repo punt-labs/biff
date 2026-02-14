@@ -128,6 +128,12 @@ class TestMalformedData:
         (tmp_path / "sessions.json").write_text("not json at all")
         assert store._read_all() == {}
 
+    def test_non_dict_json_returns_empty(
+        self, store: SessionStore, tmp_path: Path
+    ) -> None:
+        (tmp_path / "sessions.json").write_text('["a list", "not a dict"]')
+        assert store._read_all() == {}
+
     def test_missing_file_returns_empty(self, store: SessionStore) -> None:
         assert store._read_all() == {}
 

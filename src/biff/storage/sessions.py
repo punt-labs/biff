@@ -59,7 +59,7 @@ class SessionStore:
         try:
             data = json.loads(self._sessions_path.read_text())
             return {k: UserSession.model_validate(v) for k, v in data.items()}
-        except (ValidationError, ValueError, json.JSONDecodeError):
+        except (ValidationError, ValueError, json.JSONDecodeError, AttributeError):
             logger.warning("Corrupt sessions file, starting fresh")
             return {}
 
@@ -68,5 +68,9 @@ class SessionStore:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         data = {k: v.model_dump(mode="json") for k, v in sessions.items()}
         tmp = self._sessions_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2) + "\n")
-        tmp.rename(self._sessions_path)
+        try:
+            tmp.write_text(json.dumps(data, indent=2) + "\n")
+            tmp.rename(self._sessions_path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
