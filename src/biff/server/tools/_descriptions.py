@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from biff.models import UnreadSummary
+from biff.relay import atomic_write
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -87,18 +88,13 @@ async def poll_inbox(
 
 
 def _write_unread_file(path: Path, summary: UnreadSummary) -> None:
-    """Atomically write unread summary to a JSON file.
+    """Write unread summary to a JSON status file.
 
-    Uses the same temp-file-then-rename pattern as the storage layer.
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
     """
-    tmp = path.with_suffix(".tmp")
+    data = {"count": summary.count, "preview": summary.preview}
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = {"count": summary.count, "preview": summary.preview}
-        tmp.write_text(json.dumps(data, indent=2) + "\n")
-        tmp.replace(path)
+        atomic_write(path, json.dumps(data, indent=2) + "\n")
     except OSError:
         logger.warning("Failed to write unread status file %s", path, exc_info=True)
-        tmp.unlink(missing_ok=True)

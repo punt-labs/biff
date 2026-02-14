@@ -24,7 +24,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from pydantic import ValidationError
 
@@ -37,7 +37,22 @@ _MAX_BODY_PREVIEW = 40
 _MAX_PREVIEW_MESSAGES = 3
 
 
-@runtime_checkable
+def atomic_write(path: Path, content: str) -> None:
+    """Atomically write *content* to *path* using temp-file-then-replace.
+
+    Creates parent directories if needed. On failure, the temp file
+    is cleaned up and the original file is left untouched.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(content)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 class Relay(Protocol):
     """Interface between an MCP server and the message relay."""
 
@@ -169,17 +184,8 @@ class LocalRelay:
 
     def _write_inbox(self, user: str, messages: Sequence[Message]) -> None:
         """Atomically rewrite a user's inbox."""
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        path = self._inbox_path(user)
-        tmp = path.with_suffix(".tmp")
-        try:
-            with tmp.open("w") as f:
-                for msg in messages:
-                    f.write(msg.model_dump_json() + "\n")
-            tmp.replace(path)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+        content = "".join(msg.model_dump_json() + "\n" for msg in messages)
+        atomic_write(self._inbox_path(user), content)
 
     def _read_sessions(self) -> dict[str, UserSession]:
         """Read all sessions."""
@@ -195,13 +201,8 @@ class LocalRelay:
 
     def _write_sessions(self, sessions: dict[str, UserSession]) -> None:
         """Atomically rewrite the sessions file."""
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        path = self._data_dir / "sessions.json"
-        tmp = path.with_suffix(".tmp")
-        try:
-            data = {k: v.model_dump(mode="json") for k, v in sessions.items()}
-            tmp.write_text(json.dumps(data, indent=2) + "\n")
-            tmp.replace(path)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+        data = {k: v.model_dump(mode="json") for k, v in sessions.items()}
+        atomic_write(
+            self._data_dir / "sessions.json",
+            json.dumps(data, indent=2) + "\n",
+        )
