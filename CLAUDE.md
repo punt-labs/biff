@@ -164,6 +164,10 @@ git status                  # Must show "up to date with origin"
 
 Work is NOT complete until `git push` succeeds.
 
+## Product Vision
+
+The PR/FAQ (`prfaq.tex`) is the authoritative source for product vision, target market, command vocabulary, phasing, risk assessment, and "what we are not building." When there are questions about scope, priorities, or product direction, consult the PR/FAQ first.
+
 ## Biff Architecture
 
 ### What Is Biff
