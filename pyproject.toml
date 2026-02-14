@@ -142,11 +142,12 @@ reportPrivateUsage = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow'"
+addopts = "-ra -q -m 'not slow and not subprocess'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow (run with -m slow)",
+    "subprocess: marks tests that spawn biff subprocesses (run with -m subprocess)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
 ]
 
