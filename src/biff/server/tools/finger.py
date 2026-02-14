@@ -22,7 +22,7 @@ def _format_last_active(dt: datetime) -> str:
     """
     now = datetime.now(UTC)
     delta = now - dt
-    total_seconds = int(delta.total_seconds())
+    total_seconds = max(0, int(delta.total_seconds()))
 
     if total_seconds < 60:
         relative = "just now"
