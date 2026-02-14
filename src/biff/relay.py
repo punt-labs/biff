@@ -88,8 +88,16 @@ class LocalRelay:
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
 
+    @staticmethod
+    def _validate_user(user: str) -> str:
+        """Reject usernames that could escape the data directory."""
+        if not user or "/" in user or "\\" in user or ".." in user:
+            msg = f"Invalid username: {user!r}"
+            raise ValueError(msg)
+        return user
+
     def _inbox_path(self, user: str) -> Path:
-        return self._data_dir / f"inbox-{user}.jsonl"
+        return self._data_dir / f"inbox-{self._validate_user(user)}.jsonl"
 
     # -- Messages --
 

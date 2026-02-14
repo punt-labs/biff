@@ -262,6 +262,31 @@ class TestHeartbeat:
         assert result.biff_enabled is False
 
 
+# -- Username Validation --
+
+
+class TestUsernameValidation:
+    def test_rejects_path_traversal(self, relay: LocalRelay) -> None:
+        with pytest.raises(ValueError, match="Invalid username"):
+            relay.fetch("../../etc/passwd")
+
+    def test_rejects_forward_slash(self, relay: LocalRelay) -> None:
+        with pytest.raises(ValueError, match="Invalid username"):
+            relay.fetch("user/name")
+
+    def test_rejects_backslash(self, relay: LocalRelay) -> None:
+        with pytest.raises(ValueError, match="Invalid username"):
+            relay.fetch("user\\name")
+
+    def test_rejects_empty(self, relay: LocalRelay) -> None:
+        with pytest.raises(ValueError, match="Invalid username"):
+            relay.fetch("")
+
+    def test_allows_hyphens_and_underscores(self, relay: LocalRelay) -> None:
+        assert relay.fetch("jmf-pobox") == []
+        assert relay.fetch("user_name") == []
+
+
 # -- Malformed Data --
 
 
