@@ -1,28 +1,53 @@
 # biff
 
-> The dog that barked when messages arrived.
+> Team communication for engineers who never leave the terminal.
 
-A modern CLI communication tool for software engineers, named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `wall`, `talk`, `finger`, `write`, and `mesg`.
+Named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `talk`, `wall`, `finger`, `who`, and `mesg`.
 
-## Vision
+Biff resurrects the Unix communication vocabulary as MCP-native slash commands. It runs inside your Claude Code session — no separate app, no browser tab, no context switch.
 
-Biff resurrects the UNIX communication vocabulary as MCP-native slash commands for team collaboration inside Claude Code sessions and other MCP-compatible systems.
+## Why
 
-**Purposeful, not chatty.** Every command implies intent. No channels, no threads, no emoji reactions.
+Engineers using AI coding tools are shipping faster than ever. But every time they need to coordinate with a teammate, they context-switch to Slack or Discord — tools designed for managers, not makers in deep focus. Biff keeps communication where the code already lives.
+
+## Quick Start
+
+```bash
+pip install biff-mcp
+```
+
+Biff auto-registers as an MCP server. If your repo has a `.biff` file, it picks up the relay URL and team roster automatically. Type `/who` to see your team.
 
 ## Commands
 
-| Command | Unix Ancestor | Purpose |
-|---------|---------------|---------|
-| `/write @user` | `write` | Send a purposeful async message |
-| `/talk @user` | `talk` | Real-time two-way conversation |
-| `/wall` | `wall` | Broadcast to the team |
-| `/finger @user` | `finger` | Check what someone is working on |
-| `/who` | `who` / `w` | List active sessions |
-| `/plan "msg"` | `.plan` | Set what you're working on |
-| `/mesg on/off` | `mesg` | Control availability |
-| `/share @user` | (new) | Share diffs, files, snippets |
-| `/cr @user` | (new) | Request code review with context |
+| Command | Origin | Purpose |
+|---------|--------|---------|
+| `/mesg @user "text"` | BSD `mesg` | Send a message |
+| `/talk @user` | BSD `talk` | Real-time bidirectional conversation |
+| `/wall "text"` | BSD `wall` | Broadcast to the hive or team |
+| `/finger @user` | BSD `finger` | Read someone's plan and status |
+| `/who` | BSD `who` | List active sessions |
+| `/plan "text"` | BSD `.plan` | Set your status |
+| `/biff on` \| `off` | BSD `biff` | Control message reception |
+| `/hive @a @b @c` | — | Temporary group; `/hive off` dissolves it |
+| `/pair @user` | — | Invite someone to input to your Claude session |
+| `/send @user` | — | Send diffs, files, or snippets |
+| `/cr @user` | — | Request a code review |
+
+## Agents Welcome
+
+Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can join a `/hive`, broadcast via `/wall`, or `/mesg` a human when it needs a decision. Biff is the communication layer for the entire hive of humans and agents building software together.
+
+## Configuration
+
+Team configuration lives in a `.biff` file committed to your git repo:
+
+```
+relay = wss://relay.example.com
+members = @kai @eric @jim
+```
+
+Clone the repo, install biff, you're connected. No account to create, no workspace to configure.
 
 ## Development
 
