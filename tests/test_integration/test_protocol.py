@@ -30,7 +30,8 @@ class TestToolListing:
     async def test_lists_all_tools(self, biff_client: Client[Any]) -> None:
         tools = await biff_client.list_tools()
         names = {t.name for t in tools}
-        assert names == {"biff", "finger", "who", "plan"}
+        expected = {"biff", "check_messages", "finger", "send_message", "who", "plan"}
+        assert names == expected
 
     async def test_tools_have_descriptions(self, biff_client: Client[Any]) -> None:
         tools = await biff_client.list_tools()
@@ -114,3 +115,45 @@ class TestWhoProtocol:
         text = _text(result)
         assert "@kai" in text
         assert "@eric" in text
+
+
+class TestSendMessageProtocol:
+    async def test_send(self, biff_client: Client[Any], state: ServerState) -> None:
+        result = await biff_client.call_tool(
+            "send_message", {"to": "eric", "message": "PR is ready"}
+        )
+        assert "@eric" in _text(result)
+        unread = state.messages.get_unread("eric")
+        assert len(unread) == 1
+        assert unread[0].body == "PR is ready"
+
+    async def test_send_with_at_prefix(
+        self, biff_client: Client[Any], state: ServerState
+    ) -> None:
+        await biff_client.call_tool("send_message", {"to": "@eric", "message": "hello"})
+        unread = state.messages.get_unread("eric")
+        assert len(unread) == 1
+        assert unread[0].to_user == "eric"
+
+
+class TestCheckMessagesProtocol:
+    async def test_no_messages(self, biff_client: Client[Any]) -> None:
+        result = await biff_client.call_tool("check_messages", {})
+        assert "No new messages" in _text(result)
+
+    async def test_receives_and_marks_read(
+        self, biff_client: Client[Any], state: ServerState
+    ) -> None:
+        from biff.models import Message
+
+        state.messages.append(
+            Message(from_user="eric", to_user="kai", body="check this out")
+        )
+        result = await biff_client.call_tool("check_messages", {})
+        text = _text(result)
+        assert "@eric" in text
+        assert "check this out" in text
+
+        # Second call shows no new messages
+        result = await biff_client.call_tool("check_messages", {})
+        assert "No new messages" in _text(result)

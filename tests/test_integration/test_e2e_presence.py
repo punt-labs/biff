@@ -1,7 +1,7 @@
-"""End-to-end presence tests with two MCP clients sharing state.
+"""End-to-end tests with two MCP clients sharing state.
 
 Each test exercises the full protocol path for both users:
-Client A -> FastMCPTransport -> Server A -> SessionStore <- Server B <- Client B
+Client A -> FastMCPTransport -> Server A -> Store <- Server B <- Client B
 
 The shared data directory simulates two users in the same git repo.
 """
@@ -138,3 +138,74 @@ class TestPresenceLifecycle:
         finger_result = await eric.call("finger", user="@kai")
         assert "accepting messages" in finger_result
         assert "auth refactor done" in finger_result
+
+
+class TestCrossUserMessaging:
+    """User A sends a message; User B receives it."""
+
+    @pytest.mark.transcript
+    async def test_send_and_check(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """kai sends a message; eric checks and sees it."""
+        kai.transcript.title = "Cross-user: send and check messages"
+        kai.transcript.description = "kai sends a message, eric checks inbox."
+
+        result = await kai.call("send_message", to="@eric", message="PR #42 is ready")
+        assert "@eric" in result
+
+        result = await eric.call("check_messages")
+        assert "@kai" in result
+        assert "PR #42 is ready" in result
+
+    @pytest.mark.transcript
+    async def test_messages_marked_read(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Checked messages don't appear again."""
+        kai.transcript.title = "Cross-user: messages marked read"
+        kai.transcript.description = "eric checks messages, second check is empty."
+
+        await kai.call("send_message", to="eric", message="first message")
+        await eric.call("check_messages")
+
+        result = await eric.call("check_messages")
+        assert "No new messages" in result
+
+    @pytest.mark.transcript
+    async def test_bidirectional_messaging(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Both users can send and receive."""
+        kai.transcript.title = "Cross-user: bidirectional messaging"
+        kai.transcript.description = "kai and eric exchange messages."
+
+        await kai.call("send_message", to="eric", message="review my PR?")
+        await eric.call("send_message", to="kai", message="sure, on it")
+
+        kai_inbox = await kai.call("check_messages")
+        eric_inbox = await eric.call("check_messages")
+
+        assert "@eric" in kai_inbox
+        assert "sure, on it" in kai_inbox
+        assert "@kai" in eric_inbox
+        assert "review my PR?" in eric_inbox
+
+    @pytest.mark.transcript
+    async def test_deliver_when_biff_off(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Messages queue even when recipient has biff off."""
+        kai.transcript.title = "Cross-user: deliver when biff off"
+        kai.transcript.description = (
+            "eric turns biff off, kai sends anyway, eric checks later."
+        )
+
+        await eric.call("biff", enabled=False)
+        await kai.call("send_message", to="eric", message="urgent fix needed")
+
+        # eric turns biff back on and checks
+        await eric.call("biff", enabled=True)
+        result = await eric.call("check_messages")
+        assert "@kai" in result
+        assert "urgent fix needed" in result

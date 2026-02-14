@@ -94,3 +94,36 @@ class TestAvailabilityWorkflow:
 
         result = await recorder.call("finger", user="kai")
         assert "accepting messages" in result
+
+
+@pytest.mark.transcript
+class TestMessagingWorkflow:
+    """Sending and checking messages in a solo session."""
+
+    async def test_send_and_check(
+        self, recorder: RecordingClient, state: ServerState
+    ) -> None:
+        recorder.transcript.title = "Messaging: send and check"
+        recorder.transcript.description = (
+            "Send a message to a teammate, then check inbox."
+        )
+
+        from biff.models import Message
+
+        # Simulate incoming message from eric
+        state.messages.append(
+            Message(from_user="eric", to_user="kai", body="auth module looks good")
+        )
+
+        # Check inbox
+        result = await recorder.call("check_messages")
+        assert "@eric" in result
+        assert "auth module looks good" in result
+
+        # Reply
+        result = await recorder.call("send_message", to="eric", message="thanks!")
+        assert "@eric" in result
+
+        # Inbox is now empty
+        result = await recorder.call("check_messages")
+        assert "No new messages" in result

@@ -33,7 +33,8 @@ class TestServerStartup:
         """Server lists all tools over stdio transport."""
         tools = await biff_client.list_tools()
         names = {t.name for t in tools}
-        assert names == {"biff", "finger", "who", "plan"}
+        expected = {"biff", "check_messages", "finger", "send_message", "who", "plan"}
+        assert names == expected
 
     async def test_tools_have_descriptions(self, biff_client: Client[Any]) -> None:
         tools = await biff_client.list_tools()
@@ -68,6 +69,16 @@ class TestToolCallOverStdio:
         result = await biff_client.call_tool("biff", {"enabled": True})
         assert "on" in _text(result)
 
+    async def test_send_message_returns_text(self, biff_client: Client[Any]) -> None:
+        result = await biff_client.call_tool(
+            "send_message", {"to": "eric", "message": "hello over stdio"}
+        )
+        assert "@eric" in _text(result)
+
+    async def test_check_messages_empty(self, biff_client: Client[Any]) -> None:
+        result = await biff_client.call_tool("check_messages", {})
+        assert "No new messages" in _text(result)
+
 
 class TestCrossProcessState:
     """Two subprocesses share state through the same data directory."""
@@ -98,3 +109,17 @@ class TestCrossProcessState:
         text = _text(result)
         assert "@kai" in text
         assert "@eric" in text
+
+    async def test_message_across_processes(
+        self,
+        kai_client: Client[Any],
+        eric_client: Client[Any],
+    ) -> None:
+        """kai sends a message; eric receives it across processes."""
+        await kai_client.call_tool(
+            "send_message", {"to": "eric", "message": "cross-process msg"}
+        )
+        result = await eric_client.call_tool("check_messages", {})
+        text = _text(result)
+        assert "@kai" in text
+        assert "cross-process msg" in text
