@@ -60,3 +60,58 @@ async def recorder(
 ) -> RecordingClient:
     """Recording client that captures tool calls into a transcript."""
     return RecordingClient(client=biff_client, transcript=transcript)
+
+
+# --- E2E fixtures: two users sharing state via the same data directory ---
+
+
+@pytest.fixture
+def shared_data_dir(tmp_path: Path) -> Path:
+    """Shared data directory for multi-user E2E tests."""
+    return tmp_path
+
+
+@pytest.fixture
+def kai_state(shared_data_dir: Path) -> ServerState:
+    """Server state for user kai."""
+    return create_state(BiffConfig(user="kai"), shared_data_dir)
+
+
+@pytest.fixture
+def eric_state(shared_data_dir: Path) -> ServerState:
+    """Server state for user eric."""
+    return create_state(BiffConfig(user="eric"), shared_data_dir)
+
+
+@pytest.fixture
+async def kai_client(kai_state: ServerState) -> AsyncIterator[Client[Any]]:
+    """MCP client for user kai."""
+    mcp = create_server(kai_state)
+    async with Client(FastMCPTransport(mcp)) as client:
+        yield client
+
+
+@pytest.fixture
+async def eric_client(eric_state: ServerState) -> AsyncIterator[Client[Any]]:
+    """MCP client for user eric."""
+    mcp = create_server(eric_state)
+    async with Client(FastMCPTransport(mcp)) as client:
+        yield client
+
+
+@pytest.fixture
+async def kai(
+    kai_client: Client[Any],
+    transcript: Transcript,
+) -> RecordingClient:
+    """Recording client for kai in E2E tests."""
+    return RecordingClient(client=kai_client, transcript=transcript, user="kai")
+
+
+@pytest.fixture
+async def eric(
+    eric_client: Client[Any],
+    transcript: Transcript,
+) -> RecordingClient:
+    """Recording client for eric in E2E tests."""
+    return RecordingClient(client=eric_client, transcript=transcript, user="eric")
