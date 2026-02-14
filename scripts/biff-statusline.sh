@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-UNREAD_FILE="$HOME/.biff/data/unread.json"
+UNREAD_FILE="${BIFF_UNREAD_PATH:-$HOME/.biff/data/unread.json}"
 
 # Read stdin (Claude Code session JSON) — unused for now but
 # available for combining with other status info.
