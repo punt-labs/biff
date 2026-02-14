@@ -19,6 +19,7 @@ from biff.server.state import create_state
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 
 _DEFAULT_DATA_DIR = Path.home() / ".biff" / "data"
+_UNREAD_PATH = _DEFAULT_DATA_DIR / "unread.json"
 
 
 @app.command()
@@ -47,7 +48,7 @@ def serve(
 ) -> None:
     """Start the biff MCP server."""
     config = BiffConfig(user=user)
-    state = create_state(config, data_dir)
+    state = create_state(config, data_dir, unread_path=_UNREAD_PATH)
     mcp = create_server(state)
 
     if transport == "http":

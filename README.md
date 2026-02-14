@@ -49,6 +49,39 @@ members = @kai @eric @jim
 
 Clone the repo, install biff, you're connected. No account to create, no workspace to configure.
 
+## Status Bar
+
+Biff writes unread message state to `~/.biff/data/unread.json` so external tools can display a live notification count. The file is updated after every tool call:
+
+```json
+{"count": 2, "preview": "@eric about auth module, @kai about lunch"}
+```
+
+### Claude Code status line
+
+Copy the included script and configure Claude Code to use it:
+
+```bash
+cp scripts/biff-statusline.sh ~/.claude/
+chmod +x ~/.claude/biff-statusline.sh
+```
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": "~/.claude/biff-statusline.sh"
+}
+```
+
+When you have unread messages, the status bar shows:
+
+```
+biff: 2 unread — @eric about auth module, @kai about lunch
+```
+
+Requires `jq`.
+
 ## Development
 
 ```bash

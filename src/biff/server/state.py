@@ -20,12 +20,19 @@ class ServerState:
     config: BiffConfig
     messages: MessageStore
     sessions: SessionStore
+    unread_path: Path | None = None
 
 
-def create_state(config: BiffConfig, data_dir: Path) -> ServerState:
+def create_state(
+    config: BiffConfig,
+    data_dir: Path,
+    *,
+    unread_path: Path | None = None,
+) -> ServerState:
     """Create a ``ServerState`` from config and data directory."""
     return ServerState(
         config=config,
         messages=MessageStore(data_dir=data_dir),
         sessions=SessionStore(data_dir=data_dir),
+        unread_path=unread_path,
     )
