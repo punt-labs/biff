@@ -25,6 +25,8 @@ Four tiers, each testing a different boundary. New features should have tests at
 | **1. Unit** | `tests/test_server/`, `tests/test_storage/` | Direct function calls | Tool logic, storage, data models | ~1s total |
 | **2. Integration** | `tests/test_integration/` | `FastMCPTransport` (in-memory) | MCP protocol, tool discovery, cross-user state | ~2s total |
 | **3. Subprocess** | `tests/test_subprocess/` | `StdioTransport` (stdio pipes) | Wire protocol, CLI args, process lifecycle | ~5s total |
+| **3b. NATS E2E** | `tests/test_nats_e2e/` | `FastMCPTransport` + local NATS | Presence, messaging via NATS KV + JetStream | ~3s total |
+| **3c. Hosted NATS** | `tests/test_hosted_nats/` | `FastMCPTransport` + hosted NATS | Same as 3b against Synadia Cloud / self-hosted | ~10s total |
 | **4. SDK** | `tests/test_sdk/` | Claude Agent SDK (real Claude sessions) | End-to-end: Claude discovers tools, decides what to call, results flow back | ~30s per test, costs ~$0.02/call |
 
 ### Running Tests
@@ -32,6 +34,8 @@ Four tiers, each testing a different boundary. New features should have tests at
 ```bash
 uv run pytest                          # Tiers 1-2 only (default, fast)
 uv run pytest -m subprocess            # Tier 3: subprocess tests
+uv run pytest -m nats                  # Tier 3b: local NATS tests (requires nats-server)
+uv run pytest -m hosted                # Tier 3c: hosted NATS tests (requires BIFF_TEST_NATS_URL)
 uv run pytest -m sdk                   # Tier 4: SDK tests (requires ANTHROPIC_API_KEY)
 uv run pytest -m "subprocess or sdk"   # Tiers 3-4 together
 ```
