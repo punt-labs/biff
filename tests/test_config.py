@@ -100,6 +100,11 @@ class TestLoadBiffFile:
         (tmp_path / ".biff").write_text("")
         assert load_biff_file(tmp_path) == {}
 
+    def test_malformed_toml_exits(self, tmp_path: Path) -> None:
+        (tmp_path / ".biff").write_text("this is not valid toml [[[")
+        with pytest.raises(SystemExit, match="Failed to parse"):
+            load_biff_file(tmp_path)
+
 
 # -- load_config --
 

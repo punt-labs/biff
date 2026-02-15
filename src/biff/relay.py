@@ -103,6 +103,7 @@ class LocalRelay:
 
     def deliver(self, message: Message) -> None:
         """Deliver a message to the recipient's inbox."""
+        self._validate_user(message.from_user)
         self._data_dir.mkdir(parents=True, exist_ok=True)
         path = self._inbox_path(message.to_user)
         with path.open("a") as f:
@@ -147,16 +148,19 @@ class LocalRelay:
 
     def update_session(self, session: UserSession) -> None:
         """Create or update a user's session."""
+        user = self._validate_user(session.user)
         sessions = self._read_sessions()
-        sessions[session.user] = session
+        sessions[user] = session
         self._write_sessions(sessions)
 
     def get_session(self, user: str) -> UserSession | None:
         """Get a specific user's session."""
+        user = self._validate_user(user)
         return self._read_sessions().get(user)
 
     def heartbeat(self, user: str) -> None:
         """Update last_active timestamp, creating session if needed."""
+        user = self._validate_user(user)
         sessions = self._read_sessions()
         existing = sessions.get(user)
         if existing:

@@ -76,7 +76,13 @@ def load_biff_file(repo_root: Path) -> dict[str, object]:
     path = repo_root / ".biff"
     if not path.exists():
         return {}
-    return tomllib.loads(path.read_text())
+    try:
+        return tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(
+            f"Failed to parse {path}:\n{exc}\n"
+            "Fix or remove this file before starting biff."
+        ) from exc
 
 
 def _extract_biff_fields(
