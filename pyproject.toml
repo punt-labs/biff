@@ -22,7 +22,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "typer>=0.15.0",
     "rich>=13.0.0",
-    "nats-py>=2.13.1",
+    "nats-py[nkeys]>=2.13.1",
 ]
 
 [project.optional-dependencies]
