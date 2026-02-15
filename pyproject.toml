@@ -22,6 +22,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "typer>=0.15.0",
     "rich>=13.0.0",
+    "nats-py>=2.13.1",
 ]
 
 [project.optional-dependencies]
@@ -143,13 +144,14 @@ reportPrivateUsage = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not nats'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow (run with -m slow)",
     "subprocess: marks tests that spawn biff subprocesses (run with -m subprocess)",
     "sdk: marks tests that require Claude Agent SDK and an API key (run with -m sdk)",
+    "nats: marks tests that require a running nats-server (run with -m nats)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
 ]
 
