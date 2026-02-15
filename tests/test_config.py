@@ -8,12 +8,14 @@ from unittest.mock import patch
 import pytest
 
 from biff.config import (
+    _extract_biff_fields,
     compute_data_dir,
     find_git_root,
     get_git_user,
     load_biff_file,
     load_config,
 )
+from biff.models import RelayAuth
 
 # -- find_git_root --
 
@@ -106,6 +108,69 @@ class TestLoadBiffFile:
             load_biff_file(tmp_path)
 
 
+# -- _extract_biff_fields (auth) --
+
+
+class TestExtractRelayAuth:
+    def test_no_relay_section(self) -> None:
+        _, _, auth = _extract_biff_fields({})
+        assert auth is None
+
+    def test_relay_url_only(self) -> None:
+        raw: dict[str, object] = {"relay": {"url": "nats://localhost:4222"}}
+        _, url, auth = _extract_biff_fields(raw)
+        assert url == "nats://localhost:4222"
+        assert auth is None
+
+    def test_token_auth(self) -> None:
+        raw: dict[str, object] = {"relay": {"url": "nats://host", "token": "s3cret"}}
+        _, _, auth = _extract_biff_fields(raw)
+        assert auth == RelayAuth(token="s3cret")
+
+    def test_nkeys_seed_auth(self) -> None:
+        raw: dict[str, object] = {
+            "relay": {"url": "tls://host", "nkeys_seed": "/path/to.nk"}
+        }
+        _, _, auth = _extract_biff_fields(raw)
+        assert auth == RelayAuth(nkeys_seed="/path/to.nk")
+
+    def test_user_credentials_auth(self) -> None:
+        raw: dict[str, object] = {
+            "relay": {"url": "tls://host", "user_credentials": "/path/to.creds"}
+        }
+        _, _, auth = _extract_biff_fields(raw)
+        assert auth == RelayAuth(user_credentials="/path/to.creds")
+
+    def test_mutual_exclusivity_exits(self) -> None:
+        raw: dict[str, object] = {
+            "relay": {"url": "nats://host", "token": "x", "nkeys_seed": "/y"}
+        }
+        with pytest.raises(SystemExit, match="Conflicting auth"):
+            _extract_biff_fields(raw)
+
+    def test_all_three_exits(self) -> None:
+        raw: dict[str, object] = {
+            "relay": {
+                "url": "nats://host",
+                "token": "x",
+                "nkeys_seed": "/y",
+                "user_credentials": "/z",
+            }
+        }
+        with pytest.raises(SystemExit, match="Conflicting auth"):
+            _extract_biff_fields(raw)
+
+    def test_empty_string_auth_ignored(self) -> None:
+        raw: dict[str, object] = {"relay": {"url": "nats://host", "token": ""}}
+        _, _, auth = _extract_biff_fields(raw)
+        assert auth is None
+
+    def test_non_string_auth_ignored(self) -> None:
+        raw: dict[str, object] = {"relay": {"url": "nats://host", "token": 42}}
+        _, _, auth = _extract_biff_fields(raw)
+        assert auth is None
+
+
 # -- load_config --
 
 
@@ -179,3 +244,12 @@ class TestLoadConfig:
         resolved = load_config(start=tmp_path, data_dir_override=custom)
         assert resolved.data_dir == custom
         assert resolved.repo_root is None
+
+    @patch("biff.config.get_git_user", return_value="kai")
+    def test_relay_auth_flows_through(self, _mock: object, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".biff").write_text(
+            '[relay]\nurl = "tls://host"\nuser_credentials = "/creds"\n'
+        )
+        resolved = load_config(start=tmp_path)
+        assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")

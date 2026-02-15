@@ -38,7 +38,7 @@ def create_state(
     """
     if relay is None:
         if config.relay_url:
-            relay = NatsRelay(url=config.relay_url)
+            relay = NatsRelay(url=config.relay_url, auth=config.relay_auth)
         else:
             relay = LocalRelay(data_dir=data_dir)
     return ServerState(
