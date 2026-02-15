@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -84,6 +85,24 @@ class UserSession(BaseModel):
         return _ensure_utc(v)
 
 
+@dataclass(frozen=True)
+class RelayAuth:
+    """Authentication credentials for a remote NATS relay.
+
+    At most one field may be set.  Mutual exclusivity is enforced
+    at config-parse time in :func:`~biff.config._extract_biff_fields`.
+    """
+
+    token: str | None = None
+    """Shared secret token."""
+
+    nkeys_seed: str | None = None
+    """Path to an NKey seed file (``.nk``)."""
+
+    user_credentials: str | None = None
+    """Path to a NATS credentials file (``.creds``)."""
+
+
 class BiffConfig(BaseModel):
     """Validated configuration from a ``.biff`` file.
 
@@ -96,6 +115,7 @@ class BiffConfig(BaseModel):
 
     user: str = Field(min_length=1)
     relay_url: str | None = None
+    relay_auth: RelayAuth | None = None
     team: tuple[str, ...] = ()
 
 

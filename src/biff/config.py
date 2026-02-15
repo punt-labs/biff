@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from biff.models import BiffConfig
+from biff.models import BiffConfig, RelayAuth
 
 _DEFAULT_PREFIX = Path("/tmp")  # noqa: S108
 
@@ -87,10 +87,11 @@ def load_biff_file(repo_root: Path) -> dict[str, object]:
 
 def _extract_biff_fields(
     raw: dict[str, object],
-) -> tuple[tuple[str, ...], str | None]:
-    """Extract team and relay_url from parsed TOML data."""
+) -> tuple[tuple[str, ...], str | None, RelayAuth | None]:
+    """Extract team, relay_url, and relay_auth from parsed TOML data."""
     team: tuple[str, ...] = ()
     relay_url: str | None = None
+    relay_auth: RelayAuth | None = None
 
     team_section: object = raw.get("team")
     if isinstance(team_section, dict):
@@ -107,7 +108,30 @@ def _extract_biff_fields(
         if isinstance(url, str):
             relay_url = url
 
-    return team, relay_url
+        # Auth — at most one of token, nkeys_seed, user_credentials
+        token = section.get("token")
+        nkeys_seed = section.get("nkeys_seed")
+        creds = section.get("user_credentials")
+
+        auth_values = {
+            k: v
+            for k, v in [
+                ("token", token),
+                ("nkeys_seed", nkeys_seed),
+                ("user_credentials", creds),
+            ]
+            if isinstance(v, str) and v
+        }
+        if len(auth_values) > 1:
+            names = ", ".join(sorted(auth_values))
+            raise SystemExit(
+                f"Conflicting auth in .biff [relay]: {names}\n"
+                "Set at most one of 'token', 'nkeys_seed', or 'user_credentials'."
+            )
+        if auth_values:
+            relay_auth = RelayAuth(**auth_values)
+
+    return team, relay_url, relay_auth
 
 
 def load_config(
@@ -133,9 +157,10 @@ def load_config(
     # Parse .biff file
     team: tuple[str, ...] = ()
     relay_url: str | None = None
+    relay_auth: RelayAuth | None = None
     if repo_root is not None:
         raw = load_biff_file(repo_root)
-        team, relay_url = _extract_biff_fields(raw)
+        team, relay_url, relay_auth = _extract_biff_fields(raw)
 
     # Resolve user
     user = user_override or get_git_user()
@@ -158,5 +183,7 @@ def load_config(
         )
         raise SystemExit(msg)
 
-    config = BiffConfig(user=user, relay_url=relay_url, team=team)
+    config = BiffConfig(
+        user=user, relay_url=relay_url, relay_auth=relay_auth, team=team
+    )
     return ResolvedConfig(config=config, data_dir=data_dir, repo_root=repo_root)

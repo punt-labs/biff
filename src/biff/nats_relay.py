@@ -35,7 +35,7 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff.models import Message, UserSession, build_unread_summary
+from biff.models import Message, RelayAuth, UserSession, build_unread_summary
 
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
@@ -64,11 +64,28 @@ class NatsRelay:
     idempotent.
     """
 
-    def __init__(self, url: str = "nats://localhost:4222") -> None:
+    def __init__(
+        self,
+        url: str = "nats://localhost:4222",
+        auth: RelayAuth | None = None,
+    ) -> None:
         self._url = url
+        self._auth = auth
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
+
+    def _auth_kwargs(self) -> dict[str, str]:
+        """Build authentication keyword arguments for ``nats.connect()``."""
+        if self._auth is None:
+            return {}
+        if self._auth.token:
+            return {"token": self._auth.token}
+        if self._auth.nkeys_seed:
+            return {"nkeys_seed": self._auth.nkeys_seed}
+        if self._auth.user_credentials:
+            return {"user_credentials": self._auth.user_credentials}
+        return {}
 
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
         """Lazily connect and provision infrastructure.
@@ -79,7 +96,22 @@ class NatsRelay:
         if self._js is not None and self._kv is not None:
             return self._js, self._kv
 
-        nc = await nats.connect(self._url)  # pyright: ignore[reportUnknownMemberType]
+        async def _on_disconnect() -> None:
+            logger.warning("Disconnected from NATS at %s", self._url)
+
+        async def _on_reconnect() -> None:
+            logger.info("Reconnected to NATS at %s", self._url)
+
+        async def _on_error(exc: Exception) -> None:
+            logger.error("NATS error: %s", exc)
+
+        nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
+            self._url,
+            disconnected_cb=_on_disconnect,
+            reconnected_cb=_on_reconnect,
+            error_cb=_on_error,
+            **self._auth_kwargs(),
+        )
         try:
             js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
 
