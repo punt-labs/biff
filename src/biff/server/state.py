@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from biff.models import BiffConfig
+from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay, Relay
 
 
@@ -29,9 +30,19 @@ def create_state(
     relay: Relay | None = None,
     unread_path: Path | None = None,
 ) -> ServerState:
-    """Create a ``ServerState`` from config and data directory."""
+    """Create a ``ServerState`` from config and data directory.
+
+    Relay selection: an explicit *relay* wins, then ``config.relay_url``
+    selects :class:`~biff.nats_relay.NatsRelay`, otherwise
+    :class:`~biff.relay.LocalRelay`.
+    """
+    if relay is None:
+        if config.relay_url is not None:
+            relay = NatsRelay(url=config.relay_url)
+        else:
+            relay = LocalRelay(data_dir=data_dir)
     return ServerState(
         config=config,
-        relay=relay or LocalRelay(data_dir=data_dir),
+        relay=relay,
         unread_path=unread_path,
     )
