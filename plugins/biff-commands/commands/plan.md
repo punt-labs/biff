@@ -1,7 +1,6 @@
 ---
 description: Set what you're currently working on (visible to teammates)
 argument-hint: "<message>"
-allowed-tools: mcp__biff__plan
 ---
 
 ## Input

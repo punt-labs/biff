@@ -1,7 +1,6 @@
 ---
 description: Control message reception (on/off)
 argument-hint: "on|off"
-allowed-tools: mcp__biff__biff
 ---
 
 ## Input

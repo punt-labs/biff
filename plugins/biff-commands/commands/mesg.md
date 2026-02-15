@@ -1,7 +1,6 @@
 ---
 description: Send a message to a teammate
 argument-hint: "@user <message>"
-allowed-tools: mcp__biff__send_message
 ---
 
 ## Input
