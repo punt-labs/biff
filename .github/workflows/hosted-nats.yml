@@ -9,6 +9,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     if: github.repository == 'punt-labs/biff'
+    env:
+      BIFF_TEST_NATS_CREDS_CONTENT: ${{ secrets.BIFF_TEST_NATS_CREDS_CONTENT }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -20,12 +22,10 @@ jobs:
       - run: uv sync --frozen --extra dev
 
       - name: Write NATS credentials file
-        if: secrets.BIFF_TEST_NATS_CREDS_CONTENT != ''
+        if: env.BIFF_TEST_NATS_CREDS_CONTENT != ''
         run: |
           echo "$BIFF_TEST_NATS_CREDS_CONTENT" > /tmp/nats-test.creds
           echo "BIFF_TEST_NATS_CREDS=/tmp/nats-test.creds" >> "$GITHUB_ENV"
-        env:
-          BIFF_TEST_NATS_CREDS_CONTENT: ${{ secrets.BIFF_TEST_NATS_CREDS_CONTENT }}
 
       - name: Run hosted NATS tests
         run: uv run python -m pytest -m hosted -v
