@@ -59,9 +59,8 @@ async def _notify_tool_list_changed() -> None:
 
         ctx = get_context()
         ctx._queue_tool_list_changed()  # pyright: ignore[reportPrivateUsage]
-        # Capture session for the suspenders path.
-        if _session is None:
-            _session = ctx.session
+        # Always update — the client may have reconnected with a new session.
+        _session = ctx.session
         return
     except RuntimeError:
         pass
