@@ -52,13 +52,13 @@ def serve(
     port: Annotated[int, typer.Option(help="HTTP port (http transport only).")] = 8419,
 ) -> None:
     """Start the biff MCP server."""
+    from biff.statusline import UNREAD_PATH
+
     resolved = load_config(
         user_override=user,
         data_dir_override=data_dir,
         prefix=prefix,
     )
-    from biff.statusline import UNREAD_PATH
-
     state = create_state(
         resolved.config,
         resolved.data_dir,

@@ -8,13 +8,13 @@ user's original status line command.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from biff.relay import atomic_write
 
 # Well-known paths ----------------------------------------------------------
 
@@ -52,40 +52,29 @@ def read_settings(path: Path) -> dict[str, object]:
 
 
 def write_settings(path: Path, settings: dict[str, object]) -> None:
-    """Atomic write of *settings* to *path* (temp-then-replace)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".settings-", suffix=".json")
-    os.close(fd)  # close fd; we write via Path below
-    try:
-        Path(tmp).write_text(json.dumps(settings, indent=2) + "\n")
-        Path(tmp).replace(path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    """Atomic write of *settings* to *path*."""
+    atomic_write(path, json.dumps(settings, indent=2) + "\n")
 
 
 # Stash I/O -----------------------------------------------------------------
 
 
 def read_stash(path: Path) -> str | dict[str, object] | None:
-    """Read the stashed original ``statusLine`` value."""
-    if not path.exists():
+    """Read the stashed original ``statusLine`` value.
+
+    Returns ``None`` on missing file or corrupt JSON so the runtime
+    statusline command never crashes.
+    """
+    try:
+        data = json.loads(path.read_text())
+        return data.get("original")  # type: ignore[no-any-return]
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
-    data = json.loads(path.read_text())
-    return data.get("original")  # type: ignore[no-any-return]
 
 
 def write_stash(path: Path, value: str | dict[str, object] | None) -> None:
     """Persist the original ``statusLine`` value to the stash file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".stash-", suffix=".json")
-    os.close(fd)
-    try:
-        Path(tmp).write_text(json.dumps({"original": value}) + "\n")
-        Path(tmp).replace(path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    atomic_write(path, json.dumps({"original": value}) + "\n")
 
 
 # Install / Uninstall -------------------------------------------------------
