@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Claude Code status line script for biff unread messages.
+# SUPERSEDED by `biff install-statusline` / `biff uninstall-statusline`.
+# Kept as a reference/fallback. The install command points Claude Code's
+# statusLine setting at `biff statusline` (a Python CLI command) instead.
 #
-# Reads ~/.biff/data/unread.json and prints an unread count.
-# When there are no unread messages, prints nothing.
+# Claude Code status line: context usage + biff unread messages.
+#
+# Output examples:
+#   biff(3) | 32%
+#   biff | 32%
+#   biff
 #
 # Setup — add to ~/.claude/settings.json:
 #
@@ -12,22 +18,30 @@
 
 set -euo pipefail
 
-UNREAD_FILE="${BIFF_UNREAD_PATH:-$HOME/.biff/data/unread.json}"
+UNREAD_FILE="${BIFF_UNREAD_PATH:-$HOME/.biff/unread.json}"
 
-# Drain stdin (Claude Code pipes session JSON; unused here).
-cat > /dev/null
+# Claude Code pipes session JSON on stdin.
+INPUT=$(cat)
 
-if [[ ! -f "$UNREAD_FILE" ]]; then
-    exit 0
-fi
-
-COUNT=$(jq -r '.count // 0' "$UNREAD_FILE" 2>/dev/null || echo "0")
-
-if [[ "$COUNT" -gt 0 ]]; then
-    PREVIEW=$(jq -r '.preview // ""' "$UNREAD_FILE" 2>/dev/null || echo "")
-    if [[ -n "$PREVIEW" ]]; then
-        echo "biff: $COUNT unread — $PREVIEW"
-    else
-        echo "biff: $COUNT unread"
+# --- Biff + unread (grouped) ---
+BIFF="biff"
+if [[ -f "$UNREAD_FILE" ]]; then
+    COUNT=$(jq -r '.count // 0' "$UNREAD_FILE" 2>/dev/null || echo "0")
+    if [[ "$COUNT" -gt 0 ]]; then
+        BIFF="biff(${COUNT})"
     fi
 fi
+STATUS="$BIFF"
+
+# --- Context % ---
+USAGE=$(echo "$INPUT" | jq '.context_window.current_usage // null' 2>/dev/null || true)
+if [[ "$USAGE" != "null" && -n "$USAGE" ]]; then
+    CURRENT=$(echo "$USAGE" | jq '.input_tokens + .cache_creation_input_tokens + .cache_read_input_tokens' 2>/dev/null || echo "0")
+    SIZE=$(echo "$INPUT" | jq '.context_window.context_window_size // 0' 2>/dev/null || echo "0")
+    if [[ "$SIZE" -gt 0 ]]; then
+        PCT=$((CURRENT * 100 / SIZE))
+        STATUS="${STATUS} | ${PCT}%"
+    fi
+fi
+
+echo "$STATUS"

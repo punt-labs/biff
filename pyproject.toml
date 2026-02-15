@@ -93,7 +93,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415", "A002"]
-"src/biff/__main__.py" = ["T20", "FBT"]
+"src/biff/__main__.py" = ["T20", "FBT", "PLC0415"]
+"src/biff/statusline.py" = ["S602", "T20"]
 "src/biff/mcp_server.py" = ["T20", "FBT"]
 "spike/list_changed_server.py" = ["S101", "T20", "PLW0603", "F811"]
 

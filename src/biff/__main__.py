@@ -1,6 +1,6 @@
 """Biff CLI entry point.
 
-Provides ``biff serve`` and ``biff version``.
+Provides ``biff serve``, ``biff version``, and status line management.
 """
 
 from __future__ import annotations
@@ -52,6 +52,8 @@ def serve(
     port: Annotated[int, typer.Option(help="HTTP port (http transport only).")] = 8419,
 ) -> None:
     """Start the biff MCP server."""
+    from biff.statusline import UNREAD_PATH
+
     resolved = load_config(
         user_override=user,
         data_dir_override=data_dir,
@@ -60,7 +62,7 @@ def serve(
     state = create_state(
         resolved.config,
         resolved.data_dir,
-        unread_path=resolved.data_dir / "unread.json",
+        unread_path=UNREAD_PATH,
     )
     mcp = create_server(state)
 
@@ -69,6 +71,36 @@ def serve(
         mcp.run(transport="http", host=host, port=port)
     else:
         mcp.run(transport="stdio")
+
+
+@app.command("install-statusline")
+def install_statusline() -> None:
+    """Install biff into Claude Code's status bar."""
+    from biff.statusline import install
+
+    result = install()
+    print(result.message)
+    if not result.installed:
+        raise typer.Exit(code=1)
+
+
+@app.command("uninstall-statusline")
+def uninstall_statusline() -> None:
+    """Remove biff from Claude Code's status bar."""
+    from biff.statusline import uninstall
+
+    result = uninstall()
+    print(result.message)
+    if not result.uninstalled:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def statusline() -> None:
+    """Output status bar text (called by Claude Code)."""
+    from biff.statusline import run_statusline
+
+    print(run_statusline())
 
 
 if __name__ == "__main__":
