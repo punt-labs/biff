@@ -37,7 +37,7 @@ def create_state(
     :class:`~biff.relay.LocalRelay`.
     """
     if relay is None:
-        if config.relay_url is not None:
+        if config.relay_url:
             relay = NatsRelay(url=config.relay_url)
         else:
             relay = LocalRelay(data_dir=data_dir)

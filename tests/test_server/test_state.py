@@ -29,6 +29,11 @@ class TestCreateState:
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, LocalRelay)
 
+    def test_empty_relay_url_falls_back_to_local(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="kai", relay_url="")
+        state = create_state(config, tmp_path)
+        assert isinstance(state.relay, LocalRelay)
+
     def test_explicit_relay_overrides_config(self, tmp_path: Path) -> None:
         config = BiffConfig(user="kai", relay_url="nats://localhost:4222")
         local = LocalRelay(data_dir=tmp_path)

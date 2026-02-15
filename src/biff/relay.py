@@ -72,6 +72,10 @@ class Relay(Protocol):
 
     async def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]: ...
 
+    # -- Lifecycle --
+
+    async def close(self) -> None: ...
+
 
 class LocalRelay:
     """Filesystem-backed relay with per-user inbox files.
@@ -162,6 +166,9 @@ class LocalRelay:
         """Get sessions active within the TTL (seconds)."""
         cutoff = datetime.now(UTC) - timedelta(seconds=ttl)
         return [s for s in self._read_sessions().values() if s.last_active >= cutoff]
+
+    async def close(self) -> None:
+        """No-op — filesystem relay has no connection to close."""
 
     # -- Internal I/O --
 
