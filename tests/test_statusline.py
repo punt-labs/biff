@@ -92,28 +92,24 @@ class TestInstall:
         assert stash_path.exists()
         assert read_stash(stash_path) is None
         settings = read_settings(settings_path)
-        assert "statusline" in settings["statusLine"]  # type: ignore[operator]
-
-    def test_fresh_with_existing_string(self, tmp_path: Path):
-        settings_path = tmp_path / "settings.json"
-        stash_path = tmp_path / "stash.json"
-        write_settings(settings_path, {"statusLine": "echo old"})
-
-        result = install(settings_path, stash_path)
-
-        assert result.installed
-        assert read_stash(stash_path) == "echo old"
+        sl = settings["statusLine"]
+        assert isinstance(sl, dict)
+        assert sl["type"] == "command"
+        assert "statusline" in sl["command"]
 
     def test_fresh_with_existing_object(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        obj: dict[str, object] = {"command": "/bin/mystatus"}
+        obj: dict[str, object] = {
+            "type": "command",
+            "command": "/bin/mystatus",
+        }
         write_settings(settings_path, {"statusLine": obj})
 
         result = install(settings_path, stash_path)
 
         assert result.installed
-        assert read_stash(stash_path) == {"command": "/bin/mystatus"}
+        assert read_stash(stash_path) == obj
 
     def test_already_installed(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
@@ -154,28 +150,21 @@ class TestUninstall:
         assert settings["theme"] == "dark"
         assert not stash_path.exists()
 
-    def test_restore_string(self, tmp_path: Path):
-        settings_path = tmp_path / "settings.json"
-        stash_path = tmp_path / "stash.json"
-        write_settings(settings_path, {"statusLine": "biff statusline"})
-        write_stash(stash_path, "echo original")
-
-        result = uninstall(settings_path, stash_path)
-
-        assert result.uninstalled
-        assert read_settings(settings_path)["statusLine"] == "echo original"
-
     def test_restore_object(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        obj: dict[str, object] = {"command": "/bin/old"}
-        write_settings(settings_path, {"statusLine": "biff statusline"})
+        obj: dict[str, object] = {"type": "command", "command": "/bin/old"}
+        biff_sl: dict[str, object] = {
+            "type": "command",
+            "command": "biff statusline",
+        }
+        write_settings(settings_path, {"statusLine": biff_sl})
         write_stash(stash_path, obj)
 
         result = uninstall(settings_path, stash_path)
 
         assert result.uninstalled
-        assert read_settings(settings_path)["statusLine"] == {"command": "/bin/old"}
+        assert read_settings(settings_path)["statusLine"] == obj
 
     def test_not_installed(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
@@ -297,7 +286,7 @@ class TestRunStatusline:
     def test_original_with_unreads(self, tmp_path: Path):
         stash_path = tmp_path / "stash.json"
         unread_path = tmp_path / "unread.json"
-        write_stash(stash_path, "echo 42%")
+        write_stash(stash_path, {"type": "command", "command": "echo 42%"})
         unread_path.write_text(json.dumps({"count": 2}))
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
@@ -309,7 +298,7 @@ class TestRunStatusline:
     def test_original_no_unreads(self, tmp_path: Path):
         stash_path = tmp_path / "stash.json"
         unread_path = tmp_path / "unread.json"
-        write_stash(stash_path, "echo 42%")
+        write_stash(stash_path, {"type": "command", "command": "echo 42%"})
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_path)
@@ -348,8 +337,12 @@ class TestCLI:
     def test_uninstall(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        write_settings(settings_path, {"statusLine": "biff statusline"})
-        write_stash(stash_path, "echo old")
+        biff_sl: dict[str, object] = {
+            "type": "command",
+            "command": "biff statusline",
+        }
+        write_settings(settings_path, {"statusLine": biff_sl})
+        write_stash(stash_path, {"type": "command", "command": "echo old"})
         with (
             patch("biff.statusline.SETTINGS_PATH", settings_path),
             patch("biff.statusline.STASH_PATH", stash_path),

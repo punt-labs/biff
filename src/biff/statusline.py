@@ -100,7 +100,7 @@ def install(
     original = settings.get("statusLine")
     write_stash(stash_path, original)  # type: ignore[arg-type]
 
-    settings["statusLine"] = _biff_command()
+    settings["statusLine"] = _biff_statusline_setting()
     write_settings(settings_path, settings)
 
     return InstallResult(installed=True, message="Installed.")
@@ -160,34 +160,35 @@ def run_statusline(
 # Helpers -------------------------------------------------------------------
 
 
-def _biff_command() -> str:
-    """Resolve the shell command for ``biff statusline``.
+def _biff_statusline_setting() -> dict[str, str]:
+    """Build the ``statusLine`` settings object for Claude Code.
 
+    Claude Code requires ``{"type": "command", "command": "..."}``.
     Prefers ``shutil.which("biff")``, falls back to
     ``sys.executable -m biff``.
     """
     which = shutil.which("biff")
-    if which:
-        return f"{which} statusline"
-    return f"{sys.executable} -m biff statusline"
+    cmd = f"{which} statusline" if which else f"{sys.executable} -m biff statusline"
+    return {"type": "command", "command": cmd}
 
 
 def _resolve_original_command(stash_path: Path) -> str | None:
-    """Extract the shell command from the stash.
+    """Extract the shell command from the stashed ``statusLine`` value.
 
-    Handles both string values (``"some-command"``) and object values
-    (``{"command": "..."}`` as used by Claude Code's dict form).
+    Claude Code's schema requires ``{"type": "command", "command": "..."}``,
+    so the stash is always ``None`` (no prior statusLine) or an object with
+    a ``command`` key.
     """
     if not stash_path.exists():
         return None
     original = read_stash(stash_path)
     if original is None:
         return None
-    if isinstance(original, str):
-        return original
-    # isinstance(original, dict) — only remaining case
-    cmd = original.get("command")
-    return cmd if isinstance(cmd, str) else None
+    if isinstance(original, dict):
+        cmd = original.get("command")
+        return cmd if isinstance(cmd, str) else None
+    # Defensive: unexpected string form (schema requires object)
+    return original
 
 
 def _read_unread_count(path: Path) -> int:
