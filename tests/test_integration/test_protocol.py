@@ -6,17 +6,50 @@ Client -> FastMCPTransport -> FastMCP server -> tool closure -> response.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
+import pytest
+from fastmcp import Client
+from fastmcp.client.messages import MessageHandler
+from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent
 
 from biff.models import UserSession
+from biff.server.app import create_server
 from biff.server.state import ServerState
 
 from .conftest import CallToolResult
 
 if TYPE_CHECKING:
-    from fastmcp import Client
+    from mcp import types as mcp_types
+
+
+class _NotificationTracker(MessageHandler):
+    """Message handler that counts tools/list_changed notifications."""
+
+    def __init__(self) -> None:
+        self.tool_list_changed_count = 0
+
+    async def on_tool_list_changed(  # pyright: ignore[reportUnusedParameter]
+        self, message: mcp_types.ToolListChangedNotification
+    ) -> None:
+        self.tool_list_changed_count += 1
+
+
+@pytest.fixture
+async def tracked_client(
+    state: ServerState,
+) -> AsyncIterator[tuple[Client[Any], _NotificationTracker]]:
+    """MCP client with notification tracking."""
+    from biff.server.tools._descriptions import _reset_session
+
+    _reset_session()
+    tracker = _NotificationTracker()
+    mcp = create_server(state)
+    async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
+        yield client, tracker
+    _reset_session()
 
 
 def _text(result: CallToolResult) -> str:
@@ -204,3 +237,33 @@ class TestDynamicDescriptionProtocol:
         desc = await self._get_check_description(biff_client)
         assert "Check your inbox" in desc
         assert "unread" not in desc
+
+    async def test_fires_tool_list_changed_notification(
+        self,
+        tracked_client: tuple[Client[Any], _NotificationTracker],
+        state: ServerState,
+    ) -> None:
+        """Tool call that changes the description sends list_changed."""
+        from biff.models import Message
+
+        client, tracker = tracked_client
+        assert tracker.tool_list_changed_count == 0
+        await state.relay.deliver(
+            Message(from_user="eric", to_user="kai", body="PR ready")
+        )
+        # Calling any tool triggers refresh, which should fire notification
+        await client.call_tool("who", {})
+        assert tracker.tool_list_changed_count >= 1
+
+    async def test_no_notification_when_description_unchanged(
+        self,
+        tracked_client: tuple[Client[Any], _NotificationTracker],
+    ) -> None:
+        """Tool call with no description change skips notification."""
+        client, tracker = tracked_client
+        # First call may fire a notification (initial refresh); capture baseline.
+        await client.call_tool("who", {})
+        before = tracker.tool_list_changed_count
+        # Second call — no messages, description stays the same
+        await client.call_tool("who", {})
+        assert tracker.tool_list_changed_count == before
