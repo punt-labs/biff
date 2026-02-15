@@ -58,23 +58,23 @@ class Relay(Protocol):
 
     # -- Messages --
 
-    def deliver(self, message: Message) -> None: ...
+    async def deliver(self, message: Message) -> None: ...
 
-    def fetch(self, user: str) -> list[Message]: ...
+    async def fetch(self, user: str) -> list[Message]: ...
 
-    def mark_read(self, user: str, ids: Sequence[uuid.UUID]) -> None: ...
+    async def mark_read(self, user: str, ids: Sequence[uuid.UUID]) -> None: ...
 
-    def get_unread_summary(self, user: str) -> UnreadSummary: ...
+    async def get_unread_summary(self, user: str) -> UnreadSummary: ...
 
     # -- Presence --
 
-    def update_session(self, session: UserSession) -> None: ...
+    async def update_session(self, session: UserSession) -> None: ...
 
-    def get_session(self, user: str) -> UserSession | None: ...
+    async def get_session(self, user: str) -> UserSession | None: ...
 
-    def heartbeat(self, user: str) -> None: ...
+    async def heartbeat(self, user: str) -> None: ...
 
-    def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]: ...
+    async def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]: ...
 
 
 class LocalRelay:
@@ -101,7 +101,7 @@ class LocalRelay:
 
     # -- Messages --
 
-    def deliver(self, message: Message) -> None:
+    async def deliver(self, message: Message) -> None:
         """Deliver a message to the recipient's inbox."""
         self._validate_user(message.from_user)
         self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -109,11 +109,11 @@ class LocalRelay:
         with path.open("a") as f:
             f.write(message.model_dump_json() + "\n")
 
-    def fetch(self, user: str) -> list[Message]:
+    async def fetch(self, user: str) -> list[Message]:
         """Get unread messages for a user, oldest first."""
         return [m for m in self._read_inbox(user) if not m.read]
 
-    def mark_read(self, user: str, ids: Sequence[uuid.UUID]) -> None:
+    async def mark_read(self, user: str, ids: Sequence[uuid.UUID]) -> None:
         """Mark messages as read.  Rewrites the user's inbox atomically."""
         id_set = set(ids)
         if not id_set:
@@ -130,9 +130,9 @@ class LocalRelay:
         if changed:
             self._write_inbox(user, updated)
 
-    def get_unread_summary(self, user: str) -> UnreadSummary:
+    async def get_unread_summary(self, user: str) -> UnreadSummary:
         """Build an unread summary for dynamic tool descriptions."""
-        unread = self.fetch(user)
+        unread = await self.fetch(user)
         if not unread:
             return UnreadSummary()
         previews = [
@@ -146,19 +146,19 @@ class LocalRelay:
 
     # -- Presence --
 
-    def update_session(self, session: UserSession) -> None:
+    async def update_session(self, session: UserSession) -> None:
         """Create or update a user's session."""
         user = self._validate_user(session.user)
         sessions = self._read_sessions()
         sessions[user] = session
         self._write_sessions(sessions)
 
-    def get_session(self, user: str) -> UserSession | None:
+    async def get_session(self, user: str) -> UserSession | None:
         """Get a specific user's session."""
         user = self._validate_user(user)
         return self._read_sessions().get(user)
 
-    def heartbeat(self, user: str) -> None:
+    async def heartbeat(self, user: str) -> None:
         """Update last_active timestamp, creating session if needed."""
         user = self._validate_user(user)
         sessions = self._read_sessions()
@@ -171,7 +171,7 @@ class LocalRelay:
             sessions[user] = UserSession(user=user)
         self._write_sessions(sessions)
 
-    def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]:
+    async def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]:
         """Get sessions active within the TTL (seconds)."""
         cutoff = datetime.now(UTC) - timedelta(seconds=ttl)
         return [s for s in self._read_sessions().values() if s.last_active >= cutoff]

@@ -26,8 +26,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Visible to teammates via /finger and /who."
         ),
     )
-    def plan(message: str) -> str:
+    async def plan(message: str) -> str:
         """Update the current user's plan."""
-        update_current_session(state, plan=message)
-        refresh_check_messages(mcp, state)
+        await update_current_session(state, plan=message)
+        await refresh_check_messages(mcp, state)
         return f"Plan updated: {message}"

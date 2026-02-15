@@ -29,19 +29,19 @@ def state(tmp_path: Path) -> ServerState:
 
 
 class TestRefreshCheckMessages:
-    def test_no_messages_uses_base(self, state: ServerState) -> None:
+    async def test_no_messages_uses_base(self, state: ServerState) -> None:
         mcp = create_server(state)
-        refresh_check_messages(mcp, state)
+        await refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
         assert tool.description == _CHECK_MESSAGES_BASE
 
-    def test_unread_shows_count_and_preview(self, state: ServerState) -> None:
+    async def test_unread_shows_count_and_preview(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.relay.deliver(
+        await state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth module ready")
         )
-        refresh_check_messages(mcp, state)
+        await refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
         desc = tool.description
@@ -51,36 +51,44 @@ class TestRefreshCheckMessages:
         assert "auth module ready" in desc
         assert "Marks all as read." in desc
 
-    def test_multiple_unread(self, state: ServerState) -> None:
+    async def test_multiple_unread(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.relay.deliver(Message(from_user="eric", to_user="kai", body="first"))
-        state.relay.deliver(Message(from_user="priya", to_user="kai", body="second"))
-        refresh_check_messages(mcp, state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user="kai", body="first")
+        )
+        await state.relay.deliver(
+            Message(from_user="priya", to_user="kai", body="second")
+        )
+        await refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
         assert "2 unread" in desc
 
-    def test_reverts_to_base_when_cleared(self, state: ServerState) -> None:
+    async def test_reverts_to_base_when_cleared(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.relay.deliver(Message(from_user="eric", to_user="kai", body="hello"))
-        refresh_check_messages(mcp, state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user="kai", body="hello")
+        )
+        await refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
         assert "1 unread" in desc
         # Mark as read
-        unread = state.relay.fetch("kai")
-        state.relay.mark_read("kai", [m.id for m in unread])
-        refresh_check_messages(mcp, state)
+        unread = await state.relay.fetch("kai")
+        await state.relay.mark_read("kai", [m.id for m in unread])
+        await refresh_check_messages(mcp, state)
         assert tool.description == _CHECK_MESSAGES_BASE
 
-    def test_ignores_other_users_messages(self, state: ServerState) -> None:
+    async def test_ignores_other_users_messages(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.relay.deliver(Message(from_user="kai", to_user="eric", body="for eric"))
-        refresh_check_messages(mcp, state)
+        await state.relay.deliver(
+            Message(from_user="kai", to_user="eric", body="for eric")
+        )
+        await refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
         assert tool.description == _CHECK_MESSAGES_BASE
@@ -97,53 +105,57 @@ class TestUnreadFile:
             unread_path=tmp_path / "unread.json",
         )
 
-    def test_writes_unread_file(self, state_with_path: ServerState) -> None:
+    async def test_writes_unread_file(self, state_with_path: ServerState) -> None:
         mcp = create_server(state_with_path)
-        state_with_path.relay.deliver(
+        await state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth ready")
         )
-        refresh_check_messages(mcp, state_with_path)
+        await refresh_check_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
         assert "@eric" in data["preview"]
 
-    def test_writes_zero_when_no_messages(self, state_with_path: ServerState) -> None:
+    async def test_writes_zero_when_no_messages(
+        self, state_with_path: ServerState
+    ) -> None:
         mcp = create_server(state_with_path)
-        refresh_check_messages(mcp, state_with_path)
+        await refresh_check_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
         assert data["preview"] == ""
 
-    def test_reverts_to_zero_after_read(self, state_with_path: ServerState) -> None:
+    async def test_reverts_to_zero_after_read(
+        self, state_with_path: ServerState
+    ) -> None:
         mcp = create_server(state_with_path)
-        state_with_path.relay.deliver(
+        await state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="hello")
         )
-        refresh_check_messages(mcp, state_with_path)
+        await refresh_check_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
         # Mark as read
-        unread = state_with_path.relay.fetch("kai")
-        state_with_path.relay.mark_read("kai", [m.id for m in unread])
-        refresh_check_messages(mcp, state_with_path)
+        unread = await state_with_path.relay.fetch("kai")
+        await state_with_path.relay.mark_read("kai", [m.id for m in unread])
+        await refresh_check_messages(mcp, state_with_path)
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
 
-    def test_no_write_when_path_is_none(self, state: ServerState) -> None:
+    async def test_no_write_when_path_is_none(self, state: ServerState) -> None:
         assert state.unread_path is None
         mcp = create_server(state)
-        state.relay.deliver(Message(from_user="eric", to_user="kai", body="test"))
-        refresh_check_messages(mcp, state)
+        await state.relay.deliver(Message(from_user="eric", to_user="kai", body="test"))
+        await refresh_check_messages(mcp, state)
         # No error — function completes without attempting file write
 
-    def test_creates_parent_dirs(self, tmp_path: Path) -> None:
+    async def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         nested = tmp_path / "deep" / "nested" / "unread.json"
         state = create_state(BiffConfig(user="kai"), tmp_path, unread_path=nested)
         mcp = create_server(state)
-        refresh_check_messages(mcp, state)
+        await refresh_check_messages(mcp, state)
         assert nested.exists()
 
 
@@ -193,7 +205,7 @@ class TestPollInbox:
         # Let initial cycle run
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         # Inject a message
-        state_with_path.relay.deliver(
+        await state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="PR ready")
         )
         # Let poller detect the change
@@ -210,7 +222,7 @@ class TestPollInbox:
     async def test_updates_tool_description(self, state_with_path: ServerState) -> None:
         """Poller updates the check_messages tool description."""
         mcp = create_server(state_with_path)
-        state_with_path.relay.deliver(
+        await state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="lunch?")
         )
         await self._run_poller(mcp, state_with_path)

@@ -50,8 +50,10 @@ class TestTeamPresenceWorkflow:
         )
 
         # Set up other team members
-        state.relay.update_session(UserSession(user="eric", plan="reviewing PR #42"))
-        state.relay.update_session(
+        await state.relay.update_session(
+            UserSession(user="eric", plan="reviewing PR #42")
+        )
+        await state.relay.update_session(
             UserSession(user="priya", plan="debugging flaky test")
         )
 
@@ -113,7 +115,7 @@ class TestMessagingWorkflow:
         from biff.models import Message
 
         # Simulate incoming message from eric
-        state.relay.deliver(
+        await state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth module looks good")
         )
 

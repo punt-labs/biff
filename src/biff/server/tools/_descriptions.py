@@ -33,7 +33,7 @@ _CHECK_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 _DEFAULT_POLL_INTERVAL = 2.0
 
 
-def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> None:
+async def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Update the ``check_messages`` tool description with unread count.
 
     When the user has unread messages, the description changes to show
@@ -50,7 +50,7 @@ def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> Non
     tool = mcp._tool_manager._tools.get("check_messages")  # pyright: ignore[reportPrivateUsage]
     if tool is None:
         return
-    summary = state.relay.get_unread_summary(state.config.user)
+    summary = await state.relay.get_unread_summary(state.config.user)
     if summary.count == 0:
         tool.description = _CHECK_MESSAGES_BASE
     else:
@@ -81,10 +81,10 @@ async def poll_inbox(
     last_count = -1  # Force initial refresh
     while True:
         await asyncio.sleep(interval)
-        summary = state.relay.get_unread_summary(state.config.user)
+        summary = await state.relay.get_unread_summary(state.config.user)
         if summary.count != last_count:
             last_count = summary.count
-            refresh_check_messages(mcp, state)
+            await refresh_check_messages(mcp, state)
 
 
 def _write_unread_file(path: Path, summary: UnreadSummary) -> None:
