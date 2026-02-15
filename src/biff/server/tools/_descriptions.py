@@ -37,9 +37,15 @@ _CHECK_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 
 _DEFAULT_POLL_INTERVAL = 2.0
 
-# Captured from the first tool-handler context so the background
-# poller can send notifications outside a request context.
+# Updated on every tool call so the background poller can send
+# notifications outside a request context.
 _session: ServerSession | None = None
+
+
+def _reset_session() -> None:
+    """Clear the stored session — for test isolation only."""
+    global _session
+    _session = None
 
 
 async def _notify_tool_list_changed() -> None:
@@ -72,7 +78,10 @@ async def _notify_tool_list_changed() -> None:
         try:
             await _session.send_tool_list_changed()
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to send tool list changed notification", exc_info=True)
+            logger.warning(
+                "Failed to send tool list changed notification",
+                exc_info=True,
+            )
 
 
 async def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> None:

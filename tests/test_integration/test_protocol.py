@@ -42,10 +42,14 @@ async def tracked_client(
     state: ServerState,
 ) -> AsyncIterator[tuple[Client[Any], _NotificationTracker]]:
     """MCP client with notification tracking."""
+    from biff.server.tools._descriptions import _reset_session
+
+    _reset_session()
     tracker = _NotificationTracker()
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
         yield client, tracker
+    _reset_session()
 
 
 def _text(result: CallToolResult) -> str:
@@ -257,7 +261,7 @@ class TestDynamicDescriptionProtocol:
     ) -> None:
         """Tool call with no description change skips notification."""
         client, tracker = tracked_client
-        # First call may fire notification (initial refresh), so reset
+        # First call may fire a notification (initial refresh); capture baseline.
         await client.call_tool("who", {})
         before = tracker.tool_list_changed_count
         # Second call — no messages, description stays the same
