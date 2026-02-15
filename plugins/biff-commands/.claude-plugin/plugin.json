@@ -1,0 +1,9 @@
+{
+  "name": "biff-commands",
+  "description": "UNIX-style slash commands for biff team communication: /who, /finger, /plan, /mesg, /check, /biff",
+  "version": "0.1.0",
+  "author": {
+    "name": "Josh Freeman",
+    "email": "josh@jfreeman.dev"
+  }
+}
