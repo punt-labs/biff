@@ -20,7 +20,7 @@ jobs:
       - run: uv sync --frozen --extra dev
 
       - name: Write NATS credentials file
-        if: env.BIFF_TEST_NATS_CREDS_CONTENT != ''
+        if: secrets.BIFF_TEST_NATS_CREDS_CONTENT != ''
         run: |
           echo "$BIFF_TEST_NATS_CREDS_CONTENT" > /tmp/nats-test.creds
           echo "BIFF_TEST_NATS_CREDS=/tmp/nats-test.creds" >> "$GITHUB_ENV"
