@@ -19,7 +19,7 @@ from biff.relay import atomic_write
 # Well-known paths ----------------------------------------------------------
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-MCP_CONFIG_PATH = Path.home() / ".claude" / "mcp.json"
+MCP_CONFIG_PATH = Path.home() / ".claude.json"
 STASH_PATH = Path.home() / ".biff" / "statusline-original.json"
 UNREAD_DIR = Path.home() / ".biff" / "unread"
 
