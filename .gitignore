@@ -37,6 +37,7 @@ tests/transcripts/
 
 # Environment
 .env
+.envrc
 
 # LaTeX
 *.aux
