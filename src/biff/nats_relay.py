@@ -113,12 +113,26 @@ class NatsRelay:
             self._js = None
             self._kv = None
 
+    @staticmethod
+    def _validate_user(user: str) -> str:
+        """Reject usernames that could escape NATS subject boundaries.
+
+        NATS subjects use ``.`` as a separator and ``*``/``>`` as
+        wildcards.  Allowing these in usernames would let a crafted
+        name match unintended subjects.
+        """
+        if not user or any(c in user for c in (".", "*", ">", " ")):
+            msg = f"Invalid username: {user!r}"
+            raise ValueError(msg)
+        return user
+
     # -- Messages --
 
     async def deliver(self, message: Message) -> None:
         """Publish a message to the recipient's JetStream subject."""
+        self._validate_user(message.from_user)
         js, _ = await self._ensure_connected()
-        subject = f"{_SUBJECT_PREFIX}.{message.to_user}"
+        subject = f"{_SUBJECT_PREFIX}.{self._validate_user(message.to_user)}"
         await js.publish(subject, message.model_dump_json().encode())
 
     def _durable_name(self, user: str) -> str:
@@ -132,6 +146,7 @@ class NatsRelay:
 
     async def fetch(self, user: str) -> list[Message]:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
+        self._validate_user(user)
         js, _ = await self._ensure_connected()
         subject = f"{_SUBJECT_PREFIX}.{user}"
 
@@ -160,6 +175,7 @@ class NatsRelay:
 
     async def get_unread_summary(self, user: str) -> UnreadSummary:
         """Peek at messages non-destructively for notification preview."""
+        self._validate_user(user)
         js, _ = await self._ensure_connected()
         subject = f"{_SUBJECT_PREFIX}.{user}"
 
@@ -201,11 +217,13 @@ class NatsRelay:
 
     async def update_session(self, session: UserSession) -> None:
         """Store session in KV — ``put()`` resets the TTL."""
+        self._validate_user(session.user)
         _, kv = await self._ensure_connected()
         await kv.put(session.user, session.model_dump_json().encode())
 
     async def get_session(self, user: str) -> UserSession | None:
         """Read a single session from KV."""
+        self._validate_user(user)
         _, kv = await self._ensure_connected()
         try:
             entry = await kv.get(user)
@@ -217,6 +235,7 @@ class NatsRelay:
 
     async def heartbeat(self, user: str) -> None:
         """Update ``last_active``, creating session if needed."""
+        self._validate_user(user)
         _, kv = await self._ensure_connected()
         try:
             entry = await kv.get(user)
@@ -224,7 +243,7 @@ class NatsRelay:
                 raise KeyNotFoundError
             existing = UserSession.model_validate_json(entry.value)
             updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
-        except (KeyNotFoundError, BucketNotFoundError):
+        except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
             updated = UserSession(user=user)
         await kv.put(user, updated.model_dump_json().encode())
 

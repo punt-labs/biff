@@ -79,14 +79,13 @@ async def relay(nats_server: str) -> AsyncIterator[NatsRelay]:
 
     yield r
 
-    # Clean up: delete stream (removes durable consumers) and KV bucket
+    # Clean up: delete stream (removes durable consumers) and KV bucket.
+    # close() resets all cached state (_nc, _js, _kv) to None.
     if r._nc is not None and r._js is not None:
         with suppress(Exception):
             await r._js.delete_stream("BIFF_INBOX")
         with suppress(Exception):
             await r._js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
-        # Reset cached state so next test's _ensure_connected recreates infra
-        r._kv = None
 
     await r.close()
 
