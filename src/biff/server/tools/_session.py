@@ -12,10 +12,10 @@ if TYPE_CHECKING:
 
 def get_or_create_session(state: ServerState) -> UserSession:
     """Get the current user's session, creating one if it doesn't exist."""
-    session = state.sessions.get_user(state.config.user)
+    session = state.relay.get_session(state.config.user)
     if session is None:
-        state.sessions.heartbeat(state.config.user)
-        session = state.sessions.get_user(state.config.user)
+        state.relay.heartbeat(state.config.user)
+        session = state.relay.get_session(state.config.user)
         assert session is not None  # noqa: S101
     return session
 
@@ -25,5 +25,5 @@ def update_current_session(state: ServerState, **updates: object) -> UserSession
     session = get_or_create_session(state)
     updates["last_active"] = datetime.now(UTC)
     updated = session.model_copy(update=updates)
-    state.sessions.update(updated)
+    state.relay.update_session(updated)
     return updated

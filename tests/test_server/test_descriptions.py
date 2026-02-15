@@ -38,7 +38,7 @@ class TestRefreshCheckMessages:
 
     def test_unread_shows_count_and_preview(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.messages.append(
+        state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth module ready")
         )
         refresh_check_messages(mcp, state)
@@ -53,8 +53,8 @@ class TestRefreshCheckMessages:
 
     def test_multiple_unread(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.messages.append(Message(from_user="eric", to_user="kai", body="first"))
-        state.messages.append(Message(from_user="priya", to_user="kai", body="second"))
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="first"))
+        state.relay.deliver(Message(from_user="priya", to_user="kai", body="second"))
         refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
@@ -64,7 +64,7 @@ class TestRefreshCheckMessages:
 
     def test_reverts_to_base_when_cleared(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.messages.append(Message(from_user="eric", to_user="kai", body="hello"))
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="hello"))
         refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
@@ -72,14 +72,14 @@ class TestRefreshCheckMessages:
         assert desc is not None
         assert "1 unread" in desc
         # Mark as read
-        unread = state.messages.get_unread("kai")
-        state.messages.mark_read([m.id for m in unread])
+        unread = state.relay.fetch("kai")
+        state.relay.mark_read("kai", [m.id for m in unread])
         refresh_check_messages(mcp, state)
         assert tool.description == _CHECK_MESSAGES_BASE
 
     def test_ignores_other_users_messages(self, state: ServerState) -> None:
         mcp = create_server(state)
-        state.messages.append(Message(from_user="kai", to_user="eric", body="for eric"))
+        state.relay.deliver(Message(from_user="kai", to_user="eric", body="for eric"))
         refresh_check_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("check_messages")
         assert tool is not None
@@ -99,7 +99,7 @@ class TestUnreadFile:
 
     def test_writes_unread_file(self, state_with_path: ServerState) -> None:
         mcp = create_server(state_with_path)
-        state_with_path.messages.append(
+        state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth ready")
         )
         refresh_check_messages(mcp, state_with_path)
@@ -118,7 +118,7 @@ class TestUnreadFile:
 
     def test_reverts_to_zero_after_read(self, state_with_path: ServerState) -> None:
         mcp = create_server(state_with_path)
-        state_with_path.messages.append(
+        state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="hello")
         )
         refresh_check_messages(mcp, state_with_path)
@@ -126,8 +126,8 @@ class TestUnreadFile:
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
         # Mark as read
-        unread = state_with_path.messages.get_unread("kai")
-        state_with_path.messages.mark_read([m.id for m in unread])
+        unread = state_with_path.relay.fetch("kai")
+        state_with_path.relay.mark_read("kai", [m.id for m in unread])
         refresh_check_messages(mcp, state_with_path)
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
@@ -135,7 +135,7 @@ class TestUnreadFile:
     def test_no_write_when_path_is_none(self, state: ServerState) -> None:
         assert state.unread_path is None
         mcp = create_server(state)
-        state.messages.append(Message(from_user="eric", to_user="kai", body="test"))
+        state.relay.deliver(Message(from_user="eric", to_user="kai", body="test"))
         refresh_check_messages(mcp, state)
         # No error — function completes without attempting file write
 
@@ -193,7 +193,7 @@ class TestPollInbox:
         # Let initial cycle run
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         # Inject a message
-        state_with_path.messages.append(
+        state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="PR ready")
         )
         # Let poller detect the change
@@ -210,7 +210,7 @@ class TestPollInbox:
     async def test_updates_tool_description(self, state_with_path: ServerState) -> None:
         """Poller updates the check_messages tool description."""
         mcp = create_server(state_with_path)
-        state_with_path.messages.append(
+        state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="lunch?")
         )
         await self._run_poller(mcp, state_with_path)

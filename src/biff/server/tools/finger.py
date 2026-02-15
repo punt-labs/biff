@@ -50,7 +50,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """Query a user's session and presence info."""
         refresh_check_messages(mcp, state)
         bare = user.strip().lstrip("@")
-        session = state.sessions.get_user(bare)
+        session = state.relay.get_session(bare)
         if session is None:
             return f"@{bare} has no active session."
         status = "accepting messages" if session.biff_enabled else "messages off"

@@ -2,7 +2,7 @@
 
 Mirrors test_integration/test_e2e_presence.py but with actual ``biff serve``
 subprocesses communicating over stdio pipes. Exercises the full stack:
-CLI -> Typer -> FastMCP -> tool -> SessionStore -> filesystem <- other process.
+CLI -> Typer -> FastMCP -> tool -> LocalRelay -> filesystem <- other process.
 """
 
 from __future__ import annotations
