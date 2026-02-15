@@ -9,7 +9,7 @@
 
 Messages are consumed (deleted) on :meth:`fetch`; :meth:`mark_read` is a
 no-op.  :meth:`get_unread_summary` peeks at messages non-destructively
-using stream info and ephemeral consumers.
+using stream info and durable consumers with nak.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from nats.js.api import (
 from nats.js.errors import (
     BucketNotFoundError,
     KeyNotFoundError,
+    NoKeysError,
     NotFoundError,
 )
 from pydantic import ValidationError
@@ -110,12 +111,23 @@ class NatsRelay:
         subject = f"{_SUBJECT_PREFIX}.{message.to_user}"
         await js.publish(subject, message.model_dump_json().encode())
 
+    def _durable_name(self, user: str) -> str:
+        """Durable consumer name for a user's inbox.
+
+        WORK_QUEUE streams allow only one consumer per filter subject.
+        Using a durable consumer lets repeated calls reuse the same
+        server-side consumer instead of racing with ephemeral cleanup.
+        """
+        return f"inbox-{user}"
+
     async def fetch(self, user: str) -> list[Message]:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
         js, _ = await self._ensure_connected()
         subject = f"{_SUBJECT_PREFIX}.{user}"
 
-        sub = await js.pull_subscribe(subject, stream=_STREAM_NAME)
+        sub = await js.pull_subscribe(
+            subject, durable=self._durable_name(user), stream=_STREAM_NAME
+        )
         try:
             raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
         except TimeoutError:
@@ -153,8 +165,10 @@ class NatsRelay:
         if count == 0:
             return UnreadSummary()
 
-        # Peek at first few messages via ephemeral consumer + nak
-        sub = await js.pull_subscribe(subject, stream=_STREAM_NAME)
+        # Peek via the same durable consumer — nak puts messages back
+        sub = await js.pull_subscribe(
+            subject, durable=self._durable_name(user), stream=_STREAM_NAME
+        )
         try:
             raw_msgs = await sub.fetch(
                 batch=min(count, _MAX_PREVIEW_MESSAGES),
@@ -218,7 +232,7 @@ class NatsRelay:
         sessions: list[UserSession] = []
         try:
             keys = await kv.keys()  # pyright: ignore[reportUnknownMemberType]
-        except (NotFoundError, BucketNotFoundError):
+        except (NotFoundError, BucketNotFoundError, NoKeysError):
             return []
         for key in keys:
             try:
