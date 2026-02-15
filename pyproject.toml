@@ -144,7 +144,7 @@ reportPrivateUsage = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not nats'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not nats and not hosted'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
@@ -152,6 +152,7 @@ markers = [
     "subprocess: marks tests that spawn biff subprocesses (run with -m subprocess)",
     "sdk: marks tests that require Claude Agent SDK and an API key (run with -m sdk)",
     "nats: marks tests that require a running nats-server (run with -m nats)",
+    "hosted: marks tests that require a hosted NATS account (run with -m hosted)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
 ]
 

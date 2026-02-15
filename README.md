@@ -116,8 +116,29 @@ uv sync --extra dev        # Install dependencies
 uv run ruff check .        # Lint
 uv run ruff format .       # Format
 uv run mypy src/ tests/    # Type check
-uv run pytest              # Test
+uv run pytest              # Test (unit + integration)
+uv run pytest -m nats      # NATS tests (requires local nats-server)
+uv run pytest -m hosted    # Hosted NATS tests (see below)
 ```
+
+### Hosted NATS tests
+
+Tests against a real hosted NATS account (Synadia Cloud or self-hosted):
+
+```bash
+BIFF_TEST_NATS_URL=tls://connect.ngs.global \
+BIFF_TEST_NATS_CREDS=/path/to/user.creds \
+    uv run pytest -m hosted -v
+```
+
+Environment variables (set exactly one auth var, or none for anonymous):
+
+| Variable | Purpose |
+|----------|---------|
+| `BIFF_TEST_NATS_URL` | Required. Server URL (e.g. `tls://connect.ngs.global`) |
+| `BIFF_TEST_NATS_TOKEN` | Token auth |
+| `BIFF_TEST_NATS_NKEYS_SEED` | Path to NKey seed file |
+| `BIFF_TEST_NATS_CREDS` | Path to credentials file |
 
 ## License
 

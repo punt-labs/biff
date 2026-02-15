@@ -38,7 +38,11 @@ def create_state(
     """
     if relay is None:
         if config.relay_url:
-            relay = NatsRelay(url=config.relay_url, auth=config.relay_auth)
+            relay = NatsRelay(
+                url=config.relay_url,
+                auth=config.relay_auth,
+                name=f"biff-{config.user}",
+            )
         else:
             relay = LocalRelay(data_dir=data_dir)
     return ServerState(
