@@ -259,6 +259,9 @@ class TestRunOriginal:
     def test_bad_command(self):
         assert _run_original("__nonexistent_cmd_xyz__", "") == ""
 
+    def test_failing_command(self):
+        assert _run_original("bash -c 'echo partial; exit 1'", "") == ""
+
 
 # --- Run Statusline (integration) ------------------------------------------
 

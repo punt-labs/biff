@@ -78,21 +78,32 @@ def read_stash(path: Path) -> str | dict[str, object] | None:
 def write_stash(path: Path, value: str | dict[str, object] | None) -> None:
     """Persist the original ``statusLine`` value to the stash file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"original": value}) + "\n")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".stash-", suffix=".json")
+    os.close(fd)
+    try:
+        Path(tmp).write_text(json.dumps({"original": value}) + "\n")
+        Path(tmp).replace(path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 # Install / Uninstall -------------------------------------------------------
 
 
 def install(
-    settings_path: Path = SETTINGS_PATH,
-    stash_path: Path = STASH_PATH,
+    settings_path: Path | None = None,
+    stash_path: Path | None = None,
 ) -> InstallResult:
     """Install biff into Claude Code's status bar.
 
     Stashes the current ``statusLine`` value and replaces it with the
     ``biff statusline`` command.
     """
+    if settings_path is None:
+        settings_path = SETTINGS_PATH
+    if stash_path is None:
+        stash_path = STASH_PATH
     if stash_path.exists():
         return InstallResult(installed=False, message="Already installed.")
 
@@ -107,14 +118,18 @@ def install(
 
 
 def uninstall(
-    settings_path: Path = SETTINGS_PATH,
-    stash_path: Path = STASH_PATH,
+    settings_path: Path | None = None,
+    stash_path: Path | None = None,
 ) -> UninstallResult:
     """Remove biff from Claude Code's status bar.
 
     Restores the original ``statusLine`` value from the stash and deletes
     the stash file.
     """
+    if settings_path is None:
+        settings_path = SETTINGS_PATH
+    if stash_path is None:
+        stash_path = STASH_PATH
     if not stash_path.exists():
         return UninstallResult(uninstalled=False, message="Not installed.")
 
@@ -225,6 +240,8 @@ def _run_original(command: str, stdin_data: str) -> str:
             text=True,
             timeout=5,
         )
+        if result.returncode != 0:
+            return ""
         return result.stdout.strip()
     except (subprocess.TimeoutExpired, OSError):
         return ""
