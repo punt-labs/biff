@@ -18,9 +18,8 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
-from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.state import ServerState
+from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
@@ -37,13 +36,6 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     with suppress(Exception):
         await js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
     await nc.close()
-
-
-def _make_state(user: str, nats_url: str, data_dir: Path) -> ServerState:
-    """Build a ServerState backed by NatsRelay."""
-    config = BiffConfig(user=user, relay_url=nats_url)
-    relay = NatsRelay(url=nats_url)
-    return ServerState(config=config, relay=relay, unread_path=data_dir / "unread.json")
 
 
 @pytest.fixture
@@ -70,7 +62,8 @@ async def kai_client(
     nats_server: str, shared_data_dir: Path
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for kai backed by NatsRelay."""
-    state = _make_state("kai", nats_server, shared_data_dir)
+    config = BiffConfig(user="kai", relay_url=nats_server)
+    state = create_state(config, shared_data_dir / "kai")
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
         yield client
@@ -81,7 +74,8 @@ async def eric_client(
     nats_server: str, shared_data_dir: Path
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for eric backed by NatsRelay."""
-    state = _make_state("eric", nats_server, shared_data_dir)
+    config = BiffConfig(user="eric", relay_url=nats_server)
+    state = create_state(config, shared_data_dir / "eric")
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
         yield client
