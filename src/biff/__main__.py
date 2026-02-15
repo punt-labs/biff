@@ -114,26 +114,38 @@ def _resolve_github_user() -> str | None:
         return None
 
 
-def _set_git_user(user: str) -> None:
-    """Persist identity via ``git config biff.user``."""
-    subprocess.run(  # noqa: S603
-        ["git", "config", "biff.user", user],  # noqa: S607
-        check=True,
-    )
+def _set_git_user(user: str, *, cwd: Path) -> None:
+    """Persist identity via ``git config biff.user`` in *cwd*."""
+    try:
+        subprocess.run(  # noqa: S603
+            ["git", "config", "biff.user", user],  # noqa: S607
+            check=True,
+            cwd=cwd,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raise SystemExit(
+            "Failed to set 'git config biff.user'.\n"
+            "Set it manually: git config biff.user <handle>"
+        ) from None
+
+
+def _toml_basic_string(value: str) -> str:
+    """Escape *value* for use as a TOML basic string."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _build_biff_toml(members: list[str], relay_url: str) -> str:
     """Build ``.biff`` TOML content from user inputs."""
     lines: list[str] = []
     if members:
-        quoted = ", ".join(f'"{m}"' for m in members)
+        quoted = ", ".join(_toml_basic_string(m) for m in members)
         lines.append("[team]")
         lines.append(f"members = [{quoted}]")
     if relay_url:
         if lines:
             lines.append("")
         lines.append("[relay]")
-        lines.append(f'url = "{relay_url}"')
+        lines.append(f"url = {_toml_basic_string(relay_url)}")
     return "\n".join(lines) + "\n" if lines else ""
 
 
@@ -156,15 +168,15 @@ def init(
         )
 
     # Resolve identity: git config > gh CLI > OS username
-    user = get_git_user() or _resolve_github_user() or get_os_user()
+    user = get_git_user(cwd=repo_root) or _resolve_github_user() or get_os_user()
     if user is None:
         raise SystemExit("Could not determine username from any source.")
 
     # Offer to persist identity in git config if not already set
-    if get_git_user() is None:
+    if get_git_user(cwd=repo_root) is None:
         print(f"Resolved identity: {user}")
         if typer.confirm(f"Set 'git config biff.user {user}'?", default=True):
-            _set_git_user(user)
+            _set_git_user(user, cwd=repo_root)
             print(f"Set git config biff.user = {user}")
 
     # Gather team members

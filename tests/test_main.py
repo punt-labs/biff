@@ -154,6 +154,7 @@ class TestServeCommand:
 
 
 class TestInitCommand:
+    @patch("biff.__main__._set_git_user")
     @patch("biff.__main__._resolve_github_user", return_value=None)
     @patch("biff.__main__.get_os_user", return_value="kai")
     @patch("biff.__main__.get_git_user", return_value=None)
@@ -164,6 +165,7 @@ class TestInitCommand:
         _mock_git: MagicMock,
         _mock_os: MagicMock,
         _mock_gh: MagicMock,
+        _mock_set: MagicMock,
         tmp_path: Path,
     ) -> None:
         mock_root.return_value = tmp_path

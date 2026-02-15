@@ -52,7 +52,7 @@ def find_git_root(start: Path | None = None) -> Path | None:
     return None
 
 
-def get_git_user() -> str | None:
+def get_git_user(*, cwd: Path | None = None) -> str | None:
     """Read ``git config biff.user``, returning *None* if unset."""
     try:
         result = subprocess.run(
@@ -60,6 +60,7 @@ def get_git_user() -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            cwd=cwd,
         )
         value = result.stdout.strip()
         return value if result.returncode == 0 and value else None
