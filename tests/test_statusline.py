@@ -129,7 +129,7 @@ class TestInstall:
         assert "biff" in servers
         assert "other" in servers
 
-    def test_already_installed(self, tmp_path: Path):
+    def test_already_installed_reconciles_mcp(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
         mcp_path = tmp_path / "mcp.json"
@@ -138,7 +138,11 @@ class TestInstall:
         result = install(settings_path, stash_path, mcp_path)
 
         assert result == InstallResult(installed=False, message="Already installed.")
-        assert not mcp_path.exists()
+        # MCP config is reconciled even on "already installed" (upgrade path)
+        mcp = read_settings(mcp_path)
+        servers = mcp["mcpServers"]
+        assert isinstance(servers, dict)
+        assert servers["biff"] == _biff_mcp_server_entry()
 
     def test_creates_settings_if_absent(self, tmp_path: Path):
         settings_path = tmp_path / "new" / "settings.json"
