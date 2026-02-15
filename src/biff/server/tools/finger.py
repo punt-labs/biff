@@ -46,11 +46,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="finger",
         description="Check what a user is working on and their availability.",
     )
-    def finger(user: str) -> str:
+    async def finger(user: str) -> str:
         """Query a user's session and presence info."""
-        refresh_check_messages(mcp, state)
+        await refresh_check_messages(mcp, state)
         bare = user.strip().lstrip("@")
-        session = state.relay.get_session(bare)
+        session = await state.relay.get_session(bare)
         if session is None:
             return f"@{bare} has no active session."
         status = "accepting messages" if session.biff_enabled else "messages off"

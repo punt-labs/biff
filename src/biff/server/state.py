@@ -26,11 +26,12 @@ def create_state(
     config: BiffConfig,
     data_dir: Path,
     *,
+    relay: Relay | None = None,
     unread_path: Path | None = None,
 ) -> ServerState:
     """Create a ``ServerState`` from config and data directory."""
     return ServerState(
         config=config,
-        relay=LocalRelay(data_dir=data_dir),
+        relay=relay or LocalRelay(data_dir=data_dir),
         unread_path=unread_path,
     )

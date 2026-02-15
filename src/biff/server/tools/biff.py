@@ -26,9 +26,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Use 'on' to accept messages, 'off' to block them."
         ),
     )
-    def biff(enabled: bool) -> str:  # noqa: FBT001
+    async def biff(enabled: bool) -> str:  # noqa: FBT001
         """Toggle message reception for the current user."""
-        update_current_session(state, biff_enabled=enabled)
-        refresh_check_messages(mcp, state)
+        await update_current_session(state, biff_enabled=enabled)
+        await refresh_check_messages(mcp, state)
         status = "on" if enabled else "off"
         return f"Messages are now {status} for @{state.config.user}."
