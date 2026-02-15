@@ -12,8 +12,8 @@ directory with per-user inbox files and a shared sessions file::
         inbox-eric.jsonl
         sessions.json
 
-In Phase 2, ``NatsRelay`` will implement the same protocol over
-the network.
+``NatsRelay`` (in :mod:`biff.nats_relay`) implements the same protocol
+over a NATS server for networked deployments.
 """
 
 from __future__ import annotations
@@ -28,13 +28,9 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from biff.models import Message, UnreadSummary, UserSession
+from biff.models import Message, UnreadSummary, UserSession, build_unread_summary
 
 logger = logging.getLogger(__name__)
-
-_MAX_PREVIEW_LEN = 80
-_MAX_BODY_PREVIEW = 40
-_MAX_PREVIEW_MESSAGES = 3
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -133,16 +129,7 @@ class LocalRelay:
     async def get_unread_summary(self, user: str) -> UnreadSummary:
         """Build an unread summary for dynamic tool descriptions."""
         unread = await self.fetch(user)
-        if not unread:
-            return UnreadSummary()
-        previews = [
-            f"@{m.from_user} about {m.body[:_MAX_BODY_PREVIEW]}"
-            for m in unread[:_MAX_PREVIEW_MESSAGES]
-        ]
-        preview = ", ".join(previews)
-        if len(preview) > _MAX_PREVIEW_LEN:
-            preview = preview[: _MAX_PREVIEW_LEN - 3] + "..."
-        return UnreadSummary(count=len(unread), preview=preview)
+        return build_unread_summary(unread, len(unread))
 
     # -- Presence --
 

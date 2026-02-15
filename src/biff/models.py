@@ -10,6 +10,7 @@ All datetime fields are normalized to UTC; naive datetimes are rejected.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, tzinfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -109,3 +110,26 @@ class UnreadSummary(BaseModel):
 
     count: int = Field(default=0, ge=0)
     preview: str = ""
+
+
+_MAX_PREVIEW_LEN = 80
+_MAX_BODY_PREVIEW = 40
+_MAX_PREVIEW_MESSAGES = 3
+
+
+def build_unread_summary(messages: Sequence[Message], count: int) -> UnreadSummary:
+    """Build an :class:`UnreadSummary` from a list of messages.
+
+    Shared by both ``LocalRelay`` and ``NatsRelay`` to avoid
+    duplicating preview-formatting logic.
+    """
+    if count == 0:
+        return UnreadSummary()
+    previews = [
+        f"@{m.from_user} about {m.body[:_MAX_BODY_PREVIEW]}"
+        for m in messages[:_MAX_PREVIEW_MESSAGES]
+    ]
+    preview = ", ".join(previews)
+    if len(preview) > _MAX_PREVIEW_LEN:
+        preview = preview[: _MAX_PREVIEW_LEN - 3] + "..."
+    return UnreadSummary(count=count, preview=preview)

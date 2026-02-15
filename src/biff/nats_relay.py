@@ -35,12 +35,14 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff.models import Message, UnreadSummary, UserSession
+from biff.models import Message, UserSession, build_unread_summary
 
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
     from nats.js.client import JetStreamContext
     from nats.js.kv import KeyValue
+
+    from biff.models import UnreadSummary
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +53,7 @@ _KV_TTL = 300  # seconds — buffer beyond default session TTL
 _FETCH_BATCH = 100
 _FETCH_TIMEOUT = 1.0
 _PEEK_TIMEOUT = 0.5
-_MAX_PREVIEW_LEN = 80
-_MAX_BODY_PREVIEW = 40
-_MAX_PREVIEW_MESSAGES = 3
+_PEEK_BATCH = 3
 
 
 class NatsRelay:
@@ -71,29 +71,39 @@ class NatsRelay:
         self._kv: KeyValue | None = None
 
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
-        """Lazily connect and provision infrastructure."""
+        """Lazily connect and provision infrastructure.
+
+        Sets instance attributes only after all provisioning succeeds,
+        ensuring no connection leak if KV/stream creation fails.
+        """
         if self._js is not None and self._kv is not None:
             return self._js, self._kv
+
         nc = await nats.connect(self._url)  # pyright: ignore[reportUnknownMemberType]
+        try:
+            js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
+
+            # KV bucket for sessions — TTL auto-purges truly stale entries
+            kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
+                config=KeyValueConfig(bucket=_KV_BUCKET, ttl=_KV_TTL),
+            )
+
+            # Stream for messages — WORK_QUEUE deletes on ack (POP semantics)
+            await js.add_stream(  # pyright: ignore[reportUnknownMemberType]
+                config=StreamConfig(
+                    name=_STREAM_NAME,
+                    subjects=[f"{_SUBJECT_PREFIX}.>"],
+                    retention=RetentionPolicy.WORK_QUEUE,
+                ),
+            )
+        except Exception:
+            await nc.close()
+            raise
+
         self._nc = nc
-        js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
         self._js = js
-
-        # KV bucket for sessions — TTL auto-purges truly stale entries
-        self._kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
-            config=KeyValueConfig(bucket=_KV_BUCKET, ttl=_KV_TTL),
-        )
-
-        # Stream for messages — WORK_QUEUE deletes on ack (POP semantics)
-        await js.add_stream(  # pyright: ignore[reportUnknownMemberType]
-            config=StreamConfig(
-                name=_STREAM_NAME,
-                subjects=[f"{_SUBJECT_PREFIX}.>"],
-                retention=RetentionPolicy.WORK_QUEUE,
-            ),
-        )
-
-        return js, self._kv
+        self._kv = kv
+        return js, kv
 
     async def close(self) -> None:
         """Close the NATS connection and release resources."""
@@ -157,13 +167,13 @@ class NatsRelay:
         try:
             info = await js.stream_info(_STREAM_NAME, subjects_filter=subject)
         except NotFoundError:
-            return UnreadSummary()
+            return build_unread_summary([], 0)
 
         count = 0
         if info.state.subjects:
             count = info.state.subjects.get(subject, 0)
         if count == 0:
-            return UnreadSummary()
+            return build_unread_summary([], 0)
 
         # Peek via the same durable consumer — nak puts messages back
         sub = await js.pull_subscribe(
@@ -171,7 +181,7 @@ class NatsRelay:
         )
         try:
             raw_msgs = await sub.fetch(
-                batch=min(count, _MAX_PREVIEW_MESSAGES),
+                batch=min(count, _PEEK_BATCH),
                 timeout=_PEEK_TIMEOUT,
             )
         except TimeoutError:
@@ -185,14 +195,7 @@ class NatsRelay:
                 messages.append(Message.model_validate_json(raw.data))
             await raw.nak()  # Put back — don't consume
 
-        previews = [
-            f"@{m.from_user} about {m.body[:_MAX_BODY_PREVIEW]}"
-            for m in messages[:_MAX_PREVIEW_MESSAGES]
-        ]
-        preview = ", ".join(previews)
-        if len(preview) > _MAX_PREVIEW_LEN:
-            preview = preview[: _MAX_PREVIEW_LEN - 3] + "..."
-        return UnreadSummary(count=count, preview=preview)
+        return build_unread_summary(messages, count)
 
     # -- Presence --
 
