@@ -50,6 +50,8 @@ _STREAM_NAME = "BIFF_INBOX"
 _SUBJECT_PREFIX = "biff.inbox"
 _KV_BUCKET = "biff-sessions"
 _KV_TTL = 300  # seconds — buffer beyond default session TTL
+_KV_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — small JSON session blobs
+_STREAM_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — messages consumed on read
 _FETCH_BATCH = 100
 _FETCH_TIMEOUT = 1.0
 _PEEK_TIMEOUT = 0.5
@@ -68,9 +70,11 @@ class NatsRelay:
         self,
         url: str = "nats://localhost:4222",
         auth: RelayAuth | None = None,
+        name: str = "biff",
     ) -> None:
         self._url = url
         self._auth = auth
+        self._name = name
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
@@ -107,6 +111,7 @@ class NatsRelay:
 
         nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
             self._url,
+            name=self._name,
             disconnected_cb=_on_disconnect,
             reconnected_cb=_on_reconnect,
             error_cb=_on_error,
@@ -117,7 +122,11 @@ class NatsRelay:
 
             # KV bucket for sessions — TTL auto-purges truly stale entries
             kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
-                config=KeyValueConfig(bucket=_KV_BUCKET, ttl=_KV_TTL),
+                config=KeyValueConfig(
+                    bucket=_KV_BUCKET,
+                    ttl=_KV_TTL,
+                    max_bytes=_KV_MAX_BYTES,
+                ),
             )
 
             # Stream for messages — WORK_QUEUE deletes on ack (POP semantics)
@@ -126,6 +135,7 @@ class NatsRelay:
                     name=_STREAM_NAME,
                     subjects=[f"{_SUBJECT_PREFIX}.>"],
                     retention=RetentionPolicy.WORK_QUEUE,
+                    max_bytes=_STREAM_MAX_BYTES,
                 ),
             )
         except Exception:
@@ -136,6 +146,16 @@ class NatsRelay:
         self._js = js
         self._kv = kv
         return js, kv
+
+    def reset_infrastructure(self) -> None:
+        """Clear cached KV/stream handles, forcing re-provisioning.
+
+        Call after external deletion of the KV bucket or stream
+        (e.g. test cleanup) to ensure the next operation re-creates
+        them.  The underlying NATS connection is preserved.
+        """
+        self._js = None
+        self._kv = None
 
     async def close(self) -> None:
         """Close the NATS connection and release resources."""

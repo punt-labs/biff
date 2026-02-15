@@ -9,6 +9,11 @@ using credentials from environment variables:
     BIFF_TEST_NATS_CREDS      — Path to NATS credentials file
 
 At most one auth env var should be set.
+
+Connection budget: hosted accounts often have low connection limits
+(e.g. 5 per app on Synadia Cloud starter).  This module uses three
+session-scoped connections (kai relay, eric relay, cleanup) and
+reuses them across all tests.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import os
 from collections.abc import AsyncIterator, Generator
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import nats
 import pytest
@@ -25,9 +30,13 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, RelayAuth
+from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
+
+if TYPE_CHECKING:
+    from nats.aio.client import Client as NatsClient
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 
@@ -55,7 +64,7 @@ def _relay_auth_from_env() -> RelayAuth | None:
 
 
 def _auth_connect_kwargs(auth: RelayAuth | None) -> dict[str, str]:
-    """Build nats.connect() kwargs for the cleanup fixture."""
+    """Build nats.connect() kwargs from RelayAuth."""
     if auth is None:
         return {}
     if auth.token:
@@ -65,6 +74,9 @@ def _auth_connect_kwargs(auth: RelayAuth | None) -> dict[str, str]:
     if auth.user_credentials:
         return {"user_credentials": auth.user_credentials}
     return {}
+
+
+# -- Session-scoped fixtures (3 NATS connections total) --
 
 
 @pytest.fixture(scope="session")
@@ -82,21 +94,70 @@ def hosted_nats_auth() -> RelayAuth | None:
     return _relay_auth_from_env()
 
 
+@pytest.fixture(scope="session")
+async def _cleanup_conn(  # pyright: ignore[reportUnusedFunction]
+    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
+) -> AsyncIterator[NatsClient]:
+    """Session-scoped NATS connection for test cleanup."""
+    nc: NatsClient = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
+        hosted_nats_url,
+        name="biff-test-cleanup",
+        **_auth_connect_kwargs(hosted_nats_auth),
+    )
+    yield nc
+    await nc.close()
+
+
+@pytest.fixture(scope="session")
+async def kai_relay(
+    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
+) -> AsyncIterator[NatsRelay]:
+    """Session-scoped NatsRelay for kai — one connection for all tests."""
+    relay = NatsRelay(
+        url=hosted_nats_url,
+        auth=hosted_nats_auth,
+        name="biff-test-kai",
+    )
+    yield relay
+    await relay.close()
+
+
+@pytest.fixture(scope="session")
+async def eric_relay(
+    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
+) -> AsyncIterator[NatsRelay]:
+    """Session-scoped NatsRelay for eric — one connection for all tests."""
+    relay = NatsRelay(
+        url=hosted_nats_url,
+        auth=hosted_nats_auth,
+        name="biff-test-eric",
+    )
+    yield relay
+    await relay.close()
+
+
+# -- Per-test fixtures --
+
+
 @pytest.fixture(autouse=True)
 async def _cleanup_nats(  # pyright: ignore[reportUnusedFunction]
-    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
+    _cleanup_conn: NatsClient,
+    kai_relay: NatsRelay,
+    eric_relay: NatsRelay,
 ) -> AsyncIterator[None]:
-    """Delete NATS streams and KV buckets after each test for isolation."""
+    """Delete NATS infrastructure after each test for isolation.
+
+    Also resets the relay handles so ``_ensure_connected()`` re-provisions
+    the KV bucket and stream on the next test.
+    """
     yield
-    nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
-        hosted_nats_url, **_auth_connect_kwargs(hosted_nats_auth)
-    )
-    js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
+    js = _cleanup_conn.jetstream()  # pyright: ignore[reportUnknownMemberType]
     with suppress(Exception):
         await js.delete_stream("BIFF_INBOX")
     with suppress(Exception):
         await js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
-    await nc.close()
+    kai_relay.reset_infrastructure()
+    eric_relay.reset_infrastructure()
 
 
 @pytest.fixture
@@ -120,15 +181,12 @@ def transcript(request: pytest.FixtureRequest) -> Generator[Transcript]:
 
 @pytest.fixture
 async def kai_client(
-    hosted_nats_url: str,
-    hosted_nats_auth: RelayAuth | None,
+    kai_relay: NatsRelay,
     shared_data_dir: Path,
 ) -> AsyncIterator[Client[Any]]:
-    """MCP client for kai backed by hosted NatsRelay."""
-    config = BiffConfig(
-        user="kai", relay_url=hosted_nats_url, relay_auth=hosted_nats_auth
-    )
-    state = create_state(config, shared_data_dir / "kai")
+    """MCP client for kai, reusing the session-scoped relay."""
+    config = BiffConfig(user="kai")
+    state = create_state(config, shared_data_dir / "kai", relay=kai_relay)
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
         yield client
@@ -136,15 +194,12 @@ async def kai_client(
 
 @pytest.fixture
 async def eric_client(
-    hosted_nats_url: str,
-    hosted_nats_auth: RelayAuth | None,
+    eric_relay: NatsRelay,
     shared_data_dir: Path,
 ) -> AsyncIterator[Client[Any]]:
-    """MCP client for eric backed by hosted NatsRelay."""
-    config = BiffConfig(
-        user="eric", relay_url=hosted_nats_url, relay_auth=hosted_nats_auth
-    )
-    state = create_state(config, shared_data_dir / "eric")
+    """MCP client for eric, reusing the session-scoped relay."""
+    config = BiffConfig(user="eric")
+    state = create_state(config, shared_data_dir / "eric", relay=eric_relay)
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
         yield client
