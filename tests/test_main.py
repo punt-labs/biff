@@ -16,6 +16,7 @@ runner = CliRunner()
 _RESOLVED = ResolvedConfig(
     config=BiffConfig(user="kai"),
     data_dir=Path("/tmp/biff/myrepo"),
+    repo_root=Path("/proj/myrepo"),
 )
 
 

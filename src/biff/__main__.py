@@ -52,17 +52,18 @@ def serve(
     port: Annotated[int, typer.Option(help="HTTP port (http transport only).")] = 8419,
 ) -> None:
     """Start the biff MCP server."""
-    from biff.statusline import UNREAD_PATH
+    from biff.statusline import UNREAD_DIR
 
     resolved = load_config(
         user_override=user,
         data_dir_override=data_dir,
         prefix=prefix,
     )
+    repo_name = resolved.repo_root.name if resolved.repo_root else "_unknown_"
     state = create_state(
         resolved.config,
         resolved.data_dir,
-        unread_path=UNREAD_PATH,
+        unread_path=UNREAD_DIR / f"{repo_name}.json",
     )
     mcp = create_server(state)
 

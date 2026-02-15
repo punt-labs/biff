@@ -20,7 +20,7 @@ from biff.relay import atomic_write
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 STASH_PATH = Path.home() / ".biff" / "statusline-original.json"
-UNREAD_PATH = Path.home() / ".biff" / "unread.json"
+UNREAD_DIR = Path.home() / ".biff" / "unread"
 
 # Result types --------------------------------------------------------------
 
@@ -39,6 +39,14 @@ class UninstallResult:
 
     uninstalled: bool
     message: str
+
+
+@dataclass(frozen=True)
+class ProjectUnread:
+    """Unread count for a single project."""
+
+    name: str
+    count: int
 
 
 # Settings I/O -------------------------------------------------------------
@@ -141,20 +149,20 @@ def uninstall(
 
 def run_statusline(
     stash_path: Path = STASH_PATH,
-    unread_path: Path = UNREAD_PATH,
+    unread_dir: Path = UNREAD_DIR,
 ) -> str:
     """Produce the status bar text for Claude Code.
 
     1. Read stdin (session JSON from Claude Code).
     2. If an original command is stashed, run it and capture its output.
-    3. Read unread count from ``unread.json``.
-    4. Combine ``{original} | biff(N)`` with separator.
+    3. Scan ``~/.biff/unread/`` for per-project unread counts.
+    4. Combine ``{original} | {biff_segment}`` with separator.
     """
     stdin_data = sys.stdin.read()
     original_cmd = _resolve_original_command(stash_path)
     original_output = _run_original(original_cmd, stdin_data) if original_cmd else ""
-    count = _read_unread_count(unread_path)
-    biff = _biff_segment(count)
+    projects = _read_all_unreads(unread_dir)
+    biff = _biff_segment_multi(projects)
 
     if original_output:
         return f"{original_output} | {biff}"
@@ -205,14 +213,45 @@ def _read_unread_count(path: Path) -> int:
         return 0
 
 
-def _biff_segment(count: int) -> str:
-    """Format the biff status segment.
+def _read_all_unreads(unread_dir: Path) -> list[ProjectUnread]:
+    """Scan *unread_dir* for per-project ``*.json`` files.
 
-    Plain ``biff(0)`` when no unreads; bold yellow ``biff(N)`` otherwise.
+    Returns a list of :class:`ProjectUnread` with non-zero counts.
+    Gracefully returns ``[]`` on missing directory or OS errors.
     """
-    if count > 0:
-        return f"\033[1;33mbiff({count})\033[0m"
-    return "biff(0)"
+    try:
+        files = sorted(unread_dir.glob("*.json"))
+    except OSError:
+        return []
+    results: list[ProjectUnread] = []
+    for f in files:
+        count = _read_unread_count(f)
+        if count > 0:
+            results.append(ProjectUnread(name=f.stem, count=count))
+    return results
+
+
+_MAX_PROJECT_NAME_LEN = 12
+
+
+def _biff_segment_multi(projects: list[ProjectUnread]) -> str:
+    """Format the biff status segment from per-project unread counts.
+
+    No unreads → ``biff(0)`` (plain).
+    One or more projects → ``name(count)`` pairs, alphabetically sorted,
+    bold yellow.  Long names (>12 chars) are truncated with ``…``.
+    """
+    if not projects:
+        return "biff(0)"
+    ordered = sorted(projects, key=lambda p: p.name)
+    parts: list[str] = []
+    for p in ordered:
+        name = p.name
+        if len(name) > _MAX_PROJECT_NAME_LEN:
+            name = name[: _MAX_PROJECT_NAME_LEN - 1] + "\u2026"
+        parts.append(f"{name}({p.count})")
+    inner = " ".join(parts)
+    return f"\033[1;33m{inner}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str:
