@@ -151,3 +151,43 @@ class TestServeCommand:
         runner.invoke(app, ["serve"])
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["user_override"] is None
+
+
+class TestInitCommand:
+    @patch("biff.__main__._set_git_user")
+    @patch("biff.__main__._resolve_github_user", return_value=None)
+    @patch("biff.__main__.get_os_user", return_value="kai")
+    @patch("biff.__main__.get_git_user", return_value=None)
+    @patch("biff.__main__.find_git_root")
+    def test_creates_biff_file(
+        self,
+        mock_root: MagicMock,
+        _mock_git: MagicMock,
+        _mock_os: MagicMock,
+        _mock_gh: MagicMock,
+        _mock_set: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_root.return_value = tmp_path
+        # Simulate: confirm git config=yes, members="eric, priya", relay=""
+        result = runner.invoke(app, ["init"], input="y\neric, priya\n\n")
+        assert result.exit_code == 0
+        biff_file = tmp_path / ".biff"
+        assert biff_file.exists()
+        content = biff_file.read_text()
+        assert '"eric"' in content
+        assert '"priya"' in content
+
+    @patch("biff.__main__.find_git_root", return_value=None)
+    def test_not_in_repo(self, _mock: MagicMock) -> None:
+        result = runner.invoke(app, ["init"])
+        assert result.exit_code != 0
+        assert "Not in a git repository" in result.output
+
+    @patch("biff.__main__.find_git_root")
+    def test_already_exists(self, mock_root: MagicMock, tmp_path: Path) -> None:
+        mock_root.return_value = tmp_path
+        (tmp_path / ".biff").write_text('[team]\nmembers = ["kai"]\n')
+        result = runner.invoke(app, ["init"])
+        assert result.exit_code != 0
+        assert "already exists" in result.output

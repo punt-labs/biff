@@ -1,10 +1,12 @@
 """Biff CLI entry point.
 
-Provides ``biff serve``, ``biff version``, and status line management.
+Provides ``biff serve``, ``biff version``, ``biff init``, and status line
+management.
 """
 
 from __future__ import annotations
 
+import subprocess
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Annotated
@@ -12,7 +14,7 @@ from typing import Annotated
 import click
 import typer
 
-from biff.config import load_config
+from biff.config import find_git_root, get_git_user, get_os_user, load_config
 from biff.server.app import create_server
 from biff.server.state import create_state
 
@@ -95,6 +97,112 @@ def uninstall_statusline() -> None:
     print(result.message)
     if not result.uninstalled:
         raise typer.Exit(code=1)
+
+
+def _resolve_github_user() -> str | None:
+    """Resolve GitHub username via ``gh api user``, or ``None``."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        value = result.stdout.strip()
+        return value if result.returncode == 0 and value else None
+    except FileNotFoundError:
+        return None
+
+
+def _set_git_user(user: str, *, cwd: Path) -> None:
+    """Persist identity via ``git config biff.user`` in *cwd*."""
+    try:
+        subprocess.run(  # noqa: S603
+            ["git", "config", "biff.user", user],  # noqa: S607
+            check=True,
+            cwd=cwd,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raise SystemExit(
+            "Failed to set 'git config biff.user'.\n"
+            "Set it manually: git config biff.user <handle>"
+        ) from None
+
+
+def _toml_basic_string(value: str) -> str:
+    """Escape *value* for use as a TOML basic string."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _build_biff_toml(members: list[str], relay_url: str) -> str:
+    """Build ``.biff`` TOML content from user inputs."""
+    lines: list[str] = []
+    if members:
+        quoted = ", ".join(_toml_basic_string(m) for m in members)
+        lines.append("[team]")
+        lines.append(f"members = [{quoted}]")
+    if relay_url:
+        if lines:
+            lines.append("")
+        lines.append("[relay]")
+        lines.append(f"url = {_toml_basic_string(relay_url)}")
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+@app.command()
+def init(
+    start: Annotated[
+        Path | None,
+        typer.Option(help="Repo root (default: auto-detect)."),
+    ] = None,
+) -> None:
+    """Initialize biff in the current git repo."""
+    repo_root = find_git_root(start)
+    if repo_root is None:
+        raise SystemExit("Not in a git repository. Run this from inside a repo.")
+
+    biff_file = repo_root / ".biff"
+    if biff_file.exists():
+        raise SystemExit(
+            f"{biff_file} already exists. Edit it directly or remove it first."
+        )
+
+    # Resolve identity: git config > gh CLI > OS username
+    user = get_git_user(cwd=repo_root) or _resolve_github_user() or get_os_user()
+    if user is None:
+        raise SystemExit("Could not determine username from any source.")
+
+    # Offer to persist identity in git config if not already set
+    if get_git_user(cwd=repo_root) is None:
+        print(f"Resolved identity: {user}")
+        if typer.confirm(f"Set 'git config biff.user {user}'?", default=True):
+            _set_git_user(user, cwd=repo_root)
+            print(f"Set git config biff.user = {user}")
+
+    # Gather team members
+    members_input = typer.prompt(
+        "Team members (comma-separated, or empty)",
+        default="",
+        show_default=False,
+    )
+    members = [m.strip() for m in members_input.split(",") if m.strip()]
+
+    relay_url = typer.prompt(
+        "Relay URL (or empty to skip)",
+        default="",
+        show_default=False,
+    )
+
+    # Write .biff (even if empty — signals "biff is configured here")
+    biff_file.write_text(_build_biff_toml(members, relay_url))
+    print(f"Created {biff_file}")
+
+    if members:
+        print(f"  Team: {', '.join(members)}")
+    if relay_url:
+        print(f"  Relay: {relay_url}")
+    if not members and not relay_url:
+        print("  (empty — add [team] or [relay] sections as needed)")
 
 
 @app.command()
