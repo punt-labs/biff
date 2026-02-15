@@ -8,10 +8,12 @@ from unittest.mock import patch
 import pytest
 
 from biff.config import (
+    _DEFAULT_DATA_DIR_NAME,
     _extract_biff_fields,
     compute_data_dir,
     find_git_root,
     get_git_user,
+    get_os_user,
     load_biff_file,
     load_config,
 )
@@ -60,6 +62,19 @@ class TestGetGitUser:
     def test_returns_none_when_git_missing(self) -> None:
         with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
             assert get_git_user() is None
+
+
+# -- get_os_user --
+
+
+class TestGetOsUser:
+    def test_returns_username(self) -> None:
+        with patch("biff.config.getpass.getuser", return_value="kai"):
+            assert get_os_user() == "kai"
+
+    def test_returns_none_on_error(self) -> None:
+        with patch("biff.config.getpass.getuser", side_effect=OSError):
+            assert get_os_user() is None
 
 
 # -- compute_data_dir --
@@ -215,19 +230,30 @@ class TestLoadConfig:
         resolved = load_config(start=tmp_path, user_override="from-cli")
         assert resolved.config.user == "from-cli"
 
+    @patch("biff.config.get_os_user", return_value="jfreeman")
     @patch("biff.config.get_git_user", return_value=None)
-    def test_exits_when_no_user(self, _mock: object, tmp_path: Path) -> None:
+    def test_falls_back_to_os_user(
+        self, _mock_git: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        self._setup_repo(tmp_path)
+        resolved = load_config(start=tmp_path)
+        assert resolved.config.user == "jfreeman"
+
+    @patch("biff.config.get_os_user", return_value=None)
+    @patch("biff.config.get_git_user", return_value=None)
+    def test_exits_when_all_user_sources_fail(
+        self, _mock_git: object, _mock_os: object, tmp_path: Path
+    ) -> None:
         self._setup_repo(tmp_path)
         with pytest.raises(SystemExit, match="No user configured"):
             load_config(start=tmp_path)
 
     @patch("biff.config.get_git_user", return_value="kai")
-    def test_exits_when_no_repo_and_no_data_dir(
-        self, _mock: object, tmp_path: Path
-    ) -> None:
-        # No .git directory
-        with pytest.raises(SystemExit, match="Cannot determine data directory"):
-            load_config(start=tmp_path)
+    def test_no_repo_uses_default_data_dir(self, _mock: object, tmp_path: Path) -> None:
+        # No .git directory — should fall back to _default
+        resolved = load_config(start=tmp_path)
+        assert resolved.data_dir == Path("/tmp/biff") / _DEFAULT_DATA_DIR_NAME
+        assert resolved.repo_root is None
 
     @patch("biff.config.get_git_user", return_value="kai")
     def test_no_biff_file(self, _mock: object, tmp_path: Path) -> None:

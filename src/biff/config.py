@@ -22,6 +22,7 @@ Data directory layout::
 
 from __future__ import annotations
 
+import getpass
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -64,6 +65,17 @@ def get_git_user() -> str | None:
         return value if result.returncode == 0 and value else None
     except FileNotFoundError:
         return None
+
+
+def get_os_user() -> str | None:
+    """Return the OS username, or ``None`` if unavailable."""
+    try:
+        return getpass.getuser()
+    except OSError:
+        return None
+
+
+_DEFAULT_DATA_DIR_NAME = "_default"
 
 
 def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
@@ -147,10 +159,12 @@ def load_config(
 
     1. CLI overrides (``user_override``, ``data_dir_override``) take precedence.
     2. ``.biff`` TOML for team roster and relay URL.
-    3. ``git config biff.user`` for identity.
-    4. Data dir computed from ``{prefix}/biff/{repo_name}/``.
+    3. ``git config biff.user`` for identity, falling back to OS username.
+    4. Data dir computed from ``{prefix}/biff/{repo_name}/``, falling back
+       to ``{prefix}/biff/_default/`` outside git repos.
 
-    Raises :class:`SystemExit` if user or data dir cannot be resolved.
+    Raises :class:`SystemExit` only if no user identity can be resolved
+    from any source.
     """
     repo_root = find_git_root(start)
 
@@ -162,8 +176,8 @@ def load_config(
         raw = load_biff_file(repo_root)
         team, relay_url, relay_auth = _extract_biff_fields(raw)
 
-    # Resolve user
-    user = user_override or get_git_user()
+    # Resolve user: CLI override > git config > OS username
+    user = user_override or get_git_user() or get_os_user()
     if user is None:
         msg = (
             "No user configured. Set via: git config biff.user <handle>"
@@ -171,17 +185,13 @@ def load_config(
         )
         raise SystemExit(msg)
 
-    # Resolve data dir
+    # Resolve data dir: CLI override > repo-based > default fallback
     if data_dir_override is not None:
         data_dir = data_dir_override
     elif repo_root is not None:
         data_dir = compute_data_dir(repo_root, prefix)
     else:
-        msg = (
-            "Cannot determine data directory: not in a git repo"
-            " and no --data-dir specified"
-        )
-        raise SystemExit(msg)
+        data_dir = prefix / "biff" / _DEFAULT_DATA_DIR_NAME
 
     config = BiffConfig(
         user=user, relay_url=relay_url, relay_auth=relay_auth, team=team
