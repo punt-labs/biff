@@ -19,7 +19,6 @@ PLUGINS_DIR="$HOME/.claude/plugins/local-plugins/plugins"
 MARKETPLACE="$HOME/.claude/plugins/local-plugins/.claude-plugin/marketplace.json"
 INSTALL_DIR="$PLUGINS_DIR/$PLUGIN_NAME"
 SETTINGS="$HOME/.claude/settings.json"
-REGISTRY="$HOME/.claude/plugins/installed_plugins.json"
 
 # --- Helpers ----------------------------------------------------------------
 
@@ -167,17 +166,17 @@ if [[ -d "$INSTALL_DIR" || -L "$INSTALL_DIR" ]]; then
 else
   info "Cloning $REPO..."
   # Clone the full repo, then set up a sparse checkout for the plugin directory
-  TMPDIR="$(mktemp -d)"
-  git clone --quiet --depth 1 --filter=blob:none --sparse "$REPO" "$TMPDIR/biff"
-  git -C "$TMPDIR/biff" sparse-checkout set "$PLUGIN_DIR_IN_REPO"
+  CLONE_TMPDIR="$(mktemp -d)"
+  git clone --quiet --depth 1 --filter=blob:none --sparse "$REPO" "$CLONE_TMPDIR/biff"
+  git -C "$CLONE_TMPDIR/biff" sparse-checkout set "$PLUGIN_DIR_IN_REPO"
   if [[ -n "$LATEST_TAG" ]]; then
-    git -C "$TMPDIR/biff" fetch --tags --depth 1 --quiet
-    git -C "$TMPDIR/biff" checkout --quiet "$LATEST_TAG" 2>/dev/null || true
+    git -C "$CLONE_TMPDIR/biff" fetch --tags --depth 1 --quiet
+    git -C "$CLONE_TMPDIR/biff" checkout --quiet "$LATEST_TAG" 2>/dev/null || true
   fi
 
   mkdir -p "$PLUGINS_DIR"
-  mv "$TMPDIR/biff/$PLUGIN_DIR_IN_REPO" "$INSTALL_DIR"
-  rm -rf "$TMPDIR"
+  mv "$CLONE_TMPDIR/biff/$PLUGIN_DIR_IN_REPO" "$INSTALL_DIR"
+  rm -rf "$CLONE_TMPDIR"
 
   if [[ -n "$LATEST_TAG" ]]; then
     ok "Installed $LATEST_TAG to $INSTALL_DIR"

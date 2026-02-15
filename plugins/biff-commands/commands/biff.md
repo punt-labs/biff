@@ -10,8 +10,8 @@ Arguments: $ARGUMENTS
 Parse as:
 - `on` — set `enabled` to `true`
 - `off` — set `enabled` to `false`
-- (no argument) — default to `true`
+- any other or missing argument — do not call the tool; respond with: `Usage: /biff on|off`
 
 ## Task
 
-Call `mcp__biff__biff` with `enabled` set to the parsed boolean value. Confirm the new state. Do not send any other text besides the tool call and confirmation.
+If the argument is `on` or `off`, call `mcp__biff__biff` with `enabled` set to the parsed boolean value. Confirm the new state. For any other or missing argument, show the usage message. Do not send any other text.
