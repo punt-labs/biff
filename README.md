@@ -56,7 +56,14 @@ members = ["kai", "eric", "priya"]
 
 [relay]
 url = "nats://localhost:4222"
+
+# Authentication (pick at most one):
+# token = "s3cret"                          # shared secret
+# nkeys_seed = "/path/to/user.nk"          # NKey seed file
+# user_credentials = "/path/to/user.creds" # JWT + NKey creds (Synadia Cloud)
 ```
+
+Use `tls://` in the URL for encrypted connections (e.g., `tls://connect.ngs.global`).
 
 ### 3. Start the server
 
