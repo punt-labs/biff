@@ -59,7 +59,8 @@ def serve(
         data_dir_override=data_dir,
         prefix=prefix,
     )
-    repo_name = resolved.repo_root.name if resolved.repo_root else "_unknown_"
+    repo_root = resolved.repo_root
+    repo_name = repo_root.name if repo_root else resolved.data_dir.name
     state = create_state(
         resolved.config,
         resolved.data_dir,

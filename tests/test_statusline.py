@@ -374,7 +374,7 @@ class TestRunStatusline:
     def test_original_no_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        # empty dir — no unread files
+        unread_dir.mkdir()
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"

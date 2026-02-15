@@ -209,7 +209,7 @@ def _read_unread_count(path: Path) -> int:
         data = json.loads(path.read_text())
         count = data.get("count", 0)
         return int(count)
-    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return 0
 
 
