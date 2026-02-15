@@ -241,7 +241,11 @@ def _biff_mcp_server_entry() -> dict[str, object]:
     under ``mcpServers.<name>``.
     """
     cmd, base = _resolve_biff_command()
-    return {"command": cmd, "args": [*base, "serve", "--transport", "stdio"]}
+    return {
+        "type": "stdio",
+        "command": cmd,
+        "args": [*base, "serve", "--transport", "stdio"],
+    }
 
 
 def _resolve_original_command(stash_path: Path) -> str | None:
