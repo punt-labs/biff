@@ -393,3 +393,10 @@ class NatsRelay:
             except (KeyNotFoundError, ValidationError, ValueError):
                 continue
         return sessions
+
+    async def delete_session(self, session_key: str) -> None:
+        """Remove a session from KV storage."""
+        kv_key = self._kv_key(session_key)
+        _, kv = await self._ensure_connected()
+        with suppress(KeyNotFoundError, BucketNotFoundError):
+            await kv.delete(kv_key)

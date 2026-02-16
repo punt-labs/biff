@@ -34,6 +34,8 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+            with suppress(Exception):
+                await state.relay.delete_session(state.session_key)
             await state.relay.close()
 
     mcp: FastMCP[ServerState] = FastMCP(

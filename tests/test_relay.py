@@ -284,6 +284,24 @@ class TestGetSessions:
         assert users == {"kai", "eric"}
 
 
+class TestDeleteSession:
+    async def test_removes_session(self, relay: LocalRelay) -> None:
+        await relay.update_session(UserSession(user="kai", tty="tty1", plan="coding"))
+        await relay.delete_session("kai:tty1")
+        assert await relay.get_session("kai:tty1") is None
+
+    async def test_preserves_other_sessions(self, relay: LocalRelay) -> None:
+        await relay.update_session(UserSession(user="kai", tty="tty1", plan="coding"))
+        await relay.update_session(UserSession(user="eric", tty="tty2", plan="review"))
+        await relay.delete_session("kai:tty1")
+        assert await relay.get_session("kai:tty1") is None
+        assert await relay.get_session("eric:tty2") is not None
+
+    async def test_noop_for_missing_session(self, relay: LocalRelay) -> None:
+        """Deleting a nonexistent session is a no-op."""
+        await relay.delete_session("nobody:tty0")
+
+
 class TestHeartbeat:
     async def test_creates_new_session(self, relay: LocalRelay) -> None:
         await relay.heartbeat("kai:tty1")

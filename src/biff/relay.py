@@ -81,6 +81,8 @@ class Relay(Protocol):
 
     async def get_sessions(self) -> list[UserSession]: ...
 
+    async def delete_session(self, session_key: str) -> None: ...
+
     # -- Lifecycle --
 
     async def close(self) -> None: ...
@@ -222,6 +224,14 @@ class LocalRelay:
     async def get_sessions(self) -> list[UserSession]:
         """Get all sessions."""
         return list(self._read_sessions().values())
+
+    async def delete_session(self, session_key: str) -> None:
+        """Remove a session from storage."""
+        self._validate_session_key(session_key)
+        sessions = self._read_sessions()
+        if session_key in sessions:
+            del sessions[session_key]
+            self._write_sessions(sessions)
 
     async def close(self) -> None:
         """No-op — filesystem relay has no connection to close."""
