@@ -39,15 +39,15 @@ def _format_command(entry: TranscriptEntry) -> str:
         user = args["user"]
         at_user = user if str(user).startswith("@") else f"@{user}"
         return f"{prefix}> /finger {at_user}"
-    if tool == "biff" and "enabled" in args:
+    if tool == "mesg" and "enabled" in args:
         state = "on" if args["enabled"] else "off"
-        return f"{prefix}> /biff {state}"
-    if tool == "send_message" and "to" in args and "message" in args:
+        return f"{prefix}> /mesg {state}"
+    if tool == "write" and "to" in args and "message" in args:
         to = args["to"]
         at_to = to if str(to).startswith("@") else f"@{to}"
-        return f'{prefix}> /mesg {at_to} "{args["message"]}"'
-    if tool == "check_messages":
-        return f"{prefix}> /check"
+        return f'{prefix}> /write {at_to} "{args["message"]}"'
+    if tool == "read_messages":
+        return f"{prefix}> /read"
     if tool == "who":
         return f"{prefix}> /who"
 

@@ -13,4 +13,4 @@ Example: `@kai hey, ready for code review?` → `to="kai"`, `message="hey, ready
 
 ## Task
 
-Call `mcp__biff__send_message` with `to` and `message` set to the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.
+Call `mcp__biff__write` with `to` and `message` set to the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

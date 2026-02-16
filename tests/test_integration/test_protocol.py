@@ -63,7 +63,7 @@ class TestToolListing:
     async def test_lists_all_tools(self, biff_client: Client[Any]) -> None:
         tools = await biff_client.list_tools()
         names = {t.name for t in tools}
-        expected = {"biff", "check_messages", "finger", "send_message", "who", "plan"}
+        expected = {"mesg", "read_messages", "finger", "write", "who", "plan"}
         assert names == expected
 
     async def test_tools_have_descriptions(self, biff_client: Client[Any]) -> None:
@@ -97,15 +97,15 @@ class TestPlanToolProtocol:
 
 class TestBiffToggleProtocol:
     async def test_disable(self, biff_client: Client[Any], state: ServerState) -> None:
-        result = await biff_client.call_tool("biff", {"enabled": False})
+        result = await biff_client.call_tool("mesg", {"enabled": False})
         assert "is n" in _text(result)
         session = await state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is False
 
     async def test_enable(self, biff_client: Client[Any], state: ServerState) -> None:
-        await biff_client.call_tool("biff", {"enabled": False})
-        result = await biff_client.call_tool("biff", {"enabled": True})
+        await biff_client.call_tool("mesg", {"enabled": False})
+        result = await biff_client.call_tool("mesg", {"enabled": True})
         assert "is y" in _text(result)
         session = await state.relay.get_session("kai")
         assert session is not None
@@ -153,7 +153,7 @@ class TestWhoProtocol:
 class TestSendMessageProtocol:
     async def test_send(self, biff_client: Client[Any], state: ServerState) -> None:
         result = await biff_client.call_tool(
-            "send_message", {"to": "eric", "message": "PR is ready"}
+            "write", {"to": "eric", "message": "PR is ready"}
         )
         assert "@eric" in _text(result)
         unread = await state.relay.fetch("eric")
@@ -163,7 +163,7 @@ class TestSendMessageProtocol:
     async def test_send_with_at_prefix(
         self, biff_client: Client[Any], state: ServerState
     ) -> None:
-        await biff_client.call_tool("send_message", {"to": "@eric", "message": "hello"})
+        await biff_client.call_tool("write", {"to": "@eric", "message": "hello"})
         unread = await state.relay.fetch("eric")
         assert len(unread) == 1
         assert unread[0].to_user == "eric"
@@ -171,7 +171,7 @@ class TestSendMessageProtocol:
 
 class TestCheckMessagesProtocol:
     async def test_no_messages(self, biff_client: Client[Any]) -> None:
-        result = await biff_client.call_tool("check_messages", {})
+        result = await biff_client.call_tool("read_messages", {})
         assert "No new messages" in _text(result)
 
     async def test_receives_and_marks_read(
@@ -182,13 +182,13 @@ class TestCheckMessagesProtocol:
         await state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="check this out")
         )
-        result = await biff_client.call_tool("check_messages", {})
+        result = await biff_client.call_tool("read_messages", {})
         text = _text(result)
         assert "From eric" in text
         assert "check this out" in text
 
         # Second call shows no new messages
-        result = await biff_client.call_tool("check_messages", {})
+        result = await biff_client.call_tool("read_messages", {})
         assert "No new messages" in _text(result)
 
 
@@ -198,10 +198,10 @@ class TestDynamicDescriptionProtocol:
     async def _get_check_description(self, client: Client[Any]) -> str:
         tools = await client.list_tools()
         for tool in tools:
-            if tool.name == "check_messages":
+            if tool.name == "read_messages":
                 assert tool.description is not None
                 return tool.description
-        raise AssertionError("check_messages tool not found")
+        raise AssertionError("read_messages tool not found")
 
     async def test_default_description(self, biff_client: Client[Any]) -> None:
         desc = await self._get_check_description(biff_client)
@@ -233,7 +233,7 @@ class TestDynamicDescriptionProtocol:
         desc = await self._get_check_description(biff_client)
         assert "1 unread" in desc
         # Check messages clears unread
-        await biff_client.call_tool("check_messages", {})
+        await biff_client.call_tool("read_messages", {})
         desc = await self._get_check_description(biff_client)
         assert "Check your inbox" in desc
         assert "unread" not in desc

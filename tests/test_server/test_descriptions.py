@@ -14,9 +14,9 @@ from biff.models import BiffConfig, Message
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import (
-    _CHECK_MESSAGES_BASE,
+    _READ_MESSAGES_BASE,
     poll_inbox,
-    refresh_check_messages,
+    refresh_read_messages,
 )
 
 if TYPE_CHECKING:
@@ -28,21 +28,21 @@ def state(tmp_path: Path) -> ServerState:
     return create_state(BiffConfig(user="kai"), tmp_path)
 
 
-class TestRefreshCheckMessages:
+class TestRefreshReadMessages:
     async def test_no_messages_uses_base(self, state: ServerState) -> None:
         mcp = create_server(state)
-        await refresh_check_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("check_messages")
+        await refresh_read_messages(mcp, state)
+        tool = mcp._tool_manager._tools.get("read_messages")
         assert tool is not None
-        assert tool.description == _CHECK_MESSAGES_BASE
+        assert tool.description == _READ_MESSAGES_BASE
 
     async def test_unread_shows_count_and_preview(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth module ready")
         )
-        await refresh_check_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("check_messages")
+        await refresh_read_messages(mcp, state)
+        tool = mcp._tool_manager._tools.get("read_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
@@ -59,8 +59,8 @@ class TestRefreshCheckMessages:
         await state.relay.deliver(
             Message(from_user="priya", to_user="kai", body="second")
         )
-        await refresh_check_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("check_messages")
+        await refresh_read_messages(mcp, state)
+        tool = mcp._tool_manager._tools.get("read_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
@@ -71,8 +71,8 @@ class TestRefreshCheckMessages:
         await state.relay.deliver(
             Message(from_user="eric", to_user="kai", body="hello")
         )
-        await refresh_check_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("check_messages")
+        await refresh_read_messages(mcp, state)
+        tool = mcp._tool_manager._tools.get("read_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
@@ -80,18 +80,18 @@ class TestRefreshCheckMessages:
         # Mark as read
         unread = await state.relay.fetch("kai")
         await state.relay.mark_read("kai", [m.id for m in unread])
-        await refresh_check_messages(mcp, state)
-        assert tool.description == _CHECK_MESSAGES_BASE
+        await refresh_read_messages(mcp, state)
+        assert tool.description == _READ_MESSAGES_BASE
 
     async def test_ignores_other_users_messages(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
             Message(from_user="kai", to_user="eric", body="for eric")
         )
-        await refresh_check_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("check_messages")
+        await refresh_read_messages(mcp, state)
+        tool = mcp._tool_manager._tools.get("read_messages")
         assert tool is not None
-        assert tool.description == _CHECK_MESSAGES_BASE
+        assert tool.description == _READ_MESSAGES_BASE
 
 
 class TestUnreadFile:
@@ -110,7 +110,7 @@ class TestUnreadFile:
         await state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="auth ready")
         )
-        await refresh_check_messages(mcp, state_with_path)
+        await refresh_read_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
@@ -120,7 +120,7 @@ class TestUnreadFile:
         self, state_with_path: ServerState
     ) -> None:
         mcp = create_server(state_with_path)
-        await refresh_check_messages(mcp, state_with_path)
+        await refresh_read_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
@@ -133,14 +133,14 @@ class TestUnreadFile:
         await state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="hello")
         )
-        await refresh_check_messages(mcp, state_with_path)
+        await refresh_read_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
         # Mark as read
         unread = await state_with_path.relay.fetch("kai")
         await state_with_path.relay.mark_read("kai", [m.id for m in unread])
-        await refresh_check_messages(mcp, state_with_path)
+        await refresh_read_messages(mcp, state_with_path)
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
 
@@ -148,14 +148,14 @@ class TestUnreadFile:
         assert state.unread_path is None
         mcp = create_server(state)
         await state.relay.deliver(Message(from_user="eric", to_user="kai", body="test"))
-        await refresh_check_messages(mcp, state)
+        await refresh_read_messages(mcp, state)
         # No error — function completes without attempting file write
 
     async def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         nested = tmp_path / "deep" / "nested" / "unread.json"
         state = create_state(BiffConfig(user="kai"), tmp_path, unread_path=nested)
         mcp = create_server(state)
-        await refresh_check_messages(mcp, state)
+        await refresh_read_messages(mcp, state)
         assert nested.exists()
 
 
@@ -220,13 +220,13 @@ class TestPollInbox:
         assert "@eric" in data["preview"]
 
     async def test_updates_tool_description(self, state_with_path: ServerState) -> None:
-        """Poller updates the check_messages tool description."""
+        """Poller updates the read_messages tool description."""
         mcp = create_server(state_with_path)
         await state_with_path.relay.deliver(
             Message(from_user="eric", to_user="kai", body="lunch?")
         )
         await self._run_poller(mcp, state_with_path)
-        tool = mcp._tool_manager._tools.get("check_messages")
+        tool = mcp._tool_manager._tools.get("read_messages")
         assert tool is not None
         assert "1 unread" in (tool.description or "")
 

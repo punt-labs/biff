@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from biff.server.tools._descriptions import refresh_check_messages
+from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
              refactoring auth module
         """
         await update_current_session(state)
-        await refresh_check_messages(mcp, state)
+        await refresh_read_messages(mcp, state)
         bare = user.strip().lstrip("@")
         session = await state.relay.get_session(bare)
         if session is None:

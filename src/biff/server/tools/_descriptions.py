@@ -5,7 +5,7 @@ Called after every tool execution (belt) and by a background
 poller (suspenders) so notifications stay fresh even between
 tool calls.
 
-After mutating the ``check_messages`` description, fires
+After mutating the ``read_messages`` description, fires
 ``notifications/tools/list_changed`` so Claude Code re-reads
 the tool list and sees the updated unread count.
 
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CHECK_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
+_READ_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 
 _DEFAULT_POLL_INTERVAL = 2.0
 
@@ -84,8 +84,8 @@ async def _notify_tool_list_changed() -> None:
             )
 
 
-async def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) -> None:
-    """Update the ``check_messages`` tool description with unread count.
+async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -> None:
+    """Update the ``read_messages`` tool description with unread count.
 
     When the user has unread messages, the description changes to show
     the count and a preview, e.g.::
@@ -101,13 +101,13 @@ async def refresh_check_messages(mcp: FastMCP[ServerState], state: ServerState) 
     If ``state.unread_path`` is set, also writes the unread summary to
     a JSON file for status bar consumption.
     """
-    tool = mcp._tool_manager._tools.get("check_messages")  # pyright: ignore[reportPrivateUsage]
+    tool = mcp._tool_manager._tools.get("read_messages")  # pyright: ignore[reportPrivateUsage]
     if tool is None:
         return
     summary = await state.relay.get_unread_summary(state.config.user)
     old_desc = tool.description
     if summary.count == 0:
-        tool.description = _CHECK_MESSAGES_BASE
+        tool.description = _READ_MESSAGES_BASE
     else:
         tool.description = (
             f"Check messages ({summary.count} unread: {summary.preview}). "
@@ -129,7 +129,7 @@ async def poll_inbox(
 
     Runs for the lifetime of the MCP server. Detects new or read
     messages by comparing the unread count against the last known
-    value, then calls :func:`refresh_check_messages` to update both
+    value, then calls :func:`refresh_read_messages` to update both
     the tool description and the status file.
 
     The notification is sent via :func:`_notify_tool_list_changed`,
@@ -145,7 +145,7 @@ async def poll_inbox(
         summary = await state.relay.get_unread_summary(state.config.user)
         if summary.count != last_count:
             last_count = summary.count
-            await refresh_check_messages(mcp, state)
+            await refresh_read_messages(mcp, state)
 
 
 def _write_unread_file(path: Path, summary: UnreadSummary) -> None:

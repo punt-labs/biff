@@ -395,9 +395,9 @@ if [[ -f "$INSTALL_DIR/commands/plan.md" ]]; then
   install_cmd "$INSTALL_DIR/commands/plan.md" "dotplan"
 fi
 
-# /biff on|off (standalone command — plugin has separate on.md/off.md)
-BIFF_CMD_FILE="$(mktemp)"
-cat > "$BIFF_CMD_FILE" <<'BIFF_CMD'
+# /mesg on|off (standalone command — plugin has separate on.md/off.md)
+MESG_CMD_FILE="$(mktemp)"
+cat > "$MESG_CMD_FILE" <<'MESG_CMD'
 ---
 description: Control message reception (on/off)
 argument-hint: "on|off"
@@ -409,16 +409,16 @@ Arguments: $ARGUMENTS
 
 ## Task
 
-If the argument is `on`, call `mcp__biff__biff` with `enabled` set to `true` and confirm messages are now enabled.
+If the argument is `on`, call `mcp__biff__mesg` with `enabled` set to `true` and confirm messages are now enabled.
 
-If the argument is `off`, call `mcp__biff__biff` with `enabled` set to `false` and confirm messages are now disabled.
+If the argument is `off`, call `mcp__biff__mesg` with `enabled` set to `false` and confirm messages are now disabled.
 
-If no argument or an unrecognized argument is provided, respond with: `Usage: /biff on|off`
+If no argument or an unrecognized argument is provided, respond with: `Usage: /mesg on|off`
 
 Do not send any other text besides the tool call and confirmation (or usage message).
-BIFF_CMD
-install_cmd "$BIFF_CMD_FILE" "biff"
-rm -f "$BIFF_CMD_FILE"
+MESG_CMD
+install_cmd "$MESG_CMD_FILE" "mesg"
+rm -f "$MESG_CMD_FILE"
 
 if [[ $COMMANDS_INSTALLED -gt 0 ]]; then
   ok "Installed $COMMANDS_INSTALLED commands to $CLAUDE_COMMANDS_DIR"

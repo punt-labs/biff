@@ -59,7 +59,7 @@ class TestCrossUserVisibility:
         )
 
         await kai.call("plan", message="deep work on storage layer")
-        await kai.call("biff", enabled=False)
+        await kai.call("mesg", enabled=False)
         result = await eric.call("finger", user="@kai")
 
         assert "Messages: off" in result
@@ -132,12 +132,12 @@ class TestPresenceLifecycle:
         assert "@eric" in who_result
 
         # kai goes heads-down
-        await kai.call("biff", enabled=False)
+        await kai.call("mesg", enabled=False)
         finger_result = await eric.call("finger", user="@kai")
         assert "Messages: off" in finger_result
 
         # kai finishes deep work, comes back
-        await kai.call("biff", enabled=True)
+        await kai.call("mesg", enabled=True)
         await kai.call("plan", message="auth refactor done, reviewing PRs")
 
         # eric checks kai's new status
@@ -159,10 +159,10 @@ class TestCrossProcessMessaging:
             "Cross-process messaging over real stdio subprocesses."
         )
 
-        result = await kai.call("send_message", to="@eric", message="PR is ready")
+        result = await kai.call("write", to="@eric", message="PR is ready")
         assert "@eric" in result
 
-        result = await eric.call("check_messages")
+        result = await eric.call("read_messages")
         assert "From kai" in result
         assert "PR is ready" in result
 
@@ -176,11 +176,11 @@ class TestCrossProcessMessaging:
             "Two subprocesses exchange messages through shared filesystem."
         )
 
-        await kai.call("send_message", to="eric", message="review my PR?")
-        await eric.call("send_message", to="kai", message="sure, on it")
+        await kai.call("write", to="eric", message="review my PR?")
+        await eric.call("write", to="kai", message="sure, on it")
 
-        kai_inbox = await kai.call("check_messages")
-        eric_inbox = await eric.call("check_messages")
+        kai_inbox = await kai.call("read_messages")
+        eric_inbox = await eric.call("read_messages")
 
         assert "sure, on it" in kai_inbox
         assert "review my PR?" in eric_inbox
