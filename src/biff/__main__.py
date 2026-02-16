@@ -42,6 +42,10 @@ def serve(
         Path | None,
         typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
     ] = None,
+    relay_url: Annotated[
+        str | None,
+        typer.Option(help="Relay URL override. Empty string forces local relay."),
+    ] = None,
     prefix: Annotated[
         Path,
         typer.Option(help="Base path for data directory (default: /tmp)."),
@@ -59,11 +63,13 @@ def serve(
     port: Annotated[int, typer.Option(help="HTTP port (http transport only).")] = 8419,
 ) -> None:
     """Start the biff MCP server."""
+    from biff.config import RELAY_URL_UNSET
     from biff.statusline import UNREAD_DIR
 
     resolved = load_config(
         user_override=user,
         data_dir_override=data_dir,
+        relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
         prefix=prefix,
     )
     state = create_state(

@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 
 from biff.config import (
-    _DEFAULT_DATA_DIR_NAME,
     GitHubIdentity,
     compute_data_dir,
     extract_biff_fields,
@@ -323,12 +322,10 @@ class TestLoadConfig:
             load_config(start=tmp_path)
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_no_repo_uses_default_data_dir(self, _mock: object, tmp_path: Path) -> None:
-        # No .git directory — should fall back to _default
-        resolved = load_config(start=tmp_path)
-        assert resolved.data_dir == Path("/tmp/biff") / _DEFAULT_DATA_DIR_NAME
-        assert resolved.config.repo_name == _DEFAULT_DATA_DIR_NAME
-        assert resolved.repo_root is None
+    def test_no_repo_exits(self, _mock: object, tmp_path: Path) -> None:
+        # No .git directory — must error, not silently fall back
+        with pytest.raises(SystemExit, match="Not in a git repository"):
+            load_config(start=tmp_path)
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_no_biff_file(self, _mock: object, tmp_path: Path) -> None:
@@ -338,13 +335,12 @@ class TestLoadConfig:
         assert resolved.config.relay_url is None
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_no_repo_with_data_dir_override(
+    def test_no_repo_exits_even_with_data_dir_override(
         self, _mock: object, tmp_path: Path
     ) -> None:
         custom = tmp_path / "data"
-        resolved = load_config(start=tmp_path, data_dir_override=custom)
-        assert resolved.data_dir == custom
-        assert resolved.repo_root is None
+        with pytest.raises(SystemExit, match="Not in a git repository"):
+            load_config(start=tmp_path, data_dir_override=custom)
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_auth_flows_through(self, _mock: object, tmp_path: Path) -> None:
@@ -354,6 +350,19 @@ class TestLoadConfig:
         )
         resolved = load_config(start=tmp_path)
         assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_relay_url_override_clears_auth(
+        self, _mock: object, tmp_path: Path
+    ) -> None:
+        """Overriding relay URL must clear .biff auth to prevent credential leak."""
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".biff").write_text(
+            '[relay]\nurl = "tls://demo.example"\nuser_credentials = "/demo.creds"\n'
+        )
+        resolved = load_config(start=tmp_path, relay_url_override="tls://other.example")
+        assert resolved.config.relay_url == "tls://other.example"
+        assert resolved.config.relay_auth is None
 
     @patch("biff.config.get_github_identity", return_value=_KAI_NO_NAME)
     def test_empty_display_name_when_github_has_none(

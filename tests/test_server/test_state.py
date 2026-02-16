@@ -11,53 +11,61 @@ from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
 from biff.server.state import create_state
 
+_TEST_REPO = "_test-server"
+
 
 class TestCreateState:
     def test_creates_relay(self, tmp_path: Path) -> None:
-        config = BiffConfig(user="kai")
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, LocalRelay)
         assert state.config is config
 
     def test_selects_nats_relay_when_relay_url_set(self, tmp_path: Path) -> None:
-        config = BiffConfig(user="kai", relay_url="nats://localhost:4222")
+        config = BiffConfig(
+            user="kai", repo_name=_TEST_REPO, relay_url="nats://localhost:4222"
+        )
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, NatsRelay)
 
     def test_selects_local_relay_when_no_relay_url(self, tmp_path: Path) -> None:
-        config = BiffConfig(user="kai")
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, LocalRelay)
 
     def test_empty_relay_url_falls_back_to_local(self, tmp_path: Path) -> None:
-        config = BiffConfig(user="kai", relay_url="")
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url="")
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, LocalRelay)
 
     def test_explicit_relay_overrides_config(self, tmp_path: Path) -> None:
-        config = BiffConfig(user="kai", relay_url="nats://localhost:4222")
+        config = BiffConfig(
+            user="kai", repo_name=_TEST_REPO, relay_url="nats://localhost:4222"
+        )
         local = LocalRelay(data_dir=tmp_path)
         state = create_state(config, tmp_path, relay=local)
         assert isinstance(state.relay, LocalRelay)
 
     def test_relay_auth_forwarded_to_nats_relay(self, tmp_path: Path) -> None:
         auth = RelayAuth(user_credentials="/path/to.creds")
-        config = BiffConfig(user="kai", relay_url="tls://host", relay_auth=auth)
+        config = BiffConfig(
+            user="kai", repo_name=_TEST_REPO, relay_url="tls://host", relay_auth=auth
+        )
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, NatsRelay)
         assert state.relay._auth is auth
 
     def test_no_relay_auth_when_none(self, tmp_path: Path) -> None:
-        config = BiffConfig(user="kai", relay_url="nats://host")
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url="nats://host")
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, NatsRelay)
         assert state.relay._auth is None
 
     def test_state_is_frozen(self, tmp_path: Path) -> None:
-        config = BiffConfig(user="kai")
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
         state = create_state(config, tmp_path)
         with pytest.raises(AttributeError):
-            state.config = BiffConfig(user="other")  # type: ignore[misc]
+            state.config = BiffConfig(user="other", repo_name=_TEST_REPO)  # type: ignore[misc]
 
 
 class TestNatsRelayAuthKwargs:

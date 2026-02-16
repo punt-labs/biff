@@ -151,8 +151,10 @@ class TestUserSession:
 
 
 class TestBiffConfig:
+    _REPO = "_test-models"
+
     def test_create_minimal(self) -> None:
-        config = BiffConfig(user="kai")
+        config = BiffConfig(user="kai", repo_name=self._REPO)
         assert config.user == "kai"
         assert config.relay_url is None
         assert config.team == ()
@@ -160,6 +162,7 @@ class TestBiffConfig:
     def test_create_full(self) -> None:
         config = BiffConfig(
             user="kai",
+            repo_name=self._REPO,
             relay_url="ws://localhost:8420",
             team=("kai", "eric", "jess"),
         )
@@ -167,25 +170,30 @@ class TestBiffConfig:
         assert config.team == ("kai", "eric", "jess")
 
     def test_team_is_tuple(self) -> None:
-        config = BiffConfig(user="kai", team=["eric", "jess"])  # type: ignore[arg-type]
+        config = BiffConfig(user="kai", repo_name=self._REPO, team=["eric", "jess"])  # type: ignore[arg-type]
         assert isinstance(config.team, tuple)
 
     def test_frozen(self) -> None:
-        config = BiffConfig(user="kai")
+        config = BiffConfig(user="kai", repo_name=self._REPO)
         with pytest.raises(ValidationError):
             config.user = "changed"
 
     def test_empty_user_rejected(self) -> None:
         with pytest.raises(ValidationError, match="user"):
-            BiffConfig(user="")
+            BiffConfig(user="", repo_name=self._REPO)
 
     def test_whitespace_user_rejected(self) -> None:
         with pytest.raises(ValidationError, match="user"):
-            BiffConfig(user="   ")
+            BiffConfig(user="   ", repo_name=self._REPO)
+
+    def test_empty_repo_name_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="repo_name"):
+            BiffConfig(user="kai", repo_name="")
 
     def test_json_round_trip(self) -> None:
         config = BiffConfig(
             user="kai",
+            repo_name=self._REPO,
             relay_url="ws://localhost:8420",
             team=("eric", "jess"),
         )

@@ -19,11 +19,12 @@ from biff.testing import RecordingClient, Transcript
 __all__ = ["CallToolResult"]
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
+_TEST_REPO = "_test-integration"
 
 
 @pytest.fixture
 def config() -> BiffConfig:
-    return BiffConfig(user="kai")
+    return BiffConfig(user="kai", repo_name=_TEST_REPO)
 
 
 @pytest.fixture
@@ -74,13 +75,13 @@ def shared_data_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def kai_state(shared_data_dir: Path) -> ServerState:
     """Server state for user kai."""
-    return create_state(BiffConfig(user="kai"), shared_data_dir)
+    return create_state(BiffConfig(user="kai", repo_name=_TEST_REPO), shared_data_dir)
 
 
 @pytest.fixture
 def eric_state(shared_data_dir: Path) -> ServerState:
     """Server state for user eric."""
-    return create_state(BiffConfig(user="eric"), shared_data_dir)
+    return create_state(BiffConfig(user="eric", repo_name=_TEST_REPO), shared_data_dir)
 
 
 @pytest.fixture

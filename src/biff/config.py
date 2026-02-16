@@ -14,7 +14,7 @@ Config file format (``.biff``)::
 
 Data directory layout::
 
-    {prefix}/biff/{repo-name}/
+    {prefix}/biff/{directory-name}/
         inbox-kai.jsonl
         inbox-eric.jsonl
         sessions.json
@@ -105,9 +105,6 @@ def get_os_user() -> str | None:
         return None
 
 
-_DEFAULT_DATA_DIR_NAME = "_default"
-
-
 def sanitize_repo_name(name: str) -> str:
     """Sanitize a repo name for use in NATS resource names.
 
@@ -132,7 +129,7 @@ def sanitize_repo_name(name: str) -> str:
 
 
 def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
-    """Compute data directory: ``{prefix}/biff/{repo_name}/``."""
+    """Compute data directory: ``{prefix}/biff/{repo_root.name}/``."""
     return prefix / "biff" / repo_root.name
 
 
@@ -203,10 +200,14 @@ def extract_biff_fields(
     return team, relay_url, relay_auth
 
 
+RELAY_URL_UNSET = object()
+
+
 def load_config(
     *,
     user_override: str | None = None,
     data_dir_override: Path | None = None,
+    relay_url_override: object = RELAY_URL_UNSET,
     prefix: Path = _DEFAULT_PREFIX,
     start: Path | None = None,
 ) -> ResolvedConfig:
@@ -214,14 +215,15 @@ def load_config(
 
     Resolution order:
 
-    1. CLI overrides (``user_override``, ``data_dir_override``) take precedence.
+    1. CLI overrides (``user_override``, ``data_dir_override``,
+       ``relay_url_override``) take precedence.
     2. ``.biff`` TOML for team roster and relay URL.
     3. GitHub username (via ``gh api user``), falling back to OS username.
-    4. Data dir computed from ``{prefix}/biff/{repo_name}/``, falling back
-       to ``{prefix}/biff/_default/`` outside git repos.
+    4. Data dir computed from ``{prefix}/biff/{directory-name}/``.
 
-    Raises :class:`SystemExit` only if no user identity can be resolved
-    from any source.
+    Raises :class:`SystemExit` if no user identity can be resolved,
+    if ``start`` is not inside a git repository, or if the repo
+    directory name fails :func:`sanitize_repo_name`.
     """
     repo_root = find_git_root(start)
 
@@ -232,6 +234,14 @@ def load_config(
     if repo_root is not None:
         raw = load_biff_file(repo_root)
         team, relay_url, relay_auth = extract_biff_fields(raw)
+
+    # CLI relay-url override: empty string → local relay, non-empty → use it.
+    # Always clear relay_auth on override — the .biff credentials are for the
+    # .biff relay URL, not whatever the user is overriding to.
+    if relay_url_override is not RELAY_URL_UNSET:
+        override = str(relay_url_override) if relay_url_override else ""
+        relay_url = override or None
+        relay_auth = None
 
     # Resolve user: CLI override > GitHub identity > OS username
     display_name = ""
@@ -251,18 +261,14 @@ def load_config(
         )
         raise SystemExit(msg)
 
-    # Resolve data dir: CLI override > repo-based > default fallback
-    if data_dir_override is not None:
-        data_dir = data_dir_override
-    elif repo_root is not None:
-        data_dir = compute_data_dir(repo_root, prefix)
-    else:
-        data_dir = prefix / "biff" / _DEFAULT_DATA_DIR_NAME
-
-    repo_name = (
-        sanitize_repo_name(repo_root.name)
-        if repo_root is not None
-        else _DEFAULT_DATA_DIR_NAME
+    # Resolve data dir and repo name
+    if repo_root is None:
+        raise SystemExit("Not in a git repository. Run biff from inside a repo.")
+    repo_name = sanitize_repo_name(repo_root.name)
+    data_dir = (
+        data_dir_override
+        if data_dir_override is not None
+        else compute_data_dir(repo_root, prefix)
     )
 
     config = BiffConfig(

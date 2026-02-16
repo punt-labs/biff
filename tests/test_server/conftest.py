@@ -9,10 +9,12 @@ import pytest
 from biff.models import BiffConfig
 from biff.server.state import ServerState, create_state
 
+_TEST_REPO = "_test-server"
+
 
 @pytest.fixture
 def config() -> BiffConfig:
-    return BiffConfig(user="kai")
+    return BiffConfig(user="kai", repo_name=_TEST_REPO)
 
 
 @pytest.fixture

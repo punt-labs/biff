@@ -1,16 +1,15 @@
 name: Hosted NATS E2E
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-  schedule:
-    - cron: "0 8 * * 1" # Weekly Monday 8am UTC
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    if: github.repository == 'punt-labs/biff'
-    env:
-      BIFF_TEST_NATS_CREDS_CONTENT: ${{ secrets.BIFF_TEST_NATS_CREDS_CONTENT }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -21,14 +20,8 @@ jobs:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
 
-      - name: Write NATS credentials file
-        if: env.BIFF_TEST_NATS_CREDS_CONTENT != ''
-        run: |
-          echo "$BIFF_TEST_NATS_CREDS_CONTENT" > /tmp/nats-test.creds
-          echo "BIFF_TEST_NATS_CREDS=/tmp/nats-test.creds" >> "$GITHUB_ENV"
-
-      - name: Run hosted NATS tests
-        run: uv run python -m pytest -m hosted -v
+      - name: Run hosted NATS tests (demo relay)
+        run: uv run pytest -m hosted -v
         env:
-          BIFF_TEST_NATS_URL: ${{ secrets.BIFF_TEST_NATS_URL }}
-          BIFF_TEST_NATS_TOKEN: ${{ secrets.BIFF_TEST_NATS_TOKEN }}
+          BIFF_TEST_NATS_URL: "tls://connect.ngs.global"
+          BIFF_TEST_NATS_CREDS: "src/biff/data/demo.creds"

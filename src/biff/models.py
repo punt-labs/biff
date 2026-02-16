@@ -126,7 +126,7 @@ class BiffConfig(BaseModel):
 
     user: str = Field(min_length=1)
     display_name: str = ""
-    repo_name: str = "_default"
+    repo_name: str = Field(min_length=1)
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
     team: tuple[str, ...] = ()

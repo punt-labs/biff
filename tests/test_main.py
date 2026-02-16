@@ -14,7 +14,7 @@ from biff.models import BiffConfig
 runner = CliRunner()
 
 _RESOLVED = ResolvedConfig(
-    config=BiffConfig(user="kai"),
+    config=BiffConfig(user="kai", repo_name="myrepo"),
     data_dir=Path("/tmp/biff/myrepo"),
     repo_root=Path("/proj/myrepo"),
 )
