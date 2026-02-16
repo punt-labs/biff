@@ -94,29 +94,35 @@ class NatsRelay:
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
         """Lazily connect and provision infrastructure.
 
-        Sets instance attributes only after all provisioning succeeds,
-        ensuring no connection leak if KV/stream creation fails.
+        Reuses an existing NATS connection if available (e.g. after
+        :meth:`reset_infrastructure`).  Only creates a new connection
+        when none exists or the previous one was closed.
         """
         if self._js is not None and self._kv is not None:
             return self._js, self._kv
 
-        async def _on_disconnect() -> None:
-            logger.warning("Disconnected from NATS at %s", self._url)
+        # Reuse existing connection if still open
+        nc = self._nc
+        if nc is None or nc.is_closed:
 
-        async def _on_reconnect() -> None:
-            logger.info("Reconnected to NATS at %s", self._url)
+            async def _on_disconnect() -> None:
+                logger.warning("Disconnected from NATS at %s", self._url)
 
-        async def _on_error(exc: Exception) -> None:
-            logger.error("NATS error: %s", exc)
+            async def _on_reconnect() -> None:
+                logger.info("Reconnected to NATS at %s", self._url)
 
-        nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
-            self._url,
-            name=self._name,
-            disconnected_cb=_on_disconnect,
-            reconnected_cb=_on_reconnect,
-            error_cb=_on_error,
-            **self._auth_kwargs(),
-        )
+            async def _on_error(exc: Exception) -> None:
+                logger.error("NATS error: %s", exc)
+
+            nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
+                self._url,
+                name=self._name,
+                disconnected_cb=_on_disconnect,
+                reconnected_cb=_on_reconnect,
+                error_cb=_on_error,
+                **self._auth_kwargs(),
+            )
+
         try:
             js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
 
@@ -163,6 +169,21 @@ class NatsRelay:
         (e.g. test cleanup) to ensure the next operation re-creates
         them.  The underlying NATS connection is preserved.
         """
+        self._js = None
+        self._kv = None
+
+    async def delete_infrastructure(self) -> None:
+        """Delete KV bucket and stream from the NATS server.
+
+        Removes all data and resources, then clears cached handles.
+        The underlying NATS connection is preserved for reuse.
+        """
+        if self._nc is not None and not self._nc.is_closed:
+            js = self._nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
+            with suppress(NotFoundError):
+                await js.delete_key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
+            with suppress(NotFoundError):
+                await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
         self._js = None
         self._kv = None
 

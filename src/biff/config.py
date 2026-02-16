@@ -14,7 +14,7 @@ Config file format (``.biff``)::
 
 Data directory layout::
 
-    {prefix}/biff/{repo-name}/
+    {prefix}/biff/{directory-name}/
         inbox-kai.jsonl
         inbox-eric.jsonl
         sessions.json
@@ -129,7 +129,7 @@ def sanitize_repo_name(name: str) -> str:
 
 
 def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
-    """Compute data directory: ``{prefix}/biff/{repo_name}/``."""
+    """Compute data directory: ``{prefix}/biff/{repo_root.name}/``."""
     return prefix / "biff" / repo_root.name
 
 
@@ -219,7 +219,7 @@ def load_config(
        ``relay_url_override``) take precedence.
     2. ``.biff`` TOML for team roster and relay URL.
     3. GitHub username (via ``gh api user``), falling back to OS username.
-    4. Data dir computed from ``{prefix}/biff/{repo_name}/``.
+    4. Data dir computed from ``{prefix}/biff/{directory-name}/``.
 
     Raises :class:`SystemExit` only if no user identity can be resolved
     from any source.
@@ -234,12 +234,13 @@ def load_config(
         raw = load_biff_file(repo_root)
         team, relay_url, relay_auth = extract_biff_fields(raw)
 
-    # CLI relay-url override: empty string → local relay, non-empty → use it
+    # CLI relay-url override: empty string → local relay, non-empty → use it.
+    # Always clear relay_auth on override — the .biff credentials are for the
+    # .biff relay URL, not whatever the user is overriding to.
     if relay_url_override is not RELAY_URL_UNSET:
         override = str(relay_url_override) if relay_url_override else ""
         relay_url = override or None
-        if relay_url is None:
-            relay_auth = None
+        relay_auth = None
 
     # Resolve user: CLI override > GitHub identity > OS username
     display_name = ""
@@ -261,10 +262,7 @@ def load_config(
 
     # Resolve data dir and repo name
     if repo_root is None:
-        raise SystemExit(
-            "Not in a git repository. Run biff from inside a repo,"
-            " or pass --data-dir explicitly."
-        )
+        raise SystemExit("Not in a git repository. Run biff from inside a repo.")
     repo_name = sanitize_repo_name(repo_root.name)
     data_dir = (
         data_dir_override

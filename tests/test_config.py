@@ -351,6 +351,19 @@ class TestLoadConfig:
         resolved = load_config(start=tmp_path)
         assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")
 
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_relay_url_override_clears_auth(
+        self, _mock: object, tmp_path: Path
+    ) -> None:
+        """Overriding relay URL must clear .biff auth to prevent credential leak."""
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".biff").write_text(
+            '[relay]\nurl = "tls://demo.example"\nuser_credentials = "/demo.creds"\n'
+        )
+        resolved = load_config(start=tmp_path, relay_url_override="tls://other.example")
+        assert resolved.config.relay_url == "tls://other.example"
+        assert resolved.config.relay_auth is None
+
     @patch("biff.config.get_github_identity", return_value=_KAI_NO_NAME)
     def test_empty_display_name_when_github_has_none(
         self, _mock: object, tmp_path: Path

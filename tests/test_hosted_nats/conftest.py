@@ -115,19 +115,15 @@ async def _cleanup_nats(  # pyright: ignore[reportUnusedFunction]
     kai_relay: NatsRelay,
     eric_relay: NatsRelay,
 ) -> AsyncIterator[None]:
-    """Reset relay handles after each test for isolation.
+    """Delete NATS infrastructure after each test for isolation.
 
-    Resets the relay handles so ``_ensure_connected()`` re-provisions
-    the KV bucket and stream on the next test.
-
-    Note: stream/KV cleanup is currently disabled to allow manual
-    inspection of scoped resource names on the server.  Expect to see:
-    ``biff-_test-hosted-nats-inbox`` (stream) and
-    ``biff-_test-hosted-nats-sessions`` (KV bucket).
+    Deletes the KV bucket and stream so each test starts with a
+    clean slate.  The underlying NATS connections are preserved
+    (session-scoped) and reused across tests.
     """
     yield
-    kai_relay.reset_infrastructure()
-    eric_relay.reset_infrastructure()
+    await kai_relay.delete_infrastructure()
+    await eric_relay.delete_infrastructure()
 
 
 @pytest.fixture
