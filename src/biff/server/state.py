@@ -41,7 +41,8 @@ def create_state(
             relay = NatsRelay(
                 url=config.relay_url,
                 auth=config.relay_auth,
-                name=f"biff-{config.user}",
+                name=f"biff-{config.repo_name}-{config.user}",
+                repo_name=config.repo_name,
             )
         else:
             relay = LocalRelay(data_dir=data_dir)

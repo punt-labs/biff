@@ -66,12 +66,10 @@ def serve(
         data_dir_override=data_dir,
         prefix=prefix,
     )
-    repo_root = resolved.repo_root
-    repo_name = repo_root.name if repo_root else resolved.data_dir.name
     state = create_state(
         resolved.config,
         resolved.data_dir,
-        unread_path=UNREAD_DIR / f"{repo_name}.json",
+        unread_path=UNREAD_DIR / f"{resolved.config.repo_name}.json",
     )
     mcp = create_server(state)
 

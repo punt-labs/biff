@@ -108,6 +108,21 @@ def get_os_user() -> str | None:
 _DEFAULT_DATA_DIR_NAME = "_default"
 
 
+def sanitize_repo_name(name: str) -> str:
+    """Sanitize a repo name for use in NATS resource names.
+
+    NATS bucket names allow alphanumeric, dash, and underscore only.
+    Subject dots are level separators; wildcards (``*``, ``>``) are
+    reserved.  Spaces become dashes; dots become dashes; everything
+    else non-alphanumeric/dash/underscore is stripped.
+
+    Returns ``"_default"`` for empty or all-special-character names.
+    """
+    clean = name.replace(".", "-").replace(" ", "-")
+    sanitized = "".join(c for c in clean if c.isalnum() or c in "-_")
+    return sanitized or _DEFAULT_DATA_DIR_NAME
+
+
 def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
     """Compute data directory: ``{prefix}/biff/{repo_name}/``."""
     return prefix / "biff" / repo_root.name
@@ -236,9 +251,16 @@ def load_config(
     else:
         data_dir = prefix / "biff" / _DEFAULT_DATA_DIR_NAME
 
+    repo_name = (
+        sanitize_repo_name(repo_root.name)
+        if repo_root is not None
+        else _DEFAULT_DATA_DIR_NAME
+    )
+
     config = BiffConfig(
         user=user,
         display_name=display_name,
+        repo_name=repo_name,
         relay_url=relay_url,
         relay_auth=relay_auth,
         team=team,

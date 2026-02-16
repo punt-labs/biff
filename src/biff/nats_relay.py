@@ -2,10 +2,13 @@
 
 ``NatsRelay`` implements the :class:`~biff.relay.Relay` protocol using:
 
-- **NATS KV** (``biff-sessions`` bucket) for session/presence data with
-  TTL-based expiry.
-- **NATS JetStream** (``BIFF_INBOX`` stream) with ``WORK_QUEUE`` retention
-  for POP message semantics.
+- **NATS KV** (``biff-{repo}-sessions`` bucket) for session/presence data
+  with TTL-based expiry.
+- **NATS JetStream** (``BIFF_{repo}_INBOX`` stream) with ``WORK_QUEUE``
+  retention for POP message semantics.
+
+All resource names are scoped by ``repo_name`` so that multiple repos
+sharing the same NATS server are fully isolated.
 
 Messages are consumed (deleted) on :meth:`fetch`; :meth:`mark_read` is a
 no-op.  :meth:`get_unread_summary` peeks at messages non-destructively
@@ -47,9 +50,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_STREAM_NAME = "BIFF_INBOX"
-_SUBJECT_PREFIX = "biff.inbox"
-_KV_BUCKET = "biff-sessions"
 _KV_TTL = 2_592_000  # 30 days — sessions persist for long-lived plans
 _KV_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — small JSON session blobs
 _STREAM_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — messages consumed on read
@@ -72,10 +72,15 @@ class NatsRelay:
         url: str = "nats://localhost:4222",
         auth: RelayAuth | None = None,
         name: str = "biff",
+        repo_name: str = "_default",
     ) -> None:
         self._url = url
         self._auth = auth
         self._name = name
+        self._repo_name = repo_name
+        self._stream_name = f"BIFF_{repo_name}_INBOX"
+        self._subject_prefix = f"biff.{repo_name}.inbox"
+        self._kv_bucket = f"biff-{repo_name}-sessions"
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
@@ -118,7 +123,7 @@ class NatsRelay:
             # KV bucket for sessions — TTL auto-purges truly stale entries.
             # Recreate if config changed (e.g. TTL update).
             kv_config = KeyValueConfig(
-                bucket=_KV_BUCKET,
+                bucket=self._kv_bucket,
                 ttl=_KV_TTL,
                 max_bytes=_KV_MAX_BYTES,
             )
@@ -127,8 +132,8 @@ class NatsRelay:
                     config=kv_config,
                 )
             except BadRequestError:
-                logger.info("KV bucket config changed, recreating %s", _KV_BUCKET)
-                await js.delete_key_value(_KV_BUCKET)  # pyright: ignore[reportUnknownMemberType]
+                logger.info("KV bucket config changed, recreating %s", self._kv_bucket)
+                await js.delete_key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
                 kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
                     config=kv_config,
                 )
@@ -136,8 +141,8 @@ class NatsRelay:
             # Stream for messages — WORK_QUEUE deletes on ack (POP semantics)
             await js.add_stream(  # pyright: ignore[reportUnknownMemberType]
                 config=StreamConfig(
-                    name=_STREAM_NAME,
-                    subjects=[f"{_SUBJECT_PREFIX}.>"],
+                    name=self._stream_name,
+                    subjects=[f"{self._subject_prefix}.>"],
                     retention=RetentionPolicy.WORK_QUEUE,
                     max_bytes=_STREAM_MAX_BYTES,
                 ),
@@ -188,7 +193,7 @@ class NatsRelay:
         """Publish a message to the recipient's JetStream subject."""
         self._validate_user(message.from_user)
         js, _ = await self._ensure_connected()
-        subject = f"{_SUBJECT_PREFIX}.{self._validate_user(message.to_user)}"
+        subject = f"{self._subject_prefix}.{self._validate_user(message.to_user)}"
         await js.publish(subject, message.model_dump_json().encode())
 
     def _durable_name(self, user: str) -> str:
@@ -204,10 +209,10 @@ class NatsRelay:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
         self._validate_user(user)
         js, _ = await self._ensure_connected()
-        subject = f"{_SUBJECT_PREFIX}.{user}"
+        subject = f"{self._subject_prefix}.{user}"
 
         sub = await js.pull_subscribe(
-            subject, durable=self._durable_name(user), stream=_STREAM_NAME
+            subject, durable=self._durable_name(user), stream=self._stream_name
         )
         try:
             raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
@@ -233,11 +238,11 @@ class NatsRelay:
         """Peek at messages non-destructively for notification preview."""
         self._validate_user(user)
         js, _ = await self._ensure_connected()
-        subject = f"{_SUBJECT_PREFIX}.{user}"
+        subject = f"{self._subject_prefix}.{user}"
 
         # Get per-subject count from stream info
         try:
-            info = await js.stream_info(_STREAM_NAME, subjects_filter=subject)
+            info = await js.stream_info(self._stream_name, subjects_filter=subject)
         except NotFoundError:
             return build_unread_summary([], 0)
 
@@ -249,7 +254,7 @@ class NatsRelay:
 
         # Peek via the same durable consumer — nak puts messages back
         sub = await js.pull_subscribe(
-            subject, durable=self._durable_name(user), stream=_STREAM_NAME
+            subject, durable=self._durable_name(user), stream=self._stream_name
         )
         try:
             raw_msgs = await sub.fetch(

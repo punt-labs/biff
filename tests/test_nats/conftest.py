@@ -16,6 +16,8 @@ from biff.nats_relay import NatsRelay
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+_TEST_REPO = "_test-nats-unit"
+
 
 @pytest.fixture
 async def relay(nats_server: str) -> AsyncIterator[NatsRelay]:
@@ -23,7 +25,7 @@ async def relay(nats_server: str) -> AsyncIterator[NatsRelay]:
 
     Purges all streams and KV buckets between tests for isolation.
     """
-    r = NatsRelay(url=nats_server)
+    r = NatsRelay(url=nats_server, repo_name=_TEST_REPO)
 
     yield r
 
@@ -31,9 +33,9 @@ async def relay(nats_server: str) -> AsyncIterator[NatsRelay]:
     # close() resets all cached state (_nc, _js, _kv) to None.
     if r._nc is not None and r._js is not None:
         with suppress(Exception):
-            await r._js.delete_stream("BIFF_INBOX")
+            await r._js.delete_stream(f"BIFF_{_TEST_REPO}_INBOX")
         with suppress(Exception):
-            await r._js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
+            await r._js.delete_key_value(f"biff-{_TEST_REPO}-sessions")  # pyright: ignore[reportUnknownMemberType]
 
     await r.close()
 
@@ -41,6 +43,6 @@ async def relay(nats_server: str) -> AsyncIterator[NatsRelay]:
 @pytest.fixture
 async def second_relay(nats_server: str) -> AsyncIterator[NatsRelay]:
     """A second relay instance for cross-user tests."""
-    r = NatsRelay(url=nats_server)
+    r = NatsRelay(url=nats_server, repo_name=_TEST_REPO)
     yield r
     await r.close()

@@ -17,6 +17,7 @@ from biff.config import (
     get_os_user,
     load_biff_file,
     load_config,
+    sanitize_repo_name,
 )
 from biff.models import RelayAuth
 
@@ -95,6 +96,38 @@ class TestGetOsUser:
     def test_returns_none_on_error(self) -> None:
         with patch("biff.config.getpass.getuser", side_effect=OSError):
             assert get_os_user() is None
+
+
+# -- sanitize_repo_name --
+
+
+class TestSanitizeRepoName:
+    def test_simple_name(self) -> None:
+        assert sanitize_repo_name("myapp") == "myapp"
+
+    def test_dots_become_dashes(self) -> None:
+        assert sanitize_repo_name("my.app.v2") == "my-app-v2"
+
+    def test_spaces_become_dashes(self) -> None:
+        assert sanitize_repo_name("my app") == "my-app"
+
+    def test_strips_special_chars(self) -> None:
+        assert sanitize_repo_name("my@app!v2") == "myappv2"
+
+    def test_preserves_underscores(self) -> None:
+        assert sanitize_repo_name("my_app") == "my_app"
+
+    def test_preserves_dashes(self) -> None:
+        assert sanitize_repo_name("my-app") == "my-app"
+
+    def test_empty_returns_default(self) -> None:
+        assert sanitize_repo_name("") == "_default"
+
+    def test_all_special_returns_default(self) -> None:
+        assert sanitize_repo_name("@#$%") == "_default"
+
+    def test_nats_wildcards_stripped(self) -> None:
+        assert sanitize_repo_name("app*>test") == "apptest"
 
 
 # -- compute_data_dir --
@@ -230,6 +263,7 @@ class TestLoadConfig:
         resolved = load_config(start=repo)
         assert resolved.config.user == "kai"
         assert resolved.config.display_name == "Kai Chen"
+        assert resolved.config.repo_name == sanitize_repo_name(repo.name)
         assert resolved.config.team == ("kai", "eric")
         assert resolved.config.relay_url == "nats://localhost:4222"
         assert resolved.data_dir == Path("/tmp/biff") / repo.name
@@ -288,6 +322,7 @@ class TestLoadConfig:
         # No .git directory — should fall back to _default
         resolved = load_config(start=tmp_path)
         assert resolved.data_dir == Path("/tmp/biff") / _DEFAULT_DATA_DIR_NAME
+        assert resolved.config.repo_name == _DEFAULT_DATA_DIR_NAME
         assert resolved.repo_root is None
 
     @patch("biff.config.get_github_identity", return_value=_KAI)

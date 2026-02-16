@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
+_TEST_REPO = "_test-hosted-nats"
 
 
 def _relay_auth_from_env() -> RelayAuth | None:
@@ -117,6 +118,7 @@ async def kai_relay(
         url=hosted_nats_url,
         auth=hosted_nats_auth,
         name="biff-test-kai",
+        repo_name=_TEST_REPO,
     )
     yield relay
     await relay.close()
@@ -131,6 +133,7 @@ async def eric_relay(
         url=hosted_nats_url,
         auth=hosted_nats_auth,
         name="biff-test-eric",
+        repo_name=_TEST_REPO,
     )
     yield relay
     await relay.close()
@@ -153,9 +156,9 @@ async def _cleanup_nats(  # pyright: ignore[reportUnusedFunction]
     yield
     js = _cleanup_conn.jetstream()  # pyright: ignore[reportUnknownMemberType]
     with suppress(Exception):
-        await js.delete_stream("BIFF_INBOX")
+        await js.delete_stream(f"BIFF_{_TEST_REPO}_INBOX")
     with suppress(Exception):
-        await js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
+        await js.delete_key_value(f"biff-{_TEST_REPO}-sessions")  # pyright: ignore[reportUnknownMemberType]
     kai_relay.reset_infrastructure()
     eric_relay.reset_infrastructure()
 
@@ -185,7 +188,7 @@ async def kai_client(
     shared_data_dir: Path,
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for kai, reusing the session-scoped relay."""
-    config = BiffConfig(user="kai")
+    config = BiffConfig(user="kai", repo_name=_TEST_REPO)
     state = create_state(config, shared_data_dir / "kai", relay=kai_relay)
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
@@ -198,7 +201,7 @@ async def eric_client(
     shared_data_dir: Path,
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for eric, reusing the session-scoped relay."""
-    config = BiffConfig(user="eric")
+    config = BiffConfig(user="eric", repo_name=_TEST_REPO)
     state = create_state(config, shared_data_dir / "eric", relay=eric_relay)
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:

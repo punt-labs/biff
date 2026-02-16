@@ -23,6 +23,7 @@ from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
+_TEST_REPO = "_test-nats-e2e"
 
 
 @pytest.fixture(autouse=True)
@@ -32,9 +33,9 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
     with suppress(Exception):
-        await js.delete_stream("BIFF_INBOX")
+        await js.delete_stream(f"BIFF_{_TEST_REPO}_INBOX")
     with suppress(Exception):
-        await js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
+        await js.delete_key_value(f"biff-{_TEST_REPO}-sessions")  # pyright: ignore[reportUnknownMemberType]
     await nc.close()
 
 
@@ -62,7 +63,7 @@ async def kai_client(
     nats_server: str, shared_data_dir: Path
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for kai backed by NatsRelay."""
-    config = BiffConfig(user="kai", relay_url=nats_server)
+    config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(config, shared_data_dir / "kai")
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
@@ -74,7 +75,7 @@ async def eric_client(
     nats_server: str, shared_data_dir: Path
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for eric backed by NatsRelay."""
-    config = BiffConfig(user="eric", relay_url=nats_server)
+    config = BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(config, shared_data_dir / "eric")
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
