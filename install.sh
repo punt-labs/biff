@@ -334,12 +334,18 @@ CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
 mkdir -p "$CLAUDE_COMMANDS_DIR"
 
 # install_cmd SRC_FILE SHORT_NAME
-#   Installs to /SHORT_NAME if available, otherwise /biffSHORT_NAME
+#   Installs to /SHORT_NAME if available, otherwise /biffSHORT_NAME.
+#   Skips if both names are taken by non-biff commands.
 install_cmd() {
   local src="$1" short="$2"
   local dest="$CLAUDE_COMMANDS_DIR/$short.md"
   if [[ -f "$dest" ]] && ! grep -q 'mcp__biff__' "$dest" 2>/dev/null; then
-    dest="$CLAUDE_COMMANDS_DIR/biff${short}.md"
+    local fallback="$CLAUDE_COMMANDS_DIR/biff${short}.md"
+    if [[ -f "$fallback" ]] && ! grep -q 'mcp__biff__' "$fallback" 2>/dev/null; then
+      warn "/$short and /biff${short} both taken — skipping"
+      return
+    fi
+    dest="$fallback"
     warn "/$short already exists — installing as /biff${short}"
   fi
   cp "$src" "$dest"
