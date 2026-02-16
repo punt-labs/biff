@@ -2,6 +2,8 @@
 # Format biff MCP tool output for the UI panel.
 #
 # updatedMCPToolOutput sets the text displayed in the tool-result panel.
+# additionalContext passes the full tool data to the model separately,
+# so the model can emit the table while the panel stays compact.
 #
 # tool_response arrives as a JSON-encoded STRING, not an object.
 # We must parse it twice: once to extract the string, once to
@@ -10,8 +12,7 @@
 INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 
-# read_messages: show a short summary in the panel;
-# the model still receives the full response and emits the table.
+# read_messages: summary in panel, full data via additionalContext.
 if [[ "$TOOL" == "mcp__biff__read_messages" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   if [[ "$RESULT" == "No new messages." ]]; then
@@ -22,20 +23,19 @@ if [[ "$TOOL" == "mcp__biff__read_messages" ]]; then
       }
     }'
   else
-    # Count data lines (total lines minus header)
     COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
-    jq -n --arg r "${COUNT} new" '{
+    jq -n --arg summary "${COUNT} new" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
+        updatedMCPToolOutput: $summary,
+        additionalContext: $ctx
       }
     }'
   fi
   exit 0
 fi
 
-# who: show a short summary in the panel;
-# the model still receives the full response and emits the table.
+# who: summary in panel, full data via additionalContext.
 if [[ "$TOOL" == "mcp__biff__who" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   if [[ "$RESULT" == "No sessions." ]]; then
@@ -47,26 +47,26 @@ if [[ "$TOOL" == "mcp__biff__who" ]]; then
     }'
   else
     COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
-    jq -n --arg r "${COUNT} online" '{
+    jq -n --arg summary "${COUNT} online" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
+        updatedMCPToolOutput: $summary,
+        additionalContext: $ctx
       }
     }'
   fi
   exit 0
 fi
 
-# finger: show username in the panel;
-# the model still receives the full response and emits the detail.
+# finger: username in panel, full data via additionalContext.
 if [[ "$TOOL" == "mcp__biff__finger" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-  # Extract username from "Login: <user>" on first line
   USER=$(printf '%s' "$RESULT" | head -1 | sed 's/.*Login: *\([^ ]*\).*/\1/')
-  jq -n --arg r "@${USER}" '{
+  jq -n --arg summary "@${USER}" --arg ctx "$RESULT" '{
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
-      updatedMCPToolOutput: $r
+      updatedMCPToolOutput: $summary,
+      additionalContext: $ctx
     }
   }'
   exit 0
