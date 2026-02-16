@@ -120,11 +120,13 @@ class TestSanitizeRepoName:
     def test_preserves_dashes(self) -> None:
         assert sanitize_repo_name("my-app") == "my-app"
 
-    def test_empty_returns_default(self) -> None:
-        assert sanitize_repo_name("") == "_default"
+    def test_empty_exits(self) -> None:
+        with pytest.raises(SystemExit, match="no usable characters"):
+            sanitize_repo_name("")
 
-    def test_all_special_returns_default(self) -> None:
-        assert sanitize_repo_name("@#$%") == "_default"
+    def test_all_special_exits(self) -> None:
+        with pytest.raises(SystemExit, match="no usable characters"):
+            sanitize_repo_name("@#$%")
 
     def test_nats_wildcards_stripped(self) -> None:
         assert sanitize_repo_name("app*>test") == "apptest"

@@ -116,11 +116,19 @@ def sanitize_repo_name(name: str) -> str:
     reserved.  Spaces become dashes; dots become dashes; everything
     else non-alphanumeric/dash/underscore is stripped.
 
-    Returns ``"_default"`` for empty or all-special-character names.
+    Raises ``SystemExit`` if the result is empty — a repo name that
+    sanitizes to nothing would silently share a NATS namespace with
+    other unusable names, causing the exact collision this function
+    exists to prevent.
     """
     clean = name.replace(".", "-").replace(" ", "-")
     sanitized = "".join(c for c in clean if c.isalnum() or c in "-_")
-    return sanitized or _DEFAULT_DATA_DIR_NAME
+    if not sanitized:
+        raise SystemExit(
+            f"Repo name {name!r} contains no usable characters after sanitization.\n"
+            "Rename the directory or set repo_name explicitly in .biff."
+        )
+    return sanitized
 
 
 def compute_data_dir(repo_root: Path, prefix: Path) -> Path:

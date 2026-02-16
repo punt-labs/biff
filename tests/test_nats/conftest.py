@@ -33,9 +33,9 @@ async def relay(nats_server: str) -> AsyncIterator[NatsRelay]:
     # close() resets all cached state (_nc, _js, _kv) to None.
     if r._nc is not None and r._js is not None:
         with suppress(Exception):
-            await r._js.delete_stream(f"BIFF_{_TEST_REPO}_INBOX")
+            await r._js.delete_stream(r._stream_name)
         with suppress(Exception):
-            await r._js.delete_key_value(f"biff-{_TEST_REPO}-sessions")  # pyright: ignore[reportUnknownMemberType]
+            await r._js.delete_key_value(r._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
 
     await r.close()
 

@@ -156,9 +156,9 @@ async def _cleanup_nats(  # pyright: ignore[reportUnusedFunction]
     yield
     js = _cleanup_conn.jetstream()  # pyright: ignore[reportUnknownMemberType]
     with suppress(Exception):
-        await js.delete_stream(f"BIFF_{_TEST_REPO}_INBOX")
+        await js.delete_stream(kai_relay._stream_name)
     with suppress(Exception):
-        await js.delete_key_value(f"biff-{_TEST_REPO}-sessions")  # pyright: ignore[reportUnknownMemberType]
+        await js.delete_key_value(kai_relay._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
     kai_relay.reset_infrastructure()
     eric_relay.reset_infrastructure()
 
