@@ -6,15 +6,15 @@
 #   1. Checks Python 3.13+ is available
 #   2. Installs uv if not present
 #   3. Installs biff-mcp via uv (the MCP server)
-#   4. Registers the biff-commands plugin (slash commands for Claude Code)
+#   4. Registers the biff plugin (slash commands for Claude Code)
 #   5. Runs biff init (identity + team config)
 #   6. Installs the status line
 
 set -euo pipefail
 
 REPO="https://github.com/punt-labs/biff.git"
-PLUGIN_NAME="biff-commands"
-PLUGIN_DIR_IN_REPO="plugins/biff-commands"
+PLUGIN_NAME="biff"
+PLUGIN_DIR_IN_REPO="plugins/biff"
 PLUGINS_DIR="$HOME/.claude/plugins/local-plugins/plugins"
 MARKETPLACE="$HOME/.claude/plugins/local-plugins/.claude-plugin/marketplace.json"
 INSTALL_DIR="$PLUGINS_DIR/$PLUGIN_NAME"
@@ -326,7 +326,36 @@ if [[ -d "$CACHE_DIR" ]]; then
   ok "Cleared plugin cache (will rebuild on next launch)"
 fi
 
-# --- Step 6: Status line ----------------------------------------------------
+# --- Step 6: Standalone commands (/who, /mesg, etc.) -----------------------
+
+header "Slash commands"
+
+CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
+mkdir -p "$CLAUDE_COMMANDS_DIR"
+
+COMMANDS_INSTALLED=0
+for cmd in who finger mesg check on off; do
+  SRC="$INSTALL_DIR/commands/$cmd.md"
+  if [[ -f "$SRC" ]]; then
+    cp "$SRC" "$CLAUDE_COMMANDS_DIR/$cmd.md"
+    COMMANDS_INSTALLED=$((COMMANDS_INSTALLED + 1))
+  fi
+done
+
+# /dotplan (renamed from plan to avoid conflicts with built-in /plan)
+if [[ -f "$INSTALL_DIR/commands/plan.md" ]]; then
+  cp "$INSTALL_DIR/commands/plan.md" "$CLAUDE_COMMANDS_DIR/dotplan.md"
+  COMMANDS_INSTALLED=$((COMMANDS_INSTALLED + 1))
+fi
+
+if [[ $COMMANDS_INSTALLED -gt 0 ]]; then
+  ok "Installed $COMMANDS_INSTALLED commands to $CLAUDE_COMMANDS_DIR"
+  ok "Available: /who /finger /mesg /check /dotplan /on /off"
+else
+  warn "No command files found in $INSTALL_DIR/commands/"
+fi
+
+# --- Step 7: Status line ----------------------------------------------------
 
 header "Status line"
 
@@ -359,5 +388,5 @@ echo ""
 info "Next steps:"
 info "  1. Restart Claude Code (or start a new session)"
 info "  2. Run 'biff init' in each project repo to configure teams"
-info "  3. Use /who, /plan, /mesg, /finger, /check, /biff"
+info "  3. Use /who, /finger, /mesg, /check, /dotplan, /on, /off"
 echo ""
