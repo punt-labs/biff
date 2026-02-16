@@ -14,7 +14,13 @@ from typing import Annotated
 import click
 import typer
 
-from biff.config import find_git_root, get_git_user, get_os_user, load_config
+from biff.config import (
+    DEMO_RELAY_URL,
+    find_git_root,
+    get_git_user,
+    get_os_user,
+    load_config,
+)
 from biff.server.app import create_server
 from biff.server.state import create_state
 
@@ -188,9 +194,8 @@ def init(
     members = [m.strip() for m in members_input.split(",") if m.strip()]
 
     relay_url = typer.prompt(
-        "Relay URL (or empty to skip)",
-        default="",
-        show_default=False,
+        "Relay URL",
+        default=DEMO_RELAY_URL,
     )
 
     # Write .biff (even if empty — signals "biff is configured here")
