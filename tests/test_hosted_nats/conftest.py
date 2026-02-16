@@ -11,20 +11,18 @@ using credentials from environment variables:
 At most one auth env var should be set.
 
 Connection budget: hosted accounts often have low connection limits
-(e.g. 5 per app on Synadia Cloud starter).  This module uses three
-session-scoped connections (kai relay, eric relay, cleanup) and
-reuses them across all tests.
+(e.g. 5 per app on Synadia Cloud starter).  This module uses two
+session-scoped connections (kai relay, eric relay) and reuses them
+across all tests.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Generator
-from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
-import nats
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
@@ -34,9 +32,6 @@ from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
-
-if TYPE_CHECKING:
-    from nats.aio.client import Client as NatsClient
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 _TEST_REPO = "_test-hosted-nats"
@@ -64,20 +59,7 @@ def _relay_auth_from_env() -> RelayAuth | None:
     return RelayAuth(**values)
 
 
-def _auth_connect_kwargs(auth: RelayAuth | None) -> dict[str, str]:
-    """Build nats.connect() kwargs from RelayAuth."""
-    if auth is None:
-        return {}
-    if auth.token:
-        return {"token": auth.token}
-    if auth.nkeys_seed:
-        return {"nkeys_seed": auth.nkeys_seed}
-    if auth.user_credentials:
-        return {"user_credentials": auth.user_credentials}
-    return {}
-
-
-# -- Session-scoped fixtures (3 NATS connections total) --
+# -- Session-scoped fixtures (2 NATS connections total) --
 
 
 @pytest.fixture(scope="session")
@@ -93,20 +75,6 @@ def hosted_nats_url() -> str:
 def hosted_nats_auth() -> RelayAuth | None:
     """Authentication from BIFF_TEST_NATS_* env vars."""
     return _relay_auth_from_env()
-
-
-@pytest.fixture(scope="session")
-async def _cleanup_conn(  # pyright: ignore[reportUnusedFunction]
-    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
-) -> AsyncIterator[NatsClient]:
-    """Session-scoped NATS connection for test cleanup."""
-    nc: NatsClient = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
-        hosted_nats_url,
-        name="biff-test-cleanup",
-        **_auth_connect_kwargs(hosted_nats_auth),
-    )
-    yield nc
-    await nc.close()
 
 
 @pytest.fixture(scope="session")
@@ -144,21 +112,20 @@ async def eric_relay(
 
 @pytest.fixture(autouse=True)
 async def _cleanup_nats(  # pyright: ignore[reportUnusedFunction]
-    _cleanup_conn: NatsClient,
     kai_relay: NatsRelay,
     eric_relay: NatsRelay,
 ) -> AsyncIterator[None]:
-    """Delete NATS infrastructure after each test for isolation.
+    """Reset relay handles after each test for isolation.
 
-    Also resets the relay handles so ``_ensure_connected()`` re-provisions
+    Resets the relay handles so ``_ensure_connected()`` re-provisions
     the KV bucket and stream on the next test.
+
+    Note: stream/KV cleanup is currently disabled to allow manual
+    inspection of scoped resource names on the server.  Expect to see:
+    ``biff-_test-hosted-nats-inbox`` (stream) and
+    ``biff-_test-hosted-nats-sessions`` (KV bucket).
     """
     yield
-    js = _cleanup_conn.jetstream()  # pyright: ignore[reportUnknownMemberType]
-    with suppress(Exception):
-        await js.delete_stream(kai_relay._stream_name)
-    with suppress(Exception):
-        await js.delete_key_value(kai_relay._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
     kai_relay.reset_infrastructure()
     eric_relay.reset_infrastructure()
 

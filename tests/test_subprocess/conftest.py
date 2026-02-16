@@ -20,7 +20,12 @@ _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 
 
 def _make_transport(user: str, data_dir: Path) -> StdioTransport:
-    """Build a StdioTransport that spawns ``biff`` for the given user."""
+    """Build a StdioTransport that spawns ``biff`` for the given user.
+
+    Passes ``--relay-url ""`` to force local relay, preventing the
+    subprocess from connecting to a remote NATS server configured
+    in the repo's ``.biff`` file.
+    """
     return StdioTransport(
         command="uv",
         args=[
@@ -31,6 +36,8 @@ def _make_transport(user: str, data_dir: Path) -> StdioTransport:
             user,
             "--data-dir",
             str(data_dir),
+            "--relay-url",
+            "",
             "--transport",
             "stdio",
         ],

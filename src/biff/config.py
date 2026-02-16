@@ -200,10 +200,14 @@ def extract_biff_fields(
     return team, relay_url, relay_auth
 
 
+RELAY_URL_UNSET = object()
+
+
 def load_config(
     *,
     user_override: str | None = None,
     data_dir_override: Path | None = None,
+    relay_url_override: object = RELAY_URL_UNSET,
     prefix: Path = _DEFAULT_PREFIX,
     start: Path | None = None,
 ) -> ResolvedConfig:
@@ -211,11 +215,11 @@ def load_config(
 
     Resolution order:
 
-    1. CLI overrides (``user_override``, ``data_dir_override``) take precedence.
+    1. CLI overrides (``user_override``, ``data_dir_override``,
+       ``relay_url_override``) take precedence.
     2. ``.biff`` TOML for team roster and relay URL.
     3. GitHub username (via ``gh api user``), falling back to OS username.
-    4. Data dir computed from ``{prefix}/biff/{repo_name}/``, falling back
-       to ``{prefix}/biff/_default/`` outside git repos.
+    4. Data dir computed from ``{prefix}/biff/{repo_name}/``.
 
     Raises :class:`SystemExit` only if no user identity can be resolved
     from any source.
@@ -229,6 +233,13 @@ def load_config(
     if repo_root is not None:
         raw = load_biff_file(repo_root)
         team, relay_url, relay_auth = extract_biff_fields(raw)
+
+    # CLI relay-url override: empty string → local relay, non-empty → use it
+    if relay_url_override is not RELAY_URL_UNSET:
+        override = str(relay_url_override) if relay_url_override else ""
+        relay_url = override or None
+        if relay_url is None:
+            relay_auth = None
 
     # Resolve user: CLI override > GitHub identity > OS username
     display_name = ""
