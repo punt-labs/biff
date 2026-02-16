@@ -78,7 +78,7 @@ Plan: debugging the websocket reconnect logic
 ### Go do-not-disturb
 
 ```
-> /off
+> /mesg n
 
 is n
 ```
@@ -92,17 +92,17 @@ is n
 | `/finger @user` | BSD `finger` | Check what someone is working on |
 | `/who` | BSD `who` | List active sessions |
 | `/plan "text"` | BSD `.plan` | Set your status |
-| `/on` \| `/off` | BSD `mesg` | Control message reception |
+| `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 
 ## Status Bar
 
-Biff integrates with Claude Code's status line to show unread message counts:
+Biff appends to your existing Claude Code status line — it never replaces it. If you already have a status line command, biff wraps it and adds unread counts at the end:
 
 ```
-biff(3)
+your-existing-status | biff(3)
 ```
 
-This is configured automatically by `biff install-statusline`. To remove: `biff uninstall-statusline`.
+This is configured automatically by `biff install-statusline`. To remove and restore your original status line: `biff uninstall-statusline`.
 
 ## Agents Welcome
 
@@ -112,13 +112,9 @@ Because biff speaks MCP, it does not distinguish between human and agent session
 
 ## Setup
 
-### 1. Set your identity
+Biff requires a git repo and a GitHub identity. Your username and display name are resolved automatically from `gh auth` — no manual configuration needed.
 
-```bash
-git config biff.user your-handle
-```
-
-### 2. Create a `.biff` file
+### 1. Create a `.biff` file
 
 Commit a `.biff` file in your repo root (TOML format):
 
@@ -137,7 +133,7 @@ url = "nats://localhost:4222"
 
 Use `tls://` in the URL for encrypted connections (e.g., `tls://connect.ngs.global`).
 
-### 3. Start the server
+### 2. Start the server
 
 ```bash
 biff serve                              # auto-discovers user, repo, data dir

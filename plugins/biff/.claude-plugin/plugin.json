@@ -1,6 +1,6 @@
 {
   "name": "biff",
-  "description": "UNIX-style slash commands for biff team communication: /who, /finger, /plan, /write, /read, /on, /off",
+  "description": "UNIX-style slash commands for biff team communication: /who, /finger, /plan, /write, /read, /mesg",
   "version": "0.1.0",
   "author": {
     "name": "Josh Freeman",
