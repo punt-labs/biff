@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from biff.__main__ import app
-from biff.config import ResolvedConfig
+from biff.config import GitHubIdentity, ResolvedConfig
 from biff.models import BiffConfig
 
 runner = CliRunner()
@@ -153,9 +153,15 @@ class TestServeCommand:
         assert call_kwargs["user_override"] is None
 
 
+_KAI_IDENTITY = GitHubIdentity(login="kai", display_name="Kai Chen")
+
+
 class TestInitCommand:
     @patch("biff.__main__.get_os_user", return_value=None)
-    @patch("biff.__main__.get_github_user", return_value="kai")
+    @patch(
+        "biff.__main__.get_github_identity",
+        return_value=_KAI_IDENTITY,
+    )
     @patch("biff.__main__.find_git_root")
     def test_creates_biff_file(
         self,

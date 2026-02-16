@@ -59,21 +59,40 @@ def find_git_root(start: Path | None = None) -> Path | None:
     return None
 
 
-def get_github_user() -> str | None:
-    """Resolve GitHub username via ``gh api user``, or ``None``.
+@dataclass(frozen=True)
+class GitHubIdentity:
+    """GitHub login and display name resolved from ``gh api user``."""
 
-    This is the primary identity source — a developer's GitHub handle
-    is their natural identity in a git-based communication tool.
+    login: str
+    display_name: str
+
+
+def get_github_identity() -> GitHubIdentity | None:
+    """Resolve GitHub login and display name in a single API call.
+
+    Returns ``None`` when ``gh`` is missing or the call fails.
     """
     try:
         result = subprocess.run(
-            ["gh", "api", "user", "--jq", ".login"],  # noqa: S607
+            [  # noqa: S607
+                "gh",
+                "api",
+                "user",
+                "--jq",
+                '[.login, .name // ""] | @tsv',
+            ],
             capture_output=True,
             text=True,
             check=False,
         )
-        value = result.stdout.strip()
-        return value if result.returncode == 0 and value else None
+        if result.returncode != 0:
+            return None
+        parts = result.stdout.strip().split("\t", maxsplit=1)
+        login = parts[0].strip()
+        if not login:
+            return None
+        display_name = parts[1].strip() if len(parts) > 1 else ""
+        return GitHubIdentity(login=login, display_name=display_name)
     except FileNotFoundError:
         return None
 
@@ -191,8 +210,17 @@ def load_config(
         raw = load_biff_file(repo_root)
         team, relay_url, relay_auth = _extract_biff_fields(raw)
 
-    # Resolve user: CLI override > GitHub username > OS username
-    user = user_override or get_github_user() or get_os_user()
+    # Resolve user: CLI override > GitHub identity > OS username
+    display_name = ""
+    if user_override is not None:
+        user: str | None = user_override
+    else:
+        identity = get_github_identity()
+        if identity is not None:
+            user = identity.login
+            display_name = identity.display_name
+        else:
+            user = get_os_user()
     if user is None:
         msg = (
             "No user configured. Install the gh CLI and authenticate,"
@@ -209,6 +237,10 @@ def load_config(
         data_dir = prefix / "biff" / _DEFAULT_DATA_DIR_NAME
 
     config = BiffConfig(
-        user=user, relay_url=relay_url, relay_auth=relay_auth, team=team
+        user=user,
+        display_name=display_name,
+        relay_url=relay_url,
+        relay_auth=relay_auth,
+        team=team,
     )
     return ResolvedConfig(config=config, data_dir=data_dir, repo_root=repo_root)

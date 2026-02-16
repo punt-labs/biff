@@ -59,13 +59,24 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
         mesg = "on" if session.biff_enabled else "off"
 
-        # Two-column first line: Login left, Messages right
         left = f"Login: {bare}"
-        right = f"Messages: {mesg}"
-        line1 = f"{left:<38s}{right}"
+        if session.display_name:
+            # Name on first line, Messages on second
+            right = f"Name: {session.display_name}"
+            line1 = f"{left:<38s}{right}"
+            line2 = f"Messages: {mesg}"
+        else:
+            # Original layout: Messages on first line
+            right = f"Messages: {mesg}"
+            line1 = f"{left:<38s}{right}"
+            line2 = ""
 
-        line2 = f"On since {since} on claude, idle {idle}"
-
+        line_on = f"On since {since} on claude, idle {idle}"
         plan_block = f"Plan:\n {session.plan}" if session.plan else "No Plan."
 
-        return f"{line1}\n{line2}\n{plan_block}"
+        lines = [line1]
+        if line2:
+            lines.append(line2)
+        lines.append(line_on)
+        lines.append(plan_block)
+        return "\n".join(lines)

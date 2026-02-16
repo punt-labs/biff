@@ -95,6 +95,23 @@ class TestFingerTool:
         assert "coding" in result
         assert "Login: eric" in result
 
+    async def test_shows_display_name(self, state: ServerState) -> None:
+        await state.relay.update_session(
+            UserSession(user="eric", display_name="Eric Alvarez", plan="debugging")
+        )
+        fn = _get_tool_fn(state, "finger")
+        result = await fn(user="eric")
+        assert "Name: Eric Alvarez" in result
+        assert "Login: eric" in result
+        assert "Messages: on" in result
+
+    async def test_omits_name_when_empty(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="eric", plan="coding"))
+        fn = _get_tool_fn(state, "finger")
+        result = await fn(user="eric")
+        assert "Name:" not in result
+        assert "Messages: on" in result
+
 
 class TestWhoTool:
     async def test_no_active_sessions(self, state: ServerState) -> None:

@@ -16,7 +16,7 @@ import typer
 from biff.config import (
     DEMO_RELAY_URL,
     find_git_root,
-    get_github_user,
+    get_github_identity,
     get_os_user,
     load_config,
 )
@@ -143,7 +143,8 @@ def init(
         )
 
     # Resolve identity: GitHub CLI > OS username
-    user = get_github_user() or get_os_user()
+    identity = get_github_identity()
+    user = (identity.login if identity is not None else None) or get_os_user()
     if user is None:
         raise SystemExit(
             "Could not determine username.\n"
