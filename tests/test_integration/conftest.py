@@ -29,7 +29,7 @@ def config() -> BiffConfig:
 
 @pytest.fixture
 def state(tmp_path: Path, config: BiffConfig) -> ServerState:
-    return create_state(config, tmp_path)
+    return create_state(config, tmp_path, tty="tty1", hostname="test-host", pwd="/test")
 
 
 @pytest.fixture
@@ -75,13 +75,25 @@ def shared_data_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def kai_state(shared_data_dir: Path) -> ServerState:
     """Server state for user kai."""
-    return create_state(BiffConfig(user="kai", repo_name=_TEST_REPO), shared_data_dir)
+    return create_state(
+        BiffConfig(user="kai", repo_name=_TEST_REPO),
+        shared_data_dir,
+        tty="tty1",
+        hostname="test-host",
+        pwd="/test",
+    )
 
 
 @pytest.fixture
 def eric_state(shared_data_dir: Path) -> ServerState:
     """Server state for user eric."""
-    return create_state(BiffConfig(user="eric", repo_name=_TEST_REPO), shared_data_dir)
+    return create_state(
+        BiffConfig(user="eric", repo_name=_TEST_REPO),
+        shared_data_dir,
+        tty="tty2",
+        hostname="test-host",
+        pwd="/test",
+    )
 
 
 @pytest.fixture

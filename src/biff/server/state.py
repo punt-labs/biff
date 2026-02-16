@@ -12,6 +12,7 @@ from pathlib import Path
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay, Relay
+from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
 
 
 @dataclass(frozen=True)
@@ -20,7 +21,15 @@ class ServerState:
 
     config: BiffConfig
     relay: Relay
+    tty: str = ""
+    hostname: str = ""
+    pwd: str = ""
     unread_path: Path | None = None
+
+    @property
+    def session_key(self) -> str:
+        """Composite key ``{user}:{tty}`` for this server instance."""
+        return build_session_key(self.config.user, self.tty)
 
 
 def create_state(
@@ -29,12 +38,18 @@ def create_state(
     *,
     relay: Relay | None = None,
     unread_path: Path | None = None,
+    tty: str | None = None,
+    hostname: str | None = None,
+    pwd: str | None = None,
 ) -> ServerState:
     """Create a ``ServerState`` from config and data directory.
 
     Relay selection: an explicit *relay* wins, then ``config.relay_url``
     selects :class:`~biff.nats_relay.NatsRelay`, otherwise
     :class:`~biff.relay.LocalRelay`.
+
+    Runtime identity (tty, hostname, pwd) is auto-generated when not
+    provided — each server instance gets a unique session key.
     """
     if relay is None:
         if config.relay_url:
@@ -49,5 +64,8 @@ def create_state(
     return ServerState(
         config=config,
         relay=relay,
+        tty=tty or generate_tty(),
+        hostname=hostname or get_hostname(),
+        pwd=pwd or get_pwd(),
         unread_path=unread_path,
     )

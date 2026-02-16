@@ -104,7 +104,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     tool = mcp._tool_manager._tools.get("read_messages")  # pyright: ignore[reportPrivateUsage]
     if tool is None:
         return
-    summary = await state.relay.get_unread_summary(state.config.user)
+    summary = await state.relay.get_unread_summary(state.session_key)
     old_desc = tool.description
     if summary.count == 0:
         tool.description = _READ_MESSAGES_BASE
@@ -142,7 +142,7 @@ async def poll_inbox(
     last_count = -1  # Force initial refresh
     while True:
         await asyncio.sleep(interval)
-        summary = await state.relay.get_unread_summary(state.config.user)
+        summary = await state.relay.get_unread_summary(state.session_key)
         if summary.count != last_count:
             last_count = summary.count
             await refresh_read_messages(mcp, state)
