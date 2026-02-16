@@ -45,7 +45,7 @@ class InstallResult:
 
     installed: bool
     message: str
-    steps: list[StepResult] = field(default_factory=lambda: list[StepResult]())
+    steps: list[StepResult] = field(default_factory=list[StepResult])
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class UninstallResult:
 
     uninstalled: bool
     message: str
-    steps: list[StepResult] = field(default_factory=lambda: list[StepResult]())
+    steps: list[StepResult] = field(default_factory=list[StepResult])
 
 
 # Plugin source --------------------------------------------------------------
