@@ -86,7 +86,7 @@ class TestFingerTool:
         await state.relay.update_session(UserSession(user="eric", biff_enabled=False))
         fn = _get_tool_fn(state, "finger")
         result = await fn(user="eric")
-        assert "messages off" in result
+        assert "Messages: off" in result
 
     async def test_strips_at_prefix(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="eric", plan="coding"))
@@ -254,7 +254,7 @@ class TestToolInteractions:
         finger_fn = _get_tool_fn(state, "finger")
         await biff_fn(enabled=False)
         result = await finger_fn(user="kai")
-        assert "messages off" in result
+        assert "Messages: off" in result
 
     async def test_plan_then_who_shows_plan(self, state: ServerState) -> None:
         plan_fn = _get_tool_fn(state, "plan")

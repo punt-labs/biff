@@ -46,7 +46,7 @@ class TestCrossUserVisibility:
 
         assert "Login: kai" in result
         assert "debugging flaky test" in result
-        assert "messages on" in result
+        assert "Messages: on" in result
 
     @pytest.mark.transcript
     async def test_biff_off_visible_to_other(
@@ -62,7 +62,7 @@ class TestCrossUserVisibility:
         await kai.call("biff", enabled=False)
         result = await eric.call("finger", user="@kai")
 
-        assert "messages off" in result
+        assert "Messages: off" in result
         assert "deep work on storage layer" in result
 
 
@@ -134,7 +134,7 @@ class TestPresenceLifecycle:
         # kai goes heads-down
         await kai.call("biff", enabled=False)
         finger_result = await eric.call("finger", user="@kai")
-        assert "messages off" in finger_result
+        assert "Messages: off" in finger_result
 
         # kai finishes deep work, comes back
         await kai.call("biff", enabled=True)
@@ -142,7 +142,7 @@ class TestPresenceLifecycle:
 
         # eric checks kai's new status
         finger_result = await eric.call("finger", user="@kai")
-        assert "messages on" in finger_result
+        assert "Messages: on" in finger_result
         assert "auth refactor done" in finger_result
 
 

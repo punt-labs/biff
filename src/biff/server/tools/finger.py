@@ -43,11 +43,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def finger(user: str) -> str:
         """Query a user's session and presence info.
 
-        Output mimics BSD ``finger(1)``::
+        Output mimics BSD ``finger(1)`` two-column layout::
 
-            Login: kai
-            On since Sun Feb 15 14:01 (UTC) on claude, idle 3m (messages on)
-            Plan: refactoring auth
+            Login: kai                        Messages: on
+            On since Sun Feb 15 14:01 (UTC) on claude, idle 0:03
+            Plan:
+             refactoring auth module
         """
         await refresh_check_messages(mcp, state)
         bare = user.strip().lstrip("@")
@@ -56,8 +57,15 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return f"Login: {bare}\nNever logged in."
         idle = _format_idle(session.last_active)
         since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
-        mesg = "messages on" if session.biff_enabled else "messages off"
-        plan = f"Plan: {session.plan}" if session.plan else "No Plan."
-        return (
-            f"Login: {bare}\nOn since {since} on claude, idle {idle} ({mesg})\n{plan}"
-        )
+        mesg = "on" if session.biff_enabled else "off"
+
+        # Two-column first line: Login left, Messages right
+        left = f"Login: {bare}"
+        right = f"Messages: {mesg}"
+        line1 = f"{left:<38s}{right}"
+
+        line2 = f"On since {since} on claude, idle {idle}"
+
+        plan_block = f"Plan:\n {session.plan}" if session.plan else "No Plan."
+
+        return f"{line1}\n{line2}\n{plan_block}"
