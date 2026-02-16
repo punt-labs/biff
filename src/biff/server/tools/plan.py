@@ -27,7 +27,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ),
     )
     async def plan(message: str) -> str:
-        """Update the current user's plan."""
+        """Update the current user's ``.plan`` file.
+
+        Output echoes the plan, matching ``cat ~/.plan``::
+
+            Plan: refactoring auth
+        """
         await update_current_session(state, plan=message)
         await refresh_check_messages(mcp, state)
-        return f"Plan updated: {message}"
+        return f"Plan: {message}"

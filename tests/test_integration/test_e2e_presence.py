@@ -56,9 +56,9 @@ class TestCrossUserVisibility:
         await kai.call("plan", message="debugging flaky test")
         result = await eric.call("finger", user="@kai")
 
-        assert "@kai" in result
+        assert "Login: kai" in result
         assert "debugging flaky test" in result
-        assert "accepting messages" in result
+        assert "messages on" in result
 
     @pytest.mark.transcript
     async def test_biff_off_visible_to_other(
@@ -151,7 +151,7 @@ class TestPresenceLifecycle:
 
         # eric checks kai's new status
         finger_result = await eric.call("finger", user="@kai")
-        assert "accepting messages" in finger_result
+        assert "messages on" in finger_result
         assert "auth refactor done" in finger_result
 
 
@@ -170,7 +170,7 @@ class TestCrossUserMessaging:
         assert "@eric" in result
 
         result = await eric.call("check_messages")
-        assert "@kai" in result
+        assert "From kai" in result
         assert "PR #42 is ready" in result
 
     @pytest.mark.transcript
@@ -201,9 +201,9 @@ class TestCrossUserMessaging:
         kai_inbox = await kai.call("check_messages")
         eric_inbox = await eric.call("check_messages")
 
-        assert "@eric" in kai_inbox
+        assert "From eric" in kai_inbox
         assert "sure, on it" in kai_inbox
-        assert "@kai" in eric_inbox
+        assert "From kai" in eric_inbox
         assert "review my PR?" in eric_inbox
 
     @pytest.mark.transcript
@@ -222,7 +222,7 @@ class TestCrossUserMessaging:
         # eric turns biff back on and checks
         await eric.call("biff", enabled=True)
         result = await eric.call("check_messages")
-        assert "@kai" in result
+        assert "From kai" in result
         assert "urgent fix needed" in result
 
 

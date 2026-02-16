@@ -37,7 +37,7 @@ class TestBiffToggleTool:
     async def test_disable_messages(self, state: ServerState) -> None:
         fn = _get_tool_fn(state, "biff")
         result = await fn(enabled=False)
-        assert "off" in result
+        assert "is n" in result
         session = await state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is False
@@ -46,7 +46,7 @@ class TestBiffToggleTool:
         await state.relay.update_session(UserSession(user="kai", biff_enabled=False))
         fn = _get_tool_fn(state, "biff")
         result = await fn(enabled=True)
-        assert "on" in result
+        assert "is y" in result
         session = await state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is True
@@ -71,7 +71,7 @@ class TestFingerTool:
     async def test_unknown_user(self, state: ServerState) -> None:
         fn = _get_tool_fn(state, "finger")
         result = await fn(user="nobody")
-        assert "no active session" in result
+        assert "Never logged in" in result
 
     async def test_shows_plan(self, state: ServerState) -> None:
         await state.relay.update_session(
@@ -80,7 +80,7 @@ class TestFingerTool:
         fn = _get_tool_fn(state, "finger")
         result = await fn(user="eric")
         assert "refactoring auth" in result
-        assert "@eric" in result
+        assert "Login: eric" in result
 
     async def test_shows_availability(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="eric", biff_enabled=False))
@@ -93,7 +93,7 @@ class TestFingerTool:
         fn = _get_tool_fn(state, "finger")
         result = await fn(user="@eric")
         assert "coding" in result
-        assert "@eric" in result
+        assert "Login: eric" in result
 
 
 class TestWhoTool:
@@ -208,7 +208,7 @@ class TestCheckMessagesTool:
 
         check_fn = _get_tool_fn(state, "check_messages")
         result = await check_fn()
-        assert "@eric" in result
+        assert "From eric" in result
         assert "review my PR please" in result
 
     async def test_marks_as_read(self, state: ServerState, tmp_path: Path) -> None:
@@ -231,8 +231,8 @@ class TestCheckMessagesTool:
 
         check_fn = _get_tool_fn(state, "check_messages")
         result = await check_fn()
-        assert "@eric" in result
-        assert "@priya" in result
+        assert "From eric" in result
+        assert "From priya" in result
         assert "from eric" in result
         assert "from priya" in result
 

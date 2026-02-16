@@ -46,7 +46,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description="Check your inbox for new messages. Marks all as read.",
     )
     async def check_messages() -> str:
-        """Retrieve unread messages and mark them as read."""
+        """Retrieve unread messages and mark them as read.
+
+        Output mimics BSD ``from(1)``::
+
+            From kai  Sun Feb 15 14:01  hey, ready for review?
+            From eric Sun Feb 15 13:45  pushed the fix
+        """
         await update_current_session(state)
         unread = await state.relay.fetch(state.config.user)
         if not unread:
@@ -54,5 +60,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "No new messages."
         await state.relay.mark_read(state.config.user, [m.id for m in unread])
         await refresh_check_messages(mcp, state)
-        lines = [f"@{m.from_user}: {m.body}" for m in unread]
+        lines = [
+            f"From {m.from_user:<8s} {m.timestamp.strftime('%a %b %d %H:%M')}  {m.body}"
+            for m in unread
+        ]
         return "\n".join(lines)

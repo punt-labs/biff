@@ -27,8 +27,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ),
     )
     async def biff(enabled: bool) -> str:  # noqa: FBT001
-        """Toggle message reception for the current user."""
+        """Toggle message reception for the current user.
+
+        Output mimics BSD ``biff(1)``::
+
+            is y
+        """
         await update_current_session(state, biff_enabled=enabled)
         await refresh_check_messages(mcp, state)
-        status = "on" if enabled else "off"
-        return f"Messages are now {status} for @{state.config.user}."
+        return f"is {'y' if enabled else 'n'}"

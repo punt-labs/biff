@@ -61,13 +61,13 @@ class TestToolCallOverStdio:
 
     async def test_finger_unknown_user(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("finger", {"user": "nobody"})
-        assert "no active session" in _text(result)
+        assert "Never logged in" in _text(result)
 
     async def test_biff_toggle(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("biff", {"enabled": False})
-        assert "off" in _text(result)
+        assert "is n" in _text(result)
         result = await biff_client.call_tool("biff", {"enabled": True})
-        assert "on" in _text(result)
+        assert "is y" in _text(result)
 
     async def test_send_message_returns_text(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool(

@@ -98,7 +98,7 @@ class TestPlanToolProtocol:
 class TestBiffToggleProtocol:
     async def test_disable(self, biff_client: Client[Any], state: ServerState) -> None:
         result = await biff_client.call_tool("biff", {"enabled": False})
-        assert "off" in _text(result)
+        assert "is n" in _text(result)
         session = await state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is False
@@ -106,7 +106,7 @@ class TestBiffToggleProtocol:
     async def test_enable(self, biff_client: Client[Any], state: ServerState) -> None:
         await biff_client.call_tool("biff", {"enabled": False})
         result = await biff_client.call_tool("biff", {"enabled": True})
-        assert "on" in _text(result)
+        assert "is y" in _text(result)
         session = await state.relay.get_session("kai")
         assert session is not None
         assert session.biff_enabled is True
@@ -115,7 +115,7 @@ class TestBiffToggleProtocol:
 class TestFingerProtocol:
     async def test_unknown_user(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("finger", {"user": "nobody"})
-        assert "no active session" in _text(result)
+        assert "Never logged in" in _text(result)
 
     async def test_shows_plan(
         self, biff_client: Client[Any], state: ServerState
@@ -124,7 +124,7 @@ class TestFingerProtocol:
         result = await biff_client.call_tool("finger", {"user": "eric"})
         text = _text(result)
         assert "reviewing PRs" in text
-        assert "@eric" in text
+        assert "Login: eric" in text
 
     async def test_at_prefix(
         self, biff_client: Client[Any], state: ServerState
@@ -184,7 +184,7 @@ class TestCheckMessagesProtocol:
         )
         result = await biff_client.call_tool("check_messages", {})
         text = _text(result)
-        assert "@eric" in text
+        assert "From eric" in text
         assert "check this out" in text
 
         # Second call shows no new messages

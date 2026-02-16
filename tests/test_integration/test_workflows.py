@@ -34,7 +34,7 @@ class TestSoloWorkflow:
 
         result = await recorder.call("finger", user="kai")
         assert "refactoring the auth layer" in result
-        assert "accepting messages" in result
+        assert "messages on" in result
 
 
 @pytest.mark.transcript
@@ -86,7 +86,7 @@ class TestAvailabilityWorkflow:
         await recorder.call("plan", message="deep refactor of the storage layer")
 
         result = await recorder.call("biff", enabled=False)
-        assert "off" in result
+        assert "is n" in result
 
         # A teammate checking on us sees we're unavailable
         result = await recorder.call("finger", user="kai")
@@ -94,10 +94,10 @@ class TestAvailabilityWorkflow:
 
         # Done with deep work, turn messages back on
         result = await recorder.call("biff", enabled=True)
-        assert "on" in result
+        assert "is y" in result
 
         result = await recorder.call("finger", user="kai")
-        assert "accepting messages" in result
+        assert "messages on" in result
 
 
 @pytest.mark.transcript
@@ -121,7 +121,7 @@ class TestMessagingWorkflow:
 
         # Check inbox
         result = await recorder.call("check_messages")
-        assert "@eric" in result
+        assert "From eric" in result
         assert "auth module looks good" in result
 
         # Reply
