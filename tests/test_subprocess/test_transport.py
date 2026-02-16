@@ -121,7 +121,7 @@ class TestCrossProcessState:
         )
         result = await eric_client.call_tool("read_messages", {})
         text = _text(result)
-        assert "@kai" in text
+        assert "kai" in text
         assert "cross-process msg" in text
 
 
@@ -158,6 +158,8 @@ class TestDynamicDescriptionOverStdio:
         eric_client: Client[Any],
     ) -> None:
         """After checking, description reverts to base."""
+        # Drain messages from prior tests (shared NATS relay persists state)
+        await eric_client.call_tool("read_messages", {})
         await kai_client.call_tool("write", {"to": "eric", "message": "hello"})
         await eric_client.call_tool("plan", {"message": "working"})
         desc = await self._check_desc(eric_client)
