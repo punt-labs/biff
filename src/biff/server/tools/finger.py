@@ -46,7 +46,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         Output mimics BSD ``finger(1)``::
 
             Login: kai
-            On since Sun Feb 15 14:01 (UTC) on claude,   idle 3m (messages on)
+            On since Sun Feb 15 14:01 (UTC) on claude, idle 3m (messages on)
             Plan: refactoring auth
         """
         await refresh_check_messages(mcp, state)
@@ -59,5 +59,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         mesg = "messages on" if session.biff_enabled else "messages off"
         plan = f"Plan: {session.plan}" if session.plan else "No Plan."
         return (
-            f"Login: {bare}\nOn since {since} on claude,   idle {idle} ({mesg})\n{plan}"
+            f"Login: {bare}\nOn since {since} on claude, idle {idle} ({mesg})\n{plan}"
         )

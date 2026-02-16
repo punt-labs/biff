@@ -25,21 +25,31 @@ fi
 # Double-parse: tool_response is a string containing JSON
 RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
 
-# Always start with the header
-TABLE=$(printf "NAME      S  TIME   PLAN")
+# Parse pipe-separated entries and compute column width
+ROWS=()
+NAME_W=4  # minimum width = length of "NAME"
 
-# Parse pipe-separated entries if present
 if [[ "$RESULT" == *" + "* || "$RESULT" == *" - "* ]]; then
   IFS='|' read -ra ENTRIES <<< "$RESULT"
   for entry in "${ENTRIES[@]}"; do
     entry=$(echo "$entry" | xargs)  # trim whitespace
     user=$(echo "$entry" | awk '{print $1}')
-    flag=$(echo "$entry" | awk '{print $2}')
-    time=$(echo "$entry" | awk '{print $3}')
-    plan=$(echo "$entry" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i; print ""}' | xargs)
-    TABLE=$(printf "%s\n%-9s %s  %s  %s" "$TABLE" "$user" "$flag" "$time" "$plan")
+    w=${#user}
+    (( w > NAME_W )) && NAME_W=$w
+    ROWS+=("$entry")
   done
 fi
+
+# Build table with dynamic NAME column width
+TABLE=$(printf "%-${NAME_W}s  S  TIME   PLAN" "NAME")
+
+for entry in "${ROWS[@]}"; do
+  user=$(echo "$entry" | awk '{print $1}')
+  flag=$(echo "$entry" | awk '{print $2}')
+  time=$(echo "$entry" | awk '{print $3}')
+  plan=$(echo "$entry" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i; print ""}' | xargs)
+  TABLE=$(printf "%s\n%-${NAME_W}s  %s  %s  %s" "$TABLE" "$user" "$flag" "$time" "$plan")
+done
 
 jq -n --arg r "$TABLE" '{
   hookSpecificOutput: {
