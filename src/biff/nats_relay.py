@@ -28,6 +28,7 @@ from nats.js.api import (
     StreamConfig,
 )
 from nats.js.errors import (
+    BadRequestError,
     BucketNotFoundError,
     KeyNotFoundError,
     NoKeysError,
@@ -120,14 +121,23 @@ class NatsRelay:
         try:
             js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
 
-            # KV bucket for sessions — TTL auto-purges truly stale entries
-            kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
-                config=KeyValueConfig(
-                    bucket=_KV_BUCKET,
-                    ttl=_KV_TTL,
-                    max_bytes=_KV_MAX_BYTES,
-                ),
+            # KV bucket for sessions — TTL auto-purges truly stale entries.
+            # Recreate if config changed (e.g. TTL update).
+            kv_config = KeyValueConfig(
+                bucket=_KV_BUCKET,
+                ttl=_KV_TTL,
+                max_bytes=_KV_MAX_BYTES,
             )
+            try:
+                kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
+                    config=kv_config,
+                )
+            except BadRequestError:
+                logger.info("KV bucket config changed, recreating %s", _KV_BUCKET)
+                await js.delete_key_value(_KV_BUCKET)  # pyright: ignore[reportUnknownMemberType]
+                kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
+                    config=kv_config,
+                )
 
             # Stream for messages — WORK_QUEUE deletes on ack (POP semantics)
             await js.add_stream(  # pyright: ignore[reportUnknownMemberType]
