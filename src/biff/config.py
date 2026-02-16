@@ -79,7 +79,7 @@ def get_github_identity() -> GitHubIdentity | None:
                 "api",
                 "user",
                 "--jq",
-                '[.login, .name // ""] | @tsv',
+                'select(.login) | [.login, .name // ""] | @tsv',
             ],
             capture_output=True,
             text=True,
