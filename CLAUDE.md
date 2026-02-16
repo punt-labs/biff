@@ -187,6 +187,18 @@ Work is NOT complete until `git push` succeeds.
 
 The PR/FAQ (`prfaq.tex`) is the authoritative source for product vision, target market, command vocabulary, phasing, risk assessment, and "what we are not building." When there are questions about scope, priorities, or product direction, consult the PR/FAQ first.
 
+## Design Decision Log
+
+**This system is fragile.** Biff's plugin integration path — PostToolUse hooks, skill command prompts, and MCP tools working in concert — has non-obvious interactions and hard-won design decisions. Changes that look simple can break the display pipeline in ways that are difficult to debug and easy to repeat.
+
+**Before proposing or making ANY design change:**
+
+1. Read `DESIGN.md` for prior decisions on the same topic.
+2. Do not revisit a settled decision without new evidence.
+3. Log the decision, alternatives considered, and outcome in `DESIGN.md` before implementing.
+
+Failure to consult `DESIGN.md` has already caused wasted work and rollbacks. This rule is non-negotiable.
+
 ## Biff Architecture
 
 ### What Is Biff
