@@ -221,8 +221,9 @@ def load_config(
     3. GitHub username (via ``gh api user``), falling back to OS username.
     4. Data dir computed from ``{prefix}/biff/{directory-name}/``.
 
-    Raises :class:`SystemExit` only if no user identity can be resolved
-    from any source.
+    Raises :class:`SystemExit` if no user identity can be resolved,
+    if ``start`` is not inside a git repository, or if the repo
+    directory name fails :func:`sanitize_repo_name`.
     """
     repo_root = find_git_root(start)
 
