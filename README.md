@@ -1,5 +1,7 @@
 # biff
 
+<img src="docs/biff.png" alt="The original biff mail notification app" width="200" align="right">
+
 > Team communication for engineers who never leave the terminal.
 
 Named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `talk`, `wall`, `finger`, `who`, and `mesg`.
@@ -22,17 +24,12 @@ Biff auto-registers as an MCP server. If your repo has a `.biff` file, it picks 
 
 | Command | Origin | Purpose |
 |---------|--------|---------|
-| `/mesg @user "text"` | BSD `mesg` | Send a message |
-| `/talk @user` | BSD `talk` | Real-time bidirectional conversation |
-| `/wall "text"` | BSD `wall` | Broadcast to the hive or team |
+| `/write @user "text"` | BSD `write` | Send a message |
+| `/read` | BSD `from` | Check your inbox |
 | `/finger @user` | BSD `finger` | Read someone's plan and status |
 | `/who` | BSD `who` | List active sessions |
 | `/plan "text"` | BSD `.plan` | Set your status |
-| `/biff on` \| `off` | BSD `biff` | Control message reception |
-| `/hive @a @b @c` | — | Temporary group; `/hive off` dissolves it |
-| `/pair @user` | — | Invite someone to input to your Claude session |
-| `/send @user` | — | Send diffs, files, or snippets |
-| `/cr @user` | — | Request a code review |
+| `/on` \| `/off` | BSD `mesg` | Control message reception |
 
 ## Agents Welcome
 
