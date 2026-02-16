@@ -1,3 +1,9 @@
+# Intentionally public demo credentials for the biff demo relay
+# (tls://connect.ngs.global).  These are shared across all biff
+# installations using the default relay and carry usage limits
+# enforced by Synadia Cloud.  Treat them as PUBLIC — do not model
+# private credential handling after this file.
+
 -----BEGIN NATS USER JWT-----
 eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJJQVNYMzdRUkZLSEMyTUs3TEFTRVAzSFNXTVhUT0daWTZWVEtJUUNHMlFCUTRJUEJFTFBRIiwiaWF0IjoxNzcxMjAzMTI2LCJpc3MiOiJBQ1FUVzRKMllNNjNPRDRETkdVVjNRU1JLS0xMV0hRQlpTRURQR0dFRkpQRjROWVVTUDRVRUE0MiIsIm5hbWUiOiJiaWZmLWRlbW8iLCJzdWIiOiJVRFlQQVRMVEFLSUJOQlVYTUU3RDdIQVlBWFlUQVE0NzI2Vkw3RkxWWEU2VEpETFc1WFRMQ0FGUiIsIm5hdHMiOnsicHViIjp7fSwic3ViIjp7fSwic3VicyI6LTEsImRhdGEiOi0xLCJwYXlsb2FkIjotMSwiaXNzdWVyX2FjY291bnQiOiJBRFNRUEtXNDc3UU1XRkszWUZJVUNZRVRFRFJZQ0paSU5MT0taUko0TlFMUUhSWUUyVDdRRlg2UCIsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.eezVx_aOYEBJlkfHHrKPDw6IQXnZH_WIjzOW9Wvdp7xJ1mmvshF-sKkBfpYFJCQR8x4SEqVQpM--yPYtCJ3vAA
 ------END NATS USER JWT------
