@@ -1,7 +1,7 @@
 """Configuration discovery and loading.
 
 Finds the ``.biff`` TOML file at the git repo root, resolves user
-identity from ``git config biff.user``, and computes the shared data
+identity from GitHub (``gh``) or the OS, and computes the shared data
 directory.
 
 Config file format (``.biff``)::
@@ -59,15 +59,18 @@ def find_git_root(start: Path | None = None) -> Path | None:
     return None
 
 
-def get_git_user(*, cwd: Path | None = None) -> str | None:
-    """Read ``git config biff.user``, returning *None* if unset."""
+def get_github_user() -> str | None:
+    """Resolve GitHub username via ``gh api user``, or ``None``.
+
+    This is the primary identity source — a developer's GitHub handle
+    is their natural identity in a git-based communication tool.
+    """
     try:
         result = subprocess.run(
-            ["git", "config", "biff.user"],  # noqa: S607
+            ["gh", "api", "user", "--jq", ".login"],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
-            cwd=cwd,
         )
         value = result.stdout.strip()
         return value if result.returncode == 0 and value else None
@@ -171,7 +174,7 @@ def load_config(
 
     1. CLI overrides (``user_override``, ``data_dir_override``) take precedence.
     2. ``.biff`` TOML for team roster and relay URL.
-    3. ``git config biff.user`` for identity, falling back to OS username.
+    3. GitHub username (via ``gh api user``), falling back to OS username.
     4. Data dir computed from ``{prefix}/biff/{repo_name}/``, falling back
        to ``{prefix}/biff/_default/`` outside git repos.
 
@@ -188,11 +191,11 @@ def load_config(
         raw = load_biff_file(repo_root)
         team, relay_url, relay_auth = _extract_biff_fields(raw)
 
-    # Resolve user: CLI override > git config > OS username
-    user = user_override or get_git_user() or get_os_user()
+    # Resolve user: CLI override > GitHub username > OS username
+    user = user_override or get_github_user() or get_os_user()
     if user is None:
         msg = (
-            "No user configured. Set via: git config biff.user <handle>"
+            "No user configured. Install the gh CLI and authenticate,"
             " or pass --user <handle>"
         )
         raise SystemExit(msg)

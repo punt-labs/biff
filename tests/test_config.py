@@ -12,7 +12,7 @@ from biff.config import (
     _extract_biff_fields,
     compute_data_dir,
     find_git_root,
-    get_git_user,
+    get_github_user,
     get_os_user,
     load_biff_file,
     load_config,
@@ -37,31 +37,31 @@ class TestFindGitRoot:
         assert find_git_root(tmp_path) is None
 
 
-# -- get_git_user --
+# -- get_github_user (GitHub CLI) --
 
 
-class TestGetGitUser:
+class TestGetGithubUser:
     def test_returns_value_when_set(self) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "jmf-pobox\n"
-            assert get_git_user() == "jmf-pobox"
+            assert get_github_user() == "jmf-pobox"
 
     def test_returns_none_when_unset(self) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = ""
-            assert get_git_user() is None
+            assert get_github_user() is None
 
     def test_returns_none_when_empty(self) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "  \n"
-            assert get_git_user() is None
+            assert get_github_user() is None
 
-    def test_returns_none_when_git_missing(self) -> None:
+    def test_returns_none_when_gh_missing(self) -> None:
         with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
-            assert get_git_user() is None
+            assert get_github_user() is None
 
 
 # -- get_os_user --
@@ -199,7 +199,7 @@ class TestLoadConfig:
         )
         return tmp_path
 
-    @patch("biff.config.get_git_user", return_value="kai")
+    @patch("biff.config.get_github_user", return_value="kai")
     def test_full_discovery(self, _mock: object, tmp_path: Path) -> None:
         repo = self._setup_repo(tmp_path)
         resolved = load_config(start=repo)
@@ -209,20 +209,20 @@ class TestLoadConfig:
         assert resolved.data_dir == Path("/tmp/biff") / repo.name
         assert resolved.repo_root == repo
 
-    @patch("biff.config.get_git_user", return_value="kai")
+    @patch("biff.config.get_github_user", return_value="kai")
     def test_custom_prefix(self, _mock: object, tmp_path: Path) -> None:
         repo = self._setup_repo(tmp_path)
         resolved = load_config(start=repo, prefix=Path("/var/spool"))
         assert resolved.data_dir == Path("/var/spool/biff") / repo.name
 
-    @patch("biff.config.get_git_user", return_value="kai")
+    @patch("biff.config.get_github_user", return_value="kai")
     def test_data_dir_override(self, _mock: object, tmp_path: Path) -> None:
         repo = self._setup_repo(tmp_path)
         custom = tmp_path / "custom"
         resolved = load_config(start=repo, data_dir_override=custom)
         assert resolved.data_dir == custom
 
-    @patch("biff.config.get_git_user", return_value="from-git")
+    @patch("biff.config.get_github_user", return_value="from-git")
     def test_user_override_takes_precedence(
         self, _mock: object, tmp_path: Path
     ) -> None:
@@ -231,7 +231,7 @@ class TestLoadConfig:
         assert resolved.config.user == "from-cli"
 
     @patch("biff.config.get_os_user", return_value="jfreeman")
-    @patch("biff.config.get_git_user", return_value=None)
+    @patch("biff.config.get_github_user", return_value=None)
     def test_falls_back_to_os_user(
         self, _mock_git: object, _mock_os: object, tmp_path: Path
     ) -> None:
@@ -240,7 +240,7 @@ class TestLoadConfig:
         assert resolved.config.user == "jfreeman"
 
     @patch("biff.config.get_os_user", return_value=None)
-    @patch("biff.config.get_git_user", return_value=None)
+    @patch("biff.config.get_github_user", return_value=None)
     def test_exits_when_all_user_sources_fail(
         self, _mock_git: object, _mock_os: object, tmp_path: Path
     ) -> None:
@@ -248,21 +248,21 @@ class TestLoadConfig:
         with pytest.raises(SystemExit, match="No user configured"):
             load_config(start=tmp_path)
 
-    @patch("biff.config.get_git_user", return_value="kai")
+    @patch("biff.config.get_github_user", return_value="kai")
     def test_no_repo_uses_default_data_dir(self, _mock: object, tmp_path: Path) -> None:
         # No .git directory — should fall back to _default
         resolved = load_config(start=tmp_path)
         assert resolved.data_dir == Path("/tmp/biff") / _DEFAULT_DATA_DIR_NAME
         assert resolved.repo_root is None
 
-    @patch("biff.config.get_git_user", return_value="kai")
+    @patch("biff.config.get_github_user", return_value="kai")
     def test_no_biff_file(self, _mock: object, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
         resolved = load_config(start=tmp_path)
         assert resolved.config.team == ()
         assert resolved.config.relay_url is None
 
-    @patch("biff.config.get_git_user", return_value="kai")
+    @patch("biff.config.get_github_user", return_value="kai")
     def test_no_repo_with_data_dir_override(
         self, _mock: object, tmp_path: Path
     ) -> None:
@@ -271,7 +271,7 @@ class TestLoadConfig:
         assert resolved.data_dir == custom
         assert resolved.repo_root is None
 
-    @patch("biff.config.get_git_user", return_value="kai")
+    @patch("biff.config.get_github_user", return_value="kai")
     def test_relay_auth_flows_through(self, _mock: object, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
         (tmp_path / ".biff").write_text(
