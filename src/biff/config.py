@@ -36,7 +36,7 @@ _DEFAULT_PREFIX = Path("/tmp")  # noqa: S108
 DEMO_RELAY_URL = "tls://connect.ngs.global"
 
 
-def _demo_creds_path() -> Path:
+def demo_creds_path() -> Path:
     """Resolve the bundled demo credentials file path."""
     return Path(str(importlib.resources.files("biff.data").joinpath("demo.creds")))
 
@@ -127,7 +127,7 @@ def load_biff_file(repo_root: Path) -> dict[str, object]:
         ) from exc
 
 
-def _extract_biff_fields(
+def extract_biff_fields(
     raw: dict[str, object],
 ) -> tuple[tuple[str, ...], str | None, RelayAuth | None]:
     """Extract team, relay_url, and relay_auth from parsed TOML data."""
@@ -175,7 +175,7 @@ def _extract_biff_fields(
 
     # Default to bundled demo credentials for the demo relay
     if relay_url == DEMO_RELAY_URL and relay_auth is None:
-        relay_auth = RelayAuth(user_credentials=str(_demo_creds_path()))
+        relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
 
     return team, relay_url, relay_auth
 
@@ -208,7 +208,7 @@ def load_config(
     relay_auth: RelayAuth | None = None
     if repo_root is not None:
         raw = load_biff_file(repo_root)
-        team, relay_url, relay_auth = _extract_biff_fields(raw)
+        team, relay_url, relay_auth = extract_biff_fields(raw)
 
     # Resolve user: CLI override > GitHub identity > OS username
     display_name = ""

@@ -84,13 +84,7 @@ class NatsRelay:
         """Build authentication keyword arguments for ``nats.connect()``."""
         if self._auth is None:
             return {}
-        if self._auth.token:
-            return {"token": self._auth.token}
-        if self._auth.nkeys_seed:
-            return {"nkeys_seed": self._auth.nkeys_seed}
-        if self._auth.user_credentials:
-            return {"user_credentials": self._auth.user_credentials}
-        return {}
+        return self._auth.as_nats_kwargs()
 
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
         """Lazily connect and provision infrastructure.

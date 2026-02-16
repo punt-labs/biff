@@ -91,7 +91,7 @@ class RelayAuth:
     """Authentication credentials for a remote NATS relay.
 
     At most one field may be set.  Mutual exclusivity is enforced
-    at config-parse time in :func:`~biff.config._extract_biff_fields`.
+    at config-parse time in :func:`~biff.config.extract_biff_fields`.
     """
 
     token: str | None = None
@@ -102,6 +102,16 @@ class RelayAuth:
 
     user_credentials: str | None = None
     """Path to a NATS credentials file (``.creds``)."""
+
+    def as_nats_kwargs(self) -> dict[str, str]:
+        """Build keyword arguments for ``nats.connect()``."""
+        if self.token:
+            return {"token": self.token}
+        if self.nkeys_seed:
+            return {"nkeys_seed": self.nkeys_seed}
+        if self.user_credentials:
+            return {"user_credentials": self.user_credentials}
+        return {}
 
 
 class BiffConfig(BaseModel):
