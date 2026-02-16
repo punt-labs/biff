@@ -1,6 +1,6 @@
 # biff
 
-<img src="docs/biff.png" alt="The original biff mail notification app" width="200" align="right">
+<img src="docs/biff.png" alt="The original biff mail notification app" width="100" align="right">
 
 > Team communication for engineers who never leave the terminal.
 
