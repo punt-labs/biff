@@ -1,0 +1,16 @@
+{
+  "description": "Suppress raw MCP output for biff tools — the command prompts format results cleanly.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__biff__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suppress-output.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
