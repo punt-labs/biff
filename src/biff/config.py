@@ -23,6 +23,7 @@ Data directory layout::
 from __future__ import annotations
 
 import getpass
+import importlib.resources
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -32,6 +33,12 @@ from typing import cast
 from biff.models import BiffConfig, RelayAuth
 
 _DEFAULT_PREFIX = Path("/tmp")  # noqa: S108
+DEMO_RELAY_URL = "tls://connect.ngs.global"
+
+
+def _demo_creds_path() -> Path:
+    """Resolve the bundled demo credentials file path."""
+    return Path(str(importlib.resources.files("biff.data").joinpath("demo.creds")))
 
 
 @dataclass(frozen=True)
@@ -143,6 +150,10 @@ def _extract_biff_fields(
             )
         if auth_values:
             relay_auth = RelayAuth(**auth_values)
+
+    # Default to bundled demo credentials for the demo relay
+    if relay_url == DEMO_RELAY_URL and relay_auth is None:
+        relay_auth = RelayAuth(user_credentials=str(_demo_creds_path()))
 
     return team, relay_url, relay_auth
 
