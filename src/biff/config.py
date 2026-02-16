@@ -105,9 +105,6 @@ def get_os_user() -> str | None:
         return None
 
 
-_DEFAULT_DATA_DIR_NAME = "_default"
-
-
 def sanitize_repo_name(name: str) -> str:
     """Sanitize a repo name for use in NATS resource names.
 
@@ -251,18 +248,17 @@ def load_config(
         )
         raise SystemExit(msg)
 
-    # Resolve data dir: CLI override > repo-based > default fallback
-    if data_dir_override is not None:
-        data_dir = data_dir_override
-    elif repo_root is not None:
-        data_dir = compute_data_dir(repo_root, prefix)
-    else:
-        data_dir = prefix / "biff" / _DEFAULT_DATA_DIR_NAME
-
-    repo_name = (
-        sanitize_repo_name(repo_root.name)
-        if repo_root is not None
-        else _DEFAULT_DATA_DIR_NAME
+    # Resolve data dir and repo name
+    if repo_root is None:
+        raise SystemExit(
+            "Not in a git repository. Run biff from inside a repo,"
+            " or pass --data-dir explicitly."
+        )
+    repo_name = sanitize_repo_name(repo_root.name)
+    data_dir = (
+        data_dir_override
+        if data_dir_override is not None
+        else compute_data_dir(repo_root, prefix)
     )
 
     config = BiffConfig(
