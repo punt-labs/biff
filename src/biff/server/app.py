@@ -41,7 +41,11 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         instructions=(
             "Biff is a communication tool for software engineers. "
             "Use these tools to send messages, check presence, "
-            "and coordinate with your team."
+            "and coordinate with your team.\n\n"
+            "All biff tool output is pre-formatted plain text using unicode "
+            "characters for alignment. Always emit biff output verbatim — "
+            "never reformat, never convert to markdown tables, never wrap "
+            "in code fences or boxes."
         ),
         lifespan=lifespan,
     )
