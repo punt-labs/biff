@@ -189,7 +189,7 @@ The PR/FAQ (`prfaq.tex`) is the authoritative source for product vision, target 
 
 ## Design Decision Log
 
-**This system is fragile.** Biff's plugin integration path — PostToolUse hooks, skill command prompts, and MCP tools working in concert — has non-obvious interactions and hard-won design decisions. Changes that look simple can break the display pipeline in ways that are difficult to debug and easy to repeat.
+**The display pipeline is fragile.** The PostToolUse hooks, skill command prompts, status line, and push notification system have non-obvious interactions and represent 12-16 hours of iteration. The split between `updatedMCPToolOutput` (panel summary) and `additionalContext` (model-emitted full output) exists because multi-line MCP output gets truncated behind a "Control-O for more" prompt. Changes that look simple can break the display pipeline in ways that are difficult to debug and easy to repeat.
 
 **Before proposing or making ANY design change:**
 
