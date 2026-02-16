@@ -333,23 +333,35 @@ header "Slash commands"
 CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
 mkdir -p "$CLAUDE_COMMANDS_DIR"
 
+# install_cmd SRC_FILE SHORT_NAME
+#   Installs to /SHORT_NAME if available, otherwise /biffSHORT_NAME
+install_cmd() {
+  local src="$1" short="$2"
+  local dest="$CLAUDE_COMMANDS_DIR/$short.md"
+  if [[ -f "$dest" ]] && ! grep -q 'mcp__biff__' "$dest" 2>/dev/null; then
+    dest="$CLAUDE_COMMANDS_DIR/biff${short}.md"
+    warn "/$short already exists — installing as /biff${short}"
+  fi
+  cp "$src" "$dest"
+  COMMANDS_INSTALLED=$((COMMANDS_INSTALLED + 1))
+}
+
 COMMANDS_INSTALLED=0
 for cmd in who finger mesg check; do
   SRC="$INSTALL_DIR/commands/$cmd.md"
   if [[ -f "$SRC" ]]; then
-    cp "$SRC" "$CLAUDE_COMMANDS_DIR/$cmd.md"
-    COMMANDS_INSTALLED=$((COMMANDS_INSTALLED + 1))
+    install_cmd "$SRC" "$cmd"
   fi
 done
 
 # /dotplan (renamed from plan to avoid conflicts with built-in /plan)
 if [[ -f "$INSTALL_DIR/commands/plan.md" ]]; then
-  cp "$INSTALL_DIR/commands/plan.md" "$CLAUDE_COMMANDS_DIR/dotplan.md"
-  COMMANDS_INSTALLED=$((COMMANDS_INSTALLED + 1))
+  install_cmd "$INSTALL_DIR/commands/plan.md" "dotplan"
 fi
 
 # /biff on|off (standalone command — plugin has separate on.md/off.md)
-cat > "$CLAUDE_COMMANDS_DIR/biff.md" <<'BIFF_CMD'
+BIFF_CMD_FILE="$(mktemp)"
+cat > "$BIFF_CMD_FILE" <<'BIFF_CMD'
 ---
 description: Control message reception (on/off)
 argument-hint: "on|off"
@@ -369,11 +381,11 @@ If no argument or an unrecognized argument is provided, respond with: `Usage: /b
 
 Do not send any other text besides the tool call and confirmation (or usage message).
 BIFF_CMD
-COMMANDS_INSTALLED=$((COMMANDS_INSTALLED + 1))
+install_cmd "$BIFF_CMD_FILE" "biff"
+rm -f "$BIFF_CMD_FILE"
 
 if [[ $COMMANDS_INSTALLED -gt 0 ]]; then
   ok "Installed $COMMANDS_INSTALLED commands to $CLAUDE_COMMANDS_DIR"
-  ok "Available: /who /finger /mesg /check /dotplan /biff"
 else
   warn "No command files found in $INSTALL_DIR/commands/"
 fi
