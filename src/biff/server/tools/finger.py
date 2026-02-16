@@ -63,18 +63,16 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         left = f"Login: {bare}"
         if session.display_name:
-            # Name on first line, Messages on second
             right = f"Name: {session.display_name}"
-            line1 = f"{left:<38s}{right}"
-            line2 = f"Messages: {mesg}"
+            line1 = f"\u25b6  {left:<38s}{right}"
+            line2 = f"   Messages: {mesg}"
         else:
-            # Original layout: Messages on first line
             right = f"Messages: {mesg}"
-            line1 = f"{left:<38s}{right}"
+            line1 = f"\u25b6  {left:<38s}{right}"
             line2 = ""
 
-        line_on = f"On since {since} on claude, idle {idle}"
-        plan_block = f"Plan:\n {session.plan}" if session.plan else "No Plan."
+        line_on = f"   On since {since} on claude, idle {idle}"
+        plan_block = f"   Plan:\n    {session.plan}" if session.plan else "   No Plan."
 
         lines = [line1]
         if line2:

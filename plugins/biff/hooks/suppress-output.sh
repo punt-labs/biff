@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Format biff MCP tool output as a clean who-style table.
-# The hook replaces both the UI display and the model's view
-# of the tool result, so we pre-format everything here.
+# Format biff MCP tool output for the UI panel.
+#
+# updatedMCPToolOutput sets the text displayed in the tool-result panel.
 #
 # tool_response arrives as a JSON-encoded STRING, not an object.
 # We must parse it twice: once to extract the string, once to
@@ -10,10 +10,60 @@
 INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 
-# Only format who output — pass other biff tools through
-if [[ "$TOOL" != "mcp__biff__who" ]]; then
+# read_messages: show a short summary in the panel;
+# the model still receives the full response and emits the table.
+if [[ "$TOOL" == "mcp__biff__read_messages" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-  jq -n --arg r "$RESULT" '{
+  if [[ "$RESULT" == "No new messages." ]]; then
+    jq -n --arg r "$RESULT" '{
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedMCPToolOutput: $r
+      }
+    }'
+  else
+    # Count data lines (total lines minus header)
+    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    jq -n --arg r "${COUNT} new" '{
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedMCPToolOutput: $r
+      }
+    }'
+  fi
+  exit 0
+fi
+
+# who: show a short summary in the panel;
+# the model still receives the full response and emits the table.
+if [[ "$TOOL" == "mcp__biff__who" ]]; then
+  RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
+  if [[ "$RESULT" == "No sessions." ]]; then
+    jq -n --arg r "$RESULT" '{
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedMCPToolOutput: $r
+      }
+    }'
+  else
+    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    jq -n --arg r "${COUNT} online" '{
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedMCPToolOutput: $r
+      }
+    }'
+  fi
+  exit 0
+fi
+
+# finger: show username in the panel;
+# the model still receives the full response and emits the detail.
+if [[ "$TOOL" == "mcp__biff__finger" ]]; then
+  RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
+  # Extract username from "Login: <user>" on first line
+  USER=$(printf '%s' "$RESULT" | head -1 | sed 's/.*Login: *\([^ ]*\).*/\1/')
+  jq -n --arg r "@${USER}" '{
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
       updatedMCPToolOutput: $r
@@ -22,54 +72,9 @@ if [[ "$TOOL" != "mcp__biff__who" ]]; then
   exit 0
 fi
 
-# Double-parse: tool_response is a string containing JSON
-RESULT=$(printf '%s' "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-
-# Empty result — no sessions
-if [[ -z "$RESULT" ]]; then
-  jq -n '{
-    hookSpecificOutput: {
-      hookEventName: "PostToolUse",
-      updatedMCPToolOutput: "No sessions."
-    }
-  }'
-  exit 0
-fi
-
-# Parse pipe-separated entries: @user IDLE +/- plan
-# Compute dynamic column widths for NAME and IDLE
-ROWS=()
-NAME_W=4   # minimum = length of "NAME"
-IDLE_W=4   # minimum = length of "IDLE"
-
-IFS='|' read -ra ENTRIES <<< "$RESULT"
-for entry in "${ENTRIES[@]}"; do
-  # Trim leading/trailing whitespace without xargs
-  entry="${entry#"${entry%%[![:space:]]*}"}"
-  entry="${entry%"${entry##*[![:space:]]}"}"
-  user=$(printf '%s' "$entry" | awk '{print $1}')
-  idle=$(printf '%s' "$entry" | awk '{print $2}')
-  w=${#user}
-  iw=${#idle}
-  (( w > NAME_W )) && NAME_W=$w
-  (( iw > IDLE_W )) && IDLE_W=$iw
-  ROWS+=("$entry")
-done
-
-# Build table with dynamic column widths
-TABLE=$(printf "%-${NAME_W}s  %-${IDLE_W}s  S  PLAN" "NAME" "IDLE")
-
-for entry in "${ROWS[@]}"; do
-  user=$(printf '%s' "$entry" | awk '{print $1}')
-  idle=$(printf '%s' "$entry" | awk '{print $2}')
-  flag=$(printf '%s' "$entry" | awk '{print $3}')
-  plan=$(printf '%s' "$entry" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i; print ""}')
-  # Trim trailing whitespace from plan
-  plan="${plan%"${plan##*[![:space:]]}"}"
-  TABLE=$(printf "%s\n%-${NAME_W}s  %-${IDLE_W}s  %s  %s" "$TABLE" "$user" "$idle" "$flag" "$plan")
-done
-
-jq -n --arg r "$TABLE" '{
+# Pass other biff tools through unchanged
+RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
+jq -n --arg r "$RESULT" '{
   hookSpecificOutput: {
     hookEventName: "PostToolUse",
     updatedMCPToolOutput: $r

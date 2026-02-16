@@ -20,16 +20,28 @@ if TYPE_CHECKING:
 
 
 def _sanitize_plan(plan: str) -> str:
-    """Sanitize plan text so it doesn't break pipe-separated output."""
-    return plan.replace("|", "/").replace("\n", " ").replace("\r", " ")
+    """Collapse newlines so plan text stays on one row."""
+    return plan.replace("\n", " ").replace("\r", " ")
 
 
-def _format_session(s: UserSession) -> str:
-    """Format one session as ``@user IDLE +/- plan``."""
-    idle = format_idle(s.last_active)
-    flag = "+" if s.biff_enabled else "-"
-    plan = _sanitize_plan(s.plan) if s.plan else "(no plan)"
-    return f"@{s.user} {idle} {flag} {plan}"
+def _format_table(sessions: list[UserSession]) -> str:
+    """Build a columnar table matching ``w(1)`` style."""
+    rows: list[tuple[str, str, str, str]] = []
+    for s in sessions:
+        name = f"@{s.user}"
+        idle = format_idle(s.last_active)
+        flag = "+" if s.biff_enabled else "-"
+        plan = _sanitize_plan(s.plan) if s.plan else "(no plan)"
+        rows.append((name, idle, flag, plan))
+
+    name_w = max(4, max(len(r[0]) for r in rows))
+    idle_w = max(4, max(len(r[1]) for r in rows))
+
+    header = f"\u25b6  {'NAME':<{name_w}}  {'IDLE':<{idle_w}}  S  PLAN"
+    lines: list[str] = []
+    for name, idle, flag, plan in rows:
+        lines.append(f"   {name:<{name_w}}  {idle:<{idle_w}}  {flag}  {plan}")
+    return header + "\n" + "\n".join(lines)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -45,6 +57,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await refresh_read_messages(mcp, state)
         sessions = await state.relay.get_sessions()
         if not sessions:
-            return ""
+            return "No sessions."
         sorted_sessions = sorted(sessions, key=lambda s: s.user)
-        return " | ".join(_format_session(s) for s in sorted_sessions)
+        return _format_table(sorted_sessions)

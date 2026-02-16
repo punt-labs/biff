@@ -60,8 +60,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "No new messages."
         await state.relay.mark_read(state.config.user, [m.id for m in unread])
         await refresh_read_messages(mcp, state)
-        lines = [
-            f"From {m.from_user:<8s} {m.timestamp.strftime('%a %b %d %H:%M')}  {m.body}"
-            for m in unread
-        ]
-        return "\n".join(lines)
+        from_w = max(4, max(len(m.from_user) for m in unread))
+        header = f"\u25b6  {'FROM':<{from_w}}  {'DATE':<16}  MESSAGE"
+        lines: list[str] = []
+        for m in unread:
+            ts = m.timestamp.strftime("%a %b %d %H:%M")
+            lines.append(f"{m.from_user:<{from_w}}  {ts:<16}  {m.body}")
+        return header + "\n" + "\n".join(lines)

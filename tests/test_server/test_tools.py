@@ -160,19 +160,21 @@ class TestWhoTool:
         result = await fn()
         assert result.index("@alice") < result.index("@zara")
 
-    async def test_sanitizes_pipe_in_plan(self, state: ServerState) -> None:
+    async def test_preserves_pipe_in_plan(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="kai", plan="fix | deploy"))
         fn = _get_tool_fn(state, "who")
         result = await fn()
-        assert "|" not in result
-        assert "fix / deploy" in result
+        assert "fix | deploy" in result
 
     async def test_sanitizes_newline_in_plan(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="kai", plan="line1\nline2"))
         fn = _get_tool_fn(state, "who")
         result = await fn()
-        assert "\n" not in result.split(" | ")[0]
-        assert "line1 line2" in result
+        # Each row is one line; newlines in plan text are collapsed to spaces
+        for line in result.splitlines():
+            if "@kai" in line:
+                assert "line1 line2" in line
+                break
 
 
 class TestPlanTool:
@@ -256,7 +258,8 @@ class TestCheckMessagesTool:
 
         check_fn = _get_tool_fn(state, "read_messages")
         result = await check_fn()
-        assert "From eric" in result
+        assert "FROM" in result
+        assert "eric" in result
         assert "review my PR please" in result
 
     async def test_marks_as_read(self, state: ServerState, tmp_path: Path) -> None:
@@ -279,8 +282,8 @@ class TestCheckMessagesTool:
 
         check_fn = _get_tool_fn(state, "read_messages")
         result = await check_fn()
-        assert "From eric" in result
-        assert "From priya" in result
+        assert "eric" in result
+        assert "priya" in result
         assert "from eric" in result
         assert "from priya" in result
 
