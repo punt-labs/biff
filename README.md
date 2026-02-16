@@ -123,26 +123,12 @@ Commit a `.biff` file in your repo root (TOML format):
 members = ["kai", "eric", "priya"]
 
 [relay]
-url = "nats://localhost:4222"
-
-# Authentication (pick at most one):
-# token = "s3cret"                          # shared secret
-# nkeys_seed = "/path/to/user.nk"          # NKey seed file
-# user_credentials = "/path/to/user.creds" # JWT + NKey creds (Synadia Cloud)
+url = "tls://connect.ngs.global"
 ```
 
-Use `tls://` in the URL for encrypted connections (e.g., `tls://connect.ngs.global`).
+Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see the [relay configuration](#relay-configuration) section below.
 
-### 2. Start the server
-
-```bash
-biff serve                              # auto-discovers user, repo, data dir
-biff serve --user kai                   # override user
-biff serve --prefix /var/spool          # persistent data dir: /var/spool/biff/{repo}/
-biff serve --data-dir /custom/path      # explicit data dir
-```
-
-The data directory defaults to `/tmp/biff/{repo-name}/`. Two users on the same machine sharing a prefix share state through the local relay.
+`biff install-statusline` (from Quick Start) registers the MCP server automatically — there is no separate "start the server" step.
 
 ## Development
 
@@ -174,6 +160,22 @@ Environment variables (set exactly one auth var, or none for anonymous):
 | `BIFF_TEST_NATS_TOKEN` | Token auth |
 | `BIFF_TEST_NATS_NKEYS_SEED` | Path to NKey seed file |
 | `BIFF_TEST_NATS_CREDS` | Path to credentials file |
+
+### Relay configuration
+
+The demo relay works out of the box. To run your own NATS relay, update `.biff`:
+
+```toml
+[relay]
+url = "tls://your-nats-server:4222"
+
+# Authentication (pick at most one):
+# token = "s3cret"                          # shared secret
+# nkeys_seed = "/path/to/user.nk"          # NKey seed file
+# user_credentials = "/path/to/user.creds" # JWT + NKey creds (Synadia Cloud)
+```
+
+Use `nats://` for unencrypted local connections, `tls://` for encrypted remote connections.
 
 ## License
 
