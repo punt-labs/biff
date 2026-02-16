@@ -1,12 +1,15 @@
 """Presence list tool — ``/who``.
 
 Lists all active sessions within the TTL window.
+Output mirrors Unix ``who`` conventions: ``+`` means accepting
+messages, ``-`` means messages off.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff.models import UserSession
 from biff.server.tools._descriptions import refresh_check_messages
 
 if TYPE_CHECKING:
@@ -15,6 +18,14 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 _DEFAULT_TTL = 120
+
+
+def _format_session(s: UserSession) -> str:
+    """Format one session as ``@user +/- HH:MM plan``."""
+    flag = "+" if s.biff_enabled else "-"
+    time_str = s.last_active.strftime("%H:%M")
+    plan = s.plan or "(no plan)"
+    return f"@{s.user} {flag} {time_str} {plan}"
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -30,5 +41,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         active = await state.relay.get_active_sessions(ttl=_DEFAULT_TTL)
         if not active:
             return "No active sessions."
-        lines = [f"@{s.user} — {s.plan or '(no plan)'}" for s in active]
-        return "\n".join(lines)
+        return " | ".join(_format_session(s) for s in active)
