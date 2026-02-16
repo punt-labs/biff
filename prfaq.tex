@@ -127,6 +127,11 @@
 % ── adjustwidth (for faqpair indentation) ────────────────────────────────────
 \usepackage{changepage}
 
+% ── Stage and version tracking ────────────────────────────────────────────────
+\newcommand{\prfaqstage}{hypothesis}
+\newcommand{\prfaqversion}[2]{v#1.#2}
+\newcommand{\prfaqcurrentversion}{\prfaqversion{2}{2}}
+
 % ══════════════════════════════════════════════════════════════════════════════
 % Document
 % ══════════════════════════════════════════════════════════════════════════════
@@ -137,11 +142,11 @@
 \begin{center}
   {\LARGE\bfseries\color{SectionBlue} biff} \\[0.5em]
   {\large\color{AccentGray} Team communication for engineers who never leave the terminal} \\[1.5em]
-  {\small\color{AccentGray} February 2026 \quad|\quad Jim Freeman \quad|\quad punt-labs}
+  {\small\color{AccentGray} February 2026 \quad|\quad Jim Freeman \quad|\quad punt-labs \quad|\quad \prfaqcurrentversion}
 \end{center}
 
 \vspace{1em}
-\textcolor{QuoteBorder}{\rule{\textwidth}{0.8pt}}
+\noindent\textcolor{QuoteBorder}{\rule{\textwidth}{0.8pt}}
 \vspace{1em}
 
 % ══════════════════════════════════════════════════════════════════════════════
@@ -152,13 +157,14 @@
 
 \prsection{Summary}
 
-San Francisco, CA --- Today, punt-labs announced \textbf{biff}, an open-source
-communication tool that lets software engineers message teammates, share
-context, and coordinate work without leaving their terminal. Unlike Slack and
-Discord, which demand a separate window and constant attention, biff runs
-inside the engineer's existing Claude Code session as MCP-native slash
-commands. Engineers type \texttt{/mesg @kai} the same way they type
-\texttt{git push} --- in flow, with intent, and then move on.
+San Francisco, CA --- August 2026 --- Today, punt-labs announced
+\textbf{biff 1.0}, an open-source communication tool that lets software
+engineers message teammates, check presence, coordinate agents, and broadcast
+to their team --- all without leaving the terminal. Unlike Slack and Discord,
+which demand a separate window and constant attention, biff runs inside the
+engineer's existing Claude Code session as MCP-native slash commands.
+Engineers type \texttt{/write @kai} the same way they type \texttt{git push}
+--- in flow, with intent, and then move on.
 
 \prsection{Problem}
 
@@ -169,27 +175,32 @@ teammate --- asking a question, sharing a diff, requesting a code review ---
 they context-switch to Slack or Discord, tools designed for managers and
 all-day-online knowledge workers, not for makers in deep focus.
 
-The cost is not hypothetical. Research consistently shows that a single
-context switch costs 15--25 minutes of deep work recovery. For an engineer
-shipping three features a day with AI assistance, three Slack interruptions
-can erase an entire feature's worth of productive time. Slack's always-on
+The cost is not hypothetical. Gloria Mark's research at UC Irvine found that
+a single interruption costs an average of 23 minutes and 15 seconds before a
+worker returns to the original task.\footnote{Mark, G., Gudith, D., \&
+Klocke, U. (2008). The Cost of Interrupted Work: More Speed and Stress.
+\textit{Proc.\ CHI 2008}, ACM.} For an engineer shipping three features a
+day with AI assistance, three Slack interruptions can erase an entire
+feature's worth of productive time. Slack's always-on
 presence model compounds the problem: even \emph{checking} for messages
 breaks flow, and the social expectation of quick replies creates anxiety that
 degrades concentration even when no message arrives.
 
-As Thomas Dohmke, former CEO of GitHub, observed when launching Entire in
-February 2026: ``The terminal is becoming the new center of gravity, as
-developers prompt fleets of agents across multiple terminal windows at
-once.'' The engineers building the future of software --- the ones spending
-their entire day inside a terminal, collaborating with AI agents, iterating
-at speeds that would have seemed absurd two years ago --- have no
-communication tool that matches how they actually work.
+As Thomas Dohmke, former CEO of GitHub, observed when launching
+Entire: ``The terminal has become the new center of gravity on our
+computers again'' --- and the best engineers can now run a dozen agents at
+once.\footnote{Dohmke, T., ``Hello Entire World,'' Entire blog, February
+2026, \url{https://entire.io/blog/hello-entire-world/}} The engineers
+building the future of software --- the ones spending their entire day
+inside a terminal, collaborating with AI agents, iterating at speeds that
+would have seemed absurd two years ago --- have no communication tool that
+matches how they actually work.
 
 \prsection{Solution}
 
 Biff brings communication into the terminal as slash commands borrowed from
 the BSD Unix utilities that shipped with every workstation in the 1980s ---
-\texttt{talk}, \texttt{wall}, \texttt{finger}, \texttt{who},
+\texttt{write}, \texttt{wall}, \texttt{finger}, \texttt{who},
 and \texttt{mesg} --- updated for the MCP era. A typical morning might look
 like this:
 
@@ -197,12 +208,10 @@ like this:
 \ttfamily
 \small
 /plan ``refactoring the auth layer'' \\
-/mesg @kai ``auth module is ready for review'' \\
-/cr @kai \\
-/hive @kai @eric @jim \\
-/wall ``I'm pulling the auth changes into the feature branch'' \\
+/write @kai ``auth module is ready for review'' \\
+/wall ``pulling the auth changes into the feature branch'' \\
 \textnormal{\textit{...thirty minutes of focused work later...}} \\
-/hive off
+/read
 \end{quote}
 
 Every command implies intent. There are no channels to monitor, no threads to
@@ -210,29 +219,35 @@ catch up on, no emoji reactions to parse. Communication is pull-based: when
 someone sends you a message, your session notifies you --- your AI assistant
 mentions it naturally (``You have 2 unread messages from @kai. Want me to read
 them?'') and your terminal's status bar shows a live unread count. You decide
-when to engage. When you need deeper
-collaboration, \texttt{/pair @kai} invites a teammate to send input to your
-Claude Code session --- and they can only join when you explicitly consent.
-When a problem needs three people for thirty minutes, \texttt{/hive} creates a
-temporary group that dissolves when the work is done. The full command
-reference, organized by priority tier, is in Appendix~A.
+when to engage. The full command reference is in Appendix~A.
 
 Because biff speaks MCP, it does not distinguish between a human session and
-an agent session. An autonomous coding agent can join a \texttt{/hive},
-announce progress via \texttt{/wall}, or \texttt{/mesg} a human when it needs
-a decision. Agents can coordinate with other agents the same way. Biff is not
-just communication for engineers --- it is the communication layer for the
-entire hive of humans and agents building software together.
+an agent session. An autonomous coding agent can \texttt{/plan} what it is
+working on, broadcast status via \texttt{/wall}, \texttt{/write} a human when
+it needs a decision, and show up in \texttt{/who} alongside everyone else.
+When you have multiple agents working in the same codebase --- on the same
+machine, in the same directory --- they coordinate to avoid stepping on each
+other's files. Each agent gets a distinct identity via TTY sessions, and
+\texttt{/who} shows host and directory per session so you can see when agents
+share a filesystem. Workflow hooks tie into your development process: claiming
+a task auto-sets your plan, creating a PR triggers a \texttt{/wall}
+announcement. All messages are end-to-end encrypted via NaCl/libsodium, so
+the relay never sees message contents. Biff is not just communication for
+engineers --- it is the communication layer for the entire team of humans and
+agents building software together.
 
 \prsection{Customer Quote}
 
 \begin{customerquote}
 \textit{``I used to mass-quit my Slack channels once a month out of
 frustration and then guiltily rejoin them. With biff, I just set
-\texttt{/biff off} when I'm deep in a problem and \texttt{/biff on} when I
+\texttt{/mesg n} when I'm deep in a problem and \texttt{/mesg y} when I
 come up for air. My teammates can \texttt{/finger @priya} to see what I'm on
-without interrupting. Last week I shipped more in three days than I used to
-ship in two weeks, and I didn't miss a single important message.''}
+without interrupting. Now I run three agents alongside my own session ---
+\texttt{/who} shows all four of us, each with its own plan, and when one of
+them needs a decision it just \texttt{/write}s me. Last week I shipped more
+in three days than I used to ship in two weeks, and I didn't miss a single
+important message.''}
 
 \raggedleft --- \textbf{Priya Chandrasekaran}, Senior Engineer at a Series B
 startup
@@ -240,17 +255,19 @@ startup
 
 \prsection{Getting Started}
 
-Getting started with biff takes one command:
-\texttt{pip install biff-mcp}. Biff registers itself as an MCP server in
-your Claude Code session. Team configuration lives in a \texttt{.biff} file
-committed to your git repository --- it contains the relay URL and
-team member list. When you clone a repo that has a \texttt{.biff} file,
-biff automatically connects you to the right team. Encryption keys are
-generated silently on first use --- there is no account to create, no
-workspace to configure, no keys to manage, and no browser to open. Type
+Getting started with biff takes three commands:
+\texttt{pip install biff-mcp}, then \texttt{biff install} to register the MCP
+server and slash commands, then \texttt{biff doctor} to verify the setup.
+Restart Claude Code, and you are live. Biff ships with a shared relay
+on Synadia Cloud with end-to-end encryption, so there is zero infrastructure
+to provision. Team configuration lives in a \texttt{.biff} file committed to
+your git repository --- it only needs a team member list; the relay URL
+defaults to the shared relay. Your display name is resolved automatically
+from your GitHub identity. When you clone a repo that has a \texttt{.biff}
+file, biff automatically connects you to the right team. There is no account
+to create, no workspace to configure, and no browser to open. Type
 \texttt{/who} to see your teammates. Within five minutes of installation, you
-can send your first encrypted message, see your team's presence, and set
-your plan.
+can send your first message, see your team's presence, and set your plan.
 
 \prsection{Spokesperson Quote}
 
@@ -261,10 +278,10 @@ sprint-and-standup cadence look quaint --- and then lose hours every day to
 communication tools designed for a different era. Slack was built for the
 open-office, always-online workplace. Biff is built for the deep-focus,
 AI-accelerated one. We didn't add a chat feature to the terminal. We
-resurrected the Unix communication vocabulary --- \texttt{talk},
-\texttt{wall}, \texttt{finger}, \texttt{mesg} --- because those commands
-understood something Slack forgot: communication should be purposeful, not
-ambient.''
+resurrected the Unix communication vocabulary --- \texttt{write},
+\texttt{wall}, \texttt{finger}, \texttt{who}, \texttt{mesg} --- because
+those commands understood something Slack forgot: communication should be
+purposeful, not ambient.''
 
 \raggedleft --- \textbf{Jim Freeman}, Founder, punt-labs
 \end{spokespersonquote}
@@ -273,10 +290,11 @@ ambient.''
 
 Biff is open source and available today at
 \href{https://github.com/punt-labs/biff}{github.com/punt-labs/biff}.
-Install with \texttt{pip install biff-mcp}. The core tool --- including
-end-to-end encryption --- is free and always will be. The hosted relay is
-free for teams of up to five. For larger teams that need uptime guarantees,
-audit logs, and admin controls, biff teams will be available in Q3 2026.
+Install with \texttt{pip install biff-mcp}, then run \texttt{biff install}
+and \texttt{biff doctor}. The core tool, end-to-end encryption, and the
+shared relay are free and always will be. For larger teams that need uptime
+guarantees, audit logs, and admin controls, biff teams is available as a
+paid tier.
 
 \newpage
 
@@ -294,8 +312,8 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
   Biff is a terminal-native communication tool for software engineers who
   use Claude Code or other MCP-compatible systems. If you spend your working
   day in a terminal and resent switching to a browser to talk to your team,
-  biff is for you. It provides eleven slash commands covering messaging,
-  presence, collaboration, and code review --- all without leaving your
+  biff is for you. It provides six slash commands covering messaging,
+  presence, and availability control --- all without leaving your
   session. See Appendix~A for the full command reference.
 \end{faqpair}
 
@@ -322,26 +340,25 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 \end{faqpair}
 
 \begin{faqpair}{How do I get started?}
-  Run \texttt{pip install biff-mcp}. Biff auto-registers as an MCP server
-  in your Claude Code session. If your repo has a \texttt{.biff} file
-  (committed by a teammate), biff picks up the relay URL and team roster
-  automatically. Encryption keys are generated and registered
-  transparently --- you never see them. Type \texttt{/who} to see your
-  team. No account creation, no workspace to configure. You are
-  communicating securely within five minutes.
+  Run \texttt{pip install biff-mcp}, then \texttt{biff install} to register
+  the MCP server and slash commands, then \texttt{biff doctor} to verify the
+  setup. Restart Claude Code. Biff ships with a shared demo relay on Synadia
+  Cloud, so there is no infrastructure to provision. If your repo has a
+  \texttt{.biff} file (committed by a teammate), biff picks up the team
+  roster automatically. Your display name is resolved from your GitHub
+  identity. Type \texttt{/who} to see your team. No account creation, no
+  workspace to configure. You are communicating within five minutes.
 \end{faqpair}
 
 \begin{faqpair}{What happens to my messages? Is communication private?}
-  All messages are end-to-end encrypted. Direct messages (\texttt{/mesg})
-  are encrypted with the recipient's public key --- the relay stores
-  ciphertext it cannot read. Team messages (\texttt{/wall}, \texttt{/plan})
-  use a shared team key. Encryption is automatic and invisible: keypairs
-  are generated silently on first use, and the relay manages key
-  distribution. The relay follows a POP mail model: messages are held
-  only until the recipient reads them, then discarded. Biff is not a
-  system of record. In the self-hosted mode, messages route through your
-  own infrastructure and nothing touches punt-labs. Biff never reads,
-  analyzes, or trains on your messages.
+  Today, messages traverse the NATS relay in cleartext. The relay follows a
+  POP mail model: messages are held only until the recipient reads them,
+  then discarded. Biff is not a system of record. The shared demo relay is
+  hosted on Synadia Cloud; teams that want data sovereignty can self-host
+  the same NATS server and route all traffic through their own
+  infrastructure. End-to-end encryption (NaCl/libsodium) ships with
+  biff 1.0 and will make the relay unable to read message contents. Biff
+  never analyzes or trains on your messages.
 \end{faqpair}
 
 \begin{faqpair}{Does biff work without Claude Code?}
@@ -352,27 +369,29 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
   too.
 \end{faqpair}
 
-\begin{faqpair}{What does ``pairing'' mean? Can someone control my session?}
-  When a teammate invokes \texttt{/pair @you}, they are requesting to send
-  input to your Claude Code session --- not the other way around. You see
-  the request and explicitly accept or decline. If you accept, the
-  teammate can type prompts that are sent to your Claude, but you retain
-  full control and can see everything they send. You can end the pairing
-  at any time. No one can read your session, execute commands, or modify
-  your files without your explicit, per-session consent.
-
-  This is different from \texttt{/talk}, which is a simple real-time text
-  conversation between two terminals --- no session access involved.
+\begin{faqpair}{Will biff support real-time pairing or live conversation?}
+  Real-time features are on the roadmap but not yet shipped.
+  \texttt{/talk} would open a live text conversation between two terminals.
+  \texttt{/pair} would allow a teammate to send input to your Claude Code
+  session, with explicit per-session consent, full visibility for the
+  session owner, and a kill switch at any time. Both features require
+  careful security design and are scoped to a future phase.
 \end{faqpair}
 
 \begin{faqpair}{Can agents use biff?}
   Yes. Because biff is an MCP server, any MCP-compatible agent can use it
-  the same way a human does. An autonomous coding agent can join a
-  \texttt{/hive}, broadcast status via \texttt{/wall}, send artifacts via
-  \texttt{/send}, or message a human when it needs a decision. Agents can
-  also communicate with other agents --- coordinating work, handing off
-  tasks, or requesting reviews. Biff does not distinguish between human
-  and agent sessions. If it speaks MCP, it can participate.
+  the same way a human does. An autonomous coding agent can \texttt{/plan}
+  what it is working on, \texttt{/write} a human when it needs a decision,
+  and show up in
+  \texttt{/who} alongside everyone else. Agents can also coordinate with
+  other agents --- preventing duplicate work via \texttt{/plan} visibility,
+  targeting messages with \texttt{/write}, and checking presence with
+  \texttt{/who}. Biff does not distinguish between human and agent
+  sessions. If it speaks MCP, it can participate. The next roadmap phase
+  adds TTY sessions (each agent gets a distinct identity, targetable
+  via \texttt{/write @user:tty}), enriched presence showing host and
+  directory per session, and workflow hooks that automatically set plans
+  and announce milestones.
 \end{faqpair}
 
 % ── Internal FAQs (Business-facing) ──────────────────────────────────────────
@@ -383,10 +402,13 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 
 \begin{faqpair}{What is the total addressable market?}
   The immediate market is engineers using AI coding assistants inside
-  terminals. GitHub reports over 100 million developers on the platform.
-  AI-assisted coding adoption is growing rapidly --- GitHub Copilot alone
-  surpassed 1.8 million paid subscribers by late 2024, and Claude Code
-  launched to strong adoption in early 2025. The subset of engineers who
+  terminals. GitHub's Octoverse 2025 report counts over 180 million
+  developers on the platform, with 36 million joining in the past year
+  alone.\footnote{GitHub, ``Octoverse 2025,''
+  \url{https://github.blog/news-insights/octoverse/octoverse-2025/}}
+  AI-assisted coding adoption is accelerating --- GitHub Copilot reached
+  20 million cumulative signups (1.3 million paid subscribers) by
+  mid-2025, and Claude Code launched to strong adoption in early 2025. The subset of engineers who
   work primarily in the terminal with MCP-compatible tools is small today
   (estimated tens of thousands) but growing fast as MCP becomes the
   standard protocol for AI tool integration.
@@ -413,22 +435,23 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 
     \item \textbf{Cultural signal:} Steve Yegge's February 2026 article
     ``The Anthropic Hive
-    Mind''\footnote{\url{https://steve-yegge.medium.com/the-anthropic-hive-mind-d01f768f3d7b}}
-    describes Anthropic's internal engineering culture where teams ``swarm
-    around campfires'' and ``the whole team is pair programming at once''
-    --- all happening inside Claude Code sessions. He reports engineers
-    achieving 10--100x productivity gains, but notes that ``you need full
-    transparency at all times, at their speeds, or nobody will ever see
-    what you are doing.'' This is exactly the problem biff solves:
-    visibility and coordination at AI speed, inside the tool.
+    Mind''\footnote{Yegge, S., ``The Anthropic Hive Mind,'' Medium,
+    February 2026,
+    \url{https://steve-yegge.medium.com/the-anthropic-hive-mind-d01f768f3d7b}}
+    profiles engineering teams where ``the whole team is pair programming
+    at once'' and everyone sees each other's work in real time. He reports
+    engineers achieving 10--100x productivity gains but argues this
+    requires full transparency at AI speeds --- otherwise ``nobody will
+    ever see what you are doing.'' This is exactly the problem biff
+    solves: visibility and coordination at AI speed, inside the tool.
 
     \item \textbf{Investment signal:} Thomas Dohmke, former CEO of GitHub,
     launched Entire in February 2026 with a \$60M seed round --- the largest
     seed investment ever for a developer tools
-    startup.\footnote{\url{https://entire.io/blog/hello-entire-world/}}
-    His thesis: ``the entire software ecosystem is being bottlenecked by a
-    manual system of production'' and ``the terminal is becoming the new
-    center of gravity.'' Entire focuses on the code context layer (how AI
+    startup.\footnote{Dohmke, T., ``Hello Entire World,'' Entire blog,
+    February 2026, \url{https://entire.io/blog/hello-entire-world/}}
+    His thesis: ``the terminal has become the new center of gravity on our
+    computers again.'' Entire focuses on the code context layer (how AI
     changes get reviewed and governed). Biff focuses on the human
     coordination layer (how engineers communicate while working at AI
     speed). The same tectonic shift creates both opportunities.
@@ -441,6 +464,33 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
     GUIs. Now that engineers are returning to the terminal, the need has
     returned with them.
   \end{enumerate}
+\end{faqpair}
+
+\begin{faqpair}{How will engineers discover biff?}
+  Three channels, in order of expected impact:
+
+  \begin{enumerate}[leftmargin=1.5em]
+    \item \textbf{Viral loop via \texttt{.biff} file.} When a team member
+    commits a \texttt{.biff} file to a shared repo, every engineer who
+    clones that repo encounters it. The install path is two commands. This
+    is the primary growth mechanism: one adopter seeds an entire team.
+
+    \item \textbf{Developer community launch.} Hacker News, dev
+    Twitter/Bluesky, and the Claude Code plugin marketplace. The Unix
+    nostalgia angle (``biff is back'') and the anti-Slack positioning
+    generate organic interest. Target: 500 installs in the first week.
+
+    \item \textbf{Content and conference talks.} Blog posts on
+    terminal-native communication, talks at developer conferences. The
+    open-source model means the project itself is the marketing --- every
+    GitHub star, every fork, every \texttt{.biff} file committed is a
+    distribution event.
+  \end{enumerate}
+
+  The cost of acquisition is near zero: the product is free, the
+  distribution is organic, and the viral loop is built into the protocol.
+  The risk is not cost-per-acquisition but time-to-critical-mass on each
+  team.
 \end{faqpair}
 
 \begin{faqpair}{Who are the competitors and why will we win?}
@@ -464,6 +514,13 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
   or desktop app. They solve the vendor-lock-in problem but not the
   context-switch problem.
 
+  \textbf{Claude Code} (and other MCP hosts) could build messaging
+  natively. This is the most credible competitive threat. Mitigation:
+  biff is open source and protocol-level, not tied to a single host.
+  Anthropic's incentive is to grow the MCP ecosystem, not to build every
+  tool themselves. If Claude Code ships native messaging, biff's MCP
+  protocol can interoperate with it rather than compete.
+
   Biff wins by refusing to play Slack's game. It is not a chat app with a
   CLI client. It is a communication protocol native to the environment
   where engineers already work. The moat is the MCP ecosystem: as more
@@ -475,48 +532,45 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 
 \begin{faqpair}{What are the major technical risks?}
   \begin{enumerate}[leftmargin=1.5em]
-    \item \textbf{MCP notification mechanism (low risk, validated).} A
-    spike validated that Claude Code acts on
-    \texttt{notifications/tools/list\_changed} sent over SSE: when the
-    biff server updates a tool description (e.g., ``Check messages (1
-    unread: @kai about auth)''), the model sees the change and can
-    proactively mention it to the user. The full chain --- message
-    arrival, tool re-registration, SSE notification, model awareness ---
-    has been tested end-to-end. The remaining MCP spec maturity risk is
-    mitigated by wrapping all MCP interactions behind an internal
-    abstraction layer.
+    \item \textbf{MCP notification mechanism (low risk, shipped).} The
+    full chain --- message arrival, tool re-registration,
+    \texttt{notifications/tools/list\_changed} over SSE, model
+    awareness --- is shipped and working in production. When a message
+    arrives, the model sees the updated tool description (e.g., ``Check
+    messages (1 unread: @kai about auth)'') and proactively mentions it
+    to the user. All MCP interactions are wrapped behind an internal
+    abstraction layer for spec-maturity resilience.
 
-    \item \textbf{User-visible notification gap (medium risk).} Dynamic
-    tool descriptions are visible to the AI model but not directly to the
-    human user in the Claude Code UI. There is no badge, popup, or
-    inline notification for the user. Mitigation: the terminal status bar
-    is a configurable shell command that can read local files. Biff will
-    write unread state to a file, and the status bar script displays a
-    live count. This is a proven pattern but requires per-terminal setup.
+    \item \textbf{User-visible notification gap (low risk, partially
+    solved).} Dynamic tool descriptions are visible to the AI model but
+    not directly to the human user in the Claude Code UI. Biff now ships
+    optional status bar integration (\texttt{biff install-statusline})
+    that shows a live unread count in the terminal. Combined with
+    model-level awareness via tool descriptions, the notification gap
+    is addressed through two complementary channels.
 
-    \item \textbf{Message relay infrastructure (low risk).} Routing
-    messages between engineers on different machines requires a relay.
-    The relay follows a POP mail model: messages are stored on the relay
-    only until the recipient reads them, then discarded. Biff is not a
-    system of record. The relay is a NATS JetStream instance hosted by
-    punt-labs; teams that want data sovereignty can self-host the same
-    single-binary server.
+    \item \textbf{Message relay infrastructure (low risk, shipped).}
+    The NATS relay is shipped and tested against hosted NATS on Synadia
+    Cloud. Biff ships with a shared demo relay so teams can start with
+    zero infrastructure. The relay follows a POP mail model: messages are
+    stored only until the recipient reads them, then discarded. Teams
+    that want data sovereignty can self-host the same single-binary NATS
+    server.
 
-    \item \textbf{Security of pairing (medium risk).} The \texttt{/pair}
-    feature, which allows one engineer to send input to another's Claude
-    Code session, requires careful permission design. Mitigation: explicit
-    per-session consent, all input visible to the session owner, all
-    interactions logged, session owner retains kill switch. This is scoped
-    to Phase~3, giving time for the security model to mature.
+    \item \textbf{Security of pairing (medium risk, future).} The
+    \texttt{/pair} feature, which would allow one engineer to send input
+    to another's Claude Code session, requires careful permission design.
+    This is scoped to a future phase, giving time for the security model
+    to mature.
 
     \item \textbf{Adoption chicken-and-egg (high risk).} Biff is only
     useful if your teammates also use it. Mitigation: the \texttt{.biff}
     file committed to the repo means the second person on a team only
-    needs \texttt{pip install biff-mcp} --- the configuration is already
-    there. The \texttt{/plan}, \texttt{/finger}, and \texttt{/who}
-    commands provide value to individual users even without teammates.
-    The \texttt{/send} and \texttt{/cr} commands provide enough value in
-    pairs to bootstrap adoption within a team.
+    needs \texttt{pip install biff-mcp} and \texttt{biff install} ---
+    the configuration is already there. The demo relay eliminates
+    infrastructure setup. The \texttt{/plan}, \texttt{/finger}, and
+    \texttt{/who} commands provide value to individual users even without
+    teammates.
   \end{enumerate}
 \end{faqpair}
 
@@ -529,58 +583,77 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 \end{faqpair}
 
 \begin{faqpair}{Where does data live?}
-  All data lives on the relay, encrypted. The relay serves three
-  durability tiers:
+  All data lives on the NATS relay. The relay serves three durability
+  tiers:
 
-  \textbf{Persistent}: \texttt{/plan} status is stored on the relay,
-  encrypted with the team key. Like the original BSD
-  \texttt{\textasciitilde/.plan} file, it survives sessions, disconnects,
-  and restarts. \texttt{/finger} reads the persistent plan and combines
-  it with live presence.
+  \textbf{Persistent}: \texttt{/plan} status is stored on the relay.
+  Like the original BSD \texttt{\textasciitilde/.plan} file, it survives
+  sessions, disconnects, and restarts. \texttt{/finger} reads the
+  persistent plan and combines it with live presence.
 
-  \textbf{Store-and-forward}: \texttt{/mesg} follows a POP mail model
-  --- messages are encrypted with the recipient's public key, held on
-  the relay until read, then discarded. The relay cannot read them.
+  \textbf{Store-and-forward}: \texttt{/write} follows a POP mail model
+  --- messages are held on the relay until the recipient runs
+  \texttt{/read}, then discarded.
 
-  \textbf{Ephemeral}: \texttt{/wall} is a broadcast --- if you are not
-  connected when it happens, you miss it, just like BSD \texttt{wall}.
-  \texttt{/who} and \texttt{/biff on/off} are live presence state.
-  \texttt{/hive}, \texttt{/talk}, and \texttt{/pair} are sessions that
-  exist only for their duration.
+  \texttt{/who} and \texttt{/mesg y/n} are live presence state.
+  \texttt{/wall} (team broadcast) is on the roadmap.
 
-  The \texttt{.biff} file in the repository contains the relay URL and
-  team member list. It is the root of trust: adding your username to
-  \texttt{.biff} and committing it proves you have commit access to the
-  repo, which is what makes you a team member.
+  The \texttt{.biff} file in the repository contains the team member
+  list and optional relay configuration. It is the root of trust: adding
+  your username to \texttt{.biff} and committing it proves you have
+  commit access to the repo, which is what makes you a team member.
+  End-to-end encryption ships with biff 1.0 and will make the relay
+  unable to read message contents.
 \end{faqpair}
 
 \begin{faqpair}{What is the estimated development timeline?}
-  A technical spike has validated the core architecture: HTTP transport with
-  SSE for server-push notifications, dynamic tool descriptions via
-  \texttt{notifications/tools/list\_changed}, and end-to-end message
-  awareness in Claude Code. The architecture is proven; what remains is
-  implementation.
-
-  \begin{description}[leftmargin=1.5em, labelwidth=6em, font=\bfseries]
-    \item[Phase 1 (4 weeks)] Core MCP server with \texttt{/mesg},
-    \texttt{/who}, \texttt{/plan}, \texttt{/finger}, \texttt{/biff on/off}.
-    Local relay for same-machine communication. Single-user value from
-    \texttt{/plan} and session awareness. Architecture validated by spike.
-    \item[Phase 2 (4 weeks)] NATS-based relay for cross-machine messaging.
-    POP-model store-and-forward for \texttt{/mesg}. Ephemeral broadcast
-    for \texttt{/wall}. \texttt{/hive}, \texttt{/send}, \texttt{/cr}.
-    Team communication functional end-to-end.
-    \item[Phase 3 (4 weeks)] \texttt{/talk} real-time conversation,
-    \texttt{/pair} with permission model. Security audit of the
-    encryption and permission models. Note: the spike found that direct
-    subprocess handoff is not viable in MCP; \texttt{/talk} will use
-    model-mediated message exchange.
-    \item[Phase 4 (4 weeks)] Hosted relay service (biff teams).
-    Admin controls, audit logs, retention policies. Billing integration.
+  \begin{description}[leftmargin=1.5em, labelwidth=10em, font=\bfseries]
+    \item[Shipped] Core MCP server with \texttt{/write}, \texttt{/read},
+    \texttt{/who}, \texttt{/plan}, \texttt{/finger},
+    \texttt{/mesg y/n}. NATS-based relay for cross-machine messaging on
+    Synadia Cloud. POP-model store-and-forward for \texttt{/write}.
+    Status bar integration.
+    Display names from GitHub identity. Released and in use.
+    \item[Next: Agentic] \texttt{/wall} (team broadcast). TTY sessions
+    (each agent gets a distinct identity, targetable via
+    \texttt{/write @user:tty}). Enriched presence (\texttt{/who} shows
+    host and directory per session). Plan auto-expand (\texttt{/plan
+    biff-bf8} shows the task title). Workflow hooks (claiming a task
+    auto-sets plan, creating a PR triggers \texttt{/wall}). Project
+    opt-in (\texttt{/biff y} enables coordination per project).
+    \item[Future: Security] End-to-end encryption (NaCl/libsodium),
+    GitHub identity and auth, per-repo NATS credentials.
+    \item[Future: Real-Time] \texttt{/talk} for live conversation,
+    \texttt{/pair} for session sharing with explicit consent.
+    \item[Future: Hosted] Managed relay service (biff teams). Admin
+    controls, audit logs, retention policies. Billing integration.
   \end{description}
+\end{faqpair}
 
-  Total: approximately 16 weeks to full product with hosted offering. Phase
-  1 delivers usable value and can be released as a public beta.
+\begin{faqpair}{What is the agentic coordination vision?}
+  The most distinctive part of biff's roadmap is treating agents as
+  first-class team members. Today, biff already makes no distinction
+  between a human session and an agent session --- an autonomous coding
+  agent can \texttt{/plan} what it is working on, \texttt{/write} a human
+  when it needs a decision, and show up in \texttt{/who} alongside
+  everyone else.
+
+  The next phase makes this explicit. TTY sessions give each agent a
+  distinct identity: one user running three agents shows three entries in
+  \texttt{/who}, each targetable via \texttt{/write @user:tty}. Enriched
+  presence shows host and directory per session, flagging when agents share
+  a filesystem and need to coordinate to avoid file conflicts. Plan
+  auto-expand (\texttt{/plan biff-bf8}) surfaces what each agent is working
+  on without anyone looking it up. Workflow hooks automate the coordination
+  overhead: claiming a task auto-sets your plan, creating a PR triggers a
+  \texttt{/wall} announcement.
+
+  The thesis is that as engineering teams grow to include both humans and
+  autonomous agents, the coordination primitives --- presence, messaging,
+  broadcast, targeted delivery --- matter more, not less. A team of three
+  humans running nine agents across six machines needs the same visibility
+  and communication that a team of twelve humans needs, but at higher speed
+  and with less tolerance for manual ceremony.
 \end{faqpair}
 
 \begin{faqpair}{What is the scaling story?}
@@ -598,20 +671,19 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 \subsubsection*{Business}
 
 \begin{faqpair}{What is the revenue model?}
-  Open core. The biff CLI tool, self-hosted relay, and end-to-end
-  encryption are free and open source (MIT license). Revenue comes from
+  Open core. The biff CLI tool, self-hosted relay, and shared demo relay
+  are free and open source (MIT license). Revenue comes from
   \textbf{biff teams}, a hosted relay service priced at
   \$10/user/month for teams above the free tier:
 
   \begin{itemize}[leftmargin=1.5em]
-    \item Free tier: up to 5 team members on the hosted relay
+    \item Free tier: up to 5 team members on the shared demo relay
     \item Paid tier: unlimited team members with 99.9\% uptime SLA
     \item Audit logs and compliance exports
     \item Team admin controls (permissions, onboarding, offboarding)
     \item Priority support
   \end{itemize}
 
-  Encryption is not a paid feature --- it is a baseline for every user.
   The paid tier is about team size and operational guarantees. This model
   is proven by GitLab, Sentry, PostHog, and other developer-tools
   companies. Engineers adopt the free tool; their companies pay for the
@@ -639,6 +711,34 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
   rethinking.
 \end{faqpair}
 
+\begin{faqpair}{What is the next step to validate the vision?}
+  Ship to 10 external beta teams within 60 days. Each team must have at
+  least 3 members using biff as their primary coordination tool for a
+  real project. Measure D30 retention and messages-per-user-per-week.
+  Conduct post-trial interviews to understand what worked, what was
+  missing, and whether users would pay for the hosted tier.
+
+  If D30 retention is below 20\% across beta teams, the product is not
+  solving a real problem and needs fundamental rethinking. If retention is
+  above 40\% but conversion interest is zero, the free tier may be too
+  generous or the paid tier insufficiently differentiated.
+\end{faqpair}
+
+\begin{faqpair}{What does the P\&L look like at steady state?}
+  Assumptions (labeled): 10,000 paid users at \$10/user/month = \$1.2M
+  ARR. Infrastructure costs are approximately \$2,000/month (NATS relay
+  hosting on Synadia Cloud, monitoring, CI/CD). Support costs are minimal
+  at this scale given the CLI-native user base and open-source community.
+  Gross margin exceeds 95\%.
+
+  Break-even requires approximately 200 paid users (\$2,000/month
+  revenue vs.\ \$2,000/month infrastructure). The path to break-even is
+  short because infrastructure costs are near-constant up to tens of
+  thousands of users --- NATS is designed for high-throughput messaging
+  with minimal per-message overhead. The primary cost at scale is
+  engineering headcount, not infrastructure.
+\end{faqpair}
+
 \begin{faqpair}{Why now? What has changed?}
   Three things changed simultaneously, and the convergence is visible in
   real dollars and real behavior:
@@ -649,8 +749,9 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
     line. Claude Code, Cursor's terminal mode, and the MCP ecosystem mean
     the terminal is once again the primary workspace for a growing
     population of engineers. Dohmke calls this ``the new center of
-    gravity'' and bet \$60M on it. Yegge describes Anthropic engineers who
-    ``never leave their terminal sessions.''
+    gravity'' and bet \$60M on it. Yegge profiles engineering teams
+    achieving 10--100x productivity gains by working entirely inside
+    terminal sessions with AI agents.
 
     \item \textbf{MCP created a standard protocol.} Before MCP, building a
     communication tool inside a coding environment meant integrating with
@@ -670,13 +771,18 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 \begin{faqpair}{What are we not building?}
   Biff is not building:
   \begin{itemize}[leftmargin=1.5em]
-    \item \textbf{Persistent channels.} Biff has \texttt{/hive} for
-    temporary groups that dissolve when the work is done, not channels that
-    accumulate forever. There is no concept of a persistent room.
+    \item \textbf{Persistent channels or temporary groups.} No channels,
+    no rooms, no \texttt{/hive}. Communication is directed: you message a
+    person or broadcast to the team. There is no concept of a persistent
+    or temporary room.
+    \item \textbf{Artifact sharing (\texttt{/send}).} Sending diffs, files,
+    or code snippets inline is a compelling idea but out of scope for now.
+    Use git, GitHub Issues, or PR comments for artifact exchange.
+    \item \textbf{Inline code review (\texttt{/cr}).} Requesting and
+    conducting code review inside the terminal is future work. GitHub's
+    review workflow remains the system of record.
     \item \textbf{Message history or search.} Messages are ephemeral by
-    default. If you need a record, use \texttt{/send} to send an artifact
-    to a durable store (git, GitHub Issues). Biff is not a system of
-    record.
+    default. Biff is not a system of record.
     \item \textbf{Video or voice.} Biff is text. If you need a video call,
     use the tool built for video calls.
     \item \textbf{Project management.} No tasks, no boards, no sprints.
@@ -708,38 +814,42 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 \riskitem{Value}{%
   \textbf{Medium risk.} Strong circumstantial evidence (CLI adoption trend,
   MCP ecosystem growth, Yegge's observations about AI-speed collaboration)
-  but no direct customer validation yet. The risk is not ``do engineers
-  dislike Slack?'' (they do) but ``is the pain severe enough to adopt a new
-  tool?'' Slack's network effects are powerful --- even engineers who hate
-  Slack use it because their team does. Biff must provide enough standalone
-  value (\texttt{/plan}, \texttt{/finger}) to bootstrap adoption before
-  network effects kick in. The artisanal approach --- building for ourselves
-  first --- provides an honest signal: if we do not use it daily, no one
-  else will either.}
+  and early artisanal validation --- the builders use biff daily for their
+  own coordination. The risk is not ``do engineers dislike Slack?'' (they do)
+  but ``is the pain severe enough to adopt a new tool?'' Slack's network
+  effects are powerful --- even engineers who hate Slack use it because their
+  team does. Biff must provide enough standalone value (\texttt{/plan},
+  \texttt{/finger}) to bootstrap adoption before network effects kick in.
+  The artisanal signal is positive: the tool is in daily use by its
+  creators. The remaining risk is whether that signal generalizes beyond the
+  builders.}
 
 \riskitem{Usability}{%
   \textbf{Low risk.} The slash-command interface mirrors patterns engineers
   already use (git commands, Unix utilities, Claude Code slash commands).
-  Installation is a single \texttt{pip install}. Time-to-value is under five
-  minutes. The primary usability risk is discoverability: new users need to
-  learn the command vocabulary. Mitigation: the vocabulary is small (11
-  commands), the names are intuitive (borrowed from Unix), and
-  \texttt{/help} documents everything inline.}
+  Installation is three commands (\texttt{pip install}, \texttt{biff
+  install}, \texttt{biff doctor}). Time-to-value is under five minutes. The
+  primary usability risk is discoverability: new users need to learn the
+  command vocabulary. Mitigation: the vocabulary is small (6 shipped
+  commands), the names are intuitive (borrowed from Unix), and the tool
+  descriptions are self-documenting within Claude Code. The secondary
+  usability risk is the empty-room experience: a solo installer sees no
+  teammates and may not persist long enough for network effects to form.
+  Mitigation: the \texttt{.biff} file viral loop means most users arrive
+  on a team that already has at least one other member.}
 
 \riskitem{Feasibility}{%
-  \textbf{Low risk (validated).} A technical spike has confirmed the core
-  architecture end-to-end: HTTP transport with SSE, dynamic tool
-  descriptions via \texttt{notifications/tools/list\_changed}, and
-  model-visible message awareness in Claude Code. The MCP notification
-  mechanism --- the highest-uncertainty component --- works as designed.
-  The remaining technology is well-understood: NATS JetStream for the
-  message relay, NaCl/libsodium (Curve25519 + XSalsa20-Poly1305) for
-  end-to-end encryption, and PyNaCl for the Python implementation. These
-  are the same cryptographic primitives used by Signal, WireGuard, and
-  age. The highest-risk component is the \texttt{/pair} feature, which
-  requires careful permission design for session input sharing. This is
-  scoped to Phase~3, giving time for the security model to mature. No
-  component requires novel technology.}
+  \textbf{Low risk (shipped).} The core architecture is not just validated
+  --- it is shipped and in production. The MCP notification mechanism,
+  NATS JetStream relay (tested against hosted NATS on Synadia Cloud),
+  dynamic tool descriptions, model-visible message awareness, and status
+  bar integration are all working. The notification gap --- the
+  highest-uncertainty component at design time --- is addressed through two
+  channels: model-level awareness via tool descriptions and user-level
+  awareness via the status bar. The highest-risk future component is
+  \texttt{/pair}, which requires careful permission design for session
+  input sharing. End-to-end encryption (NaCl/libsodium) ships with
+  biff 1.0. No shipped component required novel technology.}
 
 \riskitem{Viability}{%
   \textbf{Medium risk.} The open-core model is proven in developer tools,
@@ -764,74 +874,102 @@ audit logs, and admin controls, biff teams will be available in Q3 2026.
 
 \section*{Appendix A: Command Reference}
 
-Commands are organized by priority tier using the MoSCoW framework.
-\textbf{Must Have} commands ship in Phase~1 and deliver standalone value.
-\textbf{Should Have} commands ship in Phase~2 and enable team workflows.
-\textbf{Could Have} commands ship in Phase~3 and require additional
-architecture work identified during technical spikes.
+Commands are organized by status: \textbf{Shipped} commands are released and
+working today. \textbf{Next} features are the immediate roadmap focus.
+\textbf{Future} features are planned but not yet scheduled. \textbf{Won't Do
+(for now)} features are out of scope.
 
-\subsection*{Must Have --- Phase 1: Core Communication}
+\subsection*{Shipped: Core Communication}
 
 \renewcommand{\arraystretch}{1.4}
 \begin{tabularx}{\textwidth}{@{}l l X@{}}
   \toprule
   \textbf{Command} & \textbf{Origin} & \textbf{Description} \\
   \midrule
+
+  \texttt{/write @user ``text''} & BSD \texttt{write} &
+  Send a one-way message to a user. Asynchronous --- the recipient reads
+  it when they choose via \texttt{/read}. \\
+
+  \texttt{/read} & BSD \texttt{from} &
+  Check your inbox. Shows unread messages with sender, timestamp, and
+  content. \\
+
+  \texttt{/finger @user} & BSD \texttt{finger} &
+  Read a user's plan and current status.
+  Non-intrusive --- the target is not notified. \\
+
+  \texttt{/who} & BSD \texttt{who} &
+  List all active sessions. Shows who is online, their availability
+  (\texttt{/mesg y/n}), and their current plan. \\
 
   \texttt{/plan ``text''} & BSD \texttt{.plan} &
   Set your status message. Visible to anyone who runs \texttt{/finger}
   or \texttt{/who}. Update it as your work changes. Provides single-user
   value without teammates. \\
 
-  \texttt{/who} & BSD \texttt{who} &
-  List all active sessions. Shows who is online, their availability
-  (\texttt{/biff on/off}), and their current plan. \\
-
-  \texttt{/finger @user} & BSD \texttt{finger} &
-  Read a user's plan and current status.
-  Non-intrusive --- the target is not notified. \\
-
-  \texttt{/mesg @user ``text''} & BSD \texttt{mesg} &
-  Send a one-way message to a user. Asynchronous --- the recipient reads
-  it when they choose. Core validated by technical spike. \\
-
-  \texttt{/biff on} | \texttt{off} & BSD \texttt{biff} &
-  Control whether you receive messages. When off, incoming messages are
-  queued until you turn it back on. \\
+  \texttt{/mesg y} | \texttt{n} & BSD \texttt{mesg} &
+  Control whether you receive messages. When off (\texttt{n}), incoming
+  messages are queued until you turn it back on (\texttt{y}). \\
 
   \bottomrule
 \end{tabularx}
 
-\subsection*{Should Have --- Phase 2: Team Communication}
+\subsection*{Next: Agentic Coordination}
 
 \renewcommand{\arraystretch}{1.4}
-\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
   \toprule
-  \textbf{Command} & \textbf{Origin} & \textbf{Description} \\
+  \textbf{Feature} & \textbf{Description} \\
   \midrule
 
-  \texttt{/wall ``text''} & BSD \texttt{wall} &
-  Broadcast a message. If you are in a \texttt{/hive}, the message goes
-  to hive members. Otherwise it goes to your full team. \\
+  \texttt{/wall ``text''} (team broadcast) &
+  Broadcast a message to your full team. Ephemeral --- if you are not
+  connected when it happens, you miss it, just like BSD \texttt{wall}. \\
 
-  \texttt{/send @user} & --- &
-  Send a diff, file, or code snippet to a user with full context.
-  The recipient receives the artifact inline in their session. \\
+  TTY sessions &
+  Each agent gets a distinct identity. One user with 3 sessions shows 3
+  entries in \texttt{/who}, targetable via \texttt{/write @user:tty}. \\
 
-  \texttt{/cr @user} & --- &
-  Request a code review. Automatically attaches the relevant changes
-  from your current branch. The reviewer receives the diff and can
-  respond with comments. \\
+  Enriched presence &
+  \texttt{/who} shows host and directory per session. Flags when agents
+  share a filesystem. \\
 
-  \texttt{/hive @a @b @c} & --- &
-  Create a temporary group with the named users. All members see each
-  other's messages. Use \texttt{/wall} to broadcast within the hive.
-  \texttt{/hive off} dissolves the group. \\
+  Plan auto-expand &
+  \texttt{/plan biff-bf8} auto-expands to show the task title. Everyone
+  sees what you are working on without looking it up. \\
+
+  Workflow hooks &
+  Claiming a task auto-sets your plan. Creating a PR triggers a
+  \texttt{/wall} announcement. \\
+
+  Project opt-in &
+  \texttt{/biff y} enables the coordination workflow per project via
+  \texttt{AGENTS.md}. \\
 
   \bottomrule
 \end{tabularx}
 
-\subsection*{Could Have --- Phase 3: Real-Time \& Pairing}
+\subsection*{Future: Network \& Security}
+
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+  \toprule
+  \textbf{Feature} & \textbf{Description} \\
+  \midrule
+
+  E2E encryption &
+  NaCl/libsodium (Curve25519 + XSalsa20-Poly1305). Messages encrypted
+  with recipient's public key; relay stores ciphertext it cannot read. \\
+
+  GitHub identity \& auth &
+  Authenticate users via GitHub identity. Per-repo NATS credentials for
+  team isolation. \\
+
+  \bottomrule
+\end{tabularx}
+
+\subsection*{Future: Real-Time \& Pairing}
 
 \renewcommand{\arraystretch}{1.4}
 \begin{tabularx}{\textwidth}{@{}l l X@{}}
@@ -840,14 +978,38 @@ architecture work identified during technical spikes.
   \midrule
 
   \texttt{/talk @user} & BSD \texttt{talk} &
-  Open a real-time bidirectional conversation. The technical spike found
-  that direct subprocess handoff is not viable in MCP; this command will
-  use model-mediated message exchange instead. \\
+  Open a real-time bidirectional conversation via model-mediated message
+  exchange. \\
 
   \texttt{/pair @user} & --- &
   Invite a user to send input to your Claude Code session. Requires
   explicit acceptance. The session owner sees all input and retains full
-  control. Highest security design complexity. \\
+  control. \\
+
+  \bottomrule
+\end{tabularx}
+
+\subsection*{Won't Do (for now)}
+
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+  \toprule
+  \textbf{Feature} & \textbf{Rationale} \\
+  \midrule
+
+  \texttt{/send @user} (artifact sharing) &
+  Sending diffs, files, or code snippets inline. Compelling but out of
+  scope --- use git or GitHub for artifact exchange. \\
+
+  \texttt{/cr @user} (code review) &
+  Inline code review in the terminal. GitHub's review workflow remains the
+  system of record. \\
+
+  \texttt{/hive @a @b @c} (temporary groups) &
+  Temporary multi-person groups that dissolve when work is done. Directed
+  messaging (\texttt{/write}) and broadcast (\texttt{/wall}, on roadmap)
+  cover the coordination need
+  without the complexity of group lifecycle management. \\
 
   \bottomrule
 \end{tabularx}
