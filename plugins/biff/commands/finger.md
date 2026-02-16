@@ -11,4 +11,4 @@ Parse the username from arguments, stripping any leading `@` if present.
 
 ## Task
 
-Call `mcp__biff__finger` with `user` set to the parsed username. Display the user's status, plan, and availability. Do not send any other text besides the tool call and the formatted results.
+Call `mcp__biff__finger` with `user` set to the parsed username. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

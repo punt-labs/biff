@@ -2,4 +2,4 @@
 description: Check your inbox for new messages
 ---
 
-Call `mcp__biff__check_messages` with no arguments. Display each message showing the sender and message content. If there are no messages, say so. Do not send any other text besides the tool call and the formatted results.
+Call `mcp__biff__check_messages` with no arguments. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.
