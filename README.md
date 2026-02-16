@@ -1,6 +1,6 @@
 # biff
 
-<img src="docs/biff.png" alt="The original biff mail notification app" width="100" align="right">
+<img src="docs/biff.png" alt="The original biff mail notification app" width="116" align="right">
 
 > Team communication for engineers who never leave the terminal.
 
@@ -16,9 +16,72 @@ Engineers using AI coding tools are shipping faster than ever. But every time th
 
 ```bash
 pip install biff-mcp
+biff install-statusline
 ```
 
-Biff auto-registers as an MCP server. If your repo has a `.biff` file, it picks up the relay URL and team roster automatically. Type `/who` to see your team.
+Restart Claude Code. Type `/who` to see your team.
+
+## What It Looks Like
+
+### See who's online
+
+```
+> /who
+
+▶  NAME    IDLE   S  PLAN
+   @kai    0:03   +  refactoring auth module
+   @eric   1:22   +  reviewing PR #47
+   @priya  0:00   +  writing integration tests
+   @dana   3:45   -  (no plan)
+```
+
+`+` means accepting messages, `-` means do not disturb.
+
+### Send a message
+
+```
+> /write @kai "auth module looks good, just one nit on the error handling"
+
+Message sent to @kai.
+```
+
+### Check your inbox
+
+```
+> /read
+
+▶  FROM   DATE              MESSAGE
+   kai    Sat Feb 15 14:01  hey, ready for review?
+   eric   Sat Feb 15 13:45  pushed the fix for the flaky test
+   priya  Sat Feb 15 12:30  can you look at the migration script?
+```
+
+### Check what someone is working on
+
+```
+> /finger @kai
+
+▶  Login: kai                              Messages: on
+   On since Sat Feb 15 14:01 (UTC) on claude, idle 0:03
+   Plan:
+    refactoring auth module
+```
+
+### Set your status
+
+```
+> /plan "debugging the websocket reconnect logic"
+
+Plan: debugging the websocket reconnect logic
+```
+
+### Go do-not-disturb
+
+```
+> /off
+
+is n
+```
 
 ## Commands
 
@@ -26,14 +89,26 @@ Biff auto-registers as an MCP server. If your repo has a `.biff` file, it picks 
 |---------|--------|---------|
 | `/write @user "text"` | BSD `write` | Send a message |
 | `/read` | BSD `from` | Check your inbox |
-| `/finger @user` | BSD `finger` | Read someone's plan and status |
+| `/finger @user` | BSD `finger` | Check what someone is working on |
 | `/who` | BSD `who` | List active sessions |
 | `/plan "text"` | BSD `.plan` | Set your status |
 | `/on` \| `/off` | BSD `mesg` | Control message reception |
 
+## Status Bar
+
+Biff integrates with Claude Code's status line to show unread message counts:
+
+```
+biff(3)
+```
+
+This is configured automatically by `biff install-statusline`. To remove: `biff uninstall-statusline`.
+
 ## Agents Welcome
 
-Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can join a `/hive`, broadcast via `/wall`, or `/mesg` a human when it needs a decision. Biff is the communication layer for the entire hive of humans and agents building software together.
+Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can `/plan` what it's working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else. Biff is the communication layer for the entire hive of humans and agents building software together.
+
+---
 
 ## Setup
 
@@ -72,26 +147,6 @@ biff serve --data-dir /custom/path      # explicit data dir
 ```
 
 The data directory defaults to `/tmp/biff/{repo-name}/`. Two users on the same machine sharing a prefix share state through the local relay.
-
-## Status Bar
-
-Biff integrates with Claude Code's status line to show unread message counts. Install with:
-
-```bash
-biff install-statusline
-```
-
-This registers the biff MCP server and configures the status line automatically. When you have unread messages, the status bar shows:
-
-```
-biff(3)
-```
-
-To remove it:
-
-```bash
-biff uninstall-statusline
-```
 
 ## Development
 
