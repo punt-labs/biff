@@ -75,36 +75,23 @@ The data directory defaults to `/tmp/biff/{repo-name}/`. Two users on the same m
 
 ## Status Bar
 
-Biff writes unread message state to `{data-dir}/unread.json` so external tools can display a live notification count. The file is updated after every tool call:
-
-```json
-{"count": 2, "preview": "@eric about auth module, @kai about lunch"}
-```
-
-### Claude Code status line
-
-Copy the included script and configure Claude Code to use it:
+Biff integrates with Claude Code's status line to show unread message counts. Install with:
 
 ```bash
-cp scripts/biff-statusline.sh ~/.claude/
-chmod +x ~/.claude/biff-statusline.sh
+biff install-statusline
 ```
 
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "statusLine": "~/.claude/biff-statusline.sh"
-}
-```
-
-When you have unread messages, the status bar shows:
+This registers the biff MCP server and configures the status line automatically. When you have unread messages, the status bar shows:
 
 ```
-biff: 2 unread — @eric about auth module, @kai about lunch
+biff(3)
 ```
 
-Requires `jq`.
+To remove it:
+
+```bash
+biff uninstall-statusline
+```
 
 ## Development
 
