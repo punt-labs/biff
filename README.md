@@ -10,7 +10,7 @@ Biff resurrects the Unix communication vocabulary as MCP-native slash commands. 
 
 ## Why
 
-Engineers using AI coding tools are shipping faster than ever. But every time they need to coordinate with a teammate, they context-switch to Slack or Discord — tools designed for managers, not makers in deep focus. Biff keeps communication where the code already lives.
+Engineers using AI coding tools are shipping faster than ever. But every time they need to coordinate with a teammate — or with another agent — they context-switch to Slack or Discord. Tools designed for managers, not makers in deep focus. Biff keeps communication where the code already lives.
 
 ## Quick Start
 
@@ -93,6 +93,7 @@ is n
 | `/finger @user` | BSD `finger` | Check what someone is working on |
 | `/who` | BSD `who` | List active sessions |
 | `/plan "text"` | BSD `.plan` | Set your status |
+| `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 
 ## Status Bar
@@ -107,7 +108,49 @@ This is optional and separate from `biff install`. To enable: `biff install-stat
 
 ## Agents Welcome
 
-Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can `/plan` what it's working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else. Biff is the communication layer for the entire hive of humans and agents building software together.
+Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can `/plan` what it's working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else.
+
+But presence is just the beginning. When you have multiple agents working in the same codebase — on the same machine, in the same directory — they need to coordinate to avoid stepping on each other's files. Biff solves this with two coordination planes:
+
+**Logical plane (cross-machine):** What work is everyone doing? `/plan` shows the task each agent is working on. `/who` shows all plans across all machines. This prevents duplicate work.
+
+**Physical plane (same-machine):** Are we sharing a filesystem? `/who` shows host and directory per session. When two agents share the same machine and directory, they coordinate via `/write` and create git worktrees to work in isolation.
+
+Biff is the communication layer for the entire hive of humans and agents building software together.
+
+## Vision
+
+Biff is built on a simple thesis: the terminal is the new center of gravity for software engineering, and the communication tools haven't caught up. Slack was built for the open-office, always-online workplace. Biff is built for the deep-focus, AI-accelerated one.
+
+Every command implies intent. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
+
+As engineering teams grow to include both humans and autonomous agents, coordination becomes the bottleneck. Biff provides the primitives — presence, messaging, broadcast, targeted delivery — that let a mixed team of humans and agents work together without stepping on each other.
+
+## Roadmap
+
+### Shipped: Core Communication
+
+The foundation is live. Presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), broadcast (`/wall`), and availability control (`/mesg`) — all working over a NATS relay for cross-machine communication.
+
+### Next: Agentic Coordination
+
+The immediate focus is making biff work for multi-agent teams:
+
+| Feature | What It Enables |
+|---------|----------------|
+| **TTY sessions** | Each agent gets a distinct identity. One user with 3 sessions shows 3 entries in `/who`, targetable via `/write @user:tty`. |
+| **Enriched presence** | `/who` shows host and directory per session. Flags when agents share a filesystem. |
+| **Plan auto-expand** | `/plan biff-bf8` auto-expands to show the task title. Everyone sees what you're working on. |
+| **Workflow hooks** | Claiming a task auto-sets your plan. Creating a PR triggers a `/wall` announcement. |
+| **Project opt-in** | `/biff y` enables the coordination workflow per project via AGENTS.md. |
+
+### Future: Real-Time and Security
+
+| Phase | What Ships |
+|-------|-----------|
+| **Network relay** | E2E encryption (NaCl/libsodium), GitHub identity and auth, per-repo NATS credentials |
+| **Real-time** | `/talk` for live conversation, `/pair` for session sharing with explicit consent |
+| **Hosted relay** | Managed service with admin controls, audit logs, team isolation |
 
 ---
 
