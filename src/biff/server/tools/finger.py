@@ -37,39 +37,37 @@ def _format_idle(dt: datetime) -> str:
     return f"{hours}:{minutes % 60:02d}"
 
 
-def _format_session(session: UserSession) -> str:
-    """Format a single session in BSD ``finger(1)`` style."""
-    idle = _format_idle(session.last_active)
-    since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
-    mesg = "on" if session.biff_enabled else "off"
-    tty_label = session.tty[:8] if session.tty else "?"
-
+def _format_user_header(session: UserSession) -> str:
+    """Format the user-level header (shown once per user)."""
     left = f"Login: {session.user}"
+    mesg = "on" if session.biff_enabled else "off"
     if session.display_name:
         right = f"Name: {session.display_name}"
         line1 = f"\u25b6  {left:<38s}{right}"
         line2 = f"   Messages: {mesg}"
-    else:
-        right = f"Messages: {mesg}"
-        line1 = f"\u25b6  {left:<38s}{right}"
-        line2 = ""
+        return f"{line1}\n{line2}"
+    right = f"Messages: {mesg}"
+    return f"\u25b6  {left:<38s}{right}"
 
-    line_on = f"   On since {since} on {tty_label}, idle {idle}"
-    host_line = ""
+
+def _format_tty_block(session: UserSession) -> str:
+    """Format per-TTY details (on-since, host/dir, plan)."""
+    idle = _format_idle(session.last_active)
+    since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
+    tty_label = session.tty[:8] if session.tty else "?"
+
+    lines = [f"   On since {since} on {tty_label}, idle {idle}"]
     if session.hostname or session.pwd:
         host = session.hostname or "?"
         pwd = session.pwd or "?"
-        host_line = f"   Host: {host}  Dir: {pwd}"
-    plan_block = f"   Plan:\n    {session.plan}" if session.plan else "   No Plan."
-
-    lines = [line1]
-    if line2:
-        lines.append(line2)
-    lines.append(line_on)
-    if host_line:
-        lines.append(host_line)
-    lines.append(plan_block)
+        lines.append(f"   Host: {host}  Dir: {pwd}")
+    lines.append(f"   Plan:\n    {session.plan}" if session.plan else "   No Plan.")
     return "\n".join(lines)
+
+
+def _format_session(session: UserSession) -> str:
+    """Format a single session in BSD ``finger(1)`` style."""
+    return f"{_format_user_header(session)}\n{_format_tty_block(session)}"
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -101,5 +99,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         sessions = await state.relay.get_sessions_for_user(bare_user)
         if not sessions:
             return f"Login: {bare_user}\nNever logged in."
-        blocks = [_format_session(s) for s in sorted(sessions, key=lambda s: s.tty)]
-        return "\n\n".join(blocks)
+        by_idle = sorted(sessions, key=lambda s: s.last_active, reverse=True)
+        header = _format_user_header(by_idle[0])
+        tty_blocks = [_format_tty_block(s) for s in by_idle]
+        return header + "\n" + "\n".join(tty_blocks)
