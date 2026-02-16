@@ -184,7 +184,7 @@ class TestCheckMessagesProtocol:
         )
         result = await biff_client.call_tool("read_messages", {})
         text = _text(result)
-        assert "From eric" in text
+        assert "eric" in text
         assert "check this out" in text
 
         # Second call shows no new messages

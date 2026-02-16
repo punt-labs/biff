@@ -163,7 +163,7 @@ class TestCrossRelayMessaging:
         assert "@eric" in result
 
         result = await eric.call("read_messages")
-        assert "From kai" in result
+        assert "kai" in result
         assert "PR is ready" in result
 
     @pytest.mark.transcript

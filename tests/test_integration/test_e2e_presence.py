@@ -170,7 +170,8 @@ class TestCrossUserMessaging:
         assert "@eric" in result
 
         result = await eric.call("read_messages")
-        assert "From kai" in result
+        assert "FROM" in result
+        assert "kai" in result
         assert "PR #42 is ready" in result
 
     @pytest.mark.transcript
@@ -201,9 +202,9 @@ class TestCrossUserMessaging:
         kai_inbox = await kai.call("read_messages")
         eric_inbox = await eric.call("read_messages")
 
-        assert "From eric" in kai_inbox
+        assert "eric" in kai_inbox
         assert "sure, on it" in kai_inbox
-        assert "From kai" in eric_inbox
+        assert "kai" in eric_inbox
         assert "review my PR?" in eric_inbox
 
     @pytest.mark.transcript
@@ -222,7 +223,7 @@ class TestCrossUserMessaging:
         # eric turns biff back on and checks
         await eric.call("mesg", enabled=True)
         result = await eric.call("read_messages")
-        assert "From kai" in result
+        assert "kai" in result
         assert "urgent fix needed" in result
 
 

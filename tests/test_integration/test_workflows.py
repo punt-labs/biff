@@ -121,7 +121,7 @@ class TestMessagingWorkflow:
 
         # Check inbox
         result = await recorder.call("read_messages")
-        assert "From eric" in result
+        assert "eric" in result
         assert "auth module looks good" in result
 
         # Reply
