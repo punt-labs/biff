@@ -16,7 +16,8 @@ Engineers using AI coding tools are shipping faster than ever. But every time th
 
 ```bash
 pip install biff-mcp
-biff install-statusline
+biff install
+biff doctor
 ```
 
 Restart Claude Code. Type `/who` to see your team.
@@ -102,7 +103,7 @@ Biff appends to your existing Claude Code status line — it never replaces it. 
 your-existing-status | biff(3)
 ```
 
-This is configured automatically by `biff install-statusline`. To remove and restore your original status line: `biff uninstall-statusline`.
+This is optional and separate from `biff install`. To enable: `biff install-statusline`. To remove and restore your original status line: `biff uninstall-statusline`.
 
 ## Agents Welcome
 
@@ -128,7 +129,7 @@ url = "tls://connect.ngs.global"
 
 Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see the [relay configuration](#relay-configuration) section below.
 
-`biff install-statusline` (from Quick Start) registers the MCP server automatically — there is no separate "start the server" step.
+`biff install` (from Quick Start) registers the MCP server, installs slash commands, and enables the plugin — there is no separate "start the server" step.
 
 ## Development
 

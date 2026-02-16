@@ -1,7 +1,7 @@
 """Biff CLI entry point.
 
-Provides ``biff serve``, ``biff version``, ``biff init``, and status line
-management.
+Provides ``biff serve``, ``biff version``, ``biff init``, ``biff install``,
+``biff doctor``, ``biff uninstall``, and status line management.
 """
 
 from __future__ import annotations
@@ -175,6 +175,46 @@ def init(
         print(f"  Relay: {relay_url}")
     if not members and not relay_url:
         print("  (empty — add [team] or [relay] sections as needed)")
+
+
+@app.command()
+def install() -> None:
+    """Install biff plugin and register MCP server."""
+    from biff.installer import install as do_install
+
+    result = do_install()
+    for step in result.steps:
+        symbol = "\u2713" if step.passed else "\u2717"
+        print(f"  {symbol} {step.name}: {step.message}")
+    print()
+    print(result.message)
+    if not result.installed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def doctor() -> None:
+    """Check biff installation health."""
+    from biff.doctor import check_environment
+
+    code = check_environment()
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@app.command()
+def uninstall() -> None:
+    """Uninstall biff plugin and MCP server."""
+    from biff.installer import uninstall as do_uninstall
+
+    result = do_uninstall()
+    for step in result.steps:
+        symbol = "\u2713" if step.passed else "\u2717"
+        print(f"  {symbol} {step.name}: {step.message}")
+    print()
+    print(result.message)
+    if not result.uninstalled:
+        raise typer.Exit(code=1)
 
 
 @app.command()
