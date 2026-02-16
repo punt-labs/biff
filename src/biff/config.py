@@ -108,6 +108,29 @@ def get_os_user() -> str | None:
 _DEFAULT_DATA_DIR_NAME = "_default"
 
 
+def sanitize_repo_name(name: str) -> str:
+    """Sanitize a repo name for use in NATS resource names.
+
+    NATS bucket names allow ASCII alphanumeric, dash, and underscore
+    only.  Subject dots are level separators; wildcards (``*``, ``>``)
+    are reserved.  Spaces become dashes; dots become dashes; non-ASCII
+    and remaining special characters are stripped.
+
+    Raises ``SystemExit`` if the result is empty — a repo name that
+    sanitizes to nothing would silently share a NATS namespace with
+    other unusable names, causing the exact collision this function
+    exists to prevent.
+    """
+    clean = name.replace(".", "-").replace(" ", "-")
+    sanitized = "".join(c for c in clean if (c.isascii() and c.isalnum()) or c in "-_")
+    if not sanitized:
+        raise SystemExit(
+            f"Repo name {name!r} contains no usable characters after sanitization.\n"
+            "Rename the directory to include ASCII letters or digits."
+        )
+    return sanitized
+
+
 def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
     """Compute data directory: ``{prefix}/biff/{repo_name}/``."""
     return prefix / "biff" / repo_root.name
@@ -236,9 +259,16 @@ def load_config(
     else:
         data_dir = prefix / "biff" / _DEFAULT_DATA_DIR_NAME
 
+    repo_name = (
+        sanitize_repo_name(repo_root.name)
+        if repo_root is not None
+        else _DEFAULT_DATA_DIR_NAME
+    )
+
     config = BiffConfig(
         user=user,
         display_name=display_name,
+        repo_name=repo_name,
         relay_url=relay_url,
         relay_auth=relay_auth,
         team=team,
