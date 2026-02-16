@@ -111,10 +111,10 @@ _DEFAULT_DATA_DIR_NAME = "_default"
 def sanitize_repo_name(name: str) -> str:
     """Sanitize a repo name for use in NATS resource names.
 
-    NATS bucket names allow alphanumeric, dash, and underscore only.
-    Subject dots are level separators; wildcards (``*``, ``>``) are
-    reserved.  Spaces become dashes; dots become dashes; everything
-    else non-alphanumeric/dash/underscore is stripped.
+    NATS bucket names allow ASCII alphanumeric, dash, and underscore
+    only.  Subject dots are level separators; wildcards (``*``, ``>``)
+    are reserved.  Spaces become dashes; dots become dashes; non-ASCII
+    and remaining special characters are stripped.
 
     Raises ``SystemExit`` if the result is empty — a repo name that
     sanitizes to nothing would silently share a NATS namespace with
@@ -122,11 +122,11 @@ def sanitize_repo_name(name: str) -> str:
     exists to prevent.
     """
     clean = name.replace(".", "-").replace(" ", "-")
-    sanitized = "".join(c for c in clean if c.isalnum() or c in "-_")
+    sanitized = "".join(c for c in clean if (c.isascii() and c.isalnum()) or c in "-_")
     if not sanitized:
         raise SystemExit(
             f"Repo name {name!r} contains no usable characters after sanitization.\n"
-            "Rename the directory or set repo_name explicitly in .biff."
+            "Rename the directory to include ASCII letters or digits."
         )
     return sanitized
 

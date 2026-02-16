@@ -131,6 +131,9 @@ class TestSanitizeRepoName:
     def test_nats_wildcards_stripped(self) -> None:
         assert sanitize_repo_name("app*>test") == "apptest"
 
+    def test_unicode_stripped(self) -> None:
+        assert sanitize_repo_name("café") == "caf"
+
 
 # -- compute_data_dir --
 
