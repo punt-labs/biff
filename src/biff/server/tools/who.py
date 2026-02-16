@@ -72,5 +72,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         sessions = await state.relay.get_sessions()
         if not sessions:
             return "No sessions."
-        sorted_sessions = sorted(sessions, key=lambda s: (s.user, s.tty))
+        sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)
         return _format_table(sorted_sessions)

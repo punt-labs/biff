@@ -164,6 +164,31 @@ class TestFingerTool:
         assert "Host: dev-box" in result
         assert "Dir: /home/eric/project" in result
 
+    async def test_multi_tty_shows_header_once(self, state: ServerState) -> None:
+        """Multiple TTYs show Login/Name once, not per-TTY."""
+        await state.relay.update_session(
+            UserSession(
+                user="eric",
+                tty="tty1",
+                display_name="Eric Alvarez",
+                plan="coding",
+            )
+        )
+        await state.relay.update_session(
+            UserSession(
+                user="eric",
+                tty="tty2",
+                display_name="Eric Alvarez",
+                plan="reviewing",
+            )
+        )
+        fn = _get_tool_fn(state, "finger")
+        result = await fn(user="eric")
+        assert result.count("Login: eric") == 1
+        assert result.count("Name: Eric Alvarez") == 1
+        assert "coding" in result
+        assert "reviewing" in result
+
 
 class TestWhoTool:
     async def test_always_includes_self(self, state: ServerState) -> None:
@@ -213,15 +238,27 @@ class TestWhoTool:
         assert "@recent" in result
         assert "2d" in result
 
-    async def test_sorted_by_username(self, state: ServerState) -> None:
+    async def test_sorted_by_idle_time(self, state: ServerState) -> None:
+        now = datetime.now(UTC)
         await state.relay.update_session(
-            UserSession(user="zara", tty="tty0", plan="testing")
+            UserSession(
+                user="zara",
+                tty="tty0",
+                plan="testing",
+                last_active=now - timedelta(hours=3),
+            )
         )
         await state.relay.update_session(
-            UserSession(user="alice", tty="tty0", plan="coding")
+            UserSession(
+                user="alice",
+                tty="tty0",
+                plan="coding",
+                last_active=now,
+            )
         )
         fn = _get_tool_fn(state, "who")
         result = await fn()
+        # Most recently active first
         assert result.index("@alice") < result.index("@zara")
 
     async def test_preserves_pipe_in_plan(self, state: ServerState) -> None:
