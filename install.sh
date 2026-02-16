@@ -326,6 +326,27 @@ if [[ -d "$CACHE_DIR" ]]; then
   ok "Cleared plugin cache (will rebuild on next launch)"
 fi
 
+# Register PostToolUse hook for output formatting
+HOOK_SCRIPT="$INSTALL_DIR/hooks/suppress-output.sh"
+if [[ -f "$HOOK_SCRIPT" ]] && [[ -f "$SETTINGS" ]] && command -v jq &>/dev/null; then
+  chmod +x "$HOOK_SCRIPT"
+  if jq -e '.hooks.PostToolUse[]? | select(.matcher == "mcp__biff__.*")' "$SETTINGS" &>/dev/null; then
+    ok "PostToolUse hook already registered"
+  else
+    TMPFILE="$(mktemp)"
+    jq --arg cmd "$HOOK_SCRIPT" '
+      .hooks //= {} |
+      .hooks.PostToolUse //= [] |
+      .hooks.PostToolUse += [{
+        "matcher": "mcp__biff__.*",
+        "hooks": [{"type": "command", "command": $cmd}]
+      }]
+    ' "$SETTINGS" > "$TMPFILE"
+    mv "$TMPFILE" "$SETTINGS"
+    ok "Registered PostToolUse hook for output formatting"
+  fi
+fi
+
 # --- Step 6: Standalone commands (/who, /mesg, etc.) -----------------------
 
 header "Slash commands"
