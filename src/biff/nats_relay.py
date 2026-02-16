@@ -4,7 +4,7 @@
 
 - **NATS KV** (``biff-{repo}-sessions`` bucket) for session/presence data
   with TTL-based expiry.
-- **NATS JetStream** (``BIFF_{repo}_INBOX`` stream) with ``WORK_QUEUE``
+- **NATS JetStream** (``biff-{repo}-inbox`` stream) with ``WORK_QUEUE``
   retention for POP message semantics.
 
 All resource names are scoped by ``repo_name`` so that multiple repos
@@ -78,7 +78,7 @@ class NatsRelay:
         self._auth = auth
         self._name = name
         self._repo_name = repo_name
-        self._stream_name = f"BIFF_{repo_name}_INBOX"
+        self._stream_name = f"biff-{repo_name}-inbox"
         self._subject_prefix = f"biff.{repo_name}.inbox"
         self._kv_bucket = f"biff-{repo_name}-sessions"
         self._nc: NatsClient | None = None

@@ -33,7 +33,7 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
     with suppress(Exception):
-        await js.delete_stream(f"BIFF_{_TEST_REPO}_INBOX")
+        await js.delete_stream(f"biff-{_TEST_REPO}-inbox")
     with suppress(Exception):
         await js.delete_key_value(f"biff-{_TEST_REPO}-sessions")  # pyright: ignore[reportUnknownMemberType]
     await nc.close()
