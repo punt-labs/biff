@@ -22,7 +22,7 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -70,7 +70,7 @@ class Relay(Protocol):
 
     async def heartbeat(self, user: str) -> None: ...
 
-    async def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]: ...
+    async def get_sessions(self) -> list[UserSession]: ...
 
     # -- Lifecycle --
 
@@ -162,10 +162,9 @@ class LocalRelay:
             sessions[user] = UserSession(user=user)
         self._write_sessions(sessions)
 
-    async def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]:
-        """Get sessions active within the TTL (seconds)."""
-        cutoff = datetime.now(UTC) - timedelta(seconds=ttl)
-        return [s for s in self._read_sessions().values() if s.last_active >= cutoff]
+    async def get_sessions(self) -> list[UserSession]:
+        """Get all sessions."""
+        return list(self._read_sessions().values())
 
     async def close(self) -> None:
         """No-op — filesystem relay has no connection to close."""

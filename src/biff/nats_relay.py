@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 _STREAM_NAME = "BIFF_INBOX"
 _SUBJECT_PREFIX = "biff.inbox"
 _KV_BUCKET = "biff-sessions"
-_KV_TTL = 300  # seconds — buffer beyond default session TTL
+_KV_TTL = 2_592_000  # 30 days — sessions persist for long-lived plans
 _KV_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — small JSON session blobs
 _STREAM_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — messages consumed on read
 _FETCH_BATCH = 100
@@ -299,10 +299,9 @@ class NatsRelay:
             updated = UserSession(user=user)
         await kv.put(user, updated.model_dump_json().encode())
 
-    async def get_active_sessions(self, *, ttl: int = 120) -> list[UserSession]:
-        """Return sessions active within the TTL window."""
+    async def get_sessions(self) -> list[UserSession]:
+        """Return all sessions (NATS KV TTL handles expiry)."""
         _, kv = await self._ensure_connected()
-        cutoff = datetime.now(UTC) - timedelta(seconds=ttl)
         sessions: list[UserSession] = []
         try:
             keys = await kv.keys()  # pyright: ignore[reportUnknownMemberType]
@@ -313,9 +312,7 @@ class NatsRelay:
                 entry = await kv.get(key)
                 if entry.value is None:
                     continue
-                session = UserSession.model_validate_json(entry.value)
-                if session.last_active >= cutoff:
-                    sessions.append(session)
+                sessions.append(UserSession.model_validate_json(entry.value))
             except (KeyNotFoundError, ValidationError, ValueError):
                 continue
         return sessions

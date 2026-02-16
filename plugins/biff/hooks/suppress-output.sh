@@ -25,20 +25,22 @@ fi
 # Double-parse: tool_response is a string containing JSON
 RESULT=$(printf '%s' "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
 
-# Empty result — no active sessions
+# Empty result — no sessions
 if [[ -z "$RESULT" ]]; then
   jq -n '{
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
-      updatedMCPToolOutput: "No active sessions."
+      updatedMCPToolOutput: "No sessions."
     }
   }'
   exit 0
 fi
 
-# Parse pipe-separated entries and compute column width
+# Parse pipe-separated entries: @user IDLE +/- plan
+# Compute dynamic column widths for NAME and IDLE
 ROWS=()
-NAME_W=4  # minimum width = length of "NAME"
+NAME_W=4   # minimum = length of "NAME"
+IDLE_W=4   # minimum = length of "IDLE"
 
 IFS='|' read -ra ENTRIES <<< "$RESULT"
 for entry in "${ENTRIES[@]}"; do
@@ -46,22 +48,25 @@ for entry in "${ENTRIES[@]}"; do
   entry="${entry#"${entry%%[![:space:]]*}"}"
   entry="${entry%"${entry##*[![:space:]]}"}"
   user=$(printf '%s' "$entry" | awk '{print $1}')
+  idle=$(printf '%s' "$entry" | awk '{print $2}')
   w=${#user}
+  iw=${#idle}
   (( w > NAME_W )) && NAME_W=$w
+  (( iw > IDLE_W )) && IDLE_W=$iw
   ROWS+=("$entry")
 done
 
-# Build table with dynamic NAME column width
-TABLE=$(printf "%-${NAME_W}s  S  TIME   PLAN" "NAME")
+# Build table with dynamic column widths
+TABLE=$(printf "%-${NAME_W}s  %-${IDLE_W}s  S  PLAN" "NAME" "IDLE")
 
 for entry in "${ROWS[@]}"; do
   user=$(printf '%s' "$entry" | awk '{print $1}')
-  flag=$(printf '%s' "$entry" | awk '{print $2}')
-  time=$(printf '%s' "$entry" | awk '{print $3}')
+  idle=$(printf '%s' "$entry" | awk '{print $2}')
+  flag=$(printf '%s' "$entry" | awk '{print $3}')
   plan=$(printf '%s' "$entry" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i; print ""}')
   # Trim trailing whitespace from plan
   plan="${plan%"${plan##*[![:space:]]}"}"
-  TABLE=$(printf "%s\n%-${NAME_W}s  %s  %s  %s" "$TABLE" "$user" "$flag" "$time" "$plan")
+  TABLE=$(printf "%s\n%-${NAME_W}s  %-${IDLE_W}s  %s  %s" "$TABLE" "$user" "$idle" "$flag" "$plan")
 done
 
 jq -n --arg r "$TABLE" '{

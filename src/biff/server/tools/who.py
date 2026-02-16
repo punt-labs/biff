@@ -1,8 +1,7 @@
 """Presence list tool — ``/who``.
 
-Lists all active sessions within the TTL window.
-Output mirrors Unix ``who`` conventions: ``+`` means accepting
-messages, ``-`` means messages off.
+Lists all sessions, showing idle time like ``w(1)``.
+``+`` means accepting messages, ``-`` means messages off.
 """
 
 from __future__ import annotations
@@ -11,13 +10,12 @@ from typing import TYPE_CHECKING
 
 from biff.models import UserSession
 from biff.server.tools._descriptions import refresh_check_messages
+from biff.server.tools._formatting import format_idle
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-
-_DEFAULT_TTL = 120
 
 
 def _sanitize_plan(plan: str) -> str:
@@ -26,11 +24,11 @@ def _sanitize_plan(plan: str) -> str:
 
 
 def _format_session(s: UserSession) -> str:
-    """Format one session as ``@user +/- HH:MM plan``."""
+    """Format one session as ``@user IDLE +/- plan``."""
+    idle = format_idle(s.last_active)
     flag = "+" if s.biff_enabled else "-"
-    time_str = s.last_active.strftime("%H:%M")
     plan = _sanitize_plan(s.plan) if s.plan else "(no plan)"
-    return f"@{s.user} {flag} {time_str} {plan}"
+    return f"@{s.user} {idle} {flag} {plan}"
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -41,10 +39,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description="List all active team members and what they're working on.",
     )
     async def who() -> str:
-        """List active sessions."""
+        """List all sessions with idle time."""
         await refresh_check_messages(mcp, state)
-        active = await state.relay.get_active_sessions(ttl=_DEFAULT_TTL)
-        if not active:
+        sessions = await state.relay.get_sessions()
+        if not sessions:
             return ""
-        sorted_sessions = sorted(active, key=lambda s: s.user)
+        sorted_sessions = sorted(sessions, key=lambda s: s.user)
         return " | ".join(_format_session(s) for s in sorted_sessions)

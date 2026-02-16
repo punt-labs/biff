@@ -114,12 +114,12 @@ class TestFingerTool:
 
 
 class TestWhoTool:
-    async def test_no_active_sessions(self, state: ServerState) -> None:
+    async def test_no_sessions(self, state: ServerState) -> None:
         fn = _get_tool_fn(state, "who")
         result = await fn()
         assert result == ""
 
-    async def test_lists_active_users(self, state: ServerState) -> None:
+    async def test_lists_users(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="kai", plan="coding"))
         await state.relay.update_session(UserSession(user="eric", plan="reviewing"))
         fn = _get_tool_fn(state, "who")
@@ -128,6 +128,30 @@ class TestWhoTool:
         assert "@eric" in result
         assert "coding" in result
         assert "reviewing" in result
+
+    async def test_shows_idle_time(self, state: ServerState) -> None:
+        old_time = datetime.now(UTC) - timedelta(hours=3)
+        await state.relay.update_session(
+            UserSession(user="kai", plan="coding", last_active=old_time)
+        )
+        fn = _get_tool_fn(state, "who")
+        result = await fn()
+        assert "3h" in result
+
+    async def test_includes_all_sessions(self, state: ServerState) -> None:
+        old_time = datetime.now(UTC) - timedelta(days=2)
+        recent_time = datetime.now(UTC) - timedelta(seconds=30)
+        await state.relay.update_session(
+            UserSession(user="old", last_active=old_time, plan="vacation")
+        )
+        await state.relay.update_session(
+            UserSession(user="recent", last_active=recent_time, plan="coding")
+        )
+        fn = _get_tool_fn(state, "who")
+        result = await fn()
+        assert "@old" in result
+        assert "@recent" in result
+        assert "2d" in result
 
     async def test_sorted_by_username(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="zara", plan="testing"))
@@ -149,20 +173,6 @@ class TestWhoTool:
         result = await fn()
         assert "\n" not in result.split(" | ")[0]
         assert "line1 line2" in result
-
-    async def test_excludes_stale_sessions(self, state: ServerState) -> None:
-        old_time = datetime.now(UTC) - timedelta(seconds=121)
-        recent_time = datetime.now(UTC) - timedelta(seconds=119)
-        await state.relay.update_session(
-            UserSession(user="stale", last_active=old_time)
-        )
-        await state.relay.update_session(
-            UserSession(user="recent", last_active=recent_time)
-        )
-        fn = _get_tool_fn(state, "who")
-        result = await fn()
-        assert "@recent" in result
-        assert "@stale" not in result
 
 
 class TestPlanTool:
