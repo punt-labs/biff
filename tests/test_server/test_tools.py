@@ -117,7 +117,7 @@ class TestWhoTool:
     async def test_no_active_sessions(self, state: ServerState) -> None:
         fn = _get_tool_fn(state, "who")
         result = await fn()
-        assert "No active sessions" in result
+        assert result == ""
 
     async def test_lists_active_users(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="kai", plan="coding"))
@@ -128,6 +128,27 @@ class TestWhoTool:
         assert "@eric" in result
         assert "coding" in result
         assert "reviewing" in result
+
+    async def test_sorted_by_username(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="zara", plan="testing"))
+        await state.relay.update_session(UserSession(user="alice", plan="coding"))
+        fn = _get_tool_fn(state, "who")
+        result = await fn()
+        assert result.index("@alice") < result.index("@zara")
+
+    async def test_sanitizes_pipe_in_plan(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="kai", plan="fix | deploy"))
+        fn = _get_tool_fn(state, "who")
+        result = await fn()
+        assert "|" not in result
+        assert "fix / deploy" in result
+
+    async def test_sanitizes_newline_in_plan(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="kai", plan="line1\nline2"))
+        fn = _get_tool_fn(state, "who")
+        result = await fn()
+        assert "\n" not in result.split(" | ")[0]
+        assert "line1 line2" in result
 
     async def test_excludes_stale_sessions(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=121)

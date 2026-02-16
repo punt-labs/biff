@@ -23,31 +23,44 @@ if [[ "$TOOL" != "mcp__biff__who" ]]; then
 fi
 
 # Double-parse: tool_response is a string containing JSON
-RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
+RESULT=$(printf '%s' "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
+
+# Empty result — no active sessions
+if [[ -z "$RESULT" ]]; then
+  jq -n '{
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      updatedMCPToolOutput: "No active sessions."
+    }
+  }'
+  exit 0
+fi
 
 # Parse pipe-separated entries and compute column width
 ROWS=()
 NAME_W=4  # minimum width = length of "NAME"
 
-if [[ "$RESULT" == *" + "* || "$RESULT" == *" - "* ]]; then
-  IFS='|' read -ra ENTRIES <<< "$RESULT"
-  for entry in "${ENTRIES[@]}"; do
-    entry=$(echo "$entry" | xargs)  # trim whitespace
-    user=$(echo "$entry" | awk '{print $1}')
-    w=${#user}
-    (( w > NAME_W )) && NAME_W=$w
-    ROWS+=("$entry")
-  done
-fi
+IFS='|' read -ra ENTRIES <<< "$RESULT"
+for entry in "${ENTRIES[@]}"; do
+  # Trim leading/trailing whitespace without xargs
+  entry="${entry#"${entry%%[![:space:]]*}"}"
+  entry="${entry%"${entry##*[![:space:]]}"}"
+  user=$(printf '%s' "$entry" | awk '{print $1}')
+  w=${#user}
+  (( w > NAME_W )) && NAME_W=$w
+  ROWS+=("$entry")
+done
 
 # Build table with dynamic NAME column width
 TABLE=$(printf "%-${NAME_W}s  S  TIME   PLAN" "NAME")
 
 for entry in "${ROWS[@]}"; do
-  user=$(echo "$entry" | awk '{print $1}')
-  flag=$(echo "$entry" | awk '{print $2}')
-  time=$(echo "$entry" | awk '{print $3}')
-  plan=$(echo "$entry" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i; print ""}' | xargs)
+  user=$(printf '%s' "$entry" | awk '{print $1}')
+  flag=$(printf '%s' "$entry" | awk '{print $2}')
+  time=$(printf '%s' "$entry" | awk '{print $3}')
+  plan=$(printf '%s' "$entry" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i; print ""}')
+  # Trim trailing whitespace from plan
+  plan="${plan%"${plan##*[![:space:]]}"}"
   TABLE=$(printf "%s\n%-${NAME_W}s  %s  %s  %s" "$TABLE" "$user" "$flag" "$time" "$plan")
 done
 

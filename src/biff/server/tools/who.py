@@ -20,11 +20,16 @@ if TYPE_CHECKING:
 _DEFAULT_TTL = 120
 
 
+def _sanitize_plan(plan: str) -> str:
+    """Sanitize plan text so it doesn't break pipe-separated output."""
+    return plan.replace("|", "/").replace("\n", " ").replace("\r", " ")
+
+
 def _format_session(s: UserSession) -> str:
     """Format one session as ``@user +/- HH:MM plan``."""
     flag = "+" if s.biff_enabled else "-"
     time_str = s.last_active.strftime("%H:%M")
-    plan = s.plan or "(no plan)"
+    plan = _sanitize_plan(s.plan) if s.plan else "(no plan)"
     return f"@{s.user} {flag} {time_str} {plan}"
 
 
@@ -40,5 +45,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await refresh_check_messages(mcp, state)
         active = await state.relay.get_active_sessions(ttl=_DEFAULT_TTL)
         if not active:
-            return "No active sessions."
-        return " | ".join(_format_session(s) for s in active)
+            return ""
+        sorted_sessions = sorted(active, key=lambda s: s.user)
+        return " | ".join(_format_session(s) for s in sorted_sessions)

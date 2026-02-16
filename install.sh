@@ -330,8 +330,17 @@ fi
 HOOK_SCRIPT="$INSTALL_DIR/hooks/suppress-output.sh"
 if [[ -f "$HOOK_SCRIPT" ]] && [[ -f "$SETTINGS" ]] && command -v jq &>/dev/null; then
   chmod +x "$HOOK_SCRIPT"
-  if jq -e '.hooks.PostToolUse[]? | select(.matcher == "mcp__biff__.*")' "$SETTINGS" &>/dev/null; then
+  EXISTING_CMD=$(jq -r '.hooks.PostToolUse[]? | select(.matcher == "mcp__biff__.*") | .hooks[0].command // ""' "$SETTINGS" 2>/dev/null)
+  if [[ "$EXISTING_CMD" == "$HOOK_SCRIPT" ]]; then
     ok "PostToolUse hook already registered"
+  elif [[ -n "$EXISTING_CMD" ]]; then
+    # Hook exists but points at a different path — update it
+    TMPFILE="$(mktemp)"
+    jq --arg cmd "$HOOK_SCRIPT" '
+      (.hooks.PostToolUse[] | select(.matcher == "mcp__biff__.*") | .hooks[0].command) = $cmd
+    ' "$SETTINGS" > "$TMPFILE"
+    mv "$TMPFILE" "$SETTINGS"
+    ok "Updated PostToolUse hook command path"
   else
     TMPFILE="$(mktemp)"
     jq --arg cmd "$HOOK_SCRIPT" '
