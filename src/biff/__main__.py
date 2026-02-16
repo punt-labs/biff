@@ -6,7 +6,6 @@ management.
 
 from __future__ import annotations
 
-import subprocess
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Annotated
@@ -17,7 +16,7 @@ import typer
 from biff.config import (
     DEMO_RELAY_URL,
     find_git_root,
-    get_git_user,
+    get_github_identity,
     get_os_user,
     load_config,
 )
@@ -37,7 +36,7 @@ def version() -> None:
 def serve(
     user: Annotated[
         str | None,
-        typer.Option(help="Your username. Auto-detected from 'git config biff.user'."),
+        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
     ] = None,
     data_dir: Annotated[
         Path | None,
@@ -105,36 +104,6 @@ def uninstall_statusline() -> None:
         raise typer.Exit(code=1)
 
 
-def _resolve_github_user() -> str | None:
-    """Resolve GitHub username via ``gh api user``, or ``None``."""
-    try:
-        result = subprocess.run(
-            ["gh", "api", "user", "--jq", ".login"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        value = result.stdout.strip()
-        return value if result.returncode == 0 and value else None
-    except FileNotFoundError:
-        return None
-
-
-def _set_git_user(user: str, *, cwd: Path) -> None:
-    """Persist identity via ``git config biff.user`` in *cwd*."""
-    try:
-        subprocess.run(  # noqa: S603
-            ["git", "config", "biff.user", user],  # noqa: S607
-            check=True,
-            cwd=cwd,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        raise SystemExit(
-            "Failed to set 'git config biff.user'.\n"
-            "Set it manually: git config biff.user <handle>"
-        ) from None
-
-
 def _toml_basic_string(value: str) -> str:
     """Escape *value* for use as a TOML basic string."""
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -173,17 +142,15 @@ def init(
             f"{biff_file} already exists. Edit it directly or remove it first."
         )
 
-    # Resolve identity: git config > gh CLI > OS username
-    user = get_git_user(cwd=repo_root) or _resolve_github_user() or get_os_user()
+    # Resolve identity: GitHub CLI > OS username
+    identity = get_github_identity()
+    user = (identity.login if identity is not None else None) or get_os_user()
     if user is None:
-        raise SystemExit("Could not determine username from any source.")
-
-    # Offer to persist identity in git config if not already set
-    if get_git_user(cwd=repo_root) is None:
-        print(f"Resolved identity: {user}")
-        if typer.confirm(f"Set 'git config biff.user {user}'?", default=True):
-            _set_git_user(user, cwd=repo_root)
-            print(f"Set git config biff.user = {user}")
+        raise SystemExit(
+            "Could not determine username.\n"
+            "Install the gh CLI and authenticate: gh auth login"
+        )
+    print(f"Identity: {user}")
 
     # Gather team members
     members_input = typer.prompt(

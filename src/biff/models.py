@@ -75,6 +75,7 @@ class UserSession(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     user: str = Field(min_length=1)
+    display_name: str = ""
     plan: str = ""
     last_active: datetime = Field(default_factory=_utc_now)
     biff_enabled: bool = True
@@ -114,6 +115,7 @@ class BiffConfig(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     user: str = Field(min_length=1)
+    display_name: str = ""
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
     team: tuple[str, ...] = ()

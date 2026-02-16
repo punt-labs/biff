@@ -193,7 +193,7 @@ if [[ -f "$PLUGIN_JSON" ]] && command -v jq &>/dev/null; then
   ok "Plugin version: $PLUGIN_VERSION"
 else
   PLUGIN_VERSION="0.1.0"
-  PLUGIN_DESCRIPTION="UNIX-style slash commands for biff team communication: /who, /finger, /plan, /mesg, /check, /biff"
+  PLUGIN_DESCRIPTION="UNIX-style slash commands for biff team communication: /who, /finger, /plan, /write, /read, /on, /off"
   warn "Could not read plugin.json — using defaults"
 fi
 
@@ -326,6 +326,36 @@ if [[ -d "$CACHE_DIR" ]]; then
   ok "Cleared plugin cache (will rebuild on next launch)"
 fi
 
+# Register PostToolUse hook for output formatting
+HOOK_SCRIPT="$INSTALL_DIR/hooks/suppress-output.sh"
+if [[ -f "$HOOK_SCRIPT" ]] && [[ -f "$SETTINGS" ]] && command -v jq &>/dev/null; then
+  chmod +x "$HOOK_SCRIPT"
+  EXISTING_CMD=$(jq -r '.hooks.PostToolUse[]? | select(.matcher == "mcp__biff__.*") | .hooks[0].command // ""' "$SETTINGS" 2>/dev/null)
+  if [[ "$EXISTING_CMD" == "$HOOK_SCRIPT" ]]; then
+    ok "PostToolUse hook already registered"
+  elif [[ -n "$EXISTING_CMD" ]]; then
+    # Hook exists but points at a different path — update it
+    TMPFILE="$(mktemp)"
+    jq --arg cmd "$HOOK_SCRIPT" '
+      (.hooks.PostToolUse[] | select(.matcher == "mcp__biff__.*") | .hooks[0].command) = $cmd
+    ' "$SETTINGS" > "$TMPFILE"
+    mv "$TMPFILE" "$SETTINGS"
+    ok "Updated PostToolUse hook command path"
+  else
+    TMPFILE="$(mktemp)"
+    jq --arg cmd "$HOOK_SCRIPT" '
+      .hooks //= {} |
+      .hooks.PostToolUse //= [] |
+      .hooks.PostToolUse += [{
+        "matcher": "mcp__biff__.*",
+        "hooks": [{"type": "command", "command": $cmd}]
+      }]
+    ' "$SETTINGS" > "$TMPFILE"
+    mv "$TMPFILE" "$SETTINGS"
+    ok "Registered PostToolUse hook for output formatting"
+  fi
+fi
+
 # --- Step 6: Standalone commands (/who, /mesg, etc.) -----------------------
 
 header "Slash commands"
@@ -353,7 +383,7 @@ install_cmd() {
 }
 
 COMMANDS_INSTALLED=0
-for cmd in who finger mesg check; do
+for cmd in who finger write read; do
   SRC="$INSTALL_DIR/commands/$cmd.md"
   if [[ -f "$SRC" ]]; then
     install_cmd "$SRC" "$cmd"
@@ -365,12 +395,12 @@ if [[ -f "$INSTALL_DIR/commands/plan.md" ]]; then
   install_cmd "$INSTALL_DIR/commands/plan.md" "dotplan"
 fi
 
-# /biff on|off (standalone command — plugin has separate on.md/off.md)
+# /biff y|n (standalone command — plugin has separate on.md/off.md)
 BIFF_CMD_FILE="$(mktemp)"
 cat > "$BIFF_CMD_FILE" <<'BIFF_CMD'
 ---
-description: Control message reception (on/off)
-argument-hint: "on|off"
+description: Control message reception (y/n)
+argument-hint: "y|n"
 ---
 
 ## Input
@@ -379,16 +409,25 @@ Arguments: $ARGUMENTS
 
 ## Task
 
-If the argument is `on`, call `mcp__biff__biff` with `enabled` set to `true` and confirm messages are now enabled.
+If the argument is `y`, call `mcp__biff__mesg` with `enabled` set to `true`.
 
-If the argument is `off`, call `mcp__biff__biff` with `enabled` set to `false` and confirm messages are now disabled.
+If the argument is `n`, call `mcp__biff__mesg` with `enabled` set to `false`.
 
-If no argument or an unrecognized argument is provided, respond with: `Usage: /biff on|off`
+If no argument or an unrecognized argument is provided, respond with: `Usage: /biff y|n`
 
-Do not send any other text besides the tool call and confirmation (or usage message).
+The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call (except the usage message for invalid input).
 BIFF_CMD
 install_cmd "$BIFF_CMD_FILE" "biff"
 rm -f "$BIFF_CMD_FILE"
+
+# Clean up commands from older versions
+for old_cmd in mesg check; do
+  old_file="$CLAUDE_COMMANDS_DIR/$old_cmd.md"
+  if [[ -f "$old_file" ]] && grep -q 'mcp__biff__' "$old_file" 2>/dev/null; then
+    rm -f "$old_file"
+    ok "Removed legacy /$old_cmd command"
+  fi
+done
 
 if [[ $COMMANDS_INSTALLED -gt 0 ]]; then
   ok "Installed $COMMANDS_INSTALLED commands to $CLAUDE_COMMANDS_DIR"
@@ -429,5 +468,5 @@ echo ""
 info "Next steps:"
 info "  1. Restart Claude Code (or start a new session)"
 info "  2. Run 'biff init' in each project repo to configure teams"
-info "  3. Use /who, /finger, /mesg, /check, /dotplan, /biff on|off"
+info "  3. Use /who, /finger, /write, /read, /dotplan, /biff y|n"
 echo ""

@@ -1,7 +1,7 @@
 """Configuration discovery and loading.
 
 Finds the ``.biff`` TOML file at the git repo root, resolves user
-identity from ``git config biff.user``, and computes the shared data
+identity from GitHub (``gh``) or the OS, and computes the shared data
 directory.
 
 Config file format (``.biff``)::
@@ -59,18 +59,40 @@ def find_git_root(start: Path | None = None) -> Path | None:
     return None
 
 
-def get_git_user(*, cwd: Path | None = None) -> str | None:
-    """Read ``git config biff.user``, returning *None* if unset."""
+@dataclass(frozen=True)
+class GitHubIdentity:
+    """GitHub login and display name resolved from ``gh api user``."""
+
+    login: str
+    display_name: str
+
+
+def get_github_identity() -> GitHubIdentity | None:
+    """Resolve GitHub login and display name in a single API call.
+
+    Returns ``None`` when ``gh`` is missing or the call fails.
+    """
     try:
         result = subprocess.run(
-            ["git", "config", "biff.user"],  # noqa: S607
+            [  # noqa: S607
+                "gh",
+                "api",
+                "user",
+                "--jq",
+                'select(.login) | [.login, .name // ""] | @tsv',
+            ],
             capture_output=True,
             text=True,
             check=False,
-            cwd=cwd,
         )
-        value = result.stdout.strip()
-        return value if result.returncode == 0 and value else None
+        if result.returncode != 0:
+            return None
+        parts = result.stdout.strip().split("\t", maxsplit=1)
+        login = parts[0].strip()
+        if not login:
+            return None
+        display_name = parts[1].strip() if len(parts) > 1 else ""
+        return GitHubIdentity(login=login, display_name=display_name)
     except FileNotFoundError:
         return None
 
@@ -171,7 +193,7 @@ def load_config(
 
     1. CLI overrides (``user_override``, ``data_dir_override``) take precedence.
     2. ``.biff`` TOML for team roster and relay URL.
-    3. ``git config biff.user`` for identity, falling back to OS username.
+    3. GitHub username (via ``gh api user``), falling back to OS username.
     4. Data dir computed from ``{prefix}/biff/{repo_name}/``, falling back
        to ``{prefix}/biff/_default/`` outside git repos.
 
@@ -188,11 +210,20 @@ def load_config(
         raw = load_biff_file(repo_root)
         team, relay_url, relay_auth = _extract_biff_fields(raw)
 
-    # Resolve user: CLI override > git config > OS username
-    user = user_override or get_git_user() or get_os_user()
+    # Resolve user: CLI override > GitHub identity > OS username
+    display_name = ""
+    if user_override is not None:
+        user: str | None = user_override
+    else:
+        identity = get_github_identity()
+        if identity is not None:
+            user = identity.login
+            display_name = identity.display_name
+        else:
+            user = get_os_user()
     if user is None:
         msg = (
-            "No user configured. Set via: git config biff.user <handle>"
+            "No user configured. Install the gh CLI and authenticate,"
             " or pass --user <handle>"
         )
         raise SystemExit(msg)
@@ -206,6 +237,10 @@ def load_config(
         data_dir = prefix / "biff" / _DEFAULT_DATA_DIR_NAME
 
     config = BiffConfig(
-        user=user, relay_url=relay_url, relay_auth=relay_auth, team=team
+        user=user,
+        display_name=display_name,
+        relay_url=relay_url,
+        relay_auth=relay_auth,
+        team=team,
     )
     return ResolvedConfig(config=config, data_dir=data_dir, repo_root=repo_root)

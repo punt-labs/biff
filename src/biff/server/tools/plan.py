@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.server.tools._descriptions import refresh_check_messages
+from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -27,7 +27,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ),
     )
     async def plan(message: str) -> str:
-        """Update the current user's plan."""
+        """Update the current user's ``.plan`` file.
+
+        Output echoes the plan, matching ``cat ~/.plan``::
+
+            Plan: refactoring auth
+        """
         await update_current_session(state, plan=message)
-        await refresh_check_messages(mcp, state)
-        return f"Plan updated: {message}"
+        await refresh_read_messages(mcp, state)
+        return f"Plan: {message}"

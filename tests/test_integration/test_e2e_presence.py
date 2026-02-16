@@ -22,10 +22,10 @@ async def _check_description(client: Client[Any]) -> str:
     """Get the check_messages tool description from an MCP client."""
     tools = await client.list_tools()
     for tool in tools:
-        if tool.name == "check_messages":
+        if tool.name == "read_messages":
             assert tool.description is not None
             return tool.description
-    raise AssertionError("check_messages tool not found")
+    raise AssertionError("read_messages tool not found")
 
 
 class TestCrossUserVisibility:
@@ -56,9 +56,9 @@ class TestCrossUserVisibility:
         await kai.call("plan", message="debugging flaky test")
         result = await eric.call("finger", user="@kai")
 
-        assert "@kai" in result
+        assert "Login: kai" in result
         assert "debugging flaky test" in result
-        assert "accepting messages" in result
+        assert "Messages: on" in result
 
     @pytest.mark.transcript
     async def test_biff_off_visible_to_other(
@@ -69,10 +69,10 @@ class TestCrossUserVisibility:
         kai.transcript.description = "kai goes heads-down, eric sees the status change."
 
         await kai.call("plan", message="deep work on storage layer")
-        await kai.call("biff", enabled=False)
+        await kai.call("mesg", enabled=False)
         result = await eric.call("finger", user="@kai")
 
-        assert "messages off" in result
+        assert "Messages: off" in result
         assert "deep work on storage layer" in result
 
 
@@ -141,17 +141,17 @@ class TestPresenceLifecycle:
         assert "@eric" in who_result
 
         # kai goes heads-down
-        await kai.call("biff", enabled=False)
+        await kai.call("mesg", enabled=False)
         finger_result = await eric.call("finger", user="@kai")
-        assert "messages off" in finger_result
+        assert "Messages: off" in finger_result
 
         # kai finishes deep work, comes back
-        await kai.call("biff", enabled=True)
+        await kai.call("mesg", enabled=True)
         await kai.call("plan", message="auth refactor done, reviewing PRs")
 
         # eric checks kai's new status
         finger_result = await eric.call("finger", user="@kai")
-        assert "accepting messages" in finger_result
+        assert "Messages: on" in finger_result
         assert "auth refactor done" in finger_result
 
 
@@ -166,11 +166,12 @@ class TestCrossUserMessaging:
         kai.transcript.title = "Cross-user: send and check messages"
         kai.transcript.description = "kai sends a message, eric checks inbox."
 
-        result = await kai.call("send_message", to="@eric", message="PR #42 is ready")
+        result = await kai.call("write", to="@eric", message="PR #42 is ready")
         assert "@eric" in result
 
-        result = await eric.call("check_messages")
-        assert "@kai" in result
+        result = await eric.call("read_messages")
+        assert "FROM" in result
+        assert "kai" in result
         assert "PR #42 is ready" in result
 
     @pytest.mark.transcript
@@ -181,10 +182,10 @@ class TestCrossUserMessaging:
         kai.transcript.title = "Cross-user: messages marked read"
         kai.transcript.description = "eric checks messages, second check is empty."
 
-        await kai.call("send_message", to="eric", message="first message")
-        await eric.call("check_messages")
+        await kai.call("write", to="eric", message="first message")
+        await eric.call("read_messages")
 
-        result = await eric.call("check_messages")
+        result = await eric.call("read_messages")
         assert "No new messages" in result
 
     @pytest.mark.transcript
@@ -195,15 +196,15 @@ class TestCrossUserMessaging:
         kai.transcript.title = "Cross-user: bidirectional messaging"
         kai.transcript.description = "kai and eric exchange messages."
 
-        await kai.call("send_message", to="eric", message="review my PR?")
-        await eric.call("send_message", to="kai", message="sure, on it")
+        await kai.call("write", to="eric", message="review my PR?")
+        await eric.call("write", to="kai", message="sure, on it")
 
-        kai_inbox = await kai.call("check_messages")
-        eric_inbox = await eric.call("check_messages")
+        kai_inbox = await kai.call("read_messages")
+        eric_inbox = await eric.call("read_messages")
 
-        assert "@eric" in kai_inbox
+        assert "eric" in kai_inbox
         assert "sure, on it" in kai_inbox
-        assert "@kai" in eric_inbox
+        assert "kai" in eric_inbox
         assert "review my PR?" in eric_inbox
 
     @pytest.mark.transcript
@@ -216,13 +217,13 @@ class TestCrossUserMessaging:
             "eric turns biff off, kai sends anyway, eric checks later."
         )
 
-        await eric.call("biff", enabled=False)
-        await kai.call("send_message", to="eric", message="urgent fix needed")
+        await eric.call("mesg", enabled=False)
+        await kai.call("write", to="eric", message="urgent fix needed")
 
         # eric turns biff back on and checks
-        await eric.call("biff", enabled=True)
-        result = await eric.call("check_messages")
-        assert "@kai" in result
+        await eric.call("mesg", enabled=True)
+        result = await eric.call("read_messages")
+        assert "kai" in result
         assert "urgent fix needed" in result
 
 
@@ -233,7 +234,7 @@ class TestCrossUserDynamicDescriptions:
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """eric sends kai a message; kai's next tool call updates description."""
-        await eric.call("send_message", to="kai", message="auth module ready")
+        await eric.call("write", to="kai", message="auth module ready")
         # kai calls any tool — triggers description refresh
         await kai.call("plan", message="working")
         desc = await _check_description(kai.client)
@@ -244,12 +245,12 @@ class TestCrossUserDynamicDescriptions:
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """After checking messages, description reverts to base."""
-        await eric.call("send_message", to="kai", message="hello")
+        await eric.call("write", to="kai", message="hello")
         await kai.call("plan", message="working")
         desc = await _check_description(kai.client)
         assert "1 unread" in desc
         # Check clears unread
-        await kai.call("check_messages")
+        await kai.call("read_messages")
         desc = await _check_description(kai.client)
         assert "unread" not in desc
 
@@ -257,6 +258,6 @@ class TestCrossUserDynamicDescriptions:
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """Sending a message doesn't add unread to sender's description."""
-        await kai.call("send_message", to="eric", message="hey")
+        await kai.call("write", to="eric", message="hey")
         desc = await _check_description(kai.client)
         assert "unread" not in desc

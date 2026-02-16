@@ -9,4 +9,4 @@ Arguments: $ARGUMENTS
 
 ## Task
 
-Call `mcp__biff__plan` with `message` set to the full arguments string. Confirm the status was set. Do not send any other text besides the tool call and confirmation.
+Call `mcp__biff__plan` with `message` set to the full arguments string. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

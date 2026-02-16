@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from biff.__main__ import app
-from biff.config import ResolvedConfig
+from biff.config import GitHubIdentity, ResolvedConfig
 from biff.models import BiffConfig
 
 runner = CliRunner()
@@ -153,24 +153,26 @@ class TestServeCommand:
         assert call_kwargs["user_override"] is None
 
 
+_KAI_IDENTITY = GitHubIdentity(login="kai", display_name="Kai Chen")
+
+
 class TestInitCommand:
-    @patch("biff.__main__._set_git_user")
-    @patch("biff.__main__._resolve_github_user", return_value=None)
-    @patch("biff.__main__.get_os_user", return_value="kai")
-    @patch("biff.__main__.get_git_user", return_value=None)
+    @patch("biff.__main__.get_os_user", return_value=None)
+    @patch(
+        "biff.__main__.get_github_identity",
+        return_value=_KAI_IDENTITY,
+    )
     @patch("biff.__main__.find_git_root")
     def test_creates_biff_file(
         self,
         mock_root: MagicMock,
-        _mock_git: MagicMock,
-        _mock_os: MagicMock,
         _mock_gh: MagicMock,
-        _mock_set: MagicMock,
+        _mock_os: MagicMock,
         tmp_path: Path,
     ) -> None:
         mock_root.return_value = tmp_path
-        # Simulate: confirm git config=yes, members="eric, priya", relay=""
-        result = runner.invoke(app, ["init"], input="y\neric, priya\n\n")
+        # Simulate: members="eric, priya", relay=""
+        result = runner.invoke(app, ["init"], input="eric, priya\n\n")
         assert result.exit_code == 0
         biff_file = tmp_path / ".biff"
         assert biff_file.exists()

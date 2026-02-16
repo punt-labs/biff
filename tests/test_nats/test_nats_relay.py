@@ -178,26 +178,19 @@ class TestGetSession:
         assert result.biff_enabled is False
 
 
-class TestGetActiveSessions:
+class TestGetSessions:
     async def test_empty(self, relay: NatsRelay) -> None:
-        assert await relay.get_active_sessions() == []
+        assert await relay.get_sessions() == []
 
-    async def test_filters_by_ttl(self, relay: NatsRelay) -> None:
+    async def test_returns_all_sessions(self, relay: NatsRelay) -> None:
         now = datetime.now(UTC)
         recent = UserSession(user="kai", last_active=now)
-        stale = UserSession(user="eric", last_active=now - timedelta(seconds=300))
+        old = UserSession(user="eric", last_active=now - timedelta(seconds=300))
         await relay.update_session(recent)
-        await relay.update_session(stale)
-        active = await relay.get_active_sessions(ttl=120)
-        assert len(active) == 1
-        assert active[0].user == "kai"
-
-    async def test_custom_ttl(self, relay: NatsRelay) -> None:
-        now = datetime.now(UTC)
-        session = UserSession(user="kai", last_active=now - timedelta(seconds=60))
-        await relay.update_session(session)
-        assert len(await relay.get_active_sessions(ttl=30)) == 0
-        assert len(await relay.get_active_sessions(ttl=120)) == 1
+        await relay.update_session(old)
+        sessions = await relay.get_sessions()
+        users = {s.user for s in sessions}
+        assert users == {"kai", "eric"}
 
 
 class TestHeartbeat:
@@ -261,7 +254,7 @@ class TestCrossRelay:
     ) -> None:
         await relay.update_session(UserSession(user="kai", plan="coding"))
         await second_relay.update_session(UserSession(user="eric", plan="reviewing"))
-        active = await relay.get_active_sessions()
-        users = {s.user for s in active}
+        sessions = await relay.get_sessions()
+        users = {s.user for s in sessions}
         assert "kai" in users
         assert "eric" in users

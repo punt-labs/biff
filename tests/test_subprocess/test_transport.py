@@ -33,7 +33,7 @@ class TestServerStartup:
         """Server lists all tools over stdio transport."""
         tools = await biff_client.list_tools()
         names = {t.name for t in tools}
-        expected = {"biff", "check_messages", "finger", "send_message", "who", "plan"}
+        expected = {"mesg", "read_messages", "finger", "write", "who", "plan"}
         assert names == expected
 
     async def test_tools_have_descriptions(self, biff_client: Client[Any]) -> None:
@@ -61,22 +61,22 @@ class TestToolCallOverStdio:
 
     async def test_finger_unknown_user(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("finger", {"user": "nobody"})
-        assert "no active session" in _text(result)
+        assert "Never logged in" in _text(result)
 
     async def test_biff_toggle(self, biff_client: Client[Any]) -> None:
-        result = await biff_client.call_tool("biff", {"enabled": False})
-        assert "off" in _text(result)
-        result = await biff_client.call_tool("biff", {"enabled": True})
-        assert "on" in _text(result)
+        result = await biff_client.call_tool("mesg", {"enabled": False})
+        assert "is n" in _text(result)
+        result = await biff_client.call_tool("mesg", {"enabled": True})
+        assert "is y" in _text(result)
 
     async def test_send_message_returns_text(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool(
-            "send_message", {"to": "eric", "message": "hello over stdio"}
+            "write", {"to": "eric", "message": "hello over stdio"}
         )
         assert "@eric" in _text(result)
 
     async def test_check_messages_empty(self, biff_client: Client[Any]) -> None:
-        result = await biff_client.call_tool("check_messages", {})
+        result = await biff_client.call_tool("read_messages", {})
         assert "No new messages" in _text(result)
 
 
@@ -117,25 +117,25 @@ class TestCrossProcessState:
     ) -> None:
         """kai sends a message; eric receives it across processes."""
         await kai_client.call_tool(
-            "send_message", {"to": "eric", "message": "cross-process msg"}
+            "write", {"to": "eric", "message": "cross-process msg"}
         )
-        result = await eric_client.call_tool("check_messages", {})
+        result = await eric_client.call_tool("read_messages", {})
         text = _text(result)
-        assert "@kai" in text
+        assert "kai" in text
         assert "cross-process msg" in text
 
 
 class TestDynamicDescriptionOverStdio:
-    """check_messages description updates via stdio transport."""
+    """read_messages description updates via stdio transport."""
 
     @staticmethod
     async def _check_desc(client: Client[Any]) -> str:
         tools = await client.list_tools()
         for t in tools:
-            if t.name == "check_messages":
+            if t.name == "read_messages":
                 assert t.description is not None
                 return t.description
-        raise AssertionError("check_messages not found")
+        raise AssertionError("read_messages not found")
 
     async def test_description_updates_after_message(
         self,
@@ -144,7 +144,7 @@ class TestDynamicDescriptionOverStdio:
     ) -> None:
         """kai sends to eric; eric's description shows unread."""
         await kai_client.call_tool(
-            "send_message", {"to": "eric", "message": "subprocess test"}
+            "write", {"to": "eric", "message": "subprocess test"}
         )
         # eric calls any tool to trigger refresh
         await eric_client.call_tool("plan", {"message": "working"})
@@ -158,11 +158,13 @@ class TestDynamicDescriptionOverStdio:
         eric_client: Client[Any],
     ) -> None:
         """After checking, description reverts to base."""
-        await kai_client.call_tool("send_message", {"to": "eric", "message": "hello"})
+        # Drain messages from prior tests (shared NATS relay persists state)
+        await eric_client.call_tool("read_messages", {})
+        await kai_client.call_tool("write", {"to": "eric", "message": "hello"})
         await eric_client.call_tool("plan", {"message": "working"})
         desc = await self._check_desc(eric_client)
         assert "1 unread" in desc
         # Check clears it
-        await eric_client.call_tool("check_messages", {})
+        await eric_client.call_tool("read_messages", {})
         desc = await self._check_desc(eric_client)
         assert "unread" not in desc
