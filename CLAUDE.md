@@ -132,10 +132,25 @@ Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging
 
 Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
+### Version Bumps
+
+Version lives in three files that must stay in sync:
+
+| File | Field |
+|------|-------|
+| `pyproject.toml` | `version = "X.Y.Z"` |
+| `src/biff/plugins/biff/.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
+| `plugins/biff/.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
+
+After editing all three, run `uv lock` to update `uv.lock`. Then reinstall: `uv tool install --force --editable .`
+
+Bump the version on every PR that changes user-facing behavior (new commands, flags, config, wire format, relay changes). Use semver: patch for fixes, minor for features, major for breaking changes.
+
 ### Pre-PR Checklist
 
 Before creating a PR, verify:
 
+- [ ] **Version bumped** if user-facing behavior changed (see Version Bumps above)
 - [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
 - [ ] **CHANGELOG entry** added for notable changes
 - [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`
