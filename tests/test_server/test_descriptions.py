@@ -22,10 +22,12 @@ from biff.server.tools._descriptions import (
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
+_TEST_REPO = "_test-server"
+
 
 @pytest.fixture
 def state(tmp_path: Path) -> ServerState:
-    return create_state(BiffConfig(user="kai"), tmp_path)
+    return create_state(BiffConfig(user="kai", repo_name=_TEST_REPO), tmp_path)
 
 
 class TestRefreshReadMessages:
@@ -100,7 +102,7 @@ class TestUnreadFile:
     @pytest.fixture
     def state_with_path(self, tmp_path: Path) -> ServerState:
         return create_state(
-            BiffConfig(user="kai"),
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
             tmp_path,
             unread_path=tmp_path / "unread.json",
         )
@@ -153,7 +155,8 @@ class TestUnreadFile:
 
     async def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         nested = tmp_path / "deep" / "nested" / "unread.json"
-        state = create_state(BiffConfig(user="kai"), tmp_path, unread_path=nested)
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, unread_path=nested)
         mcp = create_server(state)
         await refresh_read_messages(mcp, state)
         assert nested.exists()
@@ -167,7 +170,7 @@ class TestPollInbox:
     @pytest.fixture
     def state_with_path(self, tmp_path: Path) -> ServerState:
         return create_state(
-            BiffConfig(user="kai"),
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
             tmp_path,
             unread_path=tmp_path / "unread.json",
         )

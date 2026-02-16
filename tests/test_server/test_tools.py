@@ -19,6 +19,8 @@ from biff.server.state import ServerState, create_state
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
+_TEST_REPO = "_test-server"
+
 
 def _create_mcp(state: ServerState) -> FastMCP[ServerState]:
     """Create a fully configured MCP server for testing."""
@@ -252,7 +254,9 @@ class TestCheckMessagesTool:
         assert "No new messages" in result
 
     async def test_shows_unread(self, state: ServerState, tmp_path: Path) -> None:
-        eric_state = create_state(BiffConfig(user="eric"), tmp_path)
+        eric_state = create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO), tmp_path
+        )
         eric_send = _get_tool_fn(eric_state, "write")
         await eric_send(to="kai", message="review my PR please")
 
@@ -263,7 +267,9 @@ class TestCheckMessagesTool:
         assert "review my PR please" in result
 
     async def test_marks_as_read(self, state: ServerState, tmp_path: Path) -> None:
-        eric_state = create_state(BiffConfig(user="eric"), tmp_path)
+        eric_state = create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO), tmp_path
+        )
         eric_send = _get_tool_fn(eric_state, "write")
         await eric_send(to="kai", message="hello")
 
@@ -275,8 +281,12 @@ class TestCheckMessagesTool:
         assert "No new messages" in result
 
     async def test_multiple_senders(self, state: ServerState, tmp_path: Path) -> None:
-        eric_state = create_state(BiffConfig(user="eric"), tmp_path)
-        priya_state = create_state(BiffConfig(user="priya"), tmp_path)
+        eric_state = create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO), tmp_path
+        )
+        priya_state = create_state(
+            BiffConfig(user="priya", repo_name=_TEST_REPO), tmp_path
+        )
         await _get_tool_fn(eric_state, "write")(to="kai", message="from eric")
         await _get_tool_fn(priya_state, "write")(to="kai", message="from priya")
 
