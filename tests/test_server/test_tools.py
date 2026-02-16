@@ -114,10 +114,10 @@ class TestFingerTool:
 
 
 class TestWhoTool:
-    async def test_no_sessions(self, state: ServerState) -> None:
+    async def test_always_includes_self(self, state: ServerState) -> None:
         fn = _get_tool_fn(state, "who")
         result = await fn()
-        assert result == ""
+        assert "@kai" in result
 
     async def test_lists_users(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="kai", plan="coding"))
@@ -132,7 +132,7 @@ class TestWhoTool:
     async def test_shows_idle_time(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(hours=3)
         await state.relay.update_session(
-            UserSession(user="kai", plan="coding", last_active=old_time)
+            UserSession(user="eric", plan="reviewing", last_active=old_time)
         )
         fn = _get_tool_fn(state, "who")
         result = await fn()

@@ -135,9 +135,9 @@ class TestFingerProtocol:
 
 
 class TestWhoProtocol:
-    async def test_no_sessions(self, biff_client: Client[Any]) -> None:
+    async def test_always_includes_self(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("who", {})
-        assert _text(result) == ""
+        assert "@kai" in _text(result)
 
     async def test_lists_active(
         self, biff_client: Client[Any], state: ServerState

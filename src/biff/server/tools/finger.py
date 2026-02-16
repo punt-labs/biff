@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.server.tools._descriptions import refresh_check_messages
+from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -50,6 +51,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             Plan:
              refactoring auth module
         """
+        await update_current_session(state)
         await refresh_check_messages(mcp, state)
         bare = user.strip().lstrip("@")
         session = await state.relay.get_session(bare)

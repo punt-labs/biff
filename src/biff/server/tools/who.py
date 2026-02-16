@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from biff.models import UserSession
 from biff.server.tools._descriptions import refresh_check_messages
 from biff.server.tools._formatting import format_idle
+from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -40,6 +41,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     async def who() -> str:
         """List all sessions with idle time."""
+        await update_current_session(state)
         await refresh_check_messages(mcp, state)
         sessions = await state.relay.get_sessions()
         if not sessions:
