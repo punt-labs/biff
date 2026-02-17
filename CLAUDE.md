@@ -35,9 +35,19 @@ Four tiers, each testing a different boundary. New features should have tests at
 uv run pytest                          # Tiers 1-2 only (default, fast)
 uv run pytest -m subprocess            # Tier 3: subprocess tests
 uv run pytest -m nats                  # Tier 3b: local NATS tests (requires nats-server)
-uv run pytest -m hosted                # Tier 3c: hosted NATS tests (requires BIFF_TEST_NATS_URL)
+uv run pytest -m hosted                # Tier 3c: hosted NATS tests (local only, see below)
 uv run pytest -m sdk                   # Tier 4: SDK tests (requires ANTHROPIC_API_KEY)
 uv run pytest -m "subprocess or sdk"   # Tiers 3-4 together
+```
+
+### CI vs Local Tests
+
+GitHub Actions runs **Lint** and **Tests** (tiers 1-2) on every push/PR. The **Hosted NATS E2E** workflow is manual-only (`workflow_dispatch`) because session-scoped NATS connections hang in GitHub Actions' asyncio environment. Run hosted NATS tests locally before merging relay changes:
+
+```bash
+BIFF_TEST_NATS_URL=tls://connect.ngs.global \
+BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
+uv run pytest -m hosted -v
 ```
 
 ### Test Fixtures by Tier
@@ -154,6 +164,7 @@ Before creating a PR, verify:
 - [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
 - [ ] **CHANGELOG entry** added for notable changes
 - [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`
+- [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m hosted -v`
 
 ### Pull Request and Code Review Workflow
 
