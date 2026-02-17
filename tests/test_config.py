@@ -9,11 +9,13 @@ import pytest
 
 from biff.config import (
     GitHubIdentity,
+    _parse_repo_slug,
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
     get_github_identity,
     get_os_user,
+    get_repo_slug,
     load_biff_file,
     load_config,
     sanitize_repo_name,
@@ -97,6 +99,68 @@ class TestGetOsUser:
             assert get_os_user() is None
 
 
+# -- _parse_repo_slug --
+
+
+class TestParseRepoSlug:
+    def test_ssh_url(self) -> None:
+        assert _parse_repo_slug("git@github.com:punt-labs/biff.git") == "punt-labs/biff"
+
+    def test_ssh_url_no_dotgit(self) -> None:
+        assert _parse_repo_slug("git@github.com:punt-labs/biff") == "punt-labs/biff"
+
+    def test_https_url(self) -> None:
+        url = "https://github.com/punt-labs/biff.git"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    def test_https_url_no_dotgit(self) -> None:
+        url = "https://github.com/punt-labs/biff"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    def test_ssh_scheme_url(self) -> None:
+        url = "ssh://git@github.com/punt-labs/biff.git"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    def test_ssh_scheme_url_no_dotgit(self) -> None:
+        url = "ssh://git@github.com/punt-labs/biff"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    def test_ssh_scheme_url_with_port(self) -> None:
+        url = "ssh://git@github.com:2222/punt-labs/biff.git"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    def test_nested_path_rejected(self) -> None:
+        url = "https://gitlab.com/group/sub/repo.git"
+        assert _parse_repo_slug(url) is None
+
+    def test_non_url_returns_none(self) -> None:
+        assert _parse_repo_slug("/local/path/to/repo") is None
+
+    def test_bare_name_returns_none(self) -> None:
+        assert _parse_repo_slug("biff") is None
+
+
+# -- get_repo_slug --
+
+
+class TestGetRepoSlug:
+    def test_success(self, tmp_path: Path) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "git@github.com:punt-labs/biff.git\n"
+            assert get_repo_slug(tmp_path) == "punt-labs/biff"
+
+    def test_no_remote_returns_none(self, tmp_path: Path) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 128
+            mock_run.return_value.stdout = ""
+            assert get_repo_slug(tmp_path) is None
+
+    def test_git_not_found_returns_none(self, tmp_path: Path) -> None:
+        with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
+            assert get_repo_slug(tmp_path) is None
+
+
 # -- sanitize_repo_name --
 
 
@@ -126,6 +190,15 @@ class TestSanitizeRepoName:
     def test_all_special_exits(self) -> None:
         with pytest.raises(SystemExit, match="no usable characters"):
             sanitize_repo_name("@#$%")
+
+    def test_slash_becomes_double_underscore(self) -> None:
+        assert sanitize_repo_name("owner/repo") == "owner__repo"
+
+    def test_slug_with_dots(self) -> None:
+        assert sanitize_repo_name("owner/socket.io") == "owner__socket-io"
+
+    def test_no_collision_with_underscored_names(self) -> None:
+        assert sanitize_repo_name("a_b/c") != sanitize_repo_name("a/b_c")
 
     def test_nats_wildcards_stripped(self) -> None:
         assert sanitize_repo_name("app*>test") == "apptest"
@@ -261,13 +334,30 @@ class TestLoadConfig:
         )
         return tmp_path
 
+    @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_uses_remote_slug(
+        self, _mock_gh: object, _mock_slug: object, tmp_path: Path
+    ) -> None:
+        self._setup_repo(tmp_path)
+        resolved = load_config(start=tmp_path)
+        assert resolved.config.repo_name == "punt-labs__biff"
+
+    @patch("biff.config.get_repo_slug", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_falls_back_to_dirname(
+        self, _mock_gh: object, _mock_slug: object, tmp_path: Path
+    ) -> None:
+        repo = self._setup_repo(tmp_path)
+        resolved = load_config(start=repo)
+        assert resolved.config.repo_name == sanitize_repo_name(repo.name)
+
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_full_discovery(self, _mock: object, tmp_path: Path) -> None:
         repo = self._setup_repo(tmp_path)
         resolved = load_config(start=repo)
         assert resolved.config.user == "kai"
         assert resolved.config.display_name == "Kai Chen"
-        assert resolved.config.repo_name == sanitize_repo_name(repo.name)
         assert resolved.config.team == ("kai", "eric")
         assert resolved.config.relay_url == "nats://localhost:4222"
         assert resolved.data_dir == Path("/tmp/biff") / repo.name

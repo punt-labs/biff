@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import getpass
 import importlib.resources
+import re
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -107,20 +108,63 @@ def get_os_user() -> str | None:
         return None
 
 
+_SLUG_SCP_RE = re.compile(r"^[^@]+@[^:]+:(.+?)(?:\.git)?$")
+_SLUG_URL_RE = re.compile(r"^(?:https?|ssh)://[^/]+(?::\d+)?/(.+?)(?:\.git)?$")
+
+
+def _parse_repo_slug(url: str) -> str | None:
+    """Extract ``owner/repo`` from a git remote URL.
+
+    Supports scp-style SSH (``git@host:owner/repo``), scheme-based SSH
+    (``ssh://git@host/owner/repo``, with optional port), and HTTPS.
+    Returns ``None`` for URLs that don't match or have nested paths
+    (e.g. ``gitlab.com/group/sub/repo``).
+    """
+    for pattern in (_SLUG_SCP_RE, _SLUG_URL_RE):
+        m = pattern.match(url)
+        if m:
+            slug = m.group(1)
+            if slug.count("/") == 1:
+                return slug
+    return None
+
+
+def get_repo_slug(repo_root: Path) -> str | None:
+    """Resolve ``owner/repo`` from ``git remote get-url origin``.
+
+    Returns ``None`` when git is unavailable, no remote exists, or
+    the URL doesn't parse to a two-part slug.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "-C", str(repo_root), "remote", "get-url", "origin"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        return _parse_repo_slug(result.stdout.strip())
+    except FileNotFoundError:
+        return None
+
+
 def sanitize_repo_name(name: str) -> str:
-    """Sanitize a repo name for use in NATS resource names.
+    """Sanitize a repo name or slug for use in NATS resource names.
 
     NATS bucket names allow ASCII alphanumeric, dash, and underscore
     only.  Subject dots are level separators; wildcards (``*``, ``>``)
-    are reserved.  Spaces become dashes; dots become dashes; non-ASCII
-    and remaining special characters are stripped.
+    are reserved.  Slashes become double underscores (``__``) to mark
+    the owner/repo boundary without colliding with underscores in repo
+    names; dots become dashes; spaces become dashes; non-ASCII and
+    remaining special characters are stripped.
 
     Raises ``SystemExit`` if the result is empty — a repo name that
     sanitizes to nothing would silently share a NATS namespace with
     other unusable names, causing the exact collision this function
     exists to prevent.
     """
-    clean = name.replace(".", "-").replace(" ", "-")
+    clean = name.replace("/", "__").replace(".", "-").replace(" ", "-")
     sanitized = "".join(c for c in clean if (c.isascii() and c.isalnum()) or c in "-_")
     if not sanitized:
         raise SystemExit(
@@ -266,7 +310,8 @@ def load_config(
     # Resolve data dir and repo name
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run biff from inside a repo.")
-    repo_name = sanitize_repo_name(repo_root.name)
+    repo_slug = get_repo_slug(repo_root)
+    repo_name = sanitize_repo_name(repo_slug or repo_root.name)
     data_dir = (
         data_dir_override
         if data_dir_override is not None
