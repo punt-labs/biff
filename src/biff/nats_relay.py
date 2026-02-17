@@ -41,6 +41,7 @@ from nats.js.errors import (
 from pydantic import ValidationError
 
 from biff.models import Message, RelayAuth, UserSession, build_unread_summary
+from biff.relay import SESSION_TTL_SECONDS
 from biff.tty import build_session_key
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_KV_TTL = 2_592_000  # 30 days — sessions persist for long-lived plans
+_KV_TTL = SESSION_TTL_SECONDS  # NATS auto-expires keys not refreshed within this window
 _KV_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — small JSON session blobs
 _STREAM_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — messages consumed on read
 _FETCH_BATCH = 100

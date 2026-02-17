@@ -36,6 +36,8 @@ from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
 
+SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends
+
 
 def atomic_write(path: Path, content: str) -> None:
     """Atomically write *content* to *path* using temp-file-then-replace.
@@ -197,16 +199,28 @@ class LocalRelay:
         sessions[key] = session
         self._write_sessions(sessions)
 
+    def _is_expired(self, session: UserSession) -> bool:
+        """Check if a session has exceeded the idle TTL."""
+        age = (datetime.now(UTC) - session.last_active).total_seconds()
+        return age > SESSION_TTL_SECONDS
+
     async def get_session(self, session_key: str) -> UserSession | None:
         """Get a specific session by its ``{user}:{tty}`` key."""
-        return self._read_sessions().get(session_key)
+        session = self._read_sessions().get(session_key)
+        if session is not None and self._is_expired(session):
+            return None
+        return session
 
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:
         """Get all sessions for a given user, reaping removals first."""
         self._validate_user(user)
         self.reap_sentinels()
         prefix = f"{user}:"
-        return [s for k, s in self._read_sessions().items() if k.startswith(prefix)]
+        return [
+            s
+            for k, s in self._read_sessions().items()
+            if k.startswith(prefix) and not self._is_expired(s)
+        ]
 
     async def heartbeat(self, session_key: str) -> None:
         """Update last_active timestamp, creating session if needed."""
@@ -223,9 +237,9 @@ class LocalRelay:
         self._write_sessions(sessions)
 
     async def get_sessions(self) -> list[UserSession]:
-        """Get all sessions, reaping any flagged for removal first."""
+        """Get all sessions, reaping removals and filtering expired."""
         self.reap_sentinels()
-        return list(self._read_sessions().values())
+        return [s for s in self._read_sessions().values() if not self._is_expired(s)]
 
     async def delete_session(self, session_key: str) -> None:
         """Remove a session from storage."""

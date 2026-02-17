@@ -74,6 +74,22 @@ async def _reap_loop(state: ServerState, *, interval: float = 2.0) -> None:
         await _reap_sentinels(state)
 
 
+async def _heartbeat_loop(state: ServerState, *, interval: float = 60.0) -> None:
+    """Periodic heartbeat to keep this session alive in the relay.
+
+    Each ``heartbeat()`` call updates ``last_active`` and — for NATS KV —
+    resets the key's TTL.  When the process sleeps (laptop lid closed) or
+    dies (SIGKILL), heartbeats stop and the relay eventually expires the
+    session.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await state.relay.heartbeat(state.session_key)
+        except Exception:  # noqa: BLE001 — relay errors vary by backend
+            logger.warning("Heartbeat failed", exc_info=True)
+
+
 def create_server(state: ServerState) -> FastMCP[ServerState]:
     """Create a FastMCP server with all biff tools registered.
 
@@ -108,6 +124,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
 
         poller = asyncio.create_task(poll_inbox(mcp, state))
         reaper = asyncio.create_task(_reap_loop(state))
+        heartbeat = asyncio.create_task(_heartbeat_loop(state))
         # Process any sentinels left from previously-killed servers.
         await _reap_sentinels(state)
         try:
@@ -115,10 +132,13 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         finally:
             poller.cancel()
             reaper.cancel()
+            heartbeat.cancel()
             with suppress(asyncio.CancelledError):
                 await poller
             with suppress(asyncio.CancelledError):
                 await reaper
+            with suppress(asyncio.CancelledError):
+                await heartbeat
             try:
                 await state.relay.delete_session(state.session_key)
             except Exception:
