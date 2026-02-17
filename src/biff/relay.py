@@ -8,10 +8,13 @@ Session keys are composite ``{user}:{tty}`` strings.  Each server
 instance owns one session key.
 
 ``LocalRelay`` implements the relay over a shared filesystem
-directory with per-session inbox files and a shared sessions file::
+directory with per-session inbox files, per-user inbox files,
+and a shared sessions file::
 
     {data_dir}/
-        inbox-kai-a1b2c3d4.jsonl
+        inbox-kai.jsonl            # per-user mailbox (broadcast)
+        inbox-kai-a1b2c3d4.jsonl   # per-TTY mailbox (targeted)
+        inbox-eric.jsonl
         inbox-eric-12345678.jsonl
         sessions.json
 
@@ -59,9 +62,16 @@ class Relay(Protocol):
     """Interface between an MCP server and the message relay.
 
     Session keys are ``{user}:{tty}`` composite strings.
+
+    Two mailbox types exist per user:
+
+    - **User mailbox**: receives broadcast messages (``/write @user``).
+      POP semantics — first reader consumes.
+    - **TTY mailbox**: receives targeted messages (``/write @user:tty``).
+      One per session.
     """
 
-    # -- Messages --
+    # -- Messages (TTY inbox) --
 
     async def deliver(self, message: Message) -> None: ...
 
@@ -70,6 +80,16 @@ class Relay(Protocol):
     async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None: ...
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary: ...
+
+    # -- Messages (user inbox) --
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]: ...
+
+    async def mark_read_user_inbox(
+        self, user: str, ids: Sequence[uuid.UUID]
+    ) -> None: ...
+
+    async def get_user_unread_count(self, user: str) -> int: ...
 
     # -- Presence --
 
@@ -91,9 +111,10 @@ class Relay(Protocol):
 
 
 class LocalRelay:
-    """Filesystem-backed relay with per-session inbox files.
+    """Filesystem-backed relay with per-user and per-session inbox files.
 
-    Each session gets its own inbox file (``inbox-{user}-{tty}.jsonl``).
+    Broadcast messages go to the user mailbox (``inbox-{user}.jsonl``).
+    Targeted messages go to the TTY mailbox (``inbox-{user}-{tty}.jsonl``).
     Sessions are stored in a single shared ``sessions.json`` keyed
     by ``{user}:{tty}``.  All writes use temp-file-then-replace for
     atomicity.
@@ -127,38 +148,36 @@ class LocalRelay:
         safe = session_key.replace(":", "-")
         return self._data_dir / f"inbox-{safe}.jsonl"
 
+    def _user_inbox_path(self, user: str) -> Path:
+        """Inbox file path for a user's broadcast mailbox."""
+        self._validate_user(user)
+        return self._data_dir / f"inbox-{user}.jsonl"
+
     # -- Messages --
 
     async def deliver(self, message: Message) -> None:
         """Deliver a message to the recipient's inbox.
 
-        If ``to_user`` contains a ``:`` (targeted), deliver to one
-        session inbox.  Otherwise (broadcast), deliver to all active
-        sessions for that user.
+        If ``to_user`` contains a ``:`` (targeted), deliver to the
+        TTY inbox.  Otherwise (broadcast), deliver to the user's
+        broadcast mailbox — no session lookup, persists offline.
         """
         self._validate_user(message.from_user)
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
         if ":" in message.to_user:
-            # Targeted delivery — single inbox
+            # Targeted delivery — TTY inbox
             user_part = message.to_user.split(":")[0]
             self._validate_user(user_part)
             path = self._inbox_path_for_key(message.to_user)
             with path.open("a") as f:
                 f.write(message.model_dump_json() + "\n")
         else:
-            # Broadcast — deliver to every session of this user
+            # Broadcast — single user mailbox, no session lookup
             self._validate_user(message.to_user)
-            sessions = await self.get_sessions_for_user(message.to_user)
-            if not sessions:
-                # No active sessions — drop (matches NatsRelay behavior)
-                return
-            for s in sessions:
-                key = build_session_key(s.user, s.tty)
-                targeted = message.model_copy(update={"to_user": key})
-                path = self._inbox_path_for_key(key)
-                with path.open("a") as f:
-                    f.write(targeted.model_dump_json() + "\n")
+            path = self._user_inbox_path(message.to_user)
+            with path.open("a") as f:
+                f.write(message.model_dump_json() + "\n")
 
     async def fetch(self, session_key: str) -> list[Message]:
         """Get unread messages for a session, oldest first."""
@@ -182,9 +201,41 @@ class LocalRelay:
             self._write_inbox(session_key, updated)
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
-        """Build an unread summary for dynamic tool descriptions."""
-        unread = await self.fetch(session_key)
-        return build_unread_summary(unread, len(unread))
+        """Build an unread summary merging TTY and user inboxes."""
+        user = session_key.split(":")[0]
+        tty_unread = await self.fetch(session_key)
+        user_unread = await self.fetch_user_inbox(user)
+        all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
+        return build_unread_summary(all_unread, len(all_unread))
+
+    # -- Messages (user inbox) --
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]:
+        """Get unread messages from the user's broadcast mailbox."""
+        path = self._user_inbox_path(user)
+        return [m for m in self._read_inbox_file(path) if not m.read]
+
+    async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
+        """Mark messages as read in the user's broadcast mailbox."""
+        id_set = set(ids)
+        if not id_set:
+            return
+        path = self._user_inbox_path(user)
+        messages = self._read_inbox_file(path)
+        updated: list[Message] = []
+        changed = False
+        for msg in messages:
+            if msg.id in id_set and not msg.read:
+                updated.append(msg.model_copy(update={"read": True}))
+                changed = True
+            else:
+                updated.append(msg)
+        if changed:
+            self._write_inbox_file(path, updated)
+
+    async def get_user_unread_count(self, user: str) -> int:
+        """Count unread messages in the user's broadcast mailbox."""
+        return len(await self.fetch_user_inbox(user))
 
     # -- Presence --
 
@@ -300,9 +351,9 @@ class LocalRelay:
 
     # -- Internal I/O --
 
-    def _read_inbox(self, session_key: str) -> list[Message]:
-        """Read all messages from a session's inbox."""
-        path = self._inbox_path_for_key(session_key)
+    @staticmethod
+    def _read_inbox_file(path: Path) -> list[Message]:
+        """Read all messages from an inbox file."""
         if not path.exists():
             return []
         messages: list[Message] = []
@@ -316,10 +367,19 @@ class LocalRelay:
                 logger.warning("Skipping malformed inbox line: %s", stripped[:80])
         return messages
 
-    def _write_inbox(self, session_key: str, messages: Sequence[Message]) -> None:
-        """Atomically rewrite a session's inbox."""
+    @staticmethod
+    def _write_inbox_file(path: Path, messages: Sequence[Message]) -> None:
+        """Atomically rewrite an inbox file."""
         content = "".join(msg.model_dump_json() + "\n" for msg in messages)
-        atomic_write(self._inbox_path_for_key(session_key), content)
+        atomic_write(path, content)
+
+    def _read_inbox(self, session_key: str) -> list[Message]:
+        """Read all messages from a session's TTY inbox."""
+        return self._read_inbox_file(self._inbox_path_for_key(session_key))
+
+    def _write_inbox(self, session_key: str, messages: Sequence[Message]) -> None:
+        """Atomically rewrite a session's TTY inbox."""
+        self._write_inbox_file(self._inbox_path_for_key(session_key), messages)
 
     def _read_sessions(self) -> dict[str, UserSession]:
         """Read all sessions."""
