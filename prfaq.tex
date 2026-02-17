@@ -130,7 +130,7 @@
 % ── Stage and version tracking ────────────────────────────────────────────────
 \newcommand{\prfaqstage}{hypothesis}
 \newcommand{\prfaqversion}[2]{v#1.#2}
-\newcommand{\prfaqcurrentversion}{\prfaqversion{2}{2}}
+\newcommand{\prfaqcurrentversion}{\prfaqversion{2}{4}}
 
 % ══════════════════════════════════════════════════════════════════════════════
 % Document
@@ -218,8 +218,10 @@ Every command implies intent. There are no channels to monitor, no threads to
 catch up on, no emoji reactions to parse. Communication is pull-based: when
 someone sends you a message, your session notifies you --- your AI assistant
 mentions it naturally (``You have 2 unread messages from @kai. Want me to read
-them?'') and your terminal's status bar shows a live unread count. You decide
-when to engage. The full command reference is in Appendix~A.
+them?'') and your terminal's status bar shows a live indicator ---
+\texttt{kai:tty1(3)} in bold yellow when you have unreads,
+\texttt{kai:tty1(0)} when caught up, \texttt{kai:tty1(n)} when messages are
+off. You decide when to engage. The full command reference is in Appendix~A.
 
 Because biff speaks MCP, it does not distinguish between a human session and
 an agent session. An autonomous coding agent can \texttt{/plan} what it is
@@ -227,10 +229,10 @@ working on, broadcast status via \texttt{/wall}, \texttt{/write} a human when
 it needs a decision, and show up in \texttt{/who} alongside everyone else.
 When you have multiple agents working in the same codebase --- on the same
 machine, in the same directory --- they coordinate to avoid stepping on each
-other's files. Each agent gets a distinct identity via TTY sessions, and
-\texttt{/who} shows host and directory per session so you can see when agents
-share a filesystem. Workflow hooks tie into your development process: claiming
-a task auto-sets your plan, creating a PR triggers a \texttt{/wall}
+other's files. Each agent gets a distinct identity via \texttt{/tty} sessions,
+and \texttt{/who} shows host and directory per session so you can see when
+agents share a filesystem. Workflow hooks tie into your development process:
+claiming a task auto-sets your plan, creating a PR triggers a \texttt{/wall}
 announcement. All messages are end-to-end encrypted via NaCl/libsodium, so
 the relay never sees message contents. Biff is not just communication for
 engineers --- it is the communication layer for the entire team of humans and
@@ -256,7 +258,7 @@ startup
 \prsection{Getting Started}
 
 Getting started with biff takes three commands:
-\texttt{pip install biff-mcp}, then \texttt{biff install} to register the MCP
+\texttt{pip install biff}, then \texttt{biff install} to register the MCP
 server and slash commands, then \texttt{biff doctor} to verify the setup.
 Restart Claude Code, and you are live. Biff ships with a shared relay
 on Synadia Cloud with end-to-end encryption, so there is zero infrastructure
@@ -290,7 +292,7 @@ purposeful, not ambient.''
 
 Biff is open source and available today at
 \href{https://github.com/punt-labs/biff}{github.com/punt-labs/biff}.
-Install with \texttt{pip install biff-mcp}, then run \texttt{biff install}
+Install with \texttt{pip install biff}, then run \texttt{biff install}
 and \texttt{biff doctor}. The core tool, end-to-end encryption, and the
 shared relay are free and always will be. For larger teams that need uptime
 guarantees, audit logs, and admin controls, biff teams is available as a
@@ -312,9 +314,9 @@ paid tier.
   Biff is a terminal-native communication tool for software engineers who
   use Claude Code or other MCP-compatible systems. If you spend your working
   day in a terminal and resent switching to a browser to talk to your team,
-  biff is for you. It provides six slash commands covering messaging,
-  presence, and availability control --- all without leaving your
-  session. See Appendix~A for the full command reference.
+  biff is for you. It provides eight slash commands covering messaging,
+  presence, broadcast, session identity, and availability control --- all without
+  leaving your session. See Appendix~A for the full command reference.
 \end{faqpair}
 
 \begin{faqpair}{How is biff different from Slack?}
@@ -340,7 +342,7 @@ paid tier.
 \end{faqpair}
 
 \begin{faqpair}{How do I get started?}
-  Run \texttt{pip install biff-mcp}, then \texttt{biff install} to register
+  Run \texttt{pip install biff}, then \texttt{biff install} to register
   the MCP server and slash commands, then \texttt{biff doctor} to verify the
   setup. Restart Claude Code. Biff ships with a shared demo relay on Synadia
   Cloud, so there is no infrastructure to provision. If your repo has a
@@ -351,13 +353,12 @@ paid tier.
 \end{faqpair}
 
 \begin{faqpair}{What happens to my messages? Is communication private?}
-  Today, messages traverse the NATS relay in cleartext. The relay follows a
-  POP mail model: messages are held only until the recipient reads them,
-  then discarded. Biff is not a system of record. The shared demo relay is
-  hosted on Synadia Cloud; teams that want data sovereignty can self-host
-  the same NATS server and route all traffic through their own
-  infrastructure. End-to-end encryption (NaCl/libsodium) ships with
-  biff 1.0 and will make the relay unable to read message contents. Biff
+  All direct messages are end-to-end encrypted using NaCl/libsodium. The
+  relay stores only ciphertext it cannot read. Biff follows a POP mail
+  model: messages are held only until the recipient reads them, then
+  discarded. Biff is not a system of record. The shared relay is hosted on
+  Synadia Cloud; teams that want data sovereignty can self-host the same
+  NATS server and route all traffic through their own infrastructure. Biff
   never analyzes or trains on your messages.
 \end{faqpair}
 
@@ -382,16 +383,13 @@ paid tier.
   Yes. Because biff is an MCP server, any MCP-compatible agent can use it
   the same way a human does. An autonomous coding agent can \texttt{/plan}
   what it is working on, \texttt{/write} a human when it needs a decision,
-  and show up in
-  \texttt{/who} alongside everyone else. Agents can also coordinate with
-  other agents --- preventing duplicate work via \texttt{/plan} visibility,
-  targeting messages with \texttt{/write}, and checking presence with
-  \texttt{/who}. Biff does not distinguish between human and agent
-  sessions. If it speaks MCP, it can participate. The next roadmap phase
-  adds TTY sessions (each agent gets a distinct identity, targetable
-  via \texttt{/write @user:tty}), enriched presence showing host and
-  directory per session, and workflow hooks that automatically set plans
-  and announce milestones.
+  and show up in \texttt{/who} alongside everyone else. Each agent gets a
+  distinct identity via \texttt{/tty}, targetable via
+  \texttt{/write @user:tty}. \texttt{/who} shows host and directory per
+  session, so you can see when agents share a filesystem and need to
+  coordinate. Workflow hooks automatically set plans and announce
+  milestones. Biff does not distinguish between human and agent sessions.
+  If it speaks MCP, it can participate.
 \end{faqpair}
 
 % ── Internal FAQs (Business-facing) ──────────────────────────────────────────
@@ -541,13 +539,14 @@ paid tier.
     to the user. All MCP interactions are wrapped behind an internal
     abstraction layer for spec-maturity resilience.
 
-    \item \textbf{User-visible notification gap (low risk, partially
-    solved).} Dynamic tool descriptions are visible to the AI model but
-    not directly to the human user in the Claude Code UI. Biff now ships
-    optional status bar integration (\texttt{biff install-statusline})
-    that shows a live unread count in the terminal. Combined with
-    model-level awareness via tool descriptions, the notification gap
-    is addressed through two complementary channels.
+    \item \textbf{User-visible notification gap (low risk, shipped).}
+    Dynamic tool descriptions are visible to the AI model but
+    not directly to the human user in the Claude Code UI. Biff ships
+    status bar integration (\texttt{biff install} includes setup) showing
+    \texttt{user:tty(N)} with three states: caught up, unreads (bold
+    yellow), and messages off (\texttt{n}). Combined with model-level
+    awareness via tool descriptions, the notification gap is addressed
+    through two complementary channels.
 
     \item \textbf{Message relay infrastructure (low risk, shipped).}
     The NATS relay is shipped and tested against hosted NATS on Synadia
@@ -566,8 +565,8 @@ paid tier.
     \item \textbf{Adoption chicken-and-egg (high risk).} Biff is only
     useful if your teammates also use it. Mitigation: the \texttt{.biff}
     file committed to the repo means the second person on a team only
-    needs \texttt{pip install biff-mcp} and \texttt{biff install} ---
-    the configuration is already there. The demo relay eliminates
+    needs to clone, run \texttt{uv tool install --editable .} and
+    \texttt{biff install} --- the configuration is already there. The demo relay eliminates
     infrastructure setup. The \texttt{/plan}, \texttt{/finger}, and
     \texttt{/who} commands provide value to individual users even without
     teammates.
@@ -576,8 +575,8 @@ paid tier.
 
 \begin{faqpair}{What dependencies exist on other teams or systems?}
   Biff depends on the MCP protocol (maintained by Anthropic), Claude Code
-  as the primary host client (also Anthropic), Python packaging
-  infrastructure (PyPI), and NATS for the message relay. There are no
+  as the primary host client (also Anthropic), and NATS for the message
+  relay. There are no
   dependencies on other punt-labs products. The relay server is a single
   NATS binary and can be self-hosted.
 \end{faqpair}
@@ -598,26 +597,31 @@ paid tier.
   \texttt{/who} and \texttt{/mesg y/n} are live presence state.
   \texttt{/wall} (team broadcast) is on the roadmap.
 
-  The \texttt{.biff} file in the repository contains the team member
-  list and optional relay configuration. It is the root of trust: adding
-  your username to \texttt{.biff} and committing it proves you have
-  commit access to the repo, which is what makes you a team member.
-  End-to-end encryption ships with biff 1.0 and will make the relay
-  unable to read message contents.
+  Today, messages traverse the relay in cleartext. The \texttt{.biff}
+  file in the repository contains the team member list and optional relay
+  configuration. It is the root of trust: adding your username to
+  \texttt{.biff} and committing it proves you have commit access to the
+  repo, which is what makes you a team member. End-to-end encryption
+  ships with biff 1.0 and will make the relay unable to read message
+  contents.
 \end{faqpair}
 
 \begin{faqpair}{What is the estimated development timeline?}
   \begin{description}[leftmargin=1.5em, labelwidth=10em, font=\bfseries]
     \item[Shipped] Core MCP server with \texttt{/write}, \texttt{/read},
-    \texttt{/who}, \texttt{/plan}, \texttt{/finger},
+    \texttt{/who}, \texttt{/plan}, \texttt{/finger}, \texttt{/tty},
     \texttt{/mesg y/n}. NATS-based relay for cross-machine messaging on
     Synadia Cloud. POP-model store-and-forward for \texttt{/write}.
-    Status bar integration.
-    Display names from GitHub identity. Released and in use.
-    \item[Next: Agentic] \texttt{/wall} (team broadcast). TTY sessions
-    (each agent gets a distinct identity, targetable via
+    TTY sessions (each agent gets a distinct identity, targetable via
     \texttt{/write @user:tty}). Enriched presence (\texttt{/who} shows
-    host and directory per session). Plan auto-expand (\texttt{/plan
+    7 columns: NAME, TTY, IDLE, S, HOST, DIR, PLAN; \texttt{/finger}
+    shows host and directory per session). Per-session status bar
+    showing \texttt{user:tty(N)} with three states: caught up, unreads
+    (bold yellow), and messages off (\texttt{n}). \texttt{/mesg n}
+    suppresses the unread count on the status line.
+    Display names from GitHub identity. Released and in use.
+    \item[Next: Agentic] \texttt{/wall} (team broadcast).
+    Plan auto-expand (\texttt{/plan
     biff-bf8} shows the task title). Workflow hooks (claiming a task
     auto-sets plan, creating a PR triggers \texttt{/wall}). Project
     opt-in (\texttt{/biff y} enables coordination per project).
@@ -638,15 +642,15 @@ paid tier.
   when it needs a decision, and show up in \texttt{/who} alongside
   everyone else.
 
-  The next phase makes this explicit. TTY sessions give each agent a
+  This is already shipping. TTY sessions (\texttt{/tty}) give each agent a
   distinct identity: one user running three agents shows three entries in
   \texttt{/who}, each targetable via \texttt{/write @user:tty}. Enriched
   presence shows host and directory per session, flagging when agents share
-  a filesystem and need to coordinate to avoid file conflicts. Plan
-  auto-expand (\texttt{/plan biff-bf8}) surfaces what each agent is working
-  on without anyone looking it up. Workflow hooks automate the coordination
-  overhead: claiming a task auto-sets your plan, creating a PR triggers a
-  \texttt{/wall} announcement.
+  a filesystem and need to coordinate to avoid file conflicts. The next
+  phase adds plan auto-expand (\texttt{/plan biff-bf8}) to surface what
+  each agent is working on without anyone looking it up, and workflow hooks
+  to automate coordination overhead: claiming a task auto-sets your plan,
+  creating a PR triggers a \texttt{/wall} announcement.
 
   The thesis is that as engineering teams grow to include both humans and
   autonomous agents, the coordination primitives --- presence, messaging,
@@ -827,10 +831,11 @@ paid tier.
 \riskitem{Usability}{%
   \textbf{Low risk.} The slash-command interface mirrors patterns engineers
   already use (git commands, Unix utilities, Claude Code slash commands).
-  Installation is three commands (\texttt{pip install}, \texttt{biff
-  install}, \texttt{biff doctor}). Time-to-value is under five minutes. The
+  Installation is four commands (\texttt{git clone},
+  \texttt{uv tool install --editable .}, \texttt{biff install},
+  \texttt{biff doctor}). Time-to-value is under five minutes. The
   primary usability risk is discoverability: new users need to learn the
-  command vocabulary. Mitigation: the vocabulary is small (6 shipped
+  command vocabulary. Mitigation: the vocabulary is small (7 shipped
   commands), the names are intuitive (borrowed from Unix), and the tool
   descriptions are self-documenting within Claude Code. The secondary
   usability risk is the empty-room experience: a solo installer sees no
@@ -896,21 +901,28 @@ working today. \textbf{Next} features are the immediate roadmap focus.
   content. \\
 
   \texttt{/finger @user} & BSD \texttt{finger} &
-  Read a user's plan and current status.
+  Read a user's plan, current status, host, and directory.
   Non-intrusive --- the target is not notified. \\
 
   \texttt{/who} & BSD \texttt{who} &
-  List all active sessions. Shows who is online, their availability
-  (\texttt{/mesg y/n}), and their current plan. \\
+  List all active sessions with 7 columns: NAME, TTY, IDLE, S (message
+  status), HOST, DIR, and PLAN. Shows who is online, where they are
+  working, and what they are doing. \\
 
   \texttt{/plan ``text''} & BSD \texttt{.plan} &
   Set your status message. Visible to anyone who runs \texttt{/finger}
   or \texttt{/who}. Update it as your work changes. Provides single-user
   value without teammates. \\
 
+  \texttt{/tty ``name''} & BSD \texttt{tty} &
+  Name the current session. Each agent gets a distinct identity ---
+  one user with 3 sessions shows 3 entries in \texttt{/who}, targetable
+  via \texttt{/write @user:tty}. \\
+
   \texttt{/mesg y} | \texttt{n} & BSD \texttt{mesg} &
   Control whether you receive messages. When off (\texttt{n}), incoming
-  messages are queued until you turn it back on (\texttt{y}). \\
+  messages are queued until you turn it back on (\texttt{y}), and the
+  status bar shows \texttt{(n)} instead of the unread count. \\
 
   \bottomrule
 \end{tabularx}
@@ -924,16 +936,9 @@ working today. \textbf{Next} features are the immediate roadmap focus.
   \midrule
 
   \texttt{/wall ``text''} (team broadcast) &
-  Broadcast a message to your full team. Ephemeral --- if you are not
-  connected when it happens, you miss it, just like BSD \texttt{wall}. \\
-
-  TTY sessions &
-  Each agent gets a distinct identity. One user with 3 sessions shows 3
-  entries in \texttt{/who}, targetable via \texttt{/write @user:tty}. \\
-
-  Enriched presence &
-  \texttt{/who} shows host and directory per session. Flags when agents
-  share a filesystem. \\
+  Broadcast a time-sensitive announcement to all terminals. Visible
+  immediately on the status bar with duration-based expiry. Does not go
+  to inboxes --- it is a banner, not a message. \\
 
   Plan auto-expand &
   \texttt{/plan biff-bf8} auto-expands to show the task title. Everyone
