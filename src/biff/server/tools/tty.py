@@ -50,13 +50,24 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
             TTY: tty3
         """
+        name = name.strip()
+        sessions = await state.relay.get_sessions()
+
         if not name:
-            sessions = await state.relay.get_sessions()
             existing = [s.tty_name for s in sessions if s.tty_name]
             name = _next_tty_name(existing)
 
         if len(name) > _MAX_TTY_NAME:
             return f"Error: name must be {_MAX_TTY_NAME} characters or fewer."
+
+        # Reject duplicate names for the same user
+        for s in sessions:
+            if (
+                s.user == state.config.user
+                and s.tty != state.tty
+                and s.tty_name == name
+            ):
+                return f"Error: name {name!r} already in use by another session."
 
         await update_current_session(state, tty_name=name)
         await refresh_read_messages(mcp, state)
