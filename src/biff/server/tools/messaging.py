@@ -55,7 +55,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description="Check your inbox for new messages. Marks all as read.",
     )
     async def read_messages() -> str:
-        """Retrieve unread messages for this session and mark them as read.
+        """Retrieve unread messages and mark them as read.
+
+        Merges the per-user broadcast mailbox and the per-TTY targeted
+        inbox into a single chronological view.  POP semantics apply
+        independently to each — the first session to ``/read`` consumes
+        broadcast messages.
 
         Output mimics BSD ``from(1)``::
 
@@ -64,16 +69,30 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """
         await update_current_session(state)
         session_key = state.session_key
-        unread = await state.relay.fetch(session_key)
-        if not unread:
+        user = state.config.user
+
+        # Fetch from both inboxes
+        tty_unread = await state.relay.fetch(session_key)
+        user_unread = await state.relay.fetch_user_inbox(user)
+        all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
+
+        if not all_unread:
             await refresh_read_messages(mcp, state)
             return "No new messages."
-        await state.relay.mark_read(session_key, [m.id for m in unread])
+
+        # Mark read independently in each inbox
+        tty_ids = [m.id for m in tty_unread]
+        user_ids = [m.id for m in user_unread]
+        if tty_ids:
+            await state.relay.mark_read(session_key, tty_ids)
+        if user_ids:
+            await state.relay.mark_read_user_inbox(user, user_ids)
+
         await refresh_read_messages(mcp, state)
-        from_w = max(4, max(len(m.from_user) for m in unread))
+        from_w = max(4, max(len(m.from_user) for m in all_unread))
         header = f"\u25b6  {'FROM':<{from_w}}  {'DATE':<16}  MESSAGE"
         lines: list[str] = []
-        for m in unread:
+        for m in all_unread:
             ts = m.timestamp.strftime("%a %b %d %H:%M")
             lines.append(f"{m.from_user:<{from_w}}  {ts:<16}  {m.body}")
         return header + "\n" + "\n".join(lines)
