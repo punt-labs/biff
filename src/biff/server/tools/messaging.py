@@ -102,5 +102,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         lines: list[str] = []
         for m in all_unread:
             ts = m.timestamp.strftime("%a %b %d %H:%M")
-            lines.append(f"{m.from_user:<{from_w}}  {ts:<16}  {m.body}")
+            lines.append(f"   {m.from_user:<{from_w}}  {ts:<16}  {m.body}")
         return header + "\n" + "\n".join(lines)
