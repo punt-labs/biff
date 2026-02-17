@@ -119,6 +119,66 @@ class TestTTYSessionCoexistence:
         assert "session 2" in text
 
 
+class TestSessionLogout:
+    """Server shutdown removes the session from shared storage."""
+
+    async def test_session_removed_on_server_exit(
+        self,
+        kai_tty1_state: ServerState,
+        eric_state: ServerState,
+    ) -> None:
+        # Eric's server stays up the whole time
+        eric_mcp = create_server(eric_state)
+        async with Client(FastMCPTransport(eric_mcp)) as eric:
+            # Kai's server starts, registers, then exits
+            kai_mcp = create_server(kai_tty1_state)
+            async with Client(FastMCPTransport(kai_mcp)) as kai:
+                await kai.call_tool("plan", {"message": "working"})
+                # Eric sees Kai
+                result = _text(await eric.call_tool("who", {}))
+                assert "@kai" in result
+
+            # Kai's server has exited — lifespan finally block ran
+            result = _text(await eric.call_tool("who", {}))
+            assert "@kai" not in result
+
+
+class TestSentinelLogout:
+    """Sentinel file removes a session even after concurrent writes."""
+
+    async def test_sentinel_survives_heartbeat_race(
+        self,
+        kai_tty1_state: ServerState,
+        eric_state: ServerState,
+        shared_dir: Path,
+    ) -> None:
+        # Both servers up
+        eric_mcp = create_server(eric_state)
+        kai_mcp = create_server(kai_tty1_state)
+        async with (
+            Client(FastMCPTransport(eric_mcp)) as eric,
+            Client(FastMCPTransport(kai_mcp)) as kai,
+        ):
+            await kai.call_tool("plan", {"message": "working"})
+            assert "@kai" in _text(await eric.call_tool("who", {}))
+
+            # Simulate signal handler: write sentinel for kai's session
+            from biff.relay import LocalRelay
+
+            assert isinstance(kai_tty1_state.relay, LocalRelay)
+            kai_tty1_state.relay.write_remove_sentinel(
+                kai_tty1_state.session_key
+            )
+
+            # Eric heartbeats (simulates concurrent write race)
+            await eric.call_tool("plan", {"message": "still here"})
+
+            # Eric's /who should NOT show kai — sentinel was reaped
+            result = _text(await eric.call_tool("who", {}))
+            assert "@kai" not in result
+            assert "@eric" in result
+
+
 class TestMulticastDelivery:
     """/write @user delivers to all sessions of that user."""
 

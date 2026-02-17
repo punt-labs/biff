@@ -7,14 +7,71 @@ tools registered. The returned server is run via ``mcp.run(transport=...)``.
 from __future__ import annotations
 
 import asyncio
+import logging
+import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from fastmcp import FastMCP
 
+from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import poll_inbox
+
+logger = logging.getLogger(__name__)
+
+
+def _sentinel_dir(repo_name: str) -> Path:
+    """Sentinel directory for a repo: ``~/.biff/sentinels/{repo_name}/``."""
+    return Path.home() / ".biff" / "sentinels" / repo_name
+
+
+def _write_sentinel(repo_name: str, session_key: str) -> None:
+    """Create a sentinel file marking a session for removal.
+
+    Relay-agnostic — writes to ``~/.biff/sentinels/{repo}/`` so that
+    any running server's reaper task can process it.  Safe to call
+    from signal handlers (sync I/O only).
+    """
+    d = _sentinel_dir(repo_name)
+    d.mkdir(parents=True, exist_ok=True)
+    safe = session_key.replace(":", "-")
+    (d / safe).write_text(session_key)
+
+
+async def _reap_sentinels(state: ServerState) -> None:
+    """Process sentinel files, deleting flagged sessions via the relay.
+
+    Reads each file in the sentinel directory, calls
+    ``relay.delete_session()`` (async — works for both NATS and local),
+    and removes the sentinel.  Errors on individual sentinels are
+    logged but don't prevent processing of others.
+    """
+    d = _sentinel_dir(state.config.repo_name)
+    if not d.exists():
+        return
+    for sentinel in d.iterdir():
+        if not sentinel.is_file():
+            continue
+        try:
+            session_key = sentinel.read_text().strip()
+        except OSError:
+            continue
+        try:
+            await state.relay.delete_session(session_key)
+        except Exception:  # noqa: BLE001 — relay errors vary by backend
+            logger.warning("Failed to reap sentinel for %s", session_key, exc_info=True)
+            continue
+        sentinel.unlink(missing_ok=True)
+
+
+async def _reap_loop(state: ServerState, *, interval: float = 2.0) -> None:
+    """Background task: reap shutdown sentinels every *interval* seconds."""
+    while True:
+        await asyncio.sleep(interval)
+        await _reap_sentinels(state)
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:
@@ -27,15 +84,45 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
 
     @asynccontextmanager
     async def lifespan(mcp: FastMCP[ServerState]) -> AsyncIterator[ServerState]:
-        task = asyncio.create_task(poll_inbox(mcp, state))
+        _cleaned_up = False
+
+        def _signal_handler(_signum: int, _frame: object) -> None:
+            nonlocal _cleaned_up
+            if _cleaned_up:
+                return
+            _cleaned_up = True
+            # Write sentinel — relay-agnostic, picked up by any
+            # running server's reaper task.  Smallest possible
+            # operation (touch a file), runs first.
+            with suppress(OSError):
+                _write_sentinel(state.config.repo_name, state.session_key)
+            # Best-effort sync cleanup for LocalRelay only.
+            if isinstance(state.relay, LocalRelay):
+                with suppress(OSError):
+                    state.relay.write_remove_sentinel(state.session_key)
+                with suppress(OSError, ValueError):
+                    state.relay.delete_session_sync(state.session_key)
+
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, _signal_handler)
+
+        poller = asyncio.create_task(poll_inbox(mcp, state))
+        reaper = asyncio.create_task(_reap_loop(state))
+        # Process any sentinels left from previously-killed servers.
+        await _reap_sentinels(state)
         try:
             yield state
         finally:
-            task.cancel()
+            poller.cancel()
+            reaper.cancel()
             with suppress(asyncio.CancelledError):
-                await task
-            with suppress(Exception):
+                await poller
+            with suppress(asyncio.CancelledError):
+                await reaper
+            try:
                 await state.relay.delete_session(state.session_key)
+            except Exception:
+                logger.exception("Failed to delete session %s", state.session_key)
             await state.relay.close()
 
     mcp: FastMCP[ServerState] = FastMCP(

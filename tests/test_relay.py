@@ -302,6 +302,77 @@ class TestDeleteSession:
         await relay.delete_session("nobody:tty0")
 
 
+class TestRemoveSentinel:
+    """Sentinel file mechanism for robust session removal."""
+
+    def test_write_creates_sentinel_file(
+        self, relay: LocalRelay, tmp_path: Path
+    ) -> None:
+        relay.write_remove_sentinel("kai:tty1")
+        sentinel = tmp_path / "remove-kai-tty1"
+        assert sentinel.exists()
+        assert sentinel.read_text() == "kai:tty1"
+
+    async def test_reap_deletes_session(self, relay: LocalRelay) -> None:
+        await relay.update_session(UserSession(user="kai", tty="tty1", plan="coding"))
+        relay.write_remove_sentinel("kai:tty1")
+        relay.reap_sentinels()
+        assert await relay.get_session("kai:tty1") is None
+
+    async def test_reap_removes_sentinel_file(
+        self, relay: LocalRelay, tmp_path: Path
+    ) -> None:
+        await relay.update_session(UserSession(user="kai", tty="tty1"))
+        relay.write_remove_sentinel("kai:tty1")
+        relay.reap_sentinels()
+        assert not (tmp_path / "remove-kai-tty1").exists()
+
+    async def test_reap_preserves_other_sessions(self, relay: LocalRelay) -> None:
+        await relay.update_session(UserSession(user="kai", tty="tty1"))
+        await relay.update_session(UserSession(user="eric", tty="tty2"))
+        relay.write_remove_sentinel("kai:tty1")
+        relay.reap_sentinels()
+        assert await relay.get_session("kai:tty1") is None
+        assert await relay.get_session("eric:tty2") is not None
+
+    async def test_get_sessions_reaps_automatically(self, relay: LocalRelay) -> None:
+        """get_sessions() processes sentinels before returning."""
+        await relay.update_session(UserSession(user="kai", tty="tty1"))
+        await relay.update_session(UserSession(user="eric", tty="tty2"))
+        relay.write_remove_sentinel("kai:tty1")
+        sessions = await relay.get_sessions()
+        assert all(s.user != "kai" for s in sessions)
+
+    async def test_get_sessions_for_user_reaps(self, relay: LocalRelay) -> None:
+        """get_sessions_for_user() processes sentinels before returning."""
+        await relay.update_session(UserSession(user="kai", tty="tty1"))
+        await relay.update_session(UserSession(user="kai", tty="tty9"))
+        relay.write_remove_sentinel("kai:tty1")
+        sessions = await relay.get_sessions_for_user("kai")
+        assert len(sessions) == 1
+        assert sessions[0].tty == "tty9"
+
+    async def test_reap_survives_concurrent_write(self, relay: LocalRelay) -> None:
+        """Sentinel survives even if another server overwrites sessions.json."""
+        await relay.update_session(UserSession(user="kai", tty="tty1"))
+        await relay.update_session(UserSession(user="eric", tty="tty2"))
+        # Signal handler writes sentinel
+        relay.write_remove_sentinel("kai:tty1")
+        # Simulate another server doing a heartbeat (read-modify-write)
+        # that restores kai's session
+        await relay.heartbeat("eric:tty2")
+        # get_sessions still reaps kai because sentinel file persists
+        sessions = await relay.get_sessions()
+        assert all(s.user != "kai" for s in sessions)
+
+    def test_reap_noop_when_no_sentinels(self, relay: LocalRelay) -> None:
+        relay.reap_sentinels()  # no-op, no crash
+
+    def test_reap_noop_when_no_data_dir(self, tmp_path: Path) -> None:
+        relay = LocalRelay(data_dir=tmp_path / "nonexistent")
+        relay.reap_sentinels()  # no-op, no crash
+
+
 class TestHeartbeat:
     async def test_creates_new_session(self, relay: LocalRelay) -> None:
         await relay.heartbeat("kai:tty1")

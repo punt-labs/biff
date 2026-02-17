@@ -202,8 +202,9 @@ class LocalRelay:
         return self._read_sessions().get(session_key)
 
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:
-        """Get all sessions for a given user."""
+        """Get all sessions for a given user, reaping removals first."""
         self._validate_user(user)
+        self.reap_sentinels()
         prefix = f"{user}:"
         return [s for k, s in self._read_sessions().items() if k.startswith(prefix)]
 
@@ -222,15 +223,64 @@ class LocalRelay:
         self._write_sessions(sessions)
 
     async def get_sessions(self) -> list[UserSession]:
-        """Get all sessions."""
+        """Get all sessions, reaping any flagged for removal first."""
+        self.reap_sentinels()
         return list(self._read_sessions().values())
 
     async def delete_session(self, session_key: str) -> None:
         """Remove a session from storage."""
+        self.delete_session_sync(session_key)
+
+    def delete_session_sync(self, session_key: str) -> None:
+        """Remove a session from storage (sync, safe from signal handlers)."""
         self._validate_session_key(session_key)
         sessions = self._read_sessions()
         if session_key in sessions:
             del sessions[session_key]
+            self._write_sessions(sessions)
+
+    def write_remove_sentinel(self, session_key: str) -> None:
+        """Create a sentinel file marking a session for removal.
+
+        The sentinel is a plain file whose content is the session key.
+        Any server that calls :meth:`reap_sentinels` (via
+        :meth:`get_sessions` or :meth:`get_sessions_for_user`) will
+        delete the corresponding session and clean up the file.
+
+        Safe to call from signal handlers — sync I/O only, no
+        read-modify-write on the shared sessions file.
+        """
+        self._validate_session_key(session_key)
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        safe = session_key.replace(":", "-")
+        sentinel = self._data_dir / f"remove-{safe}"
+        sentinel.write_text(session_key)
+
+    def reap_sentinels(self) -> None:
+        """Process sentinel files, removing flagged sessions.
+
+        Reads each ``remove-*`` file, deletes the named session from
+        ``sessions.json``, and removes the sentinel.  Called
+        automatically by :meth:`get_sessions` and
+        :meth:`get_sessions_for_user` so callers always see clean data.
+        """
+        if not self._data_dir.exists():
+            return
+        sentinels = list(self._data_dir.glob("remove-*"))
+        if not sentinels:
+            return
+        sessions = self._read_sessions()
+        changed = False
+        for sentinel in sentinels:
+            try:
+                session_key = sentinel.read_text().strip()
+            except OSError:
+                continue
+            if session_key in sessions:
+                del sessions[session_key]
+                changed = True
+            sentinel.unlink(missing_ok=True)
+        if changed:
             self._write_sessions(sessions)
 
     async def close(self) -> None:
