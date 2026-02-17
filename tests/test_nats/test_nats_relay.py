@@ -1,7 +1,8 @@
 """Tests for NatsRelay against a real nats-server subprocess.
 
 Mirrors tests/test_relay.py but exercises NATS KV and JetStream
-rather than filesystem I/O.
+rather than filesystem I/O.  Includes user-inbox tests for the
+per-user broadcast mailbox.
 """
 
 from __future__ import annotations
@@ -202,6 +203,70 @@ class TestGetUnreadSummary:
         summary = await relay.get_unread_summary(f"eric:{_ERIC_TTY}")
         assert summary.count == 5
         assert len(summary.preview) <= 80
+
+    async def test_merges_tty_and_user_inboxes(self, relay: NatsRelay) -> None:
+        """Unread summary includes messages from both inboxes."""
+        await relay.deliver(
+            Message(from_user="kai", to_user=f"eric:{_ERIC_TTY}", body="targeted msg")
+        )
+        await relay.deliver(
+            Message(from_user="jess", to_user="eric", body="broadcast msg")
+        )
+        summary = await relay.get_unread_summary(f"eric:{_ERIC_TTY}")
+        assert summary.count == 2
+        assert "@kai" in summary.preview
+        assert "@jess" in summary.preview
+
+
+# -- User Inbox --
+
+
+class TestUserInbox:
+    async def test_deliver_and_fetch(self, relay: NatsRelay) -> None:
+        msg = Message(from_user="kai", to_user="eric", body="broadcast hello")
+        await relay.deliver(msg)
+        unread = await relay.fetch_user_inbox("eric")
+        assert len(unread) == 1
+        assert unread[0].body == "broadcast hello"
+
+    async def test_pop_semantics(self, relay: NatsRelay) -> None:
+        """Messages are consumed on fetch — second fetch is empty."""
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="once"))
+        first = await relay.fetch_user_inbox("eric")
+        assert len(first) == 1
+        second = await relay.fetch_user_inbox("eric")
+        assert second == []
+
+    async def test_persists_offline(self, relay: NatsRelay) -> None:
+        """Broadcast delivers even with no active sessions."""
+        # No sessions registered for eric
+        await relay.deliver(
+            Message(from_user="kai", to_user="eric", body="offline msg")
+        )
+        unread = await relay.fetch_user_inbox("eric")
+        assert len(unread) == 1
+        assert unread[0].body == "offline msg"
+
+    async def test_count(self, relay: NatsRelay) -> None:
+        assert await relay.get_user_unread_count("eric") == 0
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="a"))
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="b"))
+        assert await relay.get_user_unread_count("eric") == 2
+
+    async def test_does_not_consume_tty_messages(self, relay: NatsRelay) -> None:
+        """User inbox fetch does not consume TTY inbox messages."""
+        await relay.deliver(
+            Message(from_user="kai", to_user=f"eric:{_ERIC_TTY}", body="targeted")
+        )
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="broadcast"))
+        # Fetch user inbox — should only get broadcast
+        user_msgs = await relay.fetch_user_inbox("eric")
+        assert len(user_msgs) == 1
+        assert user_msgs[0].body == "broadcast"
+        # TTY inbox still has the targeted message
+        tty_msgs = await relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(tty_msgs) == 1
+        assert tty_msgs[0].body == "targeted"
 
 
 # -- Sessions --
