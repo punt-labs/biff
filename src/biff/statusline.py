@@ -8,6 +8,7 @@ user's original status line command.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -40,14 +41,6 @@ class UninstallResult:
 
     uninstalled: bool
     message: str
-
-
-@dataclass(frozen=True)
-class ProjectUnread:
-    """Unread count for a single project."""
-
-    name: str
-    count: int
 
 
 # Settings I/O -------------------------------------------------------------
@@ -195,14 +188,14 @@ def run_statusline(
 
     1. Read stdin (session JSON from Claude Code).
     2. If an original command is stashed, run it and capture its output.
-    3. Scan ``~/.biff/unread/`` for per-project unread counts.
+    3. Read single PPID-keyed unread file for this session.
     4. Combine ``{original} | {biff_segment}`` with separator.
     """
     stdin_data = sys.stdin.read()
     original_cmd = _resolve_original_command(stash_path)
     original_output = _run_original(original_cmd, stdin_data) if original_cmd else ""
-    projects = _read_all_unreads(unread_dir)
-    biff = _biff_segment_multi(projects)
+    unread = _read_session_unread(unread_dir / f"{os.getppid()}.json")
+    biff = _biff_segment(unread)
 
     if original_output:
         return f"{original_output} | {biff}"
@@ -267,73 +260,53 @@ def _resolve_original_command(stash_path: Path) -> str | None:
     return original
 
 
-def _read_unread_count(path: Path) -> int:
-    """Read the unread message count, returning 0 on any error."""
+@dataclass(frozen=True)
+class SessionUnread:
+    """Unread state for a single session, parsed from a PPID-keyed file."""
+
+    user: str
+    count: int
+    tty_name: str
+    biff_enabled: bool = True
+
+
+def _read_session_unread(path: Path) -> SessionUnread | None:
+    """Read a PPID-keyed unread file, returning ``None`` on any error."""
     try:
         data = json.loads(path.read_text())
-        count = data.get("count", 0)
-        return int(count)
+        biff_enabled = data.get("biff_enabled", True)
+        return SessionUnread(
+            user=str(data.get("user", "")),
+            count=int(data.get("count", 0)),
+            tty_name=str(data.get("tty_name", "")),
+            biff_enabled=bool(biff_enabled),
+        )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
-        return 0
+        return None
 
 
-def _read_all_unreads(unread_dir: Path) -> list[ProjectUnread]:
-    """Scan *unread_dir* for per-project ``*.json`` files.
+def _biff_segment(unread: SessionUnread | None) -> str:
+    """Format the biff status segment for a single session.
 
-    Returns a list of :class:`ProjectUnread` with non-zero counts.
-    Gracefully returns ``[]`` on missing directory or OS errors.
+    No file → ``biff`` (plain fallback).
+    Mesg off → ``user:tty(n)`` plain (regardless of actual count).
+    Zero count → ``user:tty(0)`` plain.
+    Nonzero → ``user:tty(N)`` bold yellow.
     """
-    try:
-        files = sorted(unread_dir.glob("*.json"))
-    except OSError:
-        return []
-    results: list[ProjectUnread] = []
-    for f in files:
-        count = _read_unread_count(f)
-        if count > 0:
-            results.append(ProjectUnread(name=f.stem, count=count))
-    return results
-
-
-_MAX_PROJECT_NAME_LEN = 12
-
-
-def _display_name(slug: str) -> str:
-    """Extract bare repo name from a slug for status bar display.
-
-    ``punt-labs__biff`` → ``biff``, ``myapp`` → ``myapp``.
-    The ``__`` delimiter maps ``/`` in the git remote slug
-    (see DES-007a).
-    """
-    if "__" in slug:
-        return slug.rsplit("__", maxsplit=1)[1]
-    return slug
-
-
-def _biff_segment_multi(projects: list[ProjectUnread]) -> str:
-    """Format the biff status segment from per-project unread counts.
-
-    No unreads → ``biff`` (plain, no count).
-    One or more projects → ``name(count)`` pairs, alphabetically sorted,
-    bold yellow.  Long names (>12 chars) are truncated with ``…``.
-
-    Display names are derived from slugs (``owner__repo`` → ``repo``).
-    If two projects collide on the same display name, the full slug
-    is used for all projects to avoid ambiguity.
-    """
-    if not projects:
+    if unread is None:
         return "biff"
-    ordered = sorted(projects, key=lambda p: p.name)
-    display_names = [_display_name(p.name) for p in ordered]
-    use_slug = len(display_names) != len(set(display_names))
-    parts: list[str] = []
-    for p in ordered:
-        name = p.name if use_slug else _display_name(p.name)
-        if len(name) > _MAX_PROJECT_NAME_LEN:
-            name = name[: _MAX_PROJECT_NAME_LEN - 1] + "\u2026"
-        parts.append(f"{name}({p.count})")
-    inner = " ".join(parts)
-    return f"\033[1;33m{inner}\033[0m"
+    name = unread.user or "biff"
+    if not unread.biff_enabled:
+        if unread.tty_name:
+            return f"{name}:{unread.tty_name}(n)"
+        return f"{name}(n)"
+    if unread.tty_name:
+        label = f"{name}:{unread.tty_name}({unread.count})"
+    else:
+        label = f"{name}({unread.count})"
+    if unread.count == 0:
+        return label
+    return f"\033[1;33m{label}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str:

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.server.tools._descriptions import refresh_read_messages
+from biff.server.tools._descriptions import refresh_read_messages, set_biff_enabled
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -33,6 +33,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
             is y
         """
+        set_biff_enabled(enabled=enabled)
         await update_current_session(state, biff_enabled=enabled)
         await refresh_read_messages(mcp, state)
         return f"is {'y' if enabled else 'n'}"
