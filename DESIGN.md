@@ -508,19 +508,21 @@ Claude Code (PID 30757)
 ├── biff statusline                (status line, ppid=30757, reads file)
 ```
 
-The unread file contains repo name, count, TTY name, and preview:
+The unread file contains user, repo, count, TTY name, and preview:
 
 ```json
-{"repo": "biff", "count": 2, "tty_name": "tty1", "preview": "@kai about auth"}
+{"user": "kai", "repo": "biff", "count": 2, "tty_name": "tty1", "preview": "@eric about auth"}
 ```
 
-The status line renders: `biff:tty1(2)` (bold yellow when count > 0, plain `biff` when zero).
+The status line renders: `kai:tty1(2)` (bold yellow when count > 0, plain `biff` when zero). The display uses the username as the primary label (useful for orientation across many tabs) and the TTY name for session identity.
+
+The MCP server auto-assigns a `ttyN` name on startup (same sequential logic as the `/tty` tool), so the status bar always has session identity. Users can override via `/tty custom-name`.
 
 The MCP server is registered **globally** in `~/.claude.json` (not per-project `.mcp.json`) so biff runs in every session and can update counts regardless of which project is open.
 
-### Display Name
+### Cleanup
 
-The unread file stores the slug-based `repo_name` (e.g., `punt-labs__biff`) but the status line displays the bare repo name extracted from the slug (`biff`). See `_display_name()` in `statusline.py`.
+The MCP server deletes its PPID-keyed unread file in the lifespan `finally` block on shutdown. This prevents stale files from accumulating when sessions end.
 
 ### Verified (2026-02-17)
 

@@ -18,7 +18,9 @@ from fastmcp import FastMCP
 from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
-from biff.server.tools._descriptions import poll_inbox
+from biff.server.tools._descriptions import poll_inbox, set_tty_name
+from biff.server.tools._session import update_current_session
+from biff.server.tools.tty import next_tty_name
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +162,13 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             signal.signal(sig, _signal_handler)
 
+        # Auto-assign a ttyN name so the status bar always has identity.
+        sessions = await state.relay.get_sessions()
+        existing = [s.tty_name for s in sessions if s.tty_name]
+        auto_name = next_tty_name(existing)
+        set_tty_name(auto_name)
+        await update_current_session(state, tty_name=auto_name)
+
         shutdown = asyncio.Event()
         poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
         reaper = asyncio.create_task(_reap_loop(state, shutdown))
@@ -170,6 +179,9 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
             yield state
         finally:
             await _shutdown_tasks(shutdown, [poller, reaper, heartbeat])
+            if state.unread_path is not None:
+                with suppress(FileNotFoundError):
+                    state.unread_path.unlink()
             if state.owns_relay:
                 try:
                     await state.relay.delete_session(state.session_key)

@@ -6,6 +6,7 @@ Provides ``biff serve``, ``biff version``, ``biff init``, ``biff install``,
 
 from __future__ import annotations
 
+import os
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Annotated
@@ -75,7 +76,7 @@ def serve(
     state = create_state(
         resolved.config,
         resolved.data_dir,
-        unread_path=UNREAD_DIR / f"{resolved.config.repo_name}.json",
+        unread_path=UNREAD_DIR / f"{os.getppid()}.json",
     )
     mcp = create_server(state)
 
