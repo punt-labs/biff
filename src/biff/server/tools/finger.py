@@ -54,7 +54,7 @@ def _format_tty_block(session: UserSession) -> str:
     """Format per-TTY details (on-since, host/dir, plan)."""
     idle = _format_idle(session.last_active)
     since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
-    tty_label = session.tty[:8] if session.tty else "?"
+    tty_label = session.tty_name or (session.tty[:8] if session.tty else "?")
 
     lines = [f"   On since {since} on {tty_label}, idle {idle}"]
     if session.hostname or session.pwd:
