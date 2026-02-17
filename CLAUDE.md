@@ -187,17 +187,24 @@ Work is NOT complete until `git push` succeeds.
 
 The PR/FAQ (`prfaq.tex`) is the authoritative source for product vision, target market, command vocabulary, phasing, risk assessment, and "what we are not building." When there are questions about scope, priorities, or product direction, consult the PR/FAQ first.
 
-## Design Decision Log
+## Design Decision Logs
+
+Two design logs exist. Both follow the same rules: consult before changing, do not revisit settled decisions without new evidence, log decisions before implementing.
+
+| Log | Scope | Covers |
+|-----|-------|--------|
+| `DESIGN.md` | Runtime system | Display pipeline, session keys, transport, push notifications, relay protocol, config format |
+| `DESIGN-INSTALLER.md` | Installation system | Two-phase install, plugin file delivery, MCP registration, status line stash-and-wrap, doctor checks, identity resolution, `.biff` init, uninstall |
 
 **The display pipeline is fragile.** The PostToolUse hooks, skill command prompts, status line, and push notification system have non-obvious interactions and represent 12-16 hours of iteration. The split between `updatedMCPToolOutput` (panel summary) and `additionalContext` (model-emitted full output) exists because multi-line MCP output gets truncated behind a "Control-O for more" prompt. Changes that look simple can break the display pipeline in ways that are difficult to debug and easy to repeat.
 
 **Before proposing or making ANY design change:**
 
-1. Read `DESIGN.md` for prior decisions on the same topic.
+1. Read `DESIGN.md` and `DESIGN-INSTALLER.md` for prior decisions on the same topic.
 2. Do not revisit a settled decision without new evidence.
-3. Log the decision, alternatives considered, and outcome in `DESIGN.md` before implementing.
+3. Log the decision, alternatives considered, and outcome in the appropriate log before implementing.
 
-Failure to consult `DESIGN.md` has already caused wasted work and rollbacks. This rule is non-negotiable.
+Failure to consult the design logs has already caused wasted work and rollbacks. This rule is non-negotiable.
 
 ## Biff Architecture
 
