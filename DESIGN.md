@@ -510,3 +510,56 @@ A single global `unread.json` file caused whichever server wrote last to win. Mu
 - Standard for Python tooling (`pyproject.toml`).
 - Simpler than YAML for flat key-value config.
 - `.biff` is a short, recognizable filename matching the product name.
+
+---
+
+## DES-013: Per-User Mailbox for Broadcast Messages
+
+**Date:** 2026-02-16
+**Status:** SETTLED
+**Topic:** Fixing broadcast message delivery broken by multi-TTY sessions (PR #35)
+
+### Problem
+
+PR #35 introduced multi-TTY sessions (`{user}:{tty}` keys). This broke broadcast messaging in three ways:
+
+1. **No offline delivery.** Broadcast `/write @user` looked up active sessions and dropped silently if none existed.
+2. **Message duplication.** Each active session received its own copy — N sessions meant N copies of the same message.
+3. **Orphaned messages.** Unread copies stranded in per-TTY inboxes when sessions exited.
+
+### Design
+
+Two mailbox types per user:
+
+| Mailbox | File / Subject | Written By | Semantics |
+|---------|---------------|------------|-----------|
+| **User mailbox** | `inbox-{user}.jsonl` / `biff.{repo}.inbox.{user}` | Broadcast `/write @user` | POP: first reader consumes |
+| **TTY mailbox** | `inbox-{user}-{tty}.jsonl` / `biff.{repo}.inbox.{user}.{tty}` | Targeted `/write @user:tty` | POP: session-specific |
+
+**Delivery rules:**
+- Broadcast (`to_user` without `:`) → write to user mailbox. No session lookup. Persists offline.
+- Targeted (`to_user` with `:`) → write to TTY mailbox. Same as before.
+
+**Read rules:**
+- `/read` merges both inboxes, sorted by timestamp.
+- POP semantics apply independently to each mailbox.
+- First session to `/read` consumes broadcast messages; other sessions see nothing.
+
+### NATS Subject Safety
+
+The user-level subject `biff.{repo}.inbox.{user}` (3 tokens) is distinct from the TTY-level subject `biff.{repo}.inbox.{user}.{tty}` (4 tokens). NATS exact-match filtering on the 3-token subject does not consume 4-token messages. The existing stream filter `biff.{repo}.inbox.>` covers both without config changes.
+
+### Alternatives Considered
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Keep fan-out, add offline queue | Two storage paths for the same message type; complexity for no benefit |
+| Single user-level inbox for everything | Breaks targeted delivery semantics; `/write @user:tty` must only go to one session |
+| Dedup at read time | Doesn't solve offline delivery; adds read-time complexity |
+
+### Backward Compatibility
+
+- Existing `inbox-{user}-{tty}.jsonl` files remain valid for targeted delivery.
+- Old broadcast copies already in per-TTY inboxes will still be read normally.
+- No migration needed.
+- NATS stream config unchanged (`biff.{repo}.inbox.>` covers both).
