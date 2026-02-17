@@ -117,6 +117,18 @@ class TestParseRepoSlug:
         url = "https://github.com/punt-labs/biff"
         assert _parse_repo_slug(url) == "punt-labs/biff"
 
+    def test_ssh_scheme_url(self) -> None:
+        url = "ssh://git@github.com/punt-labs/biff.git"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    def test_ssh_scheme_url_no_dotgit(self) -> None:
+        url = "ssh://git@github.com/punt-labs/biff"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
+    def test_ssh_scheme_url_with_port(self) -> None:
+        url = "ssh://git@github.com:2222/punt-labs/biff.git"
+        assert _parse_repo_slug(url) == "punt-labs/biff"
+
     def test_nested_path_rejected(self) -> None:
         url = "https://gitlab.com/group/sub/repo.git"
         assert _parse_repo_slug(url) is None
@@ -179,11 +191,14 @@ class TestSanitizeRepoName:
         with pytest.raises(SystemExit, match="no usable characters"):
             sanitize_repo_name("@#$%")
 
-    def test_slash_becomes_underscore(self) -> None:
-        assert sanitize_repo_name("owner/repo") == "owner_repo"
+    def test_slash_becomes_double_underscore(self) -> None:
+        assert sanitize_repo_name("owner/repo") == "owner__repo"
 
     def test_slug_with_dots(self) -> None:
-        assert sanitize_repo_name("owner/socket.io") == "owner_socket-io"
+        assert sanitize_repo_name("owner/socket.io") == "owner__socket-io"
+
+    def test_no_collision_with_underscored_names(self) -> None:
+        assert sanitize_repo_name("a_b/c") != sanitize_repo_name("a/b_c")
 
     def test_nats_wildcards_stripped(self) -> None:
         assert sanitize_repo_name("app*>test") == "apptest"
@@ -326,7 +341,7 @@ class TestLoadConfig:
     ) -> None:
         self._setup_repo(tmp_path)
         resolved = load_config(start=tmp_path)
-        assert resolved.config.repo_name == "punt-labs_biff"
+        assert resolved.config.repo_name == "punt-labs__biff"
 
     @patch("biff.config.get_repo_slug", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)

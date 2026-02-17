@@ -108,17 +108,19 @@ def get_os_user() -> str | None:
         return None
 
 
-_SLUG_SSH_RE = re.compile(r"^[^@]+@[^:]+:(.+?)(?:\.git)?$")
-_SLUG_HTTPS_RE = re.compile(r"^https?://[^/]+/(.+?)(?:\.git)?$")
+_SLUG_SCP_RE = re.compile(r"^[^@]+@[^:]+:(.+?)(?:\.git)?$")
+_SLUG_URL_RE = re.compile(r"^(?:https?|ssh)://[^/]+(?::\d+)?/(.+?)(?:\.git)?$")
 
 
 def _parse_repo_slug(url: str) -> str | None:
-    """Extract ``owner/repo`` from an SSH or HTTPS git remote URL.
+    """Extract ``owner/repo`` from a git remote URL.
 
+    Supports scp-style SSH (``git@host:owner/repo``), scheme-based SSH
+    (``ssh://git@host/owner/repo``, with optional port), and HTTPS.
     Returns ``None`` for URLs that don't match or have nested paths
     (e.g. ``gitlab.com/group/sub/repo``).
     """
-    for pattern in (_SLUG_SSH_RE, _SLUG_HTTPS_RE):
+    for pattern in (_SLUG_SCP_RE, _SLUG_URL_RE):
         m = pattern.match(url)
         if m:
             slug = m.group(1)
@@ -152,16 +154,17 @@ def sanitize_repo_name(name: str) -> str:
 
     NATS bucket names allow ASCII alphanumeric, dash, and underscore
     only.  Subject dots are level separators; wildcards (``*``, ``>``)
-    are reserved.  Slashes become underscores (owner/repo boundary);
-    dots become dashes; spaces become dashes; non-ASCII and remaining
-    special characters are stripped.
+    are reserved.  Slashes become double underscores (``__``) to mark
+    the owner/repo boundary without colliding with underscores in repo
+    names; dots become dashes; spaces become dashes; non-ASCII and
+    remaining special characters are stripped.
 
     Raises ``SystemExit`` if the result is empty — a repo name that
     sanitizes to nothing would silently share a NATS namespace with
     other unusable names, causing the exact collision this function
     exists to prevent.
     """
-    clean = name.replace("/", "_").replace(".", "-").replace(" ", "-")
+    clean = name.replace("/", "__").replace(".", "-").replace(" ", "-")
     sanitized = "".join(c for c in clean if (c.isascii() and c.isalnum()) or c in "-_")
     if not sanitized:
         raise SystemExit(

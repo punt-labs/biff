@@ -404,12 +404,13 @@ No migration. Sessions rebuild on next heartbeat. Orphaned NATS resources (old `
 
 - `get_repo_slug(repo_root)` runs `git remote get-url origin` and parses the SSH or HTTPS URL to extract `owner/repo`.
 - `_parse_repo_slug(url)` handles both `git@github.com:owner/repo.git` and `https://github.com/owner/repo.git`.
-- `sanitize_repo_name` gains `/` → `_` mapping. GitHub forbids `_` in owner names, so `_` unambiguously marks the owner/repo boundary.
+- `_parse_repo_slug(url)` handles scp-style SSH, `ssh://` scheme (with optional port), and HTTPS URLs.
+- `sanitize_repo_name` gains `/` → `__` (double underscore) mapping. The double underscore is collision-resistant: `a_b/c` → `a_b__c` vs `a/b_c` → `a__b_c`.
 - `load_config` prefers the slug; falls back to `repo_root.name` when no remote exists (local-only repos have no shared namespace collision risk).
 
 **Examples:**
-- `punt-labs/biff` → `punt-labs_biff`
-- `punt-labs/socket.io` → `punt-labs_socket-io`
+- `punt-labs/biff` → `punt-labs__biff`
+- `punt-labs/socket.io` → `punt-labs__socket-io`
 
 **Migration:** Same stance as DES-007 — sessions rebuild on next heartbeat (120s TTL), messages are consumed on read. Orphaned bare-name resources expire. Acceptable pre-1.0.
 
