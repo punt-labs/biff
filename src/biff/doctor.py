@@ -101,6 +101,13 @@ def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:
     target = commands_dir or COMMANDS_DIR
     source = plugin_source() / "commands"
     expected = {f.name for f in source.glob("*.md")}
+    if not expected:
+        return CheckResult(
+            "User commands",
+            False,
+            f"no bundled commands found in {source}",
+            required=False,
+        )
     missing = sorted(name for name in expected if not (target / name).exists())
     if not missing:
         return CheckResult(

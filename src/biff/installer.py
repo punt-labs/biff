@@ -157,12 +157,17 @@ def _install_user_commands(commands_dir: Path | None = None) -> StepResult:
     commands_dir = commands_dir or COMMANDS_DIR
     source = plugin_source() / "commands"
     try:
+        md_files = sorted(source.glob("*.md"))
+        if not md_files:
+            return StepResult(
+                "User commands",
+                False,
+                f"no bundled command files found in {source}",
+            )
         commands_dir.mkdir(parents=True, exist_ok=True)
-        count = 0
-        for md_file in sorted(source.glob("*.md")):
+        for md_file in md_files:
             shutil.copy2(md_file, commands_dir / md_file.name)
-            count += 1
-        return StepResult("User commands", True, f"deployed {count} commands")
+        return StepResult("User commands", True, f"deployed {len(md_files)} commands")
     except OSError as exc:
         return StepResult("User commands", False, f"copy failed: {exc}")
 
@@ -172,13 +177,16 @@ def _uninstall_user_commands(commands_dir: Path | None = None) -> StepResult:
     commands_dir = commands_dir or COMMANDS_DIR
     source = plugin_source() / "commands"
     bundled_names = {f.name for f in source.glob("*.md")}
-    removed = 0
-    for name in sorted(bundled_names):
-        target = commands_dir / name
-        if target.exists():
-            target.unlink()
-            removed += 1
-    return StepResult("User commands", True, f"removed {removed} commands")
+    try:
+        removed = 0
+        for name in sorted(bundled_names):
+            target = commands_dir / name
+            if target.is_file():
+                target.unlink()
+                removed += 1
+        return StepResult("User commands", True, f"removed {removed} commands")
+    except OSError as exc:
+        return StepResult("User commands", False, f"removal failed: {exc}")
 
 
 # Plugin registry ------------------------------------------------------------
