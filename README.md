@@ -15,7 +15,9 @@ Engineers using AI coding tools are shipping faster than ever. But every time th
 ## Quick Start
 
 ```bash
-pip install biff-mcp
+git clone https://github.com/punt-labs/biff.git
+cd biff
+uv tool install --editable .
 biff install
 biff doctor
 ```
@@ -29,14 +31,14 @@ Restart Claude Code. Type `/who` to see your team.
 ```
 > /who
 
-▶  NAME    IDLE   S  PLAN
-   @kai    0:03   +  refactoring auth module
-   @eric   1:22   +  reviewing PR #47
-   @priya  0:00   +  writing integration tests
-   @dana   3:45   -  (no plan)
+▶  NAME    TTY   IDLE  S  HOST       DIR                        PLAN
+   @kai    tty1  0:03  +  m2-mb-air  /Users/kai/code/myapp      refactoring auth module
+   @eric   tty2  1:22  +  m2-mb-air  /Users/eric/code/myapp     reviewing PR #47
+   @priya  tty1  0:00  +  priya-mbp  /Users/priya/code/myapp    writing integration tests
+   @dana   tty1  3:45  -  dana-mbp   /Users/dana/code/myapp     (no plan)
 ```
 
-`+` means accepting messages, `-` means do not disturb.
+`S` is message status: `+` means accepting messages, `-` means do not disturb.
 
 ### Send a message
 
@@ -63,7 +65,8 @@ Message sent to @kai.
 > /finger @kai
 
 ▶  Login: kai                              Messages: on
-   On since Sat Feb 15 14:01 (UTC) on claude, idle 0:03
+   On since Sat Feb 15 14:01 (UTC) on tty1, idle 0:03
+   Host: m2-mb-air  Dir: /Users/kai/code/myapp
    Plan:
     refactoring auth module
 ```
@@ -84,6 +87,8 @@ Plan: debugging the websocket reconnect logic
 is n
 ```
 
+Your status bar shows `(n)` instead of the unread count while messages are off. Messages still accumulate — `/mesg y` or `/read` reveals them.
+
 ## Commands
 
 | Command | Origin | Purpose |
@@ -93,7 +98,7 @@ is n
 | `/finger @user` | BSD `finger` | Check what someone is working on |
 | `/who` | BSD `who` | List active sessions |
 | `/plan "text"` | BSD `.plan` | Set your status |
-| `/wall "text"` | BSD `wall` | Broadcast to the team |
+| `/tty "name"` | BSD `tty` | Name the current session |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 
 ## Status Bar
@@ -101,10 +106,12 @@ is n
 Biff appends to your existing Claude Code status line — it never replaces it. If you already have a status line command, biff wraps it and adds unread counts at the end:
 
 ```
-your-existing-status | biff(3)
+your-existing-status | kai:tty1(3)
 ```
 
-This is optional and separate from `biff install`. To enable: `biff install-statusline`. To remove and restore your original status line: `biff uninstall-statusline`.
+Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off.
+
+`biff install` includes status bar setup. For standalone management: `biff install-statusline` / `biff uninstall-statusline`.
 
 ## Agents Welcome
 
@@ -128,20 +135,19 @@ As engineering teams grow to include both humans and autonomous agents, coordina
 
 ## Roadmap
 
-### Shipped: Core Communication
+### Shipped
 
-The foundation is live. Presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), broadcast (`/wall`), and availability control (`/mesg`) — all working over a NATS relay for cross-machine communication.
+Core communication is live: presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), and availability control (`/mesg`) — all working over a NATS relay for cross-machine communication.
+
+TTY sessions (`/tty`) give each agent a distinct identity — one user with 3 sessions shows 3 entries in `/who`, targetable via `/write @user:tty`. Enriched presence shows host and directory per session. Per-session status bar with `user:tty(N)` format. `/mesg n` suppresses the unread count on the status line.
 
 ### Next: Agentic Coordination
 
-The immediate focus is making biff work for multi-agent teams:
-
 | Feature | What It Enables |
 |---------|----------------|
-| **TTY sessions** | Each agent gets a distinct identity. One user with 3 sessions shows 3 entries in `/who`, targetable via `/write @user:tty`. |
-| **Enriched presence** | `/who` shows host and directory per session. Flags when agents share a filesystem. |
+| **`/wall` broadcast** | Time-sensitive announcements visible on every terminal's status bar with automatic expiry. |
 | **Plan auto-expand** | `/plan biff-bf8` auto-expands to show the task title. Everyone sees what you're working on. |
-| **Workflow hooks** | Claiming a task auto-sets your plan. Creating a PR triggers a `/wall` announcement. |
+| **Workflow hooks** | Claiming a task auto-sets your plan. Creating a PR triggers an announcement. |
 | **Project opt-in** | `/biff y` enables the coordination workflow per project via AGENTS.md. |
 
 ### Future: Real-Time and Security
