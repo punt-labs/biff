@@ -67,14 +67,22 @@ async def _reap_sentinels(state: ServerState) -> None:
         sentinel.unlink(missing_ok=True)
 
 
-async def _reap_loop(state: ServerState, *, interval: float = 2.0) -> None:
+async def _reap_loop(
+    state: ServerState, shutdown: asyncio.Event, *, interval: float = 2.0
+) -> None:
     """Background task: reap shutdown sentinels every *interval* seconds."""
-    while True:
-        await asyncio.sleep(interval)
+    while not shutdown.is_set():
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=interval)
+            return  # Shutdown requested
+        except TimeoutError:
+            pass
         await _reap_sentinels(state)
 
 
-async def _heartbeat_loop(state: ServerState, *, interval: float = 60.0) -> None:
+async def _heartbeat_loop(
+    state: ServerState, shutdown: asyncio.Event, *, interval: float = 60.0
+) -> None:
     """Periodic heartbeat to keep this session alive in the relay.
 
     Each ``heartbeat()`` call updates ``last_active`` and — for NATS KV —
@@ -82,12 +90,42 @@ async def _heartbeat_loop(state: ServerState, *, interval: float = 60.0) -> None
     dies (SIGKILL), heartbeats stop and the relay eventually expires the
     session.
     """
-    while True:
-        await asyncio.sleep(interval)
+    while not shutdown.is_set():
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=interval)
+            return  # Shutdown requested
+        except TimeoutError:
+            pass
         try:
             await state.relay.heartbeat(state.session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
             logger.warning("Heartbeat failed", exc_info=True)
+
+
+async def _shutdown_tasks(
+    shutdown: asyncio.Event, tasks: list[asyncio.Task[None]], *, timeout: float = 5.0
+) -> None:
+    """Stop background tasks cooperatively, falling back to hard cancel.
+
+    Sets the *shutdown* event so tasks exit cleanly between iterations
+    (avoids cancelling mid-NATS-I/O which corrupts shared connections).
+    Waits up to *timeout* seconds for all tasks to finish, then
+    force-cancels any stragglers.  Suppresses ``CancelledError`` at
+    every ``await`` because this runs inside a ``finally`` block that
+    may itself be responding to cancellation.
+    """
+    shutdown.set()
+    with suppress(asyncio.CancelledError):
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=timeout,
+        )
+    for t in tasks:
+        if not t.done():
+            t.cancel()
+    for t in tasks:
+        with suppress(asyncio.CancelledError):
+            await t
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:
@@ -122,23 +160,16 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             signal.signal(sig, _signal_handler)
 
-        poller = asyncio.create_task(poll_inbox(mcp, state))
-        reaper = asyncio.create_task(_reap_loop(state))
-        heartbeat = asyncio.create_task(_heartbeat_loop(state))
+        shutdown = asyncio.Event()
+        poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
+        reaper = asyncio.create_task(_reap_loop(state, shutdown))
+        heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
         # Process any sentinels left from previously-killed servers.
         await _reap_sentinels(state)
         try:
             yield state
         finally:
-            poller.cancel()
-            reaper.cancel()
-            heartbeat.cancel()
-            with suppress(asyncio.CancelledError):
-                await poller
-            with suppress(asyncio.CancelledError):
-                await reaper
-            with suppress(asyncio.CancelledError):
-                await heartbeat
+            await _shutdown_tasks(shutdown, [poller, reaper, heartbeat])
             if state.owns_relay:
                 try:
                     await state.relay.delete_session(state.session_key)
