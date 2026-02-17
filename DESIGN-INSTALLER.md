@@ -56,7 +56,7 @@ This document describes the architecture of biff's installation system — how t
 │  │            hooks/suppress-output.sh                                │  │
 │  │                                                                    │  │
 │  │  Step 3: Copy user commands                                       │  │
-│  │    _plugin_source() / "commands" / *.md                            │  │
+│  │    plugin_source() / "commands" / *.md                            │  │
 │  │      → shutil.copy2 → ~/.claude/commands/                         │  │
 │  │                                                                    │  │
 │  │  Step 4: Register in plugin registry                              │  │
@@ -478,7 +478,7 @@ Before `biff install` can succeed, the user needs:
 
 ### Design
 
-The installer copies the same `.md` command files from `_plugin_source() / "commands"` to two locations:
+The installer copies the same `.md` command files from `plugin_source() / "commands"` to two locations:
 
 1. **Plugin commands** (existing) — `~/.claude/plugins/biff/commands/` → namespaced as `/biff:who`, `/biff:mesg`, etc.
 2. **User commands** (new) — `~/.claude/commands/` → top-level as `/who`, `/mesg`, etc.
