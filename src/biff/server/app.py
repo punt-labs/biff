@@ -143,7 +143,8 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
                 await state.relay.delete_session(state.session_key)
             except Exception:
                 logger.exception("Failed to delete session %s", state.session_key)
-            await state.relay.close()
+            if state.owns_relay:
+                await state.relay.close()
 
     mcp: FastMCP[ServerState] = FastMCP(
         "biff",

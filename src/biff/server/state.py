@@ -25,6 +25,7 @@ class ServerState:
     hostname: str = ""
     pwd: str = ""
     unread_path: Path | None = None
+    owns_relay: bool = True
 
     @property
     def session_key(self) -> str:
@@ -51,6 +52,7 @@ def create_state(
     Runtime identity (tty, hostname, pwd) is auto-generated when not
     provided — each server instance gets a unique session key.
     """
+    owns_relay = relay is None
     if relay is None:
         if config.relay_url:
             relay = NatsRelay(
@@ -68,4 +70,5 @@ def create_state(
         hostname=hostname or get_hostname(),
         pwd=pwd or get_pwd(),
         unread_path=unread_path,
+        owns_relay=owns_relay,
     )

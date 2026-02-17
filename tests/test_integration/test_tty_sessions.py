@@ -166,9 +166,7 @@ class TestSentinelLogout:
             from biff.relay import LocalRelay
 
             assert isinstance(kai_tty1_state.relay, LocalRelay)
-            kai_tty1_state.relay.write_remove_sentinel(
-                kai_tty1_state.session_key
-            )
+            kai_tty1_state.relay.write_remove_sentinel(kai_tty1_state.session_key)
 
             # Eric heartbeats (simulates concurrent write race)
             await eric.call_tool("plan", {"message": "still here"})
