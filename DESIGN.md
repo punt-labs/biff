@@ -396,6 +396,23 @@ A single NATS server serves multiple repos (the normal deployment). Without scop
 
 No migration. Sessions rebuild on next heartbeat. Orphaned NATS resources (old `biff-sessions` bucket, `BIFF_INBOX` stream) expire via TTL or are manually purged. Acceptable pre-1.0.
 
+### DES-007a: Slug-Based Namespace (2026-02-17)
+
+**Problem:** `repo_root.name` is not globally unique. `punt-labs/biff` and `someone/biff` both resolve to `biff`, sharing sessions and messages on the demo relay.
+
+**Fix:** Derive the namespace from `owner/repo` (git remote origin) instead of the bare directory name.
+
+- `get_repo_slug(repo_root)` runs `git remote get-url origin` and parses the SSH or HTTPS URL to extract `owner/repo`.
+- `_parse_repo_slug(url)` handles both `git@github.com:owner/repo.git` and `https://github.com/owner/repo.git`.
+- `sanitize_repo_name` gains `/` → `_` mapping. GitHub forbids `_` in owner names, so `_` unambiguously marks the owner/repo boundary.
+- `load_config` prefers the slug; falls back to `repo_root.name` when no remote exists (local-only repos have no shared namespace collision risk).
+
+**Examples:**
+- `punt-labs/biff` → `punt-labs_biff`
+- `punt-labs/socket.io` → `punt-labs_socket-io`
+
+**Migration:** Same stance as DES-007 — sessions rebuild on next heartbeat (120s TTL), messages are consumed on read. Orphaned bare-name resources expire. Acceptable pre-1.0.
+
 ---
 
 ## DES-008: Long-Lived Sessions with Idle Time
