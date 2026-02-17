@@ -45,11 +45,16 @@ async def resolve_session(
     If that misses, searches the user's sessions for a matching
     ``tty_name``.  Returns ``None`` if no match.
     """
-    # Try as literal session key (hex ID)
-    key = build_session_key(user, tty_or_name)
-    session = await relay.get_session(key)
-    if session is not None:
-        return session
+    # Try as literal session key (hex ID).
+    # Catches ValueError from NatsRelay's _validate_tty when
+    # tty_or_name contains NATS-illegal characters (dots, spaces, etc).
+    try:
+        key = build_session_key(user, tty_or_name)
+        session = await relay.get_session(key)
+        if session is not None:
+            return session
+    except ValueError:
+        pass
 
     # Fall back to tty_name match
     sessions = await relay.get_sessions_for_user(user)
