@@ -11,9 +11,11 @@ from biff.installer import (
     _disable_plugin,
     _enable_plugin,
     _install_plugin_files,
+    _install_user_commands,
     _read_registry,
     _register_plugin,
     _uninstall_plugin_files,
+    _uninstall_user_commands,
     _unregister_plugin,
     install,
     uninstall,
@@ -59,6 +61,56 @@ class TestUninstallPluginFiles:
         target = tmp_path / "nonexistent"
         result = _uninstall_plugin_files(target)
         assert result.passed
+
+
+# -- User commands -----------------------------------------------------------
+
+
+class TestInstallUserCommands:
+    def test_deploys_all_md_files(self, tmp_path: Path) -> None:
+        target = tmp_path / "commands"
+        result = _install_user_commands(target)
+        assert result.passed
+        deployed = sorted(f.name for f in target.glob("*.md"))
+        assert len(deployed) >= 1
+        assert "who.md" in deployed
+
+    def test_creates_parent_dir(self, tmp_path: Path) -> None:
+        target = tmp_path / "deep" / "commands"
+        result = _install_user_commands(target)
+        assert result.passed
+        assert target.exists()
+
+    def test_overwrites_existing(self, tmp_path: Path) -> None:
+        target = tmp_path / "commands"
+        target.mkdir()
+        (target / "who.md").write_text("stale")
+        result = _install_user_commands(target)
+        assert result.passed
+        assert (target / "who.md").read_text() != "stale"
+
+
+class TestUninstallUserCommands:
+    def test_removes_biff_commands(self, tmp_path: Path) -> None:
+        target = tmp_path / "commands"
+        _install_user_commands(target)
+        result = _uninstall_user_commands(target)
+        assert result.passed
+        assert not list(target.glob("*.md"))
+
+    def test_noop_when_missing(self, tmp_path: Path) -> None:
+        target = tmp_path / "nonexistent"
+        result = _uninstall_user_commands(target)
+        assert result.passed
+        assert "removed 0" in result.message
+
+    def test_preserves_non_biff_files(self, tmp_path: Path) -> None:
+        target = tmp_path / "commands"
+        _install_user_commands(target)
+        (target / "custom.md").write_text("user's own command")
+        _uninstall_user_commands(target)
+        assert (target / "custom.md").exists()
+        assert (target / "custom.md").read_text() == "user's own command"
 
 
 # -- Plugin registry ---------------------------------------------------------
@@ -191,9 +243,10 @@ class TestInstallOrchestrator:
             plugins_dir=tmp_path / "plugins" / "biff",
             settings_path=tmp_path / "settings.json",
             registry_path=tmp_path / "installed_plugins.json",
+            commands_dir=tmp_path / "commands",
         )
         assert result.installed
-        assert len(result.steps) == 4
+        assert len(result.steps) == 5
         assert all(s.passed for s in result.steps)
 
     @patch("biff.installer._install_mcp_server")
@@ -205,6 +258,7 @@ class TestInstallOrchestrator:
             plugins_dir=tmp_path / "plugins" / "biff",
             settings_path=tmp_path / "settings.json",
             registry_path=tmp_path / "installed_plugins.json",
+            commands_dir=tmp_path / "commands",
         )
         assert not result.installed
         assert any(not s.passed for s in result.steps)
@@ -230,13 +284,17 @@ class TestUninstallOrchestrator:
         )
         _enable_plugin(tmp_path / "settings.json")
 
+        # Install user commands so uninstall has something to remove
+        _install_user_commands(tmp_path / "commands")
+
         result = uninstall(
             plugins_dir=tmp_path / "plugins" / "biff",
             settings_path=tmp_path / "settings.json",
             registry_path=tmp_path / "installed_plugins.json",
+            commands_dir=tmp_path / "commands",
         )
         assert result.uninstalled
-        assert len(result.steps) == 5  # 4 core + statusline
+        assert len(result.steps) == 6  # 5 core + statusline
 
 
 # -- CLI commands ------------------------------------------------------------

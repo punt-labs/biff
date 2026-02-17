@@ -20,7 +20,7 @@ from biff.config import (
     find_git_root,
     load_biff_file,
 )
-from biff.installer import PLUGINS_DIR
+from biff.installer import COMMANDS_DIR, PLUGINS_DIR
 from biff.models import RelayAuth
 from biff.statusline import STASH_PATH
 
@@ -92,6 +92,36 @@ def _check_plugin_installed(plugins_dir: Path | None = None) -> CheckResult:
         )
     commands = list(commands_dir.glob("*.md"))
     return CheckResult("Plugin commands", True, f"{len(commands)} commands installed")
+
+
+def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:
+    """Check top-level user commands are deployed (informational)."""
+    from biff.installer import plugin_source
+
+    target = commands_dir or COMMANDS_DIR
+    source = plugin_source() / "commands"
+    expected = {f.name for f in source.glob("*.md")}
+    if not expected:
+        return CheckResult(
+            "User commands",
+            False,
+            f"no bundled commands found in {source}",
+            required=False,
+        )
+    missing = sorted(name for name in expected if not (target / name).exists())
+    if not missing:
+        return CheckResult(
+            "User commands",
+            True,
+            f"{len(expected)} commands in {target}",
+            required=False,
+        )
+    return CheckResult(
+        "User commands",
+        False,
+        f"missing: {', '.join(missing)} (run: biff install)",
+        required=False,
+    )
 
 
 def _resolve_relay_config() -> tuple[str, RelayAuth | None]:
@@ -204,6 +234,7 @@ def check_environment(plugins_dir: Path | None = None) -> int:
         _check_gh_cli(),
         _check_mcp_server(),
         _check_plugin_installed(plugins_dir),
+        _check_user_commands(),
         _check_relay(),
         _check_biff_file(),
         _check_statusline(),

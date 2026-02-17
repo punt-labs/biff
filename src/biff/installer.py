@@ -22,6 +22,7 @@ from biff.statusline import read_settings, write_settings
 # Well-known paths ----------------------------------------------------------
 
 PLUGINS_DIR = Path.home() / ".claude" / "plugins" / "biff"
+COMMANDS_DIR = Path.home() / ".claude" / "commands"
 REGISTRY_PATH = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 PLUGIN_KEY = "biff@local"
@@ -60,7 +61,7 @@ class UninstallResult:
 # Plugin source --------------------------------------------------------------
 
 
-def _plugin_source() -> Path:
+def plugin_source() -> Path:
     """Resolve the bundled plugin directory from package data."""
     return Path(str(importlib.resources.files("biff.plugins").joinpath("biff")))
 
@@ -125,7 +126,7 @@ def _uninstall_mcp_server() -> StepResult:
 def _install_plugin_files(target: Path | None = None) -> StepResult:
     """Copy plugin files from package data to the Claude plugins directory."""
     target = target or PLUGINS_DIR
-    source = _plugin_source()
+    source = plugin_source()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
@@ -146,6 +147,46 @@ def _uninstall_plugin_files(target: Path | None = None) -> StepResult:
         return StepResult("Plugin files", True, "removed")
     except OSError as exc:
         return StepResult("Plugin files", False, f"removal failed: {exc}")
+
+
+# User commands --------------------------------------------------------------
+
+
+def _install_user_commands(commands_dir: Path | None = None) -> StepResult:
+    """Copy command files to ``~/.claude/commands/`` for top-level access."""
+    commands_dir = commands_dir or COMMANDS_DIR
+    source = plugin_source() / "commands"
+    try:
+        md_files = sorted(source.glob("*.md"))
+        if not md_files:
+            return StepResult(
+                "User commands",
+                False,
+                f"no bundled command files found in {source}",
+            )
+        commands_dir.mkdir(parents=True, exist_ok=True)
+        for md_file in md_files:
+            shutil.copy2(md_file, commands_dir / md_file.name)
+        return StepResult("User commands", True, f"deployed {len(md_files)} commands")
+    except OSError as exc:
+        return StepResult("User commands", False, f"copy failed: {exc}")
+
+
+def _uninstall_user_commands(commands_dir: Path | None = None) -> StepResult:
+    """Remove biff command files from ``~/.claude/commands/``."""
+    commands_dir = commands_dir or COMMANDS_DIR
+    source = plugin_source() / "commands"
+    bundled_names = {f.name for f in source.glob("*.md")}
+    try:
+        removed = 0
+        for name in sorted(bundled_names):
+            target = commands_dir / name
+            if target.is_file():
+                target.unlink()
+                removed += 1
+        return StepResult("User commands", True, f"removed {removed} commands")
+    except OSError as exc:
+        return StepResult("User commands", False, f"removal failed: {exc}")
 
 
 # Plugin registry ------------------------------------------------------------
@@ -259,20 +300,23 @@ def install(
     plugins_dir: Path | None = None,
     settings_path: Path | None = None,
     registry_path: Path | None = None,
+    commands_dir: Path | None = None,
 ) -> InstallResult:
     """Install biff plugin and register MCP server.
 
     Steps:
     1. Register MCP server via ``claude mcp add``
     2. Copy plugin files to ``~/.claude/plugins/biff/``
-    3. Register in ``installed_plugins.json``
-    4. Enable in ``settings.json``
+    3. Copy user commands to ``~/.claude/commands/``
+    4. Register in ``installed_plugins.json``
+    5. Enable in ``settings.json``
 
     Idempotent: safe to run multiple times.
     """
     steps = [
         _install_mcp_server(),
         _install_plugin_files(plugins_dir),
+        _install_user_commands(commands_dir),
         _register_plugin(registry_path, plugins_dir),
         _enable_plugin(settings_path),
     ]
@@ -294,6 +338,7 @@ def uninstall(
     plugins_dir: Path | None = None,
     settings_path: Path | None = None,
     registry_path: Path | None = None,
+    commands_dir: Path | None = None,
 ) -> UninstallResult:
     """Uninstall biff plugin, MCP server, and status line.
 
@@ -301,8 +346,9 @@ def uninstall(
     1. Disable plugin in ``settings.json``
     2. Remove from ``installed_plugins.json``
     3. Remove plugin files
-    4. Remove MCP server
-    5. Call ``uninstall-statusline``
+    4. Remove user commands
+    5. Remove MCP server
+    6. Call ``uninstall-statusline``
 
     Does NOT remove the ``.biff`` file.
     """
@@ -312,6 +358,7 @@ def uninstall(
         _disable_plugin(settings_path),
         _unregister_plugin(registry_path),
         _uninstall_plugin_files(plugins_dir),
+        _uninstall_user_commands(commands_dir),
         _uninstall_mcp_server(),
     ]
 

@@ -142,6 +142,10 @@ Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging
 
 Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
+### Installer Is Source of Truth
+
+User-facing config (`~/.claude/commands/`, `~/.claude/plugins/biff/`, MCP registration, status line) is deployed by `biff install`. Do not hand-edit these paths — changes will be overwritten on next install. To change command behavior, edit the bundled source in `src/biff/plugins/biff/commands/` and re-run `biff install`.
+
 ### Version Bumps
 
 Version lives in three files that must stay in sync:

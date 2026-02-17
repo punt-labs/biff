@@ -13,6 +13,7 @@ from biff.doctor import (
     _check_plugin_installed,
     _check_relay,
     _check_statusline,
+    _check_user_commands,
     _print_check,
     _resolve_relay_config,
     check_environment,
@@ -80,6 +81,22 @@ class TestCheckPluginInstalled:
     def test_no_commands_dir(self, tmp_path: Path) -> None:
         result = _check_plugin_installed(tmp_path)
         assert not result.passed
+
+
+class TestCheckUserCommands:
+    def test_all_deployed(self, tmp_path: Path) -> None:
+        from biff.installer import _install_user_commands
+
+        _install_user_commands(tmp_path)
+        result = _check_user_commands(tmp_path)
+        assert result.passed
+        assert not result.required
+
+    def test_missing_when_absent(self, tmp_path: Path) -> None:
+        result = _check_user_commands(tmp_path)
+        assert not result.passed
+        assert not result.required
+        assert "missing" in result.message
 
 
 class TestCheckBiffFile:
@@ -184,6 +201,7 @@ class TestCheckEnvironment:
     @patch("biff.doctor._check_statusline")
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
+    @patch("biff.doctor._check_user_commands")
     @patch("biff.doctor._check_plugin_installed")
     @patch("biff.doctor._check_mcp_server")
     @patch("biff.doctor._check_gh_cli")
@@ -192,13 +210,14 @@ class TestCheckEnvironment:
         mock_gh: object,
         mock_mcp: object,
         mock_plugin: object,
+        mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
         mock_sl: object,
     ) -> None:
         for mock in [mock_gh, mock_mcp, mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
-        for mock in [mock_biff, mock_sl]:
+        for mock in [mock_ucmds, mock_biff, mock_sl]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
 
         assert check_environment() == 0
@@ -206,6 +225,7 @@ class TestCheckEnvironment:
     @patch("biff.doctor._check_statusline")
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
+    @patch("biff.doctor._check_user_commands")
     @patch("biff.doctor._check_plugin_installed")
     @patch("biff.doctor._check_mcp_server")
     @patch("biff.doctor._check_gh_cli")
@@ -214,6 +234,7 @@ class TestCheckEnvironment:
         mock_gh: object,
         mock_mcp: object,
         mock_plugin: object,
+        mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
         mock_sl: object,
@@ -221,7 +242,7 @@ class TestCheckEnvironment:
         mock_gh.return_value = CheckResult("gh", False, "missing")  # type: ignore[attr-defined]
         for mock in [mock_mcp, mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
-        for mock in [mock_biff, mock_sl]:
+        for mock in [mock_ucmds, mock_biff, mock_sl]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
 
         assert check_environment() == 1
@@ -229,6 +250,7 @@ class TestCheckEnvironment:
     @patch("biff.doctor._check_statusline")
     @patch("biff.doctor._check_biff_file")
     @patch("biff.doctor._check_relay")
+    @patch("biff.doctor._check_user_commands")
     @patch("biff.doctor._check_plugin_installed")
     @patch("biff.doctor._check_mcp_server")
     @patch("biff.doctor._check_gh_cli")
@@ -237,13 +259,14 @@ class TestCheckEnvironment:
         mock_gh: object,
         mock_mcp: object,
         mock_plugin: object,
+        mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
         mock_sl: object,
     ) -> None:
         for mock in [mock_gh, mock_mcp, mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
-        mock_biff.return_value = CheckResult(".biff", False, "missing", required=False)  # type: ignore[attr-defined]
-        mock_sl.return_value = CheckResult("sl", False, "missing", required=False)  # type: ignore[attr-defined]
+        for mock in [mock_ucmds, mock_biff, mock_sl]:
+            mock.return_value = CheckResult("test", False, "missing", required=False)  # type: ignore[attr-defined]
 
         assert check_environment() == 0
