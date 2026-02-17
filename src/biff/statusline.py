@@ -298,19 +298,37 @@ def _read_all_unreads(unread_dir: Path) -> list[ProjectUnread]:
 _MAX_PROJECT_NAME_LEN = 12
 
 
+def _display_name(slug: str) -> str:
+    """Extract bare repo name from a slug for status bar display.
+
+    ``punt-labs__biff`` → ``biff``, ``myapp`` → ``myapp``.
+    The ``__`` delimiter maps ``/`` in the git remote slug
+    (see DES-007a).
+    """
+    if "__" in slug:
+        return slug.rsplit("__", maxsplit=1)[1]
+    return slug
+
+
 def _biff_segment_multi(projects: list[ProjectUnread]) -> str:
     """Format the biff status segment from per-project unread counts.
 
-    No unreads → ``biff(0)`` (plain).
+    No unreads → ``biff`` (plain, no count).
     One or more projects → ``name(count)`` pairs, alphabetically sorted,
     bold yellow.  Long names (>12 chars) are truncated with ``…``.
+
+    Display names are derived from slugs (``owner__repo`` → ``repo``).
+    If two projects collide on the same display name, the full slug
+    is used for all projects to avoid ambiguity.
     """
     if not projects:
-        return "biff(0)"
+        return "biff"
     ordered = sorted(projects, key=lambda p: p.name)
+    display_names = [_display_name(p.name) for p in ordered]
+    use_slug = len(display_names) != len(set(display_names))
     parts: list[str] = []
     for p in ordered:
-        name = p.name
+        name = p.name if use_slug else _display_name(p.name)
         if len(name) > _MAX_PROJECT_NAME_LEN:
             name = name[: _MAX_PROJECT_NAME_LEN - 1] + "\u2026"
         parts.append(f"{name}({p.count})")
