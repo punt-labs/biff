@@ -12,9 +12,9 @@ directory with per-session inbox files, per-user inbox files,
 and a shared sessions file::
 
     {data_dir}/
-        inbox-kai.jsonl            # per-user mailbox (broadcast)
+        userinbox-kai.jsonl        # per-user mailbox (broadcast)
         inbox-kai-a1b2c3d4.jsonl   # per-TTY mailbox (targeted)
-        inbox-eric.jsonl
+        userinbox-eric.jsonl
         inbox-eric-12345678.jsonl
         sessions.json
 
@@ -149,9 +149,13 @@ class LocalRelay:
         return self._data_dir / f"inbox-{safe}.jsonl"
 
     def _user_inbox_path(self, user: str) -> Path:
-        """Inbox file path for a user's broadcast mailbox."""
+        """Inbox file path for a user's broadcast mailbox.
+
+        Uses ``userinbox-`` prefix to avoid collision with TTY inbox
+        files (``inbox-{user}-{tty}.jsonl``).
+        """
         self._validate_user(user)
-        return self._data_dir / f"inbox-{user}.jsonl"
+        return self._data_dir / f"userinbox-{user}.jsonl"
 
     # -- Messages --
 

@@ -72,8 +72,8 @@ class TestDeliver:
         await relay.update_session(UserSession(user="eric", tty="tty9"))
         await relay.deliver(Message(from_user="kai", to_user="eric", body="hi all"))
         # Single copy in user mailbox
-        assert (tmp_path / "inbox-eric.jsonl").exists()
-        user_msgs = LocalRelay._read_inbox_file(tmp_path / "inbox-eric.jsonl")
+        assert (tmp_path / "userinbox-eric.jsonl").exists()
+        user_msgs = LocalRelay._read_inbox_file(tmp_path / "userinbox-eric.jsonl")
         assert len(user_msgs) == 1
         assert user_msgs[0].body == "hi all"
         # No per-TTY copies
@@ -85,8 +85,8 @@ class TestDeliver:
     ) -> None:
         """Broadcast with no registered sessions still persists in user mailbox."""
         await relay.deliver(Message(from_user="kai", to_user="eric", body="hello"))
-        assert (tmp_path / "inbox-eric.jsonl").exists()
-        user_msgs = LocalRelay._read_inbox_file(tmp_path / "inbox-eric.jsonl")
+        assert (tmp_path / "userinbox-eric.jsonl").exists()
+        user_msgs = LocalRelay._read_inbox_file(tmp_path / "userinbox-eric.jsonl")
         assert len(user_msgs) == 1
         assert user_msgs[0].body == "hello"
 

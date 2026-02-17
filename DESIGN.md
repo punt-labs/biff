@@ -533,7 +533,7 @@ Two mailbox types per user:
 
 | Mailbox | File / Subject | Written By | Semantics |
 |---------|---------------|------------|-----------|
-| **User mailbox** | `inbox-{user}.jsonl` / `biff.{repo}.inbox.{user}` | Broadcast `/write @user` | POP: first reader consumes |
+| **User mailbox** | `userinbox-{user}.jsonl` / `biff.{repo}.inbox.{user}` | Broadcast `/write @user` | POP: first reader consumes |
 | **TTY mailbox** | `inbox-{user}-{tty}.jsonl` / `biff.{repo}.inbox.{user}.{tty}` | Targeted `/write @user:tty` | POP: session-specific |
 
 **Delivery rules:**

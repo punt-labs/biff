@@ -254,8 +254,12 @@ class NatsRelay:
         return f"{self._subject_prefix}.{user}"
 
     def _user_durable_name(self, user: str) -> str:
-        """Durable consumer name for a user's broadcast inbox."""
-        return f"inbox-{user}"
+        """Durable consumer name for a user's broadcast inbox.
+
+        Uses ``userinbox-`` prefix to avoid collision with TTY durable
+        names (``inbox-{user}-{tty}``).
+        """
+        return f"userinbox-{user}"
 
     def _kv_key(self, session_key: str) -> str:
         """KV key for a session: ``{user}.{tty}`` (NATS KV uses dots)."""
