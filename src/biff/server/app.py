@@ -18,7 +18,11 @@ from fastmcp import FastMCP
 from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
-from biff.server.tools._descriptions import poll_inbox, set_tty_name
+from biff.server.tools._descriptions import (
+    poll_inbox,
+    refresh_read_messages,
+    set_tty_name,
+)
 from biff.server.tools._session import update_current_session
 from biff.server.tools.tty import next_tty_name
 
@@ -168,6 +172,10 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         auto_name = next_tty_name(existing)
         set_tty_name(auto_name)
         await update_current_session(state, tty_name=auto_name)
+
+        # Write the initial unread file immediately so the status line
+        # has identity from the first render (before the poller ticks).
+        await refresh_read_messages(mcp, state)
 
         shutdown = asyncio.Event()
         poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))

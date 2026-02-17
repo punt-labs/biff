@@ -520,6 +520,10 @@ The MCP server auto-assigns a `ttyN` name on startup (same sequential logic as t
 
 The MCP server is registered **globally** in `~/.claude.json` (not per-project `.mcp.json`) so biff runs in every session and can update counts regardless of which project is open.
 
+### `/mesg n` Suppression
+
+When `biff_enabled=false` (set by `/mesg n`), the status line shows `user:tty(n)` instead of the actual unread count. This is purely visual — the mailbox continues to accumulate messages. `/mesg y` restores the real count immediately. The `biff_enabled` flag is persisted in the PPID-keyed unread JSON and read by the status line process.
+
 ### Cleanup
 
 The MCP server deletes its PPID-keyed unread file in the lifespan `finally` block on shutdown. This prevents stale files from accumulating when sessions end.
