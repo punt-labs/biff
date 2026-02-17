@@ -31,7 +31,7 @@ def _format_table(sessions: list[UserSession]) -> str:
     rows: list[tuple[str, str, str, str, str, str, str]] = []
     for s in sessions:
         name = f"@{s.user}"
-        tty = s.tty[:8] if s.tty else "-"
+        tty = s.tty_name or (s.tty[:8] if s.tty else "-")
         idle = format_idle(s.last_active)
         flag = "+" if s.biff_enabled else "-"
         host = s.hostname or "-"

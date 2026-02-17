@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 
 from biff.models import UserSession
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._session import update_current_session
-from biff.tty import build_session_key, parse_address
+from biff.server.tools._session import resolve_session, update_current_session
+from biff.tty import parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -54,7 +54,7 @@ def _format_tty_block(session: UserSession) -> str:
     """Format per-TTY details (on-since, host/dir, plan)."""
     idle = _format_idle(session.last_active)
     since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
-    tty_label = session.tty[:8] if session.tty else "?"
+    tty_label = session.tty_name or (session.tty[:8] if session.tty else "?")
 
     lines = [f"   On since {since} on {tty_label}, idle {idle}"]
     if session.hostname or session.pwd:
@@ -88,9 +88,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         bare_user, tty = parse_address(user)
 
         if tty:
-            # Targeted: show one specific session
-            session_key = build_session_key(bare_user, tty)
-            session = await state.relay.get_session(session_key)
+            # Targeted: resolve by hex ID or tty_name
+            session = await resolve_session(state.relay, bare_user, tty)
             if session is None:
                 return f"Login: {bare_user}\nNo session on tty {tty}."
             return _format_session(session)

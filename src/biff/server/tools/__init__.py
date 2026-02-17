@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.server.tools import finger, mesg, messaging, plan, who
+from biff.server.tools import finger, mesg, messaging, plan, tty, who
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -19,3 +19,4 @@ def register_all_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
     messaging.register(mcp, state)
     who.register(mcp, state)
     plan.register(mcp, state)
+    tty.register(mcp, state)

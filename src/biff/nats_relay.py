@@ -149,15 +149,20 @@ class NatsRelay:
                     config=kv_config,
                 )
 
-            # Stream for messages — WORK_QUEUE deletes on ack (POP semantics)
-            await js.add_stream(  # pyright: ignore[reportUnknownMemberType]
-                config=StreamConfig(
-                    name=self._stream_name,
-                    subjects=[f"{self._subject_prefix}.>"],
-                    retention=RetentionPolicy.WORK_QUEUE,
-                    max_bytes=_STREAM_MAX_BYTES,
-                ),
+            # Stream for messages — WORK_QUEUE deletes on ack (POP semantics).
+            # Recreate if config changed (e.g. max_bytes update).
+            stream_config = StreamConfig(
+                name=self._stream_name,
+                subjects=[f"{self._subject_prefix}.>"],
+                retention=RetentionPolicy.WORK_QUEUE,
+                max_bytes=_STREAM_MAX_BYTES,
             )
+            try:
+                await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
+            except BadRequestError:
+                logger.info("Stream config changed, recreating %s", self._stream_name)
+                await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+                await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
         except Exception:
             await nc.close()
             raise

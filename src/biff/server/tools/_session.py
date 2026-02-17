@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
+from biff.relay import Relay
+from biff.tty import build_session_key
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
@@ -32,6 +34,34 @@ async def get_or_create_session(state: ServerState) -> UserSession:
         session = session.model_copy(update={"display_name": state.config.display_name})
         await state.relay.update_session(session)
     return session
+
+
+async def resolve_session(
+    relay: Relay, user: str, tty_or_name: str
+) -> UserSession | None:
+    """Resolve a tty identifier to a session.
+
+    Tries the literal hex key first (``{user}:{tty_or_name}``).
+    If that misses, searches the user's sessions for a matching
+    ``tty_name``.  Returns ``None`` if no match.
+    """
+    # Try as literal session key (hex ID).
+    # Catches ValueError from NatsRelay's _validate_tty when
+    # tty_or_name contains NATS-illegal characters (dots, spaces, etc).
+    try:
+        key = build_session_key(user, tty_or_name)
+        session = await relay.get_session(key)
+        if session is not None:
+            return session
+    except ValueError:
+        pass
+
+    # Fall back to tty_name match
+    sessions = await relay.get_sessions_for_user(user)
+    for s in sessions:
+        if s.tty_name == tty_or_name:
+            return s
+    return None
 
 
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:

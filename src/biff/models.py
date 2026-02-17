@@ -80,6 +80,7 @@ class UserSession(BaseModel):
 
     user: str = Field(min_length=1)
     tty: str = Field(default="", description="8-char hex session identifier")
+    tty_name: str = Field(default="", description="Human-readable session name")
     hostname: str = ""
     pwd: str = ""
     display_name: str = ""
