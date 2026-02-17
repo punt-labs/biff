@@ -1,10 +1,11 @@
 name: Hosted NATS E2E
 
+# Disabled from automatic CI — session-scoped NATS connections hang
+# on GitHub Actions (event loop / asyncio interaction).  Run locally:
+#   BIFF_TEST_NATS_URL=tls://connect.ngs.global \
+#   BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
+#   uv run pytest -m hosted -v
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 jobs:

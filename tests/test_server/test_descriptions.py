@@ -23,11 +23,18 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
 _TEST_REPO = "_test-server"
+_KAI_SESSION = "kai:tty1"
 
 
 @pytest.fixture
 def state(tmp_path: Path) -> ServerState:
-    return create_state(BiffConfig(user="kai", repo_name=_TEST_REPO), tmp_path)
+    return create_state(
+        BiffConfig(user="kai", repo_name=_TEST_REPO),
+        tmp_path,
+        tty="tty1",
+        hostname="test-host",
+        pwd="/test",
+    )
 
 
 class TestRefreshReadMessages:
@@ -41,7 +48,11 @@ class TestRefreshReadMessages:
     async def test_unread_shows_count_and_preview(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="auth module ready")
+            Message(
+                from_user="eric",
+                to_user=_KAI_SESSION,
+                body="auth module ready",
+            )
         )
         await refresh_read_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("read_messages")
@@ -56,10 +67,10 @@ class TestRefreshReadMessages:
     async def test_multiple_unread(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="first")
+            Message(from_user="eric", to_user=_KAI_SESSION, body="first")
         )
         await state.relay.deliver(
-            Message(from_user="priya", to_user="kai", body="second")
+            Message(from_user="priya", to_user=_KAI_SESSION, body="second")
         )
         await refresh_read_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("read_messages")
@@ -71,7 +82,7 @@ class TestRefreshReadMessages:
     async def test_reverts_to_base_when_cleared(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="hello")
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
         )
         await refresh_read_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("read_messages")
@@ -80,15 +91,15 @@ class TestRefreshReadMessages:
         assert desc is not None
         assert "1 unread" in desc
         # Mark as read
-        unread = await state.relay.fetch("kai")
-        await state.relay.mark_read("kai", [m.id for m in unread])
+        unread = await state.relay.fetch(_KAI_SESSION)
+        await state.relay.mark_read(_KAI_SESSION, [m.id for m in unread])
         await refresh_read_messages(mcp, state)
         assert tool.description == _READ_MESSAGES_BASE
 
     async def test_ignores_other_users_messages(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
-            Message(from_user="kai", to_user="eric", body="for eric")
+            Message(from_user="kai", to_user="eric:tty2", body="for eric")
         )
         await refresh_read_messages(mcp, state)
         tool = mcp._tool_manager._tools.get("read_messages")
@@ -104,13 +115,20 @@ class TestUnreadFile:
         return create_state(
             BiffConfig(user="kai", repo_name=_TEST_REPO),
             tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
             unread_path=tmp_path / "unread.json",
         )
 
     async def test_writes_unread_file(self, state_with_path: ServerState) -> None:
         mcp = create_server(state_with_path)
         await state_with_path.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="auth ready")
+            Message(
+                from_user="eric",
+                to_user=_KAI_SESSION,
+                body="auth ready",
+            )
         )
         await refresh_read_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
@@ -133,15 +151,15 @@ class TestUnreadFile:
     ) -> None:
         mcp = create_server(state_with_path)
         await state_with_path.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="hello")
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
         )
         await refresh_read_messages(mcp, state_with_path)
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
         # Mark as read
-        unread = await state_with_path.relay.fetch("kai")
-        await state_with_path.relay.mark_read("kai", [m.id for m in unread])
+        unread = await state_with_path.relay.fetch(_KAI_SESSION)
+        await state_with_path.relay.mark_read(_KAI_SESSION, [m.id for m in unread])
         await refresh_read_messages(mcp, state_with_path)
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
@@ -149,14 +167,23 @@ class TestUnreadFile:
     async def test_no_write_when_path_is_none(self, state: ServerState) -> None:
         assert state.unread_path is None
         mcp = create_server(state)
-        await state.relay.deliver(Message(from_user="eric", to_user="kai", body="test"))
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="test")
+        )
         await refresh_read_messages(mcp, state)
         # No error — function completes without attempting file write
 
     async def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         nested = tmp_path / "deep" / "nested" / "unread.json"
         config = BiffConfig(user="kai", repo_name=_TEST_REPO)
-        state = create_state(config, tmp_path, unread_path=nested)
+        state = create_state(
+            config,
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            unread_path=nested,
+        )
         mcp = create_server(state)
         await refresh_read_messages(mcp, state)
         assert nested.exists()
@@ -172,6 +199,9 @@ class TestPollInbox:
         return create_state(
             BiffConfig(user="kai", repo_name=_TEST_REPO),
             tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
             unread_path=tmp_path / "unread.json",
         )
 
@@ -209,7 +239,11 @@ class TestPollInbox:
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         # Inject a message
         await state_with_path.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="PR ready")
+            Message(
+                from_user="eric",
+                to_user=_KAI_SESSION,
+                body="PR ready",
+            )
         )
         # Let poller detect the change
         await asyncio.sleep(self._FAST_INTERVAL * 3)
@@ -226,7 +260,7 @@ class TestPollInbox:
         """Poller updates the read_messages tool description."""
         mcp = create_server(state_with_path)
         await state_with_path.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="lunch?")
+            Message(from_user="eric", to_user=_KAI_SESSION, body="lunch?")
         )
         await self._run_poller(mcp, state_with_path)
         tool = mcp._tool_manager._tools.get("read_messages")

@@ -51,10 +51,10 @@ class TestTeamPresenceWorkflow:
 
         # Set up other team members
         await state.relay.update_session(
-            UserSession(user="eric", plan="reviewing PR #42")
+            UserSession(user="eric", tty="tty2", plan="reviewing PR #42")
         )
         await state.relay.update_session(
-            UserSession(user="priya", plan="debugging flaky test")
+            UserSession(user="priya", tty="tty3", plan="debugging flaky test")
         )
 
         # kai sets their own plan
@@ -114,9 +114,13 @@ class TestMessagingWorkflow:
 
         from biff.models import Message
 
-        # Simulate incoming message from eric
+        # Simulate incoming message from eric (targeted to kai's session)
         await state.relay.deliver(
-            Message(from_user="eric", to_user="kai", body="auth module looks good")
+            Message(
+                from_user="eric",
+                to_user=state.session_key,
+                body="auth module looks good",
+            )
         )
 
         # Check inbox
@@ -124,8 +128,8 @@ class TestMessagingWorkflow:
         assert "eric" in result
         assert "auth module looks good" in result
 
-        # Reply
-        result = await recorder.call("write", to="eric", message="thanks!")
+        # Reply (targeted to eric's specific session)
+        result = await recorder.call("write", to="eric:tty2", message="thanks!")
         assert "@eric" in result
 
         # Inbox is now empty

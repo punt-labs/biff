@@ -66,15 +66,22 @@ class Message(BaseModel):
 class UserSession(BaseModel):
     """A user's active session and presence information.
 
+    Each server instance creates one session, identified by the
+    composite key ``{user}:{tty}``.  The *tty* is a random 8-char
+    hex string generated at startup.
+
     Sessions track who is online, what they're working on (plan),
-    and whether they're accepting messages (biff_enabled).
-    Session liveness is determined by comparing ``last_active``
-    against a TTL (default 120s).
+    where they are (hostname, pwd), and whether they're accepting
+    messages (biff_enabled).  Session liveness is determined by
+    comparing ``last_active`` against a TTL (default 120s).
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     user: str = Field(min_length=1)
+    tty: str = Field(default="", description="8-char hex session identifier")
+    hostname: str = ""
+    pwd: str = ""
     display_name: str = ""
     plan: str = ""
     last_active: datetime = Field(default_factory=_utc_now)

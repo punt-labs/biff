@@ -16,7 +16,7 @@ import pytest
 
 from biff.testing import RecordingClient
 
-pytestmark = pytest.mark.hosted
+pytestmark = [pytest.mark.hosted, pytest.mark.asyncio(loop_scope="session")]
 
 
 class TestCrossUserVisibility:

@@ -156,7 +156,11 @@ class TestPresenceLifecycle:
 
 
 class TestCrossUserMessaging:
-    """User A sends a message; User B receives it."""
+    """User A sends a message; User B receives it.
+
+    Both users register sessions first (via ``plan``) so broadcast
+    delivery can discover their session inboxes.
+    """
 
     @pytest.mark.transcript
     async def test_send_and_check(
@@ -165,6 +169,9 @@ class TestCrossUserMessaging:
         """kai sends a message; eric checks and sees it."""
         kai.transcript.title = "Cross-user: send and check messages"
         kai.transcript.description = "kai sends a message, eric checks inbox."
+
+        await kai.call("plan", message="working")
+        await eric.call("plan", message="working")
 
         result = await kai.call("write", to="@eric", message="PR #42 is ready")
         assert "@eric" in result
@@ -182,6 +189,9 @@ class TestCrossUserMessaging:
         kai.transcript.title = "Cross-user: messages marked read"
         kai.transcript.description = "eric checks messages, second check is empty."
 
+        await kai.call("plan", message="working")
+        await eric.call("plan", message="working")
+
         await kai.call("write", to="eric", message="first message")
         await eric.call("read_messages")
 
@@ -195,6 +205,9 @@ class TestCrossUserMessaging:
         """Both users can send and receive."""
         kai.transcript.title = "Cross-user: bidirectional messaging"
         kai.transcript.description = "kai and eric exchange messages."
+
+        await kai.call("plan", message="working")
+        await eric.call("plan", message="working")
 
         await kai.call("write", to="eric", message="review my PR?")
         await eric.call("write", to="kai", message="sure, on it")
@@ -217,7 +230,9 @@ class TestCrossUserMessaging:
             "eric turns biff off, kai sends anyway, eric checks later."
         )
 
+        # mesg registers eric's session, then disables biff
         await eric.call("mesg", enabled=False)
+        await kai.call("plan", message="working")
         await kai.call("write", to="eric", message="urgent fix needed")
 
         # eric turns biff back on and checks
@@ -228,12 +243,18 @@ class TestCrossUserMessaging:
 
 
 class TestCrossUserDynamicDescriptions:
-    """check_messages description reflects unread state across users."""
+    """check_messages description reflects unread state across users.
+
+    Both users register sessions first so broadcast delivery works.
+    """
 
     async def test_description_updates_after_incoming_message(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """eric sends kai a message; kai's next tool call updates description."""
+        await kai.call("plan", message="starting")
+        await eric.call("plan", message="starting")
+
         await eric.call("write", to="kai", message="auth module ready")
         # kai calls any tool — triggers description refresh
         await kai.call("plan", message="working")
@@ -245,6 +266,9 @@ class TestCrossUserDynamicDescriptions:
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """After checking messages, description reverts to base."""
+        await kai.call("plan", message="starting")
+        await eric.call("plan", message="starting")
+
         await eric.call("write", to="kai", message="hello")
         await kai.call("plan", message="working")
         desc = await _check_description(kai.client)
@@ -258,6 +282,9 @@ class TestCrossUserDynamicDescriptions:
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """Sending a message doesn't add unread to sender's description."""
+        await kai.call("plan", message="starting")
+        await eric.call("plan", message="starting")
+
         await kai.call("write", to="eric", message="hey")
         desc = await _check_description(kai.client)
         assert "unread" not in desc

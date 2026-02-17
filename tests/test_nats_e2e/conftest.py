@@ -64,7 +64,9 @@ async def kai_client(
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for kai backed by NatsRelay."""
     config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
-    state = create_state(config, shared_data_dir / "kai")
+    state = create_state(
+        config, shared_data_dir / "kai", tty="tty1", hostname="test-host", pwd="/test"
+    )
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
         yield client
@@ -76,7 +78,9 @@ async def eric_client(
 ) -> AsyncIterator[Client[Any]]:
     """MCP client for eric backed by NatsRelay."""
     config = BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server)
-    state = create_state(config, shared_data_dir / "eric")
+    state = create_state(
+        config, shared_data_dir / "eric", tty="tty2", hostname="test-host", pwd="/test"
+    )
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
         yield client

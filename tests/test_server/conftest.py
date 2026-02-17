@@ -19,4 +19,4 @@ def config() -> BiffConfig:
 
 @pytest.fixture
 def state(tmp_path: Path, config: BiffConfig) -> ServerState:
-    return create_state(config, tmp_path)
+    return create_state(config, tmp_path, tty="tty1", hostname="test-host", pwd="/test")

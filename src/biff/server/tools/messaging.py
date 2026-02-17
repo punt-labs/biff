@@ -1,7 +1,9 @@
 """Async messaging tools — ``write`` and ``read_messages``.
 
 ``write`` delivers a message to another user's inbox, like BSD ``write(1)``.
-``read_messages`` retrieves all unread messages and marks them read.
+Supports ``@user`` (broadcast to all sessions) and ``@user:tty`` (targeted).
+``read_messages`` retrieves all unread messages for this session and marks
+them read.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from typing import TYPE_CHECKING
 from biff.models import Message
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session
+from biff.tty import parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -29,24 +32,30 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ),
     )
     async def write(to: str, message: str) -> str:
-        """Send a message to another user's inbox, like BSD ``write(1)``."""
+        """Send a message to another user's inbox, like BSD ``write(1)``.
+
+        ``@user`` broadcasts to all sessions of that user.
+        ``@user:tty`` targets a specific session.
+        """
         await update_current_session(state)
-        bare = to.strip().lstrip("@")
+        user, tty = parse_address(to)
+        to_user = f"{user}:{tty}" if tty else user
         msg = Message(
             from_user=state.config.user,
-            to_user=bare,
+            to_user=to_user,
             body=message,
         )
         await state.relay.deliver(msg)
         await refresh_read_messages(mcp, state)
-        return f"Message sent to @{bare}."
+        display = f"@{user}:{tty}" if tty else f"@{user}"
+        return f"Message sent to {display}."
 
     @mcp.tool(
         name="read_messages",
         description="Check your inbox for new messages. Marks all as read.",
     )
     async def read_messages() -> str:
-        """Retrieve unread messages and mark them as read.
+        """Retrieve unread messages for this session and mark them as read.
 
         Output mimics BSD ``from(1)``::
 
@@ -54,11 +63,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             From eric Sun Feb 15 13:45  pushed the fix
         """
         await update_current_session(state)
-        unread = await state.relay.fetch(state.config.user)
+        session_key = state.session_key
+        unread = await state.relay.fetch(session_key)
         if not unread:
             await refresh_read_messages(mcp, state)
             return "No new messages."
-        await state.relay.mark_read(state.config.user, [m.id for m in unread])
+        await state.relay.mark_read(session_key, [m.id for m in unread])
         await refresh_read_messages(mcp, state)
         from_w = max(4, max(len(m.from_user) for m in unread))
         header = f"\u25b6  {'FROM':<{from_w}}  {'DATE':<16}  MESSAGE"

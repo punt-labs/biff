@@ -104,7 +104,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     tool = mcp._tool_manager._tools.get("read_messages")  # pyright: ignore[reportPrivateUsage]
     if tool is None:
         return
-    summary = await state.relay.get_unread_summary(state.config.user)
+    summary = await state.relay.get_unread_summary(state.session_key)
     old_desc = tool.description
     if summary.count == 0:
         tool.description = _READ_MESSAGES_BASE
@@ -123,6 +123,7 @@ async def poll_inbox(
     mcp: FastMCP[ServerState],
     state: ServerState,
     *,
+    shutdown: asyncio.Event | None = None,
     interval: float = _DEFAULT_POLL_INTERVAL,
 ) -> None:
     """Background task: poll inbox and refresh notifications on change.
@@ -132,6 +133,9 @@ async def poll_inbox(
     value, then calls :func:`refresh_read_messages` to update both
     the tool description and the status file.
 
+    When *shutdown* is set, exits cleanly between iterations —
+    no NATS operations are interrupted mid-flight.
+
     The notification is sent via :func:`_notify_tool_list_changed`,
     which uses a stored ``ServerSession`` reference captured from
     the first tool call.
@@ -140,9 +144,16 @@ async def poll_inbox(
     the polling loop. The refresh mechanism stays the same.
     """
     last_count = -1  # Force initial refresh
-    while True:
-        await asyncio.sleep(interval)
-        summary = await state.relay.get_unread_summary(state.config.user)
+    while shutdown is None or not shutdown.is_set():
+        if shutdown is not None:
+            try:
+                await asyncio.wait_for(shutdown.wait(), timeout=interval)
+                return  # Shutdown requested
+            except TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(interval)
+        summary = await state.relay.get_unread_summary(state.session_key)
         if summary.count != last_count:
             last_count = summary.count
             await refresh_read_messages(mcp, state)

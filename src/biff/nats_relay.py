@@ -3,9 +3,10 @@
 ``NatsRelay`` implements the :class:`~biff.relay.Relay` protocol using:
 
 - **NATS KV** (``biff-{repo}-sessions`` bucket) for session/presence data
-  with TTL-based expiry.
+  with TTL-based expiry.  Keys are ``{user}:{tty}``.
 - **NATS JetStream** (``biff-{repo}-inbox`` stream) with ``WORK_QUEUE``
-  retention for POP message semantics.
+  retention for POP message semantics.  Subjects include the TTY:
+  ``biff.{repo}.inbox.{user}.{tty}``.
 
 All resource names are scoped by ``repo_name`` so that multiple repos
 sharing the same NATS server are fully isolated.
@@ -40,6 +41,8 @@ from nats.js.errors import (
 from pydantic import ValidationError
 
 from biff.models import Message, RelayAuth, UserSession, build_unread_summary
+from biff.relay import SESSION_TTL_SECONDS
+from biff.tty import build_session_key
 
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
@@ -50,7 +53,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_KV_TTL = 2_592_000  # 30 days — sessions persist for long-lived plans
+_KV_TTL = SESSION_TTL_SECONDS  # NATS auto-expires keys not refreshed within this window
 _KV_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — small JSON session blobs
 _STREAM_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — messages consumed on read
 _FETCH_BATCH = 100
@@ -172,6 +175,23 @@ class NatsRelay:
         self._js = None
         self._kv = None
 
+    async def purge_data(self) -> None:
+        """Purge all sessions and messages without deleting infrastructure.
+
+        Removes all KV keys and purges the stream, but keeps the
+        bucket and stream themselves intact.  Avoids propagation
+        delays on hosted NATS servers that occur when rapidly
+        deleting and recreating infrastructure.
+        """
+        js, kv = await self._ensure_connected()
+        with suppress(NoKeysError, NotFoundError, BucketNotFoundError):
+            keys = await kv.keys()  # pyright: ignore[reportUnknownMemberType]
+            for key in keys:
+                with suppress(KeyNotFoundError):
+                    await kv.delete(key)
+        with suppress(NotFoundError):
+            await js.purge_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+
     async def delete_infrastructure(self) -> None:
         """Delete KV bucket and stream from the NATS server.
 
@@ -208,32 +228,70 @@ class NatsRelay:
             raise ValueError(msg)
         return user
 
+    @staticmethod
+    def _validate_tty(tty: str) -> str:
+        """Reject TTY values that would break NATS subjects or KV keys."""
+        if not tty or any(c in tty for c in (".", "*", ">", " ", ":")):
+            msg = f"Invalid tty: {tty!r}"
+            raise ValueError(msg)
+        return tty
+
+    def _subject_for_key(self, session_key: str) -> str:
+        """NATS subject for a session key: ``biff.{repo}.inbox.{user}.{tty}``."""
+        user, tty = session_key.split(":", maxsplit=1)
+        self._validate_user(user)
+        self._validate_tty(tty)
+        return f"{self._subject_prefix}.{user}.{tty}"
+
+    def _kv_key(self, session_key: str) -> str:
+        """KV key for a session: ``{user}.{tty}`` (NATS KV uses dots)."""
+        user, tty = session_key.split(":", maxsplit=1)
+        self._validate_user(user)
+        self._validate_tty(tty)
+        return f"{user}.{tty}"
+
     # -- Messages --
 
     async def deliver(self, message: Message) -> None:
-        """Publish a message to the recipient's JetStream subject."""
+        """Publish a message to the recipient's JetStream subject.
+
+        If ``to_user`` contains a ``:`` (targeted), publish to one
+        subject.  Otherwise (broadcast), publish to all active
+        sessions for that user.
+        """
         self._validate_user(message.from_user)
         js, _ = await self._ensure_connected()
-        subject = f"{self._subject_prefix}.{self._validate_user(message.to_user)}"
-        await js.publish(subject, message.model_dump_json().encode())
 
-    def _durable_name(self, user: str) -> str:
-        """Durable consumer name for a user's inbox.
+        if ":" in message.to_user:
+            # Targeted delivery
+            subject = self._subject_for_key(message.to_user)
+            await js.publish(subject, message.model_dump_json().encode())
+        else:
+            # Broadcast — deliver to every session of this user
+            self._validate_user(message.to_user)
+            sessions = await self.get_sessions_for_user(message.to_user)
+            for s in sessions:
+                key = build_session_key(s.user, s.tty)
+                targeted = message.model_copy(update={"to_user": key})
+                subject = self._subject_for_key(key)
+                await js.publish(subject, targeted.model_dump_json().encode())
+
+    def _durable_name(self, session_key: str) -> str:
+        """Durable consumer name for a session's inbox.
 
         WORK_QUEUE streams allow only one consumer per filter subject.
         Using a durable consumer lets repeated calls reuse the same
         server-side consumer instead of racing with ephemeral cleanup.
         """
-        return f"inbox-{user}"
+        return f"inbox-{session_key.replace(':', '-')}"
 
-    async def fetch(self, user: str) -> list[Message]:
+    async def fetch(self, session_key: str) -> list[Message]:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
-        self._validate_user(user)
         js, _ = await self._ensure_connected()
-        subject = f"{self._subject_prefix}.{user}"
+        subject = self._subject_for_key(session_key)
 
         sub = await js.pull_subscribe(
-            subject, durable=self._durable_name(user), stream=self._stream_name
+            subject, durable=self._durable_name(session_key), stream=self._stream_name
         )
         try:
             raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
@@ -252,14 +310,13 @@ class NatsRelay:
             await raw.ack()
         return messages
 
-    async def mark_read(self, user: str, ids: Sequence[UUID]) -> None:
+    async def mark_read(self, session_key: str, ids: Sequence[UUID]) -> None:
         """No-op — messages are consumed (deleted) by :meth:`fetch`."""
 
-    async def get_unread_summary(self, user: str) -> UnreadSummary:
+    async def get_unread_summary(self, session_key: str) -> UnreadSummary:
         """Peek at messages non-destructively for notification preview."""
-        self._validate_user(user)
         js, _ = await self._ensure_connected()
-        subject = f"{self._subject_prefix}.{user}"
+        subject = self._subject_for_key(session_key)
 
         # Get per-subject count from stream info
         try:
@@ -275,7 +332,7 @@ class NatsRelay:
 
         # Peek via the same durable consumer — nak puts messages back
         sub = await js.pull_subscribe(
-            subject, durable=self._durable_name(user), stream=self._stream_name
+            subject, durable=self._durable_name(session_key), stream=self._stream_name
         )
         try:
             raw_msgs = await sub.fetch(
@@ -298,36 +355,44 @@ class NatsRelay:
     # -- Presence --
 
     async def update_session(self, session: UserSession) -> None:
-        """Store session in KV — ``put()`` resets the TTL."""
-        self._validate_user(session.user)
+        """Store session in KV using ``{user}.{tty}`` key."""
+        key = build_session_key(session.user, session.tty)
+        kv_key = self._kv_key(key)
         _, kv = await self._ensure_connected()
-        await kv.put(session.user, session.model_dump_json().encode())
+        await kv.put(kv_key, session.model_dump_json().encode())
 
-    async def get_session(self, user: str) -> UserSession | None:
-        """Read a single session from KV."""
-        self._validate_user(user)
+    async def get_session(self, session_key: str) -> UserSession | None:
+        """Read a single session from KV by ``{user}:{tty}`` key."""
+        kv_key = self._kv_key(session_key)
         _, kv = await self._ensure_connected()
         try:
-            entry = await kv.get(user)
+            entry = await kv.get(kv_key)
             if entry.value is None:
                 return None
             return UserSession.model_validate_json(entry.value)
         except (KeyNotFoundError, BucketNotFoundError):
             return None
 
-    async def heartbeat(self, user: str) -> None:
-        """Update ``last_active``, creating session if needed."""
+    async def get_sessions_for_user(self, user: str) -> list[UserSession]:
+        """Return all sessions for a given user."""
         self._validate_user(user)
+        all_sessions = await self.get_sessions()
+        return [s for s in all_sessions if s.user == user]
+
+    async def heartbeat(self, session_key: str) -> None:
+        """Update ``last_active``, creating session if needed."""
+        kv_key = self._kv_key(session_key)
         _, kv = await self._ensure_connected()
         try:
-            entry = await kv.get(user)
+            entry = await kv.get(kv_key)
             if entry.value is None:
                 raise KeyNotFoundError
             existing = UserSession.model_validate_json(entry.value)
             updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
         except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
-            updated = UserSession(user=user)
-        await kv.put(user, updated.model_dump_json().encode())
+            user, tty = session_key.split(":", maxsplit=1)
+            updated = UserSession(user=user, tty=tty)
+        await kv.put(kv_key, updated.model_dump_json().encode())
 
     async def get_sessions(self) -> list[UserSession]:
         """Return all sessions (NATS KV TTL handles expiry)."""
@@ -346,3 +411,10 @@ class NatsRelay:
             except (KeyNotFoundError, ValidationError, ValueError):
                 continue
         return sessions
+
+    async def delete_session(self, session_key: str) -> None:
+        """Remove a session from KV storage."""
+        kv_key = self._kv_key(session_key)
+        _, kv = await self._ensure_connected()
+        with suppress(KeyNotFoundError, BucketNotFoundError):
+            await kv.delete(kv_key)
