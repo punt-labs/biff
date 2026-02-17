@@ -72,12 +72,12 @@ class TestDeliver:
         assert len(relay._read_inbox("eric:tty2")) == 1
         assert len(relay._read_inbox("eric:tty9")) == 1
 
-    async def test_broadcast_fallback_when_no_sessions(
+    async def test_broadcast_drops_when_no_sessions(
         self, relay: LocalRelay, tmp_path: Path
     ) -> None:
-        """Broadcast with no registered sessions writes to bare-user inbox."""
+        """Broadcast with no registered sessions drops the message."""
         await relay.deliver(Message(from_user="kai", to_user="eric", body="hello"))
-        assert (tmp_path / "inbox-eric.jsonl").exists()
+        assert not (tmp_path / "inbox-eric.jsonl").exists()
 
 
 # -- Fetch --

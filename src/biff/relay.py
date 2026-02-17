@@ -151,10 +151,7 @@ class LocalRelay:
             self._validate_user(message.to_user)
             sessions = await self.get_sessions_for_user(message.to_user)
             if not sessions:
-                # No active sessions — deliver to a bare-user inbox as fallback
-                path = self._data_dir / f"inbox-{message.to_user}.jsonl"
-                with path.open("a") as f:
-                    f.write(message.model_dump_json() + "\n")
+                # No active sessions — drop (matches NatsRelay behavior)
                 return
             for s in sessions:
                 key = build_session_key(s.user, s.tty)
@@ -195,6 +192,7 @@ class LocalRelay:
         """Create or update a session (keyed by ``{user}:{tty}``)."""
         self._validate_user(session.user)
         key = build_session_key(session.user, session.tty)
+        self._validate_session_key(key)
         sessions = self._read_sessions()
         sessions[key] = session
         self._write_sessions(sessions)

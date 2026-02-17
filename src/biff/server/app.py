@@ -139,11 +139,11 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
                 await reaper
             with suppress(asyncio.CancelledError):
                 await heartbeat
-            try:
-                await state.relay.delete_session(state.session_key)
-            except Exception:
-                logger.exception("Failed to delete session %s", state.session_key)
             if state.owns_relay:
+                try:
+                    await state.relay.delete_session(state.session_key)
+                except Exception:
+                    logger.exception("Failed to delete session %s", state.session_key)
                 await state.relay.close()
 
     mcp: FastMCP[ServerState] = FastMCP(
