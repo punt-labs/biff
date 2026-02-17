@@ -380,20 +380,25 @@ class NatsRelay:
         tty_subject = self._subject_for_key(session_key)
         user_subject = self._user_subject(user)
 
-        # Get per-subject counts from stream info
-        try:
-            info = await js.stream_info(
-                self._stream_name,
-                subjects_filter=f"{self._subject_prefix}.>",
-            )
-        except NotFoundError:
-            return build_unread_summary([], 0)
-
+        # Get per-subject counts with exact-match filters (no wildcard)
         tty_count = 0
         user_count = 0
-        if info.state.subjects:
-            tty_count = info.state.subjects.get(tty_subject, 0)
-            user_count = info.state.subjects.get(user_subject, 0)
+        try:
+            tty_info = await js.stream_info(
+                self._stream_name, subjects_filter=tty_subject
+            )
+            if tty_info.state.subjects:
+                tty_count = tty_info.state.subjects.get(tty_subject, 0)
+        except NotFoundError:
+            pass
+        try:
+            user_info = await js.stream_info(
+                self._stream_name, subjects_filter=user_subject
+            )
+            if user_info.state.subjects:
+                user_count = user_info.state.subjects.get(user_subject, 0)
+        except NotFoundError:
+            pass
         total = tty_count + user_count
         if total == 0:
             return build_unread_summary([], 0)
