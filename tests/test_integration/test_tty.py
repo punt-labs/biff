@@ -80,6 +80,53 @@ class TestTtyNaming:
         assert result == "TTY: my-session"
 
 
+class TestTtyAutoAssign:
+    """Auto-assigning sequential ttyN names."""
+
+    async def test_auto_assigns_tty1(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """No args → assigns tty1 when no sequential names exist."""
+        result = await kai.call("tty")
+        assert result == "TTY: tty1"
+
+    async def test_auto_increments(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Auto-assign picks next number after highest existing."""
+        await kai.call("tty", name="tty3")
+        result = await eric.call("tty")
+        assert result == "TTY: tty4"
+
+    async def test_ignores_non_sequential_names(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Non-ttyN names don't affect auto-numbering."""
+        await kai.call("tty", name="agent1")
+        result = await eric.call("tty")
+        assert result == "TTY: tty1"
+
+
+class TestTtyLengthLimit:
+    """Enforcing the 20-character name limit."""
+
+    async def test_rejects_long_name(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Names over 20 chars are rejected."""
+        result = await kai.call("tty", name="a" * 21)
+        assert "Error" in result
+        assert "20" in result
+
+    async def test_accepts_max_length(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Exactly 20 chars is accepted."""
+        name = "a" * 20
+        result = await kai.call("tty", name=name)
+        assert result == f"TTY: {name}"
+
+
 class TestTtyNameResolution:
     """Addressing @user:tty_name resolves to the correct session."""
 
