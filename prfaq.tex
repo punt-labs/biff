@@ -130,7 +130,7 @@
 % ── Stage and version tracking ────────────────────────────────────────────────
 \newcommand{\prfaqstage}{hypothesis}
 \newcommand{\prfaqversion}[2]{v#1.#2}
-\newcommand{\prfaqcurrentversion}{\prfaqversion{2}{6}}
+\newcommand{\prfaqcurrentversion}{\prfaqversion{2}{7}}
 
 % ══════════════════════════════════════════════════════════════════════════════
 % Document
@@ -421,8 +421,10 @@ paid tier.
   alone.\footnote{GitHub, ``Octoverse 2025,''
   \url{https://github.blog/news-insights/octoverse/octoverse-2025/}}
   AI-assisted coding adoption is accelerating --- GitHub Copilot reached
-  20 million cumulative signups (1.3 million paid subscribers) by
-  mid-2025, and Claude Code launched to strong adoption in early 2025. The subset of engineers who
+  20 million cumulative signups by mid-2025 and 4.7 million paid
+  subscribers by late 2025.\footnote{Microsoft Q2 FY2026 earnings;
+  GitHub blog, ``Octoverse 2025.''} Claude Code launched in early 2025
+  as the primary MCP client. The subset of engineers who
   work primarily in the terminal with MCP-compatible tools is small today
   (estimated tens of thousands) but growing fast as MCP becomes the
   standard protocol for AI tool integration.
@@ -504,10 +506,15 @@ paid tier.
     distribution event.
   \end{enumerate}
 
-  The cost of acquisition is near zero: the product is free, the
-  distribution is organic, and the viral loop is built into the protocol.
-  The risk is not cost-per-acquisition but time-to-critical-mass on each
-  team.
+  The real cost of acquisition is time, not money. Roughly 80\% of the
+  go-to-market effort is founder time: writing blog posts, creating
+  interest within personal networks, answering questions on forums,
+  giving conference talks, and nurturing early adopters through the
+  first-week onboarding. The remaining 20\% is modest spend on
+  conference sponsorships and targeted ads. The product itself is free
+  and the viral loop is built into the protocol (\texttt{.biff} commits
+  with the repo), so the monetary CAC is near zero --- but the time
+  investment to reach critical mass on each team is the true bottleneck.
 \end{faqpair}
 
 \begin{faqpair}{Who are the competitors and why will we win?}
@@ -832,6 +839,45 @@ paid tier.
     \item \textbf{A mobile app.} Biff is for engineers at their terminals.
     If you are on your phone, you are not in the target workflow.
   \end{itemize}
+\end{faqpair}
+
+\begin{faqpair}{What are the most likely ways biff fails?}
+  Five scenarios, in descending order of likelihood:
+
+  \begin{enumerate}[leftmargin=1.5em]
+    \item \textbf{The anti-Slack niche is too small.} Engineers who hate
+    Slack still use it because their PM is on it. Biff's repo-scoped,
+    engineer-only model may not generate enough standalone value to
+    overcome Slack's network effects. Kill signal: D30 retention below
+    20\% across beta teams.
+
+    \item \textbf{Claude Code ships native messaging.} Anthropic adds
+    \texttt{/write} and \texttt{/who} to Claude Code directly, making
+    biff redundant. Mitigation: biff is cross-client (any MCP host),
+    cross-machine (NATS relay), and repo-scoped --- capabilities an
+    embedded feature would not prioritize. But if Anthropic ships 80\%
+    of biff's value natively, the remaining 20\% may not justify a
+    separate install.
+
+    \item \textbf{Time-to-critical-mass is too long.} Each team needs
+    at least 2--3 members before biff provides value. If onboarding
+    friction or the ``install biff, then convince a colleague'' loop
+    takes weeks instead of days, teams abandon before reaching critical
+    mass.
+
+    \item \textbf{The relay becomes a liability.} A security incident or
+    prolonged outage before the team is large enough to maintain the
+    infrastructure erodes trust permanently. Today's cleartext-over-TLS
+    model is honest but fragile --- a single relay compromise exposes
+    every message.
+
+    \item \textbf{Agents outgrow the communication model.} If
+    engineering teams shift to fully autonomous agent fleets faster than
+    expected, the hybrid human+agent model becomes a niche within a
+    niche. Pure agent coordination tools (A2A, CrewAI, LangGraph) would
+    serve the dominant use case, and biff's human-centric design becomes
+    a liability rather than a differentiator.
+  \end{enumerate}
 \end{faqpair}
 
 % ══════════════════════════════════════════════════════════════════════════════
