@@ -64,20 +64,31 @@ class TestDeliver:
         assert len(relay._read_inbox("jess:tty3")) == 1
         assert relay._read_inbox("eric:tty2")[0].body == "for eric"
 
-    async def test_broadcast_delivers_to_all_sessions(self, relay: LocalRelay) -> None:
-        """Broadcast (bare user) delivers to every registered session."""
+    async def test_broadcast_delivers_to_user_mailbox(
+        self, relay: LocalRelay, tmp_path: Path
+    ) -> None:
+        """Broadcast (bare user) delivers to the user mailbox, not per-TTY."""
         await relay.update_session(UserSession(user="eric", tty="tty2"))
         await relay.update_session(UserSession(user="eric", tty="tty9"))
         await relay.deliver(Message(from_user="kai", to_user="eric", body="hi all"))
-        assert len(relay._read_inbox("eric:tty2")) == 1
-        assert len(relay._read_inbox("eric:tty9")) == 1
+        # Single copy in user mailbox
+        assert (tmp_path / "userinbox-eric.jsonl").exists()
+        user_msgs = LocalRelay._read_inbox_file(tmp_path / "userinbox-eric.jsonl")
+        assert len(user_msgs) == 1
+        assert user_msgs[0].body == "hi all"
+        # No per-TTY copies
+        assert not (tmp_path / "inbox-eric-tty2.jsonl").exists()
+        assert not (tmp_path / "inbox-eric-tty9.jsonl").exists()
 
-    async def test_broadcast_drops_when_no_sessions(
+    async def test_broadcast_persists_when_no_sessions(
         self, relay: LocalRelay, tmp_path: Path
     ) -> None:
-        """Broadcast with no registered sessions drops the message."""
+        """Broadcast with no registered sessions still persists in user mailbox."""
         await relay.deliver(Message(from_user="kai", to_user="eric", body="hello"))
-        assert not (tmp_path / "inbox-eric.jsonl").exists()
+        assert (tmp_path / "userinbox-eric.jsonl").exists()
+        user_msgs = LocalRelay._read_inbox_file(tmp_path / "userinbox-eric.jsonl")
+        assert len(user_msgs) == 1
+        assert user_msgs[0].body == "hello"
 
 
 # -- Fetch --
@@ -190,6 +201,63 @@ class TestGetUnreadSummary:
         summary = await relay.get_unread_summary("eric:tty2")
         assert summary.count == 5
         assert len(summary.preview) <= 80
+
+    async def test_merges_tty_and_user_inboxes(self, relay: LocalRelay) -> None:
+        """Unread summary includes messages from both inboxes."""
+        # Targeted to TTY
+        await relay.deliver(
+            Message(from_user="kai", to_user="eric:tty2", body="targeted msg")
+        )
+        # Broadcast to user
+        await relay.deliver(
+            Message(from_user="jess", to_user="eric", body="broadcast msg")
+        )
+        summary = await relay.get_unread_summary("eric:tty2")
+        assert summary.count == 2
+        assert "@kai" in summary.preview
+        assert "@jess" in summary.preview
+
+
+# -- User Inbox --
+
+
+class TestUserInbox:
+    async def test_fetch_empty(self, relay: LocalRelay) -> None:
+        assert await relay.fetch_user_inbox("eric") == []
+
+    async def test_fetch_unread_only(self, relay: LocalRelay) -> None:
+        msg = Message(from_user="kai", to_user="eric", body="old")
+        await relay.deliver(msg)
+        await relay.mark_read_user_inbox("eric", [msg.id])
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="new"))
+        unread = await relay.fetch_user_inbox("eric")
+        assert len(unread) == 1
+        assert unread[0].body == "new"
+
+    async def test_pop_semantics(self, relay: LocalRelay) -> None:
+        """After mark_read, messages no longer appear in fetch."""
+        msg = Message(from_user="kai", to_user="eric", body="once")
+        await relay.deliver(msg)
+        unread = await relay.fetch_user_inbox("eric")
+        assert len(unread) == 1
+        await relay.mark_read_user_inbox("eric", [msg.id])
+        assert await relay.fetch_user_inbox("eric") == []
+
+    async def test_mark_read(self, relay: LocalRelay) -> None:
+        m1 = Message(from_user="kai", to_user="eric", body="one")
+        m2 = Message(from_user="kai", to_user="eric", body="two")
+        await relay.deliver(m1)
+        await relay.deliver(m2)
+        await relay.mark_read_user_inbox("eric", [m1.id])
+        unread = await relay.fetch_user_inbox("eric")
+        assert len(unread) == 1
+        assert unread[0].body == "two"
+
+    async def test_get_count(self, relay: LocalRelay) -> None:
+        assert await relay.get_user_unread_count("eric") == 0
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="a"))
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="b"))
+        assert await relay.get_user_unread_count("eric") == 2
 
 
 # -- Sessions --

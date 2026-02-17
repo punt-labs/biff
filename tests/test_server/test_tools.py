@@ -357,13 +357,13 @@ class TestSendMessageTool:
         assert unread[0].from_user == "kai"
         assert unread[0].body == "hey, PR is ready"
 
-    async def test_broadcast_with_session(self, state: ServerState) -> None:
-        """Broadcast delivery fans out to registered sessions."""
+    async def test_broadcast_delivers_to_user_mailbox(self, state: ServerState) -> None:
+        """Broadcast delivery goes to user mailbox, not per-TTY."""
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
         assert "@eric" in result
-        unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
+        unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
     async def test_strips_at_prefix(self, state: ServerState) -> None:

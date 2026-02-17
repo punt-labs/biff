@@ -5,8 +5,10 @@
 - **NATS KV** (``biff-{repo}-sessions`` bucket) for session/presence data
   with TTL-based expiry.  Keys are ``{user}:{tty}``.
 - **NATS JetStream** (``biff-{repo}-inbox`` stream) with ``WORK_QUEUE``
-  retention for POP message semantics.  Subjects include the TTY:
-  ``biff.{repo}.inbox.{user}.{tty}``.
+  retention for POP message semantics.  Two subject levels:
+
+  - User inbox: ``biff.{repo}.inbox.{user}`` (broadcast)
+  - TTY inbox:  ``biff.{repo}.inbox.{user}.{tty}`` (targeted)
 
 All resource names are scoped by ``repo_name`` so that multiple repos
 sharing the same NATS server are fully isolated.
@@ -243,6 +245,22 @@ class NatsRelay:
         self._validate_tty(tty)
         return f"{self._subject_prefix}.{user}.{tty}"
 
+    def _user_subject(self, user: str) -> str:
+        """NATS subject for a user's broadcast inbox: ``biff.{repo}.inbox.{user}``.
+
+        3 tokens (distinct from the 4-token TTY subject).
+        """
+        self._validate_user(user)
+        return f"{self._subject_prefix}.{user}"
+
+    def _user_durable_name(self, user: str) -> str:
+        """Durable consumer name for a user's broadcast inbox.
+
+        Uses ``userinbox-`` prefix to avoid collision with TTY durable
+        names (``inbox-{user}-{tty}``).
+        """
+        return f"userinbox-{user}"
+
     def _kv_key(self, session_key: str) -> str:
         """KV key for a session: ``{user}.{tty}`` (NATS KV uses dots)."""
         user, tty = session_key.split(":", maxsplit=1)
@@ -255,26 +273,22 @@ class NatsRelay:
     async def deliver(self, message: Message) -> None:
         """Publish a message to the recipient's JetStream subject.
 
-        If ``to_user`` contains a ``:`` (targeted), publish to one
-        subject.  Otherwise (broadcast), publish to all active
-        sessions for that user.
+        If ``to_user`` contains a ``:`` (targeted), publish to the
+        TTY subject.  Otherwise (broadcast), publish to the user
+        subject — no session lookup, persists offline.
         """
         self._validate_user(message.from_user)
         js, _ = await self._ensure_connected()
 
         if ":" in message.to_user:
-            # Targeted delivery
+            # Targeted delivery — TTY subject
             subject = self._subject_for_key(message.to_user)
             await js.publish(subject, message.model_dump_json().encode())
         else:
-            # Broadcast — deliver to every session of this user
+            # Broadcast — single user subject, no session lookup
             self._validate_user(message.to_user)
-            sessions = await self.get_sessions_for_user(message.to_user)
-            for s in sessions:
-                key = build_session_key(s.user, s.tty)
-                targeted = message.model_copy(update={"to_user": key})
-                subject = self._subject_for_key(key)
-                await js.publish(subject, targeted.model_dump_json().encode())
+            subject = self._user_subject(message.to_user)
+            await js.publish(subject, message.model_dump_json().encode())
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
@@ -313,32 +327,21 @@ class NatsRelay:
     async def mark_read(self, session_key: str, ids: Sequence[UUID]) -> None:
         """No-op — messages are consumed (deleted) by :meth:`fetch`."""
 
-    async def get_unread_summary(self, session_key: str) -> UnreadSummary:
-        """Peek at messages non-destructively for notification preview."""
+    # -- Messages (user inbox) --
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]:
+        """Pull and ack all messages from the user's broadcast inbox."""
+        self._validate_user(user)
         js, _ = await self._ensure_connected()
-        subject = self._subject_for_key(session_key)
+        subject = self._user_subject(user)
 
-        # Get per-subject count from stream info
-        try:
-            info = await js.stream_info(self._stream_name, subjects_filter=subject)
-        except NotFoundError:
-            return build_unread_summary([], 0)
-
-        count = 0
-        if info.state.subjects:
-            count = info.state.subjects.get(subject, 0)
-        if count == 0:
-            return build_unread_summary([], 0)
-
-        # Peek via the same durable consumer — nak puts messages back
         sub = await js.pull_subscribe(
-            subject, durable=self._durable_name(session_key), stream=self._stream_name
+            subject,
+            durable=self._user_durable_name(user),
+            stream=self._stream_name,
         )
         try:
-            raw_msgs = await sub.fetch(
-                batch=min(count, _PEEK_BATCH),
-                timeout=_PEEK_TIMEOUT,
-            )
+            raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
         except TimeoutError:
             raw_msgs = []
         finally:
@@ -346,11 +349,87 @@ class NatsRelay:
 
         messages: list[Message] = []
         for raw in raw_msgs:
-            with suppress(ValidationError, ValueError):
-                messages.append(Message.model_validate_json(raw.data))
-            await raw.nak()  # Put back — don't consume
+            try:
+                msg = Message.model_validate_json(raw.data)
+                messages.append(msg)
+            except (ValidationError, ValueError):
+                logger.warning("Skipping malformed NATS message on %s", subject)
+            await raw.ack()
+        return messages
 
-        return build_unread_summary(messages, count)
+    async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
+        """No-op — messages are consumed (deleted) by :meth:`fetch_user_inbox`."""
+
+    async def get_user_unread_count(self, user: str) -> int:
+        """Count unread messages in the user's broadcast inbox."""
+        self._validate_user(user)
+        js, _ = await self._ensure_connected()
+        subject = self._user_subject(user)
+        try:
+            info = await js.stream_info(self._stream_name, subjects_filter=subject)
+        except NotFoundError:
+            return 0
+        if info.state.subjects:
+            return info.state.subjects.get(subject, 0)
+        return 0
+
+    async def get_unread_summary(self, session_key: str) -> UnreadSummary:
+        """Peek at messages non-destructively, merging TTY and user inboxes."""
+        js, _ = await self._ensure_connected()
+        user = session_key.split(":")[0]
+        tty_subject = self._subject_for_key(session_key)
+        user_subject = self._user_subject(user)
+
+        # Get per-subject counts with exact-match filters (no wildcard)
+        tty_count = 0
+        user_count = 0
+        try:
+            tty_info = await js.stream_info(
+                self._stream_name, subjects_filter=tty_subject
+            )
+            if tty_info.state.subjects:
+                tty_count = tty_info.state.subjects.get(tty_subject, 0)
+        except NotFoundError:
+            pass
+        try:
+            user_info = await js.stream_info(
+                self._stream_name, subjects_filter=user_subject
+            )
+            if user_info.state.subjects:
+                user_count = user_info.state.subjects.get(user_subject, 0)
+        except NotFoundError:
+            pass
+        total = tty_count + user_count
+        if total == 0:
+            return build_unread_summary([], 0)
+
+        # Peek from both subjects — nak puts messages back
+        messages: list[Message] = []
+        for subject, durable, count in [
+            (tty_subject, self._durable_name(session_key), tty_count),
+            (user_subject, self._user_durable_name(user), user_count),
+        ]:
+            if count == 0:
+                continue
+            sub = await js.pull_subscribe(
+                subject, durable=durable, stream=self._stream_name
+            )
+            try:
+                raw_msgs = await sub.fetch(
+                    batch=min(count, _PEEK_BATCH),
+                    timeout=_PEEK_TIMEOUT,
+                )
+            except TimeoutError:
+                raw_msgs = []
+            finally:
+                await sub.unsubscribe()
+            for raw in raw_msgs:
+                with suppress(ValidationError, ValueError):
+                    messages.append(Message.model_validate_json(raw.data))
+                await raw.nak()
+
+        messages.sort(key=lambda m: m.timestamp)
+        return build_unread_summary(messages, total)
 
     # -- Presence --
 

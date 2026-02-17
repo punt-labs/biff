@@ -15,8 +15,10 @@ Config file format (``.biff``)::
 Data directory layout::
 
     {prefix}/biff/{directory-name}/
-        inbox-kai.jsonl
-        inbox-eric.jsonl
+        userinbox-kai.jsonl        # per-user mailbox (broadcast)
+        inbox-kai-a1b2c3d4.jsonl   # per-TTY mailbox (targeted)
+        userinbox-eric.jsonl
+        inbox-eric-12345678.jsonl
         sessions.json
 """
 

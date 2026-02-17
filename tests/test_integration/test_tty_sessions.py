@@ -4,9 +4,10 @@ Proves core properties of multi-session support through the MCP
 protocol path:
 
 1. Two sessions of the same user coexist in /who
-2. /write @user delivers to all sessions (multicast)
+2. /write @user delivers to user mailbox (POP, first reader consumes)
 3. /write @user:tty delivers to one session (unicast)
-4. /read is per-TTY (isolated inboxes)
+4. /read merges user and TTY inboxes
+5. Broadcasts persist when user has no sessions
 """
 
 from __future__ import annotations
@@ -178,24 +179,25 @@ class TestSentinelLogout:
 
 
 class TestMulticastDelivery:
-    """/write @user delivers to all sessions of that user."""
+    """/write @user delivers to user mailbox — first reader consumes (POP)."""
 
-    async def test_broadcast_reaches_both_sessions(
+    async def test_first_reader_consumes_broadcast(
         self,
         kai_tty1: Client[Any],
         kai_tty2: Client[Any],
         eric_client: Client[Any],
     ) -> None:
-        # Register kai sessions so broadcast can find them
+        # Register kai sessions
         await kai_tty1.call_tool("plan", {"message": "working"})
         await kai_tty2.call_tool("plan", {"message": "also working"})
-        # Eric sends to @kai (broadcast)
+        # Eric sends to @kai (broadcast → user mailbox)
         await eric_client.call_tool("write", {"to": "kai", "message": "PR ready"})
-        # Both sessions should receive the message
+        # First reader gets the message
         r1 = await kai_tty1.call_tool("read_messages", {})
-        r2 = await kai_tty2.call_tool("read_messages", {})
         assert "PR ready" in _text(r1)
-        assert "PR ready" in _text(r2)
+        # Second reader sees nothing — POP semantics
+        r2 = await kai_tty2.call_tool("read_messages", {})
+        assert "No new messages" in _text(r2)
 
 
 class TestUnicastDelivery:
@@ -223,7 +225,7 @@ class TestUnicastDelivery:
 
 
 class TestPerTTYIsolation:
-    """/read is per-TTY — reading one inbox doesn't affect another."""
+    """Targeted messages are per-TTY — reading one doesn't affect another."""
 
     async def test_read_isolation(
         self,
@@ -234,11 +236,67 @@ class TestPerTTYIsolation:
         # Register kai sessions
         await kai_tty1.call_tool("plan", {"message": "working"})
         await kai_tty2.call_tool("plan", {"message": "also working"})
-        # Eric sends to both sessions (broadcast)
-        await eric_client.call_tool("write", {"to": "kai", "message": "hello team"})
-        # Read from tty1 only
+        # Eric sends targeted messages to each session
+        await eric_client.call_tool("write", {"to": "kai:tty1", "message": "for tty1"})
+        await eric_client.call_tool("write", {"to": "kai:tty2", "message": "for tty2"})
+        # Each session sees only its own message
         r1 = await kai_tty1.call_tool("read_messages", {})
-        assert "hello team" in _text(r1)
-        # tty2 should still have unread message
         r2 = await kai_tty2.call_tool("read_messages", {})
-        assert "hello team" in _text(r2)
+        assert "for tty1" in _text(r1)
+        assert "for tty2" not in _text(r1)
+        assert "for tty2" in _text(r2)
+        assert "for tty1" not in _text(r2)
+
+
+class TestOfflineDelivery:
+    """Broadcast persists when user has no active sessions."""
+
+    async def test_broadcast_persists_offline(
+        self,
+        shared_dir: Path,
+    ) -> None:
+        # Eric sends to @kai when kai has no sessions
+        eric_state = create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO),
+            shared_dir,
+            tty="tty3",
+            hostname="host-b",
+            pwd="/project/c",
+        )
+        eric_mcp = create_server(eric_state)
+        async with Client(FastMCPTransport(eric_mcp)) as eric:
+            await eric.call_tool("write", {"to": "kai", "message": "offline msg"})
+
+        # Kai comes online later and reads the message
+        kai_state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            shared_dir,
+            tty="tty1",
+            hostname="host-a",
+            pwd="/project/a",
+        )
+        kai_mcp = create_server(kai_state)
+        async with Client(FastMCPTransport(kai_mcp)) as kai:
+            r = await kai.call_tool("read_messages", {})
+            assert "offline msg" in _text(r)
+
+
+class TestDualInboxMerge:
+    """/read shows both broadcast and targeted messages."""
+
+    async def test_read_merges_both_inboxes(
+        self,
+        kai_tty1: Client[Any],
+        eric_client: Client[Any],
+    ) -> None:
+        await kai_tty1.call_tool("plan", {"message": "working"})
+        # Eric sends a broadcast and a targeted message
+        await eric_client.call_tool("write", {"to": "kai", "message": "broadcast msg"})
+        await eric_client.call_tool(
+            "write", {"to": "kai:tty1", "message": "targeted msg"}
+        )
+        # Kai's /read shows both
+        r = await kai_tty1.call_tool("read_messages", {})
+        text = _text(r)
+        assert "broadcast msg" in text
+        assert "targeted msg" in text
