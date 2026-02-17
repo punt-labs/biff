@@ -78,3 +78,39 @@ class TestTtyNaming:
         """Tool returns confirmation message."""
         result = await kai.call("tty", name="my-session")
         assert result == "TTY: my-session"
+
+
+class TestTtyNameResolution:
+    """Addressing @user:tty_name resolves to the correct session."""
+
+    @pytest.mark.transcript
+    async def test_finger_by_tty_name(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """eric can /finger @kai:auth-work using the tty_name."""
+        kai.transcript.title = "TTY: finger by tty_name"
+        kai.transcript.description = "kai names session, eric fingers by name."
+
+        await kai.call("tty", name="auth-work")
+        result = await eric.call("finger", user="@kai:auth-work")
+
+        assert "Login: kai" in result
+        assert "auth-work" in result
+
+    @pytest.mark.transcript
+    async def test_write_by_tty_name(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """eric can /write @kai:auth-work using the tty_name."""
+        kai.transcript.title = "TTY: write by tty_name"
+        kai.transcript.description = "kai names session, eric writes to name."
+
+        await kai.call("tty", name="auth-work")
+        await eric.call("plan", message="working")
+        result = await eric.call("write", to="@kai:auth-work", message="hey")
+
+        assert "Message sent" in result
+
+        # kai receives the message
+        inbox = await kai.call("read_messages")
+        assert "hey" in inbox

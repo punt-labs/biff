@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 
 from biff.models import Message
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._session import update_current_session
-from biff.tty import parse_address
+from biff.server.tools._session import resolve_session, update_current_session
+from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -39,7 +39,15 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """
         await update_current_session(state)
         user, tty = parse_address(to)
-        to_user = f"{user}:{tty}" if tty else user
+        if tty:
+            # Resolve tty_name to actual session key
+            session = await resolve_session(state.relay, user, tty)
+            if session:
+                to_user = build_session_key(session.user, session.tty)
+            else:
+                to_user = f"{user}:{tty}"
+        else:
+            to_user = user
         msg = Message(
             from_user=state.config.user,
             to_user=to_user,
