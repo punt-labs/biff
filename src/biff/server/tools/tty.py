@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from biff.server.tools._descriptions import refresh_read_messages
+from biff.server.tools._descriptions import refresh_read_messages, set_tty_name
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ _MAX_TTY_NAME = 20
 _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
 
 
-def _next_tty_name(existing_names: list[str]) -> str:
+def next_tty_name(existing_names: list[str]) -> str:
     """Return the next sequential ``ttyN`` not already in use."""
     highest = 0
     for name in existing_names:
@@ -55,7 +55,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         if not name:
             existing = [s.tty_name for s in sessions if s.tty_name]
-            name = _next_tty_name(existing)
+            name = next_tty_name(existing)
 
         if len(name) > _MAX_TTY_NAME:
             return f"Error: name must be {_MAX_TTY_NAME} characters or fewer."
@@ -69,6 +69,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             ):
                 return f"Error: name {name!r} already in use by another session."
 
+        set_tty_name(name)
         await update_current_session(state, tty_name=name)
         await refresh_read_messages(mcp, state)
         return f"TTY: {name}"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,13 +12,11 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.statusline import (
     InstallResult,
-    ProjectUnread,
+    SessionUnread,
     UninstallResult,
     _biff_mcp_server_entry,
-    _biff_segment_multi,
-    _display_name,
-    _read_all_unreads,
-    _read_unread_count,
+    _biff_segment,
+    _read_session_unread,
     _resolve_original_command,
     _run_original,
     install,
@@ -230,140 +229,104 @@ class TestUninstall:
 # --- Biff Segment -----------------------------------------------------------
 
 
-class TestDisplayName:
-    def test_bare_name_unchanged(self) -> None:
-        assert _display_name("biff") == "biff"
+class TestBiffSegment:
+    def test_none_shows_plain(self) -> None:
+        assert _biff_segment(None) == "biff"
 
-    def test_slug_extracts_repo(self) -> None:
-        assert _display_name("punt-labs__biff") == "biff"
+    def test_zero_count_shows_identity(self) -> None:
+        assert _biff_segment(SessionUnread("kai", 0, "tty1")) == "kai:tty1(0)"
 
-    def test_nested_slug(self) -> None:
-        assert _display_name("org__sub_project") == "sub_project"
-
-    def test_double_underscore_in_repo_name(self) -> None:
-        # Only splits on the LAST __, so a__b__c → c
-        assert _display_name("a__b__c") == "c"
-
-
-class TestBiffSegmentMulti:
-    def test_empty_list(self) -> None:
-        assert _biff_segment_multi([]) == "biff"
-
-    def test_single_project(self) -> None:
-        result = _biff_segment_multi([ProjectUnread("myapp", 3)])
-        assert "myapp(3)" in result
+    def test_user_with_tty(self) -> None:
+        result = _biff_segment(SessionUnread("kai", 3, "tty1"))
+        assert "kai:tty1(3)" in result
         assert "\033[1;33m" in result
         assert "\033[0m" in result
 
-    def test_slug_displays_bare_name(self) -> None:
-        result = _biff_segment_multi([ProjectUnread("punt-labs__biff", 2)])
-        assert "biff(2)" in result
-        assert "punt-labs" not in result
+    def test_user_without_tty(self) -> None:
+        result = _biff_segment(SessionUnread("kai", 3, ""))
+        assert "kai(3)" in result
+        assert "\033[1;33m" in result
 
-    def test_collision_uses_full_slug(self) -> None:
-        projects = [
-            ProjectUnread("alice__app", 1),
-            ProjectUnread("bob__app", 2),
-        ]
-        result = _biff_segment_multi(projects)
-        assert "alice__app(1)" in result
-        assert "bob__app(2)" in result
+    def test_empty_user_uses_biff(self) -> None:
+        result = _biff_segment(SessionUnread("", 1, "tty1"))
+        assert "biff:tty1(1)" in result
 
-    def test_multiple_projects_sorted(self) -> None:
-        projects = [ProjectUnread("zebra", 1), ProjectUnread("alpha", 2)]
-        result = _biff_segment_multi(projects)
-        assert "alpha(2)" in result
-        assert "zebra(1)" in result
-        # alpha before zebra
-        assert result.index("alpha") < result.index("zebra")
+    def test_mesg_off_shows_n(self) -> None:
+        result = _biff_segment(SessionUnread("kai", 5, "tty1", biff_enabled=False))
+        assert result == "kai:tty1(n)"
 
-    def test_long_name_truncated(self) -> None:
-        result = _biff_segment_multi([ProjectUnread("a-very-long-project-name", 5)])
-        assert "a-very-long\u2026(5)" in result
-        assert "a-very-long-project-name" not in result
+    def test_mesg_off_no_bold(self) -> None:
+        result = _biff_segment(SessionUnread("kai", 5, "tty1", biff_enabled=False))
+        assert "\033[" not in result
+
+    def test_mesg_off_without_tty(self) -> None:
+        result = _biff_segment(SessionUnread("kai", 3, "", biff_enabled=False))
+        assert result == "kai(n)"
 
 
-# --- Read Unread Count ------------------------------------------------------
+# --- Read Session Unread ----------------------------------------------------
 
 
-class TestReadUnreadCount:
-    def test_missing_file(self, tmp_path: Path):
-        assert _read_unread_count(tmp_path / "nope.json") == 0
+class TestReadSessionUnread:
+    def test_missing_file(self, tmp_path: Path) -> None:
+        assert _read_session_unread(tmp_path / "nope.json") is None
 
-    def test_valid_count(self, tmp_path: Path):
-        path = tmp_path / "unread.json"
-        path.write_text(json.dumps({"count": 5}))
-        assert _read_unread_count(path) == 5
+    def test_valid_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
+        path.write_text(
+            json.dumps(
+                {"user": "kai", "count": 5, "tty_name": "tty1", "preview": "@eric"}
+            )
+        )
+        result = _read_session_unread(path)
+        assert result == SessionUnread("kai", 5, "tty1")
 
-    def test_zero_count(self, tmp_path: Path):
-        path = tmp_path / "unread.json"
-        path.write_text(json.dumps({"count": 0}))
-        assert _read_unread_count(path) == 0
+    def test_zero_count(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
+        path.write_text(
+            json.dumps({"user": "kai", "count": 0, "tty_name": "", "preview": ""})
+        )
+        result = _read_session_unread(path)
+        assert result is not None
+        assert result.count == 0
 
-    def test_invalid_json(self, tmp_path: Path):
-        path = tmp_path / "unread.json"
+    def test_invalid_json(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
         path.write_text("not json")
-        assert _read_unread_count(path) == 0
+        assert _read_session_unread(path) is None
 
-    def test_missing_count_key(self, tmp_path: Path):
-        path = tmp_path / "unread.json"
-        path.write_text(json.dumps({"other": "data"}))
-        assert _read_unread_count(path) == 0
+    def test_missing_tty_name_defaults(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
+        path.write_text(json.dumps({"user": "kai", "count": 2, "preview": ""}))
+        result = _read_session_unread(path)
+        assert result is not None
+        assert result.tty_name == ""
 
+    def test_biff_enabled_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "user": "kai",
+                    "count": 3,
+                    "tty_name": "tty1",
+                    "preview": "",
+                    "biff_enabled": False,
+                }
+            )
+        )
+        result = _read_session_unread(path)
+        assert result is not None
+        assert result.biff_enabled is False
 
-# --- Read All Unreads -------------------------------------------------------
-
-
-class TestReadAllUnreads:
-    def test_missing_directory(self, tmp_path: Path) -> None:
-        assert _read_all_unreads(tmp_path / "nonexistent") == []
-
-    def test_empty_directory(self, tmp_path: Path) -> None:
-        d = tmp_path / "unread"
-        d.mkdir()
-        assert _read_all_unreads(d) == []
-
-    def test_single_project(self, tmp_path: Path) -> None:
-        d = tmp_path / "unread"
-        d.mkdir()
-        (d / "myapp.json").write_text(json.dumps({"count": 3}))
-        result = _read_all_unreads(d)
-        assert result == [ProjectUnread("myapp", 3)]
-
-    def test_multiple_projects(self, tmp_path: Path) -> None:
-        d = tmp_path / "unread"
-        d.mkdir()
-        (d / "alpha.json").write_text(json.dumps({"count": 2}))
-        (d / "beta.json").write_text(json.dumps({"count": 5}))
-        result = _read_all_unreads(d)
-        assert result == [
-            ProjectUnread("alpha", 2),
-            ProjectUnread("beta", 5),
-        ]
-
-    def test_filters_zero_counts(self, tmp_path: Path) -> None:
-        d = tmp_path / "unread"
-        d.mkdir()
-        (d / "active.json").write_text(json.dumps({"count": 1}))
-        (d / "empty.json").write_text(json.dumps({"count": 0}))
-        result = _read_all_unreads(d)
-        assert result == [ProjectUnread("active", 1)]
-
-    def test_ignores_non_json(self, tmp_path: Path) -> None:
-        d = tmp_path / "unread"
-        d.mkdir()
-        (d / "notes.txt").write_text("not a json file")
-        (d / "myapp.json").write_text(json.dumps({"count": 4}))
-        result = _read_all_unreads(d)
-        assert result == [ProjectUnread("myapp", 4)]
-
-    def test_corrupt_json_skipped(self, tmp_path: Path) -> None:
-        d = tmp_path / "unread"
-        d.mkdir()
-        (d / "broken.json").write_text("not valid json{{{")
-        (d / "good.json").write_text(json.dumps({"count": 7}))
-        result = _read_all_unreads(d)
-        assert result == [ProjectUnread("good", 7)]
+    def test_missing_biff_enabled_defaults_true(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
+        path.write_text(
+            json.dumps({"user": "kai", "count": 2, "tty_name": "tty1", "preview": ""})
+        )
+        result = _read_session_unread(path)
+        assert result is not None
+        assert result.biff_enabled is True
 
 
 # --- Resolve Original Command -----------------------------------------------
@@ -415,11 +378,23 @@ class TestRunOriginal:
 # --- Run Statusline (integration) ------------------------------------------
 
 
+def _write_ppid_unread(
+    unread_dir: Path, user: str, count: int, tty_name: str = "", preview: str = ""
+) -> None:
+    """Write a PPID-keyed unread file for the current process."""
+    unread_dir.mkdir(parents=True, exist_ok=True)
+    path = unread_dir / f"{os.getppid()}.json"
+    path.write_text(
+        json.dumps(
+            {"user": user, "count": count, "tty_name": tty_name, "preview": preview}
+        )
+    )
+
+
 class TestRunStatusline:
     def test_no_original_no_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        # No stash file, no unread dir
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
@@ -428,31 +403,28 @@ class TestRunStatusline:
     def test_no_original_with_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        unread_dir.mkdir()
-        (unread_dir / "myapp.json").write_text(json.dumps({"count": 3}))
+        _write_ppid_unread(unread_dir, "kai", 3, "tty1")
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
-        assert "myapp(3)" in result
+        assert "kai:tty1(3)" in result
         assert "\033[1;33m" in result
 
     def test_original_with_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        unread_dir.mkdir()
-        (unread_dir / "myapp.json").write_text(json.dumps({"count": 2}))
+        _write_ppid_unread(unread_dir, "kai", 2, "tty1")
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
         assert "42%" in result
-        assert "myapp(2)" in result
+        assert "kai:tty1(2)" in result
         assert " | " in result
 
     def test_original_no_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        unread_dir.mkdir()
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
@@ -461,6 +433,16 @@ class TestRunStatusline:
         assert "biff" in result
         assert "(0)" not in result
         assert " | " in result
+
+    def test_without_tty_name(self, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(unread_dir, "kai", 1)
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = "{}"
+            result = run_statusline(stash_path, unread_dir)
+        assert "kai(1)" in result
+        assert ":" not in result.replace("\033[1;33m", "").replace("\033[0m", "")
 
 
 # --- CLI integration -------------------------------------------------------

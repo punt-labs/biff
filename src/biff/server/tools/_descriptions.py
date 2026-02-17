@@ -41,11 +41,31 @@ _DEFAULT_POLL_INTERVAL = 2.0
 # notifications outside a request context.
 _session: ServerSession | None = None
 
+# Set by the ``tty`` tool so the unread file includes the session name.
+_tty_name: str = ""
+
+# Set by the ``mesg`` tool so the unread file includes availability state.
+_biff_enabled: bool = True
+
+
+def set_tty_name(name: str) -> None:
+    """Update the module-level TTY name for unread file writes."""
+    global _tty_name
+    _tty_name = name
+
+
+def set_biff_enabled(*, enabled: bool) -> None:
+    """Update the module-level biff_enabled flag for unread file writes."""
+    global _biff_enabled
+    _biff_enabled = enabled
+
 
 def _reset_session() -> None:
-    """Clear the stored session — for test isolation only."""
-    global _session
+    """Clear stored session, tty name, and biff_enabled — test isolation."""
+    global _session, _tty_name, _biff_enabled
     _session = None
+    _tty_name = ""
+    _biff_enabled = True
 
 
 async def _notify_tool_list_changed() -> None:
@@ -116,7 +136,14 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     if tool.description != old_desc:
         await _notify_tool_list_changed()
     if state.unread_path is not None:
-        _write_unread_file(state.unread_path, summary)
+        _write_unread_file(
+            state.unread_path,
+            summary,
+            repo_name=state.config.repo_name,
+            user=state.config.user,
+            tty_name=_tty_name,
+            biff_enabled=_biff_enabled,
+        )
 
 
 async def poll_inbox(
@@ -159,13 +186,32 @@ async def poll_inbox(
             await refresh_read_messages(mcp, state)
 
 
-def _write_unread_file(path: Path, summary: UnreadSummary) -> None:
+def _write_unread_file(
+    path: Path,
+    summary: UnreadSummary,
+    *,
+    repo_name: str,
+    user: str,
+    tty_name: str,
+    biff_enabled: bool,
+) -> None:
     """Write unread summary to a JSON status file.
+
+    Includes ``user``, ``repo``, ``tty_name``, and ``biff_enabled``
+    metadata so the status line can display identity, session, and
+    availability information.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
     """
-    data = {"count": summary.count, "preview": summary.preview}
+    data = {
+        "user": user,
+        "repo": repo_name,
+        "count": summary.count,
+        "tty_name": tty_name,
+        "preview": summary.preview,
+        "biff_enabled": biff_enabled,
+    }
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")
     except OSError:

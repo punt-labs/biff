@@ -83,12 +83,13 @@ class TestTtyNaming:
 class TestTtyAutoAssign:
     """Auto-assigning sequential ttyN names."""
 
-    async def test_auto_assigns_tty1(
+    async def test_auto_assigns_next(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """No args → assigns tty1 when no sequential names exist."""
+        """No args → assigns next ttyN after auto-assigned startup names."""
+        # kai (tty1) and eric (tty2) get auto-assigned on startup.
         result = await kai.call("tty")
-        assert result == "TTY: tty1"
+        assert result == "TTY: tty3"
 
     async def test_auto_increments(
         self, kai: RecordingClient, eric: RecordingClient
@@ -103,8 +104,10 @@ class TestTtyAutoAssign:
     ) -> None:
         """Non-ttyN names don't affect auto-numbering."""
         await kai.call("tty", name="agent1")
+        # eric already has tty2 from startup auto-assign; agent1 is
+        # non-sequential, so the next ttyN after tty2 is tty3.
         result = await eric.call("tty")
-        assert result == "TTY: tty1"
+        assert result == "TTY: tty3"
 
 
 class TestTtyLengthLimit:
@@ -134,8 +137,9 @@ class TestTtyValidation:
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """Whitespace-only name triggers auto-assign."""
+        # tty1, tty2 auto-assigned on startup; whitespace triggers auto.
         result = await kai.call("tty", name="   ")
-        assert result == "TTY: tty1"
+        assert result == "TTY: tty3"
 
     async def test_rejects_duplicate_name_same_user(
         self, kai: RecordingClient, eric: RecordingClient
