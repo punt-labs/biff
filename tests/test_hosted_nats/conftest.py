@@ -115,15 +115,15 @@ async def _cleanup_nats(  # pyright: ignore[reportUnusedFunction]
     kai_relay: NatsRelay,
     eric_relay: NatsRelay,
 ) -> AsyncIterator[None]:
-    """Delete NATS infrastructure after each test for isolation.
+    """Purge NATS data after each test for isolation.
 
-    Deletes the KV bucket and stream so each test starts with a
-    clean slate.  The underlying NATS connections are preserved
-    (session-scoped) and reused across tests.
+    Purges KV keys and stream messages but keeps the bucket and
+    stream intact.  Avoids propagation delays on hosted NATS servers
+    that occur when rapidly deleting and recreating infrastructure.
     """
     yield
-    await kai_relay.delete_infrastructure()
-    await eric_relay.delete_infrastructure()
+    await kai_relay.purge_data()
+    await eric_relay.purge_data()
 
 
 @pytest.fixture

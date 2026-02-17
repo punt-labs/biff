@@ -175,6 +175,23 @@ class NatsRelay:
         self._js = None
         self._kv = None
 
+    async def purge_data(self) -> None:
+        """Purge all sessions and messages without deleting infrastructure.
+
+        Removes all KV keys and purges the stream, but keeps the
+        bucket and stream themselves intact.  Avoids propagation
+        delays on hosted NATS servers that occur when rapidly
+        deleting and recreating infrastructure.
+        """
+        js, kv = await self._ensure_connected()
+        with suppress(NoKeysError, NotFoundError, BucketNotFoundError):
+            keys = await kv.keys()  # pyright: ignore[reportUnknownMemberType]
+            for key in keys:
+                with suppress(KeyNotFoundError):
+                    await kv.delete(key)
+        with suppress(NotFoundError):
+            await js.purge_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+
     async def delete_infrastructure(self) -> None:
         """Delete KV bucket and stream from the NATS server.
 
