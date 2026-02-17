@@ -490,21 +490,65 @@ The `/biff:biff on|off` command (awkward after rename) was split into `/mesg y` 
 
 ---
 
-## DES-011: Status Line — Per-Project Unread Counts
+## DES-011: Status Line — Per-Session Unread Counts via PPID
 
-**Date:** 2026-02-15
+**Date:** 2026-02-15 (revised 2026-02-17)
 **Status:** SETTLED
 **Topic:** How unread message counts appear in Claude Code's status bar
 
 ### Design
 
-Each biff server writes unread counts to `~/.biff/unread/{repo-name}.json`. The status line script scans all files in `~/.biff/unread/` and renders per-project segments: e.g., `biff(2) myapp(1)`.
+Each biff MCP server writes its unread state to `~/.biff/unread/{ppid}.json`, where `ppid` is the server's parent process ID (`os.getppid()`). The status line script reads `~/.biff/unread/{ppid}.json` using its own `os.getppid()`.
+
+**Why this works:** Claude Code (`claude -r`) spawns both the MCP server (via stdio transport) and the status line command as direct child processes. Both have the same parent PID — the Claude Code process for that session. No shell intermediary exists for either child.
+
+```
+Claude Code (PID 30757)
+├── biff serve --transport stdio   (MCP server, ppid=30757, writes file)
+├── biff statusline                (status line, ppid=30757, reads file)
+```
+
+The unread file contains repo name, count, TTY name, and preview:
+
+```json
+{"repo": "biff", "count": 2, "tty_name": "tty1", "preview": "@kai about auth"}
+```
+
+The status line renders: `biff:tty1(2)` (bold yellow when count > 0, plain `biff` when zero).
 
 The MCP server is registered **globally** in `~/.claude.json` (not per-project `.mcp.json`) so biff runs in every session and can update counts regardless of which project is open.
 
-### Why Per-Project
+### Display Name
 
-A single global `unread.json` file caused whichever server wrote last to win. Multiple projects with different unread counts stomped each other.
+The unread file stores the slug-based `repo_name` (e.g., `punt-labs__biff`) but the status line displays the bare repo name extracted from the slug (`biff`). See `_display_name()` in `statusline.py`.
+
+### Verified (2026-02-17)
+
+Instrumented both the MCP server and status line to log their PPIDs. Confirmed across multiple concurrent Claude Code sessions:
+
+| Claude PID | MCP Server PPID | Status Line PPID | Match |
+|-----------|----------------|-----------------|-------|
+| 10869 | 10869 | 10869 | ✓ |
+| 30757 | 30757 | 30757 | ✓ |
+
+Claude Code sends rich session JSON to the status line via stdin (including `session_id`, `cwd`, `session_name`), but this data is not available to the MCP server. PPID is the only shared identifier between the two sibling processes.
+
+### Prior Design: Per-Repo Files (Superseded)
+
+The original design used `~/.biff/unread/{repo-name}.json` with the status line scanning all files. This had three problems:
+
+1. **Multiple sessions stomped each other.** All MCP servers for the same repo wrote to the same file — last writer wins.
+2. **No TTY identity.** The status line couldn't show which session had unread messages.
+3. **Stale files accumulated.** No cleanup mechanism for dead servers' unread files.
+
+### Alternatives Considered
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Env var from Claude Code | Claude Code does not expose `session_id` as an env var to MCP server child processes |
+| MCP initialize handshake | `clientInfo` contains only `name` and `version`, no session identity |
+| Scan all per-TTY files | Status line wouldn't know which file is "mine" — showing all TTYs is noisy and unusable |
+| Session ID from stdin JSON | Available to the status line but not to the MCP server — no way to agree on a file key |
 
 ---
 
