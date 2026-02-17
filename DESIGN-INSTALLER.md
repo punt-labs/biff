@@ -42,7 +42,7 @@ This document describes the architecture of biff's installation system — how t
 │           │ biff install                                                  │
 │           ▼                                                              │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │                     installer.py (4 steps)                         │  │
+│  │                     installer.py (5 steps)                         │  │
 │  │                                                                    │  │
 │  │  Step 1: Register MCP server                                      │  │
 │  │    $ claude mcp add --scope user biff -- biff serve --transport    │  │
@@ -55,11 +55,15 @@ This document describes the architecture of biff's installation system — how t
 │  │    Copies: .claude-plugin/plugin.json, commands/*.md,             │  │
 │  │            hooks/suppress-output.sh                                │  │
 │  │                                                                    │  │
-│  │  Step 3: Register in plugin registry                              │  │
+│  │  Step 3: Copy user commands                                       │  │
+│  │    _plugin_source() / "commands" / *.md                            │  │
+│  │      → shutil.copy2 → ~/.claude/commands/                         │  │
+│  │                                                                    │  │
+│  │  Step 4: Register in plugin registry                              │  │
 │  │    ~/.claude/plugins/installed_plugins.json                        │  │
 │  │    Adds: { "biff@local": [{ scope, installPath, version, ... }] } │  │
 │  │                                                                    │  │
-│  │  Step 4: Enable in settings                                       │  │
+│  │  Step 5: Enable in settings                                       │  │
 │  │    ~/.claude/settings.json                                         │  │
 │  │    Adds: { "enabledPlugins": { "biff@local": true } }             │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
@@ -121,6 +125,7 @@ This document describes the architecture of biff's installation system — how t
 |------|-----------|---------|
 | `~/.claude.json` | `claude mcp add` + `statusline.py` | MCP server registration |
 | `~/.claude/plugins/biff/` | `installer.py` | Plugin files (commands, hooks) |
+| `~/.claude/commands/` | `installer.py` | Top-level user commands (`.md`) |
 | `~/.claude/plugins/installed_plugins.json` | `installer.py` | Plugin registry |
 | `~/.claude/settings.json` | `installer.py` + `statusline.py` | Plugin enable + status line |
 | `~/.biff/statusline-original.json` | `statusline.py` | Stashed original status line |
@@ -387,8 +392,9 @@ The file is committed to the repo. All team members share it.
 1. **Disable plugin** — Remove `biff@local` from `settings.json` `enabledPlugins`.
 2. **Unregister plugin** — Remove `biff@local` from `installed_plugins.json`.
 3. **Remove plugin files** — `shutil.rmtree(~/.claude/plugins/biff/)`.
-4. **Remove MCP server** — `claude mcp remove biff`.
-5. **Remove status line** — Restore stashed original, delete stash file, remove MCP entry from `~/.claude.json`.
+4. **Remove user commands** — Delete biff command files from `~/.claude/commands/`.
+5. **Remove MCP server** — `claude mcp remove biff`.
+6. **Remove status line** — Restore stashed original, delete stash file, remove MCP entry from `~/.claude.json`.
 
 ### What It Does NOT Remove
 
@@ -429,6 +435,7 @@ User                     pip              biff CLI           Claude Code Files
  │                        │                  │                      │
  │  ✓ MCP server          │                  │                      │
  │  ✓ Plugin files        │                  │                      │
+ │  ✓ User commands       │                  │                      │
  │  ✓ Plugin registry     │                  │                      │
  │  ✓ Plugin enabled      │                  │                      │
  │  "Restart Claude Code" │                  │                      │
@@ -460,3 +467,32 @@ Before `biff install` can succeed, the user needs:
 | GitHub CLI (`gh`) | Identity resolution | `brew install gh && gh auth login` |
 
 `biff doctor` validates all of these post-install.
+
+---
+
+## INS-009: User Commands — Top-Level Aliases via ~/.claude/commands/
+
+**Date:** 2026-02-16
+**Status:** SETTLED
+**Topic:** How top-level slash commands (`/who`, `/mesg`) get deployed alongside namespaced commands (`/biff:who`, `/biff:mesg`)
+
+### Design
+
+The installer copies the same `.md` command files from `_plugin_source() / "commands"` to two locations:
+
+1. **Plugin commands** (existing) — `~/.claude/plugins/biff/commands/` → namespaced as `/biff:who`, `/biff:mesg`, etc.
+2. **User commands** (new) — `~/.claude/commands/` → top-level as `/who`, `/mesg`, etc.
+
+Both are `shutil.copy2()` from the same bundled source. The installer owns both targets; hand-editing either is overwritten on next install.
+
+### Why Copy to Both
+
+Claude Code resolves commands from two paths: per-plugin (`plugins/<name>/commands/`) and global user (`~/.claude/commands/`). Plugin commands are namespaced with the plugin name; user commands are top-level. Users expect `/who`, not `/biff:who`. Both must exist because some users may disable the plugin but still want the MCP server + top-level commands.
+
+### Uninstall
+
+`_uninstall_user_commands()` only removes files whose names match the bundled command filenames. It does not touch non-biff files that may exist in `~/.claude/commands/`. This is safe because command filenames are distinctive (`who.md`, `finger.md`, `mesg.md`).
+
+### Doctor
+
+`_check_user_commands()` is informational (`required=False`). Missing user commands are not a hard failure — the namespaced plugin commands still work.
