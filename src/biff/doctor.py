@@ -227,7 +227,7 @@ def check_environment(plugins_dir: Path | None = None) -> int:
     """Run all diagnostics. Returns 0 if all required pass, 1 otherwise."""
     from importlib.metadata import version
 
-    print(f"biff-mcp {version('biff-mcp')}")
+    print(f"punt-biff {version('punt-biff')}")
     print()
 
     checks = [

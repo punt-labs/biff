@@ -30,7 +30,7 @@ app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 @app.command()
 def version() -> None:
     """Print the biff version."""
-    print(f"biff {pkg_version('biff-mcp')}")
+    print(f"biff {pkg_version('punt-biff')}")
 
 
 @app.command()

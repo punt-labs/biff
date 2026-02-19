@@ -3,6 +3,6 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/main/install.sh | bash
 set -euo pipefail
 
-pip install biff-mcp
+pip install punt-biff
 biff install
 biff doctor
