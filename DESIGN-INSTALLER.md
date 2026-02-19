@@ -17,7 +17,7 @@ This document describes the architecture of biff's installation system — how t
 │                        User's Machine                                    │
 │                                                                          │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │                     pip install biff-mcp                           │  │
+│  │                     pip install punt-biff                           │  │
 │  │                                                                    │  │
 │  │  Installs into site-packages:                                      │  │
 │  │    biff/                                                           │  │
@@ -137,14 +137,14 @@ This document describes the architecture of biff's installation system — how t
 
 **Date:** 2026-02-15
 **Status:** SETTLED
-**Topic:** Why installation is split into `pip install biff-mcp` and `biff install`
+**Topic:** Why installation is split into `pip install punt-biff` and `biff install`
 
 ### Design
 
 Installation is two commands:
 
 ```bash
-pip install biff-mcp    # Phase 1: Python package + CLI
+pip install punt-biff    # Phase 1: Python package + CLI
 biff install            # Phase 2: Claude Code integration
 ```
 
@@ -174,7 +174,7 @@ Keeping Phase 2 as a separate explicit command (`biff install`) means it runs wh
 `install.sh` chains all steps for zero-thought setup:
 
 ```bash
-pip install biff-mcp
+pip install punt-biff
 biff install
 biff doctor
 ```
@@ -409,7 +409,7 @@ The file is committed to the repo. All team members share it.
 ```
 User                     pip              biff CLI           Claude Code Files
  │                        │                  │                      │
- │  pip install biff-mcp  │                  │                      │
+ │  pip install punt-biff  │                  │                      │
  ├───────────────────────►│                  │                      │
  │                        │  install pkg     │                      │
  │                        │  + CLI entry     │                      │
