@@ -2,6 +2,7 @@
 description: Control message reception
 argument-hint: "y | n"
 ---
+<!-- markdownlint-disable MD041 -->
 
 ## Input
 

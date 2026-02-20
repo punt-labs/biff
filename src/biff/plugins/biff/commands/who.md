@@ -1,6 +1,7 @@
 ---
 description: List active team members and what they're working on
 ---
+<!-- markdownlint-disable MD041 -->
 
 Call `mcp__biff__who` with no arguments.
 

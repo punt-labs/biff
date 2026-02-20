@@ -28,7 +28,7 @@ Restart Claude Code. Type `/who` to see your team.
 
 ### See who's online
 
-```
+```text
 > /who
 
 ▶  NAME    TTY   IDLE  S  HOST       DIR                        PLAN
@@ -42,7 +42,7 @@ Restart Claude Code. Type `/who` to see your team.
 
 ### Send a message
 
-```
+```text
 > /write @kai "auth module looks good, just one nit on the error handling"
 
 Message sent to @kai.
@@ -50,7 +50,7 @@ Message sent to @kai.
 
 ### Check your inbox
 
-```
+```text
 > /read
 
 ▶  FROM   DATE              MESSAGE
@@ -61,7 +61,7 @@ Message sent to @kai.
 
 ### Check what someone is working on
 
-```
+```text
 > /finger @kai
 
 ▶  Login: kai                              Messages: on
@@ -73,7 +73,7 @@ Message sent to @kai.
 
 ### Set your status
 
-```
+```text
 > /plan "debugging the websocket reconnect logic"
 
 Plan: debugging the websocket reconnect logic
@@ -81,7 +81,7 @@ Plan: debugging the websocket reconnect logic
 
 ### Go do-not-disturb
 
-```
+```text
 > /mesg n
 
 is n
@@ -105,7 +105,7 @@ Your status bar shows `(n)` instead of the unread count while messages are off. 
 
 Biff appends to your existing Claude Code status line — it never replaces it. If you already have a status line command, biff wraps it and adds unread counts at the end:
 
-```
+```text
 your-existing-status | kai:tty1(3)
 ```
 

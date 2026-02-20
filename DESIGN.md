@@ -12,7 +12,7 @@ This file is the authoritative record of design decisions, prior approaches, and
 
 ## System Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                       Claude Code UI                         │
 │                                                              │
@@ -65,7 +65,7 @@ This file is the authoritative record of design decisions, prior approaches, and
 
 ### 1. Silent Command: `/write @kai "review the PR"`
 
-```
+```text
 User              Skill Prompt       MCP Tool        Hook              UI Panel
  │                  (write.md)        (write)    (suppress-output.sh)
  │  /write @kai     │                  │                │                │
@@ -88,7 +88,7 @@ User              Skill Prompt       MCP Tool        Hook              UI Panel
 
 ### 2. Data Command: `/who`
 
-```
+```text
 User              Skill Prompt       MCP Tool        Hook              UI Panel
  │                  (who.md)          (who)      (suppress-output.sh)
  │  /who            │                  │                │                │
@@ -115,7 +115,7 @@ User              Skill Prompt       MCP Tool        Hook              UI Panel
 
 ### 3. Push Notification: Message Arrives While Idle
 
-```
+```text
                     Background         MCP Tool        Status Line
 Sender              Poller           Description         Script
  │                  (poll_inbox)    (read_messages)    (unread.json)
@@ -409,6 +409,7 @@ No migration. Sessions rebuild on next heartbeat. Orphaned NATS resources (old `
 - `load_config` prefers the slug; falls back to `repo_root.name` when no remote exists (local-only repos have no shared namespace collision risk).
 
 **Examples:**
+
 - `punt-labs/biff` → `punt-labs__biff`
 - `punt-labs/socket.io` → `punt-labs__socket-io`
 
@@ -426,7 +427,7 @@ No migration. Sessions rebuild on next heartbeat. Orphaned NATS resources (old `
 
 Sessions persist for **30 days** (NATS KV TTL: 2,592,000s). The `/who` command shows an **IDLE column** instead of filtering out "stale" sessions.
 
-```
+```text
 ▶  NAME       S   IDLE  PLAN
    @kai       +     0m  fixing auth
    @eric      -     3h  reviewing PR #42
@@ -502,7 +503,7 @@ Each biff MCP server writes its unread state to `~/.biff/unread/{ppid}.json`, wh
 
 **Why this works:** Claude Code (`claude -r`) spawns both the MCP server (via stdio transport) and the status line command as direct child processes. Both have the same parent PID — the Claude Code process for that session. No shell intermediary exists for either child.
 
-```
+```text
 Claude Code (PID 30757)
 ├── biff serve --transport stdio   (MCP server, ppid=30757, writes file)
 ├── biff statusline                (status line, ppid=30757, reads file)
@@ -605,10 +606,12 @@ Two mailbox types per user:
 | **TTY mailbox** | `inbox-{user}-{tty}.jsonl` / `biff.{repo}.inbox.{user}.{tty}` | Targeted `/write @user:tty` | POP: session-specific |
 
 **Delivery rules:**
+
 - Broadcast (`to_user` without `:`) → write to user mailbox. No session lookup. Persists offline.
 - Targeted (`to_user` with `:`) → write to TTY mailbox. Same as before.
 
 **Read rules:**
+
 - `/read` merges both inboxes, sorted by timestamp.
 - POP semantics apply independently to each mailbox.
 - First session to `/read` consumes broadcast messages; other sessions see nothing.

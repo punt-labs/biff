@@ -2,6 +2,7 @@
 description: Send a message to a teammate
 argument-hint: "@user <message>"
 ---
+<!-- markdownlint-disable MD041 -->
 
 ## Input
 

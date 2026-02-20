@@ -2,6 +2,7 @@
 description: Name the current session (visible in /who and /finger)
 argument-hint: "[name]"
 ---
+<!-- markdownlint-disable MD041 -->
 
 ## Input
 

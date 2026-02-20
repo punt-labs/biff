@@ -51,7 +51,7 @@ git checkout -b feat/short-description main
 
 Format: `type(scope): description`
 
-```
+```text
 feat(who): add idle time display
 fix(relay): handle disconnection during fetch
 refactor(tools): extract shared formatting
