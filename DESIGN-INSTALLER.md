@@ -12,7 +12,7 @@ This document describes the architecture of biff's installation system — how t
 
 ## Installation Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                        User's Machine                                    │
 │                                                                          │
@@ -406,7 +406,7 @@ The file is committed to the repo. All team members share it.
 
 ## Installation Flow — End to End
 
-```
+```text
 User                     pip              biff CLI           Claude Code Files
  │                        │                  │                      │
  │  pip install punt-biff  │                  │                      │

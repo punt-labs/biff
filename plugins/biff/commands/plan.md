@@ -2,6 +2,7 @@
 description: Set what you're currently working on (visible to teammates)
 argument-hint: "<message>"
 ---
+<!-- markdownlint-disable MD041 -->
 
 ## Input
 

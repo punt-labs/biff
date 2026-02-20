@@ -1,6 +1,7 @@
 ---
 description: Check your inbox for new messages
 ---
+<!-- markdownlint-disable MD041 -->
 
 Call `mcp__biff__read_messages` with no arguments.
 

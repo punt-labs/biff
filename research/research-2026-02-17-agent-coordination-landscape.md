@@ -1,4 +1,5 @@
 # Research: Competitive landscape for agent-to-agent coordination tools
+
 **Date:** 2026-02-17
 **Request:** Research the competitive landscape for pure agent-to-agent coordination tools, including: (1) shared memory / hive-mind solutions, (2) how pure-agent tools differ from human+agent tools, (3) whether a gap exists between pure-agent coordination and human+agent communication. .tex file: /Users/jfreeman/Coding/biff/prfaq.tex
 **Claims investigated:** 8
@@ -12,6 +13,7 @@
 **Claim**: claude-flow is an MCP-based agent coordination tool with hive-mind / swarm capabilities
 **Verdict**: SUPPORTED
 **Sources**:
+
 - [GitHub: ruvnet/claude-flow](https://github.com/ruvnet/claude-flow): Describes itself as "the leading agent orchestration platform for Claude," ranking #1 in agent-based frameworks. Provides 171 MCP tools across 19 categories, 60+ specialized agents, and hive-mind coordination with queen-led topology and Byzantine consensus. First released November 20, 2025.
 - [Claude Flow v3 site](https://claude-flow.ruv.io/): v3 claims 84.8% SWE-Bench score, 352x faster WASM execution, 75% API cost savings. Features SONA self-learning and RuVector vector DB.
 - [PulseMCP server listing](https://www.pulsemcp.com/servers/ruvnet-claude-flow): Confirms active MCP server registration.
@@ -23,6 +25,7 @@
 **Claim**: CrewAI is a leading multi-agent framework with role-based architecture
 **Verdict**: SUPPORTED
 **Sources**:
+
 - [CrewAI GitHub](https://github.com/crewAIInc/crewAI): Open-source Python framework. Role-based architecture with Agents, Tasks, Crews, Flows. Over 100,000 developers certified via community courses.
 - [DataCamp comparison](https://www.datacamp.com/tutorial/crewai-vs-langgraph-vs-autogen): Confirms hierarchical delegation model — all subagents communicate only with the orchestrator, never directly with each other. Manager decomposes goals into sub-tasks, workers execute via structured tool interfaces.
 - [Langfuse blog](https://langfuse.com/blog/2025-03-19-ai-agent-comparison): Security evaluation shows CrewAI outperforms mesh/swarm in explicit refusal and attack resistance (refusal rate 30.8% vs. 16.4% for AutoGen).
@@ -35,6 +38,7 @@
 **Claim**: AutoGen / Microsoft Agent Framework is a leading multi-agent orchestration framework
 **Verdict**: SUPPORTED
 **Sources**:
+
 - [Microsoft Research AutoGen page](https://www.microsoft.com/en-us/research/project/autogen/): Confirms AutoGen v0.4 released January 2025. Event-driven, asynchronous architecture. 50.4k GitHub stars, 559 contributors, 98 releases.
 - [Visual Studio Magazine](https://visualstudiomagazine.com/articles/2025/10/01/semantic-kernel-autogen--open-source-microsoft-agent-framework.aspx): Microsoft Agent Framework (public preview October 1, 2025) merges AutoGen + Semantic Kernel. Adds graph-based workflows, session-based state management, and native MCP/A2A/OpenAPI support.
 - [Microsoft Learn migration guide](https://learn.microsoft.com/en-us/agent-framework/migration-guide/from-autogen/): AutoGen enters maintenance mode; Microsoft Agent Framework is the forward path, targeting GA in Q1 2026.
@@ -46,6 +50,7 @@
 **Claim**: LangGraph provides multi-agent orchestration with shared, persistent state
 **Verdict**: SUPPORTED
 **Sources**:
+
 - [LangChain LangGraph page](https://www.langchain.com/langgraph): Confirms graph-based orchestration. Shared state is an immutable data structure; agents update state, creating new versions.
 - [AWS blog on LangGraph + Bedrock](https://aws.amazon.com/blogs/machine-learning/build-multi-agent-systems-with-langgraph-and-amazon-bedrock/): Confirms supervisor pattern, parallel execution, and shared state management.
 - [Latenode architecture guide](https://latenode.com/blog/langgraph-ai-framework-2025-complete-architecture-guide-multi-agent-orchestration-analysis): Notes LangGraph's graph-based approach passes only state deltas between nodes, resulting in minimal token usage and reduced latency vs. CrewAI.
@@ -58,6 +63,7 @@
 **Claim**: OpenAI Swarm / Agents SDK is a lightweight agent handoff framework
 **Verdict**: SUPPORTED
 **Sources**:
+
 - [OpenAI Swarm GitHub](https://github.com/openai/swarm): Confirms stateless, lightweight design. Two main abstractions: agents and handoffs. Educational resource; superseded by OpenAI Agents SDK for production.
 - [VentureBeat coverage](https://venturebeat.com/ai/openais-swarm-ai-agent-framework-routines-and-handoffs): Confirms routines and handoffs pattern. Explicitly stateless by design.
 - [Galileo blog](https://galileo.ai/blog/openai-swarm-framework-multi-agents): Notes Swarm's lack of internal state and memory limits effectiveness in complex decision-making.
@@ -69,6 +75,7 @@
 **Claim**: Google's A2A protocol is a standard for agent-to-agent communication
 **Verdict**: SUPPORTED
 **Sources**:
+
 - [Google Developers Blog](https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/): A2A announced April 9, 2025 at Cloud Next. Supported by 50+ technology partners at launch.
 - [A2A GitHub](https://github.com/a2aproject/A2A): Linux Foundation project. JSON-RPC 2.0 over HTTPS. Agent Cards at `/.well-known/agent.json` for discovery.
 - [Google Cloud Blog on v0.3](https://cloud.google.com/blog/products/ai-machine-learning/agent2agent-protocol-is-getting-an-upgrade): v0.3 released July 31, 2025, adds gRPC support, signed security cards, extended Python SDK. Over 150 supporting organizations.
@@ -80,6 +87,7 @@
 **Claim**: Swarms (kyegomez) is an enterprise multi-agent framework with diverse communication architectures
 **Verdict**: SUPPORTED
 **Sources**:
+
 - [Swarms GitHub](https://github.com/kyegomez/swarms): Enterprise-grade, production-ready. Multiple architectures: sequential, parallel, graph-based (DAG), Mixture of Agents, mesh.
 - [Swarms 8.5.0 release notes (Medium, October 2025)](https://medium.com/@kyeg/swarms-8-5-0-update-new-multi-agent-architecture-and-global-infrastructure-expansion-6f8b859c5284): New SocialAlgorithms framework for defining custom inter-agent communication sequences. New SelfMoASeq architecture.
 - [Swarms documentation](https://docs.swarms.world/en/latest/swarms/concept/swarm_architectures/): Documents hierarchical, concurrent, sequential, mesh, and federated communication patterns.
@@ -91,6 +99,7 @@
 **Claim**: A gap exists between pure-agent coordination tools and hybrid human+agent communication tools
 **Verdict**: SUPPORTED — gap is well-documented
 **Sources**:
+
 - [Sagepub: "The group mind of hybrid teams" (2025)](https://journals.sagepub.com/doi/10.1177/02683962241296883): Academic research on "human-agent teaming" (HATs) identifies that "most studies focus on a single, fixed team configuration" — the dynamic context where humans and agents work as co-equal participants in a shared workspace is understudied and under-served by tools.
 - [PMC systematic review of HAT testbeds](https://pmc.ncbi.nlm.nih.gov/articles/PMC12743137/): "Despite increasing interest in human-agent teams and numerous research studies, there is a lack of comprehensive understanding regarding the capabilities and limitations of existing testbeds."
 - [Gartner stat via search results](https://www.salesmate.io/blog/future-of-ai-agents/): 1,445% surge in multi-agent system inquiries from Q1 2024 to Q2 2025. Gartner predicts 40% of enterprise applications will embed AI agents by end of 2026, up from less than 5% in 2025.
@@ -105,6 +114,7 @@
 **Claim**: Pure-agent coordination tools make design choices that would not work for human engineers
 **Verdict**: SUPPORTED — specific incompatible design choices documented
 **Sources**:
+
 - CrewAI: Mandatory LLM deliberation cycle for every interaction. Humans cannot "check in" without triggering an agent reasoning loop. No concept of an idle human with a plan.
 - LangGraph: Graph-based state machine. Human participation is a breakpoint (interrupt node), not a continuous presence. No concept of a human mailbox or availability toggle.
 - OpenAI Swarm / Agents SDK: Intentionally stateless. No persistent identity, no inbox, no presence. Works for agents that execute and terminate; fails for humans who persist across sessions.

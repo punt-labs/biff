@@ -2,6 +2,7 @@
 description: Check what a teammate is working on and their availability
 argument-hint: "@user"
 ---
+<!-- markdownlint-disable MD041 -->
 
 ## Input
 

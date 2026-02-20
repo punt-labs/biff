@@ -1,0 +1,12 @@
+{
+  "ignores": [".beads/", ".claude/", ".venv/"],
+  "overrides": [
+    {
+      "files": ["src/biff/plugins/biff/commands/*.md"],
+      "config": {
+        // Plugin command files use YAML frontmatter before h2 sections
+        "MD041": false
+      }
+    }
+  ]
+}
