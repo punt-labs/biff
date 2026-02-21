@@ -14,7 +14,9 @@ info() { printf '%b==>%b %s\n' "$BOLD" "$NC" "$1"; }
 ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
-PACKAGE="punt-biff"
+# TODO: revert to "punt-biff" once PyPI org prefix is approved
+PACKAGE="punt-biff@git+https://github.com/punt-labs/biff.git"
+PACKAGE_SHORT="punt-biff"
 BINARY="biff"
 
 # --- Step 1: Python ---
@@ -73,18 +75,11 @@ fi
 
 # --- Step 4: punt-biff ---
 
-info "Installing $PACKAGE..."
+info "Installing $PACKAGE_SHORT..."
 
-INSTALL_OUTPUT="$(uv tool install "$PACKAGE" 2>&1)" || true
-if printf '%s' "$INSTALL_OUTPUT" | grep -q "already installed"; then
-  uv tool upgrade "$PACKAGE" || fail "Failed to upgrade $PACKAGE"
-  ok "$PACKAGE upgraded"
-elif printf '%s' "$INSTALL_OUTPUT" | grep -q "Installed"; then
-  ok "$PACKAGE installed"
-else
-  printf '%s\n' "$INSTALL_OUTPUT"
-  fail "Failed to install $PACKAGE"
-fi
+# --force: overwrites existing binary (may exist from old package name or prior install)
+uv tool install --force "$PACKAGE" || fail "Failed to install $PACKAGE_SHORT"
+ok "$PACKAGE_SHORT installed"
 
 if ! command -v "$BINARY" >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
