@@ -4,7 +4,7 @@ set -euo pipefail
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
-TOOL_PATTERN="mcp__plugin_biff_biff__"
+TOOL_PATTERN="mcp__plugin_biff_tty__"
 STASH_PATH="$HOME/.biff/statusline-original.json"
 
 ACTIONS=()
@@ -28,7 +28,7 @@ fi
 if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
   if ! jq -e ".permissions.allow // [] | map(select(contains(\"$TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
     TMPFILE="$(mktemp)"
-    jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_biff_biff__*"]' "$SETTINGS" > "$TMPFILE"
+    jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_biff_tty__*"]' "$SETTINGS" > "$TMPFILE"
     mv "$TMPFILE" "$SETTINGS"
     ACTIONS+=("Auto-allowed biff MCP tools in permissions")
   fi

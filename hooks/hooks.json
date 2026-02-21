@@ -12,7 +12,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_biff_biff__.*",
+        "matcher": "mcp__plugin_biff_tty__.*",
         "hooks": [
           {
             "type": "command",

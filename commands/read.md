@@ -3,7 +3,7 @@ description: Check your inbox for new messages
 ---
 <!-- markdownlint-disable MD041 -->
 
-Call `mcp__plugin_biff_biff__read_messages` with no arguments.
+Call `mcp__plugin_biff_tty__read_messages` with no arguments.
 
 If the result says "No new messages.", do not emit any text.
 

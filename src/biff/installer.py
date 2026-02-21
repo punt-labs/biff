@@ -25,7 +25,7 @@ COMMANDS_DIR = Path.home() / ".claude" / "commands"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 PLUGIN_ID = "biff@punt-labs"
 MARKETPLACE_KEY = "punt-labs"
-TOOL_PERMISSION = "mcp__plugin_biff_biff__*"
+TOOL_PERMISSION = "mcp__plugin_biff_tty__*"
 
 # Command files deployed by the SessionStart hook
 BIFF_COMMANDS = (
@@ -210,7 +210,7 @@ def _remove_commands(commands_dir: Path | None = None) -> StepResult:
 
 
 def _remove_permissions(settings_path: Path | None = None) -> StepResult:
-    """Remove ``mcp__plugin_biff_biff__*`` from permissions.allow."""
+    """Remove ``mcp__plugin_biff_tty__*`` from permissions.allow."""
     path = settings_path or SETTINGS_PATH
     if not path.exists():
         return StepResult("Permissions", True, "no settings file")

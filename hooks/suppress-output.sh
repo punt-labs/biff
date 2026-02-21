@@ -13,7 +13,7 @@ INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 
 # read_messages: summary in panel, full data via additionalContext.
-if [[ "$TOOL" == "mcp__plugin_biff_biff__read_messages" ]]; then
+if [[ "$TOOL" == "mcp__plugin_biff_tty__read_messages" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   if [[ "$RESULT" == "No new messages." ]]; then
     jq -n --arg r "$RESULT" '{
@@ -36,7 +36,7 @@ if [[ "$TOOL" == "mcp__plugin_biff_biff__read_messages" ]]; then
 fi
 
 # who: summary in panel, full data via additionalContext.
-if [[ "$TOOL" == "mcp__plugin_biff_biff__who" ]]; then
+if [[ "$TOOL" == "mcp__plugin_biff_tty__who" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   if [[ "$RESULT" == "No sessions." ]]; then
     jq -n --arg r "$RESULT" '{
@@ -59,7 +59,7 @@ if [[ "$TOOL" == "mcp__plugin_biff_biff__who" ]]; then
 fi
 
 # finger: username in panel, full data via additionalContext.
-if [[ "$TOOL" == "mcp__plugin_biff_biff__finger" ]]; then
+if [[ "$TOOL" == "mcp__plugin_biff_tty__finger" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   USER=$(printf '%s' "$RESULT" | head -1 | sed 's/.*Login: *\([^ ]*\).*/\1/')
   jq -n --arg summary "@${USER}" --arg ctx "$RESULT" '{
