@@ -82,9 +82,10 @@ async def _notify_tool_list_changed() -> None:
     # Belt path — inside a tool handler, Context is available.
     try:
         from fastmcp.server.dependencies import get_context  # noqa: PLC0415
+        from mcp.types import ToolListChangedNotification  # noqa: PLC0415
 
         ctx = get_context()
-        ctx._queue_tool_list_changed()  # pyright: ignore[reportPrivateUsage]
+        await ctx.send_notification(ToolListChangedNotification())
         # Always update — the client may have reconnected with a new session.
         _session = ctx.session
         return
@@ -121,7 +122,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     If ``state.unread_path`` is set, also writes the unread summary to
     a JSON file for status bar consumption.
     """
-    tool = mcp._tool_manager._tools.get("read_messages")  # pyright: ignore[reportPrivateUsage]
+    tool = await mcp.get_tool("read_messages")
     if tool is None:
         return
     summary = await state.relay.get_unread_summary(state.session_key)

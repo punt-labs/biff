@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastmcp.tools.tool import FunctionTool
+from fastmcp.tools.function_tool import FunctionTool
 
 from biff.models import BiffConfig, Message, UserSession
 from biff.server.app import create_server
@@ -31,17 +31,18 @@ def _create_mcp(state: ServerState) -> FastMCP[ServerState]:
     return create_server(state)
 
 
-def _get_tool_fn(state: ServerState, tool_name: str):
+async def _get_tool_fn(state: ServerState, tool_name: str):
     """Get the callable for a registered tool by name."""
     mcp = _create_mcp(state)
-    tool = mcp._tool_manager._tools[tool_name]
+    tool = await mcp.get_tool(tool_name)
+    assert tool is not None
     assert isinstance(tool, FunctionTool)
     return tool.fn
 
 
 class TestBiffToggleTool:
     async def test_disable_messages(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "mesg")
+        fn = await _get_tool_fn(state, "mesg")
         result = await fn(enabled=False)
         assert "is n" in result
         session = await state.relay.get_session(state.session_key)
@@ -52,7 +53,7 @@ class TestBiffToggleTool:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, biff_enabled=False)
         )
-        fn = _get_tool_fn(state, "mesg")
+        fn = await _get_tool_fn(state, "mesg")
         result = await fn(enabled=True)
         assert "is y" in result
         session = await state.relay.get_session(state.session_key)
@@ -61,7 +62,7 @@ class TestBiffToggleTool:
 
     async def test_creates_session_if_missing(self, state: ServerState) -> None:
         assert await state.relay.get_session(state.session_key) is None
-        fn = _get_tool_fn(state, "mesg")
+        fn = await _get_tool_fn(state, "mesg")
         await fn(enabled=True)
         assert await state.relay.get_session(state.session_key) is not None
 
@@ -70,7 +71,7 @@ class TestBiffToggleTool:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, last_active=old_time)
         )
-        fn = _get_tool_fn(state, "mesg")
+        fn = await _get_tool_fn(state, "mesg")
         await fn(enabled=False)
         session = await state.relay.get_session(state.session_key)
         assert session is not None
@@ -79,7 +80,7 @@ class TestBiffToggleTool:
 
 class TestFingerTool:
     async def test_unknown_user(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="nobody")
         assert "Never logged in" in result
 
@@ -87,7 +88,7 @@ class TestFingerTool:
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, plan="refactoring auth")
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric")
         assert "refactoring auth" in result
         assert "Login: eric" in result
@@ -96,7 +97,7 @@ class TestFingerTool:
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, biff_enabled=False)
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric")
         assert "Messages: off" in result
 
@@ -104,7 +105,7 @@ class TestFingerTool:
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, plan="coding")
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="@eric")
         assert "coding" in result
         assert "Login: eric" in result
@@ -118,7 +119,7 @@ class TestFingerTool:
                 plan="debugging",
             )
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric")
         assert "Name: Eric Alvarez" in result
         assert "Login: eric" in result
@@ -128,7 +129,7 @@ class TestFingerTool:
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, plan="coding")
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric")
         assert "Name:" not in result
         assert "Messages: on" in result
@@ -138,14 +139,14 @@ class TestFingerTool:
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, plan="coding")
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user=f"eric:{_ERIC_TTY}")
         assert "coding" in result
         assert "Login: eric" in result
 
     async def test_targeted_finger_missing_tty(self, state: ServerState) -> None:
         """@user:tty with unknown tty reports no session."""
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric:unknown")
         assert "No session on tty unknown" in result
 
@@ -159,7 +160,7 @@ class TestFingerTool:
                 plan="coding",
             )
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric")
         assert "Host: dev-box" in result
         assert "Dir: /home/eric/project" in result
@@ -182,7 +183,7 @@ class TestFingerTool:
                 plan="reviewing",
             )
         )
-        fn = _get_tool_fn(state, "finger")
+        fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric")
         assert result.count("Login: eric") == 1
         assert result.count("Name: Eric Alvarez") == 1
@@ -192,7 +193,7 @@ class TestFingerTool:
 
 class TestWhoTool:
     async def test_always_includes_self(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "@kai" in result
 
@@ -203,7 +204,7 @@ class TestWhoTool:
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, plan="reviewing")
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "@kai" in result
         assert "@eric" in result
@@ -217,7 +218,7 @@ class TestWhoTool:
                 user="eric", tty=_ERIC_TTY, plan="reviewing", last_active=old_time
             )
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "3h" in result
 
@@ -232,7 +233,7 @@ class TestWhoTool:
                 user="recent", tty="tty0", last_active=recent_time, plan="coding"
             )
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "@old" in result
         assert "@recent" in result
@@ -256,7 +257,7 @@ class TestWhoTool:
                 last_active=now,
             )
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         # Most recently active first
         assert result.index("@alice") < result.index("@zara")
@@ -265,7 +266,7 @@ class TestWhoTool:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, plan="fix | deploy")
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "fix | deploy" in result
 
@@ -273,7 +274,7 @@ class TestWhoTool:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, plan="line1\nline2")
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         # Each row is one line; newlines in plan text are collapsed to spaces
         for line in result.splitlines():
@@ -285,7 +286,7 @@ class TestWhoTool:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, plan="coding")
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "TTY" in result
         assert _KAI_TTY in result
@@ -300,7 +301,7 @@ class TestWhoTool:
                 plan="coding",
             )
         )
-        fn = _get_tool_fn(state, "who")
+        fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "HOST" in result
         assert "DIR" in result
@@ -310,7 +311,7 @@ class TestWhoTool:
 
 class TestPlanTool:
     async def test_sets_plan(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "plan")
+        fn = await _get_tool_fn(state, "plan")
         result = await fn(message="refactoring auth")
         assert "refactoring auth" in result
         session = await state.relay.get_session(state.session_key)
@@ -321,7 +322,7 @@ class TestPlanTool:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, plan="old plan")
         )
-        fn = _get_tool_fn(state, "plan")
+        fn = await _get_tool_fn(state, "plan")
         await fn(message="new plan")
         session = await state.relay.get_session(state.session_key)
         assert session is not None
@@ -329,7 +330,7 @@ class TestPlanTool:
 
     async def test_creates_session_if_missing(self, state: ServerState) -> None:
         assert await state.relay.get_session(state.session_key) is None
-        fn = _get_tool_fn(state, "plan")
+        fn = await _get_tool_fn(state, "plan")
         await fn(message="starting fresh")
         session = await state.relay.get_session(state.session_key)
         assert session is not None
@@ -340,7 +341,7 @@ class TestPlanTool:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, last_active=old_time)
         )
-        fn = _get_tool_fn(state, "plan")
+        fn = await _get_tool_fn(state, "plan")
         await fn(message="new work")
         session = await state.relay.get_session(state.session_key)
         assert session is not None
@@ -349,7 +350,7 @@ class TestPlanTool:
 
 class TestSendMessageTool:
     async def test_sends_targeted_message(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "write")
+        fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="hey, PR is ready")
         assert "@eric" in result
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
@@ -360,14 +361,14 @@ class TestSendMessageTool:
     async def test_broadcast_delivers_to_user_mailbox(self, state: ServerState) -> None:
         """Broadcast delivery goes to user mailbox, not per-TTY."""
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
-        fn = _get_tool_fn(state, "write")
+        fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
         assert "@eric" in result
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
     async def test_strips_at_prefix(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "write")
+        fn = await _get_tool_fn(state, "write")
         await fn(to=f"@eric:{_ERIC_TTY}", message="hello")
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
@@ -377,14 +378,14 @@ class TestSendMessageTool:
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, biff_enabled=False)
         )
-        fn = _get_tool_fn(state, "write")
+        fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="urgent fix needed")
         assert "@eric" in result
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
 
     async def test_multiple_messages(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "write")
+        fn = await _get_tool_fn(state, "write")
         await fn(to=f"eric:{_ERIC_TTY}", message="first")
         await fn(to=f"eric:{_ERIC_TTY}", message="second")
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
@@ -393,7 +394,7 @@ class TestSendMessageTool:
 
 class TestCheckMessagesTool:
     async def test_no_messages(self, state: ServerState) -> None:
-        fn = _get_tool_fn(state, "read_messages")
+        fn = await _get_tool_fn(state, "read_messages")
         result = await fn()
         assert "No new messages" in result
 
@@ -404,10 +405,10 @@ class TestCheckMessagesTool:
             tty=_ERIC_TTY,
         )
         # Use targeted delivery to kai's session
-        eric_send = _get_tool_fn(eric_state, "write")
+        eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="review my PR please")
 
-        check_fn = _get_tool_fn(state, "read_messages")
+        check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()
         assert "FROM" in result
         assert "eric" in result
@@ -419,10 +420,10 @@ class TestCheckMessagesTool:
             tmp_path,
             tty=_ERIC_TTY,
         )
-        eric_send = _get_tool_fn(eric_state, "write")
+        eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="hello")
 
-        check_fn = _get_tool_fn(state, "read_messages")
+        check_fn = await _get_tool_fn(state, "read_messages")
         await check_fn()
 
         # Second check should show no new messages
@@ -440,14 +441,12 @@ class TestCheckMessagesTool:
             tmp_path,
             tty="tty3",
         )
-        await _get_tool_fn(eric_state, "write")(
-            to=f"kai:{_KAI_TTY}", message="from eric"
-        )
-        await _get_tool_fn(priya_state, "write")(
-            to=f"kai:{_KAI_TTY}", message="from priya"
-        )
+        eric_send = await _get_tool_fn(eric_state, "write")
+        await eric_send(to=f"kai:{_KAI_TTY}", message="from eric")
+        priya_send = await _get_tool_fn(priya_state, "write")
+        await priya_send(to=f"kai:{_KAI_TTY}", message="from priya")
 
-        check_fn = _get_tool_fn(state, "read_messages")
+        check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()
         assert "eric" in result
         assert "priya" in result
@@ -459,8 +458,8 @@ class TestToolInteractions:
     """Cross-tool integration tests verifying shared state."""
 
     async def test_plan_then_finger_shows_plan(self, state: ServerState) -> None:
-        plan_fn = _get_tool_fn(state, "plan")
-        finger_fn = _get_tool_fn(state, "finger")
+        plan_fn = await _get_tool_fn(state, "plan")
+        finger_fn = await _get_tool_fn(state, "finger")
         await plan_fn(message="refactoring auth")
         result = await finger_fn(user="kai")
         assert "refactoring auth" in result
@@ -468,24 +467,24 @@ class TestToolInteractions:
     async def test_biff_off_then_finger_shows_unavailable(
         self, state: ServerState
     ) -> None:
-        biff_fn = _get_tool_fn(state, "mesg")
-        finger_fn = _get_tool_fn(state, "finger")
+        biff_fn = await _get_tool_fn(state, "mesg")
+        finger_fn = await _get_tool_fn(state, "finger")
         await biff_fn(enabled=False)
         result = await finger_fn(user="kai")
         assert "Messages: off" in result
 
     async def test_plan_then_who_shows_plan(self, state: ServerState) -> None:
-        plan_fn = _get_tool_fn(state, "plan")
-        who_fn = _get_tool_fn(state, "who")
+        plan_fn = await _get_tool_fn(state, "plan")
+        who_fn = await _get_tool_fn(state, "who")
         await plan_fn(message="working on tests")
         result = await who_fn()
         assert "@kai" in result
         assert "working on tests" in result
 
 
-def _tool_description(mcp: FastMCP[ServerState], name: str) -> str:
+async def _tool_description(mcp: FastMCP[ServerState], name: str) -> str:
     """Get a tool's current description from the MCP instance."""
-    tool = mcp._tool_manager._tools.get(name)
+    tool = await mcp.get_tool(name)
     assert tool is not None
     assert tool.description is not None
     return tool.description
@@ -498,7 +497,7 @@ class TestDynamicDescriptions:
         self, state: ServerState
     ) -> None:
         mcp = _create_mcp(state)
-        desc = _tool_description(mcp, "read_messages")
+        desc = await _tool_description(mcp, "read_messages")
         assert desc == "Check your inbox for new messages. Marks all as read."
 
     async def test_description_shows_unread_after_send(
@@ -514,10 +513,10 @@ class TestDynamicDescriptions:
             )
         )
         # kai calls any tool — triggers description refresh
-        plan_tool = mcp._tool_manager._tools["plan"]
+        plan_tool = await mcp.get_tool("plan")
         assert isinstance(plan_tool, FunctionTool)
         await plan_tool.fn(message="working")
-        desc = _tool_description(mcp, "read_messages")
+        desc = await _tool_description(mcp, "read_messages")
         assert "1 unread" in desc
         assert "@eric" in desc
         assert "auth ready" in desc
@@ -532,15 +531,15 @@ class TestDynamicDescriptions:
             )
         )
         # Trigger refresh via plan
-        plan_tool = mcp._tool_manager._tools["plan"]
+        plan_tool = await mcp.get_tool("plan")
         assert isinstance(plan_tool, FunctionTool)
         await plan_tool.fn(message="working")
-        assert "1 unread" in _tool_description(mcp, "read_messages")
+        assert "1 unread" in await _tool_description(mcp, "read_messages")
         # Now check messages — should clear the description
-        check_tool = mcp._tool_manager._tools["read_messages"]
+        check_tool = await mcp.get_tool("read_messages")
         assert isinstance(check_tool, FunctionTool)
         await check_tool.fn()
-        desc = _tool_description(mcp, "read_messages")
+        desc = await _tool_description(mcp, "read_messages")
         assert desc == "Check your inbox for new messages. Marks all as read."
 
     async def test_description_shows_multiple_senders(self, state: ServerState) -> None:
@@ -560,10 +559,10 @@ class TestDynamicDescriptions:
             )
         )
         # Trigger via who
-        who_tool = mcp._tool_manager._tools["who"]
+        who_tool = await mcp.get_tool("who")
         assert isinstance(who_tool, FunctionTool)
         await who_tool.fn()
-        desc = _tool_description(mcp, "read_messages")
+        desc = await _tool_description(mcp, "read_messages")
         assert "2 unread" in desc
         assert "@eric" in desc
         assert "@priya" in desc
@@ -579,10 +578,10 @@ class TestDynamicDescriptions:
             )
         )
         # kai sends a message — should also refresh description
-        send_tool = mcp._tool_manager._tools["write"]
+        send_tool = await mcp.get_tool("write")
         assert isinstance(send_tool, FunctionTool)
         await send_tool.fn(to=f"eric:{_ERIC_TTY}", message="hey back")
-        desc = _tool_description(mcp, "read_messages")
+        desc = await _tool_description(mcp, "read_messages")
         assert "1 unread" in desc
 
     async def test_finger_triggers_refresh(self, state: ServerState) -> None:
@@ -597,10 +596,10 @@ class TestDynamicDescriptions:
                 body="look at this",
             )
         )
-        finger_tool = mcp._tool_manager._tools["finger"]
+        finger_tool = await mcp.get_tool("finger")
         assert isinstance(finger_tool, FunctionTool)
         await finger_tool.fn(user="eric")
-        desc = _tool_description(mcp, "read_messages")
+        desc = await _tool_description(mcp, "read_messages")
         assert "1 unread" in desc
 
     async def test_biff_toggle_triggers_refresh(self, state: ServerState) -> None:
@@ -612,8 +611,8 @@ class TestDynamicDescriptions:
                 body="urgent",
             )
         )
-        biff_tool = mcp._tool_manager._tools["mesg"]
+        biff_tool = await mcp.get_tool("mesg")
         assert isinstance(biff_tool, FunctionTool)
         await biff_tool.fn(enabled=False)
-        desc = _tool_description(mcp, "read_messages")
+        desc = await _tool_description(mcp, "read_messages")
         assert "1 unread" in desc

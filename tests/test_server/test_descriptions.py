@@ -41,7 +41,7 @@ class TestRefreshReadMessages:
     async def test_no_messages_uses_base(self, state: ServerState) -> None:
         mcp = create_server(state)
         await refresh_read_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("read_messages")
+        tool = await mcp.get_tool("read_messages")
         assert tool is not None
         assert tool.description == _READ_MESSAGES_BASE
 
@@ -55,7 +55,7 @@ class TestRefreshReadMessages:
             )
         )
         await refresh_read_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("read_messages")
+        tool = await mcp.get_tool("read_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
@@ -73,7 +73,7 @@ class TestRefreshReadMessages:
             Message(from_user="priya", to_user=_KAI_SESSION, body="second")
         )
         await refresh_read_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("read_messages")
+        tool = await mcp.get_tool("read_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
@@ -85,7 +85,7 @@ class TestRefreshReadMessages:
             Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
         )
         await refresh_read_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("read_messages")
+        tool = await mcp.get_tool("read_messages")
         assert tool is not None
         desc = tool.description
         assert desc is not None
@@ -102,7 +102,7 @@ class TestRefreshReadMessages:
             Message(from_user="kai", to_user="eric:tty2", body="for eric")
         )
         await refresh_read_messages(mcp, state)
-        tool = mcp._tool_manager._tools.get("read_messages")
+        tool = await mcp.get_tool("read_messages")
         assert tool is not None
         assert tool.description == _READ_MESSAGES_BASE
 
@@ -263,7 +263,7 @@ class TestPollInbox:
             Message(from_user="eric", to_user=_KAI_SESSION, body="lunch?")
         )
         await self._run_poller(mcp, state_with_path)
-        tool = mcp._tool_manager._tools.get("read_messages")
+        tool = await mcp.get_tool("read_messages")
         assert tool is not None
         assert "1 unread" in (tool.description or "")
 

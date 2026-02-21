@@ -17,9 +17,9 @@ class TestCreateServer:
         mcp = create_server(state)
         assert mcp.name == "biff"
 
-    def test_registers_all_tools(self, state: ServerState) -> None:
+    async def test_registers_all_tools(self, state: ServerState) -> None:
         mcp = create_server(state)
-        tool_names = {t.name for t in mcp._tool_manager._tools.values()}
+        tool_names = {t.name for t in await mcp.list_tools()}
         assert "mesg" in tool_names
         assert "write" in tool_names
         assert "read_messages" in tool_names
@@ -27,8 +27,8 @@ class TestCreateServer:
         assert "who" in tool_names
         assert "plan" in tool_names
 
-    def test_no_duplicate_tools(self, state: ServerState) -> None:
+    async def test_no_duplicate_tools(self, state: ServerState) -> None:
         mcp = create_server(state)
-        tools = list(mcp._tool_manager._tools.values())
+        tools = await mcp.list_tools()
         names = [t.name for t in tools]
         assert len(names) == len(set(names))
