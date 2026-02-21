@@ -15,7 +15,7 @@ Engineers using AI coding tools are shipping faster than ever. But every time th
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/530162a/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/6ce60b3/install.sh | sh
 ```
 
 Restart Claude Code twice. Type `/who` to see your team.
@@ -35,7 +35,7 @@ biff doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/530162a/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/6ce60b3/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
