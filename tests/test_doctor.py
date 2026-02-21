@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +10,6 @@ from biff.doctor import (
     CheckResult,
     _check_biff_file,
     _check_gh_cli,
-    _check_mcp_server,
     _check_plugin_installed,
     _check_relay,
     _check_statusline,
@@ -18,6 +18,7 @@ from biff.doctor import (
     _resolve_relay_config,
     check_environment,
 )
+from biff.installer import BIFF_COMMANDS
 
 # -- Individual checks -------------------------------------------------------
 
@@ -45,49 +46,37 @@ class TestCheckGhCli:
         assert result.passed
 
 
-class TestCheckMcpServer:
-    @patch("biff.doctor.shutil.which", return_value=None)
-    def test_no_claude_cli(self, _mock: object) -> None:
-        result = _check_mcp_server()
-        assert not result.passed
-
-    @patch("biff.doctor.subprocess.run")
-    @patch("biff.doctor.shutil.which", return_value="/usr/bin/claude")
-    def test_biff_registered(self, _which: object, mock_run: object) -> None:
-        mock_run.return_value.returncode = 0  # type: ignore[attr-defined]
-        mock_run.return_value.stdout = "biff: /usr/local/bin/biff serve"  # type: ignore[attr-defined]
-        result = _check_mcp_server()
-        assert result.passed
-
-    @patch("biff.doctor.subprocess.run")
-    @patch("biff.doctor.shutil.which", return_value="/usr/bin/claude")
-    def test_biff_not_registered(self, _which: object, mock_run: object) -> None:
-        mock_run.return_value.returncode = 0  # type: ignore[attr-defined]
-        mock_run.return_value.stdout = "other-server: /usr/local/bin/other"  # type: ignore[attr-defined]
-        result = _check_mcp_server()
-        assert not result.passed
-
-
 class TestCheckPluginInstalled:
-    def test_commands_present(self, tmp_path: Path) -> None:
-        commands = tmp_path / "commands"
-        commands.mkdir()
-        (commands / "write.md").write_text("test")
-        (commands / "read.md").write_text("test")
-        result = _check_plugin_installed(tmp_path)
+    def test_installed(self, tmp_path: Path) -> None:
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "installed_plugins.json").write_text(
+            json.dumps({"plugins": {"biff@punt-labs": [{"scope": "user"}]}})
+        )
+        with patch("biff.doctor.Path.home", return_value=tmp_path):
+            result = _check_plugin_installed()
         assert result.passed
-        assert "2 commands" in result.message
 
-    def test_no_commands_dir(self, tmp_path: Path) -> None:
-        result = _check_plugin_installed(tmp_path)
+    def test_not_installed_no_file(self, tmp_path: Path) -> None:
+        with patch("biff.doctor.Path.home", return_value=tmp_path):
+            result = _check_plugin_installed()
+        assert not result.passed
+
+    def test_not_installed_missing_entry(self, tmp_path: Path) -> None:
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "installed_plugins.json").write_text(
+            json.dumps({"plugins": {"other@local": [{}]}})
+        )
+        with patch("biff.doctor.Path.home", return_value=tmp_path):
+            result = _check_plugin_installed()
         assert not result.passed
 
 
 class TestCheckUserCommands:
     def test_all_deployed(self, tmp_path: Path) -> None:
-        from biff.installer import _install_user_commands
-
-        _install_user_commands(tmp_path)
+        for name in BIFF_COMMANDS:
+            (tmp_path / name).write_text("test")
         result = _check_user_commands(tmp_path)
         assert result.passed
         assert not result.required
@@ -203,19 +192,17 @@ class TestCheckEnvironment:
     @patch("biff.doctor._check_relay")
     @patch("biff.doctor._check_user_commands")
     @patch("biff.doctor._check_plugin_installed")
-    @patch("biff.doctor._check_mcp_server")
     @patch("biff.doctor._check_gh_cli")
     def test_all_pass_returns_zero(
         self,
         mock_gh: object,
-        mock_mcp: object,
         mock_plugin: object,
         mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
         mock_sl: object,
     ) -> None:
-        for mock in [mock_gh, mock_mcp, mock_plugin, mock_relay]:
+        for mock in [mock_gh, mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
         for mock in [mock_ucmds, mock_biff, mock_sl]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
@@ -227,12 +214,10 @@ class TestCheckEnvironment:
     @patch("biff.doctor._check_relay")
     @patch("biff.doctor._check_user_commands")
     @patch("biff.doctor._check_plugin_installed")
-    @patch("biff.doctor._check_mcp_server")
     @patch("biff.doctor._check_gh_cli")
     def test_required_failure_returns_one(
         self,
         mock_gh: object,
-        mock_mcp: object,
         mock_plugin: object,
         mock_ucmds: object,
         mock_relay: object,
@@ -240,7 +225,7 @@ class TestCheckEnvironment:
         mock_sl: object,
     ) -> None:
         mock_gh.return_value = CheckResult("gh", False, "missing")  # type: ignore[attr-defined]
-        for mock in [mock_mcp, mock_plugin, mock_relay]:
+        for mock in [mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
         for mock in [mock_ucmds, mock_biff, mock_sl]:
             mock.return_value = CheckResult("test", True, "ok", required=False)  # type: ignore[attr-defined]
@@ -252,19 +237,17 @@ class TestCheckEnvironment:
     @patch("biff.doctor._check_relay")
     @patch("biff.doctor._check_user_commands")
     @patch("biff.doctor._check_plugin_installed")
-    @patch("biff.doctor._check_mcp_server")
     @patch("biff.doctor._check_gh_cli")
     def test_optional_failure_still_passes(
         self,
         mock_gh: object,
-        mock_mcp: object,
         mock_plugin: object,
         mock_ucmds: object,
         mock_relay: object,
         mock_biff: object,
         mock_sl: object,
     ) -> None:
-        for mock in [mock_gh, mock_mcp, mock_plugin, mock_relay]:
+        for mock in [mock_gh, mock_plugin, mock_relay]:
             mock.return_value = CheckResult("test", True, "ok")  # type: ignore[attr-defined]
         for mock in [mock_ucmds, mock_biff, mock_sl]:
             mock.return_value = CheckResult("test", False, "missing", required=False)  # type: ignore[attr-defined]

@@ -14,7 +14,6 @@ from biff.statusline import (
     InstallResult,
     SessionUnread,
     UninstallResult,
-    _biff_mcp_server_entry,
     _biff_segment,
     _read_session_unread,
     _resolve_original_command,
@@ -88,9 +87,8 @@ class TestInstall:
     def test_fresh_no_existing(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
 
-        result = install(settings_path, stash_path, mcp_path)
+        result = install(settings_path, stash_path)
 
         assert result == InstallResult(installed=True, message="Installed.")
         assert stash_path.exists()
@@ -100,60 +98,38 @@ class TestInstall:
         assert isinstance(sl, dict)
         assert sl["type"] == "command"
         assert "statusline" in sl["command"]
-        mcp = read_settings(mcp_path)
-        servers = mcp["mcpServers"]
-        assert isinstance(servers, dict)
-        assert servers["biff"] == _biff_mcp_server_entry()
 
     def test_fresh_with_existing_object(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         obj: dict[str, object] = {
             "type": "command",
             "command": "/bin/mystatus",
         }
         write_settings(settings_path, {"statusLine": obj})
-        write_settings(
-            mcp_path,
-            {"mcpServers": {"other": {"command": "other-server"}}},
-        )
 
-        result = install(settings_path, stash_path, mcp_path)
+        result = install(settings_path, stash_path)
 
         assert result.installed
         assert read_stash(stash_path) == obj
-        mcp = read_settings(mcp_path)
-        servers = mcp["mcpServers"]
-        assert isinstance(servers, dict)
-        assert "biff" in servers
-        assert "other" in servers
 
-    def test_already_installed_reconciles_mcp(self, tmp_path: Path):
+    def test_already_installed(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         write_stash(stash_path, None)  # sentinel exists
 
-        result = install(settings_path, stash_path, mcp_path)
+        result = install(settings_path, stash_path)
 
         assert result == InstallResult(installed=False, message="Already installed.")
-        # MCP config is reconciled even on "already installed" (upgrade path)
-        mcp = read_settings(mcp_path)
-        servers = mcp["mcpServers"]
-        assert isinstance(servers, dict)
-        assert servers["biff"] == _biff_mcp_server_entry()
 
     def test_creates_settings_if_absent(self, tmp_path: Path):
         settings_path = tmp_path / "new" / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
 
-        result = install(settings_path, stash_path, mcp_path)
+        result = install(settings_path, stash_path)
 
         assert result.installed
         assert settings_path.exists()
-        assert mcp_path.exists()
 
 
 # --- Uninstall --------------------------------------------------------------
@@ -163,32 +139,22 @@ class TestUninstall:
     def test_restore_none(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         write_settings(
             settings_path, {"statusLine": "biff statusline", "theme": "dark"}
         )
         write_stash(stash_path, None)
-        write_settings(
-            mcp_path,
-            {"mcpServers": {"biff": _biff_mcp_server_entry()}},
-        )
 
-        result = uninstall(settings_path, stash_path, mcp_path)
+        result = uninstall(settings_path, stash_path)
 
         assert result == UninstallResult(uninstalled=True, message="Uninstalled.")
         settings = read_settings(settings_path)
         assert "statusLine" not in settings
         assert settings["theme"] == "dark"
         assert not stash_path.exists()
-        mcp = read_settings(mcp_path)
-        servers = mcp["mcpServers"]
-        assert isinstance(servers, dict)
-        assert "biff" not in servers
 
     def test_restore_object(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         obj: dict[str, object] = {"type": "command", "command": "/bin/old"}
         biff_sl: dict[str, object] = {
             "type": "command",
@@ -196,32 +162,17 @@ class TestUninstall:
         }
         write_settings(settings_path, {"statusLine": biff_sl})
         write_stash(stash_path, obj)
-        write_settings(
-            mcp_path,
-            {
-                "mcpServers": {
-                    "biff": _biff_mcp_server_entry(),
-                    "other": {"command": "other-server"},
-                },
-            },
-        )
 
-        result = uninstall(settings_path, stash_path, mcp_path)
+        result = uninstall(settings_path, stash_path)
 
         assert result.uninstalled
         assert read_settings(settings_path)["statusLine"] == obj
-        mcp = read_settings(mcp_path)
-        servers = mcp["mcpServers"]
-        assert isinstance(servers, dict)
-        assert "biff" not in servers
-        assert "other" in servers
 
     def test_not_installed(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
 
-        result = uninstall(settings_path, stash_path, mcp_path)
+        result = uninstall(settings_path, stash_path)
 
         assert result == UninstallResult(uninstalled=False, message="Not installed.")
 
@@ -452,29 +403,21 @@ class TestCLI:
     def test_install_fresh(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         with (
             patch("biff.statusline.SETTINGS_PATH", settings_path),
             patch("biff.statusline.STASH_PATH", stash_path),
-            patch("biff.statusline.MCP_CONFIG_PATH", mcp_path),
         ):
             result = runner.invoke(app, ["install-statusline"])
         assert result.exit_code == 0
         assert "Installed" in result.output
-        mcp = read_settings(mcp_path)
-        servers = mcp["mcpServers"]
-        assert isinstance(servers, dict)
-        assert "biff" in servers
 
     def test_install_already_installed(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         write_stash(stash_path, None)
         with (
             patch("biff.statusline.SETTINGS_PATH", settings_path),
             patch("biff.statusline.STASH_PATH", stash_path),
-            patch("biff.statusline.MCP_CONFIG_PATH", mcp_path),
         ):
             result = runner.invoke(app, ["install-statusline"])
         assert result.exit_code == 1
@@ -483,35 +426,26 @@ class TestCLI:
     def test_uninstall(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         biff_sl: dict[str, object] = {
             "type": "command",
             "command": "biff statusline",
         }
         write_settings(settings_path, {"statusLine": biff_sl})
         write_stash(stash_path, {"type": "command", "command": "echo old"})
-        write_settings(mcp_path, {"mcpServers": {"biff": _biff_mcp_server_entry()}})
         with (
             patch("biff.statusline.SETTINGS_PATH", settings_path),
             patch("biff.statusline.STASH_PATH", stash_path),
-            patch("biff.statusline.MCP_CONFIG_PATH", mcp_path),
         ):
             result = runner.invoke(app, ["uninstall-statusline"])
         assert result.exit_code == 0
         assert "Uninstalled" in result.output
-        mcp = read_settings(mcp_path)
-        servers = mcp.get("mcpServers", {})
-        assert isinstance(servers, dict)
-        assert "biff" not in servers
 
     def test_uninstall_not_installed(self, tmp_path: Path):
         settings_path = tmp_path / "settings.json"
         stash_path = tmp_path / "stash.json"
-        mcp_path = tmp_path / "mcp.json"
         with (
             patch("biff.statusline.SETTINGS_PATH", settings_path),
             patch("biff.statusline.STASH_PATH", stash_path),
-            patch("biff.statusline.MCP_CONFIG_PATH", mcp_path),
         ):
             result = runner.invoke(app, ["uninstall-statusline"])
         assert result.exit_code == 1

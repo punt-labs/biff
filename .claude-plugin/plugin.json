@@ -1,0 +1,16 @@
+{
+  "name": "biff",
+  "description": "UNIX-style team communication for Claude Code: /who, /finger, /plan, /write, /read, /mesg, /tty",
+  "version": "0.4.0",
+  "author": {
+    "name": "Punt Labs",
+    "email": "hello@punt-labs.com"
+  },
+  "mcpServers": {
+    "biff": {
+      "type": "stdio",
+      "command": "biff",
+      "args": ["serve", "--transport", "stdio"]
+    }
+  }
+}
