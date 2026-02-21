@@ -184,7 +184,7 @@ def init(
 
 @app.command()
 def install() -> None:
-    """Install biff plugin and register MCP server."""
+    """Install biff via the punt-labs marketplace."""
     from biff.installer import install as do_install
 
     result = do_install()
@@ -209,7 +209,7 @@ def doctor() -> None:
 
 @app.command()
 def uninstall() -> None:
-    """Uninstall biff plugin and MCP server."""
+    """Uninstall biff plugin and clean up artifacts."""
     from biff.installer import uninstall as do_uninstall
 
     result = do_uninstall()

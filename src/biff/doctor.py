@@ -8,6 +8,7 @@ results, and returns an exit code.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from biff.config import (
     find_git_root,
     load_biff_file,
 )
-from biff.installer import COMMANDS_DIR, PLUGINS_DIR
+from biff.installer import BIFF_COMMANDS, COMMANDS_DIR, PLUGIN_ID
 from biff.models import RelayAuth
 from biff.statusline import STASH_PATH
 
@@ -58,68 +59,44 @@ def _check_gh_cli() -> CheckResult:
     return CheckResult("gh CLI", True, "authenticated")
 
 
-def _check_mcp_server() -> CheckResult:
-    """Check biff MCP server is registered."""
-    claude = shutil.which("claude")
-    if not claude:
-        return CheckResult("MCP server", False, "claude CLI not found")
-    result = subprocess.run(
-        [claude, "mcp", "list"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
+def _check_plugin_installed() -> CheckResult:
+    """Check biff plugin is installed via marketplace."""
+    registry_path = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+    if not registry_path.exists():
         return CheckResult(
-            "MCP server",
-            False,
-            "could not list MCP servers",
-        )
-    if "biff" in result.stdout:
-        return CheckResult("MCP server", True, "registered")
-    return CheckResult("MCP server", False, "not registered (run: biff install)")
-
-
-def _check_plugin_installed(plugins_dir: Path | None = None) -> CheckResult:
-    """Check plugin slash commands are installed."""
-    target = plugins_dir or PLUGINS_DIR
-    commands_dir = target / "commands"
-    if not commands_dir.exists():
-        return CheckResult(
-            "Plugin commands",
+            "Plugin",
             False,
             "not installed (run: biff install)",
         )
-    commands = list(commands_dir.glob("*.md"))
-    return CheckResult("Plugin commands", True, f"{len(commands)} commands installed")
+    try:
+        registry = json.loads(registry_path.read_text())
+        plugins = registry.get("plugins", {})
+        if PLUGIN_ID in plugins:
+            return CheckResult("Plugin", True, f"{PLUGIN_ID} installed")
+        return CheckResult(
+            "Plugin",
+            False,
+            "not installed (run: biff install)",
+        )
+    except (json.JSONDecodeError, OSError):
+        return CheckResult("Plugin", False, "could not read plugin registry")
 
 
 def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:
     """Check top-level user commands are deployed (informational)."""
-    from biff.installer import plugin_source
-
     target = commands_dir or COMMANDS_DIR
-    source = plugin_source() / "commands"
-    expected = {f.name for f in source.glob("*.md")}
-    if not expected:
-        return CheckResult(
-            "User commands",
-            False,
-            f"no bundled commands found in {source}",
-            required=False,
-        )
-    missing = sorted(name for name in expected if not (target / name).exists())
+    missing = sorted(name for name in BIFF_COMMANDS if not (target / name).exists())
     if not missing:
         return CheckResult(
             "User commands",
             True,
-            f"{len(expected)} commands in {target}",
+            f"{len(BIFF_COMMANDS)} commands in {target}",
             required=False,
         )
     return CheckResult(
         "User commands",
         False,
-        f"missing: {', '.join(missing)} (run: biff install)",
+        f"missing: {', '.join(missing)} (restart Claude Code to deploy)",
         required=False,
     )
 
@@ -204,7 +181,7 @@ def _check_statusline() -> CheckResult:
     return CheckResult(
         "Status line",
         False,
-        "not configured (optional: run 'biff install-statusline')",
+        "not configured (restart Claude Code to auto-install)",
         required=False,
     )
 
@@ -223,7 +200,7 @@ def _print_check(check: CheckResult) -> None:
     print(f"  {symbol} {check.name}: {check.message}")
 
 
-def check_environment(plugins_dir: Path | None = None) -> int:
+def check_environment() -> int:
     """Run all diagnostics. Returns 0 if all required pass, 1 otherwise."""
     from importlib.metadata import version
 
@@ -232,8 +209,7 @@ def check_environment(plugins_dir: Path | None = None) -> int:
 
     checks = [
         _check_gh_cli(),
-        _check_mcp_server(),
-        _check_plugin_installed(plugins_dir),
+        _check_plugin_installed(),
         _check_user_commands(),
         _check_relay(),
         _check_biff_file(),

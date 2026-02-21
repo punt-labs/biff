@@ -20,7 +20,6 @@ from biff.relay import atomic_write
 # Well-known paths ----------------------------------------------------------
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-MCP_CONFIG_PATH = Path.home() / ".claude.json"
 STASH_PATH = Path.home() / ".biff" / "statusline-original.json"
 UNREAD_DIR = Path.home() / ".biff" / "unread"
 
@@ -82,47 +81,21 @@ def write_stash(path: Path, value: str | dict[str, object] | None) -> None:
 # Install / Uninstall -------------------------------------------------------
 
 
-def _ensure_mcp_server(mcp_config_path: Path) -> None:
-    """Ensure ``mcpServers.biff`` exists in the MCP config.
-
-    Only writes the file when the entry is absent or differs from the
-    expected value, so repeated calls are no-ops.
-    """
-    mcp_config = read_settings(mcp_config_path)
-    servers = mcp_config.get("mcpServers")
-    if not isinstance(servers, dict):
-        servers = {}
-    expected = _biff_mcp_server_entry()
-    if "biff" in servers and servers["biff"] == expected:
-        return
-    servers["biff"] = expected
-    mcp_config["mcpServers"] = servers
-    write_settings(mcp_config_path, mcp_config)
-
-
 def install(
     settings_path: Path | None = None,
     stash_path: Path | None = None,
-    mcp_config_path: Path | None = None,
 ) -> InstallResult:
-    """Install biff into Claude Code's status bar and global MCP config.
+    """Install biff into Claude Code's status bar.
 
     Stashes the current ``statusLine`` value, replaces it with the
-    ``biff statusline`` command, and registers the biff MCP server in
-    ``~/.claude/mcp.json``.
-
-    If the statusline is already installed, the MCP server entry is
-    still reconciled (idempotent) to support upgrades from older
-    versions that did not register the MCP server.
+    ``biff statusline`` command.  The MCP server is registered via
+    the plugin's ``mcpServers`` in ``plugin.json``, not here.
     """
     if settings_path is None:
         settings_path = SETTINGS_PATH
     if stash_path is None:
         stash_path = STASH_PATH
-    if mcp_config_path is None:
-        mcp_config_path = MCP_CONFIG_PATH
     if stash_path.exists():
-        _ensure_mcp_server(mcp_config_path)
         return InstallResult(installed=False, message="Already installed.")
 
     settings = read_settings(settings_path)
@@ -132,28 +105,23 @@ def install(
     settings["statusLine"] = _biff_statusline_setting()
     write_settings(settings_path, settings)
 
-    _ensure_mcp_server(mcp_config_path)
-
     return InstallResult(installed=True, message="Installed.")
 
 
 def uninstall(
     settings_path: Path | None = None,
     stash_path: Path | None = None,
-    mcp_config_path: Path | None = None,
 ) -> UninstallResult:
-    """Remove biff from Claude Code's status bar and global MCP config.
+    """Remove biff from Claude Code's status bar.
 
-    Restores the original ``statusLine`` value from the stash, deletes
-    the stash file, and removes the biff MCP server from
-    ``~/.claude/mcp.json``.
+    Restores the original ``statusLine`` value from the stash and
+    deletes the stash file.  The MCP server is managed by the plugin
+    system, not here.
     """
     if settings_path is None:
         settings_path = SETTINGS_PATH
     if stash_path is None:
         stash_path = STASH_PATH
-    if mcp_config_path is None:
-        mcp_config_path = MCP_CONFIG_PATH
     if not stash_path.exists():
         return UninstallResult(uninstalled=False, message="Not installed.")
 
@@ -167,12 +135,6 @@ def uninstall(
 
     write_settings(settings_path, settings)
     stash_path.unlink()
-
-    mcp_config = read_settings(mcp_config_path)
-    servers = mcp_config.get("mcpServers")
-    if isinstance(servers, dict) and "biff" in servers:
-        del servers["biff"]
-        write_settings(mcp_config_path, mcp_config)
 
     return UninstallResult(uninstalled=True, message="Uninstalled.")
 
@@ -225,20 +187,6 @@ def _biff_statusline_setting() -> dict[str, str]:
     cmd, base = _resolve_biff_command()
     parts = [cmd, *base, "statusline"]
     return {"type": "command", "command": " ".join(parts)}
-
-
-def _biff_mcp_server_entry() -> dict[str, object]:
-    """Build the MCP server entry for ``~/.claude/mcp.json``.
-
-    Returns the ``command``/``args`` dict that Claude Code expects
-    under ``mcpServers.<name>``.
-    """
-    cmd, base = _resolve_biff_command()
-    return {
-        "type": "stdio",
-        "command": cmd,
-        "args": [*base, "serve", "--transport", "stdio"],
-    }
 
 
 def _resolve_original_command(stash_path: Path) -> str | None:
