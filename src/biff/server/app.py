@@ -351,12 +351,17 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         try:
             yield state
         finally:
+            # Write logout FIRST — before stopping tasks or closing
+            # anything.  The MCP subprocess may be killed at any moment
+            # after Claude Code closes stdio, so the logout publish
+            # must happen while the NATS connection is still healthy.
+            if state.owns_relay:
+                await _append_logout_event(state)
             await _shutdown_tasks(shutdown, [poller, reaper, heartbeat, watcher])
             if state.unread_path is not None:
                 with suppress(FileNotFoundError):
                     state.unread_path.unlink()
             if state.owns_relay:
-                await _append_logout_event(state)
                 try:
                     await state.relay.delete_session(state.session_key)
                 except Exception:
