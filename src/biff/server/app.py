@@ -155,6 +155,8 @@ async def _wtmp_watcher_loop(state: ServerState, shutdown: asyncio.Event) -> Non
     relay = state.relay
     if not isinstance(relay, NatsRelay):
         return  # LocalRelay does not support wtmp
+    if not relay.wtmp_available:
+        return  # Wtmp stream not provisioned (account limit reached)
 
     kv = await relay.get_kv()
     cache: dict[str, UserSession] = {}
@@ -164,27 +166,38 @@ async def _wtmp_watcher_loop(state: ServerState, shutdown: asyncio.Event) -> Non
         async for entry in watcher:  # pyright: ignore[reportUnknownVariableType]
             if shutdown.is_set():
                 return
-
-            key: str = entry.key  # pyright: ignore[reportUnknownMemberType]
-            session_key = _kv_key_to_session_key(key)
-            if session_key is None:
-                continue
-
-            if entry.operation is None and entry.value is not None:
-                # PUT — cache the session data
-                try:
-                    session = UserSession.model_validate_json(
-                        entry.value  # pyright: ignore[reportUnknownArgumentType]
-                    )
-                    cache[session_key] = session
-                except Exception:  # noqa: BLE001
-                    logger.debug("Failed to parse KV entry %s", key)
-            elif entry.operation in ("DEL", "PURGE"):
-                await _handle_kv_delete(relay, state, cache, session_key)
+            await _handle_kv_entry(entry, relay, state, cache)
     except asyncio.CancelledError:
         return
     except Exception:  # noqa: BLE001
         logger.warning("Wtmp watcher loop exited with error", exc_info=True)
+
+
+async def _handle_kv_entry(
+    entry: object,  # nats KeyValue.Entry (untyped)
+    relay: NatsRelay,
+    state: ServerState,
+    cache: dict[str, UserSession],
+) -> None:
+    """Route a single KV watch entry to the appropriate handler."""
+    key = str(entry.key)  # type: ignore[attr-defined]  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType,reportAttributeAccessIssue]
+    session_key = _kv_key_to_session_key(key)
+    if session_key is None:
+        return
+
+    op = entry.operation  # type: ignore[attr-defined]  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    val = entry.value  # type: ignore[attr-defined]  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    if op is None and val is not None:
+        # PUT — cache the session data
+        try:
+            session = UserSession.model_validate_json(
+                val  # pyright: ignore[reportUnknownArgumentType]
+            )
+            cache[session_key] = session
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to parse KV entry %s", key)
+    elif op in ("DEL", "PURGE"):
+        await _handle_kv_delete(relay, state, cache, session_key)
 
 
 async def _handle_kv_delete(

@@ -29,6 +29,8 @@ from uuid import UUID
 
 import nats
 from nats.js.api import (
+    ConsumerConfig,
+    DeliverPolicy,
     KeyValueConfig,
     RetentionPolicy,
     StreamConfig,
@@ -98,6 +100,7 @@ class NatsRelay:
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
+        self._wtmp_available: bool = False
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
@@ -173,23 +176,7 @@ class NatsRelay:
                 await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
                 await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
 
-            # Wtmp stream for session history — LIMITS retention keeps
-            # events for max_age (30 days), independent of consumers.
-            wtmp_config = StreamConfig(
-                name=self._wtmp_stream,
-                subjects=[f"{self._wtmp_prefix}.>"],
-                retention=RetentionPolicy.LIMITS,
-                max_bytes=_STREAM_MAX_BYTES,
-                max_age=_WTMP_MAX_AGE,
-            )
-            try:
-                await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
-            except BadRequestError:
-                logger.info(
-                    "Wtmp stream config changed, recreating %s", self._wtmp_stream
-                )
-                await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
-                await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
+            await self._provision_wtmp(js)
         except Exception:
             await nc.close()
             raise
@@ -198,6 +185,41 @@ class NatsRelay:
         self._js = js
         self._kv = kv
         return js, kv
+
+    async def _provision_wtmp(self, js: JetStreamContext) -> None:
+        """Provision the wtmp stream, degrading gracefully on failure.
+
+        Non-fatal: if the account's stream limit is reached, wtmp is
+        unavailable but core messaging still works.
+        """
+        wtmp_config = StreamConfig(
+            name=self._wtmp_stream,
+            subjects=[f"{self._wtmp_prefix}.>"],
+            retention=RetentionPolicy.LIMITS,
+            max_bytes=_STREAM_MAX_BYTES,
+            max_age=_WTMP_MAX_AGE,
+        )
+        try:
+            await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
+            self._wtmp_available = True
+        except BadRequestError as exc:
+            if "maximum number of streams" in str(exc):
+                logger.warning("Wtmp stream unavailable: %s", exc)
+                self._wtmp_available = False
+            else:
+                logger.info(
+                    "Wtmp stream config changed, recreating %s",
+                    self._wtmp_stream,
+                )
+                with suppress(NotFoundError):
+                    await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
+                await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
+                self._wtmp_available = True
+
+    @property
+    def wtmp_available(self) -> bool:
+        """Whether the wtmp stream was successfully provisioned."""
+        return self._wtmp_available
 
     async def get_kv(self) -> KeyValue:
         """Return the NATS KV handle, connecting if necessary."""
@@ -213,6 +235,7 @@ class NatsRelay:
         """
         self._js = None
         self._kv = None
+        self._wtmp_available = False
 
     async def purge_data(self) -> None:
         """Purge all sessions and messages without deleting infrastructure.
@@ -549,6 +572,8 @@ class NatsRelay:
     async def append_wtmp(self, event: SessionEvent) -> None:
         """Publish a session event to the wtmp stream."""
         js, _ = await self._ensure_connected()
+        if not self._wtmp_available:
+            return
         subject = self._wtmp_subject(event.user)
         await js.publish(subject, event.model_dump_json().encode())
 
@@ -562,29 +587,38 @@ class NatsRelay:
         by NATS subject).
         """
         js, _ = await self._ensure_connected()
+        if not self._wtmp_available:
+            return []
         subject = self._wtmp_subject(user) if user else f"{self._wtmp_prefix}.>"
 
-        # Use a direct stream message fetch — get messages in reverse order
-        # by reading the stream info and then fetching by sequence.
+        # Fetch from the tail of the stream so we get the most recent
+        # events, not the oldest.  Use opt_start_seq to skip to near
+        # the end — overshooting count*2 to account for per-user
+        # filtering (subject filter is applied server-side, but
+        # stream_info.state.messages is the total count across all
+        # subjects).
         try:
-            info = await js.stream_info(self._wtmp_stream, subjects_filter=subject)
+            info = await js.stream_info(self._wtmp_stream)
         except NotFoundError:
             return []
-        total = info.state.messages
-        if total == 0:
+        last_seq = info.state.last_seq
+        if last_seq == 0:
             return []
 
-        # Fetch via ephemeral pull consumer to get ordered messages.
+        batch = max(count * 2, _FETCH_BATCH)
+        start_seq = max(1, last_seq - batch + 1)
+        consumer_config = ConsumerConfig(
+            deliver_policy=DeliverPolicy.BY_START_SEQUENCE,
+            opt_start_seq=start_seq,
+        )
         sub = await js.pull_subscribe(
             subject,
             durable=None,
             stream=self._wtmp_stream,
+            config=consumer_config,
         )
         try:
-            raw_msgs = await sub.fetch(
-                batch=min(total, max(count * 2, _FETCH_BATCH)),
-                timeout=_FETCH_TIMEOUT,
-            )
+            raw_msgs = await sub.fetch(batch=batch, timeout=_FETCH_TIMEOUT)
         except TimeoutError:
             raw_msgs = []
         finally:
