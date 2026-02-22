@@ -53,12 +53,20 @@ def _write_sentinel(repo_name: str, session_key: str) -> None:
 
 
 async def _reap_sentinels(state: ServerState) -> None:
-    """Process sentinel files, deleting flagged sessions via the relay.
+    """Process sentinel files, writing logout events and deleting sessions.
 
-    Reads each file in the sentinel directory, calls
-    ``relay.delete_session()`` (async — works for both NATS and local),
-    and removes the sentinel.  Errors on individual sentinels are
-    logged but don't prevent processing of others.
+    When a biff server receives SIGTERM/SIGINT, the signal handler writes
+    a sentinel file containing the session key.  This function processes
+    those sentinels on startup (and periodically via the reaper loop):
+
+    1. Fetch the session from KV (still present — 3-day TTL)
+    2. Append a wtmp logout event with ``last_active`` as the timestamp
+    3. Delete the KV entry
+    4. Remove the sentinel file
+
+    This is the primary logout mechanism for the common case (graceful
+    shutdown via signal).  The orphan detector handles the fallback case
+    (SIGKILL, OOM, power loss — no sentinel written).
     """
     d = _sentinel_dir(state.config.repo_name)
     if not d.exists():
@@ -70,6 +78,15 @@ async def _reap_sentinels(state: ServerState) -> None:
             session_key = sentinel.read_text().strip()
         except OSError:
             continue
+        # Write logout event before deleting the session.  The KV entry
+        # is still present (3-day TTL), so we can fetch session data for
+        # an accurate last-seen timestamp.
+        try:
+            session = await state.relay.get_session(session_key)
+            if session is not None:
+                await state.relay.append_wtmp(_build_logout_event(session_key, session))
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to write sentinel logout for %s", session_key)
         try:
             await state.relay.delete_session(session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
@@ -435,6 +452,12 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         # has identity from the first render (before the poller ticks).
         await refresh_read_messages(mcp, state)
 
+        # Reap sentinels FIRST — writes logout events for sessions that
+        # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
+        # Then re-fetch sessions so orphan detection has clean KV state.
+        await _reap_sentinels(state)
+        sessions = await state.relay.get_sessions()
+
         await _append_login_event(state, auto_name)
         await _close_orphaned_logins(state, sessions)
 
@@ -443,8 +466,6 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         reaper = asyncio.create_task(_reap_loop(state, shutdown))
         heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
         watcher = asyncio.create_task(_wtmp_watcher_loop(state, shutdown))
-        # Process any sentinels left from previously-killed servers.
-        await _reap_sentinels(state)
         try:
             yield state
         finally:
