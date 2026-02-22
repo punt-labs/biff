@@ -11,6 +11,7 @@ import logging
 import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -21,6 +22,7 @@ from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
+    get_tty_name,
     poll_inbox,
     refresh_read_messages,
     set_tty_name,
@@ -283,15 +285,27 @@ async def _append_login_event(state: ServerState, tty_name: str) -> None:
 async def _append_logout_event(state: ServerState) -> None:
     """Append a logout event to wtmp for the current session.
 
-    Called during graceful shutdown, *before* ``delete_session()``.
-    The KV watcher cannot observe our own session deletion because it
-    is stopped first, so logout must be written explicitly here.
+    Uses only local state — no NATS round-trips to fetch session data.
+    This is critical because the MCP subprocess may be killed at any
+    moment after Claude Code closes stdio.  After publishing, flushes
+    the NATS connection to ensure the event reaches the server before
+    the process exits.
     """
-    session = await state.relay.get_session(state.session_key)
-    if session is None:
-        return
+    logout_event = SessionEvent(
+        session_key=state.session_key,
+        event="logout",
+        user=state.config.user,
+        tty=state.tty,
+        tty_name=get_tty_name(),
+        hostname=state.hostname,
+        pwd=state.pwd,
+        timestamp=datetime.now(UTC),
+    )
     try:
-        await state.relay.append_wtmp(_build_logout_event(state.session_key, session))
+        await state.relay.append_wtmp(logout_event)
+        # Flush ensures the publish hits the wire before process exit.
+        if isinstance(state.relay, NatsRelay):
+            await state.relay.flush()
     except Exception:  # noqa: BLE001
         logger.warning("Failed to append wtmp logout event", exc_info=True)
 

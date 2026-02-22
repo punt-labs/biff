@@ -273,6 +273,16 @@ class NatsRelay:
         self._js = None
         self._kv = None
 
+    async def flush(self, *, timeout: int = 2) -> None:
+        """Flush pending NATS publishes to the server.
+
+        Ensures all buffered messages are sent before returning.
+        Critical for shutdown paths where the process may exit
+        immediately after.
+        """
+        if self._nc is not None and not self._nc.is_closed:
+            await self._nc.flush(timeout=timeout)
+
     async def close(self) -> None:
         """Close the NATS connection and release resources."""
         if self._nc is not None:
