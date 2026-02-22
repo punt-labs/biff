@@ -42,7 +42,13 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff.models import Message, RelayAuth, UserSession, build_unread_summary
+from biff.models import (
+    Message,
+    RelayAuth,
+    SessionEvent,
+    UserSession,
+    build_unread_summary,
+)
 from biff.relay import SESSION_TTL_SECONDS
 from biff.tty import build_session_key
 
@@ -62,6 +68,7 @@ _FETCH_BATCH = 100
 _FETCH_TIMEOUT = 1.0
 _PEEK_TIMEOUT = 0.5
 _PEEK_BATCH = 3
+_WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 
 
 class NatsRelay:
@@ -86,6 +93,8 @@ class NatsRelay:
         self._stream_name = f"biff-{repo_name}-inbox"
         self._subject_prefix = f"biff.{repo_name}.inbox"
         self._kv_bucket = f"biff-{repo_name}-sessions"
+        self._wtmp_stream = f"biff-{repo_name}-wtmp"
+        self._wtmp_prefix = f"biff.{repo_name}.wtmp"
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
@@ -163,6 +172,24 @@ class NatsRelay:
                 logger.info("Stream config changed, recreating %s", self._stream_name)
                 await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
                 await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
+
+            # Wtmp stream for session history — LIMITS retention keeps
+            # events for max_age (30 days), independent of consumers.
+            wtmp_config = StreamConfig(
+                name=self._wtmp_stream,
+                subjects=[f"{self._wtmp_prefix}.>"],
+                retention=RetentionPolicy.LIMITS,
+                max_bytes=_STREAM_MAX_BYTES,
+                max_age=_WTMP_MAX_AGE,
+            )
+            try:
+                await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
+            except BadRequestError:
+                logger.info(
+                    "Wtmp stream config changed, recreating %s", self._wtmp_stream
+                )
+                await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
+                await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
         except Exception:
             await nc.close()
             raise
@@ -171,6 +198,11 @@ class NatsRelay:
         self._js = js
         self._kv = kv
         return js, kv
+
+    async def get_kv(self) -> KeyValue:
+        """Return the NATS KV handle, connecting if necessary."""
+        _, kv = await self._ensure_connected()
+        return kv
 
     def reset_infrastructure(self) -> None:
         """Clear cached KV/stream handles, forcing re-provisioning.
@@ -198,6 +230,8 @@ class NatsRelay:
                     await kv.delete(key)
         with suppress(NotFoundError):
             await js.purge_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+        with suppress(NotFoundError):
+            await js.purge_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
 
     async def delete_infrastructure(self) -> None:
         """Delete KV bucket and stream from the NATS server.
@@ -211,6 +245,8 @@ class NatsRelay:
                 await js.delete_key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
             with suppress(NotFoundError):
                 await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+            with suppress(NotFoundError):
+                await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
         self._js = None
         self._kv = None
 
@@ -502,3 +538,66 @@ class NatsRelay:
         _, kv = await self._ensure_connected()
         with suppress(KeyNotFoundError, BucketNotFoundError):
             await kv.delete(kv_key)
+
+    # -- Session history (wtmp) --
+
+    def _wtmp_subject(self, user: str) -> str:
+        """NATS subject for a user's wtmp events: ``biff.{repo}.wtmp.{user}``."""
+        self._validate_user(user)
+        return f"{self._wtmp_prefix}.{user}"
+
+    async def append_wtmp(self, event: SessionEvent) -> None:
+        """Publish a session event to the wtmp stream."""
+        js, _ = await self._ensure_connected()
+        subject = self._wtmp_subject(event.user)
+        await js.publish(subject, event.model_dump_json().encode())
+
+    async def get_wtmp(
+        self, *, user: str | None = None, count: int = 25
+    ) -> list[SessionEvent]:
+        """Fetch recent session events from the wtmp stream.
+
+        Returns up to *count* events, most recent first.  When *user*
+        is given, only events for that user are returned (filtered
+        by NATS subject).
+        """
+        js, _ = await self._ensure_connected()
+        subject = self._wtmp_subject(user) if user else f"{self._wtmp_prefix}.>"
+
+        # Use a direct stream message fetch — get messages in reverse order
+        # by reading the stream info and then fetching by sequence.
+        try:
+            info = await js.stream_info(self._wtmp_stream, subjects_filter=subject)
+        except NotFoundError:
+            return []
+        total = info.state.messages
+        if total == 0:
+            return []
+
+        # Fetch via ephemeral pull consumer to get ordered messages.
+        sub = await js.pull_subscribe(
+            subject,
+            durable=None,
+            stream=self._wtmp_stream,
+        )
+        try:
+            raw_msgs = await sub.fetch(
+                batch=min(total, max(count * 2, _FETCH_BATCH)),
+                timeout=_FETCH_TIMEOUT,
+            )
+        except TimeoutError:
+            raw_msgs = []
+        finally:
+            await sub.unsubscribe()
+
+        events: list[SessionEvent] = []
+        for raw in raw_msgs:
+            try:
+                events.append(SessionEvent.model_validate_json(raw.data))
+            except (ValidationError, ValueError):
+                logger.warning("Skipping malformed wtmp message")
+            await raw.ack()
+
+        # Sort by timestamp descending (most recent first), take count
+        events.sort(key=lambda e: e.timestamp, reverse=True)
+        return events[:count]
