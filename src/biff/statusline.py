@@ -1,8 +1,11 @@
 """Status line integration for Claude Code.
 
 Provides install/uninstall for biff's status bar segment and the runtime
-``biff statusline`` command that composes biff's unread count with the
-user's original status line command.
+``biff statusline`` command that produces a complete, information-rich
+status line: repo:branch, context usage, session cost, and biff messaging.
+
+If the user had a pre-existing status line command before biff was installed,
+it is stashed and its output replaces the repo/context/cost segments.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from biff.relay import atomic_write
 
@@ -148,20 +152,157 @@ def run_statusline(
 ) -> str:
     """Produce the status bar text for Claude Code.
 
-    1. Read stdin (session JSON from Claude Code).
-    2. If an original command is stashed, run it and capture its output.
-    3. Read single PPID-keyed unread file for this session.
-    4. Combine ``{original} | {biff_segment}`` with separator.
+    Segments (left to right): ``repo:branch | ctx% | $cost | biff``
+
+    If a stashed original command exists and succeeds, its output replaces
+    the repo/context/cost segments (the user chose their own base).  The
+    biff messaging segment is always appended.
     """
     stdin_data = sys.stdin.read()
+    session = _parse_session_data(stdin_data)
+
     original_cmd = _resolve_original_command(stash_path)
     original_output = _run_original(original_cmd, stdin_data) if original_cmd else ""
+
+    base_segments = [original_output] if original_output else _base_segments(session)
+
     unread = _read_session_unread(unread_dir / f"{os.getppid()}.json")
     biff = _biff_segment(unread)
+    base_segments.append(biff)
 
-    if original_output:
-        return f"{original_output} | {biff}"
-    return biff
+    return " | ".join(base_segments)
+
+
+# Session data parsing ------------------------------------------------------
+
+
+def _parse_session_data(stdin_data: str) -> dict[str, object]:
+    """Parse the JSON session blob from Claude Code's stdin."""
+    try:
+        return _as_str_dict(json.loads(stdin_data))
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _as_str_dict(val: object) -> dict[str, object]:
+    """Narrow an opaque value to ``dict[str, object]``.
+
+    JSON dicts always have string keys, so this is a safe narrowing
+    after ``json.loads`` / ``dict.get()`` on parsed session data.
+    """
+    if isinstance(val, dict):
+        return cast("dict[str, object]", val)
+    return {}
+
+
+# Base segments (repo, context, cost) ---------------------------------------
+
+
+def _base_segments(session: dict[str, object]) -> list[str]:
+    """Build the non-biff segments: repo:branch, context%, $cost."""
+    segments: list[str] = []
+    git = _git_segment(session)
+    if git:
+        segments.append(git)
+    ctx = _context_segment(session)
+    if ctx:
+        segments.append(ctx)
+    cost = _cost_segment(session)
+    if cost:
+        segments.append(cost)
+    return segments
+
+
+def _git_segment(session: dict[str, object]) -> str:
+    """Format ``repo:branch`` from workspace path and git.
+
+    Claude Code sends ``workspace`` as an object with ``project_dir``
+    and ``current_dir`` keys (not a plain string).
+    """
+    workspace_raw = session.get("workspace")
+    ws = _as_str_dict(workspace_raw)
+    if ws:
+        workspace_dir = ws.get("project_dir") or ws.get("current_dir", "")
+    elif isinstance(workspace_raw, str):
+        workspace_dir = workspace_raw
+    else:
+        return ""
+    if not isinstance(workspace_dir, str) or not workspace_dir:
+        return ""
+    repo_name = Path(workspace_dir).name
+    branch = _git_branch(workspace_dir)
+    if branch:
+        return f"{repo_name}:{branch}"
+    return repo_name
+
+
+def _git_branch(workspace: str) -> str:
+    """Get the current git branch name, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=2,
+            cwd=workspace,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return ""
+
+
+def _context_segment(session: dict[str, object]) -> str:
+    """Format context window usage as a color-coded percentage.
+
+    Uses ``used_percentage`` from Claude Code when available (preferred),
+    falling back to manual calculation from token counts.
+
+    Green (default) below 50%, yellow 50-79%, red at 80%+.
+    """
+    try:
+        cw = _as_str_dict(session.get("context_window"))
+        pct_raw = cw.get("used_percentage")
+        if isinstance(pct_raw, (int, float)):
+            pct = int(pct_raw)
+        else:
+            usage = _as_str_dict(cw.get("current_usage"))
+            size = cw.get("context_window_size", 0)
+            if not isinstance(size, (int, float)) or size <= 0:
+                return ""
+            current = (
+                _int_field(usage, "input_tokens")
+                + _int_field(usage, "cache_creation_input_tokens")
+                + _int_field(usage, "cache_read_input_tokens")
+            )
+            pct = int(current * 100 / size)
+        label = f"{pct}%"
+        if pct >= 80:
+            return f"\033[31m{label}\033[0m"
+        if pct >= 50:
+            return f"\033[33m{label}\033[0m"
+        return label
+    except (TypeError, ValueError, ZeroDivisionError):
+        return ""
+
+
+def _cost_segment(session: dict[str, object]) -> str:
+    """Format the session cost as ``$X.XX``."""
+    try:
+        cost = _as_str_dict(session.get("cost"))
+        total = cost.get("total_cost_usd", 0)
+        if isinstance(total, (int, float)) and total > 0:
+            return f"${total:.2f}"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
+def _int_field(data: dict[str, object], key: str) -> int:
+    """Extract an integer field from a dict, defaulting to 0."""
+    val = data.get(key, 0)
+    return int(val) if isinstance(val, (int, float)) else 0
 
 
 # Helpers -------------------------------------------------------------------

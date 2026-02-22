@@ -14,7 +14,14 @@ from biff.statusline import (
     InstallResult,
     SessionUnread,
     UninstallResult,
+    _as_str_dict,
+    _base_segments,
     _biff_segment,
+    _context_segment,
+    _cost_segment,
+    _git_segment,
+    _int_field,
+    _parse_session_data,
     _read_session_unread,
     _resolve_original_command,
     _run_original,
@@ -175,6 +182,224 @@ class TestUninstall:
         result = uninstall(settings_path, stash_path)
 
         assert result == UninstallResult(uninstalled=False, message="Not installed.")
+
+
+# --- Session Data Parsing ---------------------------------------------------
+
+
+class TestParseSessionData:
+    def test_valid_json(self) -> None:
+        result = _parse_session_data('{"model": "opus", "workspace": "/foo"}')
+        assert result == {"model": "opus", "workspace": "/foo"}
+
+    def test_empty_json(self) -> None:
+        assert _parse_session_data("{}") == {}
+
+    def test_invalid_json(self) -> None:
+        assert _parse_session_data("not json") == {}
+
+    def test_non_dict_json(self) -> None:
+        assert _parse_session_data("[1, 2, 3]") == {}
+
+    def test_empty_string(self) -> None:
+        assert _parse_session_data("") == {}
+
+
+class TestAsStrDict:
+    def test_dict_passes_through(self) -> None:
+        result = _as_str_dict({"a": 1, "b": "two"})
+        assert result == {"a": 1, "b": "two"}
+
+    def test_non_dict_returns_empty(self) -> None:
+        assert _as_str_dict("string") == {}
+        assert _as_str_dict(42) == {}
+        assert _as_str_dict(None) == {}
+        assert _as_str_dict([1, 2]) == {}
+
+
+class TestIntField:
+    def test_int_value(self) -> None:
+        assert _int_field({"tokens": 5000}, "tokens") == 5000
+
+    def test_float_value(self) -> None:
+        assert _int_field({"tokens": 5000.5}, "tokens") == 5000
+
+    def test_missing_key(self) -> None:
+        assert _int_field({}, "tokens") == 0
+
+    def test_non_numeric(self) -> None:
+        assert _int_field({"tokens": "not a number"}, "tokens") == 0
+
+
+# --- Base Segments (repo, context, cost) ------------------------------------
+
+
+class TestGitSegment:
+    def test_workspace_string(self) -> None:
+        session: dict[str, object] = {"workspace": "/Users/kai/projects/biff"}
+        result = _git_segment(session)
+        assert result.startswith("biff")
+
+    def test_workspace_object_with_project_dir(self) -> None:
+        session: dict[str, object] = {
+            "workspace": {
+                "project_dir": "/Users/kai/projects/biff",
+                "current_dir": "/Users/kai/projects/biff",
+            }
+        }
+        result = _git_segment(session)
+        assert result.startswith("biff")
+
+    def test_workspace_object_falls_back_to_current_dir(self) -> None:
+        session: dict[str, object] = {
+            "workspace": {"current_dir": "/Users/kai/projects/myrepo"}
+        }
+        result = _git_segment(session)
+        assert "myrepo" in result
+
+    def test_missing_workspace(self) -> None:
+        assert _git_segment({}) == ""
+
+    def test_non_string_workspace(self) -> None:
+        assert _git_segment({"workspace": 42}) == ""
+
+    def test_empty_workspace(self) -> None:
+        assert _git_segment({"workspace": ""}) == ""
+
+    def test_empty_workspace_object(self) -> None:
+        assert _git_segment({"workspace": {}}) == ""
+
+
+class TestContextSegment:
+    def test_low_usage(self) -> None:
+        session: dict[str, object] = {
+            "context_window": {
+                "context_window_size": 200000,
+                "current_usage": {
+                    "input_tokens": 20000,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            }
+        }
+        result = _context_segment(session)
+        assert result == "10%"
+        assert "\033[" not in result  # no color for low usage
+
+    def test_medium_usage_yellow(self) -> None:
+        session: dict[str, object] = {
+            "context_window": {
+                "context_window_size": 200000,
+                "current_usage": {
+                    "input_tokens": 120000,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            }
+        }
+        result = _context_segment(session)
+        assert "60%" in result
+        assert "\033[33m" in result  # yellow
+
+    def test_high_usage_red(self) -> None:
+        session: dict[str, object] = {
+            "context_window": {
+                "context_window_size": 200000,
+                "current_usage": {
+                    "input_tokens": 170000,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            }
+        }
+        result = _context_segment(session)
+        assert "85%" in result
+        assert "\033[31m" in result  # red
+
+    def test_includes_cache_tokens(self) -> None:
+        session: dict[str, object] = {
+            "context_window": {
+                "context_window_size": 200000,
+                "current_usage": {
+                    "input_tokens": 40000,
+                    "cache_creation_input_tokens": 5000,
+                    "cache_read_input_tokens": 10000,
+                },
+            }
+        }
+        result = _context_segment(session)
+        # (40000+5000+10000)/200000 = 27%
+        assert result == "27%"
+
+    def test_missing_context_window(self) -> None:
+        assert _context_segment({}) == ""
+
+    def test_zero_window_size(self) -> None:
+        session: dict[str, object] = {
+            "context_window": {
+                "context_window_size": 0,
+                "current_usage": {"input_tokens": 100},
+            }
+        }
+        assert _context_segment(session) == ""
+
+    def test_non_dict_context_window(self) -> None:
+        assert _context_segment({"context_window": "bad"}) == ""
+
+    def test_used_percentage_field(self) -> None:
+        session: dict[str, object] = {"context_window": {"used_percentage": 42}}
+        assert _context_segment(session) == "42%"
+
+    def test_used_percentage_yellow(self) -> None:
+        session: dict[str, object] = {"context_window": {"used_percentage": 65}}
+        result = _context_segment(session)
+        assert "65%" in result
+        assert "\033[33m" in result
+
+    def test_used_percentage_red(self) -> None:
+        session: dict[str, object] = {"context_window": {"used_percentage": 90}}
+        result = _context_segment(session)
+        assert "90%" in result
+        assert "\033[31m" in result
+
+
+class TestCostSegment:
+    def test_positive_cost(self) -> None:
+        session: dict[str, object] = {"cost": {"total_cost_usd": 1.23}}
+        assert _cost_segment(session) == "$1.23"
+
+    def test_zero_cost(self) -> None:
+        session: dict[str, object] = {"cost": {"total_cost_usd": 0}}
+        assert _cost_segment(session) == ""
+
+    def test_missing_cost(self) -> None:
+        assert _cost_segment({}) == ""
+
+    def test_non_dict_cost(self) -> None:
+        assert _cost_segment({"cost": "bad"}) == ""
+
+    def test_small_cost(self) -> None:
+        session: dict[str, object] = {"cost": {"total_cost_usd": 0.05}}
+        assert _cost_segment(session) == "$0.05"
+
+
+class TestBaseSegments:
+    def test_empty_session(self) -> None:
+        assert _base_segments({}) == []
+
+    def test_full_session(self) -> None:
+        session: dict[str, object] = {
+            "workspace": {
+                "project_dir": "/tmp/test-repo",
+                "current_dir": "/tmp/test-repo",
+            },
+            "context_window": {"used_percentage": 25},
+            "cost": {"total_cost_usd": 0.50},
+        }
+        segments = _base_segments(session)
+        assert any("test-repo" in s for s in segments)
+        assert "$0.50" in segments
+        assert "25%" in segments
 
 
 # --- Biff Segment -----------------------------------------------------------
@@ -394,6 +619,55 @@ class TestRunStatusline:
             result = run_statusline(stash_path, unread_dir)
         assert "kai(1)" in result
         assert ":" not in result.replace("\033[1;33m", "").replace("\033[0m", "")
+
+    def test_native_segments_with_session_data(self, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        session_json = json.dumps(
+            {
+                "workspace": {
+                    "project_dir": "/tmp/my-repo",
+                    "current_dir": "/tmp/my-repo",
+                },
+                "context_window": {
+                    "used_percentage": 25,
+                    "context_window_size": 200000,
+                },
+                "cost": {"total_cost_usd": 1.50},
+            }
+        )
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = session_json
+            result = run_statusline(stash_path, unread_dir)
+        assert "my-repo" in result
+        assert "25%" in result
+        assert "$1.50" in result
+        assert "kai:tty1(0)" in result
+        assert " | " in result
+
+    def test_original_overrides_base_segments(self, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        write_stash(stash_path, {"type": "command", "command": "echo custom-base"})
+        session_json = json.dumps(
+            {
+                "workspace": {
+                    "project_dir": "/tmp/my-repo",
+                    "current_dir": "/tmp/my-repo",
+                },
+                "cost": {"total_cost_usd": 1.50},
+            }
+        )
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = session_json
+            result = run_statusline(stash_path, unread_dir)
+        # Original output replaces base segments
+        assert "custom-base" in result
+        assert "kai:tty1(0)" in result
+        # Native segments should NOT appear when original is used
+        assert "$1.50" not in result
 
 
 # --- CLI integration -------------------------------------------------------
