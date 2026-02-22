@@ -34,7 +34,13 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from biff.models import Message, UnreadSummary, UserSession, build_unread_summary
+from biff.models import (
+    Message,
+    SessionEvent,
+    UnreadSummary,
+    UserSession,
+    build_unread_summary,
+)
 from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
@@ -104,6 +110,14 @@ class Relay(Protocol):
     async def get_sessions(self) -> list[UserSession]: ...
 
     async def delete_session(self, session_key: str) -> None: ...
+
+    # -- Session history (wtmp) --
+
+    async def append_wtmp(self, event: SessionEvent) -> None: ...
+
+    async def get_wtmp(
+        self, *, user: str | None = None, count: int = 25
+    ) -> list[SessionEvent]: ...
 
     # -- Lifecycle --
 
@@ -349,6 +363,20 @@ class LocalRelay:
             sentinel.unlink(missing_ok=True)
         if changed:
             self._write_sessions(sessions)
+
+    # -- Session history (wtmp) --
+
+    async def append_wtmp(self, event: SessionEvent) -> None:
+        """No-op — local relay does not persist session history."""
+
+    async def get_wtmp(
+        self,
+        *,
+        user: str | None = None,  # noqa: ARG002
+        count: int = 25,  # noqa: ARG002
+    ) -> list[SessionEvent]:
+        """Return empty list — local relay does not persist session history."""
+        return []
 
     async def close(self) -> None:
         """No-op — filesystem relay has no connection to close."""
