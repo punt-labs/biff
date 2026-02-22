@@ -338,7 +338,9 @@ async def _close_orphaned_logins(
 
     At startup, fetches recent wtmp events and identifies login events
     with no matching logout and no active KV session.  For each orphan,
-    writes a logout event timestamped now (the time we detected it).
+    writes a logout event with the session's ``last_active`` timestamp
+    as the logout time (last-seen heuristic).  Falls back to the login
+    timestamp if the session is no longer in KV.
 
     This is the primary logout mechanism — MCP subprocess death prevents
     async cleanup in the ``finally`` block, so orphan detection on the
@@ -352,11 +354,20 @@ async def _close_orphaned_logins(
     if not events:
         return
 
-    active_keys: set[str] = {build_session_key(s.user, s.tty) for s in active_sessions}
+    # Build a map of session_key → last_active from current KV sessions
+    # so orphan logouts can use the last heartbeat as their timestamp.
+    last_seen: dict[str, datetime] = {
+        build_session_key(s.user, s.tty): s.last_active for s in active_sessions
+    }
+
+    active_keys = set(last_seen)
     active_keys.add(state.session_key)
     orphaned = _find_orphaned_logins(events, active_keys)
 
     for login in orphaned:
+        # Use the session's last heartbeat if available, otherwise
+        # fall back to the login timestamp (best available data).
+        logout_ts = last_seen.get(login.session_key, login.timestamp)
         logout = SessionEvent(
             session_key=login.session_key,
             event="logout",
@@ -365,7 +376,7 @@ async def _close_orphaned_logins(
             tty_name=login.tty_name,
             hostname=login.hostname,
             pwd=login.pwd,
-            timestamp=datetime.now(UTC),
+            timestamp=logout_ts,
         )
         try:
             await state.relay.append_wtmp(logout)
