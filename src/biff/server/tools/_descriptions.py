@@ -69,12 +69,6 @@ def set_biff_enabled(*, enabled: bool) -> None:
     _biff_enabled = enabled
 
 
-def set_wall_text(text: str) -> None:
-    """Update the module-level wall text for unread file writes."""
-    global _wall_text
-    _wall_text = text
-
-
 def _reset_session() -> None:
     """Clear stored session, tty name, biff_enabled, wall — test isolation."""
     global _session, _tty_name, _biff_enabled, _wall_text

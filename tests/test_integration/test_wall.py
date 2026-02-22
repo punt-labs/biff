@@ -109,3 +109,7 @@ class TestWallDurationValidation:
     async def test_exceeds_max_duration(self, kai: RecordingClient) -> None:
         result = await kai.call("wall", message="test", duration="10d")
         assert "maximum" in result
+
+    async def test_message_exceeds_max_length(self, kai: RecordingClient) -> None:
+        result = await kai.call("wall", message="x" * 201)
+        assert "200" in result

@@ -11,7 +11,7 @@ Arguments: $ARGUMENTS
 Parse as one of three modes:
 
 1. **Clear**: if arguments are exactly `clear` → call with `clear=True`
-2. **Post with duration**: if the last token matches a duration pattern (`30m`, `2h`, `1d`, `5d`), it is the duration and everything before it is the message → `message="...", duration="2h"`
+2. **Post with duration**: if the last token matches a duration pattern (`30m`, `2h`, `1d`, `3d`), it is the duration and everything before it is the message → `message="...", duration="2h"`
 3. **Post with default**: otherwise the entire argument string is the message → `message="..."`
 
 If no arguments are provided, call with no parameters (shows current wall).

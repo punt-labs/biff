@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
+
 from biff.models import WallPost
 from biff.server.tools._descriptions import refresh_wall
 from biff.server.tools._session import update_current_session
@@ -116,12 +118,15 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return str(exc)
 
         now = datetime.now(UTC)
-        post = WallPost(
-            text=message,
-            from_user=state.config.user,
-            posted_at=now,
-            expires_at=now + ttl,
-        )
+        try:
+            post = WallPost(
+                text=message,
+                from_user=state.config.user,
+                posted_at=now,
+                expires_at=now + ttl,
+            )
+        except ValidationError:
+            return "Message too long (200 characters max)."
         await state.relay.set_wall(post)
         await refresh_wall(mcp, state)
 
