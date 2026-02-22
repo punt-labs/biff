@@ -189,8 +189,8 @@ class NatsRelay:
     async def _provision_wtmp(self, js: JetStreamContext) -> None:
         """Provision the wtmp stream, degrading gracefully on failure.
 
-        Non-fatal: if the account's stream limit is reached, wtmp is
-        unavailable but core messaging still works.
+        Non-fatal: any provisioning failure disables wtmp but leaves
+        core messaging fully operational.
         """
         wtmp_config = StreamConfig(
             name=self._wtmp_stream,
@@ -215,6 +215,9 @@ class NatsRelay:
                     await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
                 await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
                 self._wtmp_available = True
+        except Exception:  # noqa: BLE001 — provisioning must never crash startup
+            logger.warning("Wtmp stream provisioning failed", exc_info=True)
+            self._wtmp_available = False
 
     @property
     def wtmp_available(self) -> bool:
@@ -599,6 +602,7 @@ class NatsRelay:
         js, _ = await self._ensure_connected()
         if not self._wtmp_available:
             return []
+        count = max(1, min(count, 1000))
         subject = self._wtmp_subject(user) if user else f"{self._wtmp_prefix}.>"
 
         # Fetch from the tail of the stream so we get the most recent

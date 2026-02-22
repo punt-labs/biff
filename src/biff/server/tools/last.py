@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from biff.models import SessionEvent
 from biff.server.tools._session import update_current_session
+from biff.tty import build_session_key
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -33,16 +34,15 @@ def _format_timestamp(dt: datetime) -> str:
 
 
 def _pair_events(
-    events: list[SessionEvent], active_keys: set[str]
+    events: list[SessionEvent],
 ) -> list[tuple[SessionEvent, SessionEvent | None]]:
     """Pair login events with their corresponding logout events.
 
     Returns a list of ``(login, logout | None)`` tuples sorted by
     login time descending.  A ``None`` logout means the session is
-    still active or no logout was recorded.
+    still active or no logout was recorded — the caller uses
+    ``active_keys`` to distinguish between the two.
     """
-    # Index logouts by session_key — most recent first (events are
-    # already sorted most-recent-first from get_wtmp).
     logouts: dict[str, list[SessionEvent]] = {}
     logins: list[SessionEvent] = []
 
@@ -55,7 +55,6 @@ def _pair_events(
     pairs: list[tuple[SessionEvent, SessionEvent | None]] = []
     for login in logins:
         key = login.session_key
-        # Find matching logout: first logout with timestamp >= login timestamp
         matching_logout: SessionEvent | None = None
         if key in logouts:
             for i, lo in enumerate(logouts[key]):
@@ -63,9 +62,6 @@ def _pair_events(
                     matching_logout = lo
                     logouts[key].pop(i)
                     break
-        # If no matching logout and session is active, it's "still logged in"
-        if matching_logout is None and key in active_keys:
-            pass  # None signals "still logged in"
         pairs.append((login, matching_logout))
 
     return pairs
@@ -125,6 +121,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def last(user: str = "", count: int = 25) -> str:
         """Show recent session history."""
         await update_current_session(state)
+        count = max(1, min(count, 100))
 
         # Normalize user arg — strip @ prefix
         filter_user: str | None = None
@@ -135,12 +132,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not events:
             return "No session history."
 
-        # Get current sessions to mark active ones
         current_sessions = await state.relay.get_sessions()
-        active_keys = {f"{s.user}:{s.tty}" for s in current_sessions}
+        active_keys = {build_session_key(s.user, s.tty) for s in current_sessions}
 
-        pairs = _pair_events(events, active_keys)
-        # Filter to requested count (of logins, not total events)
+        pairs = _pair_events(events)
         pairs = pairs[:count]
 
         return _format_table(pairs, active_keys)

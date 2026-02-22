@@ -69,7 +69,7 @@ if [[ "$TOOL" == "mcp__plugin_biff_tty__last" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
+    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
     jq -n --arg summary "${COUNT} sessions" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",

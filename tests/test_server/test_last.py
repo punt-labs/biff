@@ -124,7 +124,7 @@ class TestPairEvents:
             tty="tty1",
             timestamp=now,
         )
-        pairs = _pair_events([logout, login], set())
+        pairs = _pair_events([logout, login])
         assert len(pairs) == 1
         assert pairs[0][0].event == "login"
         assert pairs[0][1] is not None
@@ -139,7 +139,7 @@ class TestPairEvents:
             tty="tty1",
             timestamp=now,
         )
-        pairs = _pair_events([login], {"kai:tty1"})
+        pairs = _pair_events([login])
         assert len(pairs) == 1
         assert pairs[0][1] is None  # No logout — still logged in
 
@@ -168,7 +168,7 @@ class TestPairEvents:
                 timestamp=now - timedelta(hours=1),
             ),
         ]
-        pairs = _pair_events(events, {"eric:tty2"})
+        pairs = _pair_events(events)
         assert len(pairs) == 2
 
 
