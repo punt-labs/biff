@@ -162,15 +162,18 @@ def run_statusline(
     session = _parse_session_data(stdin_data)
 
     original_cmd = _resolve_original_command(stash_path)
-    original_output = _run_original(original_cmd, stdin_data) if original_cmd else ""
+    original_output = _run_original(original_cmd, stdin_data) if original_cmd else None
 
-    base_segments = [original_output] if original_output else _base_segments(session)
+    if original_output is not None:
+        base_segments = [original_output]
+    else:
+        base_segments = _base_segments(session)
 
     unread = _read_session_unread(unread_dir / f"{os.getppid()}.json")
     biff = _biff_segment(unread)
-    base_segments.append(biff)
 
-    return " | ".join(base_segments)
+    segments = [s for s in [*base_segments, biff] if s.strip()]
+    return " | ".join(segments)
 
 
 # Session data parsing ------------------------------------------------------
@@ -398,10 +401,11 @@ def _biff_segment(unread: SessionUnread | None) -> str:
     return f"\033[1;33m{label}\033[0m"
 
 
-def _run_original(command: str, stdin_data: str) -> str:
+def _run_original(command: str, stdin_data: str) -> str | None:
     """Run the original status line command, returning its stdout.
 
-    Returns empty string on any failure (timeout, bad exit, etc.).
+    Returns ``None`` on failure (timeout, bad exit, etc.) so callers can
+    distinguish "command failed" from "command succeeded with empty output".
     """
     try:
         result = subprocess.run(
@@ -413,7 +417,7 @@ def _run_original(command: str, stdin_data: str) -> str:
             timeout=5,
         )
         if result.returncode != 0:
-            return ""
+            return None
         return result.stdout.strip()
     except (subprocess.TimeoutExpired, OSError):
-        return ""
+        return None

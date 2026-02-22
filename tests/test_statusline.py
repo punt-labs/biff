@@ -235,27 +235,42 @@ class TestIntField:
 
 
 class TestGitSegment:
-    def test_workspace_string(self) -> None:
-        session: dict[str, object] = {"workspace": "/Users/kai/projects/biff"}
-        result = _git_segment(session)
-        assert result.startswith("biff")
+    def test_workspace_string(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "my-repo"
+        workspace.mkdir()
+        session: dict[str, object] = {"workspace": str(workspace)}
+        with patch("biff.statusline._git_branch", return_value="main"):
+            result = _git_segment(session)
+        assert result == "my-repo:main"
 
-    def test_workspace_object_with_project_dir(self) -> None:
+    def test_workspace_object_with_project_dir(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "my-repo"
+        workspace.mkdir()
         session: dict[str, object] = {
             "workspace": {
-                "project_dir": "/Users/kai/projects/biff",
-                "current_dir": "/Users/kai/projects/biff",
+                "project_dir": str(workspace),
+                "current_dir": str(workspace),
             }
         }
-        result = _git_segment(session)
-        assert result.startswith("biff")
+        with patch("biff.statusline._git_branch", return_value="feat/x"):
+            result = _git_segment(session)
+        assert result == "my-repo:feat/x"
 
-    def test_workspace_object_falls_back_to_current_dir(self) -> None:
-        session: dict[str, object] = {
-            "workspace": {"current_dir": "/Users/kai/projects/myrepo"}
-        }
-        result = _git_segment(session)
-        assert "myrepo" in result
+    def test_workspace_object_falls_back_to_current_dir(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "another-repo"
+        workspace.mkdir()
+        session: dict[str, object] = {"workspace": {"current_dir": str(workspace)}}
+        with patch("biff.statusline._git_branch", return_value=""):
+            result = _git_segment(session)
+        assert result == "another-repo"
+
+    def test_no_git_shows_dir_only(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "plain-dir"
+        workspace.mkdir()
+        session: dict[str, object] = {"workspace": str(workspace)}
+        with patch("biff.statusline._git_branch", return_value=""):
+            result = _git_segment(session)
+        assert result == "plain-dir"
 
     def test_missing_workspace(self) -> None:
         assert _git_segment({}) == ""
@@ -545,10 +560,10 @@ class TestRunOriginal:
         assert result == "input data"
 
     def test_bad_command(self):
-        assert _run_original("__nonexistent_cmd_xyz__", "") == ""
+        assert _run_original("__nonexistent_cmd_xyz__", "") is None
 
     def test_failing_command(self):
-        assert _run_original("bash -c 'echo partial; exit 1'", "") == ""
+        assert _run_original("bash -c 'echo partial; exit 1'", "") is None
 
 
 # --- Run Statusline (integration) ------------------------------------------
@@ -668,6 +683,28 @@ class TestRunStatusline:
         assert "kai:tty1(0)" in result
         # Native segments should NOT appear when original is used
         assert "$1.50" not in result
+
+    def test_empty_original_falls_back_to_native(self, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        write_stash(stash_path, {"type": "command", "command": "printf ''"})
+        session_json = json.dumps(
+            {
+                "workspace": {
+                    "project_dir": "/tmp/my-repo",
+                    "current_dir": "/tmp/my-repo",
+                },
+                "context_window": {"used_percentage": 25},
+                "cost": {"total_cost_usd": 1.50},
+            }
+        )
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = session_json
+            result = run_statusline(stash_path, unread_dir)
+        # Empty successful original → its empty output is used (not native segments)
+        # but the empty segment is filtered out, leaving just biff
+        assert "kai:tty1(0)" in result
 
 
 # --- CLI integration -------------------------------------------------------
