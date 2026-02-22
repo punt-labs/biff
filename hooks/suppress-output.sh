@@ -58,6 +58,29 @@ if [[ "$TOOL" == "mcp__plugin_biff_tty__who" ]]; then
   exit 0
 fi
 
+# last: summary in panel, full data via additionalContext.
+if [[ "$TOOL" == "mcp__plugin_biff_tty__last" ]]; then
+  RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
+  if [[ "$RESULT" == "No session history." ]]; then
+    jq -n --arg r "$RESULT" '{
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedMCPToolOutput: $r
+      }
+    }'
+  else
+    COUNT=$(printf '%s' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
+    jq -n --arg summary "${COUNT} sessions" --arg ctx "$RESULT" '{
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedMCPToolOutput: $summary,
+        additionalContext: $ctx
+      }
+    }'
+  fi
+  exit 0
+fi
+
 # finger: username in panel, full data via additionalContext.
 if [[ "$TOOL" == "mcp__plugin_biff_tty__finger" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
