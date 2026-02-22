@@ -15,6 +15,8 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
+from biff.models import SessionEvent, UserSession
+from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
@@ -108,6 +110,115 @@ async def _heartbeat_loop(
             logger.warning("Heartbeat failed", exc_info=True)
 
 
+def _kv_key_to_session_key(kv_key: str) -> str | None:
+    """Convert a KV key (``user.tty``) to a session key (``user:tty``).
+
+    Returns ``None`` if the key format is unexpected.
+    """
+    parts = kv_key.split(".", maxsplit=1)
+    if len(parts) != 2:
+        return None
+    return f"{parts[0]}:{parts[1]}"
+
+
+def _build_logout_event(session_key: str, cached: UserSession) -> SessionEvent:
+    """Build a logout ``SessionEvent`` from a cached session."""
+    return SessionEvent(
+        session_key=session_key,
+        event="logout",
+        user=cached.user,
+        tty=cached.tty,
+        tty_name=cached.tty_name,
+        hostname=cached.hostname,
+        pwd=cached.pwd,
+        timestamp=cached.last_active,
+        plan=cached.plan,
+    )
+
+
+async def _wtmp_watcher_loop(state: ServerState, shutdown: asyncio.Event) -> None:
+    """Watch KV session changes and append logout events to wtmp.
+
+    Handles logout events for *other* sessions that disappear via TTL
+    expiry or crash (no graceful shutdown).  Our own session's logout
+    is written explicitly by ``_append_logout_event()`` during graceful
+    shutdown, so the watcher skips ``state.session_key``.
+
+    On PUT events, caches the session data so that logout events can
+    include the ``last_active`` timestamp.
+
+    **Duplicate risk**: If multiple servers are running, each may
+    observe the same KV delete and write a logout event.  This is
+    acceptable — ``/last`` pairs events by session_key, so extra
+    logouts are harmless (they won't match a login).
+    """
+    relay = state.relay
+    if not isinstance(relay, NatsRelay):
+        return  # LocalRelay does not support wtmp
+
+    kv = await relay.get_kv()
+    cache: dict[str, UserSession] = {}
+
+    try:
+        watcher = await kv.watchall()  # pyright: ignore[reportUnknownMemberType]
+        async for entry in watcher:  # pyright: ignore[reportUnknownVariableType]
+            if shutdown.is_set():
+                return
+
+            key: str = entry.key  # pyright: ignore[reportUnknownMemberType]
+            session_key = _kv_key_to_session_key(key)
+            if session_key is None:
+                continue
+
+            if entry.operation is None and entry.value is not None:
+                # PUT — cache the session data
+                try:
+                    session = UserSession.model_validate_json(
+                        entry.value  # pyright: ignore[reportUnknownArgumentType]
+                    )
+                    cache[session_key] = session
+                except Exception:  # noqa: BLE001
+                    logger.debug("Failed to parse KV entry %s", key)
+            elif entry.operation in ("DEL", "PURGE"):
+                await _handle_kv_delete(relay, state, cache, session_key)
+    except asyncio.CancelledError:
+        return
+    except Exception:  # noqa: BLE001
+        logger.warning("Wtmp watcher loop exited with error", exc_info=True)
+
+
+async def _handle_kv_delete(
+    relay: NatsRelay,
+    state: ServerState,
+    cache: dict[str, UserSession],
+    session_key: str,
+) -> None:
+    """Handle a KV delete event — append logout for crashed/expired sessions.
+
+    Skips our own session key because graceful shutdown writes the
+    logout event explicitly in ``_append_logout_event()`` before the
+    watcher is stopped.  For *other* sessions (TTL expiry, crash),
+    any running server can write the logout on their behalf.
+    """
+    if session_key == state.session_key:
+        return  # Our own shutdown writes logout explicitly
+    cached = cache.pop(session_key, None)
+    if cached is None:
+        logger.debug(
+            "No cached session for %s on DEL, skipping wtmp",
+            session_key,
+        )
+        return
+    try:
+        await relay.append_wtmp(_build_logout_event(session_key, cached))
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Failed to append wtmp logout for %s",
+            session_key,
+            exc_info=True,
+        )
+
+
 async def _shutdown_tasks(
     shutdown: asyncio.Event, tasks: list[asyncio.Task[None]], *, timeout: float = 5.0
 ) -> None:
@@ -132,6 +243,44 @@ async def _shutdown_tasks(
     for t in tasks:
         with suppress(asyncio.CancelledError):
             await t
+
+
+async def _append_login_event(state: ServerState, tty_name: str) -> None:
+    """Append a login event to wtmp for the current session."""
+    session = await state.relay.get_session(state.session_key)
+    if session is None:
+        return
+    login_event = SessionEvent(
+        session_key=state.session_key,
+        event="login",
+        user=state.config.user,
+        tty=state.tty,
+        tty_name=tty_name,
+        hostname=state.hostname,
+        pwd=state.pwd,
+        timestamp=session.last_active,
+        plan=session.plan,
+    )
+    try:
+        await state.relay.append_wtmp(login_event)
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to append wtmp login event", exc_info=True)
+
+
+async def _append_logout_event(state: ServerState) -> None:
+    """Append a logout event to wtmp for the current session.
+
+    Called during graceful shutdown, *before* ``delete_session()``.
+    The KV watcher cannot observe our own session deletion because it
+    is stopped first, so logout must be written explicitly here.
+    """
+    session = await state.relay.get_session(state.session_key)
+    if session is None:
+        return
+    try:
+        await state.relay.append_wtmp(_build_logout_event(state.session_key, session))
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to append wtmp logout event", exc_info=True)
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:
@@ -177,20 +326,24 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         # has identity from the first render (before the poller ticks).
         await refresh_read_messages(mcp, state)
 
+        await _append_login_event(state, auto_name)
+
         shutdown = asyncio.Event()
         poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
         reaper = asyncio.create_task(_reap_loop(state, shutdown))
         heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
+        watcher = asyncio.create_task(_wtmp_watcher_loop(state, shutdown))
         # Process any sentinels left from previously-killed servers.
         await _reap_sentinels(state)
         try:
             yield state
         finally:
-            await _shutdown_tasks(shutdown, [poller, reaper, heartbeat])
+            await _shutdown_tasks(shutdown, [poller, reaper, heartbeat, watcher])
             if state.unread_path is not None:
                 with suppress(FileNotFoundError):
                     state.unread_path.unlink()
             if state.owns_relay:
+                await _append_logout_event(state)
                 try:
                     await state.relay.delete_session(state.session_key)
                 except Exception:
