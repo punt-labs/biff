@@ -354,14 +354,19 @@ async def _close_orphaned_logins(
     if not events:
         return
 
-    # Build a map of session_key → last_active from current KV sessions
-    # so orphan logouts can use the last heartbeat as their timestamp.
-    last_seen: dict[str, datetime] = {
-        build_session_key(s.user, s.tty): s.last_active for s in active_sessions
-    }
-
-    active_keys = set(last_seen)
-    active_keys.add(state.session_key)
+    # Build a map of session_key → last_active from current KV sessions.
+    # Sessions with a stale last_active (>2 heartbeat intervals old) are
+    # treated as dead — their KV entry just hasn't expired yet.
+    now = datetime.now(UTC)
+    stale_threshold = 120.0  # 2x heartbeat interval (60s)
+    last_seen: dict[str, datetime] = {}
+    active_keys: set[str] = {state.session_key}
+    for session in active_sessions:
+        key = build_session_key(session.user, session.tty)
+        last_seen[key] = session.last_active
+        age = (now - session.last_active).total_seconds()
+        if age < stale_threshold:
+            active_keys.add(key)
     orphaned = _find_orphaned_logins(events, active_keys)
 
     for login in orphaned:
