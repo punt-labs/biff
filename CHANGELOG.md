@@ -31,6 +31,11 @@
   Claude Code UI (#31)
 - **GitHub identity** — resolve display name from `gh api user` for
   `/finger` output (#27)
+- **Session history** — `/last` command showing login/logout history modeled
+  after Unix `last(1)`. NATS wtmp stream (JetStream, 30-day retention) records
+  session events. Three-layer logout: sentinel-based (SIGTERM), orphan detection
+  (crash recovery at startup), and KV watcher (TTL expiry). Per-user filtering,
+  configurable count, columnar output with duration (#49)
 
 ### Testing
 

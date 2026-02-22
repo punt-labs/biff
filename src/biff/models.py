@@ -140,6 +140,32 @@ class BiffConfig(BaseModel):
     team: tuple[str, ...] = ()
 
 
+class SessionEvent(BaseModel):
+    """A login or logout event for the wtmp session ledger.
+
+    Mirrors Unix ``wtmp`` records.  Login events are appended when a
+    server starts; logout events are appended when a KV watcher
+    observes a session deletion.
+    """
+
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
+    session_key: str = Field(min_length=1)
+    event: str = Field(pattern=r"^(login|logout)$")
+    user: str = Field(min_length=1)
+    tty: str = ""
+    tty_name: str = ""
+    hostname: str = ""
+    pwd: str = ""
+    timestamp: datetime = Field(default_factory=_utc_now)
+    plan: str = ""
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _normalize_timestamp(cls, v: datetime) -> datetime:
+        return _ensure_utc(v)
+
+
 class UnreadSummary(BaseModel):
     """Summary of unread messages for dynamic tool descriptions.
 

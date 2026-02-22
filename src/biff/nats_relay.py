@@ -29,6 +29,8 @@ from uuid import UUID
 
 import nats
 from nats.js.api import (
+    ConsumerConfig,
+    DeliverPolicy,
     KeyValueConfig,
     RetentionPolicy,
     StreamConfig,
@@ -42,7 +44,13 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff.models import Message, RelayAuth, UserSession, build_unread_summary
+from biff.models import (
+    Message,
+    RelayAuth,
+    SessionEvent,
+    UserSession,
+    build_unread_summary,
+)
 from biff.relay import SESSION_TTL_SECONDS
 from biff.tty import build_session_key
 
@@ -62,6 +70,7 @@ _FETCH_BATCH = 100
 _FETCH_TIMEOUT = 1.0
 _PEEK_TIMEOUT = 0.5
 _PEEK_BATCH = 3
+_WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 
 
 class NatsRelay:
@@ -86,9 +95,12 @@ class NatsRelay:
         self._stream_name = f"biff-{repo_name}-inbox"
         self._subject_prefix = f"biff.{repo_name}.inbox"
         self._kv_bucket = f"biff-{repo_name}-sessions"
+        self._wtmp_stream = f"biff-{repo_name}-wtmp"
+        self._wtmp_prefix = f"biff.{repo_name}.wtmp"
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
+        self._wtmp_available: bool = False
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
@@ -163,6 +175,8 @@ class NatsRelay:
                 logger.info("Stream config changed, recreating %s", self._stream_name)
                 await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
                 await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
+
+            await self._provision_wtmp(js)
         except Exception:
             await nc.close()
             raise
@@ -171,6 +185,49 @@ class NatsRelay:
         self._js = js
         self._kv = kv
         return js, kv
+
+    async def _provision_wtmp(self, js: JetStreamContext) -> None:
+        """Provision the wtmp stream, degrading gracefully on failure.
+
+        Non-fatal: any provisioning failure disables wtmp but leaves
+        core messaging fully operational.
+        """
+        wtmp_config = StreamConfig(
+            name=self._wtmp_stream,
+            subjects=[f"{self._wtmp_prefix}.>"],
+            retention=RetentionPolicy.LIMITS,
+            max_bytes=_STREAM_MAX_BYTES,
+            max_age=_WTMP_MAX_AGE,
+        )
+        try:
+            await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
+            self._wtmp_available = True
+        except BadRequestError as exc:
+            if "maximum number of streams" in str(exc):
+                logger.warning("Wtmp stream unavailable: %s", exc)
+                self._wtmp_available = False
+            else:
+                logger.info(
+                    "Wtmp stream config changed, recreating %s",
+                    self._wtmp_stream,
+                )
+                with suppress(NotFoundError):
+                    await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
+                await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
+                self._wtmp_available = True
+        except Exception:  # noqa: BLE001 — provisioning must never crash startup
+            logger.warning("Wtmp stream provisioning failed", exc_info=True)
+            self._wtmp_available = False
+
+    @property
+    def wtmp_available(self) -> bool:
+        """Whether the wtmp stream was successfully provisioned."""
+        return self._wtmp_available
+
+    async def get_kv(self) -> KeyValue:
+        """Return the NATS KV handle, connecting if necessary."""
+        _, kv = await self._ensure_connected()
+        return kv
 
     def reset_infrastructure(self) -> None:
         """Clear cached KV/stream handles, forcing re-provisioning.
@@ -181,6 +238,7 @@ class NatsRelay:
         """
         self._js = None
         self._kv = None
+        self._wtmp_available = False
 
     async def purge_data(self) -> None:
         """Purge all sessions and messages without deleting infrastructure.
@@ -198,6 +256,8 @@ class NatsRelay:
                     await kv.delete(key)
         with suppress(NotFoundError):
             await js.purge_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+        with suppress(NotFoundError):
+            await js.purge_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
 
     async def delete_infrastructure(self) -> None:
         """Delete KV bucket and stream from the NATS server.
@@ -211,8 +271,20 @@ class NatsRelay:
                 await js.delete_key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
             with suppress(NotFoundError):
                 await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+            with suppress(NotFoundError):
+                await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
         self._js = None
         self._kv = None
+
+    async def flush(self, *, timeout: int = 2) -> None:
+        """Flush pending NATS publishes to the server.
+
+        Ensures all buffered messages are sent before returning.
+        Critical for shutdown paths where the process may exit
+        immediately after.
+        """
+        if self._nc is not None and not self._nc.is_closed:
+            await self._nc.flush(timeout=timeout)
 
     async def close(self) -> None:
         """Close the NATS connection and release resources."""
@@ -502,3 +574,78 @@ class NatsRelay:
         _, kv = await self._ensure_connected()
         with suppress(KeyNotFoundError, BucketNotFoundError):
             await kv.delete(kv_key)
+
+    # -- Session history (wtmp) --
+
+    def _wtmp_subject(self, user: str) -> str:
+        """NATS subject for a user's wtmp events: ``biff.{repo}.wtmp.{user}``."""
+        self._validate_user(user)
+        return f"{self._wtmp_prefix}.{user}"
+
+    async def append_wtmp(self, event: SessionEvent) -> None:
+        """Publish a session event to the wtmp stream."""
+        js, _ = await self._ensure_connected()
+        if not self._wtmp_available:
+            return
+        subject = self._wtmp_subject(event.user)
+        await js.publish(subject, event.model_dump_json().encode())
+
+    async def get_wtmp(
+        self, *, user: str | None = None, count: int = 25
+    ) -> list[SessionEvent]:
+        """Fetch recent session events from the wtmp stream.
+
+        Returns up to *count* events, most recent first.  When *user*
+        is given, only events for that user are returned (filtered
+        by NATS subject).
+        """
+        js, _ = await self._ensure_connected()
+        if not self._wtmp_available:
+            return []
+        count = max(1, min(count, 1000))
+        subject = self._wtmp_subject(user) if user else f"{self._wtmp_prefix}.>"
+
+        # Fetch from the tail of the stream so we get the most recent
+        # events, not the oldest.  Use opt_start_seq to skip to near
+        # the end — overshooting count*2 to account for per-user
+        # filtering (subject filter is applied server-side, but
+        # stream_info.state.messages is the total count across all
+        # subjects).
+        try:
+            info = await js.stream_info(self._wtmp_stream)
+        except NotFoundError:
+            return []
+        last_seq = info.state.last_seq
+        if last_seq == 0:
+            return []
+
+        batch = max(count * 2, _FETCH_BATCH)
+        start_seq = max(1, last_seq - batch + 1)
+        consumer_config = ConsumerConfig(
+            deliver_policy=DeliverPolicy.BY_START_SEQUENCE,
+            opt_start_seq=start_seq,
+        )
+        sub = await js.pull_subscribe(
+            subject,
+            durable=None,
+            stream=self._wtmp_stream,
+            config=consumer_config,
+        )
+        try:
+            raw_msgs = await sub.fetch(batch=batch, timeout=_FETCH_TIMEOUT)
+        except TimeoutError:
+            raw_msgs = []
+        finally:
+            await sub.unsubscribe()
+
+        events: list[SessionEvent] = []
+        for raw in raw_msgs:
+            try:
+                events.append(SessionEvent.model_validate_json(raw.data))
+            except (ValidationError, ValueError):
+                logger.warning("Skipping malformed wtmp message")
+            await raw.ack()
+
+        # Sort by timestamp descending (most recent first), take count
+        events.sort(key=lambda e: e.timestamp, reverse=True)
+        return events[:count]

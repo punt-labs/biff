@@ -73,6 +73,7 @@ class TestToolListing:
             "who",
             "plan",
             "tty",
+            "last",
         }
         assert names == expected
 

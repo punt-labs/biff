@@ -30,6 +30,7 @@ TOOL_PERMISSION = "mcp__plugin_biff_tty__*"
 # Command files deployed by the SessionStart hook
 BIFF_COMMANDS = (
     "finger.md",
+    "last.md",
     "mesg.md",
     "plan.md",
     "read.md",

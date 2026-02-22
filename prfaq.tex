@@ -645,13 +645,15 @@ paid tier.
   \begin{description}[leftmargin=1.5em, labelwidth=10em, font=\bfseries]
     \item[Shipped] Core MCP server with \texttt{/write}, \texttt{/read},
     \texttt{/who}, \texttt{/plan}, \texttt{/finger}, \texttt{/tty},
-    \texttt{/mesg y/n}. NATS-based relay for cross-machine messaging on
-    Synadia Cloud. POP-model store-and-forward for \texttt{/write}.
-    TTY sessions (each agent gets a distinct identity, targetable via
-    \texttt{/write @user:tty}). Enriched presence (\texttt{/who} shows
-    7 columns: NAME, TTY, IDLE, S, HOST, DIR, PLAN; \texttt{/finger}
-    shows host and directory per session). Per-session status bar
-    showing \texttt{user:tty(N)} with three states: caught up, unreads
+    \texttt{/mesg y/n}, and \texttt{/last}. NATS-based relay for
+    cross-machine messaging on Synadia Cloud. POP-model store-and-forward
+    for \texttt{/write}. TTY sessions (each agent gets a distinct identity,
+    targetable via \texttt{/write @user:tty}). Enriched presence
+    (\texttt{/who} shows 7 columns: NAME, TTY, IDLE, S, HOST, DIR, PLAN;
+    \texttt{/finger} shows host and directory per session). Session
+    history (\texttt{/last} shows login/logout records modeled after Unix
+    \texttt{last(1)}, with three-layer logout detection). Per-session status
+    bar showing \texttt{user:tty(N)} with three states: caught up, unreads
     (bold yellow), and messages off (\texttt{n}). \texttt{/mesg n}
     suppresses the unread count on the status line.
     Display names from GitHub identity. Released and in use.
@@ -689,7 +691,9 @@ paid tier.
   via \texttt{/write @user:tty}. Enriched presence shows host and directory
   per session so you can see where each agent is working. An agent can
   \texttt{/plan} what it is doing, \texttt{/write} a human when it needs a
-  decision, and show up in \texttt{/who} alongside everyone else. The next
+  decision, and show up in \texttt{/who} alongside everyone else.
+  \texttt{/last} provides an audit trail of all session activity --- who
+  logged in, when, and for how long --- mirroring Unix \texttt{last(1)}. The next
   phase adds plan auto-expand (\texttt{/plan biff-bf8}) to surface what
   each agent is working on without anyone looking it up, and workflow hooks
   to automate coordination overhead: claiming a task auto-sets your plan,
@@ -924,7 +928,7 @@ paid tier.
   \texttt{uv tool install --editable .}, \texttt{biff install},
   \texttt{biff doctor}). Time-to-value is under five minutes. The
   primary usability risk is discoverability: new users need to learn the
-  command vocabulary. Mitigation: the vocabulary is small (7 shipped
+  command vocabulary. Mitigation: the vocabulary is small (8 shipped
   commands), the names are intuitive (borrowed from Unix), and the tool
   descriptions are self-documenting within Claude Code. The secondary
   usability risk is the empty-room experience: a solo installer sees no
@@ -1012,6 +1016,12 @@ working today. \textbf{Next} features are the immediate roadmap focus.
   Control whether you receive messages. When off (\texttt{n}), incoming
   messages are queued until you turn it back on (\texttt{y}), and the
   status bar shows \texttt{(n)} instead of the unread count. \\
+
+  \texttt{/last} & BSD \texttt{last} &
+  Show session login/logout history. Displays who logged in, from where,
+  when, and for how long. Active sessions are marked ``still logged in''.
+  Three-layer logout detection: sentinel-based (graceful shutdown),
+  orphan detection (crash recovery), and KV watcher (TTL expiry). \\
 
   \bottomrule
 \end{tabularx}

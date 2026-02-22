@@ -177,7 +177,7 @@ Concretely: a biff plugin hook on `TeammateIdle` or `TaskCompleted` could automa
 
 **The invisible work problem:** Teleport creates a new category of work that is *productive but invisible*. Before teleport, all work happened in a terminal someone was sitting at. Agent Teams expanded this to multiple local agents, but still on one machine. Teleport expands it further: work runs on a VM in Anthropic's cloud, potentially while the engineer's laptop is closed. The team has zero visibility into this work unless biff (or something like it) makes it visible.
 
-**Opportunity for biff:** This is the strongest integration case. See [Teleport bridge](#teleport-bridge) below.
+**Opportunity for biff:** This is the strongest integration case. See the Teleport bridge section below.
 
 ---
 
@@ -224,7 +224,7 @@ A scenario that requires biff and cannot be solved by any other tool in the land
 >
 > Maya joins the project for the first time. She runs `/who`:
 >
-> ```
+> ```text
 > NAME          TTY    IDLE  S  HOST           DIR                PLAN
 > kai           tty1   2m    ✓  kais-mbp       src/auth           [biff-yk1] fixing token refresh
 > kai:w1        tty2   0s    ✓  kais-mbp       src/auth/tests     writing auth tests
@@ -247,7 +247,7 @@ A scenario that requires biff and cannot be solved by any other tool in the land
 >
 > She runs `/finger eric`:
 >
-> ```
+> ```text
 > Login: eric                            Name: Eric Chen
 > Host: erics-mbp                        Dir: src/payments
 > Plan: payment webhook handler
@@ -262,7 +262,7 @@ A scenario that requires biff and cannot be solved by any other tool in the land
 >
 > **Twenty minutes later,** Eric's cloud task completes. Biff delivers:
 >
-> ```
+> ```text
 > @remote → eric: Task "Fix flaky webhook test" completed.
 >   Branch: fix/flaky-webhook-test (3 files, +47 -12)
 >   /tp fix/flaky-webhook-test to resume locally.
@@ -285,6 +285,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 **What:** When an engineer dispatches work with `&` (terminal → web), a biff SessionStart hook on the cloud VM registers the remote session in `/who`. The team sees `user:remote` entries for cloud-dispatched work. When the cloud session completes, a hook delivers a completion notification via `/write` and updates presence.
 
 **Concrete features:**
+
 - Cloud sessions appear in `/who` as `user:remote` with HOST `claude.ai` and their working directory
 - `/finger user:remote` shows: task description, elapsed time, branch name, file change count
 - On completion: `/write` delivers a summary to the dispatching user — branch name, files changed, test results, `/tp` command to resume
@@ -293,6 +294,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 - Optional: `/wall` broadcast for significant completions ("kai:remote landed fix/session-store — 12 files, all tests green")
 
 **How it works technically:**
+
 1. Engineer runs `& Fix the auth bug` — Claude Code creates a cloud session
 2. Cloud VM boots, clones repo, runs SessionStart hook
 3. SessionStart hook: `biff plan "fixing auth bug"` registers presence via NATS relay
@@ -315,6 +317,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 **What:** Agent Teams teammates load MCP servers from the project. If biff is in `.mcp.json`, teammates get `/write`, `/who`, `/finger` automatically. Biff becomes the cross-machine bridge that extends Agent Teams beyond a single session.
 
 **Concrete features:**
+
 - Agent Teams workers appear in `/who` as `user:worker-name` (e.g., `kai:w1`)
 - Workers can `/write` to humans on other machines
 - `TeammateIdle` hook triggers a biff presence update (goes idle in `/who`)
@@ -327,6 +330,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 **What:** When a user runs `bd update <id> --status=in_progress`, their biff `/plan` auto-updates to include the bead title. `/finger` shows the bead ID alongside the plan text.
 
 **Concrete features:**
+
 - `bd update biff-yk1 --status=in_progress` → `/plan` becomes "biff-yk1: Update prfaq competitive positioning"
 - `/finger kai` shows: `Plan: [biff-yk1] Update prfaq competitive positioning`
 - Clicking/copying the bead ID lets teammates run `bd show biff-yk1` for full context
@@ -338,6 +342,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 **What:** Biff `/write` and `/wall` messages contain decision-making context that SageOx's Ledger could capture. An integration would feed biff communication into the team's shared memory.
 
 **Concrete features:**
+
 - `/wall` broadcasts (team announcements, status changes) auto-captured as Ledger entries
 - `/write` exchanges that contain decisions (detected by keyword or explicit `/decide` flag) fed to SageOx
 
@@ -354,6 +359,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 **What:** Infrastructure tools register as participants in `/who`. Not as humans or agents, but as a third category: *services*. Just like seeing "Otter.ai" in a Zoom meeting tells you the call is being transcribed, seeing `@ox` in `/who` tells you team context is being captured. Seeing `@entire` tells you commits are being audited.
 
 **Concrete features:**
+
 - Tools register presence via biff's MCP interface with a `@` prefix convention (e.g., `@ox`, `@entire`, `@ci`)
 - `/who` displays them with a distinct marker (no TTY, no idle — they're always-on services)
 - `/finger @ox` returns service-specific info: "Recording team context. Ledger has 47 entries. Last capture: 3m ago."
@@ -362,6 +368,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 - `/mesg off` still works — you can mute tool broadcasts just like human messages
 
 **Why it matters:**
+
 1. **Transparency.** Everyone knows what infrastructure is active. No hidden recording. The Zoom analogy is exact — visibility of tooling is itself a trust mechanism.
 2. **Discoverability.** New team members see the full picture: who's here, what tools are running, what's being captured.
 3. **Composability.** Biff becomes the presence layer for the entire stack, not just for humans and agents. Each tool in the layer cake can register itself without biff knowing anything about what that tool does.

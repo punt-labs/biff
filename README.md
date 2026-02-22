@@ -98,6 +98,20 @@ Message sent to @kai.
 Plan: debugging the websocket reconnect logic
 ```
 
+### Session history
+
+```text
+> /last
+
+▶  NAME    TTY   HOST       LOGIN             LOGOUT            DURATION
+   @kai    tty3  m2-mb-air  Sat Feb 22 14:01  still logged in   -
+   @kai    tty2  m2-mb-air  Sat Feb 22 11:30  Sat Feb 22 13:58  2:28
+   @eric   tty1  m2-mb-air  Sat Feb 22 09:15  Sat Feb 22 12:45  3:30
+   @priya  tty1  priya-mbp  Fri Feb 21 16:00  Fri Feb 21 18:30  2:30
+```
+
+Shows login/logout history for all sessions, matching Unix `last(1)`. Active sessions show "still logged in". Logout timestamps use the session's last heartbeat for accuracy.
+
 ### Go do-not-disturb
 
 ```text
@@ -116,6 +130,7 @@ Your status bar shows `(n)` instead of the unread count while messages are off. 
 | `/read` | BSD `from` | Check your inbox |
 | `/finger @user` | BSD `finger` | Check what someone is working on |
 | `/who` | BSD `who` | List active sessions |
+| `/last` | BSD `last` | Show session login/logout history |
 | `/plan "text"` | BSD `.plan` | Set your status |
 | `/tty "name"` | BSD `tty` | Name the current session |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
@@ -156,9 +171,11 @@ As engineering teams grow to include both humans and autonomous agents, coordina
 
 ### Shipped
 
-Core communication is live: presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), and availability control (`/mesg`) — all working over a NATS relay for cross-machine communication.
+Core communication is live: presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), availability control (`/mesg`), and session history (`/last`) — all working over a NATS relay for cross-machine communication.
 
 TTY sessions (`/tty`) give each agent a distinct identity — one user with 3 sessions shows 3 entries in `/who`, targetable via `/write @user:tty`. Enriched presence shows host and directory per session. Per-session status bar with `user:tty(N)` format. `/mesg n` suppresses the unread count on the status line.
+
+`/last` shows login/logout history modeled after Unix `last(1)`, with three-layer logout detection: sentinel-based (SIGTERM/SIGINT), orphan detection (crash recovery), and KV watcher (TTL expiry).
 
 ### Next: Agentic Coordination
 

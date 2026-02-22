@@ -1,6 +1,6 @@
 [project]
 name = "punt-biff"
-version = "0.4.0"
+version = "0.5.0"
 description = "The dog that barked when messages arrived. A modern CLI communication tool for software engineers."
 readme = "README.md"
 requires-python = ">=3.13"

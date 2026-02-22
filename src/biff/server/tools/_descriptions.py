@@ -48,6 +48,11 @@ _tty_name: str = ""
 _biff_enabled: bool = True
 
 
+def get_tty_name() -> str:
+    """Return the module-level TTY name."""
+    return _tty_name
+
+
 def set_tty_name(name: str) -> None:
     """Update the module-level TTY name for unread file writes."""
     global _tty_name
