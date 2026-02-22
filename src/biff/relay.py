@@ -39,6 +39,7 @@ from biff.models import (
     SessionEvent,
     UnreadSummary,
     UserSession,
+    WallPost,
     build_unread_summary,
 )
 from biff.tty import build_session_key
@@ -118,6 +119,12 @@ class Relay(Protocol):
     async def get_wtmp(
         self, *, user: str | None = None, count: int = 25
     ) -> list[SessionEvent]: ...
+
+    # -- Wall (team broadcast) --
+
+    async def set_wall(self, wall: WallPost | None) -> None: ...
+
+    async def get_wall(self) -> WallPost | None: ...
 
     # -- Lifecycle --
 
@@ -377,6 +384,31 @@ class LocalRelay:
     ) -> list[SessionEvent]:
         """Return empty list — local relay does not persist session history."""
         return []
+
+    # -- Wall (team broadcast) --
+
+    async def set_wall(self, wall: WallPost | None) -> None:
+        """Set or clear the team wall broadcast."""
+        path = self._data_dir / "wall.json"
+        if wall is None:
+            path.unlink(missing_ok=True)
+        else:
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, wall.model_dump_json() + "\n")
+
+    async def get_wall(self) -> WallPost | None:
+        """Read the active wall, returning ``None`` if absent or expired."""
+        path = self._data_dir / "wall.json"
+        if not path.exists():
+            return None
+        try:
+            wall = WallPost.model_validate_json(path.read_text())
+        except (ValidationError, ValueError, OSError):
+            return None
+        if wall.is_expired:
+            path.unlink(missing_ok=True)
+            return None
+        return wall
 
     async def close(self) -> None:
         """No-op — filesystem relay has no connection to close."""

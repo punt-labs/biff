@@ -31,6 +31,10 @@
   Claude Code UI (#31)
 - **GitHub identity** — resolve display name from `gh api user` for
   `/finger` output (#27)
+- **Team broadcast** — `/wall` command for time-limited team announcements modeled
+  after BSD `wall(1)`. Posts a banner visible on every teammate's status bar and
+  tool descriptions. Duration-based expiry (default 1h, max 3d), lazy expiry on
+  read, three modes: post, read, clear (#biff-klz)
 - **Session history** — `/last` command showing login/logout history modeled
   after Unix `last(1)`. NATS wtmp stream (JetStream, 30-day retention) records
   session events. Three-layer logout: sentinel-based (SIGTERM), orphan detection

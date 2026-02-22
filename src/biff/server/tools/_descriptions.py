@@ -47,6 +47,10 @@ _tty_name: str = ""
 # Set by the ``mesg`` tool so the unread file includes availability state.
 _biff_enabled: bool = True
 
+# Set by the ``wall`` tool and background poller so the unread file
+# includes the active wall text for status bar display.
+_wall_text: str = ""
+
 
 def get_tty_name() -> str:
     """Return the module-level TTY name."""
@@ -65,12 +69,19 @@ def set_biff_enabled(*, enabled: bool) -> None:
     _biff_enabled = enabled
 
 
+def set_wall_text(text: str) -> None:
+    """Update the module-level wall text for unread file writes."""
+    global _wall_text
+    _wall_text = text
+
+
 def _reset_session() -> None:
-    """Clear stored session, tty name, and biff_enabled — test isolation."""
-    global _session, _tty_name, _biff_enabled
+    """Clear stored session, tty name, biff_enabled, wall — test isolation."""
+    global _session, _tty_name, _biff_enabled, _wall_text
     _session = None
     _tty_name = ""
     _biff_enabled = True
+    _wall_text = ""
 
 
 async def _notify_tool_list_changed() -> None:
@@ -149,6 +160,53 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
             user=state.config.user,
             tty_name=_tty_name,
             biff_enabled=_biff_enabled,
+            wall_text=_wall_text,
+        )
+
+
+async def refresh_wall(mcp: FastMCP[ServerState], state: ServerState) -> None:
+    """Update the ``wall`` tool description and module-level wall text.
+
+    When a wall is active, the description shows the current banner.
+    When no wall is active, the description reverts to base text.
+    Also syncs ``_wall_text`` so the next unread file write includes it.
+    """
+    global _wall_text
+
+    from biff.server.tools.wall import (  # noqa: PLC0415
+        WALL_BASE_DESCRIPTION,
+        format_remaining,
+    )
+
+    tool = await mcp.get_tool("wall")
+    if tool is None:
+        return
+    current = await state.relay.get_wall()
+    old_desc = tool.description
+    if current is None:
+        tool.description = WALL_BASE_DESCRIPTION
+        _wall_text = ""
+    else:
+        remaining = format_remaining(current.expires_at)
+        tool.description = (
+            f"[WALL] {current.text} — @{current.from_user}, "
+            f"expires in {remaining}. "
+            "Use wall(clear=True) to remove."
+        )
+        _wall_text = current.text
+    if tool.description != old_desc:
+        await _notify_tool_list_changed()
+    # Re-write the unread file so wall text is synced to status bar
+    if state.unread_path is not None:
+        summary = await state.relay.get_unread_summary(state.session_key)
+        _write_unread_file(
+            state.unread_path,
+            summary,
+            repo_name=state.config.repo_name,
+            user=state.config.user,
+            tty_name=_tty_name,
+            biff_enabled=_biff_enabled,
+            wall_text=_wall_text,
         )
 
 
@@ -159,12 +217,12 @@ async def poll_inbox(
     shutdown: asyncio.Event | None = None,
     interval: float = _DEFAULT_POLL_INTERVAL,
 ) -> None:
-    """Background task: poll inbox and refresh notifications on change.
+    """Background task: poll inbox and wall, refresh notifications on change.
 
     Runs for the lifetime of the MCP server. Detects new or read
     messages by comparing the unread count against the last known
-    value, then calls :func:`refresh_read_messages` to update both
-    the tool description and the status file.
+    value, and checks wall state for changes.  Calls the appropriate
+    refresh function when state changes.
 
     When *shutdown* is set, exits cleanly between iterations —
     no NATS operations are interrupted mid-flight.
@@ -172,11 +230,9 @@ async def poll_inbox(
     The notification is sent via :func:`_notify_tool_list_changed`,
     which uses a stored ``ServerSession`` reference captured from
     the first tool call.
-
-    In Phase 2 the relay will push notifications directly, replacing
-    the polling loop. The refresh mechanism stays the same.
     """
     last_count = -1  # Force initial refresh
+    last_wall: tuple[str, str] = ("", "")  # (text, posted_at) — Force initial refresh
     while shutdown is None or not shutdown.is_set():
         if shutdown is not None:
             try:
@@ -191,6 +247,14 @@ async def poll_inbox(
             last_count = summary.count
             await refresh_read_messages(mcp, state)
 
+        # Check wall state — another session may have posted or cleared.
+        # Key on (text, posted_at) so re-posts with different expiry trigger refresh.
+        wall = await state.relay.get_wall()
+        wall_key = (wall.text, wall.posted_at.isoformat()) if wall else ("", "")
+        if wall_key != last_wall:
+            last_wall = wall_key
+            await refresh_wall(mcp, state)
+
 
 def _write_unread_file(
     path: Path,
@@ -200,12 +264,13 @@ def _write_unread_file(
     user: str,
     tty_name: str,
     biff_enabled: bool,
+    wall_text: str = "",
 ) -> None:
     """Write unread summary to a JSON status file.
 
-    Includes ``user``, ``repo``, ``tty_name``, and ``biff_enabled``
-    metadata so the status line can display identity, session, and
-    availability information.
+    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``, and
+    ``wall`` metadata so the status line can display identity, session,
+    availability, and wall banner information.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
@@ -217,6 +282,7 @@ def _write_unread_file(
         "tty_name": tty_name,
         "preview": summary.preview,
         "biff_enabled": biff_enabled,
+        "wall": wall_text,
     }
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")

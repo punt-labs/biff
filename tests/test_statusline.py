@@ -25,6 +25,7 @@ from biff.statusline import (
     _read_session_unread,
     _resolve_original_command,
     _run_original,
+    _wall_segment,
     install,
     read_settings,
     read_stash,
@@ -453,6 +454,30 @@ class TestBiffSegment:
     def test_mesg_off_without_tty(self) -> None:
         result = _biff_segment(SessionUnread("kai", 3, "", biff_enabled=False))
         assert result == "kai(n)"
+
+
+# --- Wall Segment -----------------------------------------------------------
+
+
+class TestWallSegment:
+    def test_empty_returns_empty(self) -> None:
+        assert _wall_segment("") == ""
+
+    def test_active_wall(self) -> None:
+        result = _wall_segment("release freeze")
+        assert "WALL:" in result
+        assert "release freeze" in result
+
+    def test_bold_red(self) -> None:
+        result = _wall_segment("deploy in progress")
+        assert "\033[1;31m" in result
+        assert "\033[0m" in result
+
+    def test_truncates_long_text(self) -> None:
+        long_text = "x" * 50
+        result = _wall_segment(long_text)
+        assert "..." in result
+        assert len(result) < len(long_text) + 30  # ANSI codes + prefix
 
 
 # --- Read Session Unread ----------------------------------------------------

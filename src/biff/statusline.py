@@ -171,8 +171,9 @@ def run_statusline(
 
     unread = _read_session_unread(unread_dir / f"{os.getppid()}.json")
     biff = _biff_segment(unread)
+    wall = _wall_segment(unread.wall if unread else "")
 
-    segments = [s for s in [*base_segments, biff] if s.strip()]
+    segments = [s for s in [*base_segments, biff, wall] if s.strip()]
     return " | ".join(segments)
 
 
@@ -360,6 +361,7 @@ class SessionUnread:
     count: int
     tty_name: str
     biff_enabled: bool = True
+    wall: str = ""
 
 
 def _read_session_unread(path: Path) -> SessionUnread | None:
@@ -372,6 +374,7 @@ def _read_session_unread(path: Path) -> SessionUnread | None:
             count=int(data.get("count", 0)),
             tty_name=str(data.get("tty_name", "")),
             biff_enabled=bool(biff_enabled),
+            wall=str(data.get("wall", "")),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None
@@ -399,6 +402,19 @@ def _biff_segment(unread: SessionUnread | None) -> str:
     if unread.count == 0:
         return label
     return f"\033[1;33m{label}\033[0m"
+
+
+def _wall_segment(wall_text: str) -> str:
+    """Format the wall banner segment for the status bar.
+
+    Empty when no wall is active.  Bold red when active to
+    distinguish from normal biff status.
+    """
+    if not wall_text:
+        return ""
+    # Truncate long wall messages for status bar readability
+    display = wall_text if len(wall_text) <= 40 else wall_text[:37] + "..."
+    return f"\033[1;31mWALL: {display}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str | None:
