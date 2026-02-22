@@ -29,6 +29,7 @@ from biff.server.tools._descriptions import (
 )
 from biff.server.tools._session import update_current_session
 from biff.server.tools.tty import next_tty_name
+from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +311,71 @@ async def _append_logout_event(state: ServerState) -> None:
         logger.warning("Failed to append wtmp logout event", exc_info=True)
 
 
+def _find_orphaned_logins(
+    events: list[SessionEvent],
+    active_keys: set[str],
+) -> list[SessionEvent]:
+    """Return login events that have no matching logout and no active session."""
+    logout_keys = {e.session_key for e in events if e.event == "logout"}
+    orphans: list[SessionEvent] = []
+    seen: set[str] = set()
+    for event in events:
+        if event.event != "login" or event.session_key in seen:
+            continue
+        seen.add(event.session_key)
+        has_logout = event.session_key in logout_keys
+        is_active = event.session_key in active_keys
+        if not has_logout and not is_active:
+            orphans.append(event)
+    return orphans
+
+
+async def _close_orphaned_logins(
+    state: ServerState,
+    active_sessions: list[UserSession],
+) -> None:
+    """Write retroactive logout events for sessions that died without cleanup.
+
+    At startup, fetches recent wtmp events and identifies login events
+    with no matching logout and no active KV session.  For each orphan,
+    writes a logout event timestamped now (the time we detected it).
+
+    This is the primary logout mechanism — MCP subprocess death prevents
+    async cleanup in the ``finally`` block, so orphan detection on the
+    next startup is the only reliable path.
+    """
+    try:
+        events = await state.relay.get_wtmp(count=100)
+    except Exception:  # noqa: BLE001
+        return
+
+    if not events:
+        return
+
+    active_keys: set[str] = {build_session_key(s.user, s.tty) for s in active_sessions}
+    active_keys.add(state.session_key)
+    orphaned = _find_orphaned_logins(events, active_keys)
+
+    for login in orphaned:
+        logout = SessionEvent(
+            session_key=login.session_key,
+            event="logout",
+            user=login.user,
+            tty=login.tty,
+            tty_name=login.tty_name,
+            hostname=login.hostname,
+            pwd=login.pwd,
+            timestamp=datetime.now(UTC),
+        )
+        try:
+            await state.relay.append_wtmp(logout)
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to close orphaned login %s", login.session_key)
+
+    if orphaned:
+        logger.info("Closed %d orphaned login(s)", len(orphaned))
+
+
 def create_server(state: ServerState) -> FastMCP[ServerState]:
     """Create a FastMCP server with all biff tools registered.
 
@@ -354,6 +420,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         await refresh_read_messages(mcp, state)
 
         await _append_login_event(state, auto_name)
+        await _close_orphaned_logins(state, sessions)
 
         shutdown = asyncio.Event()
         poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
