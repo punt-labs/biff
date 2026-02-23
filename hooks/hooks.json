@@ -12,11 +12,20 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_biff_tty__.*",
+        "matcher": "mcp__plugin_biff(-dev)?_tty__.*",
         "hooks": [
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suppress-output.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__(github|plugin_github_github)__(create|merge)_pull_request",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pr-announce.sh"
           }
         ]
       }
