@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session
 
@@ -26,6 +27,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Visible to teammates via /finger and /who."
         ),
     )
+    @auto_enable(state)
     async def plan(message: str) -> str:
         """Update the current user's ``.plan`` file.
 

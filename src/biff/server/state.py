@@ -11,7 +11,7 @@ from pathlib import Path
 
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
-from biff.relay import LocalRelay, Relay
+from biff.relay import DormantRelay, LocalRelay, Relay
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
 
 
@@ -26,6 +26,8 @@ class ServerState:
     pwd: str = ""
     unread_path: Path | None = None
     owns_relay: bool = True
+    dormant: bool = False
+    repo_root: Path | None = None
 
     @property
     def session_key(self) -> str:
@@ -42,19 +44,28 @@ def create_state(
     tty: str | None = None,
     hostname: str | None = None,
     pwd: str | None = None,
+    dormant: bool = False,
+    repo_root: Path | None = None,
 ) -> ServerState:
     """Create a ``ServerState`` from config and data directory.
 
-    Relay selection: an explicit *relay* wins, then ``config.relay_url``
-    selects :class:`~biff.nats_relay.NatsRelay`, otherwise
-    :class:`~biff.relay.LocalRelay`.
+    Relay selection (in priority order):
+
+    1. An explicit *relay* always wins (used by tests).
+    2. When *dormant* is ``True``, uses
+       :class:`~biff.relay.DormantRelay`.
+    3. ``config.relay_url`` selects
+       :class:`~biff.nats_relay.NatsRelay`.
+    4. Otherwise :class:`~biff.relay.LocalRelay`.
 
     Runtime identity (tty, hostname, pwd) is auto-generated when not
     provided — each server instance gets a unique session key.
     """
     owns_relay = relay is None
     if relay is None:
-        if config.relay_url:
+        if dormant:
+            relay = DormantRelay()
+        elif config.relay_url:
             relay = NatsRelay(
                 url=config.relay_url,
                 auth=config.relay_auth,
@@ -71,4 +82,6 @@ def create_state(
         pwd=pwd or get_pwd(),
         unread_path=unread_path,
         owns_relay=owns_relay,
+        dormant=dormant,
+        repo_root=repo_root,
     )

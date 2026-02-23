@@ -131,6 +131,74 @@ class Relay(Protocol):
     async def close(self) -> None: ...
 
 
+class DormantRelay:
+    """Null relay for disabled biff instances.
+
+    Implements the full :class:`Relay` protocol with safe empty returns.
+    Tools bound to a dormant relay get no messages, no sessions, and no
+    errors — the server runs but does nothing on the network.
+    """
+
+    async def deliver(self, message: Message) -> None:
+        pass
+
+    async def fetch(self, session_key: str) -> list[Message]:  # noqa: ARG002 — Protocol impl
+        return []
+
+    async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None:
+        pass
+
+    async def get_unread_summary(self, session_key: str) -> UnreadSummary:  # noqa: ARG002
+        return UnreadSummary()
+
+    async def fetch_user_inbox(self, user: str) -> list[Message]:  # noqa: ARG002
+        return []
+
+    async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
+        pass
+
+    async def get_user_unread_count(self, user: str) -> int:  # noqa: ARG002
+        return 0
+
+    async def update_session(self, session: UserSession) -> None:
+        pass
+
+    async def get_session(self, session_key: str) -> UserSession | None:  # noqa: ARG002
+        return None
+
+    async def get_sessions_for_user(self, user: str) -> list[UserSession]:  # noqa: ARG002
+        return []
+
+    async def heartbeat(self, session_key: str) -> None:
+        pass
+
+    async def get_sessions(self) -> list[UserSession]:
+        return []
+
+    async def delete_session(self, session_key: str) -> None:
+        pass
+
+    async def append_wtmp(self, event: SessionEvent) -> None:
+        pass
+
+    async def get_wtmp(
+        self,
+        *,
+        user: str | None = None,  # noqa: ARG002
+        count: int = 25,  # noqa: ARG002
+    ) -> list[SessionEvent]:
+        return []
+
+    async def set_wall(self, wall: WallPost | None) -> None:
+        pass
+
+    async def get_wall(self) -> WallPost | None:
+        return None
+
+    async def close(self) -> None:
+        pass
+
+
 class LocalRelay:
     """Filesystem-backed relay with per-user and per-session inbox files.
 

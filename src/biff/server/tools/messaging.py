@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.models import Message
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._formatting import ColumnSpec, format_table
 from biff.server.tools._session import resolve_session, update_current_session
@@ -28,6 +29,21 @@ _READ_SPECS: list[ColumnSpec] = [
 ]
 
 
+async def _resolve_recipient(state: ServerState, to: str) -> tuple[str, str]:
+    """Resolve an address to ``(relay_key, display_name)``."""
+    user, tty = parse_address(to)
+    if tty:
+        session = await resolve_session(state.relay, user, tty)
+        if session:
+            relay_key = build_session_key(session.user, session.tty)
+        else:
+            relay_key = f"{user}:{tty}"
+    else:
+        relay_key = user
+    display = f"@{user}:{tty}" if tty else f"@{user}"
+    return relay_key, display
+
+
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register messaging tools."""
 
@@ -38,6 +54,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Messages are delivered to their inbox asynchronously."
         ),
     )
+    @auto_enable(state)
     async def write(to: str, message: str) -> str:
         """Send a message to another user's inbox, like BSD ``write(1)``.
 
@@ -45,16 +62,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ``@user:tty`` targets a specific session.
         """
         await update_current_session(state)
-        user, tty = parse_address(to)
-        if tty:
-            # Resolve tty_name to actual session key
-            session = await resolve_session(state.relay, user, tty)
-            if session:
-                to_user = build_session_key(session.user, session.tty)
-            else:
-                to_user = f"{user}:{tty}"
-        else:
-            to_user = user
+        to_user, display = await _resolve_recipient(state, to)
         msg = Message(
             from_user=state.config.user,
             to_user=to_user,
@@ -62,13 +70,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         )
         await state.relay.deliver(msg)
         await refresh_read_messages(mcp, state)
-        display = f"@{user}:{tty}" if tty else f"@{user}"
         return f"Message sent to {display}."
 
     @mcp.tool(
         name="read_messages",
         description="Check your inbox for new messages. Marks all as read.",
     )
+    @auto_enable(state)
     async def read_messages() -> str:
         """Retrieve unread messages and mark them as read.
 

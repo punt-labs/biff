@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from biff.models import SessionEvent
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._formatting import ColumnSpec, format_table
 from biff.server.tools._session import update_current_session
 from biff.tty import build_session_key
@@ -112,6 +113,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="last",
         description="Show session login/logout history (like Unix last).",
     )
+    @auto_enable(state)
     async def last(user: str = "", count: int = 25) -> str:
         """Show recent session history."""
         await update_current_session(state)

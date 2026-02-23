@@ -156,14 +156,14 @@ class TestServeCommand:
 _KAI_IDENTITY = GitHubIdentity(login="kai", display_name="Kai Chen")
 
 
-class TestInitCommand:
+class TestEnableCommand:
     @patch("biff.__main__.get_os_user", return_value=None)
     @patch(
         "biff.__main__.get_github_identity",
         return_value=_KAI_IDENTITY,
     )
     @patch("biff.__main__.find_git_root")
-    def test_creates_biff_file(
+    def test_creates_biff_and_local(
         self,
         mock_root: MagicMock,
         _mock_gh: MagicMock,
@@ -172,24 +172,69 @@ class TestInitCommand:
     ) -> None:
         mock_root.return_value = tmp_path
         # Simulate: members="eric, priya", relay=""
-        result = runner.invoke(app, ["init"], input="eric, priya\n\n")
+        result = runner.invoke(app, ["enable"], input="eric, priya\n\n")
         assert result.exit_code == 0
-        biff_file = tmp_path / ".biff"
-        assert biff_file.exists()
-        content = biff_file.read_text()
+        assert (tmp_path / ".biff").exists()
+        assert (tmp_path / ".biff.local").exists()
+        content = (tmp_path / ".biff").read_text()
         assert '"eric"' in content
         assert '"priya"' in content
+        local = (tmp_path / ".biff.local").read_text()
+        assert "enabled = true" in local
+
+    @patch("biff.__main__.find_git_root")
+    def test_existing_biff_skips_init(
+        self, mock_root: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_root.return_value = tmp_path
+        (tmp_path / ".biff").write_text('[team]\nmembers = ["kai"]\n')
+        result = runner.invoke(app, ["enable"])
+        assert result.exit_code == 0
+        assert "enabled" in result.output
+        assert (tmp_path / ".biff.local").exists()
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:
-        result = runner.invoke(app, ["init"])
+        result = runner.invoke(app, ["enable"])
         assert result.exit_code != 0
         assert "Not in a git repository" in result.output
 
     @patch("biff.__main__.find_git_root")
-    def test_already_exists(self, mock_root: MagicMock, tmp_path: Path) -> None:
+    def test_idempotent(self, mock_root: MagicMock, tmp_path: Path) -> None:
         mock_root.return_value = tmp_path
-        (tmp_path / ".biff").write_text('[team]\nmembers = ["kai"]\n')
-        result = runner.invoke(app, ["init"])
+        (tmp_path / ".biff").write_text("")
+        runner.invoke(app, ["enable"])
+        runner.invoke(app, ["enable"])
+        assert (tmp_path / ".biff.local").read_text() == "enabled = true\n"
+
+    @patch("biff.__main__.find_git_root")
+    def test_adds_gitignore_entry(self, mock_root: MagicMock, tmp_path: Path) -> None:
+        mock_root.return_value = tmp_path
+        (tmp_path / ".biff").write_text("")
+        runner.invoke(app, ["enable"])
+        gitignore = (tmp_path / ".gitignore").read_text()
+        assert ".biff.local" in gitignore
+
+
+class TestDisableCommand:
+    @patch("biff.__main__.find_git_root")
+    def test_writes_disabled(self, mock_root: MagicMock, tmp_path: Path) -> None:
+        mock_root.return_value = tmp_path
+        result = runner.invoke(app, ["disable"])
+        assert result.exit_code == 0
+        assert "disabled" in result.output
+        local = (tmp_path / ".biff.local").read_text()
+        assert "enabled = false" in local
+
+    @patch("biff.__main__.find_git_root", return_value=None)
+    def test_not_in_repo(self, _mock: MagicMock) -> None:
+        result = runner.invoke(app, ["disable"])
         assert result.exit_code != 0
-        assert "already exists" in result.output
+        assert "Not in a git repository" in result.output
+
+    @patch("biff.__main__.find_git_root")
+    def test_idempotent(self, mock_root: MagicMock, tmp_path: Path) -> None:
+        mock_root.return_value = tmp_path
+        runner.invoke(app, ["disable"])
+        runner.invoke(app, ["disable"])
+        assert (tmp_path / ".biff.local").read_text() == "enabled = false\n"

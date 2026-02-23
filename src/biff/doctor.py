@@ -19,6 +19,7 @@ from biff.config import (
     demo_creds_path,
     extract_biff_fields,
     find_git_root,
+    is_enabled,
     load_biff_file,
 )
 from biff.installer import BIFF_COMMANDS, COMMANDS_DIR, PLUGIN_ID
@@ -160,7 +161,7 @@ def _check_biff_file() -> CheckResult:
         return CheckResult(
             ".biff file",
             False,
-            "not in a git repo (run 'biff init' inside a project)",
+            "not in a git repo (run 'biff enable' inside a project)",
             required=False,
         )
     biff_file = repo_root / ".biff"
@@ -169,7 +170,27 @@ def _check_biff_file() -> CheckResult:
     return CheckResult(
         ".biff file",
         False,
-        f"not found (run 'biff init' in {repo_root})",
+        f"not found (run 'biff enable' in {repo_root})",
+        required=False,
+    )
+
+
+def _check_enabled() -> CheckResult:
+    """Check whether biff is enabled via ``.biff.local`` (informational)."""
+    repo_root = find_git_root()
+    if repo_root is None:
+        return CheckResult(
+            "Enabled",
+            False,
+            "not in a git repo",
+            required=False,
+        )
+    if is_enabled(repo_root):
+        return CheckResult("Enabled", True, "yes (.biff.local)", required=False)
+    return CheckResult(
+        "Enabled",
+        False,
+        "no (run 'biff enable' to activate)",
         required=False,
     )
 
@@ -213,6 +234,7 @@ def check_environment() -> int:
         _check_user_commands(),
         _check_relay(),
         _check_biff_file(),
+        _check_enabled(),
         _check_statusline(),
     ]
 

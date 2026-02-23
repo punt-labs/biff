@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._formatting import (
     ColumnSpec,
@@ -65,6 +66,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="who",
         description="List all active team members and what they're working on.",
     )
+    @auto_enable(state)
     async def who() -> str:
         """List all sessions with idle time."""
         await update_current_session(state)

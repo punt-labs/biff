@@ -1,7 +1,8 @@
 """Biff CLI entry point.
 
-Provides ``biff serve``, ``biff version``, ``biff init``, ``biff install``,
-``biff doctor``, ``biff uninstall``, and status line management.
+Provides ``biff serve``, ``biff version``, ``biff enable``, ``biff disable``,
+``biff install``, ``biff doctor``, ``biff uninstall``, and status line
+management.
 """
 
 from __future__ import annotations
@@ -15,10 +16,14 @@ import typer
 
 from biff.config import (
     DEMO_RELAY_URL,
+    build_biff_toml,
+    ensure_gitignore,
     find_git_root,
     get_github_identity,
     get_os_user,
+    is_enabled,
     load_config,
+    write_biff_local,
 )
 from biff.server.app import create_server
 from biff.server.state import create_state
@@ -73,10 +78,13 @@ def serve(
         relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
         prefix=prefix,
     )
+    dormant = not is_enabled(resolved.repo_root)
     state = create_state(
         resolved.config,
         resolved.data_dir,
         unread_path=UNREAD_DIR / f"{find_session_key()}.json",
+        dormant=dormant,
+        repo_root=resolved.repo_root,
     )
     mcp = create_server(state)
 
@@ -109,77 +117,78 @@ def uninstall_statusline() -> None:
         raise typer.Exit(code=1)
 
 
-def _toml_basic_string(value: str) -> str:
-    """Escape *value* for use as a TOML basic string."""
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _build_biff_toml(members: list[str], relay_url: str) -> str:
-    """Build ``.biff`` TOML content from user inputs."""
-    lines: list[str] = []
-    if members:
-        quoted = ", ".join(_toml_basic_string(m) for m in members)
-        lines.append("[team]")
-        lines.append(f"members = [{quoted}]")
-    if relay_url:
-        if lines:
-            lines.append("")
-        lines.append("[relay]")
-        lines.append(f"url = {_toml_basic_string(relay_url)}")
-    return "\n".join(lines) + "\n" if lines else ""
-
-
 @app.command()
-def init(
+def enable(
     start: Annotated[
         Path | None,
         typer.Option(help="Repo root (default: auto-detect)."),
     ] = None,
 ) -> None:
-    """Initialize biff in the current git repo."""
+    """Enable biff in the current git repo.
+
+    If no ``.biff`` team config exists, runs the interactive init flow
+    (identity resolution, team members, relay URL) to create one.
+    Writes ``.biff.local`` with ``enabled = true`` and ensures it is
+    gitignored.  Idempotent — safe to run multiple times.
+    """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
     biff_file = repo_root / ".biff"
-    if biff_file.exists():
-        raise SystemExit(
-            f"{biff_file} already exists. Edit it directly or remove it first."
+    if not biff_file.exists():
+        # Interactive init flow — create .biff
+        identity = get_github_identity()
+        user = (identity.login if identity is not None else None) or get_os_user()
+        if user is None:
+            raise SystemExit(
+                "Could not determine username.\n"
+                "Install the gh CLI and authenticate: gh auth login"
+            )
+        print(f"Identity: {user}")
+
+        members_input = typer.prompt(
+            "Team members (comma-separated, or empty)",
+            default="",
+            show_default=False,
+        )
+        members = [m.strip() for m in members_input.split(",") if m.strip()]
+
+        relay_url = typer.prompt(
+            "Relay URL",
+            default=DEMO_RELAY_URL,
         )
 
-    # Resolve identity: GitHub CLI > OS username
-    identity = get_github_identity()
-    user = (identity.login if identity is not None else None) or get_os_user()
-    if user is None:
-        raise SystemExit(
-            "Could not determine username.\n"
-            "Install the gh CLI and authenticate: gh auth login"
-        )
-    print(f"Identity: {user}")
+        biff_file.write_text(build_biff_toml(members, relay_url))
+        print(f"Created {biff_file}")
+        if members:
+            print(f"  Team: {', '.join(members)}")
+        if relay_url:
+            print(f"  Relay: {relay_url}")
 
-    # Gather team members
-    members_input = typer.prompt(
-        "Team members (comma-separated, or empty)",
-        default="",
-        show_default=False,
-    )
-    members = [m.strip() for m in members_input.split(",") if m.strip()]
+    write_biff_local(repo_root, enabled=True)
+    ensure_gitignore(repo_root)
+    print("biff enabled. Restart Claude Code for changes to take effect.")
 
-    relay_url = typer.prompt(
-        "Relay URL",
-        default=DEMO_RELAY_URL,
-    )
 
-    # Write .biff (even if empty — signals "biff is configured here")
-    biff_file.write_text(_build_biff_toml(members, relay_url))
-    print(f"Created {biff_file}")
+@app.command()
+def disable(
+    start: Annotated[
+        Path | None,
+        typer.Option(help="Repo root (default: auto-detect)."),
+    ] = None,
+) -> None:
+    """Disable biff in the current git repo.
 
-    if members:
-        print(f"  Team: {', '.join(members)}")
-    if relay_url:
-        print(f"  Relay: {relay_url}")
-    if not members and not relay_url:
-        print("  (empty — add [team] or [relay] sections as needed)")
+    Writes ``.biff.local`` with ``enabled = false``.  Idempotent.
+    """
+    repo_root = find_git_root(start)
+    if repo_root is None:
+        raise SystemExit("Not in a git repository. Run this from inside a repo.")
+
+    write_biff_local(repo_root, enabled=False)
+    ensure_gitignore(repo_root)
+    print("biff disabled. Restart Claude Code for changes to take effect.")
 
 
 @app.command()
