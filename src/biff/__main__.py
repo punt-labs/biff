@@ -6,7 +6,6 @@ Provides ``biff serve``, ``biff version``, ``biff init``, ``biff install``,
 
 from __future__ import annotations
 
-import os
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Annotated
@@ -65,6 +64,7 @@ def serve(
 ) -> None:
     """Start the biff MCP server."""
     from biff.config import RELAY_URL_UNSET
+    from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
 
     resolved = load_config(
@@ -76,7 +76,7 @@ def serve(
     state = create_state(
         resolved.config,
         resolved.data_dir,
-        unread_path=UNREAD_DIR / f"{os.getppid()}.json",
+        unread_path=UNREAD_DIR / f"{find_session_key()}.json",
     )
     mcp = create_server(state)
 

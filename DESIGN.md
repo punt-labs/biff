@@ -493,21 +493,24 @@ The `/biff:biff on|off` command (awkward after rename) was split into `/mesg y` 
 
 ## DES-011: Status Line — Per-Session Unread Counts via PPID
 
-**Date:** 2026-02-15 (revised 2026-02-17)
+**Date:** 2026-02-15 (revised 2026-02-17, 2026-02-22)
 **Status:** SETTLED
 **Topic:** How unread message counts appear in Claude Code's status bar
 
 ### Design
 
-Each biff MCP server writes its unread state to `~/.biff/unread/{ppid}.json`, where `ppid` is the server's parent process ID (`os.getppid()`). The status line script reads `~/.biff/unread/{ppid}.json` using its own `os.getppid()`.
+Each biff MCP server writes its unread state to `~/.biff/unread/{key}.json`, where `key` is the topmost `claude` ancestor PID found by walking the process tree (`find_session_key()` in `src/biff/session_key.py`). The status line script reads the same path using the same function.
 
-**Why this works:** Claude Code (`claude -r`) spawns both the MCP server (via stdio transport) and the status line command as direct child processes. Both have the same parent PID — the Claude Code process for that session. No shell intermediary exists for either child.
+**Why this works:** Both the MCP server and the statusline command are descendants of the same root Claude Code process. Walking up the process tree to the topmost `claude` ancestor gives both a stable key regardless of intermediate child processes.
 
 ```text
-Claude Code (PID 30757)
-├── biff serve --transport stdio   (MCP server, ppid=30757, writes file)
-├── biff statusline                (status line, ppid=30757, reads file)
+Claude Code (PID 19147)
+├── biff statusline                (status line, walks up → 19147)
+└── claude (PID 57369, MCP manager)
+    └── biff serve --transport stdio   (MCP server, walks up → 19147)
 ```
+
+Falls back to `os.getppid()` when no `claude` ancestor exists (e.g. manual invocation, test environments).
 
 The unread file contains user, repo, count, TTY name, and preview:
 
@@ -529,16 +532,38 @@ When `biff_enabled=false` (set by `/mesg n`), the status line shows `user:tty(n)
 
 The MCP server deletes its PPID-keyed unread file in the lifespan `finally` block on shutdown. This prevents stale files from accumulating when sessions end.
 
-### Verified (2026-02-17)
+### DES-011a: Ancestor Walk (2026-02-22)
 
-Instrumented both the MCP server and status line to log their PPIDs. Confirmed across multiple concurrent Claude Code sessions:
+**New evidence:** Claude Code now interposes an intermediate child process between the main process and MCP servers. The direct-parent PPID assumption from DES-011 no longer holds:
+
+```text
+57369 (claude, MCP manager)   ← MCP server parent (os.getppid() = 57369)
+├── biff serve (prod)
+└── biff serve (dev)
+```
+
+The statusline is spawned from a different level, so `os.getppid()` returns a different PID. MCP server writes to `57369.json`; statusline looks for a different PID — file not found, status bar shows bare `biff`.
+
+**Fix:** `find_session_key()` in `src/biff/session_key.py` runs a single `ps -eo pid=,ppid=,comm=` call, parses the full process table into a dict, and walks upward from the current PID to find the topmost ancestor whose `comm` basename is `claude`. Both MCP server and statusline converge on the same root Claude Code PID regardless of intermediate processes.
+
+- Safety bounded to 10 levels (process trees are shallow)
+- Result cached per process lifetime (the ancestor PID never changes)
+- Falls back to `os.getppid()` if `ps` fails or no `claude` ancestor found
+
+**Verified (2026-02-22):** Live process tree shows `find_session_key()` returns 57369 (the claude process) while `os.getppid()` returns 67618 (a transient shell). Status bar correctly shows `jmf-pobox:tty5(0)` instead of bare `biff`.
+
+### Prior Verification (2026-02-17)
+
+Instrumented both the MCP server and status line to log their PPIDs. Confirmed match under the original direct-child model:
 
 | Claude PID | MCP Server PPID | Status Line PPID | Match |
 |-----------|----------------|-----------------|-------|
 | 10869 | 10869 | 10869 | ✓ |
 | 30757 | 30757 | 30757 | ✓ |
 
-Claude Code sends rich session JSON to the status line via stdin (including `session_id`, `cwd`, `session_name`), but this data is not available to the MCP server. PPID is the only shared identifier between the two sibling processes.
+This verification is no longer sufficient — Claude Code's process tree changed after this test. DES-011a addresses the new topology.
+
+Claude Code sends rich session JSON to the status line via stdin (including `session_id`, `cwd`, `session_name`), but this data is not available to the MCP server. The process tree walk is the only shared identifier between the two descendant processes.
 
 ### Prior Design: Per-Repo Files (Superseded)
 

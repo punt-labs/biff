@@ -11,7 +11,6 @@ it is stashed and its output replaces the repo/context/cost segments.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import cast
 
 from biff.relay import atomic_write
+from biff.session_key import find_session_key
 
 # Well-known paths ----------------------------------------------------------
 
@@ -169,7 +169,7 @@ def run_statusline(
     else:
         base_segments = _base_segments(session)
 
-    unread = _read_session_unread(unread_dir / f"{os.getppid()}.json")
+    unread = _read_session_unread(unread_dir / f"{find_session_key()}.json")
     biff = _biff_segment(unread)
     wall = _wall_segment(unread.wall if unread else "")
 
