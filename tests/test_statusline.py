@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from biff.__main__ import app
 from biff.statusline import (
+    _LINE2_IDLE,
     InstallResult,
     SessionUnread,
     UninstallResult,
@@ -465,7 +466,7 @@ class TestWallSegment:
 
     def test_active_wall(self) -> None:
         result = _wall_segment("release freeze")
-        assert "WALL:" in result
+        assert result.startswith("▶")
         assert "release freeze" in result
 
     def test_bold_red(self) -> None:
@@ -478,6 +479,16 @@ class TestWallSegment:
         result = _wall_segment(long_text)
         assert "..." not in result
         assert long_text in result
+
+    def test_with_sender(self) -> None:
+        result = _wall_segment("release freeze", "kai")
+        assert "@kai: release freeze" in result
+        assert result.startswith("▶")
+
+    def test_without_sender(self) -> None:
+        result = _wall_segment("release freeze", "")
+        assert "@" not in result
+        assert "release freeze" in result
 
 
 # --- Read Session Unread ----------------------------------------------------
@@ -601,6 +612,7 @@ def _write_ppid_unread(
     tty_name: str = "",
     preview: str = "",
     wall: str = "",
+    wall_from: str = "",
 ) -> None:
     """Write a PPID-keyed unread file for the current process."""
     unread_dir.mkdir(parents=True, exist_ok=True)
@@ -613,6 +625,7 @@ def _write_ppid_unread(
                 "tty_name": tty_name,
                 "preview": preview,
                 "wall": wall,
+                "wall_from": wall_from,
             }
         )
     )
@@ -626,7 +639,7 @@ class TestRunStatusline:
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
-        assert result == "biff"
+        assert result == f"biff\n{_LINE2_IDLE}"
 
     def test_no_original_with_unreads(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
@@ -728,25 +741,29 @@ class TestRunStatusline:
     def test_wall_on_separate_line(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 0, "tty1", wall="release freeze")
+        _write_ppid_unread(
+            unread_dir, "kai", 0, "tty1", wall="release freeze", wall_from="eric"
+        )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
         assert len(lines) == 2
         assert "kai:tty1(0)" in lines[0]
-        assert "WALL:" in lines[1]
-        assert "release freeze" in lines[1]
+        assert lines[1].startswith("▶")
+        assert "@eric: release freeze" in lines[1]
 
-    def test_no_wall_single_line(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_no_wall_idle_line_2(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_ppid_unread(unread_dir, "kai", 0, "tty1")
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
-        assert "\n" not in result
-        assert "kai:tty1(0)" in result
+        lines = result.split("\n")
+        assert len(lines) == 2
+        assert "kai:tty1(0)" in lines[0]
+        assert lines[1] == _LINE2_IDLE
 
     def test_empty_original_falls_back_to_native(
         self, _mock_key: object, tmp_path: Path

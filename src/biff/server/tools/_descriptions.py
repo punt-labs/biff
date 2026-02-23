@@ -55,8 +55,9 @@ _tty_name: str = ""
 _biff_enabled: bool = True
 
 # Set by the ``wall`` tool and background poller so the unread file
-# includes the active wall text for status bar display.
+# includes the active wall text and sender for status bar display.
 _wall_text: str = ""
+_wall_from: str = ""
 
 
 def get_tty_name() -> str:
@@ -78,11 +79,12 @@ def set_biff_enabled(*, enabled: bool) -> None:
 
 def _reset_session() -> None:
     """Clear stored session, tty name, biff_enabled, wall — test isolation."""
-    global _session, _tty_name, _biff_enabled, _wall_text
+    global _session, _tty_name, _biff_enabled, _wall_text, _wall_from
     _session = None
     _tty_name = ""
     _biff_enabled = True
     _wall_text = ""
+    _wall_from = ""
 
 
 async def _notify_tool_list_changed() -> None:
@@ -162,6 +164,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
             tty_name=_tty_name,
             biff_enabled=_biff_enabled,
             wall_text=_wall_text,
+            wall_from=_wall_from,
         )
 
 
@@ -180,7 +183,7 @@ async def refresh_wall(
     Pass *wall* to skip the relay fetch when the caller already has
     the current wall (e.g. :func:`poll_inbox`).
     """
-    global _wall_text
+    global _wall_text, _wall_from
 
     from biff.server.tools.wall import (  # noqa: PLC0415
         WALL_BASE_DESCRIPTION,
@@ -195,6 +198,7 @@ async def refresh_wall(
     if current is None:
         tool.description = WALL_BASE_DESCRIPTION
         _wall_text = ""
+        _wall_from = ""
     else:
         remaining = format_remaining(current.expires_at)
         tool.description = (
@@ -203,6 +207,7 @@ async def refresh_wall(
             "Use wall(clear=True) to remove."
         )
         _wall_text = current.text
+        _wall_from = current.from_user
     if tool.description != old_desc:
         await _notify_tool_list_changed()
     # Re-write the unread file so wall text is synced to status bar
@@ -216,6 +221,7 @@ async def refresh_wall(
             tty_name=_tty_name,
             biff_enabled=_biff_enabled,
             wall_text=_wall_text,
+            wall_from=_wall_from,
         )
 
 
@@ -278,12 +284,13 @@ def _write_unread_file(
     tty_name: str,
     biff_enabled: bool,
     wall_text: str = "",
+    wall_from: str = "",
 ) -> None:
     """Write unread summary to a JSON status file.
 
-    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``, and
-    ``wall`` metadata so the status line can display identity, session,
-    availability, and wall banner information.
+    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``,
+    ``wall``, and ``wall_from`` metadata so the status line can display
+    identity, session, availability, and wall banner information.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
@@ -296,6 +303,7 @@ def _write_unread_file(
         "preview": summary.preview,
         "biff_enabled": biff_enabled,
         "wall": wall_text,
+        "wall_from": wall_from,
     }
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")

@@ -173,13 +173,15 @@ def run_statusline(
 
     unread = _read_session_unread(unread_dir / f"{find_session_key()}.json")
     biff = _biff_segment(unread)
-    wall = _wall_segment(unread.wall if unread else "")
+    wall = _wall_segment(
+        unread.wall if unread else "",
+        unread.wall_from if unread else "",
+    )
 
     segments = [s for s in [*base_segments, biff] if s.strip()]
-    lines = [" | ".join(segments)]
-    if wall.strip():
-        lines.append(wall)
-    return "\n".join(lines)
+    line1 = " | ".join(segments)
+    line2 = wall if wall.strip() else _LINE2_IDLE
+    return f"{line1}\n{line2}"
 
 
 # Session data parsing ------------------------------------------------------
@@ -367,6 +369,7 @@ class SessionUnread:
     tty_name: str
     biff_enabled: bool = True
     wall: str = ""
+    wall_from: str = ""
 
 
 def _read_session_unread(path: Path) -> SessionUnread | None:
@@ -380,6 +383,7 @@ def _read_session_unread(path: Path) -> SessionUnread | None:
             tty_name=str(data.get("tty_name", "")),
             biff_enabled=bool(biff_enabled),
             wall=str(data.get("wall", "")),
+            wall_from=str(data.get("wall_from", "")),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None
@@ -412,14 +416,22 @@ def _biff_segment(unread: SessionUnread | None) -> str:
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07?|[()][A-B012])")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
+# Line 2 is always emitted to prevent the status bar from jumping between
+# 1 and 2 lines.  The ▶ marker keeps the line non-empty so Claude Code's
+# renderer allocates the row, and is visually consistent with biff's other
+# command outputs (/who, /finger, /read, /last).
+_LINE2_IDLE = "▶"
 
-def _wall_segment(wall_text: str) -> str:
-    """Format the wall banner for its own status bar line.
 
-    Empty when no wall is active.  Bold red when active to
-    distinguish from normal biff status.  Sanitizes ANSI escape
-    sequences and control characters but does not truncate —
-    Claude Code's renderer manages line width.
+def _wall_segment(wall_text: str, wall_from: str = "") -> str:
+    """Format the wall banner for line 2 of the status bar.
+
+    Returns empty string when no wall is active (caller substitutes
+    ``_LINE2_IDLE``).  Bold red with ``▶`` prefix when active, keeping
+    the marker consistent across idle and wall states.  Includes
+    ``@sender`` when available.  Sanitizes ANSI escape sequences and
+    control characters but does not truncate — Claude Code's renderer
+    manages line width.
     """
     if not wall_text:
         return ""
@@ -429,7 +441,8 @@ def _wall_segment(wall_text: str) -> str:
     clean = " ".join(clean.split())
     if not clean:
         return ""
-    return f"\033[1;31mWALL: {clean}\033[0m"
+    sender = f"@{wall_from}: " if wall_from else ""
+    return f"▶ \033[1;31m{sender}{clean}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str | None:

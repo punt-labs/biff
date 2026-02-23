@@ -28,6 +28,6 @@ RESPONSE=$(echo "$INPUT" | jq -r '.tool_response // ""')
 jq -n '{
   hookSpecificOutput: {
     hookEventName: "PostToolUse",
-    additionalContext: "You just claimed a bead. Set your dotplan so teammates can see what you are working on: /plan <description of the work>"
+    additionalContext: "You just claimed a bead. Set your dotplan so teammates can see what you are working on: /plan <bead-id>: <short description>. Example: /plan biff-dm8: Fix status bar line 2 height"
   }
 }'
