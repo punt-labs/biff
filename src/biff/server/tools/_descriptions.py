@@ -276,16 +276,7 @@ async def poll_inbox(
         if tracker.napping:
             if tracker.seconds_since_pop() < pop_interval:
                 continue
-            await _pop_fetch(mcp, state, tracker, last_count, last_wall)
-            # Update local tracking after POP (summary was refreshed)
-            summary = await state.relay.get_unread_summary(state.session_key)
-            last_count = summary.count
-            current_wall = await state.relay.get_wall()
-            last_wall = (
-                (current_wall.text, current_wall.posted_at.isoformat())
-                if current_wall
-                else ("", "")
-            )
+            last_count, last_wall = await _pop_fetch(mcp, state, tracker)
             continue
 
         # Active: normal polling
@@ -311,20 +302,28 @@ async def _pop_fetch(
     mcp: FastMCP[ServerState],
     state: ServerState,
     tracker: ActivityTracker,
-    last_count: int,  # noqa: ARG001 — reserved for future delta detection
-    last_wall: tuple[str, str],  # noqa: ARG001 — reserved for future delta detection
-) -> None:
+) -> tuple[int, tuple[str, str]]:
     """Reconnect, fetch unread/wall, heartbeat, disconnect.  Like email POP.
 
     The relay reconnects transparently on the first method call.
-    After fetching, piggybacks a heartbeat (10-min interval is 0.23%
-    of the 3-day KV TTL — zero risk of expiry) then disconnects.
+    After fetching, captures tracking state, piggybacks a heartbeat,
+    then disconnects.  Returns ``(count, wall_key)`` so the caller
+    can update its local tracking without reconnecting.
     """
     await refresh_read_messages(mcp, state)
     await refresh_wall(mcp, state)
+    # Capture tracking data while still connected
+    summary = await state.relay.get_unread_summary(state.session_key)
+    current_wall = await state.relay.get_wall()
     await state.relay.heartbeat(state.session_key)
     await state.relay.disconnect()
     tracker.record_pop()
+    wall_key = (
+        (current_wall.text, current_wall.posted_at.isoformat())
+        if current_wall
+        else ("", "")
+    )
+    return summary.count, wall_key
 
 
 def _write_unread_file(
