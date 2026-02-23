@@ -143,7 +143,7 @@ If the feature was on the roadmap, move it to "Shipped" in both `README.md` and 
 
 ### Checklist
 
-```
+```text
 [ ] DESIGN.md updated (if design decision)
 [ ] punt-kit patterns/ or standards/ updated (if reusable pattern)
 [ ] public-website bead created (if externally interesting)
