@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.config import is_enabled, write_biff_local
+from biff.config import ensure_gitignore, is_enabled, write_biff_local
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -51,6 +51,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             atomic_write(repo_root / ".biff", content)
 
         write_biff_local(repo_root, enabled=enabled)
+        ensure_gitignore(repo_root)
 
         currently = is_enabled(repo_root)
         verb = "enabled" if currently else "disabled"
