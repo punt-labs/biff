@@ -1,18 +1,19 @@
 """Lazy activation — auto-enable biff on first tool use while dormant.
 
 When biff starts in dormant mode (no ``.biff.local`` with ``enabled = true``),
-calling any tool is treated as intent to use biff.  ``lazy_activate`` writes
-the activation config to disk and returns a restart message.  The caller
-returns the message early — the actual tool logic is skipped until the next
-session when biff starts connected.
+calling any tool is treated as intent to use biff.  The :func:`auto_enable`
+decorator wraps a tool so that dormant invocations write the activation
+config to disk and return a restart message instead of running the tool.
 
 The ``biff`` toggle tool is the one exception: it handles its own
-enable/disable logic and must NOT call ``lazy_activate``.
+enable/disable logic and must NOT use ``auto_enable``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from functools import wraps
+from typing import TYPE_CHECKING, ParamSpec
 
 from biff.config import (
     DEMO_RELAY_URL,
@@ -23,6 +24,8 @@ from biff.config import (
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
+
+_P = ParamSpec("_P")
 
 
 def lazy_activate(state: ServerState) -> str | None:
@@ -50,3 +53,38 @@ def lazy_activate(state: ServerState) -> str | None:
     ensure_gitignore(repo_root)
 
     return "biff enabled. Restart Claude Code to connect."
+
+
+def auto_enable(
+    state: ServerState,
+) -> Callable[
+    [Callable[_P, Awaitable[str]]],
+    Callable[_P, Awaitable[str]],
+]:
+    """Decorator: auto-enable biff when a tool is called while dormant.
+
+    Wrap every tool (except ``biff`` toggle) so that dormant invocations
+    write ``.biff.local`` and return a restart prompt instead of running
+    the tool body.
+
+    Usage inside a ``register()`` function::
+
+        @mcp.tool(name="who", description="...")
+        @auto_enable(state)
+        async def who() -> str:
+            ...
+    """
+
+    def decorator(
+        fn: Callable[_P, Awaitable[str]],
+    ) -> Callable[_P, Awaitable[str]]:
+        @wraps(fn)
+        async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> str:
+            msg = lazy_activate(state)
+            if msg:
+                return msg
+            return await fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator

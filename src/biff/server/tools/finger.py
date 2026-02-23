@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
-from biff.server.tools._activate import lazy_activate
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import resolve_session, update_current_session
 from biff.tty import parse_address
@@ -78,15 +78,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="finger",
         description="Check what a user is working on and their availability.",
     )
+    @auto_enable(state)
     async def finger(user: str) -> str:
         """Query a user's session and presence info.
 
         ``@user`` shows all sessions for that user.
         ``@user:tty`` shows a specific session.
         """
-        msg = lazy_activate(state)
-        if msg:
-            return msg
         await update_current_session(state)
         await refresh_read_messages(mcp, state)
         bare_user, tty = parse_address(user)

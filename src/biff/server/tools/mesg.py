@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.server.tools._activate import lazy_activate
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages, set_biff_enabled
 from biff.server.tools._session import update_current_session
 
@@ -27,6 +27,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Use 'on' to accept messages, 'off' to block them."
         ),
     )
+    @auto_enable(state)
     async def mesg(enabled: bool) -> str:  # noqa: FBT001
         """Toggle message reception for the current user.
 
@@ -34,9 +35,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
             is y
         """
-        msg = lazy_activate(state)
-        if msg:
-            return msg
         set_biff_enabled(enabled=enabled)
         await update_current_session(state, biff_enabled=enabled)
         await refresh_read_messages(mcp, state)

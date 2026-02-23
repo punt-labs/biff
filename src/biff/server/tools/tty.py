@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from biff.server.tools._activate import lazy_activate
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages, set_tty_name
 from biff.server.tools._session import update_current_session
 
@@ -41,6 +41,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Name the current session. Visible in /who and /finger TTY column."
         ),
     )
+    @auto_enable(state)
     async def tty(name: str = "") -> str:
         """Set a human-readable name for this session.
 
@@ -51,9 +52,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
             TTY: tty3
         """
-        msg = lazy_activate(state)
-        if msg:
-            return msg
         name = name.strip()
         sessions = await state.relay.get_sessions()
 

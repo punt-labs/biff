@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from biff.models import WallPost
-from biff.server.tools._activate import lazy_activate
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_wall
 from biff.server.tools._session import update_current_session
 
@@ -93,6 +93,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register the wall tool."""
 
     @mcp.tool(name="wall", description=WALL_BASE_DESCRIPTION)
+    @auto_enable(state)
     async def wall(message: str = "", duration: str = "", clear: bool = False) -> str:
         """Post, read, or clear a team broadcast wall.
 
@@ -103,9 +104,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         - ``wall(clear=True)`` — remove the active wall
         - ``wall()`` — show the current wall
         """
-        msg = lazy_activate(state)
-        if msg:
-            return msg
         await update_current_session(state)
 
         # Clear mode

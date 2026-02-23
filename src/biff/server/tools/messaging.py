@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.models import Message
-from biff.server.tools._activate import lazy_activate
+from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._formatting import ColumnSpec, format_table
 from biff.server.tools._session import resolve_session, update_current_session
@@ -54,15 +54,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Messages are delivered to their inbox asynchronously."
         ),
     )
+    @auto_enable(state)
     async def write(to: str, message: str) -> str:
         """Send a message to another user's inbox, like BSD ``write(1)``.
 
         ``@user`` broadcasts to all sessions of that user.
         ``@user:tty`` targets a specific session.
         """
-        activation = lazy_activate(state)
-        if activation:
-            return activation
         await update_current_session(state)
         to_user, display = await _resolve_recipient(state, to)
         msg = Message(
@@ -78,6 +76,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="read_messages",
         description="Check your inbox for new messages. Marks all as read.",
     )
+    @auto_enable(state)
     async def read_messages() -> str:
         """Retrieve unread messages and mark them as read.
 
@@ -91,9 +90,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             From kai  Sun Feb 15 14:01  hey, ready for review?
             From eric Sun Feb 15 13:45  pushed the fix
         """
-        msg = lazy_activate(state)
-        if msg:
-            return msg
         await update_current_session(state)
         session_key = state.session_key
         user = state.config.user
