@@ -193,6 +193,57 @@ def load_biff_file(repo_root: Path) -> dict[str, object]:
         ) from exc
 
 
+def load_biff_local(repo_root: Path) -> dict[str, object]:
+    """Parse ``.biff.local`` TOML at *repo_root*, or return ``{}`` if missing."""
+    path = repo_root / ".biff.local"
+    if not path.exists():
+        return {}
+    try:
+        return tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError:
+        return {}
+
+
+def is_enabled(repo_root: Path | None) -> bool:
+    """True only if ``.biff.local`` exists with ``enabled = true``.
+
+    Returns ``False`` if: *repo_root* is ``None``, no ``.biff`` file,
+    no ``.biff.local`` file, or ``enabled`` is not ``true``.
+    """
+    if repo_root is None:
+        return False
+    if not (repo_root / ".biff").exists():
+        return False
+    local = load_biff_local(repo_root)
+    return local.get("enabled") is True
+
+
+def ensure_gitignore(repo_root: Path) -> None:
+    """Add ``.biff.local`` to the repo's ``.gitignore`` if not already present."""
+    gitignore = repo_root / ".gitignore"
+    if gitignore.exists():
+        content = gitignore.read_text()
+        if ".biff.local" in content:
+            return
+        if not content.endswith("\n"):
+            content += "\n"
+        content += ".biff.local\n"
+        gitignore.write_text(content)
+    else:
+        gitignore.write_text(".biff.local\n")
+
+
+def write_biff_local(repo_root: Path, *, enabled: bool) -> None:
+    """Write ``.biff.local`` with the ``enabled`` flag.
+
+    Uses :func:`~biff.relay.atomic_write` for safe replacement.
+    """
+    from biff.relay import atomic_write  # noqa: PLC0415
+
+    content = f"enabled = {'true' if enabled else 'false'}\n"
+    atomic_write(repo_root / ".biff.local", content)
+
+
 def extract_biff_fields(
     raw: dict[str, object],
 ) -> tuple[tuple[str, ...], str | None, RelayAuth | None]:

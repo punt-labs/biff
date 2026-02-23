@@ -25,6 +25,7 @@ from biff.server.tools._descriptions import (
     get_tty_name,
     poll_inbox,
     refresh_read_messages,
+    refresh_wall,
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
@@ -409,6 +410,85 @@ async def _close_orphaned_logins(
         logger.info("Closed %d orphaned login(s)", len(orphaned))
 
 
+@asynccontextmanager
+async def _active_lifespan(
+    mcp: FastMCP[ServerState], state: ServerState
+) -> AsyncIterator[ServerState]:
+    """Lifespan for an active (non-dormant) server.
+
+    Registers signal handlers, starts background tasks, and manages
+    session lifecycle.  Extracted from :func:`create_server` for
+    complexity management.
+    """
+    _cleaned_up = False
+
+    def _signal_handler(_signum: int, _frame: object) -> None:
+        nonlocal _cleaned_up
+        if _cleaned_up:
+            return
+        _cleaned_up = True
+        # Write sentinel — relay-agnostic, picked up by any
+        # running server's reaper task.  Smallest possible
+        # operation (touch a file), runs first.
+        with suppress(OSError):
+            _write_sentinel(state.config.repo_name, state.session_key)
+        # Best-effort sync cleanup for LocalRelay only.
+        if isinstance(state.relay, LocalRelay):
+            with suppress(OSError):
+                state.relay.write_remove_sentinel(state.session_key)
+            with suppress(OSError, ValueError):
+                state.relay.delete_session_sync(state.session_key)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _signal_handler)
+
+    # Auto-assign a ttyN name so the status bar always has identity.
+    sessions = await state.relay.get_sessions()
+    existing = [s.tty_name for s in sessions if s.tty_name]
+    auto_name = next_tty_name(existing)
+    set_tty_name(auto_name)
+    await update_current_session(state, tty_name=auto_name)
+
+    # Write the initial unread file and wall state immediately so the
+    # status line has identity from the first render (before the poller ticks).
+    await refresh_read_messages(mcp, state)
+    await refresh_wall(mcp, state)
+
+    # Reap sentinels FIRST — writes logout events for sessions that
+    # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
+    # Then re-fetch sessions so orphan detection has clean KV state.
+    await _reap_sentinels(state)
+    sessions = await state.relay.get_sessions()
+
+    await _append_login_event(state, auto_name)
+    await _close_orphaned_logins(state, sessions)
+
+    shutdown = asyncio.Event()
+    poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
+    reaper = asyncio.create_task(_reap_loop(state, shutdown))
+    heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
+    watcher = asyncio.create_task(_wtmp_watcher_loop(state, shutdown))
+    try:
+        yield state
+    finally:
+        # Write logout FIRST — before stopping tasks or closing
+        # anything.  The MCP subprocess may be killed at any moment
+        # after Claude Code closes stdio, so the logout publish
+        # must happen while the NATS connection is still healthy.
+        if state.owns_relay:
+            await _append_logout_event(state)
+        await _shutdown_tasks(shutdown, [poller, reaper, heartbeat, watcher])
+        if state.unread_path is not None:
+            with suppress(FileNotFoundError):
+                state.unread_path.unlink()
+        if state.owns_relay:
+            try:
+                await state.relay.delete_session(state.session_key)
+            except Exception:
+                logger.exception("Failed to delete session %s", state.session_key)
+            await state.relay.close()
+
+
 def create_server(state: ServerState) -> FastMCP[ServerState]:
     """Create a FastMCP server with all biff tools registered.
 
@@ -419,72 +499,11 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
 
     @asynccontextmanager
     async def lifespan(mcp: FastMCP[ServerState]) -> AsyncIterator[ServerState]:
-        _cleaned_up = False
-
-        def _signal_handler(_signum: int, _frame: object) -> None:
-            nonlocal _cleaned_up
-            if _cleaned_up:
-                return
-            _cleaned_up = True
-            # Write sentinel — relay-agnostic, picked up by any
-            # running server's reaper task.  Smallest possible
-            # operation (touch a file), runs first.
-            with suppress(OSError):
-                _write_sentinel(state.config.repo_name, state.session_key)
-            # Best-effort sync cleanup for LocalRelay only.
-            if isinstance(state.relay, LocalRelay):
-                with suppress(OSError):
-                    state.relay.write_remove_sentinel(state.session_key)
-                with suppress(OSError, ValueError):
-                    state.relay.delete_session_sync(state.session_key)
-
-        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            signal.signal(sig, _signal_handler)
-
-        # Auto-assign a ttyN name so the status bar always has identity.
-        sessions = await state.relay.get_sessions()
-        existing = [s.tty_name for s in sessions if s.tty_name]
-        auto_name = next_tty_name(existing)
-        set_tty_name(auto_name)
-        await update_current_session(state, tty_name=auto_name)
-
-        # Write the initial unread file immediately so the status line
-        # has identity from the first render (before the poller ticks).
-        await refresh_read_messages(mcp, state)
-
-        # Reap sentinels FIRST — writes logout events for sessions that
-        # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
-        # Then re-fetch sessions so orphan detection has clean KV state.
-        await _reap_sentinels(state)
-        sessions = await state.relay.get_sessions()
-
-        await _append_login_event(state, auto_name)
-        await _close_orphaned_logins(state, sessions)
-
-        shutdown = asyncio.Event()
-        poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
-        reaper = asyncio.create_task(_reap_loop(state, shutdown))
-        heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
-        watcher = asyncio.create_task(_wtmp_watcher_loop(state, shutdown))
-        try:
+        if state.dormant:
             yield state
-        finally:
-            # Write logout FIRST — before stopping tasks or closing
-            # anything.  The MCP subprocess may be killed at any moment
-            # after Claude Code closes stdio, so the logout publish
-            # must happen while the NATS connection is still healthy.
-            if state.owns_relay:
-                await _append_logout_event(state)
-            await _shutdown_tasks(shutdown, [poller, reaper, heartbeat, watcher])
-            if state.unread_path is not None:
-                with suppress(FileNotFoundError):
-                    state.unread_path.unlink()
-            if state.owns_relay:
-                try:
-                    await state.relay.delete_session(state.session_key)
-                except Exception:
-                    logger.exception("Failed to delete session %s", state.session_key)
-                await state.relay.close()
+            return
+        async with _active_lifespan(mcp, state) as ctx:
+            yield ctx
 
     mcp: FastMCP[ServerState] = FastMCP(
         "biff",

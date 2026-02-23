@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from biff.models import SessionEvent
+from biff.server.tools._activate import lazy_activate
 from biff.server.tools._formatting import ColumnSpec, format_table
 from biff.server.tools._session import update_current_session
 from biff.tty import build_session_key
@@ -114,6 +115,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     async def last(user: str = "", count: int = 25) -> str:
         """Show recent session history."""
+        msg = lazy_activate(state)
+        if msg:
+            return msg
         await update_current_session(state)
         count = max(1, min(count, 100))
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from biff.models import WallPost
+from biff.server.tools._activate import lazy_activate
 from biff.server.tools._descriptions import refresh_wall
 from biff.server.tools._session import update_current_session
 
@@ -102,6 +103,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         - ``wall(clear=True)`` — remove the active wall
         - ``wall()`` — show the current wall
         """
+        msg = lazy_activate(state)
+        if msg:
+            return msg
         await update_current_session(state)
 
         # Clear mode

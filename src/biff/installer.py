@@ -35,6 +35,7 @@ BIFF_COMMANDS = (
     "plan.md",
     "read.md",
     "tty.md",
+    "wall.md",
     "who.md",
     "write.md",
 )

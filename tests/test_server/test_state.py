@@ -8,7 +8,7 @@ import pytest
 
 from biff.models import BiffConfig, RelayAuth
 from biff.nats_relay import NatsRelay
-from biff.relay import LocalRelay
+from biff.relay import DormantRelay, LocalRelay
 from biff.server.state import create_state
 
 _TEST_REPO = "_test-server"
@@ -60,6 +60,32 @@ class TestCreateState:
         state = create_state(config, tmp_path)
         assert isinstance(state.relay, NatsRelay)
         assert state.relay._auth is None
+
+    def test_dormant_uses_dormant_relay(self, tmp_path: Path) -> None:
+        config = BiffConfig(
+            user="kai", repo_name=_TEST_REPO, relay_url="nats://localhost:4222"
+        )
+        state = create_state(config, tmp_path, dormant=True)
+        assert isinstance(state.relay, DormantRelay)
+        assert state.dormant is True
+
+    def test_dormant_overrides_relay_url(self, tmp_path: Path) -> None:
+        config = BiffConfig(
+            user="kai", repo_name=_TEST_REPO, relay_url="tls://connect.ngs.global"
+        )
+        state = create_state(config, tmp_path, dormant=True)
+        assert isinstance(state.relay, DormantRelay)
+
+    def test_not_dormant_uses_normal_relay(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, dormant=False)
+        assert isinstance(state.relay, LocalRelay)
+        assert state.dormant is False
+
+    def test_repo_root_stored(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path, repo_root=tmp_path)
+        assert state.repo_root == tmp_path
 
     def test_state_is_frozen(self, tmp_path: Path) -> None:
         config = BiffConfig(user="kai", repo_name=_TEST_REPO)

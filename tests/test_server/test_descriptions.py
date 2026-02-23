@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from biff.models import BiffConfig, Message
+from biff.models import BiffConfig, Message, WallPost
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import (
@@ -18,6 +18,7 @@ from biff.server.tools._descriptions import (
     poll_inbox,
     refresh_read_messages,
 )
+from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -298,3 +299,70 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
         assert task.done()
+
+    async def test_poller_detects_wall_post(self, state_with_path: ServerState) -> None:
+        """Poller detects a wall posted between cycles and updates tool description."""
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(
+            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
+        )
+        # Let initial cycle run
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        tool = await mcp.get_tool("wall")
+        assert tool is not None
+        assert tool.description == WALL_BASE_DESCRIPTION
+
+        # Post a wall directly via relay
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="deploy freeze",
+            from_user="eric",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        await state_with_path.relay.set_wall(wall)
+        # Let poller detect the change
+        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert tool.description is not None
+        assert "deploy freeze" in tool.description
+        assert "[WALL]" in tool.description
+
+    async def test_poller_detects_wall_clear(
+        self, state_with_path: ServerState
+    ) -> None:
+        """Poller detects a cleared wall and reverts tool description."""
+        mcp = create_server(state_with_path)
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="freeze",
+            from_user="eric",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        await state_with_path.relay.set_wall(wall)
+
+        task = asyncio.create_task(
+            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
+        )
+        # Let poller pick up the wall
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        tool = await mcp.get_tool("wall")
+        assert tool is not None
+        assert "[WALL]" in (tool.description or "")
+
+        # Clear the wall
+        await state_with_path.relay.set_wall(None)
+        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert tool.description == WALL_BASE_DESCRIPTION

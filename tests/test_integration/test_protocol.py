@@ -66,6 +66,7 @@ class TestToolListing:
         tools = await biff_client.list_tools()
         names = {t.name for t in tools}
         expected = {
+            "biff",
             "mesg",
             "read_messages",
             "finger",
