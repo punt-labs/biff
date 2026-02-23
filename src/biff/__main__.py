@@ -206,6 +206,7 @@ def disable(
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
     write_biff_local(repo_root, enabled=False)
+    ensure_gitignore(repo_root)
     print("biff disabled. Restart Claude Code for changes to take effect.")
 
 

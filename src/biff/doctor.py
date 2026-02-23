@@ -161,7 +161,7 @@ def _check_biff_file() -> CheckResult:
         return CheckResult(
             ".biff file",
             False,
-            "not in a git repo (run 'biff init' inside a project)",
+            "not in a git repo (run 'biff enable' inside a project)",
             required=False,
         )
     biff_file = repo_root / ".biff"
@@ -170,7 +170,7 @@ def _check_biff_file() -> CheckResult:
     return CheckResult(
         ".biff file",
         False,
-        f"not found (run 'biff init' in {repo_root})",
+        f"not found (run 'biff enable' in {repo_root})",
         required=False,
     )
 

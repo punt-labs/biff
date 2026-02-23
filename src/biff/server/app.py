@@ -500,7 +500,12 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     @asynccontextmanager
     async def lifespan(mcp: FastMCP[ServerState]) -> AsyncIterator[ServerState]:
         if state.dormant:
-            yield state
+            try:
+                yield state
+            finally:
+                if state.unread_path is not None:
+                    with suppress(FileNotFoundError):
+                        state.unread_path.unlink()
             return
         async with _active_lifespan(mcp, state) as ctx:
             yield ctx

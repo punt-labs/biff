@@ -49,11 +49,14 @@ def create_state(
 ) -> ServerState:
     """Create a ``ServerState`` from config and data directory.
 
-    Relay selection: when *dormant* is ``True``, uses
-    :class:`~biff.relay.DormantRelay` regardless of config.  Otherwise,
-    an explicit *relay* wins, then ``config.relay_url`` selects
-    :class:`~biff.nats_relay.NatsRelay`, otherwise
-    :class:`~biff.relay.LocalRelay`.
+    Relay selection (in priority order):
+
+    1. An explicit *relay* always wins (used by tests).
+    2. When *dormant* is ``True``, uses
+       :class:`~biff.relay.DormantRelay`.
+    3. ``config.relay_url`` selects
+       :class:`~biff.nats_relay.NatsRelay`.
+    4. Otherwise :class:`~biff.relay.LocalRelay`.
 
     Runtime identity (tty, hostname, pwd) is auto-generated when not
     provided — each server instance gets a unique session key.
