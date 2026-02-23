@@ -78,6 +78,7 @@ def auto_enable(
             msg = lazy_activate(state)
             if msg:
                 return msg
+            state.activity.touch()
             return await fn(*args, **kwargs)
 
         return wrapper
