@@ -10,6 +10,7 @@ duration-based persistence and explicit clearing.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
     from biff.server.state import ServerState
 
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _DURATION_UNITS: dict[str, int] = {"m": 60, "h": 3600, "d": 86400}
 _MAX_DURATION = timedelta(days=3)  # Capped by sessions KV bucket TTL
 _DEFAULT_DURATION = timedelta(hours=1)
@@ -108,11 +110,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await refresh_wall(mcp, state)
             return "Wall cleared."
 
-        # Read mode (no message, or whitespace-only)
-        message = message.strip()
+        # Sanitize: strip control chars, collapse to single line
+        message = _CTRL_RE.sub("", message)
+        message = " ".join(message.split())
         if not message:
             current = await state.relay.get_wall()
             if current is None:
+                await refresh_wall(mcp, state, wall=None)
                 return "No active wall."
             return _format_wall(current)
 

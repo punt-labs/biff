@@ -405,20 +405,22 @@ def _biff_segment(unread: SessionUnread | None) -> str:
     return f"\033[1;33m{label}\033[0m"
 
 
-_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07?|[()][A-B012])")
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _wall_segment(wall_text: str) -> str:
     """Format the wall banner segment for the status bar.
 
     Empty when no wall is active.  Bold red when active to
-    distinguish from normal biff status.  Sanitizes control
-    characters and ANSI escape codes for single-line display.
+    distinguish from normal biff status.  Sanitizes all ANSI
+    escape sequences and control characters for single-line display.
     """
     if not wall_text:
         return ""
-    # Sanitize: strip ANSI escapes, collapse whitespace to single spaces
+    # Sanitize: strip ANSI escapes and control chars, collapse whitespace
     clean = _ANSI_RE.sub("", wall_text)
+    clean = _CTRL_RE.sub("", clean)
     clean = " ".join(clean.split())
     if not clean:
         return ""

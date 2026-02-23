@@ -86,6 +86,9 @@ def _read_process_table() -> dict[int, tuple[int, str]]:
         text=True,
         timeout=5,
     )
+    if result.returncode != 0:
+        msg = f"ps exited with status {result.returncode}"
+        raise subprocess.SubprocessError(msg)
     table: dict[int, tuple[int, str]] = {}
     for line in result.stdout.splitlines():
         parts = line.split(None, 2)
