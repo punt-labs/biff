@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from biff.models import SessionEvent
 from biff.server.tools.last import (
     _format_duration,
-    _format_table,
+    _format_last,
     _format_timestamp,
     _pair_events,
 )
@@ -174,7 +174,7 @@ class TestPairEvents:
 
 class TestFormatTable:
     def test_empty_returns_message(self) -> None:
-        assert _format_table([], set()) == "No session history."
+        assert _format_last([], set()) == "No session history."
 
     def test_single_completed_session(self) -> None:
         now = datetime.now(UTC)
@@ -194,7 +194,7 @@ class TestFormatTable:
             tty="tty1",
             timestamp=now,
         )
-        result = _format_table([(login, logout)], set())
+        result = _format_last([(login, logout)], set())
         assert "@kai" in result
         assert "tty1" in result
         assert "dev-box" in result
@@ -210,7 +210,7 @@ class TestFormatTable:
             tty="tty1",
             timestamp=now,
         )
-        result = _format_table([(login, None)], {"kai:tty1"})
+        result = _format_last([(login, None)], {"kai:tty1"})
         assert "still logged in" in result
         assert "-" in result  # Duration is "-"
 
@@ -224,7 +224,7 @@ class TestFormatTable:
             tty="tty1",
             timestamp=now,
         )
-        result = _format_table([(login, None)], set())
+        result = _format_last([(login, None)], set())
         assert "gone" in result
 
     def test_header_columns(self) -> None:
@@ -236,7 +236,7 @@ class TestFormatTable:
             tty="tty1",
             timestamp=now,
         )
-        result = _format_table([(login, None)], set())
+        result = _format_last([(login, None)], set())
         assert "NAME" in result
         assert "TTY" in result
         assert "HOST" in result

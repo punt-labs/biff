@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING
 
 from biff.models import UserSession
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._formatting import format_idle
+from biff.server.tools._formatting import (
+    ColumnSpec,
+    format_idle,
+    format_table,
+    last_component,
+)
 from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
@@ -20,42 +25,37 @@ if TYPE_CHECKING:
 
     from biff.server.state import ServerState
 
+_WHO_SPECS: list[ColumnSpec] = [
+    ColumnSpec("NAME", min_width=4),
+    ColumnSpec("TTY", min_width=3),
+    ColumnSpec("IDLE", min_width=4),
+    ColumnSpec("S", min_width=1),
+    ColumnSpec("HOST", min_width=4),
+    ColumnSpec("DIR", min_width=3),
+    ColumnSpec("PLAN", min_width=10, fixed=False),
+]
+
 
 def _sanitize_plan(plan: str) -> str:
     """Collapse newlines so plan text stays on one row."""
     return plan.replace("\n", " ").replace("\r", " ")
 
 
-def _format_table(sessions: list[UserSession]) -> str:
+def _format_who(sessions: list[UserSession]) -> str:
     """Build a columnar table matching ``w(1)`` style with host and dir."""
-    rows: list[tuple[str, str, str, str, str, str, str]] = []
-    for s in sessions:
-        name = f"@{s.user}"
-        tty = s.tty_name or (s.tty[:8] if s.tty else "-")
-        idle = format_idle(s.last_active)
-        flag = "+" if s.biff_enabled else "-"
-        host = s.hostname or "-"
-        pwd = s.pwd or "-"
-        plan = _sanitize_plan(s.plan) if s.plan else "(no plan)"
-        rows.append((name, tty, idle, flag, host, pwd, plan))
-
-    name_w = max(4, max(len(r[0]) for r in rows))
-    tty_w = max(3, max(len(r[1]) for r in rows))
-    idle_w = max(4, max(len(r[2]) for r in rows))
-    host_w = max(4, max(len(r[4]) for r in rows))
-    pwd_w = max(3, max(len(r[5]) for r in rows))
-
-    header = (
-        f"\u25b6  {'NAME':<{name_w}}  {'TTY':<{tty_w}}  {'IDLE':<{idle_w}}"
-        f"  S  {'HOST':<{host_w}}  {'DIR':<{pwd_w}}  PLAN"
-    )
-    lines: list[str] = []
-    for name, tty, idle, flag, host, pwd, plan in rows:
-        lines.append(
-            f"   {name:<{name_w}}  {tty:<{tty_w}}  {idle:<{idle_w}}"
-            f"  {flag}  {host:<{host_w}}  {pwd:<{pwd_w}}  {plan}"
-        )
-    return header + "\n" + "\n".join(lines)
+    rows: list[list[str]] = [
+        [
+            f"@{s.user}",
+            s.tty_name or (s.tty[:8] if s.tty else "-"),
+            format_idle(s.last_active),
+            "+" if s.biff_enabled else "-",
+            s.hostname or "-",
+            last_component(s.pwd) if s.pwd else "-",
+            _sanitize_plan(s.plan) if s.plan else "(no plan)",
+        ]
+        for s in sessions
+    ]
+    return format_table(_WHO_SPECS, rows)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -73,4 +73,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not sessions:
             return "No sessions."
         sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)
-        return _format_table(sorted_sessions)
+        return _format_who(sorted_sessions)
