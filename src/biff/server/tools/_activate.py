@@ -16,8 +16,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, ParamSpec
 
 from biff.config import (
-    DEMO_RELAY_URL,
-    build_biff_toml,
+    ensure_biff_file,
     ensure_gitignore,
     write_biff_local,
 )
@@ -41,13 +40,9 @@ def lazy_activate(state: ServerState) -> str | None:
     if repo_root is None:
         return "biff: not in a git repository."
 
-    # Create .biff if missing (non-interactive, using current config)
-    if not (repo_root / ".biff").exists():
-        from biff.relay import atomic_write  # noqa: PLC0415
-
-        relay_url = state.config.relay_url or DEMO_RELAY_URL
-        content = build_biff_toml(list(state.config.team), relay_url)
-        atomic_write(repo_root / ".biff", content)
+    ensure_biff_file(
+        repo_root, team=state.config.team, relay_url=state.config.relay_url
+    )
 
     write_biff_local(repo_root, enabled=True)
     ensure_gitignore(repo_root)

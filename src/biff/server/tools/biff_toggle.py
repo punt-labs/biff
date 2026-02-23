@@ -10,8 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.config import (
-    DEMO_RELAY_URL,
-    build_biff_toml,
+    ensure_biff_file,
     ensure_gitignore,
     is_enabled,
     write_biff_local,
@@ -46,13 +45,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if repo_root is None:
             return "Error: not in a git repository."
 
-        if enabled and not (repo_root / ".biff").exists():
-            # Create minimal .biff with current config defaults
-            from biff.relay import atomic_write  # noqa: PLC0415
-
-            relay_url = state.config.relay_url or DEMO_RELAY_URL
-            content = build_biff_toml(list(state.config.team), relay_url)
-            atomic_write(repo_root / ".biff", content)
+        if enabled:
+            ensure_biff_file(
+                repo_root, team=state.config.team, relay_url=state.config.relay_url
+            )
 
         write_biff_local(repo_root, enabled=enabled)
         ensure_gitignore(repo_root)

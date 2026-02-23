@@ -218,6 +218,18 @@ def is_enabled(repo_root: Path | None) -> bool:
     return local.get("enabled") is True
 
 
+def ensure_biff_file(
+    repo_root: Path, *, team: tuple[str, ...], relay_url: str | None
+) -> None:
+    """Create ``.biff`` if it doesn't exist, using provided defaults."""
+    if (repo_root / ".biff").exists():
+        return
+    from biff.relay import atomic_write  # noqa: PLC0415
+
+    url = relay_url or DEMO_RELAY_URL
+    atomic_write(repo_root / ".biff", build_biff_toml(list(team), url))
+
+
 def ensure_gitignore(repo_root: Path) -> None:
     """Add ``.biff.local`` to the repo's ``.gitignore`` if not already present."""
     gitignore = repo_root / ".gitignore"
