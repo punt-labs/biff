@@ -44,6 +44,6 @@ fi
 jq -n --arg msg "$MSG" '{
   hookSpecificOutput: {
     hookEventName: "PostToolUse",
-    additionalContext: ("This team uses biff for communication. Consider announcing to the team: /wall \"" + $msg + "\"")
+    additionalContext: ("This team uses biff for communication. Consider announcing to the team: /wall " + $msg)
   }
 }'
