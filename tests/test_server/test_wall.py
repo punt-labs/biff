@@ -55,7 +55,7 @@ class TestWallPostModel:
     def test_rejects_long_text(self) -> None:
         with pytest.raises(ValidationError):
             WallPost(
-                text="x" * 201,
+                text="x" * 513,
                 from_user="kai",
                 expires_at=datetime.now(UTC) + timedelta(hours=1),
             )

@@ -53,7 +53,7 @@ class Message(BaseModel):
     id: uuid.UUID = Field(default_factory=_new_id)
     from_user: str = Field(min_length=1)
     to_user: str = Field(min_length=1)
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=512)
     timestamp: datetime = Field(default_factory=_utc_now)
     read: bool = False
 
@@ -176,7 +176,7 @@ class WallPost(BaseModel):
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
-    text: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=512)
     from_user: str = Field(min_length=1)
     posted_at: datetime = Field(default_factory=_utc_now)
     expires_at: datetime

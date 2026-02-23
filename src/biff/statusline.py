@@ -153,7 +153,8 @@ def run_statusline(
 ) -> str:
     """Produce the status bar text for Claude Code.
 
-    Segments (left to right): ``repo:branch | ctx% | $cost | biff``
+    Line 1: ``repo:branch | ctx% | $cost | biff``
+    Line 2 (when active): ``WALL: <message>`` (bold red, full width)
 
     If a stashed original command exists and succeeds, its output replaces
     the repo/context/cost segments (the user chose their own base).  The
@@ -174,8 +175,11 @@ def run_statusline(
     biff = _biff_segment(unread)
     wall = _wall_segment(unread.wall if unread else "")
 
-    segments = [s for s in [*base_segments, biff, wall] if s.strip()]
-    return " | ".join(segments)
+    segments = [s for s in [*base_segments, biff] if s.strip()]
+    lines = [" | ".join(segments)]
+    if wall.strip():
+        lines.append(wall)
+    return "\n".join(lines)
 
 
 # Session data parsing ------------------------------------------------------
@@ -410,11 +414,12 @@ _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _wall_segment(wall_text: str) -> str:
-    """Format the wall banner segment for the status bar.
+    """Format the wall banner for its own status bar line.
 
     Empty when no wall is active.  Bold red when active to
-    distinguish from normal biff status.  Sanitizes all ANSI
-    escape sequences and control characters for single-line display.
+    distinguish from normal biff status.  Sanitizes ANSI escape
+    sequences and control characters but does not truncate —
+    Claude Code's renderer manages line width.
     """
     if not wall_text:
         return ""
@@ -424,9 +429,7 @@ def _wall_segment(wall_text: str) -> str:
     clean = " ".join(clean.split())
     if not clean:
         return ""
-    # Truncate long wall messages for status bar readability
-    display = clean if len(clean) <= 40 else clean[:37] + "..."
-    return f"\033[1;31mWALL: {display}\033[0m"
+    return f"\033[1;31mWALL: {clean}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str | None:

@@ -127,6 +127,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return str(exc)
 
         now = datetime.now(UTC)
+        message = message[:512]
         try:
             post = WallPost(
                 text=message,
@@ -138,7 +139,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             for err in exc.errors():
                 if err.get("type") == "string_too_short":
                     return "Message cannot be blank."
-            return "Message too long (200 characters max)."
+            return str(exc)
         await state.relay.set_wall(post)
         await refresh_wall(mcp, state)
 

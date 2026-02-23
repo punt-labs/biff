@@ -72,7 +72,21 @@ else
   fail "works with mcp__github__ prefix" "got: $CTX"
 fi
 
-# ── Test 3: create_pull_request with string tool_response ─────────────
+# ── Test 3: create_pull_request with double quotes in title ───────────
+OUTPUT=$(cd "$TMPDIR" && echo '{
+  "tool_name": "mcp__github__create_pull_request",
+  "tool_input": {"title": "fix: use \"strict\" mode"},
+  "tool_response": {"number": 55}
+}' | bash "$HOOK")
+
+CTX=$(echo "$OUTPUT" | jq -r '.hookSpecificOutput.additionalContext')
+if echo "$CTX" | grep -q 'Created PR #55.*strict'; then
+  pass "handles title with double quotes"
+else
+  fail "handles title with double quotes" "got: $CTX"
+fi
+
+# ── Test 4: create_pull_request with string tool_response ─────────────
 OUTPUT=$(cd "$TMPDIR" && echo '{
   "tool_name": "mcp__github__create_pull_request",
   "tool_input": {"title": "docs: readme"},
