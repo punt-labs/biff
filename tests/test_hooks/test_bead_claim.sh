@@ -16,16 +16,16 @@ pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1: $2"; }
 
 # ── Setup: temp git repo with .biff ──────────────────────────────────
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+TEST_REPO=$(mktemp -d)
+trap 'rm -rf "$TEST_REPO"' EXIT
 
-git -C "$TMPDIR" init -q
-touch "$TMPDIR/.biff"
+git -C "$TEST_REPO" init -q
+touch "$TEST_REPO/.biff"
 
 # Also create a repo WITHOUT .biff
-TMPDIR_NO_BIFF=$(mktemp -d)
-trap 'rm -rf "$TMPDIR" "$TMPDIR_NO_BIFF"' EXIT
-git -C "$TMPDIR_NO_BIFF" init -q
+TEST_REPO_NO_BIFF=$(mktemp -d)
+trap 'rm -rf "$TEST_REPO" "$TEST_REPO_NO_BIFF"' EXIT
+git -C "$TEST_REPO_NO_BIFF" init -q
 
 echo "bead-claim.sh tests"
 echo "────────────────────"
@@ -34,7 +34,7 @@ echo "────────────────────"
 echo ""
 echo "matching:"
 
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update biff-679 --status=in_progress"},
   "tool_response": "✓ biff-679 → in_progress"
@@ -59,7 +59,7 @@ else
 fi
 
 # ── Test 2: different flag order ─────────────────────────────────────
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update --status=in_progress biff-679"},
   "tool_response": "✓ biff-679 → in_progress"
@@ -73,7 +73,7 @@ else
 fi
 
 # ── Test 3: chained command ──────────────────────────────────────────
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update biff-679 --status=in_progress && bd show biff-679"},
   "tool_response": "✓ biff-679 → in_progress\n..."
@@ -87,7 +87,7 @@ else
 fi
 
 # ── Test 4: --status in_progress (space instead of =) ────────────────
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update biff-679 --status in_progress"},
   "tool_response": "✓ biff-679 → in_progress"
@@ -104,7 +104,7 @@ fi
 echo ""
 echo "gating:"
 
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update biff-679 --status=in_progress"},
   "tool_response": "Error: issue not found"
@@ -117,7 +117,7 @@ else
 fi
 
 # ── Test 6: no .biff file → silent exit ──────────────────────────────
-OUTPUT=$(cd "$TMPDIR_NO_BIFF" && echo '{
+OUTPUT=$(cd "$TEST_REPO_NO_BIFF" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update biff-679 --status=in_progress"},
   "tool_response": "✓ biff-679 → in_progress"
@@ -130,7 +130,7 @@ else
 fi
 
 # ── Test 7: unrelated Bash command → silent exit ─────────────────────
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "git status"},
   "tool_response": "On branch main"
@@ -143,7 +143,7 @@ else
 fi
 
 # ── Test 8: bd update without in_progress → silent exit ──────────────
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update biff-679 --assignee=kai"},
   "tool_response": "✓ biff-679 updated"
@@ -156,7 +156,7 @@ else
 fi
 
 # ── Test 9: bd update --description containing in_progress → silent exit
-OUTPUT=$(cd "$TMPDIR" && echo '{
+OUTPUT=$(cd "$TEST_REPO" && echo '{
   "tool_name": "Bash",
   "tool_input": {"command": "bd update biff-679 --description=\"matches bd update.*in_progress pattern\""},
   "tool_response": "✓ biff-679 updated"
