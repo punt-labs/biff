@@ -127,7 +127,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return str(exc)
 
         now = datetime.now(UTC)
-        message = message[:200]
+        message = message[:512]
         try:
             post = WallPost(
                 text=message,

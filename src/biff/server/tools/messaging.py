@@ -51,7 +51,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         msg = Message(
             from_user=state.config.user,
             to_user=to_user,
-            body=message,
+            body=message[:512],
         )
         await state.relay.deliver(msg)
         await refresh_read_messages(mcp, state)
