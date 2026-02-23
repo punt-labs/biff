@@ -110,6 +110,13 @@ class TestWallDurationValidation:
         result = await kai.call("wall", message="test", duration="10d")
         assert "maximum" in result
 
-    async def test_message_exceeds_max_length(self, kai: RecordingClient) -> None:
-        result = await kai.call("wall", message="x" * 201)
-        assert "200" in result
+    async def test_long_message_truncated(self, kai: RecordingClient) -> None:
+        result = await kai.call("wall", message="x" * 250)
+        assert "Wall posted" in result
+
+    async def test_whitespace_only_message_treated_as_read(
+        self, kai: RecordingClient
+    ) -> None:
+        """Whitespace-only message should fall through to read mode, not error."""
+        result = await kai.call("wall", message="   ")
+        assert "No active wall" in result
