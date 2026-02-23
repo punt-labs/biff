@@ -659,3 +659,52 @@ The user-level subject `biff.{repo}.inbox.{user}` (3 tokens) is distinct from th
 - Old broadcast copies already in per-TTY inboxes will still be read normally.
 - No migration needed.
 - NATS stream config unchanged (`biff.{repo}.inbox.>` covers both).
+
+## DES-014: Column-Constrained Table Formatter
+
+**Date:** 2026-02-23
+**Status:** SETTLED
+**Topic:** Shared 80-column table formatter for all tool output
+
+### Problem
+
+Tool output (`/who`, `/last`, `/read`) used ad-hoc formatting that broke when content — especially the PLAN column — exceeded terminal width. Long plans pushed columns off-screen or created ragged output. Each tool implemented its own formatting logic, duplicating alignment and header code.
+
+### Design
+
+One shared formatter in `_formatting.py` with two primitives:
+
+- **`ColumnSpec`** — frozen dataclass defining header, min width, alignment, and whether the column is fixed or variable.
+- **`format_table(specs, rows)`** — renders a constrained-width table with `▶` header prefix and `   ` row prefix (3-char indent).
+
+**Layout algorithm:**
+
+1. Fixed columns grow to fit their content (max of header, min_width, content).
+2. Exactly one column per table is marked `fixed=False` (the variable column).
+3. The variable column receives the remaining width budget: `80 - prefix - fixed_total - separators`.
+4. Variable content that exceeds its budget wraps via `textwrap.wrap()`. Continuation lines indent to the variable column's start offset.
+
+**80-character hard limit.** Biff output is consumed by LLMs in Claude Code, not resizable terminals. 80 columns is the product decision — wide enough for useful data, narrow enough to avoid context waste.
+
+**ANSI awareness.** `visible_width()` strips ANSI escape sequences before measuring, so colored output doesn't inflate column widths.
+
+**DIR truncation.** `last_component()` extracts the final path component (`/Users/kai/biff` → `biff`) to save horizontal space in the DIR column.
+
+### Migration
+
+All three tool modules migrated to shared formatter:
+
+| Tool | Specs constant | Variable column |
+|------|---------------|-----------------|
+| `/who` | `_WHO_SPECS` | PLAN |
+| `/last` | `_LAST_SPECS` | DURATION |
+| `/read` | `_READ_SPECS` | MESSAGE |
+
+### Alternatives Considered
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Per-tool formatters | Duplicates alignment logic; bug fixes must be applied N times |
+| Dynamic terminal width detection | LLM consumers have no terminal; fixed width is the correct abstraction |
+| Multiple variable columns | Ambiguous budget allocation; one variable column keeps the algorithm simple and predictable |
+| Truncation instead of wrapping | Loses information; wrapping preserves full content while constraining width |

@@ -306,7 +306,7 @@ class TestWhoTool:
         assert "HOST" in result
         assert "DIR" in result
         assert "dev-box" in result
-        assert "/home/kai" in result
+        assert "kai" in result  # DIR shows last path component
 
 
 class TestPlanTool:

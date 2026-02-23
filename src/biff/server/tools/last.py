@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from biff.models import SessionEvent
+from biff.server.tools._formatting import ColumnSpec, format_table
 from biff.server.tools._session import update_current_session
 from biff.tty import build_session_key
 
@@ -18,6 +19,15 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
+
+_LAST_SPECS: list[ColumnSpec] = [
+    ColumnSpec("NAME", min_width=4),
+    ColumnSpec("TTY", min_width=3),
+    ColumnSpec("HOST", min_width=4),
+    ColumnSpec("LOGIN", min_width=16),
+    ColumnSpec("LOGOUT", min_width=15),
+    ColumnSpec("DURATION", min_width=8, fixed=False),
+]
 
 
 def _format_duration(login_ts: datetime, logout_ts: datetime) -> str:
@@ -67,12 +77,12 @@ def _pair_events(
     return pairs
 
 
-def _format_table(
+def _format_last(
     pairs: list[tuple[SessionEvent, SessionEvent | None]],
     active_keys: set[str],
 ) -> str:
     """Build a columnar table matching Unix ``last(1)`` style."""
-    rows: list[tuple[str, str, str, str, str, str]] = []
+    rows: list[list[str]] = []
     for login, logout in pairs:
         name = f"@{login.user}"
         tty = login.tty_name or (login.tty[:8] if login.tty else "-")
@@ -87,28 +97,12 @@ def _format_table(
         else:
             logout_str = "gone"
             duration = "-"
-        rows.append((name, tty, host, login_str, logout_str, duration))
+        rows.append([name, tty, host, login_str, logout_str, duration])
 
     if not rows:
         return "No session history."
 
-    name_w = max(4, max(len(r[0]) for r in rows))
-    tty_w = max(3, max(len(r[1]) for r in rows))
-    host_w = max(4, max(len(r[2]) for r in rows))
-    login_w = max(5, max(len(r[3]) for r in rows))
-    logout_w = max(6, max(len(r[4]) for r in rows))
-
-    header = (
-        f"\u25b6  {'NAME':<{name_w}}  {'TTY':<{tty_w}}  {'HOST':<{host_w}}"
-        f"  {'LOGIN':<{login_w}}  {'LOGOUT':<{logout_w}}  DURATION"
-    )
-    lines: list[str] = []
-    for name, tty, host, login_str, logout_str, duration in rows:
-        lines.append(
-            f"   {name:<{name_w}}  {tty:<{tty_w}}  {host:<{host_w}}"
-            f"  {login_str:<{login_w}}  {logout_str:<{logout_w}}  {duration}"
-        )
-    return header + "\n" + "\n".join(lines)
+    return format_table(_LAST_SPECS, rows)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -138,4 +132,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         pairs = _pair_events(events)
         pairs = pairs[:count]
 
-        return _format_table(pairs, active_keys)
+        return _format_last(pairs, active_keys)
