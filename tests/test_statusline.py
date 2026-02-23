@@ -464,20 +464,35 @@ class TestWallSegment:
         assert _wall_segment("") == ""
 
     def test_active_wall(self) -> None:
-        result = _wall_segment("release freeze")
+        result = _wall_segment("release freeze", max_width=80)
         assert "WALL:" in result
         assert "release freeze" in result
 
     def test_bold_red(self) -> None:
-        result = _wall_segment("deploy in progress")
+        result = _wall_segment("deploy in progress", max_width=80)
         assert "\033[1;31m" in result
         assert "\033[0m" in result
 
-    def test_truncates_long_text(self) -> None:
-        long_text = "x" * 50
-        result = _wall_segment(long_text)
+    def test_truncates_to_max_width(self) -> None:
+        long_text = "x" * 100
+        result = _wall_segment(long_text, max_width=40)
         assert "..." in result
-        assert len(result) < len(long_text) + 30  # ANSI codes + prefix
+        # "WALL: " = 6 chars, ANSI overhead = 11, budget = 40-6-11 = 23
+        # display = 20 x's + "..." = 23
+        plain = result.replace("\033[1;31m", "").replace("\033[0m", "")
+        assert len(plain) <= 40
+
+    def test_fits_within_width(self) -> None:
+        result = _wall_segment("short", max_width=80)
+        assert "short" in result
+        assert "..." not in result
+
+    def test_terminal_width_fallback(self) -> None:
+        # max_width=0 triggers shutil.get_terminal_size()
+        with patch("biff.statusline.shutil.get_terminal_size") as mock_ts:
+            mock_ts.return_value = os.terminal_size((60, 24))
+            result = _wall_segment("a" * 100, max_width=0)
+        assert "..." in result
 
 
 # --- Read Session Unread ----------------------------------------------------
@@ -595,14 +610,25 @@ class TestRunOriginal:
 
 
 def _write_ppid_unread(
-    unread_dir: Path, user: str, count: int, tty_name: str = "", preview: str = ""
+    unread_dir: Path,
+    user: str,
+    count: int,
+    tty_name: str = "",
+    preview: str = "",
+    wall: str = "",
 ) -> None:
     """Write a PPID-keyed unread file for the current process."""
     unread_dir.mkdir(parents=True, exist_ok=True)
     path = unread_dir / f"{os.getppid()}.json"
     path.write_text(
         json.dumps(
-            {"user": user, "count": count, "tty_name": tty_name, "preview": preview}
+            {
+                "user": user,
+                "count": count,
+                "tty_name": tty_name,
+                "preview": preview,
+                "wall": wall,
+            }
         )
     )
 
@@ -713,6 +739,29 @@ class TestRunStatusline:
         assert "kai:tty1(0)" in result
         # Native segments should NOT appear when original is used
         assert "$1.50" not in result
+
+    def test_wall_on_separate_line(self, _mock_key: object, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(unread_dir, "kai", 0, "tty1", wall="release freeze")
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = "{}"
+            result = run_statusline(stash_path, unread_dir)
+        lines = result.split("\n")
+        assert len(lines) == 2
+        assert "kai:tty1(0)" in lines[0]
+        assert "WALL:" in lines[1]
+        assert "release freeze" in lines[1]
+
+    def test_no_wall_single_line(self, _mock_key: object, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = "{}"
+            result = run_statusline(stash_path, unread_dir)
+        assert "\n" not in result
+        assert "kai:tty1(0)" in result
 
     def test_empty_original_falls_back_to_native(
         self, _mock_key: object, tmp_path: Path

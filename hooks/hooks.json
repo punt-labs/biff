@@ -21,7 +21,7 @@
         ]
       },
       {
-        "matcher": "mcp__(github|plugin_github_github)__(create|merge)_pull_request",
+        "matcher": "mcp__(github|plugin_github_github)__(create|merge)_pull_request$",
         "hooks": [
           {
             "type": "command",

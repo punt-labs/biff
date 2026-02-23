@@ -41,9 +41,9 @@ else
   exit 0
 fi
 
-jq -n --arg ctx "This team uses biff for communication. Consider announcing to the team: /wall \"${MSG}\"" '{
+jq -n --arg msg "$MSG" '{
   hookSpecificOutput: {
     hookEventName: "PostToolUse",
-    additionalContext: $ctx
+    additionalContext: ("This team uses biff for communication. Consider announcing to the team: /wall \"" + $msg + "\"")
   }
 }'
