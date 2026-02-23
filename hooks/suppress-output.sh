@@ -8,12 +8,17 @@
 # tool_response arrives as a JSON-encoded STRING, not an object.
 # We must parse it twice: once to extract the string, once to
 # read the .result field inside it.
+#
+# Supports both prod (mcp__plugin_biff_tty__*) and dev
+# (mcp__plugin_biff-dev_tty__*) tool prefixes by extracting the
+# bare tool name via ${TOOL##*__}.
 
 INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name')
+TOOL_NAME="${TOOL##*__}"
 
 # read_messages: summary in panel, full data via additionalContext.
-if [[ "$TOOL" == "mcp__plugin_biff_tty__read_messages" ]]; then
+if [[ "$TOOL_NAME" == "read_messages" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   if [[ "$RESULT" == "No new messages." ]]; then
     jq -n --arg r "$RESULT" '{
@@ -36,7 +41,7 @@ if [[ "$TOOL" == "mcp__plugin_biff_tty__read_messages" ]]; then
 fi
 
 # who: summary in panel, full data via additionalContext.
-if [[ "$TOOL" == "mcp__plugin_biff_tty__who" ]]; then
+if [[ "$TOOL_NAME" == "who" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   if [[ "$RESULT" == "No sessions." ]]; then
     jq -n --arg r "$RESULT" '{
@@ -59,7 +64,7 @@ if [[ "$TOOL" == "mcp__plugin_biff_tty__who" ]]; then
 fi
 
 # last: summary in panel, full data via additionalContext.
-if [[ "$TOOL" == "mcp__plugin_biff_tty__last" ]]; then
+if [[ "$TOOL_NAME" == "last" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   if [[ "$RESULT" == "No session history." ]]; then
     jq -n --arg r "$RESULT" '{
@@ -82,7 +87,7 @@ if [[ "$TOOL" == "mcp__plugin_biff_tty__last" ]]; then
 fi
 
 # finger: username in panel, full data via additionalContext.
-if [[ "$TOOL" == "mcp__plugin_biff_tty__finger" ]]; then
+if [[ "$TOOL_NAME" == "finger" ]]; then
   RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
   USER=$(printf '%s' "$RESULT" | head -1 | sed 's/.*Login: *\([^ ]*\).*/\1/')
   jq -n --arg summary "@${USER}" --arg ctx "$RESULT" '{
