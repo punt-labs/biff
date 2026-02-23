@@ -11,7 +11,7 @@ it is stashed and its output replaces the repo/context/cost segments.
 from __future__ import annotations
 
 import json
-import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import cast
 
 from biff.relay import atomic_write
+from biff.session_key import find_session_key
 
 # Well-known paths ----------------------------------------------------------
 
@@ -169,10 +170,11 @@ def run_statusline(
     else:
         base_segments = _base_segments(session)
 
-    unread = _read_session_unread(unread_dir / f"{os.getppid()}.json")
+    unread = _read_session_unread(unread_dir / f"{find_session_key()}.json")
     biff = _biff_segment(unread)
+    wall = _wall_segment(unread.wall if unread else "")
 
-    segments = [s for s in [*base_segments, biff] if s.strip()]
+    segments = [s for s in [*base_segments, biff, wall] if s.strip()]
     return " | ".join(segments)
 
 
@@ -360,6 +362,7 @@ class SessionUnread:
     count: int
     tty_name: str
     biff_enabled: bool = True
+    wall: str = ""
 
 
 def _read_session_unread(path: Path) -> SessionUnread | None:
@@ -372,6 +375,7 @@ def _read_session_unread(path: Path) -> SessionUnread | None:
             count=int(data.get("count", 0)),
             tty_name=str(data.get("tty_name", "")),
             biff_enabled=bool(biff_enabled),
+            wall=str(data.get("wall", "")),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None
@@ -399,6 +403,30 @@ def _biff_segment(unread: SessionUnread | None) -> str:
     if unread.count == 0:
         return label
     return f"\033[1;33m{label}\033[0m"
+
+
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07?|[()][A-B012])")
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _wall_segment(wall_text: str) -> str:
+    """Format the wall banner segment for the status bar.
+
+    Empty when no wall is active.  Bold red when active to
+    distinguish from normal biff status.  Sanitizes all ANSI
+    escape sequences and control characters for single-line display.
+    """
+    if not wall_text:
+        return ""
+    # Sanitize: strip ANSI escapes and control chars, collapse whitespace
+    clean = _ANSI_RE.sub("", wall_text)
+    clean = _CTRL_RE.sub("", clean)
+    clean = " ".join(clean.split())
+    if not clean:
+        return ""
+    # Truncate long wall messages for status bar readability
+    display = clean if len(clean) <= 40 else clean[:37] + "..."
+    return f"\033[1;31mWALL: {display}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str | None:

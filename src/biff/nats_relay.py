@@ -49,6 +49,7 @@ from biff.models import (
     RelayAuth,
     SessionEvent,
     UserSession,
+    WallPost,
     build_unread_summary,
 )
 from biff.relay import SESSION_TTL_SECONDS
@@ -649,3 +650,32 @@ class NatsRelay:
         # Sort by timestamp descending (most recent first), take count
         events.sort(key=lambda e: e.timestamp, reverse=True)
         return events[:count]
+
+    # -- Wall (team broadcast) --
+
+    _WALL_KV_KEY = "wall"
+
+    async def set_wall(self, wall: WallPost | None) -> None:
+        """Set or clear the team wall in the sessions KV bucket."""
+        _, kv = await self._ensure_connected()
+        if wall is None:
+            with suppress(KeyNotFoundError, BucketNotFoundError):
+                await kv.delete(self._WALL_KV_KEY)
+        else:
+            await kv.put(self._WALL_KV_KEY, wall.model_dump_json().encode())
+
+    async def get_wall(self) -> WallPost | None:
+        """Read the active wall, returning ``None`` if absent or expired."""
+        _, kv = await self._ensure_connected()
+        try:
+            entry = await kv.get(self._WALL_KV_KEY)
+            if entry.value is None:
+                return None
+            wall = WallPost.model_validate_json(entry.value)
+        except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
+            return None
+        if wall.is_expired:
+            with suppress(KeyNotFoundError, BucketNotFoundError):
+                await kv.delete(self._WALL_KV_KEY)
+            return None
+        return wall

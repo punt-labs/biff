@@ -166,6 +166,32 @@ class SessionEvent(BaseModel):
         return _ensure_utc(v)
 
 
+class WallPost(BaseModel):
+    """A team broadcast banner with time-based expiry.
+
+    Unlike messages (which go into inboxes and require ``/read``),
+    a wall is immediately visible on the status bar and tool
+    descriptions — fire-and-forget with automatic cleanup.
+    """
+
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
+    text: str = Field(min_length=1, max_length=200)
+    from_user: str = Field(min_length=1)
+    posted_at: datetime = Field(default_factory=_utc_now)
+    expires_at: datetime
+
+    @field_validator("posted_at", "expires_at", mode="after")
+    @classmethod
+    def _normalize(cls, v: datetime) -> datetime:
+        return _ensure_utc(v)
+
+    @property
+    def is_expired(self) -> bool:
+        """Whether the wall has passed its expiry time."""
+        return datetime.now(UTC) >= self.expires_at
+
+
 class UnreadSummary(BaseModel):
     """Summary of unread messages for dynamic tool descriptions.
 

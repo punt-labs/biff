@@ -25,6 +25,7 @@ from biff.statusline import (
     _read_session_unread,
     _resolve_original_command,
     _run_original,
+    _wall_segment,
     install,
     read_settings,
     read_stash,
@@ -455,6 +456,30 @@ class TestBiffSegment:
         assert result == "kai(n)"
 
 
+# --- Wall Segment -----------------------------------------------------------
+
+
+class TestWallSegment:
+    def test_empty_returns_empty(self) -> None:
+        assert _wall_segment("") == ""
+
+    def test_active_wall(self) -> None:
+        result = _wall_segment("release freeze")
+        assert "WALL:" in result
+        assert "release freeze" in result
+
+    def test_bold_red(self) -> None:
+        result = _wall_segment("deploy in progress")
+        assert "\033[1;31m" in result
+        assert "\033[0m" in result
+
+    def test_truncates_long_text(self) -> None:
+        long_text = "x" * 50
+        result = _wall_segment(long_text)
+        assert "..." in result
+        assert len(result) < len(long_text) + 30  # ANSI codes + prefix
+
+
 # --- Read Session Unread ----------------------------------------------------
 
 
@@ -582,8 +607,9 @@ def _write_ppid_unread(
     )
 
 
+@patch("biff.statusline.find_session_key", return_value=os.getppid())
 class TestRunStatusline:
-    def test_no_original_no_unreads(self, tmp_path: Path) -> None:
+    def test_no_original_no_unreads(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         with patch("biff.statusline.sys.stdin") as mock_stdin:
@@ -591,7 +617,7 @@ class TestRunStatusline:
             result = run_statusline(stash_path, unread_dir)
         assert result == "biff"
 
-    def test_no_original_with_unreads(self, tmp_path: Path) -> None:
+    def test_no_original_with_unreads(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_ppid_unread(unread_dir, "kai", 3, "tty1")
@@ -601,7 +627,7 @@ class TestRunStatusline:
         assert "kai:tty1(3)" in result
         assert "\033[1;33m" in result
 
-    def test_original_with_unreads(self, tmp_path: Path) -> None:
+    def test_original_with_unreads(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_ppid_unread(unread_dir, "kai", 2, "tty1")
@@ -613,7 +639,7 @@ class TestRunStatusline:
         assert "kai:tty1(2)" in result
         assert " | " in result
 
-    def test_original_no_unreads(self, tmp_path: Path) -> None:
+    def test_original_no_unreads(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
@@ -625,7 +651,7 @@ class TestRunStatusline:
         assert "(0)" not in result
         assert " | " in result
 
-    def test_without_tty_name(self, tmp_path: Path) -> None:
+    def test_without_tty_name(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_ppid_unread(unread_dir, "kai", 1)
@@ -635,7 +661,9 @@ class TestRunStatusline:
         assert "kai(1)" in result
         assert ":" not in result.replace("\033[1;33m", "").replace("\033[0m", "")
 
-    def test_native_segments_with_session_data(self, tmp_path: Path) -> None:
+    def test_native_segments_with_session_data(
+        self, _mock_key: object, tmp_path: Path
+    ) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_ppid_unread(unread_dir, "kai", 0, "tty1")
@@ -661,7 +689,9 @@ class TestRunStatusline:
         assert "kai:tty1(0)" in result
         assert " | " in result
 
-    def test_original_overrides_base_segments(self, tmp_path: Path) -> None:
+    def test_original_overrides_base_segments(
+        self, _mock_key: object, tmp_path: Path
+    ) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_ppid_unread(unread_dir, "kai", 0, "tty1")
@@ -684,7 +714,9 @@ class TestRunStatusline:
         # Native segments should NOT appear when original is used
         assert "$1.50" not in result
 
-    def test_empty_original_falls_back_to_native(self, tmp_path: Path) -> None:
+    def test_empty_original_falls_back_to_native(
+        self, _mock_key: object, tmp_path: Path
+    ) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         _write_ppid_unread(unread_dir, "kai", 0, "tty1")

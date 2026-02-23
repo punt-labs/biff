@@ -1,6 +1,6 @@
 [project]
 name = "punt-biff"
-version = "0.5.0"
+version = "0.6.0"
 description = "The dog that barked when messages arrived. A modern CLI communication tool for software engineers."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -97,6 +97,7 @@ ignore = [
 "src/biff/installer.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/doctor.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/statusline.py" = ["S602", "T20"]
+"src/biff/server/tools/wall.py" = ["FBT"]
 "src/biff/mcp_server.py" = ["T20", "FBT"]
 "spike/list_changed_server.py" = ["S101", "T20", "PLW0603", "F811"]
 

@@ -70,6 +70,7 @@ class TestToolListing:
             "read_messages",
             "finger",
             "write",
+            "wall",
             "who",
             "plan",
             "tty",
