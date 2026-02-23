@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from biff.server.tools._formatting import (
     ColumnSpec,
     format_idle,
@@ -134,7 +136,7 @@ class TestFormatTable:
         ]
         result = format_table(specs, [["1:23", "coding"]])
         lines = result.splitlines()
-        # "1:23" should be right-padded in a 6-wide column
+        # "1:23" should be right-aligned in a 6-wide column
         assert "  1:23" in lines[1]
 
     def test_multiple_rows(self) -> None:
@@ -149,6 +151,20 @@ class TestFormatTable:
         ansi_text = "\033[32mcoding\033[0m"
         result = format_table(specs, [["@kai", ansi_text]])
         assert ansi_text in result
+
+    def test_ansi_aware_padding(self) -> None:
+        """Fixed columns with ANSI content pad based on visible width."""
+        specs = [
+            ColumnSpec("NAME", min_width=8),
+            ColumnSpec("PLAN", min_width=5, fixed=False),
+        ]
+        # "\033[32m@kai\033[0m" has visible width 4, string length 13
+        ansi_name = "\033[32m@kai\033[0m"
+        result = format_table(specs, [[ansi_name, "work"]])
+        row = result.splitlines()[1]
+        # The NAME cell should be padded to 8 visible chars, not 8 string chars
+        # So there should be 4 trailing spaces after the ANSI reset
+        assert f"{ansi_name}    " in row
 
     def test_header_column_names(self) -> None:
         specs = [
@@ -178,8 +194,6 @@ class TestFormatTable:
             ColumnSpec("A", min_width=4, fixed=False),
             ColumnSpec("B", min_width=4, fixed=False),
         ]
-        import pytest
-
         with pytest.raises(ValueError, match="at most one"):
             format_table(specs, [["a", "b"]])
 

@@ -81,10 +81,11 @@ def last_component(path: str) -> str:
 
 
 def _fmt_cell(text: str, width: int, align: Literal["left", "right"]) -> str:
-    """Pad *text* to *width* using the given alignment."""
+    """Pad *text* to *width* using visible width (ANSI-aware)."""
+    padding = max(0, width - visible_width(text))
     if align == "right":
-        return text.rjust(width)
-    return text.ljust(width)
+        return " " * padding + text
+    return text + " " * padding
 
 
 def _render_rows(
