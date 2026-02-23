@@ -423,9 +423,10 @@ def _wall_segment(wall_text: str, max_width: int = 0) -> str:
 
     Uses ``shutil.get_terminal_size()`` which checks ``$COLUMNS``
     first (set by the parent shell), then ``os.get_terminal_size()``,
-    then falls back to 80.  The ANSI escape codes wrapping the output
-    are invisible but consume bytes — the budget accounts for them
-    so renderers that count raw bytes still fit on one line.
+    then falls back to 80.  ANSI escape codes wrapping the output
+    are zero-width in terminal rendering and do not consume visible
+    columns, so only the prefix and message text count toward the
+    truncation budget.
     """
     if not wall_text:
         return ""
@@ -436,12 +437,9 @@ def _wall_segment(wall_text: str, max_width: int = 0) -> str:
     if not clean:
         return ""
     prefix = "WALL: "
-    # Bold-red open + reset close = 11 invisible bytes that some
-    # renderers count toward line width.
-    ansi_overhead = len("\033[1;31m") + len("\033[0m")
     if max_width <= 0:
         max_width = shutil.get_terminal_size().columns
-    budget = max_width - len(prefix) - ansi_overhead
+    budget = max_width - len(prefix)
     if budget < 10:
         budget = 10
     display = clean if len(clean) <= budget else clean[: budget - 3] + "..."

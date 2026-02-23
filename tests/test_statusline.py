@@ -477,10 +477,10 @@ class TestWallSegment:
         long_text = "x" * 100
         result = _wall_segment(long_text, max_width=40)
         assert "..." in result
-        # "WALL: " = 6 chars, ANSI overhead = 11, budget = 40-6-11 = 23
-        # display = 20 x's + "..." = 23
+        # "WALL: " = 6 chars, budget = 40-6 = 34
+        # display = 31 x's + "..." = 34
         plain = result.replace("\033[1;31m", "").replace("\033[0m", "")
-        assert len(plain) <= 40
+        assert len(plain) == 40
 
     def test_fits_within_width(self) -> None:
         result = _wall_segment("short", max_width=80)
