@@ -7,8 +7,12 @@ FastMCPTransport -> FastMCP -> tool -> NatsRelay -> NATS <- other server.
 
 from __future__ import annotations
 
+import nats
 import pytest
+from nats.js.errors import NotFoundError
 
+from biff.models import Message
+from biff.nats_relay import NatsRelay
 from biff.testing import RecordingClient
 
 pytestmark = pytest.mark.nats
@@ -204,3 +208,39 @@ class TestCrossRelayMessaging:
         # Second read is empty
         result = await eric.call("read_messages")
         assert "No new messages" in result
+
+
+class TestConsumerCleanup:
+    """Durable consumers are deleted when sessions exit."""
+
+    async def test_delete_session_removes_consumer(self, nats_server: str) -> None:
+        """delete_session() deletes the per-session inbox consumer."""
+        repo = "_test-consumer-cleanup"
+        relay = NatsRelay(url=nats_server, repo_name=repo)
+        stream = f"biff-{repo}-inbox"
+        session_key = "kai:tty1"
+        consumer_name = relay._durable_name(session_key)
+
+        try:
+            # Deliver a message so the stream has data, then fetch to
+            # create the durable consumer.
+            msg = Message(from_user="eric", to_user=session_key, body="hello")
+            await relay.deliver(msg)
+            await relay.fetch(session_key)
+
+            # Verify consumer exists on the server.
+            nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
+            js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
+            info = await js.consumer_info(stream, consumer_name)
+            assert info.name == consumer_name
+
+            # delete_session should remove both the KV entry and the consumer.
+            await relay.delete_session(session_key)
+
+            with pytest.raises(NotFoundError):
+                await js.consumer_info(stream, consumer_name)
+
+            await nc.close()
+        finally:
+            await relay.delete_infrastructure()
+            await relay.close()

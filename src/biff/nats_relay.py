@@ -72,6 +72,7 @@ _FETCH_TIMEOUT = 1.0
 _PEEK_TIMEOUT = 0.5
 _PEEK_BATCH = 3
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
+_CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 
 
 class NatsRelay:
@@ -383,7 +384,10 @@ class NatsRelay:
         subject = self._subject_for_key(session_key)
 
         sub = await js.pull_subscribe(
-            subject, durable=self._durable_name(session_key), stream=self._stream_name
+            subject,
+            durable=self._durable_name(session_key),
+            stream=self._stream_name,
+            config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
         )
         try:
             raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
@@ -417,6 +421,7 @@ class NatsRelay:
             subject,
             durable=self._user_durable_name(user),
             stream=self._stream_name,
+            config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
         )
         try:
             raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
@@ -490,7 +495,10 @@ class NatsRelay:
             if count == 0:
                 continue
             sub = await js.pull_subscribe(
-                subject, durable=durable, stream=self._stream_name
+                subject,
+                durable=durable,
+                stream=self._stream_name,
+                config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
             )
             try:
                 raw_msgs = await sub.fetch(
@@ -570,11 +578,16 @@ class NatsRelay:
         return sessions
 
     async def delete_session(self, session_key: str) -> None:
-        """Remove a session from KV storage."""
+        """Remove a session from KV storage and its inbox consumer."""
         kv_key = self._kv_key(session_key)
-        _, kv = await self._ensure_connected()
+        js, kv = await self._ensure_connected()
         with suppress(KeyNotFoundError, BucketNotFoundError):
             await kv.delete(kv_key)
+        # Delete the per-session inbox consumer to prevent consumer leaks.
+        # The user-level consumer (userinbox-{user}) is shared across sessions
+        # and cleaned up by inactive_threshold when no sessions remain.
+        with suppress(NotFoundError):
+            await js.delete_consumer(self._stream_name, self._durable_name(session_key))
 
     # -- Session history (wtmp) --
 
