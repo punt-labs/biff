@@ -4,7 +4,7 @@
 # PostToolUse hook. Matches ALL Bash tool calls — must exit fast
 # on non-matching commands.  Only fires when:
 #   1. Working directory has a .biff marker
-#   2. Command contains "bd update" + "in_progress"
+#   2. Command contains "bd update" + "--status" + "in_progress"
 #   3. Command succeeded (tool_response contains ✓)
 #
 # Light-touch: does NOT parse bd output or run bd show.
@@ -19,7 +19,7 @@ INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
 # Fast exit: not a bead claim
-[[ "$CMD" =~ bd[[:space:]]+update.*in_progress ]] || exit 0
+[[ "$CMD" =~ bd[[:space:]]+update.*--status[=[:space:]]in_progress ]] || exit 0
 
 # Check the command succeeded (tool_response should contain ✓)
 RESPONSE=$(echo "$INPUT" | jq -r '.tool_response // ""')

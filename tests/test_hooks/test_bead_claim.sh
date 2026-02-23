@@ -17,13 +17,14 @@ fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1: $2"; }
 
 # ── Setup: temp git repo with .biff ──────────────────────────────────
 TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR" "$TMPDIR_NO_BIFF"' EXIT
+trap 'rm -rf "$TMPDIR"' EXIT
 
 git -C "$TMPDIR" init -q
 touch "$TMPDIR/.biff"
 
 # Also create a repo WITHOUT .biff
 TMPDIR_NO_BIFF=$(mktemp -d)
+trap 'rm -rf "$TMPDIR" "$TMPDIR_NO_BIFF"' EXIT
 git -C "$TMPDIR_NO_BIFF" init -q
 
 echo "bead-claim.sh tests"
@@ -152,6 +153,19 @@ if [[ -z "$OUTPUT" ]]; then
   pass "silent exit for bd update without in_progress"
 else
   fail "silent exit for bd update without in_progress" "got output: $OUTPUT"
+fi
+
+# ── Test 9: bd update --description containing in_progress → silent exit
+OUTPUT=$(cd "$TMPDIR" && echo '{
+  "tool_name": "Bash",
+  "tool_input": {"command": "bd update biff-679 --description=\"matches bd update.*in_progress pattern\""},
+  "tool_response": "✓ biff-679 updated"
+}' | bash "$HOOK" 2>&1) || true
+
+if [[ -z "$OUTPUT" ]]; then
+  pass "silent exit for --description containing in_progress"
+else
+  fail "silent exit for --description containing in_progress" "got output: $OUTPUT"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────
