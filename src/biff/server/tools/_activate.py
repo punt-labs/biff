@@ -14,7 +14,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.config import DEMO_RELAY_URL, ensure_gitignore, write_biff_local
+from biff.config import (
+    DEMO_RELAY_URL,
+    build_biff_toml,
+    ensure_gitignore,
+    write_biff_local,
+)
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
@@ -35,7 +40,6 @@ def lazy_activate(state: ServerState) -> str | None:
 
     # Create .biff if missing (non-interactive, using current config)
     if not (repo_root / ".biff").exists():
-        from biff.__main__ import build_biff_toml  # noqa: PLC0415
         from biff.relay import atomic_write  # noqa: PLC0415
 
         relay_url = state.config.relay_url or DEMO_RELAY_URL

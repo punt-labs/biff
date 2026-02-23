@@ -16,6 +16,7 @@ import typer
 
 from biff.config import (
     DEMO_RELAY_URL,
+    build_biff_toml,
     ensure_gitignore,
     find_git_root,
     get_github_identity,
@@ -114,26 +115,6 @@ def uninstall_statusline() -> None:
     print(result.message)
     if not result.uninstalled:
         raise typer.Exit(code=1)
-
-
-def _toml_basic_string(value: str) -> str:
-    """Escape *value* for use as a TOML basic string."""
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def build_biff_toml(members: list[str], relay_url: str) -> str:
-    """Build ``.biff`` TOML content from user inputs."""
-    lines: list[str] = []
-    if members:
-        quoted = ", ".join(_toml_basic_string(m) for m in members)
-        lines.append("[team]")
-        lines.append(f"members = [{quoted}]")
-    if relay_url:
-        if lines:
-            lines.append("")
-        lines.append("[relay]")
-        lines.append(f"url = {_toml_basic_string(relay_url)}")
-    return "\n".join(lines) + "\n" if lines else ""
 
 
 @app.command()

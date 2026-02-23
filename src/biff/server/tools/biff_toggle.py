@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.config import ensure_gitignore, is_enabled, write_biff_local
+from biff.config import (
+    DEMO_RELAY_URL,
+    build_biff_toml,
+    ensure_gitignore,
+    is_enabled,
+    write_biff_local,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -42,8 +48,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         if enabled and not (repo_root / ".biff").exists():
             # Create minimal .biff with current config defaults
-            from biff.__main__ import build_biff_toml  # noqa: PLC0415
-            from biff.config import DEMO_RELAY_URL  # noqa: PLC0415
             from biff.relay import atomic_write  # noqa: PLC0415
 
             relay_url = state.config.relay_url or DEMO_RELAY_URL

@@ -244,6 +244,26 @@ def write_biff_local(repo_root: Path, *, enabled: bool) -> None:
     atomic_write(repo_root / ".biff.local", content)
 
 
+def _toml_basic_string(value: str) -> str:
+    """Escape *value* for use as a TOML basic string."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def build_biff_toml(members: list[str], relay_url: str) -> str:
+    """Build ``.biff`` TOML content from user inputs."""
+    lines: list[str] = []
+    if members:
+        quoted = ", ".join(_toml_basic_string(m) for m in members)
+        lines.append("[team]")
+        lines.append(f"members = [{quoted}]")
+    if relay_url:
+        if lines:
+            lines.append("")
+        lines.append("[relay]")
+        lines.append(f"url = {_toml_basic_string(relay_url)}")
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 def extract_biff_fields(
     raw: dict[str, object],
 ) -> tuple[tuple[str, ...], str | None, RelayAuth | None]:
