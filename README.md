@@ -112,6 +112,16 @@ Plan: debugging the websocket reconnect logic
 
 Shows login/logout history for all sessions, matching Unix `last(1)`. Active sessions show "still logged in". Logout timestamps use the session's last heartbeat for accuracy.
 
+### Broadcast to the team
+
+```text
+> /wall "release freeze — do not push to main" 2h
+
+Wall posted (2h): release freeze — do not push to main
+```
+
+Every teammate's status bar shows `WALL: release freeze — do not push to main` in bold red. Expires automatically after 2 hours. Use `/wall clear` to remove early.
+
 ### Go do-not-disturb
 
 ```text
@@ -133,6 +143,7 @@ Your status bar shows `(n)` instead of the unread count while messages are off. 
 | `/last` | BSD `last` | Show session login/logout history |
 | `/plan "text"` | BSD `.plan` | Set your status |
 | `/tty "name"` | BSD `tty` | Name the current session |
+| `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 
 ## Status Bar
@@ -140,10 +151,10 @@ Your status bar shows `(n)` instead of the unread count while messages are off. 
 Biff appends to your existing Claude Code status line — it never replaces it. If you already have a status line command, biff wraps it and adds unread counts at the end:
 
 ```text
-your-existing-status | kai:tty1(3)
+your-existing-status | kai:tty1(3) | WALL: release freeze
 ```
 
-Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off.
+Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off. Active wall broadcasts appear as a bold red `WALL:` segment.
 
 `biff install` includes status bar setup. For standalone management: `biff install-statusline` / `biff uninstall-statusline`.
 
@@ -171,17 +182,18 @@ As engineering teams grow to include both humans and autonomous agents, coordina
 
 ### Shipped
 
-Core communication is live: presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), availability control (`/mesg`), and session history (`/last`) — all working over a NATS relay for cross-machine communication.
+Core communication is live: presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), availability control (`/mesg`), session history (`/last`), and team broadcast (`/wall`) — all working over a NATS relay for cross-machine communication.
 
 TTY sessions (`/tty`) give each agent a distinct identity — one user with 3 sessions shows 3 entries in `/who`, targetable via `/write @user:tty`. Enriched presence shows host and directory per session. Per-session status bar with `user:tty(N)` format. `/mesg n` suppresses the unread count on the status line.
 
 `/last` shows login/logout history modeled after Unix `last(1)`, with three-layer logout detection: sentinel-based (SIGTERM/SIGINT), orphan detection (crash recovery), and KV watcher (TTL expiry).
 
+`/wall` broadcasts time-limited announcements visible on every teammate's status bar. Duration-based expiry (default 1h, max 3d). Poll-based cross-session refresh so all sessions see wall changes within seconds.
+
 ### Next: Agentic Coordination
 
 | Feature | What It Enables |
 |---------|----------------|
-| **`/wall` broadcast** | Time-sensitive announcements visible on every terminal's status bar with automatic expiry. |
 | **Plan auto-expand** | `/plan biff-bf8` auto-expands to show the task title. Everyone sees what you're working on. |
 | **Workflow hooks** | Claiming a task auto-sets your plan. Creating a PR triggers an announcement. |
 | **Project opt-in** | `/biff y` enables the coordination workflow per project via AGENTS.md. |

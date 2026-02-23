@@ -630,7 +630,8 @@ paid tier.
   \texttt{/read}, then discarded.
 
   \texttt{/who} and \texttt{/mesg y/n} are live presence state.
-  \texttt{/wall} (team broadcast) is on the roadmap.
+  \texttt{/wall} broadcasts time-limited announcements to all terminals
+  with duration-based expiry and poll-based cross-session refresh.
 
   Today, messages traverse the relay in cleartext. The \texttt{.biff}
   file in the repository contains the team member list and optional relay
@@ -656,9 +657,10 @@ paid tier.
     bar showing \texttt{user:tty(N)} with three states: caught up, unreads
     (bold yellow), and messages off (\texttt{n}). \texttt{/mesg n}
     suppresses the unread count on the status line.
-    Display names from GitHub identity. Released and in use.
-    \item[Next: Team Coordination] \texttt{/wall} (team broadcast).
-    Plan auto-expand (\texttt{/plan
+    Display names from GitHub identity. Team broadcast (\texttt{/wall})
+    with duration-based expiry (default 1h, max 3d), poll-based cross-session
+    refresh, and status bar integration. Released and in use.
+    \item[Next: Agentic Coordination] Plan auto-expand (\texttt{/plan
     biff-bf8} shows the task title). Workflow hooks (claiming a task
     auto-sets plan, creating a PR triggers \texttt{/wall}). Project
     opt-in (\texttt{/biff y} enables coordination per project).
@@ -1023,21 +1025,22 @@ working today. \textbf{Next} features are the immediate roadmap focus.
   Three-layer logout detection: sentinel-based (graceful shutdown),
   orphan detection (crash recovery), and KV watcher (TTL expiry). \\
 
+  \texttt{/wall ``text''} & BSD \texttt{wall} &
+  Broadcast a time-sensitive announcement to all terminals. Visible
+  immediately on the status bar with duration-based expiry (default 1h,
+  max 3d). Does not go to inboxes --- it is a banner, not a message.
+  Cross-session poll-based refresh. \\
+
   \bottomrule
 \end{tabularx}
 
-\subsection*{Next: Team Coordination}
+\subsection*{Next: Agentic Coordination}
 
 \renewcommand{\arraystretch}{1.4}
 \begin{tabularx}{\textwidth}{@{}l X@{}}
   \toprule
   \textbf{Feature} & \textbf{Description} \\
   \midrule
-
-  \texttt{/wall ``text''} (team broadcast) &
-  Broadcast a time-sensitive announcement to all terminals. Visible
-  immediately on the status bar with duration-based expiry. Does not go
-  to inboxes --- it is a banner, not a message. \\
 
   Plan auto-expand &
   \texttt{/plan biff-bf8} auto-expands to show the task title. Everyone
@@ -1111,7 +1114,7 @@ working today. \textbf{Next} features are the immediate roadmap focus.
 
   \texttt{/hive @a @b @c} (temporary groups) &
   Temporary multi-person groups that dissolve when work is done. Directed
-  messaging (\texttt{/write}) and broadcast (\texttt{/wall}, on roadmap)
+  messaging (\texttt{/write}) and broadcast (\texttt{/wall})
   cover the coordination need
   without the complexity of group lifecycle management. \\
 
