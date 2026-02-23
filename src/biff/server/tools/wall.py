@@ -54,7 +54,11 @@ def _parse_duration(s: str) -> timedelta:
     if n <= 0:
         msg = "Duration must be positive."
         raise ValueError(msg)
-    td = timedelta(seconds=n * _DURATION_UNITS[s[-1]])
+    try:
+        td = timedelta(seconds=n * _DURATION_UNITS[s[-1]])
+    except OverflowError:
+        msg = f"Duration {s!r} exceeds maximum of 3 days."
+        raise ValueError(msg) from None
     if td > _MAX_DURATION:
         msg = f"Duration {s!r} exceeds maximum of 3 days."
         raise ValueError(msg)
@@ -104,7 +108,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await refresh_wall(mcp, state)
             return "Wall cleared."
 
-        # Read mode (no message)
+        # Read mode (no message, or whitespace-only)
+        message = message.strip()
         if not message:
             current = await state.relay.get_wall()
             if current is None:
@@ -125,7 +130,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 posted_at=now,
                 expires_at=now + ttl,
             )
-        except ValidationError:
+        except ValidationError as exc:
+            for err in exc.errors():
+                if err.get("type") == "string_too_short":
+                    return "Message cannot be blank."
             return "Message too long (200 characters max)."
         await state.relay.set_wall(post)
         await refresh_wall(mcp, state)

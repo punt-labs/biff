@@ -22,8 +22,15 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from biff.models import UnreadSummary
+from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
+
+
+class _Sentinel:
+    """Sentinel for distinguishing 'not provided' from ``None``."""
+
+
+_SENTINEL = _Sentinel()
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -158,12 +165,20 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
         )
 
 
-async def refresh_wall(mcp: FastMCP[ServerState], state: ServerState) -> None:
+async def refresh_wall(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    *,
+    wall: WallPost | None | _Sentinel = _SENTINEL,
+) -> None:
     """Update the ``wall`` tool description and module-level wall text.
 
     When a wall is active, the description shows the current banner.
     When no wall is active, the description reverts to base text.
     Also syncs ``_wall_text`` so the next unread file write includes it.
+
+    Pass *wall* to skip the relay fetch when the caller already has
+    the current wall (e.g. :func:`poll_inbox`).
     """
     global _wall_text
 
@@ -175,7 +190,7 @@ async def refresh_wall(mcp: FastMCP[ServerState], state: ServerState) -> None:
     tool = await mcp.get_tool("wall")
     if tool is None:
         return
-    current = await state.relay.get_wall()
+    current = await state.relay.get_wall() if isinstance(wall, _Sentinel) else wall
     old_desc = tool.description
     if current is None:
         tool.description = WALL_BASE_DESCRIPTION
@@ -243,11 +258,15 @@ async def poll_inbox(
 
         # Check wall state — another session may have posted or cleared.
         # Key on (text, posted_at) so re-posts with different expiry trigger refresh.
-        wall = await state.relay.get_wall()
-        wall_key = (wall.text, wall.posted_at.isoformat()) if wall else ("", "")
+        current_wall = await state.relay.get_wall()
+        wall_key = (
+            (current_wall.text, current_wall.posted_at.isoformat())
+            if current_wall
+            else ("", "")
+        )
         if wall_key != last_wall:
             last_wall = wall_key
-            await refresh_wall(mcp, state)
+            await refresh_wall(mcp, state, wall=current_wall)
 
 
 def _write_unread_file(

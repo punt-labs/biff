@@ -11,6 +11,7 @@ it is stashed and its output replaces the repo/context/cost segments.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -404,16 +405,25 @@ def _biff_segment(unread: SessionUnread | None) -> str:
     return f"\033[1;33m{label}\033[0m"
 
 
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
 def _wall_segment(wall_text: str) -> str:
     """Format the wall banner segment for the status bar.
 
     Empty when no wall is active.  Bold red when active to
-    distinguish from normal biff status.
+    distinguish from normal biff status.  Sanitizes control
+    characters and ANSI escape codes for single-line display.
     """
     if not wall_text:
         return ""
+    # Sanitize: strip ANSI escapes, collapse whitespace to single spaces
+    clean = _ANSI_RE.sub("", wall_text)
+    clean = " ".join(clean.split())
+    if not clean:
+        return ""
     # Truncate long wall messages for status bar readability
-    display = wall_text if len(wall_text) <= 40 else wall_text[:37] + "..."
+    display = clean if len(clean) <= 40 else clean[:37] + "..."
     return f"\033[1;31mWALL: {display}\033[0m"
 
 
