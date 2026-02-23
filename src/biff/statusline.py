@@ -413,20 +413,13 @@ _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07?|[()][A-B012])")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
-def _wall_segment(wall_text: str, max_width: int = 0) -> str:
+def _wall_segment(wall_text: str) -> str:
     """Format the wall banner for its own status bar line.
 
     Empty when no wall is active.  Bold red when active to
-    distinguish from normal biff status.  Sanitizes all ANSI
-    escape sequences and control characters.  Truncates to
-    *max_width* visible characters (0 = detect from environment).
-
-    Uses ``shutil.get_terminal_size()`` which checks ``$COLUMNS``
-    first (set by the parent shell), then ``os.get_terminal_size()``,
-    then falls back to 80.  ANSI escape codes wrapping the output
-    are zero-width in terminal rendering and do not consume visible
-    columns, so only the prefix and message text count toward the
-    truncation budget.
+    distinguish from normal biff status.  Sanitizes ANSI escape
+    sequences and control characters but does not truncate —
+    Claude Code's renderer manages line width.
     """
     if not wall_text:
         return ""
@@ -436,14 +429,7 @@ def _wall_segment(wall_text: str, max_width: int = 0) -> str:
     clean = " ".join(clean.split())
     if not clean:
         return ""
-    prefix = "WALL: "
-    if max_width <= 0:
-        max_width = shutil.get_terminal_size().columns
-    budget = max_width - len(prefix)
-    if budget < 10:
-        budget = 10
-    display = clean if len(clean) <= budget else clean[: budget - 3] + "..."
-    return f"\033[1;31m{prefix}{display}\033[0m"
+    return f"\033[1;31mWALL: {clean}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str | None:
