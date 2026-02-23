@@ -4,9 +4,11 @@ I am a principal engineer. Every change I make leaves the codebase in a better s
 
 ## Standards
 
+Follow [punt-kit standards](../punt-kit/standards/) for Python, workflow, GitHub, CLI, and plugins. Below are biff-specific overrides and additions.
+
 - **Tests accompany code.** Every module ships with tests. Untested code is unfinished code.
-- **Types are exact.** I use Protocol classes for third-party libraries without stubs. `object` with narrowing where the type is structurally known. Never `Any`.
-- **Runtime introspection is unnecessary.** I use explicit Protocol inheritance and structural typing. Never `hasattr()`.
+- **Types are exact.** Protocol classes for third-party libraries without stubs. `object` with narrowing where the type is structurally known. Never `Any`.
+- **Runtime introspection is unnecessary.** Explicit Protocol inheritance and structural typing. Never `hasattr()`.
 - **Duplication is a design failure.** If I see two copies, I extract one abstraction. If I wrote the duplication, I fix it before committing.
 - **Backwards compatibility shims do not exist.** When code changes, callers change. No `_old_name = new_name` aliases, no `# removed` tombstones, no re-exports of dead symbols.
 - **Legacy code shrinks.** Every change is an opportunity to simplify what surrounds it.
@@ -62,79 +64,9 @@ Each tier provides `kai` and `eric` fixtures representing two users sharing a `t
 
 `RecordingClient` wraps a FastMCP `Client` with transcript capture. `SDKClient` wraps the Claude Agent SDK `query()` with structured result parsing and transcript capture.
 
-### Transcripts
+Tests marked `@pytest.mark.transcript` auto-save human-readable transcripts to `tests/transcripts/`.
 
-Tests marked `@pytest.mark.transcript` auto-save human-readable transcripts to `tests/transcripts/`. These serve as demo output showing tool interactions.
-
-## Development Workflow
-
-### Branch Discipline
-
-All code changes go on feature branches. Never commit directly to main.
-
-```bash
-git checkout -b feat/short-description main
-# ... work, commit, push ...
-# create PR, complete code review workflow (see below), merge, then delete branch
-```
-
-| Prefix | Use |
-|--------|-----|
-| `feat/` | New features |
-| `fix/` | Bug fixes |
-| `refactor/` | Code improvements |
-| `docs/` | Documentation only |
-
-### Micro-Commits
-
-One logical change per commit. 1-5 files, under 100 lines. Quality gates pass before every commit.
-
-Commit message format: `type(scope): description`
-
-| Prefix | Use |
-|--------|-----|
-| `feat:` | New feature |
-| `fix:` | Bug fix |
-| `refactor:` | Code change, no behavior change |
-| `test:` | Adding or updating tests |
-| `docs:` | Documentation |
-| `chore:` | Build, dependencies, CI |
-
-### Issue Tracking with Beads
-
-This project uses **beads** (`bd`) for issue tracking. See `.beads/README.md` for setup. If an issue discovered here affects multiple repos or requires a standards change, escalate to a [punt-kit bead](https://github.com/punt-labs/punt-kit) instead (see [bead placement scheme](../CLAUDE.md#where-to-create-a-bead)).
-
-| Use Beads (`bd`) | Use TodoWrite |
-|------------------|---------------|
-| Multi-session work | Single-session tasks |
-| Work with dependencies | Simple linear execution |
-| Discovered work to track | Immediate TODO items |
-
-```bash
-bd ready --limit=99         # Show ALL issues ready to work
-bd show <id>                # View issue details
-bd update <id> --status=in_progress   # Claim work
-bd close <id>               # Mark complete
-bd sync                     # Sync with git remote
-```
-
-### Workflow Tiers
-
-Match the workflow to the bead's scope. The deciding factor is **design ambiguity**, not size.
-
-| Tier | Tool | When | Tracking |
-|------|------|------|----------|
-| **T1: Forge** | `/feature-forge` | Epics, cross-cutting work, competing design approaches | Beads with dependencies |
-| **T2: Feature Dev** | `/feature-dev` | Features, multi-file, clear goal but needs exploration | Beads + TodoWrite (internal) |
-| **T3: Direct** | Plan mode or manual | Tasks, bugs, obvious implementation path | Beads |
-
-**Decision flow:**
-
-1. Is there design ambiguity needing multi-perspective input? → **T1: Forge**
-2. Does it touch multiple files and benefit from codebase exploration? → **T2: Feature Dev**
-3. Otherwise → **T3: Direct** (plan mode if >3 files, manual if fewer)
-
-**Escalation only goes up.** If T3 reveals unexpected scope, escalate to T2. If T2 reveals competing design approaches, escalate to T1. Never demote mid-flight.
+## Biff-Specific Workflow
 
 ### GitHub Operations
 
@@ -158,45 +90,66 @@ Version lives in three files that must stay in sync:
 
 After editing all three, run `uv lock` to update `uv.lock`. Then reinstall: `uv tool install --force --editable .`
 
-Bump the version on every PR that changes user-facing behavior (new commands, flags, config, wire format, relay changes). Use semver: patch for fixes, minor for features, major for breaking changes.
+Bump the version on every PR that changes user-facing behavior. Use semver: patch for fixes, minor for features, major for breaking changes.
 
 ### Pre-PR Checklist
 
 Before creating a PR, verify:
 
-- [ ] **Version bumped** if user-facing behavior changed (see Version Bumps above)
-- [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
+- [ ] **Version bumped** if user-facing behavior changed
+- [ ] **README updated** if user-facing behavior changed
 - [ ] **CHANGELOG entry** added for notable changes
-- [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`
+- [ ] **Quality gates pass**
 - [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m hosted -v`
 
-### Pull Request and Code Review Workflow
+### Workflow Tiers
 
-Do **not** merge immediately after creating a PR. The full flow is:
+Match the workflow to the bead's scope. The deciding factor is **design ambiguity**, not size.
 
-1. **Create PR** — Push branch, open PR (via MCP or `gh pr create`).
-2. **Trigger GitHub Copilot code review** — Request review so Copilot analyzes the diff.
-3. **Wait for feedback** — Allow time for review comments and suggestions.
-4. **Evaluate feedback** — Read each comment; decide which are valid and actionable.
-5. **Address valid issues** — Commit fixes; push; ensure quality gates pass on each change.
-6. **Merge only when** — All review feedback has been evaluated (addressed or explicitly declined), GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`) run clean.
+| Tier | Tool | When | Tracking |
+|------|------|------|----------|
+| **T1: Forge** | `/feature-forge` | Epics, cross-cutting work, competing design approaches | Beads with dependencies |
+| **T2: Feature Dev** | `/feature-dev` | Features, multi-file, clear goal but needs exploration | Beads + TodoWrite (internal) |
+| **T3: Direct** | Plan mode or manual | Tasks, bugs, obvious implementation path | Beads |
 
-**Quality gates apply at every step:** Each commit that addresses review feedback must pass both local checks and GitHub Actions. Do not merge if any CI check is failing.
+**Escalation only goes up.** If T3 reveals unexpected scope, escalate to T2. If T2 reveals competing design approaches, escalate to T1. Never demote mid-flight.
 
-### Session Close Protocol
+## Knowledge Propagation Protocol
 
-Before ending any session:
+After merging a PR that introduces new patterns, design decisions, or hard-won debugging insights, propagate knowledge outward before closing the session:
 
-```bash
-git status                  # Check for uncommitted work
-git add <files>             # Stage changes
-git commit -m "..."         # Commit
-bd sync                     # Sync beads with git
-git push                    # Push to remote
-git status                  # Must show "up to date with origin"
+### 1. Document in DESIGN.md
+
+Log the decision in the appropriate design log (`DESIGN.md` or `DESIGN-INSTALLER.md`). Include: what changed, why, what was rejected, and what evidence drove the decision.
+
+### 2. Propagate to punt-kit
+
+If the pattern is reusable across projects:
+
+- **Pattern file** — Create or update `punt-kit/patterns/<name>.md` if a new architectural pattern emerged (e.g., process tree walk, sentinel types, relay round-trip elimination).
+- **Standard update** — Update `punt-kit/standards/*.md` if an existing standard was invalidated or needs refinement.
+- **PR directly** for factual corrections to existing patterns. **Bead** in punt-kit for broader standards work.
+
+### 3. Hand off to public-website
+
+If the discovery is interesting to external developers (plugin authors, MCP server builders, Claude Code users):
+
+- Create a **bead** in `public-website/` describing what to add to the existing blog post (or a new post if warranted).
+- Include: the story arc (what broke, how we found it, what the fix teaches), technical details, and audience.
+
+### 4. Update prfaq.tex and README
+
+If the feature was on the roadmap, move it to "Shipped" in both `README.md` and `prfaq.tex`. Recompile the PDF. Features should never remain listed as "Next" after they ship.
+
+### Checklist
+
 ```
-
-Work is NOT complete until `git push` succeeds.
+[ ] DESIGN.md updated (if design decision)
+[ ] punt-kit patterns/ or standards/ updated (if reusable pattern)
+[ ] public-website bead created (if externally interesting)
+[ ] README.md and prfaq.tex updated (if shipped feature)
+[ ] prfaq.pdf recompiled
+```
 
 ## Product Vision
 
@@ -223,25 +176,7 @@ Failure to consult the design logs has already caused wasted work and rollbacks.
 
 ## Biff Architecture
 
-### What Is Biff
-
-A modern CLI communication tool for software engineers, named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `wall`, `talk`, `finger`, `write`, and `mesg`.
-
-Biff resurrects the UNIX communication vocabulary as MCP-native slash commands for team collaboration inside Claude Code sessions (and other MCP-compatible systems).
-
-### Command Vocabulary
-
-| Command | Mode | Unix Ancestor | Purpose |
-|---------|------|---------------|---------|
-| `/mesg @user` | Async, one-way | `mesg` | Send a purposeful message |
-| `/talk @user` | Sync, two-way | `talk` | Real-time conversation |
-| `/wall` | Team broadcast | `wall` | Announce to the team |
-| `/finger @user` | Status query | `finger` | Check what someone is working on |
-| `/who` | Presence list | `who` / `w` | List active sessions |
-| `/plan "msg"` | Status set | `.plan` file | Set what you're working on |
-| `/mesg on/off` | Availability | `mesg` | Control message reception |
-| `/share @user` | Context share | (new) | Share diffs, files, snippets |
-| `/cr @user` | Code review | (new) | Request code review with context |
+Biff is a CLI communication tool for software engineers, named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `wall`, `talk`, `finger`, `write`, and `mesg`. It resurrects the Unix communication vocabulary as MCP-native slash commands. See `prfaq.tex` for the full product vision, command vocabulary, and phasing.
 
 ### Communication Model
 
