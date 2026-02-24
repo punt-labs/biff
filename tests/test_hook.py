@@ -6,6 +6,7 @@ without I/O — no stdin/stdout mocking, no git repo, no .biff files.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -23,6 +24,23 @@ from biff.hook import (
     handle_session_resume,
     handle_session_start,
 )
+
+# Deterministic worktree root for hint file tests.
+_FAKE_WORKTREE = "/test/worktree"
+_FAKE_HINT_HASH = hashlib.sha256(_FAKE_WORKTREE.encode()).hexdigest()[:16]
+
+
+def _hint_mocks(tmp_path: Path):
+    """Context manager stack mocking Path.home and worktree root."""
+    return (
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+    )
+
+
+def _hint_path(tmp_path: Path, name: str) -> Path:
+    """Expected hint file path for tests."""
+    return tmp_path / ".biff" / "hints" / _FAKE_HINT_HASH / name
 
 
 def _identity(s: str) -> str:
@@ -514,15 +532,17 @@ class TestHandlePostCheckout:
     """Git post-checkout handler — plan hint file writing."""
 
     def test_branch_checkout_writes_hint(self, tmp_path: Path) -> None:
+        home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch("biff.hook._get_git_branch", return_value="feature/auth"),
-            patch("pathlib.Path.home", return_value=tmp_path),
+            home_mock,
+            wt_mock,
         ):
             result = handle_post_checkout("1")
 
         assert result is not None
         assert "→ feature/auth" in result
-        hint = (tmp_path / ".biff" / "plan-hint").read_text().strip()
+        hint = _hint_path(tmp_path, "plan-hint").read_text().strip()
         assert "→ feature/auth" in hint
 
     def test_file_checkout_ignored(self) -> None:
@@ -532,13 +552,15 @@ class TestHandlePostCheckout:
         assert handle_post_checkout("") is None
 
     def test_bead_branch_expanded(self, tmp_path: Path) -> None:
+        home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch("biff.hook._get_git_branch", return_value="jmf/biff-ka4"),
             patch(
                 "biff.server.tools.plan.expand_bead_id",
                 return_value="biff-ka4: post-checkout hook",
             ),
-            patch("pathlib.Path.home", return_value=tmp_path),
+            home_mock,
+            wt_mock,
         ):
             result = handle_post_checkout("1")
 
@@ -546,20 +568,24 @@ class TestHandlePostCheckout:
         assert "biff-ka4: post-checkout hook" in result
 
     def test_main_branch_writes_empty_hint(self, tmp_path: Path) -> None:
+        home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch("biff.hook._get_git_branch", return_value="main"),
-            patch("pathlib.Path.home", return_value=tmp_path),
+            home_mock,
+            wt_mock,
         ):
             result = handle_post_checkout("1")
 
         assert result is None  # Empty hint returns None
-        hint = (tmp_path / ".biff" / "plan-hint").read_text().strip()
+        hint = _hint_path(tmp_path, "plan-hint").read_text().strip()
         assert hint == ""
 
     def test_master_branch_writes_empty_hint(self, tmp_path: Path) -> None:
+        home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch("biff.hook._get_git_branch", return_value="master"),
-            patch("pathlib.Path.home", return_value=tmp_path),
+            home_mock,
+            wt_mock,
         ):
             result = handle_post_checkout("1")
 
@@ -577,24 +603,26 @@ class TestCheckPlanHint:
     """Plan hint file reading and cleanup."""
 
     def test_reads_and_deletes_hint(self, tmp_path: Path) -> None:
-        hint_dir = tmp_path / ".biff"
-        hint_dir.mkdir(parents=True)
-        (hint_dir / "plan-hint").write_text("→ feature/auth\n")
+        hp = _hint_path(tmp_path, "plan-hint")
+        hp.parent.mkdir(parents=True)
+        hp.write_text("→ feature/auth\n")
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             result = check_plan_hint()
 
         assert result is not None
         assert "→ feature/auth" in result
         assert 'source="auto"' in result
-        assert not (hint_dir / "plan-hint").exists()
+        assert not hp.exists()
 
     def test_empty_hint_clears_plan(self, tmp_path: Path) -> None:
-        hint_dir = tmp_path / ".biff"
-        hint_dir.mkdir(parents=True)
-        (hint_dir / "plan-hint").write_text("\n")
+        hp = _hint_path(tmp_path, "plan-hint")
+        hp.parent.mkdir(parents=True)
+        hp.write_text("\n")
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             result = check_plan_hint()
 
         assert result is not None
@@ -602,15 +630,17 @@ class TestCheckPlanHint:
         assert 'message=""' in result
 
     def test_no_hint_returns_none(self, tmp_path: Path) -> None:
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             assert check_plan_hint() is None
 
     def test_bead_expanded_hint(self, tmp_path: Path) -> None:
-        hint_dir = tmp_path / ".biff"
-        hint_dir.mkdir(parents=True)
-        (hint_dir / "plan-hint").write_text("→ biff-ka4: post-checkout hook\n")
+        hp = _hint_path(tmp_path, "plan-hint")
+        hp.parent.mkdir(parents=True)
+        hp.write_text("→ biff-ka4: post-checkout hook\n")
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             result = check_plan_hint()
 
         assert result is not None
@@ -624,17 +654,19 @@ class TestHandlePostCommit:
     """Git post-commit handler — plan hint with commit subject."""
 
     def test_writes_hint_with_checkmark(self, tmp_path: Path) -> None:
+        home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch(
                 "biff.hook._get_commit_subject",
                 return_value="feat: auto-assign TTY",
             ),
-            patch("pathlib.Path.home", return_value=tmp_path),
+            home_mock,
+            wt_mock,
         ):
             result = handle_post_commit()
 
         assert result == "✓ feat: auto-assign TTY"
-        hint = (tmp_path / ".biff" / "plan-hint").read_text().strip()
+        hint = _hint_path(tmp_path, "plan-hint").read_text().strip()
         assert hint == "✓ feat: auto-assign TTY"
 
     def test_empty_subject_returns_none(self) -> None:
@@ -643,16 +675,19 @@ class TestHandlePostCommit:
 
     def test_hint_picked_up_by_check(self, tmp_path: Path) -> None:
         """End-to-end: post-commit writes hint, check_plan_hint reads it."""
+        home_mock, wt_mock = _hint_mocks(tmp_path)
         with (
             patch(
                 "biff.hook._get_commit_subject",
                 return_value="fix: status bar height",
             ),
-            patch("pathlib.Path.home", return_value=tmp_path),
+            home_mock,
+            wt_mock,
         ):
             handle_post_commit()
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock2, wt_mock2 = _hint_mocks(tmp_path)
+        with home_mock2, wt_mock2:
             result = check_plan_hint()
 
         assert result is not None
@@ -668,16 +703,18 @@ class TestHandlePrePush:
 
     def test_main_branch_writes_hint(self, tmp_path: Path) -> None:
         lines = ["abc123 def456 refs/heads/main 000000"]
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             result = handle_pre_push(lines)
 
         assert result is not None
         assert "default branch" in result
-        assert (tmp_path / ".biff" / "wall-hint").exists()
+        assert _hint_path(tmp_path, "wall-hint").exists()
 
     def test_master_branch_writes_hint(self, tmp_path: Path) -> None:
         lines = ["abc123 def456 refs/heads/master 000000"]
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             result = handle_pre_push(lines)
 
         assert result is not None
@@ -694,7 +731,8 @@ class TestHandlePrePush:
             "abc123 def456 refs/heads/feature/auth 000000",
             "abc123 def456 refs/heads/main 000000",
         ]
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             result = handle_pre_push(lines)
 
         assert result is not None
@@ -707,29 +745,78 @@ class TestCheckWallHint:
     """Wall hint file reading and cleanup."""
 
     def test_reads_and_deletes_hint(self, tmp_path: Path) -> None:
-        hint_dir = tmp_path / ".biff"
-        hint_dir.mkdir(parents=True)
-        (hint_dir / "wall-hint").write_text("Pushed to default branch\n")
+        hp = _hint_path(tmp_path, "wall-hint")
+        hp.parent.mkdir(parents=True)
+        hp.write_text("Pushed to default branch\n")
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             result = check_wall_hint()
 
         assert result is not None
         assert "/wall" in result
-        assert not (hint_dir / "wall-hint").exists()
+        assert not hp.exists()
 
     def test_no_hint_returns_none(self, tmp_path: Path) -> None:
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             assert check_wall_hint() is None
 
     def test_end_to_end(self, tmp_path: Path) -> None:
         """Pre-push writes hint, check_wall_hint reads it."""
         lines = ["abc123 def456 refs/heads/main 000000"]
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
             handle_pre_push(lines)
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        home_mock2, wt_mock2 = _hint_mocks(tmp_path)
+        with home_mock2, wt_mock2:
             result = check_wall_hint()
 
         assert result is not None
         assert "/wall" in result
+
+
+# ── Worktree isolation ────────────────────────────────────────────
+
+
+class TestWorktreeIsolation:
+    """Hint files are scoped by worktree — no cross-session races."""
+
+    def test_different_worktrees_isolated(self, tmp_path: Path) -> None:
+        """Hint written in worktree A is invisible from worktree B."""
+        wt_a = "/repo/worktree-a"
+        wt_b = "/repo/worktree-b"
+        hash_a = hashlib.sha256(wt_a.encode()).hexdigest()[:16]
+
+        # Write hint in worktree A
+        hp = tmp_path / ".biff" / "hints" / hash_a / "plan-hint"
+        hp.parent.mkdir(parents=True)
+        hp.write_text("→ feature/auth\n")
+
+        # Read from worktree B — should see nothing
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.hook._get_worktree_root", return_value=wt_b),
+        ):
+            result = check_plan_hint()
+
+        assert result is None
+        assert hp.exists()  # Not consumed by B
+
+    def test_same_worktree_shares_hints(self, tmp_path: Path) -> None:
+        """Two sessions in the same worktree share hints (by design)."""
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with (
+            patch("biff.hook._get_git_branch", return_value="feature/auth"),
+            home_mock,
+            wt_mock,
+        ):
+            handle_post_checkout("1")
+
+        home_mock2, wt_mock2 = _hint_mocks(tmp_path)
+        with home_mock2, wt_mock2:
+            result = check_plan_hint()
+
+        assert result is not None
+        assert "feature/auth" in result

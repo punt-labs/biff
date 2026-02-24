@@ -10,6 +10,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 import re
@@ -213,9 +214,39 @@ def _expand_branch_plan(branch: str) -> str:
     return f"→ {branch}"
 
 
+def _get_worktree_root() -> str:
+    """Return the git worktree root path, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (FileNotFoundError, TimeoutError, OSError):
+        pass
+    return ""
+
+
+def _hint_dir() -> pathlib.Path:
+    """Worktree-scoped hint directory: ``~/.biff/hints/{hash}/``.
+
+    Each git worktree gets its own hint directory so multiple sessions
+    in different worktrees don't race on shared hint files.  Sessions
+    in the same worktree share a hint directory — the coordination
+    contract requires worktree isolation for concurrent sessions.
+    """
+    root = _get_worktree_root()
+    h = hashlib.sha256(root.encode()).hexdigest()[:16] if root else "default"
+    return pathlib.Path.home() / ".biff" / "hints" / h
+
+
 def _plan_hint_path() -> pathlib.Path:
-    """Path to the plan hint file: ``~/.biff/plan-hint``."""
-    return pathlib.Path.home() / ".biff" / "plan-hint"
+    """Worktree-scoped plan hint file path."""
+    return _hint_dir() / "plan-hint"
 
 
 def handle_post_checkout(branch_flag: str) -> str | None:
@@ -305,8 +336,8 @@ def handle_post_commit() -> str | None:
 
 
 def _wall_hint_path() -> pathlib.Path:
-    """Path to the wall hint file: ``~/.biff/wall-hint``."""
-    return pathlib.Path.home() / ".biff" / "wall-hint"
+    """Worktree-scoped wall hint file path."""
+    return _hint_dir() / "wall-hint"
 
 
 def _read_pre_push_refs() -> list[str]:

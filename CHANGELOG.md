@@ -14,6 +14,10 @@
 - **Branch regex false positives** — `_BEAD_BRANCH_RE` now uses word boundaries
   (`\b`), preventing common branch names like `my-feature` from being truncated
   to `my-feat` and misidentified as bead IDs.
+- **Hint file session race** — plan and wall hint files are now scoped by git
+  worktree path (`~/.biff/hints/{hash}/`). Multiple sessions in different
+  worktrees no longer race on shared hint files. Sessions in the same worktree
+  share hints by design — the coordination contract requires worktree isolation.
 
 ## 0.8.0 — 2026-02-24
 
