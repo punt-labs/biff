@@ -1,8 +1,8 @@
 """Biff CLI entry point.
 
 Provides ``biff serve``, ``biff version``, ``biff enable``, ``biff disable``,
-``biff install``, ``biff doctor``, ``biff uninstall``, and status line
-management.
+``biff install``, ``biff doctor``, ``biff uninstall``, ``biff hook``, and
+status line management.
 """
 
 from __future__ import annotations
@@ -25,10 +25,12 @@ from biff.config import (
     load_config,
     write_biff_local,
 )
+from biff.hook import hook_app
 from biff.server.app import create_server
 from biff.server.state import create_state
 
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
+app.add_typer(hook_app, name="hook")
 
 
 @app.command()

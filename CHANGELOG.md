@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.8.0 — 2026-02-24
+
+### Added
+
+- **`biff hook` CLI dispatcher** (DES-017) — new `biff hook claude-code <event>`
+  and `biff hook git <event>` command groups. All hook logic moves from shell
+  scripts to versioned Python. Shell scripts become thin dispatchers with a
+  fast `.biff` file-existence gate. (#biff-7vp)
+- **Plan auto-expand** — `/plan biff-ka4` now resolves the bead title via
+  `bd show --json -q` and expands to `biff-ka4: post-checkout hook`. Falls
+  back to the raw string if `bd` is unavailable or the ID is invalid. (#biff-5zq)
+- **`plan_source` field** — `UserSession` now tracks how the plan was set
+  (`"manual"` or `"auto"`). Manual `/plan` calls always set `"manual"`.
+  Git hooks (Phase 2) will set `"auto"` and only overwrite auto plans,
+  preventing automated hooks from clobbering intentional plans. (#biff-efk)
+
+### Changed
+
+- **Migrated bead-claim and PR-announce hooks** — `bead-claim.sh` (55 lines)
+  and `pr-announce.sh` (55 lines) replaced by `post-bash.sh` and
+  `pr-announce.sh` thin dispatchers (4 lines each) plus Python handlers
+  in `hook.py`. (#biff-7vp)
+
 ## 0.7.0 — 2026-02-24
 
 ### Changed

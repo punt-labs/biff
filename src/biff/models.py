@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -90,6 +91,7 @@ class UserSession(BaseModel):
     pwd: str = ""
     display_name: str = ""
     plan: str = ""
+    plan_source: Literal["manual", "auto"] = "manual"
     last_active: datetime = Field(default_factory=_utc_now)
     biff_enabled: bool = True
     public_key: str = Field(

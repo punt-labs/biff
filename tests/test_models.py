@@ -111,6 +111,34 @@ class TestUserSession:
         session = UserSession(user="kai", plan="refactoring auth")
         assert session.plan == "refactoring auth"
 
+    def test_plan_source_defaults_to_manual(self) -> None:
+        session = UserSession(user="kai")
+        assert session.plan_source == "manual"
+
+    def test_plan_source_manual(self) -> None:
+        session = UserSession(user="kai", plan="work", plan_source="manual")
+        assert session.plan_source == "manual"
+
+    def test_plan_source_auto(self) -> None:
+        session = UserSession(user="kai", plan="→ main", plan_source="auto")
+        assert session.plan_source == "auto"
+
+    def test_plan_source_invalid_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="plan_source"):
+            UserSession(user="kai", plan_source="unknown")  # type: ignore[arg-type]
+
+    def test_plan_source_round_trip(self) -> None:
+        session = UserSession(user="kai", plan="work", plan_source="auto")
+        json_str = session.model_dump_json()
+        restored = UserSession.model_validate_json(json_str)
+        assert restored.plan_source == "auto"
+
+    def test_plan_source_missing_in_json_defaults_manual(self) -> None:
+        """Old sessions without plan_source deserialize with 'manual' default."""
+        raw = '{"user": "kai", "plan": "working"}'
+        session = UserSession.model_validate_json(raw)
+        assert session.plan_source == "manual"
+
     def test_biff_disabled(self) -> None:
         session = UserSession(user="kai", biff_enabled=False)
         assert session.biff_enabled is False
