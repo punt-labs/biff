@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-02-24
+
+### Changed
+
+- **Shared NATS streams** — consolidated per-repo streams into 3 shared streams
+  (`biff-inbox`, `biff-sessions`, `biff-wtmp`) with subject-based repo isolation.
+  Removes the 8-repo limit imposed by Synadia Cloud's 25-stream cap. (#62, #64)
+- **Idempotent stream provisioning** — create-or-update replaces
+  delete-and-recreate, preventing accidental data loss in shared streams (#62)
+- **Scoped purge** — `purge_data()` uses subject filters to purge only the
+  current repo's data, not the entire shared stream (#62)
+
+### Added
+
+- **Wtmp schema versioning** — `SessionEvent.version` field enables
+  forward-compatible schema evolution for the 30-day retention wtmp stream (#64)
+- **Stream namespace isolation** — `stream_prefix` parameter on `NatsRelay`
+  separates test streams (`biff-dev-*`) from production (`biff-*`) (#64)
+- **Encryption extension points** — reserved KV key namespaces (`key.*`,
+  `team-key`) and model fields (`UserSession.public_key`, `Message` encryption
+  envelope) for future E2E encryption (biff-lff). No encryption code yet. (#62)
+
+### Fixed
+
+- **Resilient consumer cleanup** — `delete_session()` suppresses `TimeoutError`
+  and `NatsError` during consumer deletion; `inactive_threshold` is the safety
+  net (#64)
+- **Legacy stream cleanup** — startup migration deletes orphaned per-repo streams
+  with error suppression to avoid crash on first boot after upgrade (#63)
+
 ## 0.6.0 — 2026-02-23
 
 ### Added
