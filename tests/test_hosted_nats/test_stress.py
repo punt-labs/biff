@@ -30,13 +30,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from nats.js.errors import NotFoundError
 
-from biff.models import Message, RelayAuth, UserSession, WallPost
+from biff.models import Message, RelayAuth, SessionEvent, UserSession, WallPost
 from biff.nats_relay import NatsRelay
 from biff.tty import build_session_key
 
@@ -841,6 +841,198 @@ class TestConcurrentMixedWorkload:
         await asyncio.gather(
             *(relays[i].delete_session(_session_key(i)) for i in range(n_users))
         )
+
+
+class TestWtmpAtScale:
+    """Wtmp stream operations under load — append, peek, consumer cleanup.
+
+    The wtmp stream uses LIMITS retention (not WORK_QUEUE) and peek
+    semantics (read without consuming).  Each get_wtmp() call creates
+    a UUID-named consumer and deletes it after use.  Under load,
+    consumers must not leak.
+    """
+
+    async def test_concurrent_appends(self, relays: list[NatsRelay]) -> None:
+        """All relays append login events concurrently."""
+        now = datetime.now(UTC)
+        await asyncio.gather(
+            *(
+                relays[i].append_wtmp(
+                    SessionEvent(
+                        session_key=_session_key(i),
+                        event="login",
+                        user=_user(i)[0],
+                        tty=_user(i)[1],
+                        timestamp=now,
+                    )
+                )
+                for i in range(_N_RELAYS)
+            )
+        )
+
+        # All events should be retrievable
+        events = await relays[0].get_wtmp(count=_N_RELAYS)
+        assert len(events) == _N_RELAYS
+        users = {e.user for e in events}
+        assert len(users) == _N_RELAYS
+
+    async def test_version_field_persisted(self, relays: list[NatsRelay]) -> None:
+        """Version field round-trips through the wtmp stream."""
+        lead = relays[0]
+        event = SessionEvent(
+            session_key="vtest:tty0",
+            event="login",
+            user="vtest",
+            tty="tty0",
+            timestamp=datetime.now(UTC),
+        )
+        assert event.version == 1
+
+        await lead.append_wtmp(event)
+        events = await lead.get_wtmp(user="vtest")
+        assert len(events) == 1
+        assert events[0].version == 1
+
+    async def test_per_user_filtering_at_scale(self, relays: list[NatsRelay]) -> None:
+        """Per-user filter returns only that user's events among many."""
+        now = datetime.now(UTC)
+
+        # Append events for all users
+        await asyncio.gather(
+            *(
+                relays[0].append_wtmp(
+                    SessionEvent(
+                        session_key=_session_key(i),
+                        event="login",
+                        user=_user(i)[0],
+                        tty=_user(i)[1],
+                        timestamp=now - timedelta(minutes=i),
+                    )
+                )
+                for i in range(_N_RELAYS)
+            )
+        )
+
+        # Filter for a single user
+        target_user = _user(0)[0]
+        events = await relays[0].get_wtmp(user=target_user)
+        assert len(events) == 1
+        assert events[0].user == target_user
+
+    async def test_consumer_cleanup_after_reads(self, relays: list[NatsRelay]) -> None:
+        """Repeated get_wtmp() calls don't leak consumers proportionally.
+
+        Each get_wtmp() creates a UUID-named consumer and deletes it.
+        Against hosted NATS, a few deletes may lag asynchronously, so
+        the count can temporarily increase by a small constant.  The
+        key invariant: N reads must not produce N consumers.
+        """
+        lead = relays[0]
+
+        # Seed some events
+        now = datetime.now(UTC)
+        await asyncio.gather(
+            *(
+                lead.append_wtmp(
+                    SessionEvent(
+                        session_key=_session_key(i),
+                        event="login",
+                        user=_user(i)[0],
+                        tty=_user(i)[1],
+                        timestamp=now,
+                    )
+                )
+                for i in range(5)
+            )
+        )
+
+        n_reads = 20
+        consumers_before = await _consumer_count(lead, _WTMP_STREAM)
+
+        for _ in range(n_reads):
+            events = await lead.get_wtmp(count=5)
+            assert len(events) == 5
+
+        consumers_after = await _consumer_count(lead, _WTMP_STREAM)
+        # Allow a small constant for async cleanup lag, but not proportional growth.
+        max_allowed = consumers_before + 5
+        assert consumers_after <= max_allowed, (
+            f"Wtmp consumer leak: {consumers_before} -> {consumers_after} "
+            f"after {n_reads} get_wtmp() calls (max allowed {max_allowed})"
+        )
+
+    async def test_concurrent_reads_no_leak(self, relays: list[NatsRelay]) -> None:
+        """Concurrent get_wtmp() from multiple relays — zero consumer leak."""
+        lead = relays[0]
+
+        # Seed events
+        now = datetime.now(UTC)
+        await asyncio.gather(
+            *(
+                lead.append_wtmp(
+                    SessionEvent(
+                        session_key=_session_key(i),
+                        event="login",
+                        user=_user(i)[0],
+                        tty=_user(i)[1],
+                        timestamp=now,
+                    )
+                )
+                for i in range(10)
+            )
+        )
+
+        consumers_before = await _consumer_count(lead, _WTMP_STREAM)
+
+        # 5 rounds of all 20 relays reading concurrently
+        for _ in range(5):
+            results = await asyncio.gather(
+                *(relay.get_wtmp(count=10) for relay in relays)
+            )
+            for events in results:
+                assert len(events) == 10
+
+        consumers_after = await _consumer_count(lead, _WTMP_STREAM)
+        max_allowed = consumers_before + 5
+        assert consumers_after <= max_allowed, (
+            f"Concurrent wtmp read consumer leak: "
+            f"{consumers_before} -> {consumers_after} "
+            f"after 5 rounds x {_N_RELAYS} relays (max allowed {max_allowed})"
+        )
+
+    async def test_volume_and_ordering(self, relays: list[NatsRelay]) -> None:
+        """Many events maintain correct ordering (most recent first)."""
+        lead = relays[0]
+        n_events = 100
+        now = datetime.now(UTC)
+
+        # Append 100 events with distinct timestamps
+        await asyncio.gather(
+            *(
+                lead.append_wtmp(
+                    SessionEvent(
+                        session_key=f"vol{i}:tty0",
+                        event="login" if i % 2 == 0 else "logout",
+                        user=f"vol{i}",
+                        tty="tty0",
+                        timestamp=now - timedelta(seconds=n_events - i),
+                    )
+                )
+                for i in range(n_events)
+            )
+        )
+
+        # Retrieve with count limit
+        events = await lead.get_wtmp(count=25)
+        assert len(events) == 25
+
+        # Verify descending timestamp order
+        for i in range(len(events) - 1):
+            assert events[i].timestamp >= events[i + 1].timestamp
+
+        # Retrieve all
+        all_events = await lead.get_wtmp(count=n_events)
+        assert len(all_events) == n_events
 
 
 class TestAccountCapacity:
