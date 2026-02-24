@@ -708,6 +708,7 @@ class NatsRelay:
         consumer_config = ConsumerConfig(
             deliver_policy=DeliverPolicy.BY_START_SEQUENCE,
             opt_start_seq=start_seq,
+            inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD,
         )
 
         # Use a unique named consumer per call and delete after use.

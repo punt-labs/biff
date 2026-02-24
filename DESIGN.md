@@ -837,7 +837,7 @@ WORK_QUEUE retention allows one consumer per filter subject. In a shared stream,
 |----------|---------|-----|
 | TTY inbox fetch | `inbox-{user}-{tty}` | `{repo}-inbox-{user}-{tty}` |
 | User inbox fetch | `userinbox-{user}` | `{repo}-userinbox-{user}` |
-| Wtmp peek | `wtmp-peek-{name}` | Unchanged — `{name}` already includes repo via `biff-{repo}-{user}` |
+| Wtmp peek | `wtmp-peek-{name}` | `{repo}-wtmp-peek-{uuid}` — UUID suffix avoids collision between concurrent sessions of the same user |
 
 Consumer name length limit is 256 characters. With repo slugs like `punt-labs__biff` (16 chars) plus user/tty, the combined name is well within limits.
 
