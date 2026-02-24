@@ -80,15 +80,14 @@ User-facing config (`~/.claude/commands/`, `~/.claude/plugins/biff/`, MCP regist
 
 ### Version Bumps
 
-Version lives in three files that must stay in sync:
+Version lives in two files that must stay in sync:
 
 | File | Field |
 |------|-------|
 | `pyproject.toml` | `version = "X.Y.Z"` |
-| `src/biff/plugins/biff/.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
-| `plugins/biff/.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
+| `.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
 
-After editing all three, run `uv lock` to update `uv.lock`. Then reinstall: `uv tool install --force --editable .`
+After editing both, run `uv lock` to update `uv.lock`. Then reinstall: `uv tool install --force --editable .`
 
 Bump the version on every PR that changes user-facing behavior. Use semver: patch for fixes, minor for features, major for breaking changes.
 

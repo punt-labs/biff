@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 — 2026-02-23
+
 ### Added
 
 - **MCP server** — FastMCP-based server with HTTP and stdio transports,
