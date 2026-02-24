@@ -7,12 +7,14 @@ without I/O — no stdin/stdout mocking, no git repo, no .biff files.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 from biff.hook import (
     _expand_branch_plan,
     handle_post_bash,
     handle_post_pr,
+    handle_session_end,
     handle_session_resume,
     handle_session_start,
 )
@@ -336,3 +338,77 @@ class TestExpandBranchPlan:
         ):
             result = _expand_branch_plan("jmf/biff-xyz")
         assert result == "→ biff-xyz"
+
+
+# ── handle_session_end ──────────────────────────────────────────────
+
+
+class TestHandleSessionEnd:
+    """SessionEnd handler — active-to-sentinel conversion."""
+
+    def test_converts_active_to_sentinel(self, tmp_path: Path) -> None:
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc12345").write_text("kai:abc12345\nmy-repo\n")
+
+        sentinel_dir = tmp_path / "sentinels" / "my-repo"
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "biff.server.app.sentinel_dir",
+                return_value=sentinel_dir,
+            ),
+        ):
+            count = handle_session_end()
+
+        assert count == 1
+        assert (sentinel_dir / "kai-abc12345").read_text() == "kai:abc12345"
+        assert not (active_dir / "kai-abc12345").exists()
+
+    def test_empty_active_dir(self, tmp_path: Path) -> None:
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            count = handle_session_end()
+
+        assert count == 0
+
+    def test_no_active_dir(self, tmp_path: Path) -> None:
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            count = handle_session_end()
+
+        assert count == 0
+
+    def test_multiple_sessions(self, tmp_path: Path) -> None:
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-aaa").write_text("kai:aaa\nrepo-a\n")
+        (active_dir / "kai-bbb").write_text("kai:bbb\nrepo-b\n")
+
+        def fake_sentinel_dir(repo: str) -> Path:
+            return tmp_path / "sentinels" / repo
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "biff.server.app.sentinel_dir",
+                side_effect=fake_sentinel_dir,
+            ),
+        ):
+            count = handle_session_end()
+
+        assert count == 2
+        assert (tmp_path / "sentinels" / "repo-a" / "kai-aaa").exists()
+        assert (tmp_path / "sentinels" / "repo-b" / "kai-bbb").exists()
+
+    def test_malformed_active_file_skipped(self, tmp_path: Path) -> None:
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "bad").write_text("only-one-line\n")
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            count = handle_session_end()
+
+        assert count == 0

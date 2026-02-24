@@ -22,6 +22,11 @@
   check `/read` for unread messages. On resume/compact, re-orients Claude
   with a `/read` reminder. Branch-inferred plans use `source="auto"` so
   git hooks can later overwrite them. (#biff-6we)
+- **SessionEnd cleanup** — on session end, converts active session markers
+  (`~/.biff/active/`) to sentinel files for the existing reaper. MCP server
+  writes active markers on startup; the hook converts them to sentinels before
+  potential SIGKILL, ensuring session presence is cleaned up even on abrupt
+  termination. (#biff-w5c)
 
 ### Changed
 

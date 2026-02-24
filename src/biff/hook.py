@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 import sys
+from contextlib import suppress
 from typing import cast
 
 import typer
@@ -246,6 +247,54 @@ def handle_session_resume() -> str:
     return "Biff session resumed. Check /read for unread messages."
 
 
+def handle_session_end() -> int:
+    """Convert active-session markers to sentinels for cleanup.
+
+    Reads ``~/.biff/active/*``, writes corresponding sentinel files
+    in ``~/.biff/sentinels/{repo}/``, then deletes the active markers.
+    The existing reaper task processes the sentinels on next startup.
+
+    Returns the number of sessions cleaned up.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from biff.server.app import (  # noqa: PLC0415
+        remove_active_session,
+        sentinel_dir,
+    )
+
+    active_dir = Path.home() / ".biff" / "active"
+    if not active_dir.exists():
+        return 0
+
+    count = 0
+    for f in active_dir.iterdir():
+        if not f.is_file():
+            continue
+        try:
+            lines = f.read_text().strip().splitlines()
+            if len(lines) < 2:
+                continue
+            session_key, repo_name = lines[0], lines[1]
+        except OSError:
+            continue
+
+        # Write sentinel so the reaper deletes the KV entry.
+        sdir = sentinel_dir(repo_name)
+        sdir.mkdir(parents=True, exist_ok=True)
+        safe = session_key.replace(":", "-")
+        try:
+            (sdir / safe).write_text(session_key)
+        except OSError:
+            continue
+
+        # Remove the active marker.
+        with suppress(OSError):
+            remove_active_session(session_key)
+        count += 1
+    return count
+
+
 # ── Claude Code commands ─────────────────────────────────────────────
 
 
@@ -293,10 +342,11 @@ def cc_session_resume() -> None:
 
 @_cc_app.command("session-end")
 def cc_session_end() -> None:
-    """SessionEnd — immediate session cleanup.
-
-    Stub: full implementation in biff-w5c.
-    """
+    """SessionEnd — convert active sessions to sentinels for cleanup."""
+    if not _is_biff_enabled():
+        return
+    _read_hook_input()  # consume stdin
+    handle_session_end()
 
 
 @_cc_app.command("stop")
