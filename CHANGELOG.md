@@ -27,6 +27,11 @@
   writes active markers on startup; the hook converts them to sentinels before
   potential SIGKILL, ensuring session presence is cleaned up even on abrupt
   termination. (#biff-w5c)
+- **Git post-checkout hook** — on branch switch, writes a plan hint file
+  (`~/.biff/plan-hint`) with the expanded branch name (including bead ID
+  resolution). The PostToolUse Bash handler picks up the hint and nudges
+  Claude to set the plan with `source="auto"`. Switching to main/master
+  clears the plan. (#biff-ka4)
 
 ### Changed
 

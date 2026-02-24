@@ -11,6 +11,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -212,6 +213,61 @@ def _expand_branch_plan(branch: str) -> str:
     return f"→ {branch}"
 
 
+def _plan_hint_path() -> pathlib.Path:
+    """Path to the plan hint file: ``~/.biff/plan-hint``."""
+    return pathlib.Path.home() / ".biff" / "plan-hint"
+
+
+def handle_post_checkout(branch_flag: str) -> str | None:
+    """Process git post-checkout — write plan hint for branch switches.
+
+    Writes ``~/.biff/plan-hint`` with the expanded branch plan.
+    The PostToolUse Bash handler picks up the hint on the next
+    tool call and nudges Claude to set the plan.
+
+    Returns the plan hint text, or ``None`` for file checkouts.
+    """
+    if branch_flag != "1":
+        return None  # File checkout, not branch switch
+
+    branch = _get_git_branch()
+    if not branch:
+        return None
+
+    hint = "" if branch in ("main", "master") else _expand_branch_plan(branch)
+
+    hint_path = _plan_hint_path()
+    hint_path.parent.mkdir(parents=True, exist_ok=True)
+    hint_path.write_text(f"{hint}\n")
+    return hint or None
+
+
+def check_plan_hint() -> str | None:
+    """Check for a plan hint written by a git hook.
+
+    Reads and deletes ``~/.biff/plan-hint``.  Returns an
+    ``additionalContext`` string, or ``None`` if no hint exists.
+    """
+    hint_path = _plan_hint_path()
+    if not hint_path.exists():
+        return None
+    try:
+        content = hint_path.read_text().strip()
+        hint_path.unlink(missing_ok=True)
+    except OSError:
+        return None
+
+    if not content:
+        return (
+            "You switched to the default branch. "
+            'Clear your plan: /plan with message="" and source="auto".'
+        )
+    return (
+        "Your branch changed. Set your plan: "
+        f'/plan with message="{content}" and source="auto".'
+    )
+
+
 def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
     """Build SessionStart(startup) additionalContext.
 
@@ -305,6 +361,8 @@ def cc_post_bash() -> None:
         return
     data = _read_hook_input()
     result = handle_post_bash(data)
+    if result is None:
+        result = check_plan_hint()
     if result is not None:
         _emit(_post_tool_use_context(result))
 
@@ -370,14 +428,14 @@ def cc_pre_compact() -> None:
 
 @_git_app.command("post-checkout")
 def git_post_checkout(
-    prev_head: str = typer.Argument("", help="Previous HEAD ref"),
-    new_head: str = typer.Argument("", help="New HEAD ref"),
+    prev_head: str = typer.Argument("", help="Previous HEAD ref"),  # noqa: ARG001
+    new_head: str = typer.Argument("", help="New HEAD ref"),  # noqa: ARG001
     branch_flag: str = typer.Argument("", help="1=branch checkout, 0=file"),
 ) -> None:
-    """post-checkout — update plan from branch name.
-
-    Stub: full implementation in biff-ka4.
-    """
+    """post-checkout — write plan hint from branch name."""
+    if not _is_biff_enabled():
+        return
+    handle_post_checkout(branch_flag)
 
 
 @_git_app.command("post-commit")

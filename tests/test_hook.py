@@ -12,7 +12,9 @@ from unittest.mock import patch
 
 from biff.hook import (
     _expand_branch_plan,
+    check_plan_hint,
     handle_post_bash,
+    handle_post_checkout,
     handle_post_pr,
     handle_session_end,
     handle_session_resume,
@@ -412,3 +414,113 @@ class TestHandleSessionEnd:
             count = handle_session_end()
 
         assert count == 0
+
+
+# ── handle_post_checkout ───────────────────────────────────────────
+
+
+class TestHandlePostCheckout:
+    """Git post-checkout handler — plan hint file writing."""
+
+    def test_branch_checkout_writes_hint(self, tmp_path: Path) -> None:
+        with (
+            patch("biff.hook._get_git_branch", return_value="feature/auth"),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            result = handle_post_checkout("1")
+
+        assert result is not None
+        assert "→ feature/auth" in result
+        hint = (tmp_path / ".biff" / "plan-hint").read_text().strip()
+        assert "→ feature/auth" in hint
+
+    def test_file_checkout_ignored(self) -> None:
+        assert handle_post_checkout("0") is None
+
+    def test_empty_branch_flag_ignored(self) -> None:
+        assert handle_post_checkout("") is None
+
+    def test_bead_branch_expanded(self, tmp_path: Path) -> None:
+        with (
+            patch("biff.hook._get_git_branch", return_value="jmf/biff-ka4"),
+            patch(
+                "biff.server.tools.plan.expand_bead_id",
+                return_value="biff-ka4: post-checkout hook",
+            ),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            result = handle_post_checkout("1")
+
+        assert result is not None
+        assert "biff-ka4: post-checkout hook" in result
+
+    def test_main_branch_writes_empty_hint(self, tmp_path: Path) -> None:
+        with (
+            patch("biff.hook._get_git_branch", return_value="main"),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            result = handle_post_checkout("1")
+
+        assert result is None  # Empty hint returns None
+        hint = (tmp_path / ".biff" / "plan-hint").read_text().strip()
+        assert hint == ""
+
+    def test_master_branch_writes_empty_hint(self, tmp_path: Path) -> None:
+        with (
+            patch("biff.hook._get_git_branch", return_value="master"),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            result = handle_post_checkout("1")
+
+        assert result is None
+
+    def test_no_branch_returns_none(self) -> None:
+        with patch("biff.hook._get_git_branch", return_value=""):
+            assert handle_post_checkout("1") is None
+
+
+# ── check_plan_hint ────────────────────────────────────────────────
+
+
+class TestCheckPlanHint:
+    """Plan hint file reading and cleanup."""
+
+    def test_reads_and_deletes_hint(self, tmp_path: Path) -> None:
+        hint_dir = tmp_path / ".biff"
+        hint_dir.mkdir(parents=True)
+        (hint_dir / "plan-hint").write_text("→ feature/auth\n")
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = check_plan_hint()
+
+        assert result is not None
+        assert "→ feature/auth" in result
+        assert 'source="auto"' in result
+        assert not (hint_dir / "plan-hint").exists()
+
+    def test_empty_hint_clears_plan(self, tmp_path: Path) -> None:
+        hint_dir = tmp_path / ".biff"
+        hint_dir.mkdir(parents=True)
+        (hint_dir / "plan-hint").write_text("\n")
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = check_plan_hint()
+
+        assert result is not None
+        assert "default branch" in result
+        assert 'message=""' in result
+
+    def test_no_hint_returns_none(self, tmp_path: Path) -> None:
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert check_plan_hint() is None
+
+    def test_bead_expanded_hint(self, tmp_path: Path) -> None:
+        hint_dir = tmp_path / ".biff"
+        hint_dir.mkdir(parents=True)
+        (hint_dir / "plan-hint").write_text("→ biff-ka4: post-checkout hook\n")
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = check_plan_hint()
+
+        assert result is not None
+        assert "biff-ka4: post-checkout hook" in result
