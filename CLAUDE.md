@@ -78,7 +78,11 @@ Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 User-facing config (`~/.claude/commands/`, `~/.claude/plugins/biff/`, MCP registration, status line) is deployed by `biff install`. Do not hand-edit these paths — changes will be overwritten on next install. To change command behavior, edit the bundled source in `src/biff/plugins/biff/commands/` and re-run `biff install`.
 
-### Version Bumps
+### Release Process
+
+Biff ships through two channels. Each has its own cadence and bar.
+
+#### Version Source of Truth
 
 Version lives in two files that must stay in sync:
 
@@ -89,35 +93,86 @@ Version lives in two files that must stay in sync:
 
 After editing both, run `uv lock` to update `uv.lock`. Then reinstall: `uv tool install --force --editable .`
 
-Bump the version on every PR that changes user-facing behavior. Use semver: patch for fixes, minor for features, major for breaking changes.
+Use semver: patch for fixes, minor for features, major for breaking changes. Bump on every PR that changes user-facing behavior.
 
-### Release Bar
+**IMPORTANT:** `plugin.json` must always have `"name": "biff"` on main. During local development, the name may be `"biff-dev"` for dev/prod isolation — **never commit `"biff-dev"` to main**. Verify before pushing.
 
-Biff only makes sense if it doesn't break at scale. We only get one chance to make a good impression. The release bar exists to ensure we know where the product breaks *before* users find out.
+#### Channel 1: Plugin Marketplace
 
-**Scale target:** An active open source project with 243+ concurrent committers. If biff can't handle that without resource exhaustion, connection failures, or degraded UX, it is not ready to ship.
+The plugin marketplace serves Claude Code users via `claude plugin install biff@punt-labs` and `claude plugin update`. It pulls from the git tag on GitHub.
 
-**Before any PyPI release:**
+**When:** Every version bump merged to main.
+
+**Process:**
+
+```bash
+# 1. Version already bumped in PR (pyproject.toml + plugin.json)
+# 2. CHANGELOG updated with release section
+# 3. Verify plugin.json name is "biff" (not "biff-dev")
+grep '"name"' .claude-plugin/plugin.json  # Must be "biff"
+
+# 4. Commit, tag, push
+git add .claude-plugin/plugin.json CHANGELOG.md
+git commit -m "chore: release vX.Y.Z — short description"
+git tag vX.Y.Z
+git push origin main vX.Y.Z
+
+# 5. Verify
+claude plugin update biff@punt-labs  # Should show new version
+```
+
+**Bar:** Quality gates pass. That's it. The marketplace release is the plugin definition + hook scripts + commands — no Python runtime. Low risk.
+
+#### Channel 2: PyPI (`punt-biff`)
+
+PyPI serves `pip install punt-biff` / `uv tool install punt-biff`. This ships the Python runtime (MCP server, relay, CLI).
+
+**When:** Milestone releases only. Not every version bump.
+
+**Bar:**
 
 - [ ] **All test tiers pass** — unit, integration, subprocess, local NATS, hosted NATS
-- [ ] **No resource leaks** — NATS consumers, asyncio tasks, file handles, connections. Use the `leak-hunter` agent to verify.
-- [ ] **Hosted NATS E2E validates relay path** — the full relay round-trip (connect, publish, consume, cleanup) must complete against Synadia Cloud. Use the `distributed-test-engineer` agent to validate.
-- [ ] **Scale smoke test** — simulate concurrent multi-user load (presence updates, messaging, wall broadcasts) and verify no resource exhaustion.
+- [ ] **No resource leaks** — NATS consumers, asyncio tasks, file handles, connections
+- [ ] **Hosted NATS E2E validates relay path** — full round-trip against Synadia Cloud
+- [ ] **Scale smoke test** — concurrent multi-user load without resource exhaustion
+
+**Scale target:** 243+ concurrent committers. If biff can't handle that without resource exhaustion, connection failures, or degraded UX, it is not ready to ship.
+
+**Process:**
+
+```bash
+# 1. All of Channel 1 already done (tag exists, marketplace updated)
+# 2. Run full test suite including hosted NATS
+BIFF_TEST_NATS_URL=tls://connect.ngs.global \
+BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
+uv run pytest -m hosted -v
+
+# 3. Build and publish
+rm -rf dist/ && uv build && uvx twine check dist/*
+uvx twine upload dist/*
+
+# 4. GitHub release
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "See CHANGELOG.md"
+
+# 5. Verify
+uv tool install --upgrade punt-biff && biff --version
+```
 
 **Specialized agents for release validation:**
 
 | Agent | Role | When to Use |
 |-------|------|-------------|
-| `distributed-test-engineer` | Diagnoses distributed system test failures: NATS, asyncio event loops, pytest-asyncio fixture scoping, MCP transport | Hosted NATS test hangs, connection lifecycle bugs, fixture deadlocks |
-| `leak-hunter` | Finds memory and resource leaks: NATS consumers, asyncio tasks, file descriptors, connection pools | Before any release, after relay code changes, consumer limit errors |
+| `distributed-test-engineer` | Diagnoses distributed system test failures: NATS, asyncio, pytest-asyncio, MCP transport | Hosted NATS test hangs, connection lifecycle bugs |
+| `leak-hunter` | Finds resource leaks: NATS consumers, asyncio tasks, file descriptors | Before any PyPI release, after relay code changes |
 
 ### Pre-PR Checklist
 
 Before creating a PR, verify:
 
-- [ ] **Version bumped** if user-facing behavior changed
+- [ ] **Version bumped** in both `pyproject.toml` and `plugin.json` if user-facing behavior changed
+- [ ] **`plugin.json` name is `"biff"`** (not `"biff-dev"`)
+- [ ] **CHANGELOG entry** added under `## Unreleased` or new version section
 - [ ] **README updated** if user-facing behavior changed
-- [ ] **CHANGELOG entry** added for notable changes
 - [ ] **Quality gates pass**
 - [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m hosted -v`
 

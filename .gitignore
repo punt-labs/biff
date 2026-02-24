@@ -53,5 +53,8 @@ tests/transcripts/
 # Biff local activation (per-user, not committed)
 .biff.local
 
+# Deprecated tooling
+.claude-flow/
+
 # OS
 .DS_Store
