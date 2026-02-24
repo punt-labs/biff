@@ -236,21 +236,29 @@ class NatsRelay:
     async def _cleanup_legacy_streams(self, js: JetStreamContext) -> None:
         """Delete orphaned per-repo streams from pre-DES-016 installations.
 
-        Always runs on startup — no migration flag.  Each delete is a
-        no-op (suppressed NotFoundError) once legacy resources are gone.
+        Best-effort: any failure is logged and swallowed.  Legacy cleanup
+        must never crash startup.  Always runs — no migration flag.
+        Each delete is a no-op (suppressed NotFoundError) once legacy
+        resources are gone.
         """
-        for name in (
-            f"biff-{self._repo_name}-inbox",
-            f"biff-{self._repo_name}-wtmp",
-        ):
-            with suppress(NotFoundError):
-                await js.delete_stream(name)  # pyright: ignore[reportUnknownMemberType]
-                logger.info("Cleaned up legacy stream %s", name)
-        with suppress(NotFoundError, BucketNotFoundError):
-            await js.delete_key_value(  # pyright: ignore[reportUnknownMemberType]
-                f"biff-{self._repo_name}-sessions",
-            )
-            logger.info("Cleaned up legacy KV bucket biff-%s-sessions", self._repo_name)
+        try:
+            for name in (
+                f"biff-{self._repo_name}-inbox",
+                f"biff-{self._repo_name}-wtmp",
+            ):
+                with suppress(NotFoundError):
+                    await js.delete_stream(name)  # pyright: ignore[reportUnknownMemberType]
+                    logger.info("Cleaned up legacy stream %s", name)
+            with suppress(NotFoundError, BucketNotFoundError):
+                await js.delete_key_value(  # pyright: ignore[reportUnknownMemberType]
+                    f"biff-{self._repo_name}-sessions",
+                )
+                logger.info(
+                    "Cleaned up legacy KV bucket biff-%s-sessions",
+                    self._repo_name,
+                )
+        except Exception:  # noqa: BLE001 — best-effort cleanup must never crash startup
+            logger.warning("Legacy stream cleanup failed", exc_info=True)
 
     @property
     def wtmp_available(self) -> bool:
