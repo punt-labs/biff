@@ -15,6 +15,7 @@ from biff.hook import (
     check_plan_hint,
     handle_post_bash,
     handle_post_checkout,
+    handle_post_commit,
     handle_post_pr,
     handle_session_end,
     handle_session_resume,
@@ -524,3 +525,46 @@ class TestCheckPlanHint:
 
         assert result is not None
         assert "biff-ka4: post-checkout hook" in result
+
+
+# ── handle_post_commit ─────────────────────────────────────────────
+
+
+class TestHandlePostCommit:
+    """Git post-commit handler — plan hint with commit subject."""
+
+    def test_writes_hint_with_checkmark(self, tmp_path: Path) -> None:
+        with (
+            patch(
+                "biff.hook._get_commit_subject",
+                return_value="feat: auto-assign TTY",
+            ),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            result = handle_post_commit()
+
+        assert result == "✓ feat: auto-assign TTY"
+        hint = (tmp_path / ".biff" / "plan-hint").read_text().strip()
+        assert hint == "✓ feat: auto-assign TTY"
+
+    def test_empty_subject_returns_none(self) -> None:
+        with patch("biff.hook._get_commit_subject", return_value=""):
+            assert handle_post_commit() is None
+
+    def test_hint_picked_up_by_check(self, tmp_path: Path) -> None:
+        """End-to-end: post-commit writes hint, check_plan_hint reads it."""
+        with (
+            patch(
+                "biff.hook._get_commit_subject",
+                return_value="fix: status bar height",
+            ),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            handle_post_commit()
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = check_plan_hint()
+
+        assert result is not None
+        assert "✓ fix: status bar height" in result
+        assert 'source="auto"' in result

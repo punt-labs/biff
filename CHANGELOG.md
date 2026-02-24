@@ -32,6 +32,9 @@
   resolution). The PostToolUse Bash handler picks up the hint and nudges
   Claude to set the plan with `source="auto"`. Switching to main/master
   clears the plan. (#biff-ka4)
+- **Git post-commit hook** — after each commit, writes a plan hint with
+  `✓ <subject>` so teammates see commit progress in `/finger` and `/who`.
+  Uses the same plan hint file mechanism as post-checkout. (#biff-crz)
 
 ### Changed
 

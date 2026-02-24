@@ -268,6 +268,42 @@ def check_plan_hint() -> str | None:
     )
 
 
+def _get_commit_subject() -> str:
+    """Return the most recent commit's subject line, or empty on failure."""
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%s"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (FileNotFoundError, TimeoutError, OSError):
+        pass
+    return ""
+
+
+def handle_post_commit() -> str | None:
+    """Process git post-commit — write plan hint with commit subject.
+
+    Writes ``~/.biff/plan-hint`` with ``✓ <subject>``.  The PostToolUse
+    Bash handler picks up the hint and nudges Claude to set the plan.
+
+    Returns the plan hint text, or ``None`` if no subject found.
+    """
+    subject = _get_commit_subject()
+    if not subject:
+        return None
+
+    hint = f"✓ {subject}"
+    hint_path = _plan_hint_path()
+    hint_path.parent.mkdir(parents=True, exist_ok=True)
+    hint_path.write_text(f"{hint}\n")
+    return hint
+
+
 def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
     """Build SessionStart(startup) additionalContext.
 
@@ -440,10 +476,10 @@ def git_post_checkout(
 
 @_git_app.command("post-commit")
 def git_post_commit() -> None:
-    """post-commit — update plan with commit subject.
-
-    Stub: full implementation in biff-crz.
-    """
+    """post-commit — write plan hint with commit subject."""
+    if not _is_biff_enabled():
+        return
+    handle_post_commit()
 
 
 @_git_app.command("pre-push")
