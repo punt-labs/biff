@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
+from biff.server.activity import ActivityTracker
 
 
 class _Sentinel:
@@ -43,6 +44,8 @@ logger = logging.getLogger(__name__)
 _READ_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 
 _DEFAULT_POLL_INTERVAL = 2.0
+_DEFAULT_IDLE_THRESHOLD = 300.0  # 5 minutes — transition to napping
+_DEFAULT_POP_INTERVAL = 600.0  # 10 minutes — POP fetch while napping
 
 # Updated on every tool call so the background poller can send
 # notifications outside a request context.
@@ -231,21 +234,26 @@ async def poll_inbox(
     *,
     shutdown: asyncio.Event | None = None,
     interval: float = _DEFAULT_POLL_INTERVAL,
+    idle_threshold: float = _DEFAULT_IDLE_THRESHOLD,
+    pop_interval: float = _DEFAULT_POP_INTERVAL,
 ) -> None:
     """Background task: poll inbox and wall, refresh notifications on change.
 
-    Runs for the lifetime of the MCP server. Detects new or read
-    messages by comparing the unread count against the last known
-    value, and checks wall state for changes.  Calls the appropriate
-    refresh function when state changes.
+    Runs for the lifetime of the MCP server.  In **active** mode,
+    polls the relay every *interval* seconds (normal operation).
+    After *idle_threshold* seconds with no tool call, transitions to
+    **napping** (POP mode): releases the TCP connection and only
+    reconnects every *pop_interval* seconds for a brief fetch cycle.
+
+    The poller always ticks at *interval* (2s default).  During
+    napping, ticks are cheap no-ops (datetime comparison).  This
+    keeps wake-up responsive — at most 2s lag when ``touch()``
+    clears napping.
 
     When *shutdown* is set, exits cleanly between iterations —
     no NATS operations are interrupted mid-flight.
-
-    The notification is sent via :func:`_notify_tool_list_changed`,
-    which uses a stored ``ServerSession`` reference captured from
-    the first tool call.
     """
+    tracker = state.activity
     last_count = -1  # Force initial refresh
     last_wall: tuple[str, str] = ("", "")  # (text, posted_at) — Force initial refresh
     while shutdown is None or not shutdown.is_set():
@@ -257,6 +265,21 @@ async def poll_inbox(
                 pass
         else:
             await asyncio.sleep(interval)
+
+        # Transition: active → napping
+        if not tracker.napping and tracker.idle_seconds() > idle_threshold:
+            tracker.enter_nap()
+            await state.relay.disconnect()
+            continue
+
+        # Napping: skip unless POP interval reached
+        if tracker.napping:
+            if tracker.seconds_since_pop() < pop_interval:
+                continue
+            last_count, last_wall = await _pop_fetch(mcp, state, tracker)
+            continue
+
+        # Active: normal polling
         summary = await state.relay.get_unread_summary(state.session_key)
         if summary.count != last_count:
             last_count = summary.count
@@ -273,6 +296,34 @@ async def poll_inbox(
         if wall_key != last_wall:
             last_wall = wall_key
             await refresh_wall(mcp, state, wall=current_wall)
+
+
+async def _pop_fetch(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    tracker: ActivityTracker,
+) -> tuple[int, tuple[str, str]]:
+    """Reconnect, fetch unread/wall, heartbeat, disconnect.  Like email POP.
+
+    The relay reconnects transparently on the first method call.
+    After fetching, captures tracking state, piggybacks a heartbeat,
+    then disconnects.  Returns ``(count, wall_key)`` so the caller
+    can update its local tracking without reconnecting.
+    """
+    await refresh_read_messages(mcp, state)
+    await refresh_wall(mcp, state)
+    # Capture tracking data while still connected
+    summary = await state.relay.get_unread_summary(state.session_key)
+    current_wall = await state.relay.get_wall()
+    await state.relay.heartbeat(state.session_key)
+    await state.relay.disconnect()
+    tracker.record_pop()
+    wall_key = (
+        (current_wall.text, current_wall.posted_at.isoformat())
+        if current_wall
+        else ("", "")
+    )
+    return summary.count, wall_key
 
 
 def _write_unread_file(

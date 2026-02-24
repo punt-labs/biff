@@ -128,6 +128,10 @@ class Relay(Protocol):
 
     # -- Lifecycle --
 
+    async def disconnect(self) -> None:
+        """Release the connection temporarily.  Next relay call reconnects."""
+        ...
+
     async def close(self) -> None: ...
 
 
@@ -194,6 +198,9 @@ class DormantRelay:
 
     async def get_wall(self) -> WallPost | None:
         return None
+
+    async def disconnect(self) -> None:
+        pass
 
     async def close(self) -> None:
         pass
@@ -477,6 +484,9 @@ class LocalRelay:
             path.unlink(missing_ok=True)
             return None
         return wall
+
+    async def disconnect(self) -> None:
+        """No-op — filesystem relay has no connection to release."""
 
     async def close(self) -> None:
         """No-op — filesystem relay has no connection to close."""

@@ -6,12 +6,13 @@ directly during registration; it is also available as the lifespan context.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay, Relay
+from biff.server.activity import ActivityTracker
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
 
 
@@ -21,6 +22,7 @@ class ServerState:
 
     config: BiffConfig
     relay: Relay
+    activity: ActivityTracker = field(default_factory=ActivityTracker)
     tty: str = ""
     hostname: str = ""
     pwd: str = ""

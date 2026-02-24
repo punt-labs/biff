@@ -288,6 +288,19 @@ class NatsRelay:
         if self._nc is not None and not self._nc.is_closed:
             await self._nc.flush(timeout=timeout)
 
+    async def disconnect(self) -> None:
+        """Release TCP connection temporarily.  Next relay call reconnects.
+
+        Semantically distinct from :meth:`close` — disconnect is
+        reversible (the session continues), close is permanent
+        (the session is ending).
+        """
+        if self._nc is not None and not self._nc.is_closed:
+            await self._nc.close()
+        self._nc = None
+        self._js = None
+        self._kv = None
+
     async def close(self) -> None:
         """Close the NATS connection and release resources."""
         if self._nc is not None:
