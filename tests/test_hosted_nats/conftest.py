@@ -42,6 +42,7 @@ from biff.testing import RecordingClient, Transcript
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 _TEST_REPO = "_test-hosted-nats"
+_STREAM_PREFIX = "biff-dev"
 
 
 def _relay_auth_from_env() -> RelayAuth | None:
@@ -94,6 +95,7 @@ async def kai_relay(
         auth=hosted_nats_auth,
         name="biff-test-kai",
         repo_name=_TEST_REPO,
+        stream_prefix=_STREAM_PREFIX,
     )
     yield relay
     await relay.close()
@@ -109,6 +111,7 @@ async def eric_relay(
         auth=hosted_nats_auth,
         name="biff-test-eric",
         repo_name=_TEST_REPO,
+        stream_prefix=_STREAM_PREFIX,
     )
     yield relay
     await relay.close()

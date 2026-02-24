@@ -73,10 +73,8 @@ _FETCH_TIMEOUT = 1.0
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 
-# Shared resource names (DES-016) — 3 total regardless of repo count.
-_INBOX_STREAM = "biff-inbox"
-_SESSIONS_BUCKET = "biff-sessions"
-_WTMP_STREAM = "biff-wtmp"
+# Default stream prefix (DES-016).  Tests override via stream_prefix="biff-dev".
+_DEFAULT_STREAM_PREFIX = "biff"
 
 # KV key namespaces reserved for encryption (DES-016, biff-lff).
 # Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
@@ -97,18 +95,28 @@ class NatsRelay:
         auth: RelayAuth | None = None,
         name: str = "biff",
         repo_name: str = "_default",
+        stream_prefix: str = _DEFAULT_STREAM_PREFIX,
     ) -> None:
         self._url = url
         self._auth = auth
         self._name = name
         self._repo_name = repo_name
+        # Validate stream_prefix — must be a simple alphanumeric-dash token.
+        # Dots, wildcards, or spaces would break NATS subject routing.
+        if not stream_prefix or not all(c.isalnum() or c == "-" for c in stream_prefix):
+            msg = (
+                f"stream_prefix must be non-empty alphanumeric-dash: {stream_prefix!r}"
+            )
+            raise ValueError(msg)
         # Shared resource names (DES-016) — constant across repos.
-        self._stream_name = _INBOX_STREAM
-        self._kv_bucket = _SESSIONS_BUCKET
-        self._wtmp_stream = _WTMP_STREAM
+        # stream_prefix allows tests to isolate from production streams.
+        self._stream_name = f"{stream_prefix}-inbox"
+        self._kv_bucket = f"{stream_prefix}-sessions"
+        self._wtmp_stream = f"{stream_prefix}-wtmp"
         # Subject prefixes — repo-specific within shared streams.
-        self._subject_prefix = f"biff.{repo_name}.inbox"
-        self._wtmp_prefix = f"biff.{repo_name}.wtmp"
+        self._stream_prefix = stream_prefix
+        self._subject_prefix = f"{stream_prefix}.{repo_name}.inbox"
+        self._wtmp_prefix = f"{stream_prefix}.{repo_name}.wtmp"
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
@@ -178,7 +186,7 @@ class NatsRelay:
             # Never delete-recreate shared infrastructure.
             stream_config = StreamConfig(
                 name=self._stream_name,
-                subjects=["biff.*.inbox.>"],
+                subjects=[f"{self._stream_prefix}.*.inbox.>"],
                 retention=RetentionPolicy.WORK_QUEUE,
                 max_bytes=_STREAM_MAX_BYTES,
             )
@@ -210,7 +218,7 @@ class NatsRelay:
         """
         wtmp_config = StreamConfig(
             name=self._wtmp_stream,
-            subjects=["biff.*.wtmp.>"],
+            subjects=[f"{self._stream_prefix}.*.wtmp.>"],
             retention=RetentionPolicy.LIMITS,
             max_bytes=_STREAM_MAX_BYTES,
             max_age=_WTMP_MAX_AGE,
@@ -664,8 +672,16 @@ class NatsRelay:
         # without a final fetch.  The user-level consumer (userinbox-{user})
         # is likewise deleted by fetch_user_inbox(); inactive_threshold is
         # the safety net for consumers orphaned by crashes.
-        with suppress(NotFoundError):
+        try:
             await js.delete_consumer(self._stream_name, self._durable_name(session_key))
+        except NotFoundError:
+            pass  # Already deleted by fetch() — expected.
+        except (TimeoutError, NatsError) as exc:
+            logger.warning(
+                "Consumer cleanup failed for %s (will auto-expire): %s",
+                session_key,
+                exc,
+            )
 
     # -- Session history (wtmp) --
 
@@ -745,9 +761,14 @@ class NatsRelay:
         events: list[SessionEvent] = []
         for raw in raw_msgs:
             try:
-                events.append(SessionEvent.model_validate_json(raw.data))
+                event = SessionEvent.model_validate_json(raw.data)
             except (ValidationError, ValueError):
                 logger.warning("Skipping malformed wtmp message")
+            else:
+                if event.version == 1:
+                    events.append(event)
+                else:
+                    logger.debug("Skipping wtmp v%d (unsupported)", event.version)
             await raw.ack()
 
         # Sort by timestamp descending (most recent first), take count

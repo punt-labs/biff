@@ -1000,6 +1000,44 @@ Per-repo streams were natural failure domain boundaries. Shared streams mean one
 | `tests/test_nats_e2e/conftest.py` | Same cleanup change |
 | `tests/test_hosted_nats/test_stress.py` | Updated stream/bucket constants, consumer name patterns, KV key queries |
 
+### Stream Namespace Isolation (addendum, 2026-02-24)
+
+The `NatsRelay` constructor accepts a `stream_prefix` parameter (default `"biff"`).  Stream names, subject patterns, and subject prefixes all derive from it:
+
+| `stream_prefix` | Inbox stream | Sessions KV | Wtmp stream | Subject pattern |
+|-----------------|-------------|-------------|-------------|-----------------|
+| `"biff"` (default) | `biff-inbox` | `biff-sessions` | `biff-wtmp` | `biff.{repo}.inbox.>` |
+| `"biff-dev"` (tests) | `biff-dev-inbox` | `biff-dev-sessions` | `biff-dev-wtmp` | `biff-dev.{repo}.inbox.>` |
+
+**Motivation:** Hosted NATS tests must not touch production streams.  Before this change, tests and production shared the same `biff-*` streams, and legacy stream cleanup caused subject overlap errors against Synadia Cloud.  With `stream_prefix="biff-dev"`, test streams are fully isolated — they can be created and destroyed without affecting production data.
+
+**Cost:** One constructor parameter, no production behavior change (default is `"biff"`).
+
+### Wtmp Schema Versioning (addendum, 2026-02-24)
+
+`SessionEvent` now carries a `version: int = 1` field.  This enables forward-compatible schema evolution for the durable wtmp stream.
+
+**Why wtmp needs versioning but inbox does not:**
+
+- **Inbox** (WORK_QUEUE): Messages are consumed within seconds.  A schema change means old messages are gone before the new code reads them.  Purge-and-cutover is sufficient.
+- **Wtmp** (LIMITS, 30-day retention): Session history persists.  A breaking schema change would leave historical records that new code cannot deserialize.
+
+**Deserialization strategy:**
+
+```python
+event = SessionEvent.model_validate_json(raw.data)
+if event.version == 1:
+    events.append(event)
+else:
+    logger.debug("Skipping wtmp v%d (unsupported)", event.version)
+```
+
+Records without a `version` field (pre-v1) deserialize with `version=1` (Pydantic default).  Unrecognized versions are skipped with a debug log, not a crash.  When v2 ships, the reader adds a second branch; v1 records remain readable for their 30-day retention lifetime.
+
+### Resilient Consumer Cleanup (addendum, 2026-02-24)
+
+`delete_session()` now suppresses `TimeoutError` and `NatsError` (in addition to `NotFoundError`) when deleting the per-session inbox consumer.  Against hosted NATS under sustained load, the 5-second default timeout for `js.delete_consumer()` can expire.  The consumer's `inactive_threshold` (5 minutes) is the safety net — it auto-expires regardless of whether the explicit delete succeeds.
+
 ### Alternatives Considered
 
 | Alternative | Rejected Because |
