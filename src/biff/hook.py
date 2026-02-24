@@ -293,9 +293,10 @@ def check_plan_hint() -> str | None:
             "You switched to the default branch. "
             'Clear your plan: /plan with message="" and source="auto".'
         )
+    safe = json.dumps(content, ensure_ascii=False)[1:-1]  # escape " and \
     return (
         "Your branch changed. Set your plan: "
-        f'/plan with message="{content}" and source="auto".'
+        f'/plan with message="{safe}" and source="auto".'
     )
 
 
@@ -402,9 +403,10 @@ def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
     branch = _get_git_branch()
     if branch:
         plan_text = _expand_branch_plan(branch)
+        safe = json.dumps(plan_text, ensure_ascii=False)[1:-1]  # escape " and \
         parts.append(
             f"Set your plan from the current branch: "
-            f'/plan with message="{plan_text}" and source="auto".'
+            f'/plan with message="{safe}" and source="auto".'
         )
     else:
         parts.append(

@@ -301,6 +301,12 @@ class TestHandleSessionStart:
             result = handle_session_start({})
         assert "→ main" in result
 
+    def test_quotes_in_branch_escaped(self) -> None:
+        with patch("biff.hook._get_git_branch", return_value='feature/"quotes"'):
+            result = handle_session_start({})
+        assert r"\"quotes\"" in result
+        assert 'source="auto"' in result
+
 
 # ── handle_session_resume ───────────────────────────────────────────
 
@@ -645,6 +651,20 @@ class TestCheckPlanHint:
 
         assert result is not None
         assert "biff-ka4: post-checkout hook" in result
+
+    def test_quotes_in_content_escaped(self, tmp_path: Path) -> None:
+        hp = _hint_path(tmp_path, "plan-hint")
+        hp.parent.mkdir(parents=True)
+        hp.write_text('→ feature/"quoted"\n')
+
+        home_mock, wt_mock = _hint_mocks(tmp_path)
+        with home_mock, wt_mock:
+            result = check_plan_hint()
+
+        assert result is not None
+        # Escaped quotes don't break the message="..." syntax
+        assert r"feature/\"quoted\"" in result
+        assert 'source="auto"' in result
 
 
 # ── handle_post_commit ─────────────────────────────────────────────

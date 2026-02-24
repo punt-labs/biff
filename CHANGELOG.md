@@ -2,23 +2,6 @@
 
 ## Unreleased
 
-### Fixed
-
-- **plan_source priority enforcement** — auto plans (from git hooks) can no longer
-  overwrite manual `/plan` entries. The guard was documented but not implemented;
-  both Copilot and Cursor caught this independently.
-- **SessionEnd repo_name mismatch** — `handle_session_end()` now uses the same
-  sanitized repo slug as `write_active_session()` (e.g. `punt-labs__biff`), fixing
-  a comparison that silently prevented session cleanup when a git remote was
-  configured.
-- **Branch regex false positives** — `_BEAD_BRANCH_RE` now uses word boundaries
-  (`\b`), preventing common branch names like `my-feature` from being truncated
-  to `my-feat` and misidentified as bead IDs.
-- **Hint file session race** — plan and wall hint files are now scoped by git
-  worktree path (`~/.biff/hints/{hash}/`). Multiple sessions in different
-  worktrees no longer race on shared hint files. Sessions in the same worktree
-  share hints by design — the coordination contract requires worktree isolation.
-
 ## 0.8.0 — 2026-02-24
 
 ### Added
@@ -67,6 +50,26 @@
   and `pr-announce.sh` (55 lines) replaced by `post-bash.sh` and
   `pr-announce.sh` thin dispatchers (4 lines each) plus Python handlers
   in `hook.py`. (#biff-7vp)
+
+### Fixed
+
+- **plan_source priority enforcement** — auto plans (from git hooks) can no longer
+  overwrite manual `/plan` entries. The guard was documented but not implemented;
+  both Copilot and Cursor caught this independently.
+- **SessionEnd repo_name mismatch** — `handle_session_end()` now uses the same
+  sanitized repo slug as `write_active_session()` (e.g. `punt-labs__biff`), fixing
+  a comparison that silently prevented session cleanup when a git remote was
+  configured.
+- **Branch regex false positives** — `_BEAD_BRANCH_RE` now uses word boundaries
+  (`\b`), preventing common branch names like `my-feature` from being truncated
+  to `my-feat` and misidentified as bead IDs.
+- **Hint file session race** — plan and wall hint files are now scoped by git
+  worktree path (`~/.biff/hints/{hash}/`). Multiple sessions in different
+  worktrees no longer race on shared hint files. Sessions in the same worktree
+  share hints by design — the coordination contract requires worktree isolation.
+- **Hint content escaping** — branch names and commit subjects containing double
+  quotes no longer break the `/plan with message="..."` prompt syntax. Content is
+  now JSON-escaped before embedding.
 
 ## 0.7.0 — 2026-02-24
 
