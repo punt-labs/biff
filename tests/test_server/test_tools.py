@@ -518,8 +518,6 @@ class TestDynamicDescriptions:
         await plan_tool.fn(message="working")
         desc = await _tool_description(mcp, "read_messages")
         assert "1 unread" in desc
-        assert "@eric" in desc
-        assert "auth ready" in desc
 
     async def test_description_reverts_after_check(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
@@ -564,8 +562,6 @@ class TestDynamicDescriptions:
         await who_tool.fn()
         desc = await _tool_description(mcp, "read_messages")
         assert "2 unread" in desc
-        assert "@eric" in desc
-        assert "@priya" in desc
 
     async def test_send_message_triggers_refresh(self, state: ServerState) -> None:
         mcp = _create_mcp(state)

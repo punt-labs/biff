@@ -708,3 +708,53 @@ All three tool modules migrated to shared formatter:
 | Dynamic terminal width detection | LLM consumers have no terminal; fixed width is the correct abstraction |
 | Multiple variable columns | Ambiguous budget allocation; one variable column keeps the algorithm simple and predictable |
 | Truncation instead of wrapping | Loses information; wrapping preserves full content while constraining width |
+
+## DES-015: Count-Only Unread Summary — Eliminate Poller Consumers
+
+**Date:** 2026-02-23
+**Status:** SETTLED
+**Topic:** Removing message preview from unread summaries to eliminate steady-state consumers
+
+### Problem
+
+The background poller calls `get_unread_summary()` every 2 seconds. On `NatsRelay`, this used `_peek_subject()` to read actual message bodies and build a preview string (e.g., `"@kai about auth, @eric about lunch"`). Each peek created a durable consumer — 2 per active user (TTY inbox + user inbox). These were the last remaining consumers in the steady-state footprint after the delete-after-use fix on `fetch()`.
+
+### Evidence
+
+The preview was consumed in exactly **one place**: the `read_messages` tool description:
+
+```text
+Check messages (2 unread: @kai about auth, @eric about lunch). Marks all as read.
+```
+
+The status line does **not** use the preview — `statusline.py` has zero references to it. The `SessionUnread` dataclass omits the field. The unread JSON file wrote the preview but nothing read it.
+
+### Design
+
+Eliminate `_peek_subject()` and `build_unread_summary()`. The `UnreadSummary` model becomes count-only. `get_unread_summary()` uses `stream_info()` for counts (zero consumers) and returns `UnreadSummary(count=total)`.
+
+Tool description becomes: `"Check messages (2 unread). Marks all as read."`
+
+Steady-state consumer footprint drops to **zero per user**.
+
+### Why This Is Sufficient
+
+- `"N unread"` is sufficient signal — the count change triggers `tools/list_changed`, Claude sees the updated description, and proactively mentions it.
+- When the user calls `/read`, they see the full messages with sender and body. The preview in the description was never the primary read path.
+- The preview was never visible to humans (status line ignores it).
+
+### Impact
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Steady-state consumers per user | 2 (poller peek) | 0 |
+| Max concurrent users (500 limit) | ~250 | Unlimited by consumers |
+| Poller operations | `stream_info` + `_peek_subject` | `stream_info` only |
+
+### Alternatives Considered
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Cache preview, reduce peek frequency | Still creates consumers; complexity for diminishing returns |
+| Use stream direct-get API | Not available in nats.py client; would still require consumer-like operations |
+| Keep preview on LocalRelay only | Inconsistent behavior across relays; dead code on the dominant deployment path |

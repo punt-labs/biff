@@ -33,7 +33,18 @@ class TestServerStartup:
         """Server lists all tools over stdio transport."""
         tools = await biff_client.list_tools()
         names = {t.name for t in tools}
-        expected = {"mesg", "read_messages", "finger", "write", "who", "plan"}
+        expected = {
+            "biff",
+            "finger",
+            "last",
+            "mesg",
+            "plan",
+            "read_messages",
+            "tty",
+            "wall",
+            "who",
+            "write",
+        }
         assert names == expected
 
     async def test_tools_have_descriptions(self, biff_client: Client[Any]) -> None:
@@ -150,7 +161,6 @@ class TestDynamicDescriptionOverStdio:
         await eric_client.call_tool("plan", {"message": "working"})
         desc = await self._check_desc(eric_client)
         assert "1 unread" in desc
-        assert "@kai" in desc
 
     async def test_description_reverts_after_check(
         self,
