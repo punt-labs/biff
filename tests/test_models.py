@@ -206,18 +206,16 @@ class TestUnreadSummary:
     def test_empty(self) -> None:
         summary = UnreadSummary()
         assert summary.count == 0
-        assert summary.preview == ""
 
-    def test_with_messages(self) -> None:
-        summary = UnreadSummary(count=2, preview="@kai about auth, @eric about lunch")
+    def test_with_count(self) -> None:
+        summary = UnreadSummary(count=2)
         assert summary.count == 2
-        assert "@kai" in summary.preview
 
     def test_negative_count_rejected(self) -> None:
         with pytest.raises(ValidationError, match="count"):
             UnreadSummary(count=-1)
 
     def test_frozen(self) -> None:
-        summary = UnreadSummary(count=1, preview="@kai about auth")
+        summary = UnreadSummary(count=1)
         with pytest.raises(ValidationError):
             summary.count = 0

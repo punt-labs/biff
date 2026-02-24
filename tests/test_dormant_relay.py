@@ -28,7 +28,6 @@ class TestDormantRelay:
         relay = DormantRelay()
         summary = await relay.get_unread_summary("eric:tty2")
         assert summary.count == 0
-        assert summary.preview == ""
 
     async def test_fetch_user_inbox_returns_empty(self) -> None:
         relay = DormantRelay()
