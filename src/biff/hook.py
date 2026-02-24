@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from typing import cast
 
@@ -66,14 +67,19 @@ def _emit(output: dict[str, object]) -> None:
     sys.stdout.write("\n")
 
 
-def _post_tool_use_context(context: str) -> dict[str, object]:
-    """Build PostToolUse hook output with ``additionalContext`` only."""
+def _hook_context(event: str, context: str) -> dict[str, object]:
+    """Build hook output with ``additionalContext`` for any event."""
     return {
         "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
+            "hookEventName": event,
             "additionalContext": context,
         }
     }
+
+
+def _post_tool_use_context(context: str) -> dict[str, object]:
+    """Build PostToolUse hook output with ``additionalContext`` only."""
+    return _hook_context("PostToolUse", context)
 
 
 def _parse_tool_response(raw: object) -> dict[str, object]:
@@ -169,6 +175,77 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
     )
 
 
+def _get_git_branch() -> str:
+    """Return the current git branch name, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (FileNotFoundError, TimeoutError, OSError):
+        pass
+    return ""
+
+
+_BEAD_BRANCH_RE = re.compile(r"[a-z]+-[a-z0-9]{2,4}")
+
+
+def _expand_branch_plan(branch: str) -> str:
+    """Build a plan string from a branch name.
+
+    If the branch contains a bead ID (e.g. ``biff-ka4``), resolve
+    the title.  Otherwise return the branch name as-is, prefixed
+    with ``→`` to indicate automatic provenance.
+    """
+    from biff.server.tools.plan import expand_bead_id  # noqa: PLC0415
+
+    m = _BEAD_BRANCH_RE.search(branch)
+    if m:
+        expanded = expand_bead_id(m.group())
+        return f"→ {expanded}"
+    return f"→ {branch}"
+
+
+def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
+    """Build SessionStart(startup) additionalContext.
+
+    Always returns context — at minimum, a /tty nudge.
+    Reads the git branch and suggests /plan with auto source.
+    """
+    parts: list[str] = [
+        "Biff session starting.",
+        "Call /tty to name this session (auto-assigns ttyN).",
+    ]
+
+    branch = _get_git_branch()
+    if branch:
+        plan_text = _expand_branch_plan(branch)
+        parts.append(
+            f"Set your plan from the current branch: "
+            f'/plan with message="{plan_text}" and source="auto".'
+        )
+    else:
+        parts.append(
+            "Set your plan with /plan to show teammates what you're working on."
+        )
+
+    parts.append("Check /read for unread messages.")
+    return " ".join(parts)
+
+
+def handle_session_resume() -> str:
+    """Build SessionStart(resume|compact) additionalContext.
+
+    Re-orients Claude after context compaction or resume.
+    """
+    return "Biff session resumed. Check /read for unread messages."
+
+
 # ── Claude Code commands ─────────────────────────────────────────────
 
 
@@ -196,18 +273,22 @@ def cc_post_pr() -> None:
 
 @_cc_app.command("session-start")
 def cc_session_start() -> None:
-    """SessionStart — auto-tty, plan from branch, check unread.
-
-    Stub: full implementation in biff-6we.
-    """
+    """SessionStart(startup) — auto-tty, plan from branch, check unread."""
+    if not _is_biff_enabled():
+        return
+    data = _read_hook_input()
+    result = handle_session_start(data)
+    _emit(_hook_context("SessionStart", result))
 
 
 @_cc_app.command("session-resume")
 def cc_session_resume() -> None:
-    """SessionStart (resume/compact) — refresh presence, re-announce plan.
-
-    Stub: full implementation in biff-6we.
-    """
+    """SessionStart(resume/compact) — re-orient after context loss."""
+    if not _is_biff_enabled():
+        return
+    _read_hook_input()  # consume stdin even if unused
+    result = handle_session_resume()
+    _emit(_hook_context("SessionStart", result))
 
 
 @_cc_app.command("session-end")

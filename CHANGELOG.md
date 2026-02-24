@@ -17,6 +17,11 @@
   (`"manual"` or `"auto"`). Manual `/plan` calls always set `"manual"`.
   Git hooks (Phase 2) will set `"auto"` and only overwrite auto plans,
   preventing automated hooks from clobbering intentional plans. (#biff-efk)
+- **SessionStart hooks** — on startup, nudges Claude to auto-assign `/tty`,
+  set `/plan` from the current git branch (with bead ID expansion), and
+  check `/read` for unread messages. On resume/compact, re-orients Claude
+  with a `/read` reminder. Branch-inferred plans use `source="auto"` so
+  git hooks can later overwrite them. (#biff-6we)
 
 ### Changed
 

@@ -7,8 +7,20 @@ without I/O — no stdin/stdout mocking, no git repo, no .biff files.
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
-from biff.hook import handle_post_bash, handle_post_pr
+from biff.hook import (
+    _expand_branch_plan,
+    handle_post_bash,
+    handle_post_pr,
+    handle_session_resume,
+    handle_session_start,
+)
+
+
+def _identity(s: str) -> str:
+    return s
+
 
 # ── handle_post_bash ─────────────────────────────────────────────────
 
@@ -218,3 +230,109 @@ class TestHandlePostPr:
             "tool_response": json.dumps({"number": 42}),
         }
         assert handle_post_pr(data) is None
+
+
+# ── handle_session_start ────────────────────────────────────────────
+
+
+class TestHandleSessionStart:
+    """SessionStart(startup) handler — branch detection and nudges."""
+
+    def test_includes_tty_nudge(self) -> None:
+        with patch("biff.hook._get_git_branch", return_value=""):
+            result = handle_session_start({})
+        assert "/tty" in result
+
+    def test_includes_read_nudge(self) -> None:
+        with patch("biff.hook._get_git_branch", return_value=""):
+            result = handle_session_start({})
+        assert "/read" in result
+
+    def test_branch_included_in_plan_nudge(self) -> None:
+        with patch("biff.hook._get_git_branch", return_value="feature/auth"):
+            result = handle_session_start({})
+        assert "→ feature/auth" in result
+        assert 'source="auto"' in result
+
+    def test_bead_branch_expanded(self) -> None:
+        with (
+            patch("biff.hook._get_git_branch", return_value="jmf/biff-ka4"),
+            patch(
+                "biff.server.tools.plan.expand_bead_id",
+                return_value="biff-ka4: post-checkout hook",
+            ),
+        ):
+            result = handle_session_start({})
+        assert "→ biff-ka4: post-checkout hook" in result
+
+    def test_no_branch_still_returns_context(self) -> None:
+        with patch("biff.hook._get_git_branch", return_value=""):
+            result = handle_session_start({})
+        assert "Biff session starting" in result
+        assert "/plan" in result
+
+    def test_main_branch_included(self) -> None:
+        with patch("biff.hook._get_git_branch", return_value="main"):
+            result = handle_session_start({})
+        assert "→ main" in result
+
+
+# ── handle_session_resume ───────────────────────────────────────────
+
+
+class TestHandleSessionResume:
+    """SessionStart(resume|compact) handler — re-orientation nudge."""
+
+    def test_includes_read_nudge(self) -> None:
+        result = handle_session_resume()
+        assert "/read" in result
+
+    def test_mentions_resume(self) -> None:
+        result = handle_session_resume()
+        assert "resumed" in result
+
+
+# ── _expand_branch_plan ─────────────────────────────────────────────
+
+
+class TestExpandBranchPlan:
+    """Branch name to plan string conversion."""
+
+    def test_plain_branch(self) -> None:
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            side_effect=_identity,
+        ):
+            assert _expand_branch_plan("feature/auth") == "→ feature/auth"
+
+    def test_bead_id_in_branch(self) -> None:
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            return_value="biff-ka4: post-checkout hook",
+        ):
+            result = _expand_branch_plan("jmf/biff-ka4")
+        assert result == "→ biff-ka4: post-checkout hook"
+
+    def test_bead_id_at_start(self) -> None:
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            return_value="biff-ka4: hook",
+        ):
+            result = _expand_branch_plan("biff-ka4-description")
+        assert result == "→ biff-ka4: hook"
+
+    def test_no_bead_id(self) -> None:
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            side_effect=_identity,
+        ):
+            assert _expand_branch_plan("main") == "→ main"
+
+    def test_expansion_failure_uses_raw_branch(self) -> None:
+        """If expand_bead_id returns the ID unchanged, use the full branch."""
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            side_effect=_identity,
+        ):
+            result = _expand_branch_plan("jmf/biff-xyz")
+        assert result == "→ biff-xyz"

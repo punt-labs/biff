@@ -8,6 +8,24 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-init.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-resume.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
