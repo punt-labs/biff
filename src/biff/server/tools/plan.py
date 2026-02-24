@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._session import update_current_session
+from biff.server.tools._session import get_or_create_session, update_current_session
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -80,9 +80,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         The *source* parameter controls overwrite priority.
         Hooks pass ``"auto"``; manual ``/plan`` calls use the
-        default ``"manual"``.  Git hooks only overwrite ``"auto"``
-        plans, preserving intentional manual plans.
+        default ``"manual"``.  Auto plans cannot overwrite manual
+        plans — the user's intentional plan takes precedence.
         """
+        if source == "auto":
+            session = await get_or_create_session(state)
+            if session.plan_source == "manual" and session.plan:
+                return f"Plan unchanged (manual): {session.plan}"
         message = expand_bead_id(message)
         await update_current_session(state, plan=message, plan_source=source)
         await refresh_read_messages(mcp, state)

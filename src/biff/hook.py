@@ -194,7 +194,7 @@ def _get_git_branch() -> str:
     return ""
 
 
-_BEAD_BRANCH_RE = re.compile(r"[a-z]+-[a-z0-9]{2,4}")
+_BEAD_BRANCH_RE = re.compile(r"\b[a-z]+-[a-z0-9]{2,4}\b")
 
 
 def _expand_branch_plan(branch: str) -> str:
@@ -403,7 +403,11 @@ def handle_session_end() -> int:
     """
     from pathlib import Path  # noqa: PLC0415
 
-    from biff.config import find_git_root  # noqa: PLC0415
+    from biff.config import (  # noqa: PLC0415
+        find_git_root,
+        get_repo_slug,
+        sanitize_repo_name,
+    )
     from biff.server.app import (  # noqa: PLC0415
         remove_active_session,
         sentinel_dir,
@@ -412,7 +416,7 @@ def handle_session_end() -> int:
     repo_root = find_git_root()
     if repo_root is None:
         return 0
-    current_repo = repo_root.name
+    current_repo = sanitize_repo_name(get_repo_slug(repo_root) or repo_root.name)
 
     active_dir = Path.home() / ".biff" / "active"
     if not active_dir.exists():

@@ -344,6 +344,32 @@ class TestExpandBranchPlan:
             result = _expand_branch_plan("jmf/biff-xyz")
         assert result == "→ biff-xyz"
 
+    def test_no_false_positive_on_common_branch(self) -> None:
+        """Branch names like my-feature must not be truncated to my-feat."""
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            side_effect=_identity,
+        ):
+            result = _expand_branch_plan("my-feature")
+        assert result == "→ my-feature"
+
+    def test_no_false_positive_fix_tests(self) -> None:
+        """fix-tests must not match as a bead ID."""
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            side_effect=_identity,
+        ):
+            result = _expand_branch_plan("fix-tests")
+        assert result == "→ fix-tests"
+
+    def test_no_false_positive_add_logging(self) -> None:
+        with patch(
+            "biff.server.tools.plan.expand_bead_id",
+            side_effect=_identity,
+        ):
+            result = _expand_branch_plan("add-logging")
+        assert result == "→ add-logging"
+
 
 # ── handle_session_end ──────────────────────────────────────────────
 
@@ -363,6 +389,7 @@ class TestHandleSessionEnd:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("biff.config.find_git_root", return_value=fake_root),
+            patch("biff.config.get_repo_slug", return_value=None),
             patch(
                 "biff.server.app.sentinel_dir",
                 return_value=sentinel_dir,
@@ -383,6 +410,7 @@ class TestHandleSessionEnd:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("biff.config.find_git_root", return_value=fake_root),
+            patch("biff.config.get_repo_slug", return_value=None),
         ):
             count = handle_session_end()
 
@@ -395,6 +423,7 @@ class TestHandleSessionEnd:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("biff.config.find_git_root", return_value=fake_root),
+            patch("biff.config.get_repo_slug", return_value=None),
         ):
             count = handle_session_end()
 
@@ -414,6 +443,7 @@ class TestHandleSessionEnd:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("biff.config.find_git_root", return_value=fake_root),
+            patch("biff.config.get_repo_slug", return_value=None),
             patch(
                 "biff.server.app.sentinel_dir",
                 return_value=sentinel_dir,
@@ -433,6 +463,33 @@ class TestHandleSessionEnd:
 
         assert count == 0
 
+    def test_matches_sanitized_repo_slug(self, tmp_path: Path) -> None:
+        """Active file uses sanitized slug (owner__repo), not directory name."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc").write_text("kai:abc\npunt-labs__biff\n")
+
+        sentinel_dir = tmp_path / "sentinels" / "punt-labs__biff"
+        fake_root = tmp_path / "biff"
+        fake_root.mkdir()
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.config.find_git_root", return_value=fake_root),
+            patch(
+                "biff.config.get_repo_slug",
+                return_value="punt-labs/biff",
+            ),
+            patch(
+                "biff.server.app.sentinel_dir",
+                return_value=sentinel_dir,
+            ),
+        ):
+            count = handle_session_end()
+
+        assert count == 1
+        assert (sentinel_dir / "kai-abc").exists()
+
     def test_malformed_active_file_skipped(self, tmp_path: Path) -> None:
         active_dir = tmp_path / ".biff" / "active"
         active_dir.mkdir(parents=True)
@@ -443,6 +500,7 @@ class TestHandleSessionEnd:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("biff.config.find_git_root", return_value=fake_root),
+            patch("biff.config.get_repo_slug", return_value=None),
         ):
             count = handle_session_end()
 
