@@ -1224,7 +1224,7 @@ Git's `post-checkout` hook fires on `git checkout`, `git switch`, and `git workt
 When the branch flag is 1 (branch checkout):
 
 1. Read new branch name
-2. If branch name contains a bead ID pattern (`biff-xxx`), resolve to title via `bd show --format=oneline`
+2. If branch name contains a bead ID pattern (`biff-xxx`), resolve to title via `bd show --json -q`
 3. Call `biff plan` with the result
 4. Output nothing (git hook, no JSON output)
 
@@ -1257,7 +1257,7 @@ Silent on feature branch pushes (those are in-progress work, not announcements).
 When `/plan` receives a bead ID (e.g., `/plan biff-ka4`), the plan tool resolves the title:
 
 1. Check if the message matches `/^[a-z]+-[a-z0-9]{2,4}$/` (bead ID pattern)
-2. If match, shell out to `bd show --format=oneline <id>` to get the title
+2. If match, shell out to `bd show --json -q <id>` to get the title
 3. Set plan to `<id>: <title>` (e.g., `biff-ka4: Branch-switch hook`)
 4. If `bd show` fails (not a valid bead), use the raw string as-is
 

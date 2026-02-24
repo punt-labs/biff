@@ -98,6 +98,14 @@ Message sent to @kai.
 Plan: debugging the websocket reconnect logic
 ```
 
+Bead IDs auto-expand:
+
+```text
+> /plan biff-ka4
+
+Plan: biff-ka4: post-checkout hook: update plan from branch
+```
+
 ### Session history
 
 ```text
@@ -192,15 +200,13 @@ TTY sessions (`/tty`) give each agent a distinct identity — one user with 3 se
 
 Per-project activation via `/biff y` (or `biff enable` from CLI). Biff starts dormant — no NATS connection, no consumers, no status line — until you opt in. Lazy NATS connection management releases the TCP connection after 5 minutes idle and reconnects briefly every 10 minutes to fetch messages (POP-mode polling), so a terminal left open for hours doesn't hold a persistent connection.
 
-Workflow hooks: claiming a bead auto-suggests `/plan`, creating or merging a PR suggests `/wall` announcement. Hooks gate on `.biff.local` — silent when biff is not enabled.
+Workflow hooks integrate biff into the development lifecycle automatically:
 
-### Next: Agentic Coordination
+- **Plan auto-expand** — `/plan biff-bf8` resolves the issue title so teammates see what you're working on, not just an opaque ID.
+- **Session lifecycle** — on startup, biff auto-assigns a tty, sets your plan from the current git branch (with bead ID expansion), and checks for unread messages. On session end, active sessions are cleaned up immediately instead of waiting for TTL expiry.
+- **Git hooks** — `biff enable` deploys post-checkout, post-commit, and pre-push hooks into `.git/hooks/`. Branch switches update your plan automatically (`→ feature/auth`). Commits update it with a checkmark (`✓ feat: add auth`). Pushing to main suggests a `/wall` announcement. All hooks coexist with existing git hooks (e.g. beads) and gate on `.biff.local` — silent when biff is not enabled.
 
-| Feature | What It Enables |
-|---------|----------------|
-| **Plan auto-expand** | `/plan biff-bf8` auto-expands to show the task title. Everyone sees what you're working on. |
-
-### Future: Real-Time and Security
+### Next: Real-Time and Security
 
 | Phase | What Ships |
 |-------|-----------|
@@ -228,7 +234,7 @@ url = "tls://connect.ngs.global"
 
 Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see the [relay configuration](#relay-configuration) section below.
 
-`biff install` (from Quick Start) registers the MCP server, installs slash commands, and enables the plugin — there is no separate "start the server" step.
+`biff install` (from Quick Start) registers the MCP server, installs slash commands, and enables the plugin — there is no separate "start the server" step. `biff enable` activates biff in the current repo and deploys git hooks (post-checkout, post-commit, pre-push) that keep your plan current as you work. Run `biff doctor` to verify everything is wired up.
 
 ## Development
 

@@ -35,7 +35,31 @@ from biff.tty import build_session_key
 logger = logging.getLogger(__name__)
 
 
-def _sentinel_dir(repo_name: str) -> Path:
+def _active_dir() -> Path:
+    """Active session directory: ``~/.biff/active/``."""
+    return Path.home() / ".biff" / "active"
+
+
+def write_active_session(repo_name: str, session_key: str) -> None:
+    """Mark a session as active so SessionEnd hooks can find it.
+
+    Writes ``~/.biff/active/{safe_key}`` containing the session key
+    and repo name.  The SessionEnd hook reads these files and converts
+    them to sentinels for the reaper to process.
+    """
+    d = _active_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    safe = session_key.replace(":", "-")
+    (d / safe).write_text(f"{session_key}\n{repo_name}\n")
+
+
+def remove_active_session(session_key: str) -> None:
+    """Remove the active session marker on shutdown."""
+    safe = session_key.replace(":", "-")
+    (_active_dir() / safe).unlink(missing_ok=True)
+
+
+def sentinel_dir(repo_name: str) -> Path:
     """Sentinel directory for a repo: ``~/.biff/sentinels/{repo_name}/``."""
     return Path.home() / ".biff" / "sentinels" / repo_name
 
@@ -47,7 +71,7 @@ def _write_sentinel(repo_name: str, session_key: str) -> None:
     any running server's reaper task can process it.  Safe to call
     from signal handlers (sync I/O only).
     """
-    d = _sentinel_dir(repo_name)
+    d = sentinel_dir(repo_name)
     d.mkdir(parents=True, exist_ok=True)
     safe = session_key.replace(":", "-")
     (d / safe).write_text(session_key)
@@ -69,7 +93,7 @@ async def _reap_sentinels(state: ServerState) -> None:
     shutdown via signal).  The orphan detector handles the fallback case
     (SIGKILL, OOM, power loss — no sentinel written).
     """
-    d = _sentinel_dir(state.config.repo_name)
+    d = sentinel_dir(state.config.repo_name)
     if not d.exists():
         return
     for sentinel in d.iterdir():
@@ -490,6 +514,10 @@ async def _active_lifespan(
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)
 
+    # Register this session as active so SessionEnd hooks can find it.
+    with suppress(OSError):
+        write_active_session(state.config.repo_name, state.session_key)
+
     # Auto-assign a ttyN name so the status bar always has identity.
     sessions = await state.relay.get_sessions()
     existing = [s.tty_name for s in sessions if s.tty_name]
@@ -535,6 +563,8 @@ async def _active_lifespan(
             except Exception:
                 logger.exception("Failed to delete session %s", state.session_key)
             await state.relay.close()
+        with suppress(OSError):
+            remove_active_session(state.session_key)
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:

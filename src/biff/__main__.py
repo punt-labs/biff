@@ -1,8 +1,8 @@
 """Biff CLI entry point.
 
 Provides ``biff serve``, ``biff version``, ``biff enable``, ``biff disable``,
-``biff install``, ``biff doctor``, ``biff uninstall``, and status line
-management.
+``biff install``, ``biff doctor``, ``biff uninstall``, ``biff hook``, and
+status line management.
 """
 
 from __future__ import annotations
@@ -25,10 +25,12 @@ from biff.config import (
     load_config,
     write_biff_local,
 )
+from biff.hook import hook_app
 from biff.server.app import create_server
 from biff.server.state import create_state
 
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
+app.add_typer(hook_app, name="hook")
 
 
 @app.command()
@@ -168,6 +170,13 @@ def enable(
 
     write_biff_local(repo_root, enabled=True)
     ensure_gitignore(repo_root)
+
+    from biff.git_hooks import deploy_git_hooks
+
+    hooks = deploy_git_hooks(repo_root)
+    if hooks:
+        print(f"Git hooks: {', '.join(hooks)}")
+
     print("biff enabled. Restart Claude Code for changes to take effect.")
 
 
@@ -188,6 +197,13 @@ def disable(
 
     write_biff_local(repo_root, enabled=False)
     ensure_gitignore(repo_root)
+
+    from biff.git_hooks import remove_git_hooks
+
+    hooks = remove_git_hooks(repo_root)
+    if hooks:
+        print(f"Git hooks removed: {', '.join(hooks)}")
+
     print("biff disabled. Restart Claude Code for changes to take effect.")
 
 

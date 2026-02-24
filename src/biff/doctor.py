@@ -195,6 +195,36 @@ def _check_enabled() -> CheckResult:
     )
 
 
+def _check_git_hooks() -> CheckResult:
+    """Check biff git hooks are deployed (informational)."""
+    repo_root = find_git_root()
+    if repo_root is None:
+        return CheckResult(
+            "Git hooks",
+            False,
+            "not in a git repo",
+            required=False,
+        )
+    if not is_enabled(repo_root):
+        return CheckResult(
+            "Git hooks",
+            True,
+            "skipped (biff not enabled)",
+            required=False,
+        )
+    from biff.git_hooks import check_git_hooks
+
+    missing = check_git_hooks(repo_root)
+    if not missing:
+        return CheckResult("Git hooks", True, "all deployed", required=False)
+    return CheckResult(
+        "Git hooks",
+        False,
+        f"missing: {', '.join(missing)} (run 'biff enable')",
+        required=False,
+    )
+
+
 def _check_statusline() -> CheckResult:
     """Check status line is configured (informational)."""
     if STASH_PATH.exists():
@@ -235,6 +265,7 @@ def check_environment() -> int:
         _check_relay(),
         _check_biff_file(),
         _check_enabled(),
+        _check_git_hooks(),
         _check_statusline(),
     ]
 

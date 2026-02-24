@@ -318,6 +318,77 @@ class TestPlanTool:
         assert session is not None
         assert session.plan == "refactoring auth"
 
+    async def test_sets_plan_source_manual(self, state: ServerState) -> None:
+        fn = await _get_tool_fn(state, "plan")
+        await fn(message="refactoring auth")
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan_source == "manual"
+
+    async def test_source_auto_sets_plan_source(self, state: ServerState) -> None:
+        """Hooks pass source='auto' to mark plans as overwritable."""
+        fn = await _get_tool_fn(state, "plan")
+        await fn(message="→ feature-branch", source="auto")
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan == "→ feature-branch"
+        assert session.plan_source == "auto"
+
+    async def test_overwrites_auto_plan_source(self, state: ServerState) -> None:
+        """Manual /plan overwrites an auto plan_source from a git hook."""
+        await state.relay.update_session(
+            UserSession(
+                user="kai", tty=_KAI_TTY, plan="→ feature-branch", plan_source="auto"
+            )
+        )
+        fn = await _get_tool_fn(state, "plan")
+        await fn(message="deep refactoring")
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan == "deep refactoring"
+        assert session.plan_source == "manual"
+
+    async def test_auto_cannot_overwrite_manual(self, state: ServerState) -> None:
+        """Auto plan from git hook must not overwrite a manual /plan."""
+        await state.relay.update_session(
+            UserSession(
+                user="kai", tty=_KAI_TTY, plan="deep refactoring", plan_source="manual"
+            )
+        )
+        fn = await _get_tool_fn(state, "plan")
+        result = await fn(message="→ feature-branch", source="auto")
+        assert "unchanged" in result
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan == "deep refactoring"
+        assert session.plan_source == "manual"
+
+    async def test_auto_overwrites_auto(self, state: ServerState) -> None:
+        """Auto plan can overwrite another auto plan (branch switch)."""
+        await state.relay.update_session(
+            UserSession(
+                user="kai", tty=_KAI_TTY, plan="→ old-branch", plan_source="auto"
+            )
+        )
+        fn = await _get_tool_fn(state, "plan")
+        await fn(message="→ new-branch", source="auto")
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan == "→ new-branch"
+        assert session.plan_source == "auto"
+
+    async def test_auto_clears_empty_manual(self, state: ServerState) -> None:
+        """Auto plan can replace an empty manual plan (session start)."""
+        await state.relay.update_session(
+            UserSession(user="kai", tty=_KAI_TTY, plan="", plan_source="manual")
+        )
+        fn = await _get_tool_fn(state, "plan")
+        await fn(message="→ feature-branch", source="auto")
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan == "→ feature-branch"
+        assert session.plan_source == "auto"
+
     async def test_updates_existing_plan(self, state: ServerState) -> None:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, plan="old plan")

@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+## 0.8.0 — 2026-02-24
+
+### Added
+
+- **`biff hook` CLI dispatcher** (DES-017) — new `biff hook claude-code <event>`
+  and `biff hook git <event>` command groups. All hook logic moves from shell
+  scripts to versioned Python. Shell scripts become thin dispatchers with a
+  fast `.biff` file-existence gate. (#biff-7vp)
+- **Plan auto-expand** — `/plan biff-ka4` now resolves the bead title via
+  `bd show --json -q` and expands to `biff-ka4: post-checkout hook`. Falls
+  back to the raw string if `bd` is unavailable or the ID is invalid. (#biff-5zq)
+- **`plan_source` field** — `UserSession` now tracks how the plan was set
+  (`"manual"` or `"auto"`). Manual `/plan` calls always set `"manual"`.
+  Git hooks (Phase 2) will set `"auto"` and only overwrite auto plans,
+  preventing automated hooks from clobbering intentional plans. (#biff-efk)
+- **SessionStart hooks** — on startup, nudges Claude to auto-assign `/tty`,
+  set `/plan` from the current git branch (with bead ID expansion), and
+  check `/read` for unread messages. On resume/compact, re-orients Claude
+  with a `/read` reminder. Branch-inferred plans use `source="auto"` so
+  git hooks can later overwrite them. (#biff-6we)
+- **SessionEnd cleanup** — on session end, converts active session markers
+  (`~/.biff/active/`) to sentinel files for the existing reaper. MCP server
+  writes active markers on startup; the hook converts them to sentinels before
+  potential SIGKILL, ensuring session presence is cleaned up even on abrupt
+  termination. (#biff-w5c)
+- **Git post-checkout hook** — on branch switch, writes a plan hint file
+  (`~/.biff/plan-hint`) with the expanded branch name (including bead ID
+  resolution). The PostToolUse Bash handler picks up the hint and nudges
+  Claude to set the plan with `source="auto"`. Switching to main/master
+  clears the plan. (#biff-ka4)
+- **Git post-commit hook** — after each commit, writes a plan hint with
+  `✓ <subject>` so teammates see commit progress in `/finger` and `/who`.
+  Uses the same plan hint file mechanism as post-checkout. (#biff-crz)
+- **Git pre-push hook** — when pushing to main/master, writes a wall hint
+  file (`~/.biff/wall-hint`). The PostToolUse Bash handler picks up the
+  hint and suggests `/wall <summary>`. Silent for feature branch pushes.
+  (#biff-9e7)
+- **Git hook deployment** — `biff enable` deploys post-checkout, post-commit,
+  and pre-push hooks into `.git/hooks/`. `biff disable` removes them. Hooks
+  coexist with existing git hooks (e.g. beads post-merge) via marked blocks.
+  `biff doctor` reports missing hooks. (#biff-9z2)
+
+### Changed
+
+- **Migrated bead-claim and PR-announce hooks** — `bead-claim.sh` (55 lines)
+  and `pr-announce.sh` (55 lines) replaced by `post-bash.sh` and
+  `pr-announce.sh` thin dispatchers (4 lines each) plus Python handlers
+  in `hook.py`. (#biff-7vp)
+
+### Fixed
+
+- **plan_source priority enforcement** — auto plans (from git hooks) can no longer
+  overwrite manual `/plan` entries. The guard was documented but not implemented;
+  both Copilot and Cursor caught this independently.
+- **SessionEnd repo_name mismatch** — `handle_session_end()` now uses the same
+  sanitized repo slug as `write_active_session()` (e.g. `punt-labs__biff`), fixing
+  a comparison that silently prevented session cleanup when a git remote was
+  configured.
+- **Branch regex false positives** — `_BEAD_BRANCH_RE` now uses word boundaries
+  (`\b`), preventing common branch names like `my-feature` from being truncated
+  to `my-feat` and misidentified as bead IDs.
+- **Hint file session race** — plan and wall hint files are now scoped by git
+  worktree path (`~/.biff/hints/{hash}/`). Multiple sessions in different
+  worktrees no longer race on shared hint files. Sessions in the same worktree
+  share hints by design — the coordination contract requires worktree isolation.
+- **Hint content escaping** — branch names and commit subjects containing double
+  quotes no longer break the `/plan with message="..."` prompt syntax. Content is
+  now JSON-escaped before embedding.
+
 ## 0.7.0 — 2026-02-24
 
 ### Changed
