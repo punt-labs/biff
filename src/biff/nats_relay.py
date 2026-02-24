@@ -95,12 +95,19 @@ class NatsRelay:
         auth: RelayAuth | None = None,
         name: str = "biff",
         repo_name: str = "_default",
-        stream_prefix: str = "biff",
+        stream_prefix: str = _DEFAULT_STREAM_PREFIX,
     ) -> None:
         self._url = url
         self._auth = auth
         self._name = name
         self._repo_name = repo_name
+        # Validate stream_prefix — must be a simple alphanumeric-dash token.
+        # Dots, wildcards, or spaces would break NATS subject routing.
+        if not stream_prefix or not all(c.isalnum() or c == "-" for c in stream_prefix):
+            msg = (
+                f"stream_prefix must be non-empty alphanumeric-dash: {stream_prefix!r}"
+            )
+            raise ValueError(msg)
         # Shared resource names (DES-016) — constant across repos.
         # stream_prefix allows tests to isolate from production streams.
         self._stream_name = f"{stream_prefix}-inbox"
@@ -665,8 +672,16 @@ class NatsRelay:
         # without a final fetch.  The user-level consumer (userinbox-{user})
         # is likewise deleted by fetch_user_inbox(); inactive_threshold is
         # the safety net for consumers orphaned by crashes.
-        with suppress(NotFoundError, TimeoutError, NatsError):
+        try:
             await js.delete_consumer(self._stream_name, self._durable_name(session_key))
+        except NotFoundError:
+            pass  # Already deleted by fetch() — expected.
+        except (TimeoutError, NatsError) as exc:
+            logger.warning(
+                "Consumer cleanup failed for %s (will auto-expire): %s",
+                session_key,
+                exc,
+            )
 
     # -- Session history (wtmp) --
 

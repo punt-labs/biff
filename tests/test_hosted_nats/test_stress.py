@@ -682,10 +682,13 @@ class TestUnreadSummaryZeroConsumers:
         lead = relays[0]
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
 
-        # 50 calls against nonexistent inboxes (batch in groups of 10)
-        for _ in range(5):
+        # 50 calls against 50 distinct nonexistent inboxes (batch in groups of 10)
+        for batch in range(5):
             summaries = await asyncio.gather(
-                *(lead.get_unread_summary(f"ghost{i}:ttyX") for i in range(10))
+                *(
+                    lead.get_unread_summary(f"ghost{batch * 10 + i}:ttyX")
+                    for i in range(10)
+                )
             )
             for summary in summaries:
                 assert summary.count == 0
