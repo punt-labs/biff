@@ -1,7 +1,7 @@
 """Fixtures for NatsRelay tests.
 
 Provides a :class:`~biff.nats_relay.NatsRelay` connected to the shared
-``nats_server`` fixture, with per-test cleanup of streams and KV buckets.
+``nats_server`` fixture, with per-test cleanup of shared streams.
 """
 
 from __future__ import annotations
@@ -23,20 +23,24 @@ _TEST_REPO = "_test-nats-unit"
 async def relay(nats_server: str) -> AsyncIterator[NatsRelay]:
     """Provide a connected NatsRelay and clean up after each test.
 
-    Purges all streams and KV buckets between tests for isolation.
+    Deletes shared streams entirely between tests for full isolation.
+    WORK_QUEUE consumer state can interfere across tests if only
+    messages are purged — deleting the stream removes consumers too.
+    Test nats-server is disposable, so this is safe.
     """
     r = NatsRelay(url=nats_server, repo_name=_TEST_REPO)
 
     yield r
 
-    # Clean up: delete stream (removes durable consumers) and KV bucket.
-    # close() resets all cached state (_nc, _js, _kv) to None.
+    # Aggressive cleanup: delete shared infrastructure.
+    # purge_data() alone leaves consumers, which can interfere
+    # with WORK_QUEUE delivery in subsequent tests.
     if r._nc is not None and r._js is not None:
-        with suppress(Exception):
-            await r._js.delete_stream(r._stream_name)
+        for name in (r._stream_name, r._wtmp_stream):
+            with suppress(Exception):
+                await r._js.delete_stream(name)
         with suppress(Exception):
             await r._js.delete_key_value(r._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
-
     await r.close()
 
 

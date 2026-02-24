@@ -28,14 +28,20 @@ _TEST_REPO = "_test-nats-e2e"
 
 @pytest.fixture(autouse=True)
 async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ignore[reportUnusedFunction]
-    """Delete NATS streams and KV buckets after each test for isolation."""
+    """Delete shared NATS streams after each test for full isolation.
+
+    WORK_QUEUE consumer state can interfere across tests if only
+    messages are purged.  Test nats-server is disposable.
+    """
     yield
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
     with suppress(Exception):
-        await js.delete_stream(f"biff-{_TEST_REPO}-inbox")
+        await js.delete_stream("biff-inbox")
     with suppress(Exception):
-        await js.delete_key_value(f"biff-{_TEST_REPO}-sessions")  # pyright: ignore[reportUnknownMemberType]
+        await js.delete_stream("biff-wtmp")
+    with suppress(Exception):
+        await js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
     await nc.close()
 
 

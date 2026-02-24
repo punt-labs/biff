@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 
 import nats
 import pytest
@@ -24,7 +25,7 @@ _TEST_REPO = "_test-nats-e2e"
 
 @pytest.fixture(autouse=True)
 async def _cleanup_wtmp(nats_server: str) -> AsyncIterator[None]:  # pyright: ignore[reportUnusedFunction]
-    """Delete wtmp stream after each test for isolation.
+    """Delete shared wtmp stream after each test for isolation.
 
     Runs after the main _cleanup_nats fixture in conftest.py.
     """
@@ -32,7 +33,7 @@ async def _cleanup_wtmp(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
     with suppress(Exception):
-        await js.delete_stream(f"biff-{_TEST_REPO}-wtmp")
+        await js.delete_stream("biff-wtmp")
     await nc.close()
 
 
@@ -78,8 +79,6 @@ class TestWtmpStream:
         """Events appended to wtmp are retrievable."""
         relay = NatsRelay(url=nats_server, repo_name=_TEST_REPO)
         try:
-            from datetime import UTC, datetime
-
             event = SessionEvent(
                 session_key="test:tty1",
                 event="login",
@@ -100,8 +99,6 @@ class TestWtmpStream:
         """User filter returns only that user's events."""
         relay = NatsRelay(url=nats_server, repo_name=_TEST_REPO)
         try:
-            from datetime import UTC, datetime
-
             now = datetime.now(UTC)
             for user in ("alice", "bob"):
                 await relay.append_wtmp(
@@ -123,8 +120,6 @@ class TestWtmpStream:
         """Count parameter limits results."""
         relay = NatsRelay(url=nats_server, repo_name=_TEST_REPO)
         try:
-            from datetime import UTC, datetime, timedelta
-
             now = datetime.now(UTC)
             for i in range(5):
                 await relay.append_wtmp(
@@ -145,8 +140,6 @@ class TestWtmpStream:
         """Events are returned most recent first."""
         relay = NatsRelay(url=nats_server, repo_name=_TEST_REPO)
         try:
-            from datetime import UTC, datetime, timedelta
-
             now = datetime.now(UTC)
             # Append in chronological order
             for i in range(3):

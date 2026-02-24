@@ -17,7 +17,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from biff.models import SessionEvent, UserSession
-from biff.nats_relay import NatsRelay
+from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
@@ -136,15 +136,22 @@ async def _heartbeat_loop(
             logger.warning("Heartbeat failed", exc_info=True)
 
 
-def _kv_key_to_session_key(kv_key: str) -> str | None:
-    """Convert a KV key (``user.tty``) to a session key (``user:tty``).
+def _kv_key_to_session_key(kv_key: str, repo_name: str) -> str | None:
+    """Convert a KV key (``{repo}.{user}.{tty}``) to a session key (``user:tty``).
 
-    Returns ``None`` if the key format is unexpected.
+    Returns ``None`` if the key format is unexpected, belongs to a
+    different repo, or is a non-session key (wall, encryption keys).
+    Structural filtering per DES-016.
     """
-    parts = kv_key.split(".", maxsplit=1)
-    if len(parts) != 2:
+    parts = kv_key.split(".", maxsplit=2)
+    if len(parts) != 3:
         return None
-    return f"{parts[0]}:{parts[1]}"
+    if parts[0] != repo_name:
+        return None
+    # Skip reserved KV namespaces (encryption keys — DES-016).
+    if parts[1] in RESERVED_KV_NAMESPACES:
+        return None
+    return f"{parts[1]}:{parts[2]}"
 
 
 def _build_logout_event(session_key: str, cached: UserSession) -> SessionEvent:
@@ -243,7 +250,7 @@ async def _handle_kv_entry(
 ) -> None:
     """Route a single KV watch entry to the appropriate handler."""
     key = str(entry.key)  # type: ignore[attr-defined]  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType,reportAttributeAccessIssue]
-    session_key = _kv_key_to_session_key(key)
+    session_key = _kv_key_to_session_key(key, state.config.repo_name)
     if session_key is None:
         return
 

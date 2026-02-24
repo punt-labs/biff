@@ -758,3 +758,254 @@ Steady-state consumer footprint drops to **zero per user**.
 | Cache preview, reduce peek frequency | Still creates consumers; complexity for diminishing returns |
 | Use stream direct-get API | Not available in nats.py client; would still require consumer-like operations |
 | Keep preview on LocalRelay only | Inconsistent behavior across relays; dead code on the dominant deployment path |
+
+## DES-016: Shared NATS Streams — Encryption-Aware Design
+
+**Date:** 2026-02-24
+**Status:** SETTLED
+**Topic:** Consolidating per-repo NATS streams into shared infrastructure with extension points for E2E encryption (biff-lff)
+
+### Problem
+
+Per-repo NATS streams (DES-007) create 3 JetStream streams per repository:
+
+| Resource | Name Pattern | Type |
+|----------|-------------|------|
+| Inbox stream | `biff-{repo}-inbox` | JetStream WORK_QUEUE |
+| Sessions KV bucket | `biff-{repo}-sessions` | KV (internally `KV_biff-{repo}-sessions` stream) |
+| Wtmp stream | `biff-{repo}-wtmp` | JetStream LIMITS |
+
+Synadia Cloud R1 accounts are limited to 25 streams. At 3 per repo: **8 repos max**. This is fatal for any team working across more than a dozen projects.
+
+Separately, the prfaq commits to E2E encryption (biff-lff) as a launch requirement. Encryption needs: public key distribution (via the same KV bucket being restructured), a team shared key slot, and a message envelope format that receivers can distinguish from plaintext. Designing shared streams without considering encryption means a second breaking migration when encryption ships.
+
+### Design
+
+Consolidate to 3 shared streams with subject-based repo isolation. Reserve KV key namespaces and model fields for encryption.
+
+**Shared resource names:**
+
+| Resource | Current (per-repo) | New (shared) |
+|----------|-------------------|-------------|
+| Inbox stream | `biff-{repo}-inbox` | `biff-inbox` |
+| Sessions KV | `biff-{repo}-sessions` | `biff-sessions` |
+| Wtmp stream | `biff-{repo}-wtmp` | `biff-wtmp` |
+
+**Stream count: 3 total regardless of repo count** (down from 3N). At 25-stream limit, this leaves 22 streams for other JetStream usage.
+
+**Subject structure — unchanged:**
+
+```text
+biff.{repo}.inbox.{user}          # broadcast delivery (3 tokens)
+biff.{repo}.inbox.{user}.{tty}    # targeted delivery (4 tokens)
+biff.{repo}.wtmp.{user}           # session event log
+```
+
+The repo token is already present in every subject. Routing isolation is encoded in the subject hierarchy, not the stream name. Moving the repo discriminator out of the stream name and into subject filtering is the entire change.
+
+**Stream subject filters:**
+
+| Stream | Filter | Rationale |
+|--------|--------|-----------|
+| `biff-inbox` | `biff.*.inbox.>` | `*` matches exactly one token (the repo). Mutually exclusive with wtmp subjects. |
+| `biff-wtmp` | `biff.*.wtmp.>` | Same pattern. `inbox` and `wtmp` are distinct second-level tokens — no overlap. |
+
+Using `biff.*.inbox.>` (narrow) rather than `biff.>` (broad). Two streams cannot both claim the same subject in NATS. Narrow filters partition the namespace cleanly and prevent the inbox stream from accidentally capturing wtmp subjects or future subject trees.
+
+### KV Key Namespace
+
+The shared `biff-sessions` KV bucket holds data for all repos. Keys must be repo-prefixed to avoid collisions.
+
+**Key format:**
+
+| Purpose | Key Pattern | Example |
+|---------|-------------|---------|
+| Session presence | `{repo}.{user}.{tty}` | `punt-labs__biff.kai.a1b2c3d4` |
+| Wall broadcast | `{repo}.wall` | `punt-labs__biff.wall` |
+| *Reserved: public keys* | `{repo}.key.{user}` | `punt-labs__biff.key.kai` |
+| *Reserved: team key* | `{repo}.team-key` | `punt-labs__biff.team-key` |
+
+The `key.{user}` and `team-key` namespaces are reserved for biff-lff. They are documented here so that the encryption implementation drops into reserved slots without a KV schema migration.
+
+**`get_sessions()` filtering:** The KV stream's internal subject format is `$KV.biff-sessions.{key}`. To query only one repo's sessions, use `subjects_filter=$KV.biff-sessions.{repo}.>`. This returns all keys starting with the repo prefix (sessions, wall, and eventually keys). The caller strips the prefix and parses the remainder. Non-session keys (`wall`, `key.*`, `team-key`) are distinguished by structure and skipped.
+
+### Consumer Name Scoping
+
+WORK_QUEUE retention allows one consumer per filter subject. In a shared stream, consumer names must include the repo to avoid collisions between repos with the same username.
+
+| Consumer | Current | New |
+|----------|---------|-----|
+| TTY inbox fetch | `inbox-{user}-{tty}` | `{repo}-inbox-{user}-{tty}` |
+| User inbox fetch | `userinbox-{user}` | `{repo}-userinbox-{user}` |
+| Wtmp peek | `wtmp-peek-{name}` | `{repo}-wtmp-peek-{uuid}` — UUID suffix avoids collision between concurrent sessions of the same user |
+
+Consumer name length limit is 256 characters. With repo slugs like `punt-labs__biff` (16 chars) plus user/tty, the combined name is well within limits.
+
+### Encryption Extension Points
+
+These are not implemented in DES-016. They are design reservations that biff-lff will fill.
+
+**1. `UserSession.public_key` field:**
+
+```python
+public_key: str = ""  # Base64-encoded Curve25519 public key; empty = no encryption
+```
+
+Default empty string. Zero behavior change. The session KV entry already carries presence data; adding the public key means one KV read reveals both presence and key material. When lff ships, senders look up the recipient's public key from their session to encrypt with NaCl Box.
+
+**2. `Message` encryption envelope:**
+
+```python
+encrypted: bool = False        # True when body contains ciphertext
+nonce: str = ""                # Base64-encoded 24-byte nonce
+sender_pubkey: str = ""        # Base64-encoded Curve25519 public key
+encryption_mode: str = ""      # "box" | "secretbox" | ""
+```
+
+All default to empty/false. Existing clients produce `encrypted=False` messages. When lff ships, encrypted messages set `encrypted=True` and populate the envelope. Receivers that see `encrypted=True` but lack decryption capability skip the message gracefully instead of crashing on `ValidationError`.
+
+The relay never inspects `body` — it publishes `message.model_dump_json().encode()` as opaque bytes (line 377 of `nats_relay.py`). Encryption changes what goes *into* the body, not how the relay routes it.
+
+**3. KV key reservations:**
+
+- `{repo}.key.{user}` — public key (32 bytes Curve25519, base64 = 44 chars)
+- `{repo}.team-key` — team symmetric key (encrypted per-member, NaCl Box wrapped)
+
+These are documented above in the key namespace table.
+
+### Why Encryption-Aware
+
+The code reviewer's position — that encryption only changes the message payload and is therefore decoupled from stream architecture — is technically correct about code paths. But it misses the product reality:
+
+1. **The shared relay carries plaintext by default.** Consolidating from per-repo to shared streams makes this worse: all repos' plaintext messages flow through a single pipe. E2E encryption is the mechanism that makes shared infrastructure acceptable for a communication tool.
+
+2. **The prfaq says encryption is a launch requirement** (stated six times in `prfaq.tex`). Designing shared infrastructure without it is designing a temporary architecture.
+
+3. **The KV bucket is the natural key distribution mechanism.** The session entries that wg4 restructures are the same entries that lff needs for public keys. Getting the key format right once avoids a second migration.
+
+4. **The cost is marginal.** Three reserved key patterns in a documentation table, one field on `UserSession` (empty default), four fields on `Message` (empty/false defaults). No PyNaCl dependency. No encryption code. No key generation. Approximately 3 hours of additional design, 1-2 hours of implementation.
+
+5. **Private servers become the upgrade path.** Shared streams + E2E encryption makes the free demo relay defensible ("your messages are encrypted, the relay is blind"). Teams that want full infrastructure isolation — no shared pipes, no noisy-neighbor risk, no blast-radius concerns — upgrade to a private NATS server. This is a coherent product tier: free shared relay (encrypted) vs. paid private relay (isolated + encrypted).
+
+### Stream Limits
+
+Shared streams accumulate data from all repos. Limits must be raised proportionally.
+
+| Config | Current (per-repo) | New (shared) | Rationale |
+|--------|-------------------|-------------|-----------|
+| `_STREAM_MAX_BYTES` (inbox) | 10 MiB | 100 MiB | ~10 repos × 10 MiB. POP semantics mean messages are consumed immediately; this is a safety buffer, not expected steady state. |
+| `_KV_MAX_BYTES` (sessions) | 1 MiB | 10 MiB | ~10 repos × 1 MiB. Session blobs are small (~500 bytes). |
+| `_STREAM_MAX_BYTES` (wtmp) | 10 MiB | 100 MiB | 30-day retention × N repos. |
+| `_KV_TTL` | 259,200s (3 days) | 259,200s (3 days) | Unchanged. See TTL note below. |
+
+**TTL note:** DES-008 says 30-day session TTL (2,592,000s) but the code has 259,200s (3 days). This discrepancy predates DES-016. When biff-lff ships, public keys in the same KV bucket will need the heartbeat refresh cadence to prevent TTL expiry. The current 3-day TTL is sufficient for sessions (heartbeats every 60s refresh the key). Public keys can use the same refresh mechanism — the `update_session()` call that refreshes `last_active` will also refresh the KV TTL on the session entry, and lff can refresh the key entry on the same cadence.
+
+### KV Watcher Fan-Out
+
+The wtmp watcher (`_wtmp_watcher_loop` in `app.py`) uses `kv.watchall()` on the sessions bucket. With a shared bucket, every repo's session updates flow through every watcher instance.
+
+**Scale estimate:** 243 users × 60s heartbeats ÷ 60s = ~4 KV updates/second across the bucket. Each watcher processes entries synchronously in the async iterator. At 4/s, this is negligible.
+
+**Repo filtering:** `_kv_key_to_session_key()` (line 139 of `app.py`) currently parses `user.tty` from a KV key with `split(".", maxsplit=1)`. After DES-016, keys are `{repo}.{user}.{tty}`. The function changes to `split(".", maxsplit=2)`, verifies the first token matches `state.config.repo_name`, and returns `None` for other repos' entries. Non-session keys (`wall`, `key.*`, `team-key`) are also filtered out by structure (wrong token count or discriminator).
+
+### Stream Provisioning: Idempotent, Not Delete-and-Recreate
+
+The current `BadRequestError` handling (lines 155-160 and 172-175 of `nats_relay.py`) deletes and recreates on config mismatch. With shared streams, delete-and-recreate is catastrophic — it destroys all repos' data.
+
+**New provisioning logic:**
+
+1. `js.add_stream(config)` — creates if not exists, no-op if config matches.
+2. On `BadRequestError`: call `js.update_stream(config)` to update mutable fields (e.g., `max_bytes`).
+3. If update also fails: log a warning and continue with the existing stream. Do not delete.
+4. Same pattern for KV: `js.create_key_value(config)` then update on mismatch.
+
+No single relay instance has the authority to delete shared infrastructure.
+
+### Scoped Purge
+
+`purge_data()` (line 241) currently calls `js.purge_stream(name)` which purges the entire stream. With shared streams, this destroys all repos' data.
+
+**New purge logic — subject-filtered:**
+
+```python
+# Inbox: purge only this repo's messages
+await js.purge_stream("biff-inbox", subject=f"biff.{repo}.inbox.>")
+
+# KV: purge only this repo's keys
+await js.purge_stream("KV_biff-sessions", subject=f"$KV.biff-sessions.{repo}.>")
+
+# Wtmp: purge only this repo's events
+await js.purge_stream("biff-wtmp", subject=f"biff.{repo}.wtmp.>")
+```
+
+The nats.py `purge_stream()` accepts a `subject` parameter for filtered purge (verified: signature is `(self, name, seq=None, subject=None, keep=None) -> bool`).
+
+### `delete_infrastructure()` Is Lethal — Becomes Scoped Purge
+
+`delete_infrastructure()` (line 263) deletes the KV bucket and stream entirely. With shared streams, calling this from any relay instance destroys all repos' data. This method is called only by test fixtures.
+
+**Change:** `delete_infrastructure()` becomes `purge_repo_data()` — identical to the scoped `purge_data()` above. It does not delete the shared streams. Test fixtures that need full cleanup (local `nats-server` subprocess tests) can call `delete_infrastructure()` on a separate code path, but the default cleanup is always scoped.
+
+### Migration
+
+**Sessions:** Rebuild on next heartbeat. Old per-repo KV buckets (`biff-{repo}-sessions`) become orphans. The new shared bucket starts empty; `update_current_session()` at server startup populates it immediately. No session data is lost — sessions are transient presence records.
+
+**Messages:** POP semantics. Unread messages in old per-repo streams (`biff-{repo}-inbox`) are permanently lost. This is acceptable: messages are ephemeral notifications, not a chat log. The prfaq and DES-006 both commit to this.
+
+**Orphaned streams:** Old per-repo streams continue to exist on the NATS server but are no longer written to or read from. They count against the 25-stream limit until manually deleted. On startup, after provisioning shared streams, attempt to delete old per-repo streams with `suppress(NotFoundError)`:
+
+```python
+# Migration cleanup — remove orphaned per-repo streams
+for old_name in [f"biff-{repo}-inbox", f"biff-{repo}-wtmp"]:
+    with suppress(NotFoundError):
+        await js.delete_stream(old_name)
+with suppress(NotFoundError):
+    await js.delete_key_value(f"biff-{repo}-sessions")
+```
+
+This runs once per server startup. After the old streams are deleted, the suppress catches `NotFoundError` on subsequent startups.
+
+**No migration flag.** A `.biff` config flag like `stream_mode = "shared"` was considered for incremental rollout. Rejected because: (a) the stream layout is an implementation detail, not a user-facing config; (b) maintaining two code paths (per-repo + shared) doubles the surface area; (c) pre-1.0, breaking changes are acceptable.
+
+### Noisy-Neighbor Risk
+
+Per-repo streams were natural failure domain boundaries. Shared streams mean one repo's problem is every repo's problem:
+
+- **Message volume:** A chatty repo could fill the 100 MiB shared inbox. Mitigated by POP semantics — messages are consumed immediately, so steady-state volume is low.
+- **KV operations:** High-frequency heartbeats from one repo increase KV churn for all watchers. Mitigated by 60s heartbeat interval and repo-prefix filtering in the watcher.
+- **Stream corruption:** A corrupt shared stream affects all repos. No mitigation beyond NATS server reliability.
+- **Accidental purge:** `purge_data()` is scoped by subject filter, but operator error (manual NATS CLI purge) could hit the shared stream. Mitigated by documentation and `biff doctor` checks.
+
+**This is the fundamental tradeoff of consolidation.** It is the right call given the 25-stream limit. Teams that want full isolation upgrade to a private NATS server — this is the product tier that makes the tradeoff explicit.
+
+### Impact
+
+| Metric | Before (per-repo) | After (shared) |
+|--------|-------------------|----------------|
+| JetStream streams at 8 repos | 24 | 3 |
+| Max repos per account (25 limit) | 8 | Unlimited by streams |
+| Consumer names | `inbox-{user}-{tty}` | `{repo}-inbox-{user}-{tty}` |
+| KV keys | `{user}.{tty}` | `{repo}.{user}.{tty}` |
+| Purge scope | Full stream | Subject-filtered |
+| Provisioning | Delete-and-recreate | Idempotent create-or-update |
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `src/biff/nats_relay.py` | Shared stream constants, repo-prefixed KV keys, wall key method, consumer name prefixes, subject filters, scoped purge, idempotent provisioning, migration cleanup |
+| `src/biff/models.py` | `UserSession.public_key` field, `Message` encryption envelope fields (all empty defaults) |
+| `src/biff/server/app.py` | `_kv_key_to_session_key()` parses `{repo}.{user}.{tty}`, filters non-matching repos |
+| `tests/test_nats/conftest.py` | Cleanup uses `purge_data()` instead of `delete_infrastructure()` |
+| `tests/test_nats_e2e/conftest.py` | Same cleanup change |
+| `tests/test_hosted_nats/test_stress.py` | Updated stream/bucket constants, consumer name patterns, KV key queries |
+
+### Alternatives Considered
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Ship wg4 without encryption awareness | Second breaking migration when lff ships. KV key namespace collisions. Message format incompatibility. Costs ~3 hours to avoid. |
+| Ship wg4 + lff together | 3-4x implementation cost. Blocks P1 stream fix for months. Encryption requires PyNaCl, key generation, key distribution protocol, trust model. |
+| `biff.>` as shared stream filter | Two streams cannot both claim `biff.>`. Narrow filters (`biff.*.inbox.>`, `biff.*.wtmp.>`) partition cleanly. |
+| `.biff` config flag for migration | Two code paths doubles surface area. Pre-1.0 breaking changes are acceptable. |
+| Separate KV bucket for encryption keys | Burns another stream slot, defeating wg4's purpose. Session entries are the natural home for public keys. |
