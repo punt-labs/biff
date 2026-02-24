@@ -55,6 +55,12 @@ class Message(BaseModel):
     body: str = Field(min_length=1, max_length=512)
     timestamp: datetime = Field(default_factory=_utc_now)
     read: bool = False
+    # Encryption envelope — reserved for biff-lff (DES-016).
+    # All defaults are empty/false; populated when E2E encryption is active.
+    encrypted: bool = False
+    nonce: str = ""
+    sender_pubkey: str = ""
+    encryption_mode: str = ""
 
     @field_validator("timestamp", mode="after")
     @classmethod
@@ -86,6 +92,10 @@ class UserSession(BaseModel):
     plan: str = ""
     last_active: datetime = Field(default_factory=_utc_now)
     biff_enabled: bool = True
+    public_key: str = Field(
+        default="",
+        description="Base64-encoded Curve25519 public key; empty = no encryption",
+    )
 
     @field_validator("last_active", mode="after")
     @classmethod

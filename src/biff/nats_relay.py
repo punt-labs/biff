@@ -2,16 +2,18 @@
 
 ``NatsRelay`` implements the :class:`~biff.relay.Relay` protocol using:
 
-- **NATS KV** (``biff-{repo}-sessions`` bucket) for session/presence data
-  with TTL-based expiry.  Keys are ``{user}:{tty}``.
-- **NATS JetStream** (``biff-{repo}-inbox`` stream) with ``WORK_QUEUE``
+- **NATS KV** (``biff-sessions`` bucket) for session/presence data
+  with TTL-based expiry.  Keys are ``{repo}.{user}.{tty}``.
+- **NATS JetStream** (``biff-inbox`` stream) with ``WORK_QUEUE``
   retention for POP message semantics.  Two subject levels:
 
   - User inbox: ``biff.{repo}.inbox.{user}`` (broadcast)
   - TTY inbox:  ``biff.{repo}.inbox.{user}.{tty}`` (targeted)
 
-All resource names are scoped by ``repo_name`` so that multiple repos
-sharing the same NATS server are fully isolated.
+Three shared streams total (DES-016).  Repos are isolated by subject
+hierarchy (``biff.{repo}.inbox.>``) and KV key prefix (``{repo}.``),
+not by separate NATS resources.  This eliminates the per-repo stream
+scaling wall (25-stream Synadia Cloud limit hit at 8 repos).
 
 Messages are consumed (deleted) on :meth:`fetch`; :meth:`mark_read` is a
 no-op.  :meth:`get_unread_summary` uses ``stream_info()`` for counts
@@ -20,12 +22,13 @@ only — zero consumers created (DES-015).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import nats
 from nats.errors import Error as NatsError
@@ -63,12 +66,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _KV_TTL = SESSION_TTL_SECONDS  # NATS auto-expires keys not refreshed within this window
-_KV_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — small JSON session blobs
-_STREAM_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — messages consumed on read
+_KV_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — shared bucket, all repos' sessions
+_STREAM_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB — shared stream, all repos' messages
 _FETCH_BATCH = 100
 _FETCH_TIMEOUT = 1.0
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
+
+# Shared resource names (DES-016) — 3 total regardless of repo count.
+_INBOX_STREAM = "biff-inbox"
+_SESSIONS_BUCKET = "biff-sessions"
+_WTMP_STREAM = "biff-wtmp"
+
+# KV key namespaces reserved for encryption (DES-016, biff-lff).
+# Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
+RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
 
 
 class NatsRelay:
@@ -90,10 +102,12 @@ class NatsRelay:
         self._auth = auth
         self._name = name
         self._repo_name = repo_name
-        self._stream_name = f"biff-{repo_name}-inbox"
+        # Shared resource names (DES-016) — constant across repos.
+        self._stream_name = _INBOX_STREAM
+        self._kv_bucket = _SESSIONS_BUCKET
+        self._wtmp_stream = _WTMP_STREAM
+        # Subject prefixes — repo-specific within shared streams.
         self._subject_prefix = f"biff.{repo_name}.inbox"
-        self._kv_bucket = f"biff-{repo_name}-sessions"
-        self._wtmp_stream = f"biff-{repo_name}-wtmp"
         self._wtmp_prefix = f"biff.{repo_name}.wtmp"
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
@@ -141,8 +155,9 @@ class NatsRelay:
         try:
             js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
 
-            # KV bucket for sessions — TTL auto-purges truly stale entries.
-            # Recreate if config changed (e.g. TTL update).
+            # KV bucket for sessions — shared across all repos (DES-016).
+            # TTL auto-purges truly stale entries.  Never delete-recreate
+            # shared infrastructure; use the existing bucket on config mismatch.
             kv_config = KeyValueConfig(
                 bucket=self._kv_bucket,
                 ttl=_KV_TTL,
@@ -153,28 +168,30 @@ class NatsRelay:
                     config=kv_config,
                 )
             except BadRequestError:
-                logger.info("KV bucket config changed, recreating %s", self._kv_bucket)
-                await js.delete_key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
-                kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
-                    config=kv_config,
+                logger.info(
+                    "Shared KV bucket %s config differs, using as-is",
+                    self._kv_bucket,
                 )
+                kv = await js.key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
 
-            # Stream for messages — WORK_QUEUE deletes on ack (POP semantics).
-            # Recreate if config changed (e.g. max_bytes update).
+            # Inbox stream — shared WORK_QUEUE with wildcard subjects (DES-016).
+            # Never delete-recreate shared infrastructure.
             stream_config = StreamConfig(
                 name=self._stream_name,
-                subjects=[f"{self._subject_prefix}.>"],
+                subjects=["biff.*.inbox.>"],
                 retention=RetentionPolicy.WORK_QUEUE,
                 max_bytes=_STREAM_MAX_BYTES,
             )
             try:
                 await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
             except BadRequestError:
-                logger.info("Stream config changed, recreating %s", self._stream_name)
-                await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
-                await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
+                logger.info(
+                    "Shared stream %s config differs, using as-is",
+                    self._stream_name,
+                )
 
             await self._provision_wtmp(js)
+            await self._cleanup_legacy_streams(js)
         except Exception:
             await nc.close()
             raise
@@ -185,14 +202,15 @@ class NatsRelay:
         return js, kv
 
     async def _provision_wtmp(self, js: JetStreamContext) -> None:
-        """Provision the wtmp stream, degrading gracefully on failure.
+        """Provision the shared wtmp stream, degrading gracefully on failure.
 
         Non-fatal: any provisioning failure disables wtmp but leaves
-        core messaging fully operational.
+        core messaging fully operational.  Never delete-recreate
+        shared infrastructure (DES-016).
         """
         wtmp_config = StreamConfig(
             name=self._wtmp_stream,
-            subjects=[f"{self._wtmp_prefix}.>"],
+            subjects=["biff.*.wtmp.>"],
             retention=RetentionPolicy.LIMITS,
             max_bytes=_STREAM_MAX_BYTES,
             max_age=_WTMP_MAX_AGE,
@@ -205,17 +223,34 @@ class NatsRelay:
                 logger.warning("Wtmp stream unavailable: %s", exc)
                 self._wtmp_available = False
             else:
+                # Shared stream config differs — use as-is.
                 logger.info(
-                    "Wtmp stream config changed, recreating %s",
+                    "Shared wtmp stream %s config differs, using as-is",
                     self._wtmp_stream,
                 )
-                with suppress(NotFoundError):
-                    await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
-                await js.add_stream(config=wtmp_config)  # pyright: ignore[reportUnknownMemberType]
                 self._wtmp_available = True
         except Exception:  # noqa: BLE001 — provisioning must never crash startup
             logger.warning("Wtmp stream provisioning failed", exc_info=True)
             self._wtmp_available = False
+
+    async def _cleanup_legacy_streams(self, js: JetStreamContext) -> None:
+        """Delete orphaned per-repo streams from pre-DES-016 installations.
+
+        Always runs on startup — no migration flag.  Each delete is a
+        no-op (suppressed NotFoundError) once legacy resources are gone.
+        """
+        for name in (
+            f"biff-{self._repo_name}-inbox",
+            f"biff-{self._repo_name}-wtmp",
+        ):
+            with suppress(NotFoundError):
+                await js.delete_stream(name)  # pyright: ignore[reportUnknownMemberType]
+                logger.info("Cleaned up legacy stream %s", name)
+        with suppress(NotFoundError, BucketNotFoundError):
+            await js.delete_key_value(  # pyright: ignore[reportUnknownMemberType]
+                f"biff-{self._repo_name}-sessions",
+            )
+            logger.info("Cleaned up legacy KV bucket biff-%s-sessions", self._repo_name)
 
     @property
     def wtmp_available(self) -> bool:
@@ -239,12 +274,11 @@ class NatsRelay:
         self._wtmp_available = False
 
     async def purge_data(self) -> None:
-        """Purge all sessions and messages without deleting infrastructure.
+        """Purge this repo's data from shared streams without deleting infrastructure.
 
-        Removes all KV keys and purges the stream, but keeps the
-        bucket and stream themselves intact.  Avoids propagation
-        delays on hosted NATS servers that occur when rapidly
-        deleting and recreating infrastructure.
+        Subject-filtered purge (DES-016): only removes KV keys and
+        messages belonging to this repo, leaving other repos' data
+        intact.  Keeps the shared bucket and streams themselves.
 
         Purges the underlying KV stream (``KV_{bucket}``) directly
         instead of calling ``kv.keys()`` which creates an ephemeral
@@ -253,27 +287,26 @@ class NatsRelay:
         """
         js, _ = await self._ensure_connected()
         kv_stream = f"KV_{self._kv_bucket}"
+        kv_subject = f"$KV.{self._kv_bucket}.{self._repo_name}.>"
         with suppress(NotFoundError):
-            await js.purge_stream(kv_stream)  # pyright: ignore[reportUnknownMemberType]
+            await js.purge_stream(kv_stream, subject=kv_subject)  # pyright: ignore[reportUnknownMemberType]
         with suppress(NotFoundError):
-            await js.purge_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
+            await js.purge_stream(  # pyright: ignore[reportUnknownMemberType]
+                self._stream_name, subject=f"{self._subject_prefix}.>"
+            )
         with suppress(NotFoundError):
-            await js.purge_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
+            await js.purge_stream(  # pyright: ignore[reportUnknownMemberType]
+                self._wtmp_stream, subject=f"{self._wtmp_prefix}.>"
+            )
 
     async def delete_infrastructure(self) -> None:
-        """Delete KV bucket and stream from the NATS server.
+        """Purge this repo's data and clear cached handles.
 
-        Removes all data and resources, then clears cached handles.
-        The underlying NATS connection is preserved for reuse.
+        Shared streams are never deleted (DES-016) — other repos may
+        be using them.  This is equivalent to :meth:`purge_data` plus
+        clearing cached JetStream/KV handles to force re-provisioning.
         """
-        if self._nc is not None and not self._nc.is_closed:
-            js = self._nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
-            with suppress(NotFoundError):
-                await js.delete_key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
-            with suppress(NotFoundError):
-                await js.delete_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
-            with suppress(NotFoundError):
-                await js.delete_stream(self._wtmp_stream)  # pyright: ignore[reportUnknownMemberType]
+        await self.purge_data()
         self._js = None
         self._kv = None
 
@@ -347,17 +380,23 @@ class NatsRelay:
     def _user_durable_name(self, user: str) -> str:
         """Durable consumer name for a user's broadcast inbox.
 
-        Uses ``userinbox-`` prefix to avoid collision with TTY durable
-        names (``inbox-{user}-{tty}``).
+        Repo-prefixed (DES-016) to avoid collisions in shared streams.
+        Uses ``userinbox-`` suffix to avoid collision with TTY durable
+        names (``{repo}-inbox-{user}-{tty}``).
         """
-        return f"userinbox-{user}"
+        return f"{self._repo_name}-userinbox-{user}"
 
     def _kv_key(self, session_key: str) -> str:
-        """KV key for a session: ``{user}.{tty}`` (NATS KV uses dots)."""
+        """KV key for a session: ``{repo}.{user}.{tty}`` (DES-016)."""
         user, tty = session_key.split(":", maxsplit=1)
         self._validate_user(user)
         self._validate_tty(tty)
-        return f"{user}.{tty}"
+        return f"{self._repo_name}.{user}.{tty}"
+
+    @property
+    def _wall_kv_key(self) -> str:
+        """KV key for the team wall: ``{repo}.wall`` (DES-016)."""
+        return f"{self._repo_name}.wall"
 
     # -- Messages --
 
@@ -384,18 +423,26 @@ class NatsRelay:
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
 
+        Repo-prefixed (DES-016) to avoid collisions in shared streams.
         WORK_QUEUE streams allow only one consumer per filter subject.
         Using a durable consumer lets repeated calls reuse the same
         server-side consumer instead of racing with ephemeral cleanup.
         """
-        return f"inbox-{session_key.replace(':', '-')}"
+        return f"{self._repo_name}-inbox-{session_key.replace(':', '-')}"
 
-    async def fetch(self, session_key: str) -> list[Message]:
-        """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
-        js, _ = await self._ensure_connected()
-        subject = self._subject_for_key(session_key)
-        durable = self._durable_name(session_key)
+    async def _fetch_from_subject(
+        self,
+        js: JetStreamContext,
+        subject: str,
+        durable: str,
+    ) -> list[Message]:
+        """Pull, ack, and delete consumer for a WORK_QUEUE subject.
 
+        Shared implementation for :meth:`fetch` (TTY inbox) and
+        :meth:`fetch_user_inbox` (user broadcast inbox).  Acks are
+        fire-and-forget in nats.py, so we flush before deleting the
+        consumer to ensure the server has processed all acks.
+        """
         sub = await js.pull_subscribe(
             subject,
             durable=durable,
@@ -418,6 +465,13 @@ class NatsRelay:
                 except (ValidationError, ValueError):
                     logger.warning("Skipping malformed NATS message on %s", subject)
                 await raw.ack()
+
+            # Acks are fire-and-forget publishes in nats.py.  Flush
+            # ensures the server has received all acks before we delete
+            # the consumer — otherwise the WORK_QUEUE message removal
+            # can race with consumer deletion.
+            if raw_msgs and self._nc is not None:
+                await self._nc.flush()
 
             return messages
         finally:
@@ -430,6 +484,15 @@ class NatsRelay:
             except (NatsError, TimeoutError):
                 logger.debug("Consumer cleanup failed for %s (will expire)", durable)
 
+    async def fetch(self, session_key: str) -> list[Message]:
+        """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
+        js, _ = await self._ensure_connected()
+        return await self._fetch_from_subject(
+            js,
+            subject=self._subject_for_key(session_key),
+            durable=self._durable_name(session_key),
+        )
+
     async def mark_read(self, session_key: str, ids: Sequence[UUID]) -> None:
         """No-op — messages are consumed (deleted) by :meth:`fetch`."""
 
@@ -439,39 +502,11 @@ class NatsRelay:
         """Pull and ack all messages from the user's broadcast inbox."""
         self._validate_user(user)
         js, _ = await self._ensure_connected()
-        subject = self._user_subject(user)
-        durable = self._user_durable_name(user)
-
-        sub = await js.pull_subscribe(
-            subject,
-            durable=durable,
-            stream=self._stream_name,
-            config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
+        return await self._fetch_from_subject(
+            js,
+            subject=self._user_subject(user),
+            durable=self._user_durable_name(user),
         )
-        try:
-            try:
-                raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
-            except TimeoutError:
-                raw_msgs = []
-            finally:
-                await sub.unsubscribe()
-
-            messages: list[Message] = []
-            for raw in raw_msgs:
-                try:
-                    msg = Message.model_validate_json(raw.data)
-                    messages.append(msg)
-                except (ValidationError, ValueError):
-                    logger.warning("Skipping malformed NATS message on %s", subject)
-                await raw.ack()
-
-            return messages
-        finally:
-            # Same pattern as fetch() — always clean up the consumer.
-            try:
-                await js.delete_consumer(self._stream_name, durable)
-            except (NatsError, TimeoutError):
-                logger.debug("Consumer cleanup failed for %s (will expire)", durable)
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
         """No-op — messages are consumed (deleted) by :meth:`fetch_user_inbox`."""
@@ -563,33 +598,52 @@ class NatsRelay:
         await kv.put(kv_key, updated.model_dump_json().encode())
 
     async def get_sessions(self) -> list[UserSession]:
-        """Return all sessions (NATS KV TTL handles expiry).
+        """Return all sessions for this repo (NATS KV TTL handles expiry).
 
-        Uses ``stream_info`` with ``subjects_filter`` to discover KV
-        keys instead of ``kv.keys()`` which creates an ephemeral
-        consumer via ``kv.watch()`` — those leak on long-lived
-        connections.
+        Uses ``stream_info`` with a repo-scoped ``subjects_filter`` to
+        discover only this repo's KV keys — other repos' data is never
+        fetched.  Explicit structural filtering (DES-016) skips
+        non-session keys (wall, encryption key reservations) by shape
+        rather than relying on validation errors.
         """
         js, kv = await self._ensure_connected()
-        sessions: list[UserSession] = []
         kv_stream = f"KV_{self._kv_bucket}"
         kv_prefix = f"$KV.{self._kv_bucket}."
+        repo_filter = f"{kv_prefix}{self._repo_name}.>"
         try:
-            info = await js.stream_info(kv_stream, subjects_filter=f"{kv_prefix}>")
+            info = await js.stream_info(kv_stream, subjects_filter=repo_filter)
         except NotFoundError:
             return []
         if not info.state.subjects:
             return []
+        # Collect session-shaped keys, filtering out non-session entries.
+        session_keys: list[str] = []
         for subject in info.state.subjects:
             key = subject.removeprefix(kv_prefix)
+            # Structural filter: session keys are {repo}.{user}.{tty}.
+            # Skip wall ({repo}.wall — 2 parts), encryption key
+            # reservations ({repo}.key.{user} — reserved namespace),
+            # and team keys ({repo}.team-key — 2 parts).
+            parts = key.split(".", maxsplit=2)
+            if len(parts) != 3 or parts[0] != self._repo_name:
+                continue
+            if parts[1] in RESERVED_KV_NAMESPACES:
+                continue
+            session_keys.append(key)
+
+        # Fetch all session values concurrently to avoid N serial
+        # round-trips (matters at 243+ concurrent sessions).
+        async def _get_session(key: str) -> UserSession | None:
             try:
                 entry = await kv.get(key)
                 if entry.value is None:
-                    continue
-                sessions.append(UserSession.model_validate_json(entry.value))
+                    return None
+                return UserSession.model_validate_json(entry.value)
             except (KeyNotFoundError, ValidationError, ValueError):
-                continue
-        return sessions
+                return None
+
+        results = await asyncio.gather(*(_get_session(k) for k in session_keys))
+        return [s for s in results if s is not None]
 
     async def delete_session(self, session_key: str) -> None:
         """Remove a session from KV storage and its inbox consumer."""
@@ -656,14 +710,13 @@ class NatsRelay:
             opt_start_seq=start_seq,
         )
 
-        # Use a named consumer and delete after use.  Ephemeral consumers
-        # (durable=None) leak when the connection stays open — the same
-        # lesson documented in _durable_name().  Delete-before-create
-        # handles stale consumers from prior calls where cleanup failed
-        # or where the config (start_seq / subject filter) changed.
-        consumer_name = f"wtmp-peek-{self._name}"
-        with suppress(NotFoundError):
-            await js.delete_consumer(self._wtmp_stream, consumer_name)
+        # Use a unique named consumer per call and delete after use.
+        # Ephemeral consumers (durable=None) leak when the connection
+        # stays open — the same lesson documented in _durable_name().
+        # A UUID suffix avoids collisions between concurrent sessions
+        # of the same user (who share the same relay name).
+        # inactive_threshold is the safety net for crash cleanup.
+        consumer_name = f"{self._repo_name}-wtmp-peek-{uuid4().hex[:12]}"
 
         sub = await js.pull_subscribe(
             subject,
@@ -694,22 +747,20 @@ class NatsRelay:
 
     # -- Wall (team broadcast) --
 
-    _WALL_KV_KEY = "wall"
-
     async def set_wall(self, wall: WallPost | None) -> None:
         """Set or clear the team wall in the sessions KV bucket."""
         _, kv = await self._ensure_connected()
         if wall is None:
             with suppress(KeyNotFoundError, BucketNotFoundError):
-                await kv.delete(self._WALL_KV_KEY)
+                await kv.delete(self._wall_kv_key)
         else:
-            await kv.put(self._WALL_KV_KEY, wall.model_dump_json().encode())
+            await kv.put(self._wall_kv_key, wall.model_dump_json().encode())
 
     async def get_wall(self) -> WallPost | None:
         """Read the active wall, returning ``None`` if absent or expired."""
         _, kv = await self._ensure_connected()
         try:
-            entry = await kv.get(self._WALL_KV_KEY)
+            entry = await kv.get(self._wall_kv_key)
             if entry.value is None:
                 return None
             wall = WallPost.model_validate_json(entry.value)
@@ -717,6 +768,6 @@ class NatsRelay:
             return None
         if wall.is_expired:
             with suppress(KeyNotFoundError, BucketNotFoundError):
-                await kv.delete(self._WALL_KV_KEY)
+                await kv.delete(self._wall_kv_key)
             return None
         return wall

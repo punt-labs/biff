@@ -217,28 +217,34 @@ class TestConsumerCleanup:
         """delete_session() deletes the per-session inbox consumer."""
         repo = "_test-consumer-cleanup"
         relay = NatsRelay(url=nats_server, repo_name=repo)
-        stream = f"biff-{repo}-inbox"
         session_key = "kai:tty1"
         consumer_name = relay._durable_name(session_key)
 
         try:
-            # Deliver a message so the stream has data, then fetch to
-            # create the durable consumer.
+            # Deliver a message so the stream has data, then create
+            # the durable consumer via pull_subscribe (not fetch(),
+            # which deletes the consumer in its finally block).
             msg = Message(from_user="eric", to_user=session_key, body="hello")
             await relay.deliver(msg)
-            await relay.fetch(session_key)
 
-            # Verify consumer exists on the server.
+            js_relay, _ = await relay._ensure_connected()
+            subject = relay._subject_for_key(session_key)
+            sub = await js_relay.pull_subscribe(
+                subject, durable=consumer_name, stream=relay._stream_name
+            )
+            await sub.unsubscribe()
+
+            # Verify consumer exists on the shared stream.
             nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
             js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
-            info = await js.consumer_info(stream, consumer_name)
+            info = await js.consumer_info(relay._stream_name, consumer_name)
             assert info.name == consumer_name
 
             # delete_session should remove both the KV entry and the consumer.
             await relay.delete_session(session_key)
 
             with pytest.raises(NotFoundError):
-                await js.consumer_info(stream, consumer_name)
+                await js.consumer_info(relay._stream_name, consumer_name)
 
             await nc.close()
         finally:

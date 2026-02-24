@@ -49,10 +49,11 @@ pytestmark = [
 # -- Constants --
 
 _REPO = "_test-stress"
-_INBOX_STREAM = f"biff-{_REPO}-inbox"
-_KV_BUCKET = f"biff-{_REPO}-sessions"
+# DES-016: shared stream names — constant across repos.
+_INBOX_STREAM = "biff-inbox"
+_KV_BUCKET = "biff-sessions"
 _KV_STREAM = f"KV_{_KV_BUCKET}"
-_WTMP_STREAM = f"biff-{_REPO}-wtmp"
+_WTMP_STREAM = "biff-wtmp"
 
 # Scale: 20 real NATS connections, each a separate NatsRelay.
 # Account allows 100; we use 20 + 2 from hosted E2E fixtures = 22.
@@ -91,9 +92,9 @@ async def _consumer_count(relay: NatsRelay, stream: str) -> int:
 
 
 async def _kv_key_count(relay: NatsRelay) -> int:
-    """Count KV keys via stream_info — no consumers created."""
+    """Count KV keys for this repo via stream_info — no consumers created."""
     js, _ = await relay._ensure_connected()  # pyright: ignore[reportPrivateUsage]
-    prefix = f"$KV.{_KV_BUCKET}."
+    prefix = f"$KV.{_KV_BUCKET}.{_REPO}."
     try:
         info = await js.stream_info(_KV_STREAM, subjects_filter=f"{prefix}>")
         return len(info.state.subjects) if info.state.subjects else 0
@@ -148,18 +149,21 @@ async def _cleanup(relays: list[NatsRelay]) -> AsyncIterator[None]:  # pyright: 
     lead = relays[0]
     await lead.purge_data()
     # Delete all possible consumers from simulated users.
+    # Consumer names are repo-prefixed (DES-016).
     # Concurrent deletion keeps cleanup fast against hosted NATS.
     deletes: list[asyncio.Task[None]] = []
     for i in range(_N_RELAYS):
         user, tty = _user(i)
         deletes.append(
-            asyncio.ensure_future(
-                _delete_consumer_safe(lead, _INBOX_STREAM, f"inbox-{user}-{tty}")
+            asyncio.create_task(
+                _delete_consumer_safe(
+                    lead, _INBOX_STREAM, f"{_REPO}-inbox-{user}-{tty}"
+                )
             )
         )
         deletes.append(
-            asyncio.ensure_future(
-                _delete_consumer_safe(lead, _INBOX_STREAM, f"userinbox-{user}")
+            asyncio.create_task(
+                _delete_consumer_safe(lead, _INBOX_STREAM, f"{_REPO}-userinbox-{user}")
             )
         )
     await asyncio.gather(*deletes)
