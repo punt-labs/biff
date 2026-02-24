@@ -39,7 +39,6 @@ from nats.js.errors import (
     BadRequestError,
     BucketNotFoundError,
     KeyNotFoundError,
-    NoKeysError,
     NotFoundError,
 )
 from pydantic import ValidationError
@@ -249,13 +248,16 @@ class NatsRelay:
         bucket and stream themselves intact.  Avoids propagation
         delays on hosted NATS servers that occur when rapidly
         deleting and recreating infrastructure.
+
+        Purges the underlying KV stream (``KV_{bucket}``) directly
+        instead of calling ``kv.keys()`` which creates an ephemeral
+        consumer via ``kv.watch()`` — those leak on long-lived
+        connections.
         """
-        js, kv = await self._ensure_connected()
-        with suppress(NoKeysError, NotFoundError, BucketNotFoundError):
-            keys = await kv.keys()  # pyright: ignore[reportUnknownMemberType]
-            for key in keys:
-                with suppress(KeyNotFoundError):
-                    await kv.delete(key)
+        js, _ = await self._ensure_connected()
+        kv_stream = f"KV_{self._kv_bucket}"
+        with suppress(NotFoundError):
+            await js.purge_stream(kv_stream)  # pyright: ignore[reportUnknownMemberType]
         with suppress(NotFoundError):
             await js.purge_stream(self._stream_name)  # pyright: ignore[reportUnknownMemberType]
         with suppress(NotFoundError):
@@ -573,14 +575,25 @@ class NatsRelay:
         await kv.put(kv_key, updated.model_dump_json().encode())
 
     async def get_sessions(self) -> list[UserSession]:
-        """Return all sessions (NATS KV TTL handles expiry)."""
-        _, kv = await self._ensure_connected()
+        """Return all sessions (NATS KV TTL handles expiry).
+
+        Uses ``stream_info`` with ``subjects_filter`` to discover KV
+        keys instead of ``kv.keys()`` which creates an ephemeral
+        consumer via ``kv.watch()`` — those leak on long-lived
+        connections.
+        """
+        js, kv = await self._ensure_connected()
         sessions: list[UserSession] = []
+        kv_stream = f"KV_{self._kv_bucket}"
+        kv_prefix = f"$KV.{self._kv_bucket}."
         try:
-            keys = await kv.keys()  # pyright: ignore[reportUnknownMemberType]
-        except (NotFoundError, BucketNotFoundError, NoKeysError):
+            info = await js.stream_info(kv_stream, subjects_filter=f"{kv_prefix}>")
+        except NotFoundError:
             return []
-        for key in keys:
+        if not info.state.subjects:
+            return []
+        for subject in info.state.subjects:
+            key = subject.removeprefix(kv_prefix)
             try:
                 entry = await kv.get(key)
                 if entry.value is None:
@@ -652,9 +665,19 @@ class NatsRelay:
             deliver_policy=DeliverPolicy.BY_START_SEQUENCE,
             opt_start_seq=start_seq,
         )
+
+        # Use a named consumer and delete after use.  Ephemeral consumers
+        # (durable=None) leak when the connection stays open — the same
+        # lesson documented in _durable_name().  Delete-before-create
+        # handles stale consumers from prior calls where cleanup failed
+        # or where the config (start_seq / subject filter) changed.
+        consumer_name = f"wtmp-peek-{self._name}"
+        with suppress(NotFoundError):
+            await js.delete_consumer(self._wtmp_stream, consumer_name)
+
         sub = await js.pull_subscribe(
             subject,
-            durable=None,
+            durable=consumer_name,
             stream=self._wtmp_stream,
             config=consumer_config,
         )
@@ -664,6 +687,8 @@ class NatsRelay:
             raw_msgs = []
         finally:
             await sub.unsubscribe()
+            with suppress(NotFoundError):
+                await js.delete_consumer(self._wtmp_stream, consumer_name)
 
         events: list[SessionEvent] = []
         for raw in raw_msgs:

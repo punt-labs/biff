@@ -182,12 +182,15 @@ async def _run_kv_watch(
     """Run a single KV watch cycle until napping or shutdown."""
     kv = await relay.get_kv()
     watcher = await kv.watchall()  # pyright: ignore[reportUnknownMemberType]
-    async for entry in watcher:  # pyright: ignore[reportUnknownVariableType]
-        if shutdown.is_set():
-            return
-        if state.activity.napping:
-            return  # Connection about to close, caller restarts
-        await _handle_kv_entry(entry, relay, state, cache)
+    try:
+        async for entry in watcher:  # pyright: ignore[reportUnknownVariableType]
+            if shutdown.is_set():
+                return
+            if state.activity.napping:
+                return  # Connection about to close, caller restarts
+            await _handle_kv_entry(entry, relay, state, cache)
+    finally:
+        await watcher.stop()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
 
 
 async def _wtmp_watcher_loop(state: ServerState, shutdown: asyncio.Event) -> None:

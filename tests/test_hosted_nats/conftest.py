@@ -14,6 +14,11 @@ Connection budget: hosted accounts often have low connection limits
 (e.g. 5 per app on Synadia Cloud starter).  This module uses two
 session-scoped connections (kai relay, eric relay) and reuses them
 across all tests.
+
+All async fixtures use ``loop_scope="session"`` to match the tests'
+``pytest.mark.asyncio(loop_scope="session")``.  Without this, pytest-
+asyncio creates a function-scoped event loop for each fixture while the
+test body runs on the session-scoped loop — deadlock.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import pytest_asyncio
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
@@ -78,7 +84,7 @@ def hosted_nats_auth() -> RelayAuth | None:
     return _relay_auth_from_env()
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def kai_relay(
     hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
 ) -> AsyncIterator[NatsRelay]:
@@ -93,7 +99,7 @@ async def kai_relay(
     await relay.close()
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def eric_relay(
     hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
 ) -> AsyncIterator[NatsRelay]:
@@ -109,9 +115,10 @@ async def eric_relay(
 
 
 # -- Per-test fixtures --
+# All use loop_scope="session" to match the test-level loop.
 
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True, loop_scope="session")
 async def _cleanup_nats(  # pyright: ignore[reportUnusedFunction]
     kai_relay: NatsRelay,
     eric_relay: NatsRelay,
@@ -149,7 +156,7 @@ def transcript(request: pytest.FixtureRequest) -> Generator[Transcript]:
         path.write_text(t.render())
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def kai_client(
     kai_relay: NatsRelay,
     shared_data_dir: Path,
@@ -162,7 +169,7 @@ async def kai_client(
         yield client
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def eric_client(
     eric_relay: NatsRelay,
     shared_data_dir: Path,
@@ -175,7 +182,7 @@ async def eric_client(
         yield client
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def kai(
     kai_client: Client[Any],
     transcript: Transcript,
@@ -184,7 +191,7 @@ async def kai(
     return RecordingClient(client=kai_client, transcript=transcript, user="kai")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def eric(
     eric_client: Client[Any],
     transcript: Transcript,
