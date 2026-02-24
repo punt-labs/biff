@@ -14,8 +14,8 @@ All resource names are scoped by ``repo_name`` so that multiple repos
 sharing the same NATS server are fully isolated.
 
 Messages are consumed (deleted) on :meth:`fetch`; :meth:`mark_read` is a
-no-op.  :meth:`get_unread_summary` peeks at messages non-destructively
-using stream info and durable consumers with nak.
+no-op.  :meth:`get_unread_summary` uses ``stream_info()`` for counts
+only — zero consumers created (DES-015).
 """
 
 from __future__ import annotations
@@ -47,9 +47,9 @@ from biff.models import (
     Message,
     RelayAuth,
     SessionEvent,
+    UnreadSummary,
     UserSession,
     WallPost,
-    build_unread_summary,
 )
 from biff.relay import SESSION_TTL_SECONDS
 from biff.tty import build_session_key
@@ -59,8 +59,6 @@ if TYPE_CHECKING:
     from nats.js.client import JetStreamContext
     from nats.js.kv import KeyValue
 
-    from biff.models import UnreadSummary
-
 logger = logging.getLogger(__name__)
 
 _KV_TTL = SESSION_TTL_SECONDS  # NATS auto-expires keys not refreshed within this window
@@ -68,8 +66,6 @@ _KV_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — small JSON session blobs
 _STREAM_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — messages consumed on read
 _FETCH_BATCH = 100
 _FETCH_TIMEOUT = 1.0
-_PEEK_TIMEOUT = 0.5
-_PEEK_BATCH = 3
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 
@@ -397,10 +393,11 @@ class NatsRelay:
         """Pull and ack all messages — WORK_QUEUE deletes them on ack."""
         js, _ = await self._ensure_connected()
         subject = self._subject_for_key(session_key)
+        durable = self._durable_name(session_key)
 
         sub = await js.pull_subscribe(
             subject,
-            durable=self._durable_name(session_key),
+            durable=durable,
             stream=self._stream_name,
             config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
         )
@@ -419,6 +416,13 @@ class NatsRelay:
             except (ValidationError, ValueError):
                 logger.warning("Skipping malformed NATS message on %s", subject)
             await raw.ack()
+
+        # Delete consumer after acks complete — frees the server-side slot.
+        # suppress() handles the race where the consumer expired via
+        # inactive_threshold or was already deleted by delete_session().
+        with suppress(NotFoundError):
+            await js.delete_consumer(self._stream_name, durable)
+
         return messages
 
     async def mark_read(self, session_key: str, ids: Sequence[UUID]) -> None:
@@ -431,10 +435,11 @@ class NatsRelay:
         self._validate_user(user)
         js, _ = await self._ensure_connected()
         subject = self._user_subject(user)
+        durable = self._user_durable_name(user)
 
         sub = await js.pull_subscribe(
             subject,
-            durable=self._user_durable_name(user),
+            durable=durable,
             stream=self._stream_name,
             config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
         )
@@ -453,6 +458,11 @@ class NatsRelay:
             except (ValidationError, ValueError):
                 logger.warning("Skipping malformed NATS message on %s", subject)
             await raw.ack()
+
+        # Delete consumer after acks — same pattern as fetch().
+        with suppress(NotFoundError):
+            await js.delete_consumer(self._stream_name, durable)
+
         return messages
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
@@ -472,13 +482,16 @@ class NatsRelay:
         return 0
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
-        """Peek at messages non-destructively, merging TTY and user inboxes."""
+        """Count unread messages across TTY and user inboxes.
+
+        Uses ``stream_info()`` with subject filters — zero consumers
+        created (DES-015).
+        """
         js, _ = await self._ensure_connected()
         user = session_key.split(":")[0]
         tty_subject = self._subject_for_key(session_key)
         user_subject = self._user_subject(user)
 
-        # Get per-subject counts with exact-match filters (no wildcard)
         tty_count = 0
         user_count = 0
         try:
@@ -497,40 +510,7 @@ class NatsRelay:
                 user_count = user_info.state.subjects.get(user_subject, 0)
         except NotFoundError:
             pass
-        total = tty_count + user_count
-        if total == 0:
-            return build_unread_summary([], 0)
-
-        # Peek from both subjects — nak puts messages back
-        messages: list[Message] = []
-        for subject, durable, count in [
-            (tty_subject, self._durable_name(session_key), tty_count),
-            (user_subject, self._user_durable_name(user), user_count),
-        ]:
-            if count == 0:
-                continue
-            sub = await js.pull_subscribe(
-                subject,
-                durable=durable,
-                stream=self._stream_name,
-                config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
-            )
-            try:
-                raw_msgs = await sub.fetch(
-                    batch=min(count, _PEEK_BATCH),
-                    timeout=_PEEK_TIMEOUT,
-                )
-            except TimeoutError:
-                raw_msgs = []
-            finally:
-                await sub.unsubscribe()
-            for raw in raw_msgs:
-                with suppress(ValidationError, ValueError):
-                    messages.append(Message.model_validate_json(raw.data))
-                await raw.nak()
-
-        messages.sort(key=lambda m: m.timestamp)
-        return build_unread_summary(messages, total)
+        return UnreadSummary(count=tty_count + user_count)
 
     # -- Presence --
 
@@ -609,9 +589,11 @@ class NatsRelay:
         js, kv = await self._ensure_connected()
         with suppress(KeyNotFoundError, BucketNotFoundError):
             await kv.delete(kv_key)
-        # Delete the per-session inbox consumer to prevent consumer leaks.
-        # The user-level consumer (userinbox-{user}) is shared across sessions
-        # and cleaned up by inactive_threshold when no sessions remain.
+        # Delete the per-session inbox consumer.  fetch() already deletes
+        # its consumer after use; this catches the case where a session ends
+        # without a final fetch.  The user-level consumer (userinbox-{user})
+        # is likewise deleted by fetch_user_inbox(); inactive_threshold is
+        # the safety net for consumers orphaned by crashes.
         with suppress(NotFoundError):
             await js.delete_consumer(self._stream_name, self._durable_name(session_key))
 

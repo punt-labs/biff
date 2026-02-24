@@ -252,7 +252,6 @@ class TestDynamicDescriptionProtocol:
         await biff_client.call_tool("plan", {"message": "working"})
         desc = await self._get_check_description(biff_client)
         assert "1 unread" in desc
-        assert "@eric" in desc
 
     async def test_reverts_after_check(
         self, biff_client: Client[Any], state: ServerState
