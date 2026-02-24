@@ -1151,7 +1151,7 @@ biff hook git post-checkout "$1" "$2" "$3" 2>/dev/null || true
 
 The `biff hook` subcommand is a new CLI command group:
 
-```
+```text
 biff hook claude-code session-start   # Called by SessionStart hook
 biff hook claude-code session-resume  # Called by SessionStart (resume/compact)
 biff hook claude-code session-end     # Called by SessionEnd hook
@@ -1211,7 +1211,7 @@ Cost: one KV put per agent turn. At the observed rate of ~1-2 turns per minute d
 
 When context compacts, the model loses all prior context. The PreCompact hook injects the current plan into `additionalContext` so the model remembers what it was working on:
 
-```
+```text
 Current biff plan: biff-ka4: Branch-switch hook — nudge dotplan update after git checkout/switch
 ```
 
@@ -1222,12 +1222,14 @@ This is not a nudge — it's context preservation.
 Git's `post-checkout` hook fires on `git checkout`, `git switch`, and `git worktree add`. It receives three arguments: previous HEAD SHA, new HEAD SHA, and a branch flag (1 for branch checkout, 0 for file checkout).
 
 When the branch flag is 1 (branch checkout):
+
 1. Read new branch name
 2. If branch name contains a bead ID pattern (`biff-xxx`), resolve to title via `bd show --format=oneline`
 3. Call `biff plan` with the result
 4. Output nothing (git hook, no JSON output)
 
 This is a git hook, not a Claude Code hook. It fires reliably on every branch switch, whether done by Claude or by the human in another terminal. This is more reliable than a PostToolUse Bash hook matching `git checkout` because:
+
 - It catches `git switch`, `git checkout`, and worktree operations
 - It doesn't require regex matching of bash commands
 - It fires even when the checkout happens outside Claude Code
@@ -1236,7 +1238,7 @@ This is a git hook, not a Claude Code hook. It fires reliably on every branch sw
 
 After every commit, update the plan with the commit subject line. This gives `/who` observers a live feed of progress:
 
-```
+```text
 /who
 ▶  NAME    TTY   IDLE  S  HOST    DIR              PLAN
    @kai    tty1  0m    +  MBP-2   punt-labs/biff   feat: auto-assign TTY on session start
@@ -1278,6 +1280,7 @@ Each source gets a prefix that identifies *how* the plan was set:
 | SessionStart (branch) | `→` | `→ main` |
 
 **Why overwrite, not append:**
+
 - The plan column in `/who` is 20-40 characters. Appending produces unreadable strings.
 - The plan answers "what are you doing *right now*?" — not "what have you done today?"
 - Commit history is `/last`. The plan is the present tense.
