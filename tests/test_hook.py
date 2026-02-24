@@ -357,9 +357,12 @@ class TestHandleSessionEnd:
         (active_dir / "kai-abc12345").write_text("kai:abc12345\nmy-repo\n")
 
         sentinel_dir = tmp_path / "sentinels" / "my-repo"
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.config.find_git_root", return_value=fake_root),
             patch(
                 "biff.server.app.sentinel_dir",
                 return_value=sentinel_dir,
@@ -374,46 +377,73 @@ class TestHandleSessionEnd:
     def test_empty_active_dir(self, tmp_path: Path) -> None:
         active_dir = tmp_path / ".biff" / "active"
         active_dir.mkdir(parents=True)
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.config.find_git_root", return_value=fake_root),
+        ):
             count = handle_session_end()
 
         assert count == 0
 
     def test_no_active_dir(self, tmp_path: Path) -> None:
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.config.find_git_root", return_value=fake_root),
+        ):
             count = handle_session_end()
 
         assert count == 0
 
-    def test_multiple_sessions(self, tmp_path: Path) -> None:
+    def test_scoped_to_current_repo(self, tmp_path: Path) -> None:
+        """Only cleans up sessions matching the current repo name."""
         active_dir = tmp_path / ".biff" / "active"
         active_dir.mkdir(parents=True)
-        (active_dir / "kai-aaa").write_text("kai:aaa\nrepo-a\n")
-        (active_dir / "kai-bbb").write_text("kai:bbb\nrepo-b\n")
+        (active_dir / "kai-aaa").write_text("kai:aaa\nmy-repo\n")
+        (active_dir / "kai-bbb").write_text("kai:bbb\nother-repo\n")
 
-        def fake_sentinel_dir(repo: str) -> Path:
-            return tmp_path / "sentinels" / repo
+        sentinel_dir = tmp_path / "sentinels" / "my-repo"
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.config.find_git_root", return_value=fake_root),
             patch(
                 "biff.server.app.sentinel_dir",
-                side_effect=fake_sentinel_dir,
+                return_value=sentinel_dir,
             ),
         ):
             count = handle_session_end()
 
-        assert count == 2
-        assert (tmp_path / "sentinels" / "repo-a" / "kai-aaa").exists()
-        assert (tmp_path / "sentinels" / "repo-b" / "kai-bbb").exists()
+        assert count == 1
+        # my-repo session cleaned up
+        assert not (active_dir / "kai-aaa").exists()
+        # other-repo session left untouched
+        assert (active_dir / "kai-bbb").exists()
+
+    def test_no_git_root_returns_zero(self, tmp_path: Path) -> None:
+        with patch("biff.config.find_git_root", return_value=None):
+            count = handle_session_end()
+
+        assert count == 0
 
     def test_malformed_active_file_skipped(self, tmp_path: Path) -> None:
         active_dir = tmp_path / ".biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "bad").write_text("only-one-line\n")
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.config.find_git_root", return_value=fake_root),
+        ):
             count = handle_session_end()
 
         assert count == 0

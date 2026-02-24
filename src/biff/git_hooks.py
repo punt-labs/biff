@@ -87,6 +87,9 @@ def deploy_git_hooks(repo_root: Path | None = None) -> list[str]:
                 # Append to existing hook (coexistence).
                 hook_path.write_text(content.rstrip("\n") + "\n\n" + block)
                 updated.append(name)
+            # Ensure executable even for existing files.
+            if not hook_path.stat().st_mode & 0o111:
+                hook_path.chmod(hook_path.stat().st_mode | 0o755)
         else:
             # Create new hook file.
             hook_path.write_text(f"#!/usr/bin/env bash\n{block}")

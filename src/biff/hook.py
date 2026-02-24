@@ -395,18 +395,24 @@ def handle_session_resume() -> str:
 def handle_session_end() -> int:
     """Convert active-session markers to sentinels for cleanup.
 
-    Reads ``~/.biff/active/*``, writes corresponding sentinel files
-    in ``~/.biff/sentinels/{repo}/``, then deletes the active markers.
-    The existing reaper task processes the sentinels on next startup.
+    Only processes sessions belonging to the **current repo** — other
+    repos' sessions are left untouched.  This prevents ending one
+    Claude Code session from reaping sessions in unrelated repos.
 
     Returns the number of sessions cleaned up.
     """
     from pathlib import Path  # noqa: PLC0415
 
+    from biff.config import find_git_root  # noqa: PLC0415
     from biff.server.app import (  # noqa: PLC0415
         remove_active_session,
         sentinel_dir,
     )
+
+    repo_root = find_git_root()
+    if repo_root is None:
+        return 0
+    current_repo = repo_root.name
 
     active_dir = Path.home() / ".biff" / "active"
     if not active_dir.exists():
@@ -422,6 +428,10 @@ def handle_session_end() -> int:
                 continue
             session_key, repo_name = lines[0], lines[1]
         except OSError:
+            continue
+
+        # Only clean up sessions for THIS repo.
+        if repo_name != current_repo:
             continue
 
         # Write sentinel so the reaper deletes the KV entry.

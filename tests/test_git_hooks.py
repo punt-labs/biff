@@ -58,6 +58,16 @@ class TestDeployGitHooks:
         assert "existing hook" in content
         assert _MARKER_START in content
 
+    def test_ensures_executable_on_existing(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        hook = repo / ".git" / "hooks" / "post-commit"
+        hook.write_text("#!/bin/sh\necho 'hello'\n")
+        hook.chmod(0o644)  # Not executable
+
+        deploy_git_hooks(repo)
+
+        assert hook.stat().st_mode & 0o111  # Now executable
+
     def test_preserves_existing_content(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         beads_hook = repo / ".git" / "hooks" / "post-checkout"
