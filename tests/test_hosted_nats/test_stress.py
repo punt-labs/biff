@@ -506,6 +506,245 @@ class TestConsumerFootprint:
         )
 
 
+class TestUnreadSummaryZeroConsumers:
+    """DES-015: get_unread_summary() must create zero consumers.
+
+    This is the core property that DES-015 exists to guarantee.
+    The poller calls get_unread_summary() every 2 seconds per user.
+    At 243 users that's 121 calls/second.  If any of those calls
+    create a consumer, the account limit is hit within minutes.
+    """
+
+    async def test_single_relay_repeated_calls(self, relays: list[NatsRelay]) -> None:
+        """100 get_unread_summary() calls from one relay — zero consumers."""
+        lead = relays[0]
+        key = _session_key(0)
+        await lead.update_session(_make_session(0))
+
+        # Seed some messages so the summary has work to do
+        for j in range(5):
+            await lead.deliver(
+                Message(from_user="bot", to_user=key, body=f"msg-{j}")
+            )
+        await lead.deliver(
+            Message(from_user="bot", to_user=_user(0)[0], body="broadcast")
+        )
+
+        consumers_before = await _consumer_count(lead, _INBOX_STREAM)
+
+        for _ in range(100):
+            summary = await lead.get_unread_summary(key)
+            assert summary.count == 6  # 5 tty + 1 user
+
+        consumers_after = await _consumer_count(lead, _INBOX_STREAM)
+        assert consumers_after == consumers_before, (
+            f"get_unread_summary() leaked consumers: "
+            f"{consumers_before} -> {consumers_after} after 100 calls"
+        )
+
+        await lead.delete_session(key)
+
+    async def test_concurrent_polling_all_relays(
+        self, relays: list[NatsRelay]
+    ) -> None:
+        """All 20 relays call get_unread_summary() concurrently, 10 rounds."""
+        lead = relays[0]
+
+        # Register sessions and seed messages for all users
+        for i in range(len(relays)):
+            await relays[i].update_session(_make_session(i))
+            await lead.deliver(
+                Message(
+                    from_user="bot", to_user=_session_key(i), body=f"hello-{i}"
+                )
+            )
+
+        consumers_before = await _consumer_count(lead, _INBOX_STREAM)
+        rounds = 10
+
+        for _ in range(rounds):
+            summaries = await asyncio.gather(
+                *(
+                    relays[i].get_unread_summary(_session_key(i))
+                    for i in range(len(relays))
+                )
+            )
+            for i, summary in enumerate(summaries):
+                assert summary.count >= 1, (
+                    f"User {i} expected >= 1 unread, got {summary.count}"
+                )
+
+        consumers_after = await _consumer_count(lead, _INBOX_STREAM)
+        assert consumers_after == consumers_before, (
+            f"Concurrent get_unread_summary() leaked consumers: "
+            f"{consumers_before} -> {consumers_after} "
+            f"after {rounds} rounds x {len(relays)} relays"
+        )
+
+        for i in range(len(relays)):
+            await relays[i].delete_session(_session_key(i))
+
+    async def test_summary_with_empty_inboxes(self, relays: list[NatsRelay]) -> None:
+        """get_unread_summary() on empty inboxes — still zero consumers."""
+        lead = relays[0]
+        consumers_before = await _consumer_count(lead, _INBOX_STREAM)
+
+        # 50 calls against nonexistent inboxes
+        for i in range(50):
+            summary = await lead.get_unread_summary(f"ghost{i}:ttyX")
+            assert summary.count == 0
+
+        consumers_after = await _consumer_count(lead, _INBOX_STREAM)
+        assert consumers_after == consumers_before, (
+            f"Empty inbox summary leaked consumers: "
+            f"{consumers_before} -> {consumers_after}"
+        )
+
+
+class TestConcurrentMixedWorkload:
+    """Simulate realistic concurrent load: polling + messaging + presence.
+
+    Real-world biff has N users simultaneously:
+    - Polling get_unread_summary() every 2s (background poller)
+    - Sending messages to each other (write tool)
+    - Updating presence (plan tool, heartbeat)
+    - Enumerating sessions (who tool)
+
+    This test runs all four workloads concurrently and verifies
+    no consumer leak occurs.
+    """
+
+    async def test_mixed_concurrent_workload(self, relays: list[NatsRelay]) -> None:
+        """Run polling, messaging, presence, and enumeration concurrently."""
+        n_users = _N_RELAYS
+        lead = relays[0]
+        rounds = 5
+
+        # Setup: register all users
+        for i in range(n_users):
+            await relays[i].update_session(_make_session(i, plan=f"task-{i}"))
+
+        consumers_before = await _consumer_count(lead, _INBOX_STREAM)
+        kv_consumers_before = await _consumer_count(lead, _KV_STREAM)
+
+        for round_num in range(rounds):
+            # All four workloads run concurrently within each round
+            polling = asyncio.gather(
+                *(
+                    relays[i].get_unread_summary(_session_key(i))
+                    for i in range(n_users)
+                )
+            )
+            messaging = asyncio.gather(
+                *(
+                    relays[i].deliver(
+                        Message(
+                            from_user=_user(i)[0],
+                            to_user=_session_key((i + 1) % n_users),
+                            body=f"round-{round_num}",
+                        )
+                    )
+                    for i in range(n_users)
+                )
+            )
+            presence = asyncio.gather(
+                *(
+                    relays[i].update_session(
+                        _make_session(i, plan=f"round-{round_num}")
+                    )
+                    for i in range(n_users)
+                )
+            )
+            enumeration = asyncio.gather(
+                *(relays[i].get_sessions() for i in range(n_users))
+            )
+
+            summaries, _, _, session_lists = await asyncio.gather(
+                polling, messaging, presence, enumeration
+            )
+
+            # Verify polling returned valid counts
+            for summary in summaries:
+                assert summary.count >= 0
+
+            # Verify enumeration returned all users
+            for sessions in session_lists:
+                assert len(sessions) == n_users
+
+        # Drain all delivered messages so consumers get deleted
+        for _ in range(rounds):
+            for i in range(n_users):
+                await relays[i].fetch(_session_key(i))
+
+        consumers_after = await _consumer_count(lead, _INBOX_STREAM)
+        kv_consumers_after = await _consumer_count(lead, _KV_STREAM)
+
+        assert consumers_after == consumers_before, (
+            f"Mixed workload inbox consumer leak: "
+            f"{consumers_before} -> {consumers_after} "
+            f"after {rounds} concurrent rounds"
+        )
+        assert kv_consumers_after == kv_consumers_before, (
+            f"Mixed workload KV consumer leak: "
+            f"{kv_consumers_before} -> {kv_consumers_after} "
+            f"after {rounds} concurrent rounds"
+        )
+
+        for i in range(n_users):
+            await relays[i].delete_session(_session_key(i))
+
+    async def test_polling_during_message_storm(
+        self, relays: list[NatsRelay]
+    ) -> None:
+        """Poll unread summaries while messages are being delivered."""
+        n_users = _N_RELAYS
+        lead = relays[0]
+        messages_per_user = 10
+
+        for i in range(n_users):
+            await relays[i].update_session(_make_session(i))
+
+        consumers_before = await _consumer_count(lead, _INBOX_STREAM)
+
+        # Storm: deliver messages_per_user messages to each user concurrently
+        storm = asyncio.gather(
+            *(
+                relays[i % n_users].deliver(
+                    Message(
+                        from_user=_user(i % n_users)[0],
+                        to_user=_session_key((i + 1) % n_users),
+                        body=f"storm-{i}",
+                    )
+                )
+                for i in range(n_users * messages_per_user)
+            )
+        )
+
+        # Poll concurrently while the storm is running
+        polling = asyncio.gather(
+            *(
+                relays[i].get_unread_summary(_session_key(i))
+                for i in range(n_users)
+            )
+        )
+
+        await asyncio.gather(storm, polling)
+
+        # Drain
+        for i in range(n_users):
+            msgs = await relays[i].fetch(_session_key(i))
+            assert len(msgs) == messages_per_user
+
+        consumers_after = await _consumer_count(lead, _INBOX_STREAM)
+        assert consumers_after == consumers_before, (
+            f"Polling-during-storm consumer leak: "
+            f"{consumers_before} -> {consumers_after}"
+        )
+
+        for i in range(n_users):
+            await relays[i].delete_session(_session_key(i))
+
+
 class TestAccountCapacity:
     """Discover and document the real capacity of the Synadia Cloud account.
 
