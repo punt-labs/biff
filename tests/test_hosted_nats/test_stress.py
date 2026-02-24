@@ -523,9 +523,7 @@ class TestUnreadSummaryZeroConsumers:
 
         # Seed some messages so the summary has work to do
         for j in range(5):
-            await lead.deliver(
-                Message(from_user="bot", to_user=key, body=f"msg-{j}")
-            )
+            await lead.deliver(Message(from_user="bot", to_user=key, body=f"msg-{j}"))
         await lead.deliver(
             Message(from_user="bot", to_user=_user(0)[0], body="broadcast")
         )
@@ -544,9 +542,7 @@ class TestUnreadSummaryZeroConsumers:
 
         await lead.delete_session(key)
 
-    async def test_concurrent_polling_all_relays(
-        self, relays: list[NatsRelay]
-    ) -> None:
+    async def test_concurrent_polling_all_relays(self, relays: list[NatsRelay]) -> None:
         """All 20 relays call get_unread_summary() concurrently, 10 rounds."""
         lead = relays[0]
 
@@ -554,9 +550,7 @@ class TestUnreadSummaryZeroConsumers:
         for i in range(len(relays)):
             await relays[i].update_session(_make_session(i))
             await lead.deliver(
-                Message(
-                    from_user="bot", to_user=_session_key(i), body=f"hello-{i}"
-                )
+                Message(from_user="bot", to_user=_session_key(i), body=f"hello-{i}")
             )
 
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
@@ -630,10 +624,7 @@ class TestConcurrentMixedWorkload:
         for round_num in range(rounds):
             # All four workloads run concurrently within each round
             polling = asyncio.gather(
-                *(
-                    relays[i].get_unread_summary(_session_key(i))
-                    for i in range(n_users)
-                )
+                *(relays[i].get_unread_summary(_session_key(i)) for i in range(n_users))
             )
             messaging = asyncio.gather(
                 *(
@@ -693,9 +684,7 @@ class TestConcurrentMixedWorkload:
         for i in range(n_users):
             await relays[i].delete_session(_session_key(i))
 
-    async def test_polling_during_message_storm(
-        self, relays: list[NatsRelay]
-    ) -> None:
+    async def test_polling_during_message_storm(self, relays: list[NatsRelay]) -> None:
         """Poll unread summaries while messages are being delivered."""
         n_users = _N_RELAYS
         lead = relays[0]
@@ -722,10 +711,7 @@ class TestConcurrentMixedWorkload:
 
         # Poll concurrently while the storm is running
         polling = asyncio.gather(
-            *(
-                relays[i].get_unread_summary(_session_key(i))
-                for i in range(n_users)
-            )
+            *(relays[i].get_unread_summary(_session_key(i)) for i in range(n_users))
         )
 
         await asyncio.gather(storm, polling)
