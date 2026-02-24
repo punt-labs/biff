@@ -795,7 +795,7 @@ Consolidate to 3 shared streams with subject-based repo isolation. Reserve KV ke
 
 **Subject structure — unchanged:**
 
-```
+```text
 biff.{repo}.inbox.{user}          # broadcast delivery (3 tokens)
 biff.{repo}.inbox.{user}.{tty}    # targeted delivery (4 tokens)
 biff.{repo}.wtmp.{user}           # session event log
