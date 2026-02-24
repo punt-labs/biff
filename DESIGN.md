@@ -1047,3 +1047,307 @@ Records without a `version` field (pre-v1) deserialize with `version=1` (Pydanti
 | `biff.>` as shared stream filter | Two streams cannot both claim `biff.>`. Narrow filters (`biff.*.inbox.>`, `biff.*.wtmp.>`) partition cleanly. |
 | `.biff` config flag for migration | Two code paths doubles surface area. Pre-1.0 breaking changes are acceptable. |
 | Separate KV bucket for encryption keys | Burns another stream slot, defeating wg4's purpose. Session entries are the natural home for public keys. |
+
+## DES-017: Hook Integration Architecture — biff-* Lifecycle Hooks
+
+**Date:** 2026-02-24
+**Status:** SETTLED (architecture), OPEN (implementation phased)
+**Topic:** Systematic hook integration that makes biff a continuous presence in the developer workflow, not just a set of slash commands
+**Research:** `punt-kit/research/entire-io-hook-architecture.md`
+
+### Problem
+
+Biff has three hooks today:
+
+| Hook | Event | Trigger | What It Does |
+|------|-------|---------|-------------|
+| `session-start.sh` | SessionStart | Every session | First-run setup: deploy commands, auto-allow MCP tools, install statusline |
+| `suppress-output.sh` | PostToolUse | Biff MCP tools | Display formatting: split panel summary vs. model context |
+| `pr-announce.sh` | PostToolUse | GitHub PR create/merge | Suggest `/wall` announcement |
+| `bead-claim.sh` | PostToolUse | Bash `bd update` | Suggest `/plan` after claiming work |
+
+The first two are infrastructure (display pipeline, DES-001). The second two are nudges. All four are PostToolUse.
+
+This leaves biff blind to the session lifecycle. Biff doesn't know when a session starts working, what branch it's on, when it switches context, when it commits, when it pushes, or when it ends. A teammate running `/who` sees stale data — a session that's been dead for hours still appears online because nothing triggered cleanup. A session that switched branches 30 minutes ago still shows its old plan.
+
+Entire.io (see research doc) solved an analogous problem — session provenance — by hooking into **both** Claude Code lifecycle events (7 hooks across 6 events) and git hooks (4 hooks). Entire proved that deep lifecycle integration is invisible to the user when hooks are fast and fail-safe. The hooks are thin dispatchers that call `entire hooks <agent> <event>` — no logic in the shell script, all logic in the versioned CLI binary.
+
+Biff should follow this pattern. Biff's mission is coordination, not provenance, so the *events* we care about are different, but the *architecture* is the same: thin shell dispatchers, dual-layer capture (Claude Code + git), and fail-open by default.
+
+### Design
+
+#### Principle: Biff Hooks Are the Connective Tissue
+
+Biff commands (`/who`, `/write`, `/plan`, `/wall`) are the *vocabulary*. Hooks are the *nervous system* that keeps the vocabulary current. Without hooks, every biff command shows a stale snapshot. With hooks, biff reflects reality.
+
+The hook architecture has two layers:
+
+1. **Claude Code hooks** (plugin `hooks/hooks.json`) — capture agent lifecycle events
+2. **Git hooks** (installed by `biff install`) — capture code lifecycle events
+
+Both layers call `biff hook <event>` — the biff CLI binary is the single dispatcher. Hook scripts are one-liners. All logic lives in versioned Python code.
+
+#### Layer 1: Claude Code Hooks
+
+| Event | Matcher | Hook Script | Biff Action | Output |
+|-------|---------|-------------|-------------|--------|
+| **SessionStart** | `startup` | `hooks/session-start.sh` | Call `/tty` (auto-assign session name), set initial `/plan` from git branch, check `/read` for unread messages | `additionalContext` with setup summary |
+| **SessionStart** | `resume\|compact` | `hooks/session-resume.sh` | Refresh presence heartbeat, re-announce plan | `additionalContext` if unread messages waiting |
+| **SessionEnd** | `""` (all) | `hooks/session-end.sh` | Clear presence (immediate, don't wait for TTL) | Silent |
+| **PostToolUse** | biff MCP tools | `hooks/suppress-output.sh` | Display formatting (unchanged, DES-001) | `updatedMCPToolOutput` + `additionalContext` |
+| **PostToolUse** | GitHub PR tools | `hooks/pr-announce.sh` | Suggest `/wall` (unchanged) | `additionalContext` |
+| **PostToolUse** | `Bash` | `hooks/post-bash.sh` | Dispatch: git checkout/switch → suggest `/plan` update; `bd update --status=in_progress` → suggest `/plan` (bead-claim, unchanged) | `additionalContext` |
+| **Stop** | — | `hooks/stop.sh` | Refresh presence heartbeat (proves session is alive to remote observers) | Silent |
+| **PreCompact** | — | `hooks/pre-compact.sh` | Snapshot current plan to `additionalContext` so it survives compaction | `additionalContext` |
+
+**Not hooked (and why):**
+
+| Event | Why Not |
+|-------|---------|
+| UserPromptSubmit | Too noisy. Every prompt would trigger a hook. No coordination value. |
+| PreToolUse | Biff observes, it doesn't block. PreToolUse's value is blocking. |
+| SubagentStart/Stop | Future (biff-60o, agent teams). Not needed until multi-agent coordination ships. |
+| Notification | No coordination value. |
+| TaskCompleted | Future (when beads is MCP). |
+| TeammateIdle | Future (agent teams). |
+| ConfigChange | No coordination value. |
+
+#### Layer 2: Git Hooks
+
+Installed by `biff install` into `.git/hooks/`. Each hook calls `biff hook git <event>`. All are **fail-open** (`|| true`) — if biff crashes, git still works. All gate on `.biff` + `.biff.local` enabled.
+
+| Git Hook | Command | Biff Action |
+|----------|---------|-------------|
+| **post-checkout** | `biff hook git post-checkout "$1" "$2" "$3"` | Update `/plan` with new branch name. If switching from a feature branch to main, clear the plan. If switching to a feature branch, set plan to branch name (which often contains the bead ID). |
+| **post-commit** | `biff hook git post-commit` | Update `/plan` with commit subject line (shows progress). Optionally suggest `/wall` for significant commits (merge commits, version bumps). |
+| **pre-push** | `biff hook git pre-push "$1"` | Suggest `/wall` announcement for pushes to main/default branch. Silent for pushes to feature branches. |
+| **post-merge** | (leave existing beads hook, add biff dispatch) | After `bd sync` runs, refresh `/plan` from current branch. |
+
+**Not hooked (and why):**
+
+| Git Hook | Why Not |
+|----------|---------|
+| prepare-commit-msg | Biff doesn't mutate commits. That's Entire's job. |
+| commit-msg | Same — biff observes, it doesn't mutate. |
+| pre-commit | Blocking hook. Biff doesn't block developer actions. |
+| pre-rebase | No coordination value. |
+
+#### The Dispatcher Pattern
+
+All hooks are thin dispatchers. No logic in shell:
+
+```bash
+#!/usr/bin/env bash
+# hooks/session-end.sh — thin dispatcher
+biff hook claude-code session-end 2>/dev/null || true
+```
+
+```bash
+#!/usr/bin/env bash
+# .git/hooks/post-checkout — thin dispatcher
+# $1=previous HEAD, $2=new HEAD, $3=branch flag
+biff hook git post-checkout "$1" "$2" "$3" 2>/dev/null || true
+```
+
+The `biff hook` subcommand is a new CLI command group:
+
+```
+biff hook claude-code session-start   # Called by SessionStart hook
+biff hook claude-code session-resume  # Called by SessionStart (resume/compact)
+biff hook claude-code session-end     # Called by SessionEnd hook
+biff hook claude-code post-bash       # Called by PostToolUse Bash hook
+biff hook claude-code stop            # Called by Stop hook
+biff hook claude-code pre-compact     # Called by PreCompact hook
+biff hook git post-checkout           # Called by git post-checkout hook
+biff hook git post-commit             # Called by git post-commit hook
+biff hook git pre-push                # Called by git pre-push hook
+```
+
+Each reads JSON from stdin (Claude Code hooks) or positional args (git hooks), calls the appropriate biff MCP tool or writes directly to the local relay, and outputs JSON to stdout (Claude Code hooks only).
+
+#### Gating: `.biff` + `.biff.local`
+
+All hooks gate on the `.biff` marker file and `.biff.local` enabled flag. This is unchanged from the existing pr-announce.sh and bead-claim.sh pattern:
+
+```bash
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[[ -f "$REPO_ROOT/.biff" ]] || exit 0
+BIFF_LOCAL="$REPO_ROOT/.biff.local"
+if [[ -f "$BIFF_LOCAL" ]]; then
+  grep -qE '^enabled\s*=\s*true' "$BIFF_LOCAL" || exit 0
+else
+  exit 0
+fi
+```
+
+Exception: `session-start.sh` runs unconditionally because it handles first-run setup (deploying commands, installing statusline). It gates the *biff-specific* actions (tty, plan) on `.biff` + `.biff.local`.
+
+#### SessionStart: What Actually Happens
+
+On `startup` (new session):
+
+1. **Existing behavior** (unchanged): deploy commands, auto-allow MCP tools, install statusline
+2. **New — auto-assign TTY**: Call `biff hook claude-code session-start` which calls the `tty` MCP tool with no name (auto-assigns `ttyN`). This makes every session immediately visible in `/who`.
+3. **New — set initial plan from branch**: Read current git branch. If it matches a bead ID pattern (e.g., `biff-ka4-branch-switch-hook`), set plan to the bead ID and title. Otherwise set plan to the branch name.
+4. **New — check unread**: Check unread message count. If > 0, include in `additionalContext`: "You have N unread messages. Use /read to view them."
+
+On `resume` or `compact`:
+
+1. Refresh presence heartbeat (re-publish session to KV so TTL doesn't expire)
+2. Re-announce current plan in `additionalContext` (since compaction may have erased the context)
+3. Check unread messages (same as startup)
+
+#### SessionEnd: Immediate Cleanup
+
+Currently, sessions expire via KV TTL (3 days, DES-008). This means `/who` shows ghost sessions for up to 3 days after a session ends. SessionEnd hook calls `biff hook claude-code session-end` which deletes the session KV entry immediately. This is best-effort — if biff crashes or the network is down, the TTL is the safety net.
+
+#### Stop: Heartbeat
+
+The `Stop` event fires every time Claude finishes a response. This is a natural heartbeat signal — if a session is active, `Stop` fires every few minutes. The hook refreshes the presence KV entry's TTL. This means sessions that go idle (user walks away without exiting) will eventually expire by TTL, but active sessions stay fresh.
+
+Cost: one KV put per agent turn. At the observed rate of ~1-2 turns per minute during active work, this is negligible.
+
+#### PreCompact: Plan Survival
+
+When context compacts, the model loses all prior context. The PreCompact hook injects the current plan into `additionalContext` so the model remembers what it was working on:
+
+```
+Current biff plan: biff-ka4: Branch-switch hook — nudge dotplan update after git checkout/switch
+```
+
+This is not a nudge — it's context preservation.
+
+#### post-checkout: Branch-Aware Plan (biff-ka4)
+
+Git's `post-checkout` hook fires on `git checkout`, `git switch`, and `git worktree add`. It receives three arguments: previous HEAD SHA, new HEAD SHA, and a branch flag (1 for branch checkout, 0 for file checkout).
+
+When the branch flag is 1 (branch checkout):
+1. Read new branch name
+2. If branch name contains a bead ID pattern (`biff-xxx`), resolve to title via `bd show --format=oneline`
+3. Call `biff plan` with the result
+4. Output nothing (git hook, no JSON output)
+
+This is a git hook, not a Claude Code hook. It fires reliably on every branch switch, whether done by Claude or by the human in another terminal. This is more reliable than a PostToolUse Bash hook matching `git checkout` because:
+- It catches `git switch`, `git checkout`, and worktree operations
+- It doesn't require regex matching of bash commands
+- It fires even when the checkout happens outside Claude Code
+
+#### post-commit: Progress Updates
+
+After every commit, update the plan with the commit subject line. This gives `/who` observers a live feed of progress:
+
+```
+/who
+▶  NAME    TTY   IDLE  S  HOST    DIR              PLAN
+   @kai    tty1  0m    +  MBP-2   punt-labs/biff   feat: auto-assign TTY on session start
+```
+
+The commit subject is the most concise summary of what just happened. It's already written, already reviewed, and already describes the work.
+
+#### pre-push: Team Announcement
+
+Before pushing to the default branch (main/master), suggest a `/wall` broadcast. This is the natural announcement point — the work is done, reviewed, and about to be visible to everyone.
+
+Silent on feature branch pushes (those are in-progress work, not announcements).
+
+#### biff-5zq: Plan Auto-Expand
+
+When `/plan` receives a bead ID (e.g., `/plan biff-ka4`), the plan tool resolves the title:
+
+1. Check if the message matches `/^[a-z]+-[a-z0-9]{2,4}$/` (bead ID pattern)
+2. If match, shell out to `bd show --format=oneline <id>` to get the title
+3. Set plan to `<id>: <title>` (e.g., `biff-ka4: Branch-switch hook`)
+4. If `bd show` fails (not a valid bead), use the raw string as-is
+
+This runs in the plan MCP tool itself, not in a hook. The hook architecture routes events to biff; the plan tool enriches content.
+
+### Plan Semantics: Append vs. Overwrite
+
+The plan is a single string visible in `/who` and `/finger`. Multiple hooks update it (SessionStart, post-checkout, post-commit, bead-claim, manual `/plan`). The question: should hooks *overwrite* the plan or *append* to it?
+
+**Decision: Overwrite with provenance prefix.**
+
+Each source gets a prefix that identifies *how* the plan was set:
+
+| Source | Prefix | Example |
+|--------|--------|---------|
+| Manual `/plan` | (none) | `reviewing PR #64` |
+| Bead claim | (none) | `biff-ka4: Branch-switch hook` |
+| Git post-checkout | `→` | `→ feature/biff-ka4-hooks` |
+| Git post-commit | `✓` | `✓ feat: auto-assign TTY on session start` |
+| SessionStart (branch) | `→` | `→ main` |
+
+**Why overwrite, not append:**
+- The plan column in `/who` is 20-40 characters. Appending produces unreadable strings.
+- The plan answers "what are you doing *right now*?" — not "what have you done today?"
+- Commit history is `/last`. The plan is the present tense.
+
+**Priority: manual > bead > git.** If the user explicitly called `/plan`, git hooks should not overwrite it. Implementation: store a `plan_source` field alongside the plan text. Git hooks only overwrite if `plan_source` is `"auto"`. Manual `/plan` and bead-claim set `plan_source` to `"manual"`. This prevents the annoying pattern where you set a careful plan and a git checkout immediately overwrites it.
+
+### Implementation Phases
+
+#### Phase 1: Session Lifecycle (immediate)
+
+- `biff hook` CLI command group with dispatcher
+- SessionStart: auto-assign TTY, set plan from branch, check unread
+- SessionEnd: immediate session cleanup
+- Update `hooks/hooks.json` with SessionStart matchers and SessionEnd
+- biff-5zq: plan auto-expand in the plan tool
+
+**Files:** `src/biff/cli/hook.py` (new), `hooks/hooks.json`, `hooks/session-end.sh` (new), `src/biff/server/tools/plan.py`
+
+#### Phase 2: Git Hooks (next)
+
+- `biff install` deploys git hooks (post-checkout, post-commit, pre-push)
+- post-checkout updates plan (biff-ka4)
+- post-commit updates plan with commit subject
+- pre-push suggests `/wall` for default branch pushes
+- Consolidate post-bash.sh (absorbs bead-claim.sh, adds git checkout detection as fallback)
+
+**Files:** `src/biff/cli/hook.py`, `src/biff/installer.py`, git hook templates
+
+#### Phase 3: Heartbeat and Context (after beads MCP)
+
+- Stop: presence heartbeat
+- PreCompact: plan survival
+- SessionStart resume/compact: presence refresh, plan re-announcement
+- PostToolUse on beads MCP tools (replaces Bash regex matching)
+
+**Files:** `hooks/hooks.json`, `hooks/stop.sh`, `hooks/pre-compact.sh`, `hooks/session-resume.sh`
+
+### The biff-* Integration Mental Model
+
+Each external tool biff integrates with is a "biff-*" surface:
+
+| Surface | Hooks | Biff Actions |
+|---------|-------|-------------|
+| **biff-core** | SessionStart, SessionEnd, Stop, PreCompact | TTY, plan, presence, heartbeat |
+| **biff-git** | post-checkout, post-commit, pre-push, PostToolUse(Bash) | Plan updates, wall suggestions |
+| **biff-beads** | PostToolUse(Bash→`bd`), future: PostToolUse(beads MCP) | Plan from bead, claim nudge |
+| **biff-github** | PostToolUse(GitHub MCP) | Wall suggestions for PR events |
+| **biff-entire** | Future: coordinate plan/tty with Entire sessions | Shared session identity |
+| **biff-prfaq** | Future: PostToolUse(prfaq tools) | Wall announcements for decisions |
+
+These are not separate codebases or plugins. They are matcher groups in `hooks/hooks.json` and dispatch branches in `biff hook`. The "biff-*" naming is a mental model for organizing which events flow to which biff actions.
+
+### Fail Modes
+
+| Failure | Impact | Mitigation |
+|---------|--------|-----------|
+| `biff` CLI not installed | Hooks silently exit 0 | `command -v biff` check in dispatcher |
+| NATS unreachable | Plan/presence updates fail | Local relay fallback; hooks exit 0 |
+| `bd` not installed | Bead ID resolution fails | Graceful fallback to raw string |
+| Git hook not installed | Git lifecycle events missed | `biff doctor` checks for missing hooks |
+| Session crash (no SessionEnd) | Ghost session in /who | KV TTL (3 days) eventually cleans up |
+| Hook takes too long | Claude Code waits | 5-second timeout on all hooks |
+
+### Alternatives Considered
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Logic in shell scripts (current approach for pr-announce, bead-claim) | Not testable, not versioned with the CLI, duplicates gating logic. Entire.io's dispatcher pattern is superior. |
+| Hook only Claude Code, not git | Misses manual git operations (checkout in another terminal). Git hooks are more reliable for code lifecycle events. |
+| Hook UserPromptSubmit for activity tracking | Too noisy. Stop event is sufficient for heartbeat (fires once per agent turn, not once per keystroke). |
+| PreToolUse for safety checks | Biff observes, it doesn't block. Blocking developer actions is not biff's job. |
+| Separate biff-git, biff-beads plugins | Over-engineering. These are matcher groups and dispatch branches, not separate plugin surfaces. |
+| Auto-wall on every commit | Too noisy. Only suggest wall for pushes to default branch and PR events. |
