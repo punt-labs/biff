@@ -1,0 +1,5 @@
+{
+  "extends": "../../.markdownlint.jsonc",
+  // Agent files use YAML frontmatter before prose sections
+  "MD041": false
+}

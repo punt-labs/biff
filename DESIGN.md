@@ -722,7 +722,8 @@ The background poller calls `get_unread_summary()` every 2 seconds. On `NatsRela
 ### Evidence
 
 The preview was consumed in exactly **one place**: the `read_messages` tool description:
-```
+
+```text
 Check messages (2 unread: @kai about auth, @eric about lunch). Marks all as read.
 ```
 
