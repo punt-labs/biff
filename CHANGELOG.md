@@ -35,6 +35,10 @@
 - **Git post-commit hook** — after each commit, writes a plan hint with
   `✓ <subject>` so teammates see commit progress in `/finger` and `/who`.
   Uses the same plan hint file mechanism as post-checkout. (#biff-crz)
+- **Git pre-push hook** — when pushing to main/master, writes a wall hint
+  file (`~/.biff/wall-hint`). The PostToolUse Bash handler picks up the
+  hint and suggests `/wall <summary>`. Silent for feature branch pushes.
+  (#biff-9e7)
 
 ### Changed
 

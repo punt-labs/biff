@@ -13,10 +13,12 @@ from unittest.mock import patch
 from biff.hook import (
     _expand_branch_plan,
     check_plan_hint,
+    check_wall_hint,
     handle_post_bash,
     handle_post_checkout,
     handle_post_commit,
     handle_post_pr,
+    handle_pre_push,
     handle_session_end,
     handle_session_resume,
     handle_session_start,
@@ -568,3 +570,78 @@ class TestHandlePostCommit:
         assert result is not None
         assert "✓ fix: status bar height" in result
         assert 'source="auto"' in result
+
+
+# ── handle_pre_push ────────────────────────────────────────────────
+
+
+class TestHandlePrePush:
+    """Git pre-push handler — wall hint for default branch pushes."""
+
+    def test_main_branch_writes_hint(self, tmp_path: Path) -> None:
+        lines = ["abc123 def456 refs/heads/main 000000"]
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = handle_pre_push(lines)
+
+        assert result is not None
+        assert "default branch" in result
+        assert (tmp_path / ".biff" / "wall-hint").exists()
+
+    def test_master_branch_writes_hint(self, tmp_path: Path) -> None:
+        lines = ["abc123 def456 refs/heads/master 000000"]
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = handle_pre_push(lines)
+
+        assert result is not None
+
+    def test_feature_branch_ignored(self) -> None:
+        lines = ["abc123 def456 refs/heads/feature/auth 000000"]
+        assert handle_pre_push(lines) is None
+
+    def test_empty_refs_ignored(self) -> None:
+        assert handle_pre_push([]) is None
+
+    def test_multiple_refs_detects_main(self, tmp_path: Path) -> None:
+        lines = [
+            "abc123 def456 refs/heads/feature/auth 000000",
+            "abc123 def456 refs/heads/main 000000",
+        ]
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = handle_pre_push(lines)
+
+        assert result is not None
+
+
+# ── check_wall_hint ────────────────────────────────────────────────
+
+
+class TestCheckWallHint:
+    """Wall hint file reading and cleanup."""
+
+    def test_reads_and_deletes_hint(self, tmp_path: Path) -> None:
+        hint_dir = tmp_path / ".biff"
+        hint_dir.mkdir(parents=True)
+        (hint_dir / "wall-hint").write_text("Pushed to default branch\n")
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = check_wall_hint()
+
+        assert result is not None
+        assert "/wall" in result
+        assert not (hint_dir / "wall-hint").exists()
+
+    def test_no_hint_returns_none(self, tmp_path: Path) -> None:
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert check_wall_hint() is None
+
+    def test_end_to_end(self, tmp_path: Path) -> None:
+        """Pre-push writes hint, check_wall_hint reads it."""
+        lines = ["abc123 def456 refs/heads/main 000000"]
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            handle_pre_push(lines)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = check_wall_hint()
+
+        assert result is not None
+        assert "/wall" in result

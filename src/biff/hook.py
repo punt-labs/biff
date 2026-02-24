@@ -304,6 +304,59 @@ def handle_post_commit() -> str | None:
     return hint
 
 
+def _wall_hint_path() -> pathlib.Path:
+    """Path to the wall hint file: ``~/.biff/wall-hint``."""
+    return pathlib.Path.home() / ".biff" / "wall-hint"
+
+
+def _read_pre_push_refs() -> list[str]:
+    """Read pre-push ref lines from stdin (git provides these)."""
+    try:
+        raw = sys.stdin.read()
+        return raw.strip().splitlines() if raw.strip() else []
+    except OSError:
+        return []
+
+
+def handle_pre_push(ref_lines: list[str]) -> str | None:
+    """Process git pre-push — suggest /wall for default branch pushes.
+
+    Writes ``~/.biff/wall-hint`` when pushing to main/master.
+    The PostToolUse Bash handler picks up the hint.
+
+    Returns the wall hint text, or ``None`` for feature branch pushes.
+    """
+    for line in ref_lines:
+        parts = line.split()
+        if len(parts) >= 3:
+            remote_ref = parts[2]
+            if remote_ref in ("refs/heads/main", "refs/heads/master"):
+                hint_path = _wall_hint_path()
+                hint_path.parent.mkdir(parents=True, exist_ok=True)
+                hint_path.write_text("Pushed to default branch\n")
+                return "Pushed to default branch"
+    return None
+
+
+def check_wall_hint() -> str | None:
+    """Check for a wall hint written by a git hook.
+
+    Reads and deletes ``~/.biff/wall-hint``.  Returns an
+    ``additionalContext`` string, or ``None`` if no hint exists.
+    """
+    hint_path = _wall_hint_path()
+    if not hint_path.exists():
+        return None
+    try:
+        hint_path.unlink(missing_ok=True)
+    except OSError:
+        return None
+    return (
+        "You just pushed to the default branch. "
+        "Consider announcing to the team: /wall <summary of what shipped>"
+    )
+
+
 def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
     """Build SessionStart(startup) additionalContext.
 
@@ -396,9 +449,7 @@ def cc_post_bash() -> None:
     if not _is_biff_enabled():
         return
     data = _read_hook_input()
-    result = handle_post_bash(data)
-    if result is None:
-        result = check_plan_hint()
+    result = handle_post_bash(data) or check_plan_hint() or check_wall_hint()
     if result is not None:
         _emit(_post_tool_use_context(result))
 
@@ -484,9 +535,10 @@ def git_post_commit() -> None:
 
 @_git_app.command("pre-push")
 def git_pre_push(
-    remote: str = typer.Argument("", help="Remote name"),
+    remote: str = typer.Argument("", help="Remote name"),  # noqa: ARG001
 ) -> None:
-    """pre-push — suggest /wall for default branch pushes.
-
-    Stub: full implementation in biff-9e7.
-    """
+    """pre-push — suggest /wall for default branch pushes."""
+    if not _is_biff_enabled():
+        return
+    ref_lines = _read_pre_push_refs()
+    handle_pre_push(ref_lines)
