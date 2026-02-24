@@ -39,6 +39,10 @@
   file (`~/.biff/wall-hint`). The PostToolUse Bash handler picks up the
   hint and suggests `/wall <summary>`. Silent for feature branch pushes.
   (#biff-9e7)
+- **Git hook deployment** — `biff enable` deploys post-checkout, post-commit,
+  and pre-push hooks into `.git/hooks/`. `biff disable` removes them. Hooks
+  coexist with existing git hooks (e.g. beads post-merge) via marked blocks.
+  `biff doctor` reports missing hooks. (#biff-9z2)
 
 ### Changed
 
