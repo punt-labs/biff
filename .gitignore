@@ -50,5 +50,8 @@ tests/transcripts/
 # MCP (project-local, not part of plugin distribution)
 .mcp.json
 
+# Biff local activation (per-user, not committed)
+.biff.local
+
 # OS
 .DS_Store

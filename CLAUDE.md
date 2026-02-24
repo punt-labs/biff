@@ -91,6 +91,26 @@ After editing both, run `uv lock` to update `uv.lock`. Then reinstall: `uv tool 
 
 Bump the version on every PR that changes user-facing behavior. Use semver: patch for fixes, minor for features, major for breaking changes.
 
+### Release Bar
+
+Biff only makes sense if it doesn't break at scale. We only get one chance to make a good impression. The release bar exists to ensure we know where the product breaks *before* users find out.
+
+**Scale target:** An active open source project with 243+ concurrent committers. If biff can't handle that without resource exhaustion, connection failures, or degraded UX, it is not ready to ship.
+
+**Before any PyPI release:**
+
+- [ ] **All test tiers pass** — unit, integration, subprocess, local NATS, hosted NATS
+- [ ] **No resource leaks** — NATS consumers, asyncio tasks, file handles, connections. Use the `leak-hunter` agent to verify.
+- [ ] **Hosted NATS E2E validates relay path** — the full relay round-trip (connect, publish, consume, cleanup) must complete against Synadia Cloud. Use the `distributed-test-engineer` agent to validate.
+- [ ] **Scale smoke test** — simulate concurrent multi-user load (presence updates, messaging, wall broadcasts) and verify no resource exhaustion.
+
+**Specialized agents for release validation:**
+
+| Agent | Role | When to Use |
+|-------|------|-------------|
+| `distributed-test-engineer` | Diagnoses distributed system test failures: NATS, asyncio event loops, pytest-asyncio fixture scoping, MCP transport | Hosted NATS test hangs, connection lifecycle bugs, fixture deadlocks |
+| `leak-hunter` | Finds memory and resource leaks: NATS consumers, asyncio tasks, file descriptors, connection pools | Before any release, after relay code changes, consumer limit errors |
+
 ### Pre-PR Checklist
 
 Before creating a PR, verify:

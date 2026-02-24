@@ -12,6 +12,12 @@ set -euo pipefail
 # Gate: only fire in biff-enabled projects
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 [[ -f "$REPO_ROOT/.biff" ]] || exit 0
+BIFF_LOCAL="$REPO_ROOT/.biff.local"
+if [[ -f "$BIFF_LOCAL" ]]; then
+  grep -qE '^enabled\s*=\s*true' "$BIFF_LOCAL" || exit 0
+else
+  exit 0
+fi
 
 INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name')
