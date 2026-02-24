@@ -36,12 +36,14 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     yield
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
-    with suppress(Exception):
-        await js.delete_stream("biff-inbox")
-    with suppress(Exception):
-        await js.delete_stream("biff-wtmp")
-    with suppress(Exception):
-        await js.delete_key_value("biff-sessions")  # pyright: ignore[reportUnknownMemberType]
+    # Delete both production and dev-prefixed streams for full cleanup.
+    for prefix in ("biff", "biff-dev"):
+        with suppress(Exception):
+            await js.delete_stream(f"{prefix}-inbox")
+        with suppress(Exception):
+            await js.delete_stream(f"{prefix}-wtmp")
+        with suppress(Exception):
+            await js.delete_key_value(f"{prefix}-sessions")  # pyright: ignore[reportUnknownMemberType]
     await nc.close()
 
 

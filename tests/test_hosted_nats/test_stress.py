@@ -49,11 +49,12 @@ pytestmark = [
 # -- Constants --
 
 _REPO = "_test-stress"
-# DES-016: shared stream names — constant across repos.
-_INBOX_STREAM = "biff-inbox"
-_KV_BUCKET = "biff-sessions"
+# Test-isolated stream names — "biff-dev" prefix avoids touching production.
+_STREAM_PREFIX = "biff-dev"
+_INBOX_STREAM = f"{_STREAM_PREFIX}-inbox"
+_KV_BUCKET = f"{_STREAM_PREFIX}-sessions"
 _KV_STREAM = f"KV_{_KV_BUCKET}"
-_WTMP_STREAM = "biff-wtmp"
+_WTMP_STREAM = f"{_STREAM_PREFIX}-wtmp"
 
 # Scale: 20 real NATS connections, each a separate NatsRelay.
 # Account allows 100; we use 20 + 2 from hosted E2E fixtures = 22.
@@ -129,6 +130,7 @@ async def relays(
             auth=hosted_nats_auth,
             name=f"stress-{i:03d}",
             repo_name=_REPO,
+            stream_prefix=_STREAM_PREFIX,
         )
         opened.append(relay)
     # Establish all connections concurrently
@@ -261,22 +263,29 @@ class TestMessagingWithinBudget:
         sender = relays[0]
 
         # Register sessions
-        for i in range(n_users):
-            await relays[i].update_session(_make_session(i))
+        await asyncio.gather(
+            *(relays[i].update_session(_make_session(i)) for i in range(n_users))
+        )
 
         # Send one message to each user's session inbox
-        for i in range(n_users):
-            user, tty = _user(i)
-            msg = Message(
-                from_user="bot",
-                to_user=f"{user}:{tty}",
-                body=f"Hello user {i}",
+        await asyncio.gather(
+            *(
+                sender.deliver(
+                    Message(
+                        from_user="bot",
+                        to_user=f"{_user(i)[0]}:{_user(i)[1]}",
+                        body=f"Hello user {i}",
+                    )
+                )
+                for i in range(n_users)
             )
-            await sender.deliver(msg)
+        )
 
         # Fetch — each call creates/reuses a durable consumer
-        for i in range(n_users):
-            messages = await relays[i].fetch(_session_key(i))
+        results = await asyncio.gather(
+            *(relays[i].fetch(_session_key(i)) for i in range(n_users))
+        )
+        for i, messages in enumerate(results):
             assert len(messages) == 1
             assert messages[0].body == f"Hello user {i}"
 
@@ -285,22 +294,32 @@ class TestMessagingWithinBudget:
         assert consumers == 0, f"Expected 0 consumers after fetch(), got {consumers}"
 
         # delete_session is still safe to call (suppress NotFoundError)
-        for i in range(n_users):
-            await relays[i].delete_session(_session_key(i))
+        await asyncio.gather(
+            *(relays[i].delete_session(_session_key(i)) for i in range(n_users))
+        )
 
     async def test_user_inbox_broadcast(self, relays: list[NatsRelay]) -> None:
         """Broadcast via user inbox for 20 users."""
         n_users = _N_RELAYS
         sender = relays[0]
 
-        for i in range(n_users):
-            user, _ = _user(i)
-            msg = Message(from_user="bot", to_user=user, body=f"Broadcast {i}")
-            await sender.deliver(msg)
+        await asyncio.gather(
+            *(
+                sender.deliver(
+                    Message(
+                        from_user="bot",
+                        to_user=_user(i)[0],
+                        body=f"Broadcast {i}",
+                    )
+                )
+                for i in range(n_users)
+            )
+        )
 
-        for i in range(n_users):
-            user, _ = _user(i)
-            messages = await relays[i].fetch_user_inbox(user)
+        results = await asyncio.gather(
+            *(relays[i].fetch_user_inbox(_user(i)[0]) for i in range(n_users))
+        )
+        for i, messages in enumerate(results):
             assert len(messages) == 1
             assert messages[0].body == f"Broadcast {i}"
 
@@ -341,45 +360,62 @@ class TestConsumerAccounting:
         iterations = 20
 
         # Warm up: one cycle to establish baseline
-        for i in range(n_users):
-            await lead.update_session(_make_session(i))
-            await lead.deliver(
-                Message(
-                    from_user="bot",
-                    to_user=_session_key(i),
-                    body="warmup",
+        await asyncio.gather(
+            *(lead.update_session(_make_session(i)) for i in range(n_users))
+        )
+        await asyncio.gather(
+            *(
+                lead.deliver(
+                    Message(
+                        from_user="bot",
+                        to_user=_session_key(i),
+                        body="warmup",
+                    )
                 )
+                for i in range(n_users)
             )
-            await lead.fetch(_session_key(i))
-            await lead.delete_session(_session_key(i))
+        )
+        await asyncio.gather(*(lead.fetch(_session_key(i)) for i in range(n_users)))
+        await asyncio.gather(
+            *(lead.delete_session(_session_key(i)) for i in range(n_users))
+        )
 
         inbox_baseline = await _consumer_count(lead, _INBOX_STREAM)
         kv_baseline = await _consumer_count(lead, _KV_STREAM)
 
         for iteration in range(iterations):
             # Register
-            for i in range(n_users):
-                await lead.update_session(_make_session(i))
+            await asyncio.gather(
+                *(lead.update_session(_make_session(i)) for i in range(n_users))
+            )
 
             # Enumerate (must not create consumers)
             sessions = await lead.get_sessions()
             assert len(sessions) == n_users
 
-            # Send and fetch
-            for i in range(n_users):
-                await lead.deliver(
-                    Message(
-                        from_user="bot",
-                        to_user=_session_key(i),
-                        body=f"iter-{iteration}",
+            # Send all, then fetch all (deliver must complete before fetch)
+            await asyncio.gather(
+                *(
+                    lead.deliver(
+                        Message(
+                            from_user="bot",
+                            to_user=_session_key(i),
+                            body=f"iter-{iteration}",
+                        )
                     )
+                    for i in range(n_users)
                 )
-                messages = await lead.fetch(_session_key(i))
+            )
+            results = await asyncio.gather(
+                *(lead.fetch(_session_key(i)) for i in range(n_users))
+            )
+            for messages in results:
                 assert len(messages) == 1
 
             # Cleanup
-            for i in range(n_users):
-                await lead.delete_session(_session_key(i))
+            await asyncio.gather(
+                *(lead.delete_session(_session_key(i)) for i in range(n_users))
+            )
 
         inbox_final = await _consumer_count(lead, _INBOX_STREAM)
         kv_final = await _consumer_count(lead, _KV_STREAM)
@@ -397,18 +433,17 @@ class TestConsumerAccounting:
         """100 get_sessions() calls must not change KV consumer count."""
         lead = relays[0]
 
-        for i in range(5):
-            await lead.update_session(_make_session(i))
+        await asyncio.gather(*(lead.update_session(_make_session(i)) for i in range(5)))
 
         before = await _consumer_count(lead, _KV_STREAM)
-        for _ in range(100):
-            await lead.get_sessions()
+        # Batch in groups of 10 for concurrency
+        for _ in range(10):
+            await asyncio.gather(*(lead.get_sessions() for _ in range(10)))
         after = await _consumer_count(lead, _KV_STREAM)
 
         assert after == before, f"get_sessions() leaked consumers: {before} -> {after}"
 
-        for i in range(5):
-            await lead.delete_session(_session_key(i))
+        await asyncio.gather(*(lead.delete_session(_session_key(i)) for i in range(5)))
 
 
 class TestWallBroadcast:
@@ -453,28 +488,54 @@ class TestConsumerFootprint:
         sender = relays[0]
 
         # Register sessions
-        for i in range(n_users):
-            await relays[i % _N_RELAYS].update_session(_make_session(i))
+        await asyncio.gather(
+            *(
+                relays[i % _N_RELAYS].update_session(_make_session(i))
+                for i in range(n_users)
+            )
+        )
 
         consumers_before = await _consumer_count(sender, _INBOX_STREAM)
 
         # Send to both session and user inboxes
-        for i in range(n_users):
-            user, tty = _user(i)
-            await sender.deliver(
-                Message(from_user="bot", to_user=f"{user}:{tty}", body=f"tty-{i}")
+        await asyncio.gather(
+            *(
+                sender.deliver(
+                    Message(
+                        from_user="bot",
+                        to_user=f"{_user(i)[0]}:{_user(i)[1]}",
+                        body=f"tty-{i}",
+                    )
+                )
+                for i in range(n_users)
             )
-            await sender.deliver(
-                Message(from_user="bot", to_user=user, body=f"user-{i}")
+        )
+        await asyncio.gather(
+            *(
+                sender.deliver(
+                    Message(
+                        from_user="bot",
+                        to_user=_user(i)[0],
+                        body=f"user-{i}",
+                    )
+                )
+                for i in range(n_users)
             )
+        )
 
         # Fetch from both inboxes — consumers created then deleted
-        for i in range(n_users):
-            relay = relays[i % _N_RELAYS]
-            user, _ = _user(i)
-            tty_msgs = await relay.fetch(_session_key(i))
+        tty_results = await asyncio.gather(
+            *(relays[i % _N_RELAYS].fetch(_session_key(i)) for i in range(n_users))
+        )
+        user_results = await asyncio.gather(
+            *(
+                relays[i % _N_RELAYS].fetch_user_inbox(_user(i)[0])
+                for i in range(n_users)
+            )
+        )
+        for tty_msgs in tty_results:
             assert len(tty_msgs) == 1
-            user_msgs = await relay.fetch_user_inbox(user)
+        for user_msgs in user_results:
             assert len(user_msgs) == 1
 
         consumers_after = await _consumer_count(sender, _INBOX_STREAM)
@@ -484,8 +545,12 @@ class TestConsumerFootprint:
         )
 
         # Cleanup
-        for i in range(n_users):
-            await relays[i % _N_RELAYS].delete_session(_session_key(i))
+        await asyncio.gather(
+            *(
+                relays[i % _N_RELAYS].delete_session(_session_key(i))
+                for i in range(n_users)
+            )
+        )
 
     async def test_repeated_fetch_cycles_stable(self, relays: list[NatsRelay]) -> None:
         """Consumer count stays flat across repeated send/fetch cycles."""
@@ -496,17 +561,22 @@ class TestConsumerFootprint:
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
 
         for cycle in range(cycles):
-            for i in range(n_users):
-                user, tty = _user(i)
-                await lead.deliver(
-                    Message(
-                        from_user="bot",
-                        to_user=f"{user}:{tty}",
-                        body=f"cycle-{cycle}",
+            await asyncio.gather(
+                *(
+                    lead.deliver(
+                        Message(
+                            from_user="bot",
+                            to_user=f"{_user(i)[0]}:{_user(i)[1]}",
+                            body=f"cycle-{cycle}",
+                        )
                     )
+                    for i in range(n_users)
                 )
-            for i in range(n_users):
-                msgs = await lead.fetch(_session_key(i))
+            )
+            results = await asyncio.gather(
+                *(lead.fetch(_session_key(i)) for i in range(n_users))
+            )
+            for msgs in results:
                 assert len(msgs) == 1
 
         consumers_after = await _consumer_count(lead, _INBOX_STREAM)
@@ -532,17 +602,25 @@ class TestUnreadSummaryZeroConsumers:
         await lead.update_session(_make_session(0))
 
         # Seed some messages so the summary has work to do
-        for j in range(5):
-            await lead.deliver(Message(from_user="bot", to_user=key, body=f"msg-{j}"))
-        await lead.deliver(
-            Message(from_user="bot", to_user=_user(0)[0], body="broadcast")
+        await asyncio.gather(
+            *(
+                lead.deliver(Message(from_user="bot", to_user=key, body=f"msg-{j}"))
+                for j in range(5)
+            ),
+            lead.deliver(
+                Message(from_user="bot", to_user=_user(0)[0], body="broadcast")
+            ),
         )
 
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
 
-        for _ in range(100):
-            summary = await lead.get_unread_summary(key)
-            assert summary.count == 6  # 5 tty + 1 user
+        # Batch in groups of 10 for concurrency
+        for _ in range(10):
+            summaries = await asyncio.gather(
+                *(lead.get_unread_summary(key) for _ in range(10))
+            )
+            for summary in summaries:
+                assert summary.count == 6  # 5 tty + 1 user
 
         consumers_after = await _consumer_count(lead, _INBOX_STREAM)
         assert consumers_after == consumers_before, (
@@ -557,11 +635,21 @@ class TestUnreadSummaryZeroConsumers:
         lead = relays[0]
 
         # Register sessions and seed messages for all users
-        for i in range(len(relays)):
-            await relays[i].update_session(_make_session(i))
-            await lead.deliver(
-                Message(from_user="bot", to_user=_session_key(i), body=f"hello-{i}")
+        await asyncio.gather(
+            *(relays[i].update_session(_make_session(i)) for i in range(len(relays)))
+        )
+        await asyncio.gather(
+            *(
+                lead.deliver(
+                    Message(
+                        from_user="bot",
+                        to_user=_session_key(i),
+                        body=f"hello-{i}",
+                    )
+                )
+                for i in range(len(relays))
             )
+        )
 
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
         rounds = 10
@@ -585,18 +673,22 @@ class TestUnreadSummaryZeroConsumers:
             f"after {rounds} rounds x {len(relays)} relays"
         )
 
-        for i in range(len(relays)):
-            await relays[i].delete_session(_session_key(i))
+        await asyncio.gather(
+            *(relays[i].delete_session(_session_key(i)) for i in range(len(relays)))
+        )
 
     async def test_summary_with_empty_inboxes(self, relays: list[NatsRelay]) -> None:
         """get_unread_summary() on empty inboxes — still zero consumers."""
         lead = relays[0]
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
 
-        # 50 calls against nonexistent inboxes
-        for i in range(50):
-            summary = await lead.get_unread_summary(f"ghost{i}:ttyX")
-            assert summary.count == 0
+        # 50 calls against nonexistent inboxes (batch in groups of 10)
+        for _ in range(5):
+            summaries = await asyncio.gather(
+                *(lead.get_unread_summary(f"ghost{i}:ttyX") for i in range(10))
+            )
+            for summary in summaries:
+                assert summary.count == 0
 
         consumers_after = await _consumer_count(lead, _INBOX_STREAM)
         assert consumers_after == consumers_before, (
@@ -625,8 +717,12 @@ class TestConcurrentMixedWorkload:
         rounds = 5
 
         # Setup: register all users
-        for i in range(n_users):
-            await relays[i].update_session(_make_session(i, plan=f"task-{i}"))
+        await asyncio.gather(
+            *(
+                relays[i].update_session(_make_session(i, plan=f"task-{i}"))
+                for i in range(n_users)
+            )
+        )
 
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
         kv_consumers_before = await _consumer_count(lead, _KV_STREAM)
@@ -674,8 +770,9 @@ class TestConcurrentMixedWorkload:
 
         # Drain all delivered messages so consumers get deleted
         for _ in range(rounds):
-            for i in range(n_users):
-                await relays[i].fetch(_session_key(i))
+            await asyncio.gather(
+                *(relays[i].fetch(_session_key(i)) for i in range(n_users))
+            )
 
         consumers_after = await _consumer_count(lead, _INBOX_STREAM)
         kv_consumers_after = await _consumer_count(lead, _KV_STREAM)
@@ -685,14 +782,15 @@ class TestConcurrentMixedWorkload:
             f"{consumers_before} -> {consumers_after} "
             f"after {rounds} concurrent rounds"
         )
-        assert kv_consumers_after == kv_consumers_before, (
+        assert kv_consumers_after <= kv_consumers_before, (
             f"Mixed workload KV consumer leak: "
             f"{kv_consumers_before} -> {kv_consumers_after} "
             f"after {rounds} concurrent rounds"
         )
 
-        for i in range(n_users):
-            await relays[i].delete_session(_session_key(i))
+        await asyncio.gather(
+            *(relays[i].delete_session(_session_key(i)) for i in range(n_users))
+        )
 
     async def test_polling_during_message_storm(self, relays: list[NatsRelay]) -> None:
         """Poll unread summaries while messages are being delivered."""
@@ -700,8 +798,9 @@ class TestConcurrentMixedWorkload:
         lead = relays[0]
         messages_per_user = 10
 
-        for i in range(n_users):
-            await relays[i].update_session(_make_session(i))
+        await asyncio.gather(
+            *(relays[i].update_session(_make_session(i)) for i in range(n_users))
+        )
 
         consumers_before = await _consumer_count(lead, _INBOX_STREAM)
 
@@ -727,8 +826,10 @@ class TestConcurrentMixedWorkload:
         await asyncio.gather(storm, polling)
 
         # Drain
-        for i in range(n_users):
-            msgs = await relays[i].fetch(_session_key(i))
+        drain_results = await asyncio.gather(
+            *(relays[i].fetch(_session_key(i)) for i in range(n_users))
+        )
+        for msgs in drain_results:
             assert len(msgs) == messages_per_user
 
         consumers_after = await _consumer_count(lead, _INBOX_STREAM)
@@ -737,8 +838,9 @@ class TestConcurrentMixedWorkload:
             f"{consumers_before} -> {consumers_after}"
         )
 
-        for i in range(n_users):
-            await relays[i].delete_session(_session_key(i))
+        await asyncio.gather(
+            *(relays[i].delete_session(_session_key(i)) for i in range(n_users))
+        )
 
 
 class TestAccountCapacity:

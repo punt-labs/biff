@@ -155,10 +155,15 @@ class SessionEvent(BaseModel):
     Mirrors Unix ``wtmp`` records.  Login events are appended when a
     server starts; logout events are appended when a KV watcher
     observes a session deletion.
+
+    ``version`` enables forward-compatible schema evolution for the
+    durable wtmp stream.  Readers route on version to the appropriate
+    validator; unrecognised versions are skipped rather than crashing.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
+    version: int = 1
     session_key: str = Field(min_length=1)
     event: str = Field(pattern=r"^(login|logout)$")
     user: str = Field(min_length=1)

@@ -32,8 +32,9 @@ async def _cleanup_wtmp(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     yield
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
-    with suppress(Exception):
-        await js.delete_stream("biff-wtmp")
+    for prefix in ("biff", "biff-dev"):
+        with suppress(Exception):
+            await js.delete_stream(f"{prefix}-wtmp")
     await nc.close()
 
 
