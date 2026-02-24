@@ -40,6 +40,7 @@ from biff.models import (
     UnreadSummary,
     UserSession,
     WallPost,
+    build_unread_summary,
 )
 from biff.tty import build_session_key
 
@@ -300,11 +301,12 @@ class LocalRelay:
             self._write_inbox(session_key, updated)
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:
-        """Count unread messages across TTY and user inboxes."""
+        """Build an unread summary merging TTY and user inboxes."""
         user = session_key.split(":")[0]
-        tty_count = len(await self.fetch(session_key))
-        user_count = len(await self.fetch_user_inbox(user))
-        return UnreadSummary(count=tty_count + user_count)
+        tty_unread = await self.fetch(session_key)
+        user_unread = await self.fetch_user_inbox(user)
+        all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
+        return build_unread_summary(all_unread, len(all_unread))
 
     # -- Messages (user inbox) --
 

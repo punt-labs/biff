@@ -10,6 +10,7 @@ All datetime fields are normalized to UTC; naive datetimes are rejected.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 
@@ -194,12 +195,34 @@ class WallPost(BaseModel):
 class UnreadSummary(BaseModel):
     """Summary of unread messages for dynamic tool descriptions.
 
-    Count-only (DES-015): no message preview.  The count drives the
-    ``read_messages`` tool description (``"2 unread"``) and the
-    ``tools/list_changed`` notification.  Eliminating the preview
-    removed the last consumer-creating operation from the polling path.
+    Used by the message watcher to generate descriptions like
+    ``"Check messages (2 unread: @kai about auth, @eric about lunch)"``.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     count: int = Field(default=0, ge=0)
+    preview: str = ""
+
+
+_MAX_PREVIEW_LEN = 80
+_MAX_BODY_PREVIEW = 40
+_MAX_PREVIEW_MESSAGES = 3
+
+
+def build_unread_summary(messages: Sequence[Message], count: int) -> UnreadSummary:
+    """Build an :class:`UnreadSummary` from a list of messages.
+
+    Shared by both ``LocalRelay`` and ``NatsRelay`` to avoid
+    duplicating preview-formatting logic.
+    """
+    if count == 0:
+        return UnreadSummary()
+    previews = [
+        f"@{m.from_user} about {m.body[:_MAX_BODY_PREVIEW]}"
+        for m in messages[:_MAX_PREVIEW_MESSAGES]
+    ]
+    preview = ", ".join(previews)
+    if len(preview) > _MAX_PREVIEW_LEN:
+        preview = preview[: _MAX_PREVIEW_LEN - 3] + "..."
+    return UnreadSummary(count=count, preview=preview)

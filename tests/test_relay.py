@@ -166,6 +166,7 @@ class TestGetUnreadSummary:
     async def test_empty(self, relay: LocalRelay) -> None:
         summary = await relay.get_unread_summary("eric:tty2")
         assert summary.count == 0
+        assert summary.preview == ""
 
     async def test_single_message(self, relay: LocalRelay) -> None:
         await relay.deliver(
@@ -173,6 +174,8 @@ class TestGetUnreadSummary:
         )
         summary = await relay.get_unread_summary("eric:tty2")
         assert summary.count == 1
+        assert "@kai" in summary.preview
+        assert "auth ready" in summary.preview
 
     async def test_multiple_messages(self, relay: LocalRelay) -> None:
         await relay.deliver(
@@ -183,17 +186,36 @@ class TestGetUnreadSummary:
         )
         summary = await relay.get_unread_summary("eric:tty2")
         assert summary.count == 2
+        assert "@kai" in summary.preview
+        assert "@jess" in summary.preview
+
+    async def test_preview_truncated(self, relay: LocalRelay) -> None:
+        for i in range(5):
+            await relay.deliver(
+                Message(
+                    from_user=f"user{i}",
+                    to_user="eric:tty2",
+                    body="a very long message body that goes on and on",
+                )
+            )
+        summary = await relay.get_unread_summary("eric:tty2")
+        assert summary.count == 5
+        assert len(summary.preview) <= 80
 
     async def test_merges_tty_and_user_inboxes(self, relay: LocalRelay) -> None:
         """Unread summary includes messages from both inboxes."""
+        # Targeted to TTY
         await relay.deliver(
             Message(from_user="kai", to_user="eric:tty2", body="targeted msg")
         )
+        # Broadcast to user
         await relay.deliver(
             Message(from_user="jess", to_user="eric", body="broadcast msg")
         )
         summary = await relay.get_unread_summary("eric:tty2")
         assert summary.count == 2
+        assert "@kai" in summary.preview
+        assert "@jess" in summary.preview
 
 
 # -- User Inbox --

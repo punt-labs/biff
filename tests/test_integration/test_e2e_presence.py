@@ -260,6 +260,7 @@ class TestCrossUserDynamicDescriptions:
         await kai.call("plan", message="working")
         desc = await _check_description(kai.client)
         assert "1 unread" in desc
+        assert "@eric" in desc
 
     async def test_description_reverts_after_check(
         self, kai: RecordingClient, eric: RecordingClient

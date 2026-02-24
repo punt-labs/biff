@@ -131,7 +131,10 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     """Update the ``read_messages`` tool description with unread count.
 
     When the user has unread messages, the description changes to show
-    the count, e.g. ``"Check messages (2 unread). Marks all as read."``
+    the count and a preview, e.g.::
+
+        Check messages (2 unread: @kai about auth, @eric about lunch).
+        Marks all as read.
 
     When the inbox is empty, the description reverts to the base text.
 
@@ -150,7 +153,8 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
         tool.description = _READ_MESSAGES_BASE
     else:
         tool.description = (
-            f"Check messages ({summary.count} unread). Marks all as read."
+            f"Check messages ({summary.count} unread: {summary.preview}). "
+            "Marks all as read."
         )
     if tool.description != old_desc:
         await _notify_tool_list_changed()
@@ -333,7 +337,7 @@ def _write_unread_file(
     wall_text: str = "",
     wall_from: str = "",
 ) -> None:
-    """Write unread count to a JSON status file.
+    """Write unread summary to a JSON status file.
 
     Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``,
     ``wall``, and ``wall_from`` metadata so the status line can display
@@ -347,6 +351,7 @@ def _write_unread_file(
         "repo": repo_name,
         "count": summary.count,
         "tty_name": tty_name,
+        "preview": summary.preview,
         "biff_enabled": biff_enabled,
         "wall": wall_text,
         "wall_from": wall_from,

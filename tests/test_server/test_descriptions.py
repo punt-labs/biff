@@ -46,7 +46,7 @@ class TestRefreshReadMessages:
         assert tool is not None
         assert tool.description == _READ_MESSAGES_BASE
 
-    async def test_unread_shows_count(self, state: ServerState) -> None:
+    async def test_unread_shows_count_and_preview(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
             Message(
@@ -61,6 +61,8 @@ class TestRefreshReadMessages:
         desc = tool.description
         assert desc is not None
         assert "1 unread" in desc
+        assert "@eric" in desc
+        assert "auth module ready" in desc
         assert "Marks all as read." in desc
 
     async def test_multiple_unread(self, state: ServerState) -> None:
@@ -133,7 +135,7 @@ class TestUnreadFile:
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
-        assert "preview" not in data
+        assert "@eric" in data["preview"]
 
     async def test_writes_zero_when_no_messages(
         self, state_with_path: ServerState
@@ -143,6 +145,7 @@ class TestUnreadFile:
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
+        assert data["preview"] == ""
 
     async def test_reverts_to_zero_after_read(
         self, state_with_path: ServerState
@@ -252,6 +255,7 @@ class TestPollInbox:
         assert state_with_path.unread_path is not None
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
+        assert "@eric" in data["preview"]
 
     async def test_updates_tool_description(self, state_with_path: ServerState) -> None:
         """Poller updates the read_messages tool description."""
