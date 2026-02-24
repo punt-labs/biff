@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 import nats
+from nats.errors import Error as NatsError
 from nats.js.api import (
     ConsumerConfig,
     DeliverPolicy,
@@ -402,28 +403,32 @@ class NatsRelay:
             config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
         )
         try:
-            raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
-        except TimeoutError:
-            raw_msgs = []
-        finally:
-            await sub.unsubscribe()
-
-        messages: list[Message] = []
-        for raw in raw_msgs:
             try:
-                msg = Message.model_validate_json(raw.data)
-                messages.append(msg)
-            except (ValidationError, ValueError):
-                logger.warning("Skipping malformed NATS message on %s", subject)
-            await raw.ack()
+                raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
+            except TimeoutError:
+                raw_msgs = []
+            finally:
+                await sub.unsubscribe()
 
-        # Delete consumer after acks complete — frees the server-side slot.
-        # suppress() handles the race where the consumer expired via
-        # inactive_threshold or was already deleted by delete_session().
-        with suppress(NotFoundError):
-            await js.delete_consumer(self._stream_name, durable)
+            messages: list[Message] = []
+            for raw in raw_msgs:
+                try:
+                    msg = Message.model_validate_json(raw.data)
+                    messages.append(msg)
+                except (ValidationError, ValueError):
+                    logger.warning("Skipping malformed NATS message on %s", subject)
+                await raw.ack()
 
-        return messages
+            return messages
+        finally:
+            # Delete consumer after use — frees the server-side slot.
+            # Broad except: any delete_consumer failure must not prevent
+            # returning already-acked messages (WORK_QUEUE deletes on ack).
+            # inactive_threshold provides backup cleanup.
+            try:
+                await js.delete_consumer(self._stream_name, durable)
+            except (NatsError, TimeoutError):
+                logger.debug("Consumer cleanup failed for %s (will expire)", durable)
 
     async def mark_read(self, session_key: str, ids: Sequence[UUID]) -> None:
         """No-op — messages are consumed (deleted) by :meth:`fetch`."""
@@ -444,26 +449,29 @@ class NatsRelay:
             config=ConsumerConfig(inactive_threshold=_CONSUMER_INACTIVE_THRESHOLD),
         )
         try:
-            raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
-        except TimeoutError:
-            raw_msgs = []
-        finally:
-            await sub.unsubscribe()
-
-        messages: list[Message] = []
-        for raw in raw_msgs:
             try:
-                msg = Message.model_validate_json(raw.data)
-                messages.append(msg)
-            except (ValidationError, ValueError):
-                logger.warning("Skipping malformed NATS message on %s", subject)
-            await raw.ack()
+                raw_msgs = await sub.fetch(batch=_FETCH_BATCH, timeout=_FETCH_TIMEOUT)
+            except TimeoutError:
+                raw_msgs = []
+            finally:
+                await sub.unsubscribe()
 
-        # Delete consumer after acks — same pattern as fetch().
-        with suppress(NotFoundError):
-            await js.delete_consumer(self._stream_name, durable)
+            messages: list[Message] = []
+            for raw in raw_msgs:
+                try:
+                    msg = Message.model_validate_json(raw.data)
+                    messages.append(msg)
+                except (ValidationError, ValueError):
+                    logger.warning("Skipping malformed NATS message on %s", subject)
+                await raw.ack()
 
-        return messages
+            return messages
+        finally:
+            # Same pattern as fetch() — always clean up the consumer.
+            try:
+                await js.delete_consumer(self._stream_name, durable)
+            except (NatsError, TimeoutError):
+                logger.debug("Consumer cleanup failed for %s (will expire)", durable)
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[UUID]) -> None:
         """No-op — messages are consumed (deleted) by :meth:`fetch_user_inbox`."""

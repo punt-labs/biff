@@ -17,10 +17,12 @@ Synadia Cloud account limits (Biff / NGS / biff-default)::
     R1 Streams:              25
     R1 Disk:                 2.5 GiB
 
-The consumers-per-stream limit (500) supports the 243-user
-target (243 session + 243 user consumers = 486 worst case).
-The stress test validates that biff operates correctly at
-scale and cleans up after itself.
+With DES-015 (count-only unread summaries), the steady-state
+JetStream consumer footprint is 0 per user, so the
+consumers-per-stream limit (500) is no longer the primary
+capacity bottleneck.  The 300 connection limit is now the
+main constraint.  The stress test validates that biff operates
+correctly at scale and cleans up after itself.
 """
 
 from __future__ import annotations
@@ -38,7 +40,11 @@ from biff.models import Message, RelayAuth, UserSession, WallPost
 from biff.nats_relay import NatsRelay
 from biff.tty import build_session_key
 
-pytestmark = [pytest.mark.stress, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.stress,
+    pytest.mark.hosted,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 # -- Constants --
 
