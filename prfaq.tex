@@ -33,6 +33,7 @@
 
 % ── Lists ─────────────────────────────────────────────────────────────────────
 \usepackage{enumitem}
+\usepackage{needspace}
 
 % ── Hyperlinks ────────────────────────────────────────────────────────────────
 \usepackage{hyperref}
@@ -103,16 +104,24 @@
   skipbelow=\baselineskip,
 ]{spokespersonquote}
 
-% ── faqpair — Q&A pair with bold question ────────────────────────────────────
+% ── faqpair — numbered Q&A pair with bold question ──────────────────────────
+% Label FAQ pairs: \begin{faqpair}{Question}\label{faq:slug}
+% Then cross-reference: (see \faqref{faq:slug})
+\newcounter{faqnum}
 \newenvironment{faqpair}[1]{%
+  \needspace{4\baselineskip}%
   \vspace{0.5em}%
-  \noindent\textbf{\color{SectionBlue}Q: #1}\par%
+  \refstepcounter{faqnum}%
+  \noindent\textbf{\color{SectionBlue}Q\thefaqnum: #1}\par\nopagebreak[4]%
   \vspace{0.2em}%
   \begin{adjustwidth}{1em}{0pt}%
+  \setlength{\parindent}{0pt}%
 }{%
   \end{adjustwidth}%
   \vspace{0.5em}%
 }
+% ── \faqref{faq:slug} — clickable "FAQ 3" reference ─────────────────────────
+\newcommand{\faqref}[1]{\hyperref[#1]{FAQ~\ref*{#1}}}
 
 % ── riskitem — description-style risk entry (avoids table margin issues) ─────
 \newcommand{\riskitem}[2]{%
@@ -314,7 +323,7 @@ paid tier.
 
 \subsection*{External FAQs}
 
-\begin{faqpair}{What is biff and who is it for?}
+\begin{faqpair}{What is biff and who is it for?}\label{faq:what-is-biff}
   Biff is a terminal-native communication tool for software engineers who
   use Claude Code or other MCP-compatible systems. If you spend your working
   day in a terminal and resent switching to a browser to talk to your team,
@@ -323,7 +332,7 @@ paid tier.
   leaving your session. See Appendix~A for the full command reference.
 \end{faqpair}
 
-\begin{faqpair}{How is biff different from Slack?}
+\begin{faqpair}{How is biff different from Slack?}\label{faq:diff-slack}
   Slack is a workplace chat platform designed around channels, threads, and
   continuous presence. It assumes you are watching. Biff is a communication
   tool designed around intent and focus. It assumes you are working. In
@@ -342,7 +351,7 @@ paid tier.
   terminal.
 \end{faqpair}
 
-\begin{faqpair}{How is biff different from Discord?}
+\begin{faqpair}{How is biff different from Discord?}\label{faq:diff-discord}
   Discord is a community platform built around persistent voice and text
   channels. It works well for open-source communities and gaming. Biff is a
   team tool built around directed messages and explicit intent. Discord is
@@ -350,7 +359,7 @@ paid tier.
   inside your AI coding session --- there is no alt-tab.
 \end{faqpair}
 
-\begin{faqpair}{How do I get started?}
+\begin{faqpair}{How do I get started?}\label{faq:get-started}
   Run \texttt{pip install biff}, then \texttt{biff install} to register
   the MCP server and slash commands, then \texttt{biff doctor} to verify the
   setup. Restart Claude Code. Biff ships with a shared demo relay on Synadia
@@ -361,7 +370,7 @@ paid tier.
   workspace to configure. You are communicating within five minutes.
 \end{faqpair}
 
-\begin{faqpair}{What happens to my messages? Is communication private?}
+\begin{faqpair}{What happens to my messages? Is communication private?}\label{faq:privacy}
   All direct messages are end-to-end encrypted using NaCl/libsodium. The
   relay stores only ciphertext it cannot read. Biff follows a POP mail
   model: messages are held only until the recipient reads them, then
@@ -371,7 +380,7 @@ paid tier.
   never analyzes or trains on your messages.
 \end{faqpair}
 
-\begin{faqpair}{Does biff work without Claude Code?}
+\begin{faqpair}{Does biff work without Claude Code?}\label{faq:without-claude}
   Biff is built on the Model Context Protocol (MCP), which is an open
   standard. Any MCP-compatible client can use biff. Claude Code is the
   primary target today because it has the largest population of engineers
@@ -379,7 +388,7 @@ paid tier.
   too.
 \end{faqpair}
 
-\begin{faqpair}{Will biff support real-time pairing or live conversation?}
+\begin{faqpair}{Will biff support real-time pairing or live conversation?}\label{faq:realtime}
   Real-time features are on the roadmap but not yet shipped.
   \texttt{/talk} would open a live text conversation between two terminals.
   \texttt{/pair} would allow a teammate to send input to your Claude Code
@@ -388,7 +397,7 @@ paid tier.
   careful security design and are scoped to a future phase.
 \end{faqpair}
 
-\begin{faqpair}{Can agents use biff?}
+\begin{faqpair}{Can agents use biff?}\label{faq:agents}
   Yes. Because biff is an MCP server, agents participate alongside humans
   as natural members of the team. An autonomous coding agent can
   \texttt{/plan} what it is working on, \texttt{/write} a human when it
@@ -405,16 +414,18 @@ paid tier.
   claude-flow and other agent frameworks are better suited for that. Biff
   serves the human-scale communication layer: the place where humans see
   what their agents are doing, and agents can reach a human when they need
-  one.
+  one. See \faqref{faq:agentic} for the broader coordination vision.
 \end{faqpair}
 
 % ── Internal FAQs (Business-facing) ──────────────────────────────────────────
+
+\pagebreak
 
 \subsection*{Internal FAQs}
 
 \subsubsection*{Value \& Market}
 
-\begin{faqpair}{What is the total addressable market?}
+\begin{faqpair}{What is the total addressable market?}\label{faq:tam}
   The immediate market is engineers using AI coding assistants inside
   terminals. GitHub's Octoverse 2025 report counts over 180 million
   developers on the platform, with 36 million joining in the past year
@@ -436,9 +447,10 @@ paid tier.
   multiplies; and as engineers run more agents alongside their own
   sessions, each human represents a growing number of sessions that benefit
   from biff's visibility and communication layer.
+  See \faqref{faq:pnl} for steady-state economics.
 \end{faqpair}
 
-\begin{faqpair}{What evidence do we have that customers want this?}
+\begin{faqpair}{What evidence do we have that customers want this?}\label{faq:evidence}
   Four categories of evidence:
 
   \begin{enumerate}[leftmargin=1.5em]
@@ -482,7 +494,7 @@ paid tier.
   \end{enumerate}
 \end{faqpair}
 
-\begin{faqpair}{How will engineers discover biff?}
+\begin{faqpair}{How will engineers discover biff?}\label{faq:discovery}
   Three channels, in order of expected impact:
 
   \begin{enumerate}[leftmargin=1.5em]
@@ -517,7 +529,7 @@ paid tier.
   investment to reach critical mass on each team is the true bottleneck.
 \end{faqpair}
 
-\begin{faqpair}{Who are the competitors and why will we win?}
+\begin{faqpair}{Who are the competitors and why will we win?}\label{faq:competitors}
   \textbf{Slack} is the dominant team communication tool but is
   increasingly resented by engineers for its interruption-driven model.
   Slack could build a CLI client, but its revenue depends on engagement
@@ -563,7 +575,7 @@ paid tier.
 
 \subsubsection*{Technical}
 
-\begin{faqpair}{What are the major technical risks?}
+\begin{faqpair}{What are the major technical risks?}\label{faq:tech-risks}
   \begin{enumerate}[leftmargin=1.5em]
     \item \textbf{MCP notification mechanism (low risk, shipped).} The
     full chain --- message arrival, tool re-registration,
@@ -604,11 +616,11 @@ paid tier.
     \texttt{biff install} --- the configuration is already there. The demo relay eliminates
     infrastructure setup. The \texttt{/plan}, \texttt{/finger}, and
     \texttt{/who} commands provide value to individual users even without
-    teammates.
+    teammates. See \faqref{faq:discovery} for the distribution strategy.
   \end{enumerate}
 \end{faqpair}
 
-\begin{faqpair}{What dependencies exist on other teams or systems?}
+\begin{faqpair}{What dependencies exist on other teams or systems?}\label{faq:dependencies}
   Biff depends on the MCP protocol (maintained by Anthropic), Claude Code
   as the primary host client (also Anthropic), and NATS for the message
   relay. There are no
@@ -616,7 +628,7 @@ paid tier.
   NATS binary and can be self-hosted.
 \end{faqpair}
 
-\begin{faqpair}{Where does data live?}
+\begin{faqpair}{Where does data live?}\label{faq:data}
   All data lives on the NATS relay. The relay serves three durability
   tiers:
 
@@ -639,33 +651,21 @@ paid tier.
   \texttt{.biff} and committing it proves you have commit access to the
   repo, which is what makes you a team member. End-to-end encryption
   ships with biff 1.0 and will make the relay unable to read message
-  contents.
+  contents. See \faqref{faq:timeline} for the encryption roadmap.
 \end{faqpair}
 
-\begin{faqpair}{What is the estimated development timeline?}
+\begin{faqpair}{What is the estimated development timeline?}\label{faq:timeline}
   \begin{description}[leftmargin=1.5em, labelwidth=10em, font=\bfseries]
-    \item[Shipped] Core MCP server with \texttt{/write}, \texttt{/read},
-    \texttt{/who}, \texttt{/plan}, \texttt{/finger}, \texttt{/tty},
-    \texttt{/mesg y/n}, and \texttt{/last}. NATS-based relay for
-    cross-machine messaging on Synadia Cloud. POP-model store-and-forward
-    for \texttt{/write}. TTY sessions (each agent gets a distinct identity,
-    targetable via \texttt{/write @user:tty}). Enriched presence
-    (\texttt{/who} shows 7 columns: NAME, TTY, IDLE, S, HOST, DIR, PLAN;
-    \texttt{/finger} shows host and directory per session). Session
-    history (\texttt{/last} shows login/logout records modeled after Unix
-    \texttt{last(1)}, with three-layer logout detection). Per-session status
-    bar showing \texttt{user:tty(N)} with three states: caught up, unreads
-    (bold yellow), and messages off (\texttt{n}). \texttt{/mesg n}
-    suppresses the unread count on the status line.
-    Display names from GitHub identity. Team broadcast (\texttt{/wall})
-    with duration-based expiry (default 1h, max 3d), poll-based cross-session
-    refresh, and status bar integration. Per-project activation via
-    \texttt{/biff y} (or \texttt{biff enable} from CLI) with dormant mode ---
-    no NATS connection, no consumers, no status line until opted in. Lazy
-    NATS connection management releases TCP after 5 minutes idle and
-    reconnects briefly every 10 minutes (POP-mode polling). Workflow hooks:
-    claiming a bead suggests \texttt{/plan}, creating or merging a PR
-    suggests \texttt{/wall}. Released and in use.
+    \item[Shipped] All nine core commands: messaging (\texttt{/write},
+    \texttt{/read}), presence (\texttt{/who}, \texttt{/finger},
+    \texttt{/plan}), session identity (\texttt{/tty}), availability
+    (\texttt{/mesg}), session history (\texttt{/last}), and team broadcast
+    (\texttt{/wall}). Cross-machine relay on Synadia Cloud with zero
+    infrastructure setup. Per-project activation (\texttt{/biff y}) with
+    idle connection management. Status bar integration showing unread
+    counts. Workflow hooks for plan and wall automation. GitHub identity
+    for display names. Released and in daily use.
+    See Appendix~A for the full command reference.
     \item[Next: Agentic Coordination] Plan auto-expand (\texttt{/plan
     biff-bf8} shows the task title).
     \item[Future: Security] End-to-end encryption (NaCl/libsodium),
@@ -677,7 +677,7 @@ paid tier.
   \end{description}
 \end{faqpair}
 
-\begin{faqpair}{What is the agentic coordination vision?}
+\begin{faqpair}{What is the agentic coordination vision?}\label{faq:agentic}
   Biff serves the human+agent collaboration layer, not the pure
   agent-to-agent coordination layer. These are different problems with
   different design constraints.
@@ -714,7 +714,7 @@ paid tier.
   when it matters.
 \end{faqpair}
 
-\begin{faqpair}{What is the scaling story?}
+\begin{faqpair}{What is the scaling story?}\label{faq:scaling}
   The relay is a NATS JetStream instance --- a single Go binary that
   handles 100,000+ messages per second on one node. Horizontal scaling
   is straightforward: NATS supports clustering with Raft-based
@@ -726,11 +726,9 @@ paid tier.
   retrieve-and-discard semantics biff requires.
 \end{faqpair}
 
-\pagebreak
-
 \subsubsection*{Business}
 
-\begin{faqpair}{What is the revenue model?}
+\begin{faqpair}{What is the revenue model?}\label{faq:revenue}
   Open core. The biff CLI tool, self-hosted relay, and shared demo relay
   are free and open source (MIT license). Revenue comes from
   \textbf{biff teams}, a hosted relay service priced at
@@ -750,7 +748,7 @@ paid tier.
   managed version when the team grows and needs reliability guarantees.
 \end{faqpair}
 
-\begin{faqpair}{What are the key metrics for success?}
+\begin{faqpair}{What are the key metrics for success?}\label{faq:metrics}
   \begin{description}[leftmargin=1.5em, labelwidth=10em, font=\bfseries]
     \item[Weekly active users] Target: 1,000 WAU within 6 months of
     launch. Measures adoption.
@@ -771,7 +769,7 @@ paid tier.
   rethinking.
 \end{faqpair}
 
-\begin{faqpair}{What is the next step to validate the vision?}
+\begin{faqpair}{What is the next step to validate the vision?}\label{faq:validate}
   Ship to 10 external beta teams within 60 days. Each team must have at
   least 3 members using biff as their primary coordination tool for a
   real project. Measure D30 retention and messages-per-user-per-week.
@@ -782,9 +780,10 @@ paid tier.
   solving a real problem and needs fundamental rethinking. If retention is
   above 40\% but conversion interest is zero, the free tier may be too
   generous or the paid tier insufficiently differentiated.
+  See \faqref{faq:metrics} for the target numbers.
 \end{faqpair}
 
-\begin{faqpair}{What does the P\&L look like at steady state?}
+\begin{faqpair}{What does the P\&L look like at steady state?}\label{faq:pnl}
   Assumptions (labeled): 10,000 paid users at \$10/user/month = \$1.2M
   ARR. Infrastructure costs are approximately \$2,000/month (NATS relay
   hosting on Synadia Cloud, monitoring, CI/CD). Support costs are minimal
@@ -799,7 +798,7 @@ paid tier.
   engineering headcount, not infrastructure.
 \end{faqpair}
 
-\begin{faqpair}{Why now? What has changed?}
+\begin{faqpair}{Why now? What has changed?}\label{faq:why-now}
   Three things changed simultaneously, and the convergence is visible in
   real dollars and real behavior:
 
@@ -828,7 +827,7 @@ paid tier.
   \end{enumerate}
 \end{faqpair}
 
-\begin{faqpair}{What are we not building?}
+\begin{faqpair}{What are we not building?}\label{faq:not-building}
   Biff is not building:
   \begin{itemize}[leftmargin=1.5em]
     \item \textbf{Persistent channels or temporary groups.} No channels,
@@ -853,7 +852,7 @@ paid tier.
   \end{itemize}
 \end{faqpair}
 
-\begin{faqpair}{What are the most likely ways biff fails?}
+\begin{faqpair}{What are the most likely ways biff fails?}\label{faq:failure-modes}
   Five scenarios, in descending order of likelihood:
 
   \begin{enumerate}[leftmargin=1.5em]
@@ -908,7 +907,9 @@ paid tier.
   innerrightmargin=10pt,
   innertopmargin=10pt,
   innerbottommargin=10pt,
+  nobreak=true,
 ]
+\small
 {\bfseries\color{SectionBlue}Four Risks Assessment}\par
 \vspace{0.5em}
 

@@ -204,7 +204,7 @@ Workflow hooks: claiming a bead auto-suggests `/plan`, creating or merging a PR 
 
 | Phase | What Ships |
 |-------|-----------|
-| **Network relay** | E2E encryption (NaCl/libsodium), GitHub identity and auth, per-repo NATS credentials |
+| **Security** | E2E encryption (NaCl/libsodium), GitHub identity and auth, per-repo NATS credentials |
 | **Real-time** | `/talk` for live conversation, `/pair` for session sharing with explicit consent |
 | **Hosted relay** | Managed service with admin controls, audit logs, team isolation |
 
