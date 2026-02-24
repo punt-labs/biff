@@ -190,13 +190,15 @@ TTY sessions (`/tty`) give each agent a distinct identity — one user with 3 se
 
 `/wall` broadcasts time-limited announcements visible on every teammate's status bar. Duration-based expiry (default 1h, max 3d). Poll-based cross-session refresh so all sessions see wall changes within seconds.
 
+Per-project activation via `/biff y` (or `biff enable` from CLI). Biff starts dormant — no NATS connection, no consumers, no status line — until you opt in. Lazy NATS connection management releases the TCP connection after 5 minutes idle and reconnects briefly every 10 minutes to fetch messages (POP-mode polling), so a terminal left open for hours doesn't hold a persistent connection.
+
+Workflow hooks: claiming a bead auto-suggests `/plan`, creating or merging a PR suggests `/wall` announcement. Hooks gate on `.biff.local` — silent when biff is not enabled.
+
 ### Next: Agentic Coordination
 
 | Feature | What It Enables |
 |---------|----------------|
 | **Plan auto-expand** | `/plan biff-bf8` auto-expands to show the task title. Everyone sees what you're working on. |
-| **Workflow hooks** | Claiming a task auto-sets your plan. Creating a PR triggers an announcement. |
-| **Project opt-in** | `/biff y` enables the coordination workflow per project via AGENTS.md. |
 
 ### Future: Real-Time and Security
 

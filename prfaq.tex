@@ -659,11 +659,15 @@ paid tier.
     suppresses the unread count on the status line.
     Display names from GitHub identity. Team broadcast (\texttt{/wall})
     with duration-based expiry (default 1h, max 3d), poll-based cross-session
-    refresh, and status bar integration. Released and in use.
+    refresh, and status bar integration. Per-project activation via
+    \texttt{/biff y} (or \texttt{biff enable} from CLI) with dormant mode ---
+    no NATS connection, no consumers, no status line until opted in. Lazy
+    NATS connection management releases TCP after 5 minutes idle and
+    reconnects briefly every 10 minutes (POP-mode polling). Workflow hooks:
+    claiming a bead suggests \texttt{/plan}, creating or merging a PR
+    suggests \texttt{/wall}. Released and in use.
     \item[Next: Agentic Coordination] Plan auto-expand (\texttt{/plan
-    biff-bf8} shows the task title). Workflow hooks (claiming a task
-    auto-sets plan, creating a PR triggers \texttt{/wall}). Project
-    opt-in (\texttt{/biff y} enables coordination per project).
+    biff-bf8} shows the task title).
     \item[Future: Security] End-to-end encryption (NaCl/libsodium),
     GitHub identity and auth, per-repo NATS credentials.
     \item[Future: Real-Time] \texttt{/talk} for live conversation,
@@ -1031,6 +1035,18 @@ working today. \textbf{Next} features are the immediate roadmap focus.
   max 3d). Does not go to inboxes --- it is a banner, not a message.
   Cross-session poll-based refresh. \\
 
+  \texttt{/biff y} | \texttt{n} & BSD \texttt{biff} &
+  Per-project activation toggle. \texttt{/biff y} (or \texttt{biff enable}
+  from CLI) opts in via \texttt{.biff.local}; \texttt{/biff n} opts out.
+  Dormant mode: no NATS connection, no consumers, no status line until
+  opted in. Lazy NATS connection releases TCP after 5 minutes idle,
+  reconnects briefly every 10 minutes (POP-mode polling). \\
+
+  Workflow hooks & --- &
+  Claiming a bead suggests \texttt{/plan}. Creating or merging a PR
+  suggests \texttt{/wall} announcement. Hooks gate on \texttt{.biff.local}
+  --- silent when biff is not enabled. \\
+
   \bottomrule
 \end{tabularx}
 
@@ -1045,14 +1061,6 @@ working today. \textbf{Next} features are the immediate roadmap focus.
   Plan auto-expand &
   \texttt{/plan biff-bf8} auto-expands to show the task title. Everyone
   sees what you are working on without looking it up. \\
-
-  Workflow hooks &
-  Claiming a task auto-sets your plan. Creating a PR triggers a
-  \texttt{/wall} announcement. \\
-
-  Project opt-in &
-  \texttt{/biff y} enables the coordination workflow per project via
-  \texttt{AGENTS.md}. \\
 
   \bottomrule
 \end{tabularx}
