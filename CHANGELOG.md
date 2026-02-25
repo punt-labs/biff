@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.10.5 — 2026-02-25
+
+### Fixed
+
+- **Status bar latency regression fixed** — wall and talk updates now arrive within
+  0-2s on idle sessions instead of 2+ minutes. Root cause: nap mode disconnected the
+  NATS TCP connection, killing all KV watches and subscriptions. Now nap mode keeps the
+  connection alive and reduces polling frequency instead. (DES-019)
+
+### Changed
+
+- **KV watcher detects wall changes** — `_run_kv_watch` now routes wall key updates
+  through `refresh_wall()` → `_notify_tool_list_changed()` for instant push notifications
+  to Claude Code. Previously wall changes were only detected by the 2s poller.
+- **Heartbeat fires during nap** — idle sessions maintain heartbeat on schedule
+  regardless of nap state, preventing session liveness gaps.
+- **POP-mode connection cycling eliminated** — `_pop_fetch()` removed, `disconnect()`
+  no longer called during nap. NATS connection persists for the full server lifetime.
+
 ## 0.10.4 — 2026-02-25
 
 ### Fixed

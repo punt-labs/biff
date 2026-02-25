@@ -37,28 +37,28 @@ class TestActivityTracker:
         tracker.touch()
         assert not tracker.napping
 
-    def test_record_pop_resets_pop_timer(self) -> None:
+    def test_record_nap_poll_resets_timer(self) -> None:
         tracker = ActivityTracker()
         time.sleep(0.05)
-        tracker.record_pop()
-        assert tracker.seconds_since_pop() < 0.05
+        tracker.record_nap_poll()
+        assert tracker.seconds_since_nap_poll() < 0.05
 
-    def test_seconds_since_pop_increases(self) -> None:
+    def test_seconds_since_nap_poll_increases(self) -> None:
         tracker = ActivityTracker()
         time.sleep(0.05)
-        assert tracker.seconds_since_pop() >= 0.04
+        assert tracker.seconds_since_nap_poll() >= 0.04
 
-    def test_pop_does_not_clear_napping(self) -> None:
+    def test_nap_poll_does_not_clear_napping(self) -> None:
         tracker = ActivityTracker()
         tracker.enter_nap()
-        tracker.record_pop()
+        tracker.record_nap_poll()
         assert tracker.napping
 
     def test_full_nap_wake_cycle(self) -> None:
-        """Active → nap → POP → touch → active."""
+        """Active → nap → nap poll → touch → active."""
         tracker = ActivityTracker()
         tracker.enter_nap()
-        tracker.record_pop()
+        tracker.record_nap_poll()
         tracker.touch()
         # After touch: no longer napping, idle timer just reset
         assert not tracker.napping

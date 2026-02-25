@@ -142,9 +142,6 @@ async def _heartbeat_loop(
     resets the key's TTL.  When the process sleeps (laptop lid closed) or
     dies (SIGKILL), heartbeats stop and the relay eventually expires the
     session.
-
-    Skips when napping — the POP fetch in :func:`poll_inbox` piggybacks
-    a heartbeat on its reconnect cycle.
     """
     while not shutdown.is_set():
         try:
@@ -152,8 +149,6 @@ async def _heartbeat_loop(
             return  # Shutdown requested
         except TimeoutError:
             pass
-        if state.activity.napping:
-            continue  # POP fetch handles heartbeat
         try:
             await state.relay.heartbeat(state.session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
@@ -193,52 +188,52 @@ def _build_logout_event(session_key: str, cached: UserSession) -> SessionEvent:
     )
 
 
-async def _wait_until_active(state: ServerState, shutdown: asyncio.Event) -> bool:
-    """Block until the server exits napping state or shutdown is requested.
-
-    Returns ``True`` if shutdown was requested, ``False`` if now active.
-    """
-    while state.activity.napping and not shutdown.is_set():
-        with suppress(TimeoutError):
-            await asyncio.wait_for(shutdown.wait(), timeout=2.0)
-    return shutdown.is_set()
-
-
 async def _run_kv_watch(
+    mcp: FastMCP[ServerState],
     relay: NatsRelay,
     state: ServerState,
     shutdown: asyncio.Event,
     cache: dict[str, UserSession],
 ) -> None:
-    """Run a single KV watch cycle until napping or shutdown."""
+    """Run a single KV watch cycle until shutdown.
+
+    Stays alive during napping — the NATS connection is no longer
+    released on idle.  This ensures wall changes and session events
+    are detected in real-time regardless of activity state.
+    """
     kv = await relay.get_kv()
     watcher = await kv.watchall()  # pyright: ignore[reportUnknownMemberType]
     try:
         async for entry in watcher:  # pyright: ignore[reportUnknownVariableType]
             if shutdown.is_set():
                 return
-            if state.activity.napping:
-                return  # Connection about to close, caller restarts
+            key = str(entry.key)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType,reportAttributeAccessIssue]
+            if key == NatsRelay.wall_kv_key(state.config.repo_name):
+                await refresh_wall(mcp, state)
+                continue
             await _handle_kv_entry(entry, relay, state, cache)
     finally:
         await watcher.stop()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
 
 
-async def _wtmp_watcher_loop(state: ServerState, shutdown: asyncio.Event) -> None:
-    """Watch KV session changes and append logout events to wtmp.
+async def _kv_watcher_loop(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    shutdown: asyncio.Event,
+) -> None:
+    """Watch KV changes for wall updates and session events (wtmp).
 
-    Handles logout events for *other* sessions that disappear via TTL
-    expiry or crash (no graceful shutdown).  Our own session's logout
-    is written explicitly by ``_append_logout_event()`` during graceful
-    shutdown, so the watcher skips ``state.session_key``.
+    Handles:
+    - **Wall changes**: detected in ``_run_kv_watch()`` when the KV key
+      matches ``NatsRelay.wall_kv_key(state.config.repo_name)`` and
+      triggers immediate ``refresh_wall()``.
+    - **Session logout events**: for *other* sessions that disappear
+      via TTL expiry or crash (no graceful shutdown).  Our own session's
+      logout is written explicitly by ``_append_logout_event()`` during
+      graceful shutdown.
 
-    On PUT events, caches the session data so that logout events can
-    include the ``last_active`` timestamp.
-
-    When napping, the NATS connection is released by the poller.  The
-    watch iterator will error when the connection closes.  The outer
-    loop catches this, waits until no longer napping, then restarts
-    the watch from a fresh connection.
+    The NATS connection stays alive during napping so wall changes
+    arrive in real-time regardless of activity state.
 
     **Duplicate risk**: If multiple servers are running, each may
     observe the same KV delete and write a logout event.  This is
@@ -247,21 +242,17 @@ async def _wtmp_watcher_loop(state: ServerState, shutdown: asyncio.Event) -> Non
     """
     relay = state.relay
     if not isinstance(relay, NatsRelay):
-        return  # LocalRelay does not support wtmp
-    if not relay.wtmp_available:
-        return  # Wtmp stream not provisioned (account limit reached)
+        return  # LocalRelay does not support KV watches
 
     cache: dict[str, UserSession] = {}
 
     while not shutdown.is_set():
-        if await _wait_until_active(state, shutdown):
-            return
         try:
-            await _run_kv_watch(relay, state, shutdown, cache)
+            await _run_kv_watch(mcp, relay, state, shutdown, cache)
         except asyncio.CancelledError:
             return
         except Exception:  # noqa: BLE001
-            logger.debug("Wtmp watcher restarting after error", exc_info=True)
+            logger.debug("KV watcher restarting after error", exc_info=True)
             with suppress(TimeoutError):
                 await asyncio.wait_for(shutdown.wait(), timeout=2.0)
 
@@ -543,7 +534,7 @@ async def _active_lifespan(
     poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
     reaper = asyncio.create_task(_reap_loop(state, shutdown))
     heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
-    watcher = asyncio.create_task(_wtmp_watcher_loop(state, shutdown))
+    watcher = asyncio.create_task(_kv_watcher_loop(mcp, state, shutdown))
     try:
         yield state
     finally:

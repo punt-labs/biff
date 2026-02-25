@@ -1451,3 +1451,71 @@ inbound path.  Outbound uses `/write` (one LLM round-trip, unavoidable).
 | Notification hooks (PreToolUse/PostToolUse) | Would need LLM to process the notification — same latency problem. |
 | WebSocket/SSE push from MCP server | Claude Code doesn't support server-initiated push outside tool responses and `notifications/tools/list_changed`. |
 | Separate talk line on status bar (line 3) | Claude Code status bar supports exactly 2 lines. Must share line 2 with wall. |
+
+---
+
+## DES-019: Persistent NATS Connection — Eliminate POP-Mode Cycling
+
+**Date:** 2026-02-25
+**Status:** SETTLED
+**Topic:** Status bar latency regression caused by NATS connection cycling during idle
+
+### Problem
+
+After the nap-mode + POP-mode connection conservation was introduced (PR #60), wall
+and talk status bar updates took 2+ minutes to appear on idle sessions.  The root cause:
+when a session transitioned to "napping" after 120s of idle, the NATS TCP connection was
+fully closed.  This killed all KV watches (wall, sessions) and NATS subscriptions (talk
+notifications).  The POP cycle reconnected every 10s for a brief fetch, then disconnected
+again — meaning updates could only land during the narrow reconnect window.
+
+The key insight: `_notify_tool_list_changed()` is the forcing function that makes Claude
+Code re-read tool descriptions.  Without a live NATS connection, wall changes cannot
+trigger this notification.  Polling alone can never achieve 2s latency because the poller
+runs on a 2s tick but the unread file write only helps the human-visible status line —
+the model-visible tool description still requires `tools/list_changed` to fire.
+
+### Decision
+
+Eliminate POP-mode connection cycling entirely.  Napping now means "reduce polling
+frequency" (30s instead of 2s) but the NATS connection stays open.  This preserves:
+
+1. **KV watches** — wall changes detected instantly via `kv.watchall()`, triggering
+   `refresh_wall()` → `_notify_tool_list_changed()` within milliseconds.
+2. **NATS subscriptions** — talk notifications delivered in real-time.
+3. **Heartbeat** — session liveness maintained without reconnect storms.
+
+### Implementation
+
+1. **`ActivityTracker`** — Simplified.  Renamed `record_pop()` → `record_nap_poll()`,
+   `seconds_since_pop()` → `seconds_since_nap_poll()`.  Napping is purely a frequency
+   knob, not a connection state.
+
+2. **`poll_inbox()`** — Removed `disconnect()` call from nap transition.  Removed
+   `_pop_fetch()` function entirely.  Nap mode now runs `_active_tick` at 30s intervals
+   instead of disconnecting.
+
+3. **KV watcher (`_run_kv_watch`)** — Extended to detect wall key changes.  When a
+   KV entry matches `{repo}.wall`, calls `refresh_wall()` which fires
+   `_notify_tool_list_changed()`.  The watcher no longer exits during nap — it runs
+   for the full server lifetime.
+
+4. **Heartbeat loop** — No longer skips during nap.  Heartbeats fire on schedule
+   regardless of activity state.
+
+### Why Not Keep Connection Conservation
+
+| Concern | Resolution |
+|---------|-----------|
+| NATS connection cost during idle | One TCP connection per session is trivial.  NATS is designed for long-lived connections. |
+| Server load during nap | Reduced from polling every 2s to every 30s.  KV watches are server-push, zero client-side cost. |
+| Bandwidth | KV watch delivers only changed keys.  No polling overhead at all for wall/session changes. |
+
+### Prior Design (Rejected)
+
+POP-mode (PR #60): disconnect after 120s idle, reconnect every 10s for brief POP cycle
+(fetch inbox + heartbeat), then disconnect again.  This was designed to conserve NATS
+connections but broke the real-time push notification pipeline.  The 10s reconnect window
+meant worst-case 10s + processing latency for wall updates — and in practice, the
+combination of reconnect time, KV watch restart, and poller timing resulted in 2+ minute
+visible latency.
