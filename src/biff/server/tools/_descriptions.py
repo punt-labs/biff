@@ -210,6 +210,8 @@ async def refresh_wall(
         )
         _wall_text = current.text
         _wall_from = current.from_user
+        if current.from_tty:
+            _wall_from += f" ({current.from_tty})"
     if tool.description != old_desc:
         await _notify_tool_list_changed()
     # Re-write the unread file so wall text is synced to status bar

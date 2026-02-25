@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from biff.models import WallPost
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_wall
-from biff.server.tools._session import get_or_create_session, update_current_session
+from biff.server.tools._session import update_current_session
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -105,7 +105,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         - ``wall(clear=True)`` — remove the active wall
         - ``wall()`` — show the current wall
         """
-        await update_current_session(state)
+        session = await update_current_session(state)
 
         # Clear mode
         if clear:
@@ -129,7 +129,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         except ValueError as exc:
             return str(exc)
 
-        session = await get_or_create_session(state)
         now = datetime.now(UTC)
         message = message[:512]
         try:
