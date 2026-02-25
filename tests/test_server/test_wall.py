@@ -8,7 +8,45 @@ import pytest
 from pydantic import ValidationError
 
 from biff.models import WallPost
-from biff.server.tools.wall import _parse_duration, format_remaining
+from biff.server.tools.wall import _format_wall, _parse_duration, format_remaining
+
+
+class TestFormatWall:
+    def test_includes_tty_when_set(self) -> None:
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="deploy freeze",
+            from_user="kai",
+            from_tty="main",
+            expires_at=now + timedelta(hours=1),
+        )
+        result = _format_wall(wall)
+        assert "@kai (main)" in result
+        assert "deploy freeze" in result
+
+    def test_omits_tty_when_empty(self) -> None:
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="deploy freeze",
+            from_user="kai",
+            expires_at=now + timedelta(hours=1),
+        )
+        result = _format_wall(wall)
+        assert "from @kai (" in result  # followed by remaining, not tty
+        assert "from @kai (main)" not in result
+
+    def test_backwards_compat_no_from_tty(self) -> None:
+        """Wall posts deserialized from old format (no from_tty) show no parens."""
+        now = datetime.now(UTC)
+        old_json = WallPost(
+            text="old wall",
+            from_user="eric",
+            expires_at=now + timedelta(hours=1),
+        ).model_dump_json()
+        wall = WallPost.model_validate_json(old_json)
+        assert wall.from_tty == ""
+        result = _format_wall(wall)
+        assert "from @eric (" in result  # followed by remaining, not tty
 
 
 class TestWallPostModel:
