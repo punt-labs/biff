@@ -414,6 +414,28 @@ class NatsRelay:
         """KV key for the team wall: ``{repo}.wall`` (DES-016)."""
         return f"{self._repo_name}.wall"
 
+    def talk_notify_subject(self, user: str) -> str:
+        """NATS core subject for talk notifications to a user.
+
+        Published by :meth:`deliver` after every message delivery.
+        Subscribed by ``talk_listen`` for instant wake-up.  Core NATS
+        (no stream) — messages are dropped if nobody is listening.
+        """
+        self._validate_user(user)
+        return f"{self._stream_prefix}.{self._repo_name}.talk.notify.{user}"
+
+    async def get_nc(self) -> NatsClient:
+        """Return the raw NATS client, connecting if necessary.
+
+        Used by talk tools for core pub/sub subscriptions that
+        don't go through JetStream.
+        """
+        await self._ensure_connected()
+        if self._nc is None:  # pragma: no cover — _ensure_connected guarantees this
+            msg = "NATS client not available after connect"
+            raise RuntimeError(msg)
+        return self._nc
+
     # -- Messages --
 
     async def deliver(self, message: Message) -> None:
@@ -422,6 +444,11 @@ class NatsRelay:
         If ``to_user`` contains a ``:`` (targeted), publish to the
         TTY subject.  Otherwise (broadcast), publish to the user
         subject — no session lookup, persists offline.
+
+        After JetStream delivery, publishes a lightweight notification
+        on a core NATS subject so any active ``talk_listen`` call wakes
+        immediately.  The notification is best-effort — delivery succeeds
+        even if notification fails.
         """
         self._validate_user(message.from_user)
         js, _ = await self._ensure_connected()
@@ -435,6 +462,26 @@ class NatsRelay:
             self._validate_user(message.to_user)
             subject = self._user_subject(message.to_user)
             await js.publish(subject, message.model_dump_json().encode())
+
+        # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
+        # Extract user part from targeted addresses (user:tty → user).
+        await self._publish_talk_notification(message.to_user)
+
+    async def _publish_talk_notification(self, to_user: str) -> None:
+        """Publish a talk notification so ``talk_listen`` wakes up.
+
+        Best-effort: failures are logged at debug level and never
+        propagate — the JetStream delivery (the critical path) has
+        already succeeded.
+        """
+        if self._nc is None or self._nc.is_closed:
+            return
+        user = to_user.split(":")[0] if ":" in to_user else to_user
+        try:
+            subject = self.talk_notify_subject(user)
+            await self._nc.publish(subject, b"1")
+        except Exception:  # noqa: BLE001 — notification is best-effort
+            logger.debug("Talk notification failed for %s", user)
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.

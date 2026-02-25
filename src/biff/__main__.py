@@ -1,18 +1,24 @@
 """Biff CLI entry point.
 
 Provides ``biff serve``, ``biff version``, ``biff enable``, ``biff disable``,
-``biff install``, ``biff doctor``, ``biff uninstall``, ``biff hook``, and
-status line management.
+``biff install``, ``biff doctor``, ``biff uninstall``, ``biff hook``,
+``biff talk``, and status line management.
 """
 
 from __future__ import annotations
 
+import asyncio
+import queue as queue_mod
+import threading as threading_mod
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import click
 import typer
+
+if TYPE_CHECKING:
+    from nats.aio.client import Client as NatsClient
 
 from biff.config import (
     DEMO_RELAY_URL,
@@ -253,6 +259,192 @@ def statusline() -> None:
     from biff.statusline import run_statusline
 
     print(run_statusline())
+
+
+@app.command()
+def talk(
+    to: Annotated[
+        str,
+        typer.Argument(help="User to talk to, e.g. @jmf-pobox"),
+    ],
+    message: Annotated[
+        str,
+        typer.Argument(help="Opening message (optional)."),
+    ] = "",
+) -> None:
+    """Start an interactive talk session with a teammate or agent.
+
+    Opens a real-time conversation loop: type a message and press
+    Enter to send, then wait for a reply.  Ctrl+C to end.
+
+    This is the phone/terminal use case — steer an agent session
+    from any device that can run ``biff talk``.
+    """
+    import asyncio as _asyncio
+
+    _asyncio.run(_talk_repl(to, message))
+
+
+async def _talk_fetch_and_print(relay: object, session_key: str, user: str) -> None:
+    """Fetch and print any unread messages using shared formatting."""
+    from biff.nats_relay import NatsRelay
+    from biff.server.tools.talk import fetch_all_unread, format_talk_messages
+
+    if not isinstance(relay, NatsRelay):
+        return
+    messages = await fetch_all_unread(relay, session_key, user)
+    if messages:
+        print(format_talk_messages(messages))
+
+
+def _stdin_reader(
+    input_queue: queue_mod.Queue[str | None], stop: threading_mod.Event
+) -> None:
+    """Read lines from stdin in a dedicated thread.
+
+    Runs until EOF or ``stop`` is set.  Each line is put into ``input_queue``
+    as a string.  Sentinel ``None`` signals EOF.
+    """
+    while not stop.is_set():
+        try:
+            line = input("you> ")
+        except EOFError:
+            input_queue.put(None)
+            return
+        input_queue.put(line)
+
+
+async def _talk_loop(
+    relay: object,
+    nc: NatsClient,
+    subject: str,
+    session_key: str,
+    user: str,
+    target: str,
+) -> None:
+    """Run the talk conversation loop with notification-driven message display."""
+    from biff.models import Message
+    from biff.nats_relay import NatsRelay
+
+    if not isinstance(relay, NatsRelay):
+        return
+
+    input_queue: queue_mod.Queue[str | None] = queue_mod.Queue()
+    stop_flag = threading_mod.Event()
+    threading_mod.Thread(
+        target=_stdin_reader, args=(input_queue, stop_flag), daemon=True
+    ).start()
+
+    notify_event = asyncio.Event()
+
+    async def _on_notify(_msg: object) -> None:
+        notify_event.set()
+
+    sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+        subject, cb=_on_notify
+    )
+    try:
+        while True:
+            await _talk_fetch_and_print(relay, session_key, user)
+            notify_event.clear()
+
+            loop = asyncio.get_running_loop()
+            input_fut = asyncio.ensure_future(
+                loop.run_in_executor(None, input_queue.get, True, 2.0)
+            )
+            notify_fut = asyncio.ensure_future(notify_event.wait())
+
+            futs: set[asyncio.Future[object]] = {
+                input_fut,  # type: ignore[arg-type]
+                notify_fut,  # type: ignore[arg-type]
+            }
+            await asyncio.wait(futs, return_when=asyncio.FIRST_COMPLETED)
+
+            if notify_fut.done():
+                if not input_fut.done():
+                    input_fut.cancel()
+                    continue
+                line = input_fut.result()
+            elif input_fut.done():
+                notify_fut.cancel()
+                line = input_fut.result()
+            else:
+                # Both timed out.
+                input_fut.cancel()
+                notify_fut.cancel()
+                continue
+
+            if line is None:
+                break  # EOF
+            line = line.strip()
+            if not line:
+                continue
+            msg = Message(from_user=user, to_user=target, body=line[:512])
+            await relay.deliver(msg)
+    finally:
+        stop_flag.set()
+        await sub.unsubscribe()
+
+
+async def _talk_repl(to: str, opening: str) -> None:
+    """Interactive talk loop: send messages, receive replies in real-time."""
+    import sys
+
+    from biff.config import load_config
+    from biff.models import Message, UserSession
+    from biff.nats_relay import NatsRelay
+    from biff.tty import generate_tty, parse_address
+
+    resolved = load_config()
+    config = resolved.config
+    if not config.relay_url:
+        print("Talk requires a NATS relay. Configure relay_url in .biff.")
+        sys.exit(1)
+
+    user, _tty_target = parse_address(to)
+    relay = NatsRelay(
+        url=config.relay_url,
+        auth=config.relay_auth,
+        name=f"biff-talk-{config.user}",
+        repo_name=config.repo_name,
+    )
+    tty = generate_tty()
+
+    try:
+        sessions = await relay.get_sessions_for_user(user)
+        if not sessions:
+            print(f"@{user} is not online.")
+            return
+
+        await relay.update_session(
+            UserSession(
+                user=config.user, tty=tty, tty_name="talk", plan=f"talking to @{user}"
+            )
+        )
+
+        if opening:
+            msg = Message(from_user=config.user, to_user=user, body=opening[:512])
+            await relay.deliver(msg)
+            print(f"you> {opening}")
+
+        print(f"Connected to @{user}. Type a message and press Enter. Ctrl+C to end.\n")
+
+        nc = await relay.get_nc()
+        subject = relay.talk_notify_subject(config.user)
+        session_key = f"{config.user}:{tty}"
+
+        await _talk_loop(relay, nc, subject, session_key, config.user, user)
+
+    except KeyboardInterrupt:
+        print("\nTalk session ended.")
+    finally:
+        from contextlib import suppress
+
+        from biff.tty import build_session_key
+
+        with suppress(Exception):
+            await relay.delete_session(build_session_key(config.user, tty))
+        await relay.close()
 
 
 if __name__ == "__main__":

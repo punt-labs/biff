@@ -20,6 +20,7 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import create_state
+from biff.server.tools.talk import _reset_talk
 from biff.testing import RecordingClient, Transcript
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
@@ -33,6 +34,7 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     WORK_QUEUE consumer state can interfere across tests if only
     messages are purged.  Test nats-server is disposable.
     """
+    _reset_talk()
     yield
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]

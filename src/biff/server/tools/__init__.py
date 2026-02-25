@@ -11,6 +11,7 @@ from biff.server.tools import (
     mesg,
     messaging,
     plan,
+    talk,
     tty,
     wall,
     who,
@@ -32,4 +33,5 @@ def register_all_tools(mcp: FastMCP[ServerState], state: ServerState) -> None:
     plan.register(mcp, state)
     tty.register(mcp, state)
     wall.register(mcp, state)
+    talk.register(mcp, state)
     last.register(mcp, state)

@@ -130,6 +130,26 @@ Wall posted (2h): release freeze — do not push to main
 
 Every teammate's status bar shows `WALL: release freeze — do not push to main` in bold red. Expires automatically after 2 hours. Use `/wall clear` to remove early.
 
+### Talk in real time
+
+```text
+> /talk @kai "can you review PR #42?"
+
+Talk session started with @kai. Use talk_listen to wait for replies.
+
+> /talk_listen
+
+[14:32:15] @kai: sure, looking now. give me 5 min
+
+> /write @kai "thanks, no rush"
+
+> /talk_end
+
+Talk session with @kai ended.
+```
+
+`/talk` opens a real-time conversation. `/talk_listen` blocks until a message arrives (NATS notification wakes it instantly). Replies go via `/write`. `/talk_end` closes the session. Also available from any terminal: `biff talk @kai "hey"`.
+
 ### Go do-not-disturb
 
 ```text
@@ -151,6 +171,7 @@ Your status bar shows `(n)` instead of the unread count while messages are off. 
 | `/last` | BSD `last` | Show session login/logout history |
 | `/plan "text"` | BSD `.plan` | Set your status |
 | `/tty "name"` | BSD `tty` | Name the current session |
+| `/talk @user "msg"` | BSD `talk` | Start a real-time conversation |
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 
@@ -206,12 +227,14 @@ Workflow hooks integrate biff into the development lifecycle automatically:
 - **Session lifecycle** — on startup, biff auto-assigns a tty, sets your plan from the current git branch (with bead ID expansion), and checks for unread messages. On session end, active sessions are cleaned up immediately instead of waiting for TTL expiry.
 - **Git hooks** — `biff enable` deploys post-checkout, post-commit, and pre-push hooks into `.git/hooks/`. Branch switches update your plan automatically (`→ feature/auth`). Commits update it with a checkmark (`✓ feat: add auth`). Pushing to main suggests a `/wall` announcement. All hooks coexist with existing git hooks (e.g. beads) and gate on `.biff.local` — silent when biff is not enabled.
 
-### Next: Real-Time and Security
+Real-time talk is live: `/talk @user` opens a bidirectional conversation with instant NATS notification wake-up. `/talk_listen` blocks until a message arrives. `biff talk @user` provides a standalone terminal REPL for talking to agents or teammates from any device.
+
+### Next: Security and Hosting
 
 | Phase | What Ships |
 |-------|-----------|
 | **Security** | E2E encryption (NaCl/libsodium), GitHub identity and auth, per-repo NATS credentials |
-| **Real-time** | `/talk` for live conversation, `/pair` for session sharing with explicit consent |
+| **Real-time** | `/pair` for session sharing with explicit consent |
 | **Hosted relay** | Managed service with admin controls, audit logs, team isolation |
 
 ---

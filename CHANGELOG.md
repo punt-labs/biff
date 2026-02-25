@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.9.0 — 2026-02-25
+
+### Added
+
+- **Real-time talk** — three new MCP tools (`/talk`, `/talk_listen`, `/talk_end`)
+  for real-time bidirectional conversation between biff sessions. Supports
+  human↔agent, human↔human, and agent↔agent conversations. Uses NATS core
+  pub/sub for instant notification with subscribe-before-check pattern to
+  prevent race conditions. (#biff-8t3)
+- **`biff talk` CLI** — `biff talk @user [message]` command for terminal-based
+  interactive conversations. Single persistent stdin reader thread, NATS
+  notification-driven message display, online presence check before connecting.
+
 ## 0.8.2 — 2026-02-24
 
 ### Fixed
