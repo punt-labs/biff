@@ -297,7 +297,14 @@ async def _manage_talk_subscription(
                 data = json.loads(msg.data)  # type: ignore[attr-defined]
                 sender = data.get("from", "")
                 body = data.get("body", "")
-                if sender and sender == _talk_partner and body:
+                # _talk_partner may be "user:tty" but notification
+                # from field is always just the username.
+                partner_user = (
+                    _talk_partner.split(":")[0]
+                    if _talk_partner and ":" in _talk_partner
+                    else _talk_partner
+                )
+                if sender and sender == partner_user and body:
                     set_talk_message(f"@{sender}: {body}")
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass

@@ -138,25 +138,26 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "Talk requires a NATS relay connection."
 
         await update_current_session(state)
-        user, _tty = parse_address(to)
+        user, tty = parse_address(to)
 
         sessions = await relay.get_sessions_for_user(user)
         if not sessions:
             return f"@{user} is not online."
 
-        set_talk_partner(user)
+        target = f"{user}:{tty}" if tty else user
+        set_talk_partner(target)
 
         if message:
             msg = Message(
                 from_user=state.config.user,
-                to_user=user,
+                to_user=target,
                 body=message[:512],
             )
             await relay.deliver(msg)
             await refresh_read_messages(mcp, state)
 
         return (
-            f"Talk session started with @{user}. "
+            f"Talk session started with @{target}. "
             f"Replies appear on the status bar. Use /write to reply."
         )
 

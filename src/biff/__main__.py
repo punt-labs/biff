@@ -426,7 +426,8 @@ async def _talk_repl(to: str, opening: str) -> None:
         print("Talk requires a NATS relay. Configure relay_url in .biff.")
         sys.exit(1)
 
-    user, _tty_target = parse_address(to)
+    user, tty_target = parse_address(to)
+    target = f"{user}:{tty_target}" if tty_target else user
     relay = NatsRelay(
         url=config.relay_url,
         auth=config.relay_auth,
@@ -443,22 +444,22 @@ async def _talk_repl(to: str, opening: str) -> None:
 
         await relay.update_session(
             UserSession(
-                user=config.user, tty=tty, tty_name="talk", plan=f"talking to @{user}"
+                user=config.user, tty=tty, tty_name="talk", plan=f"talking to @{target}"
             )
         )
 
         if opening:
-            msg = Message(from_user=config.user, to_user=user, body=opening[:512])
+            msg = Message(from_user=config.user, to_user=target, body=opening[:512])
             await relay.deliver(msg)
             print(f"you> {opening}")
 
-        print(f"Connected to @{user}. Type a message and press Enter. Ctrl+C to end.\n")
+        print(f"Connected to @{target}. Type and press Enter. Ctrl+C to end.\n")
 
         nc = await relay.get_nc()
         subject = relay.talk_notify_subject(config.user)
         session_key = f"{config.user}:{tty}"
 
-        await _talk_loop(relay, nc, subject, session_key, config.user, user)
+        await _talk_loop(relay, nc, subject, session_key, config.user, target)
 
     except KeyboardInterrupt:
         print("\nTalk session ended.")
