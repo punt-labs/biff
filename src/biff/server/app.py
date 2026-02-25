@@ -224,8 +224,9 @@ async def _kv_watcher_loop(
     """Watch KV changes for wall updates and session events (wtmp).
 
     Handles:
-    - **Wall changes**: detected via ``_is_wall_key()`` and triggers
-      immediate ``refresh_wall()`` + ``_notify_tool_list_changed()``.
+    - **Wall changes**: detected in ``_run_kv_watch()`` when the KV key
+      matches ``NatsRelay.wall_kv_key(state.config.repo_name)`` and
+      triggers immediate ``refresh_wall()``.
     - **Session logout events**: for *other* sessions that disappear
       via TTL expiry or crash (no graceful shutdown).  Our own session's
       logout is written explicitly by ``_append_logout_event()`` during

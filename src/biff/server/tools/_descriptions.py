@@ -446,10 +446,10 @@ async def poll_inbox(
             if tracker.napping:
                 if tracker.seconds_since_nap_poll() < nap_interval:
                     continue
-                tracker.record_nap_poll()
                 last_count, last_wall, last_talk = await _active_tick(
                     mcp, state, last_count, last_wall, last_talk
                 )
+                tracker.record_nap_poll()
                 continue
 
             last_count, last_wall, last_talk = await _active_tick(
