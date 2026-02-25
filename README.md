@@ -4,13 +4,13 @@
 
 > Team communication for engineers who never leave the terminal.
 
-Named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `talk`, `wall`, `finger`, `who`, and `mesg`.
+[![License](https://img.shields.io/github/license/punt-labs/biff)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/biff/test.yml?label=CI)](https://github.com/punt-labs/biff/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/punt-biff)](https://pypi.org/project/punt-biff/)
 
-Biff resurrects the Unix communication vocabulary as MCP-native slash commands. It runs inside your Claude Code session — no separate app, no browser tab, no context switch.
+Named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `talk`, `wall`, `finger`, `who`, and `mesg`. Biff resurrects the Unix communication vocabulary as MCP-native slash commands inside Claude Code.
 
-## Why
-
-Engineers using AI coding tools are shipping faster than ever. But every time they need to coordinate with a teammate — or with another agent — they context-switch to Slack or Discord. Tools designed for managers, not makers in deep focus. Biff keeps communication where the code already lives.
+**Platforms:** macOS, Linux
 
 ## Quick Start
 
@@ -43,6 +43,15 @@ sh install.sh
 
 </details>
 
+## Features
+
+- **MCP-native** --- runs inside Claude Code as slash commands, no separate app
+- **BSD vocabulary** --- `/who`, `/write`, `/talk`, `/wall` --- commands engineers already know
+- **NATS relay** --- cross-machine presence and messaging over encrypted connections
+- **Agent-first** --- agents show up in `/who` alongside humans, coordinate via `/plan` and `/write`
+- **Status bar** --- live unread count, wall broadcasts, talk messages --- wraps your existing status line
+- **Zero config** --- installs in one command, activates per-repo with `/biff y`
+
 ## What It Looks Like
 
 ### See who's online
@@ -54,7 +63,6 @@ sh install.sh
    @kai    tty1  0:03  +  m2-mb-air  /Users/kai/code/myapp      refactoring auth module
    @eric   tty2  1:22  +  m2-mb-air  /Users/eric/code/myapp     reviewing PR #47
    @priya  tty1  0:00  +  priya-mbp  /Users/priya/code/myapp    writing integration tests
-   @dana   tty1  3:45  -  dana-mbp   /Users/dana/code/myapp     (no plan)
 ```
 
 `S` is message status: `+` means accepting messages, `-` means do not disturb.
@@ -77,6 +85,9 @@ Message sent to @kai.
    eric   Sat Feb 15 13:45  pushed the fix for the flaky test
    priya  Sat Feb 15 12:30  can you look at the migration script?
 ```
+
+<details>
+<summary>More examples: /finger, /plan, /last, /wall, /talk, /mesg</summary>
 
 ### Check what someone is working on
 
@@ -115,40 +126,27 @@ Plan: biff-ka4: post-checkout hook: update plan from branch
    @kai    tty3  m2-mb-air  Sat Feb 22 14:01  still logged in   -
    @kai    tty2  m2-mb-air  Sat Feb 22 11:30  Sat Feb 22 13:58  2:28
    @eric   tty1  m2-mb-air  Sat Feb 22 09:15  Sat Feb 22 12:45  3:30
-   @priya  tty1  priya-mbp  Fri Feb 21 16:00  Fri Feb 21 18:30  2:30
 ```
-
-Shows login/logout history for all sessions, matching Unix `last(1)`. Active sessions show "still logged in". Logout timestamps use the session's last heartbeat for accuracy.
 
 ### Broadcast to the team
 
 ```text
-> /wall "release freeze — do not push to main" 2h
+> /wall "release freeze --- do not push to main" 2h
 
-Wall posted (2h): release freeze — do not push to main
+Wall posted (2h): release freeze --- do not push to main
 ```
 
-Every teammate's status bar shows `WALL: release freeze — do not push to main` in bold red. Expires automatically after 2 hours. Use `/wall clear` to remove early.
+Every teammate's status bar shows `WALL: release freeze` in bold red. Expires automatically.
 
 ### Talk in real time
 
 ```text
 > /talk @kai "can you review PR #42?"
 
-Talk session started with @kai. Use talk_listen to wait for replies.
-
-> /talk_listen
-
-[14:32:15] @kai: sure, looking now. give me 5 min
-
-> /write @kai "thanks, no rush"
-
-> /talk_end
-
-Talk session with @kai ended.
+Talk session started with @kai. Replies appear on the status bar.
 ```
 
-`/talk` opens a real-time conversation. `/talk_listen` blocks until a message arrives (NATS notification wakes it instantly). Replies go via `/write`. `/talk_end` closes the session. Also available from any terminal: `biff talk @kai "hey"`.
+Incoming messages show on your status bar automatically. Reply with `/write`, close with `/talk end`.
 
 ### Go do-not-disturb
 
@@ -158,7 +156,9 @@ Talk session with @kai ended.
 is n
 ```
 
-Your status bar shows `(n)` instead of the unread count while messages are off. Messages still accumulate — `/mesg y` or `/read` reveals them.
+Your status bar shows `(n)` instead of the unread count. Messages still accumulate --- `/mesg y` or `/read` reveals them.
+
+</details>
 
 ## Commands
 
@@ -175,75 +175,11 @@ Your status bar shows `(n)` instead of the unread count while messages are off. 
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 
-## Status Bar
-
-Biff appends to your existing Claude Code status line — it never replaces it. If you already have a status line command, biff wraps it and adds unread counts at the end:
-
-```text
-your-existing-status | kai:tty1(3) | WALL: release freeze
-```
-
-Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off. Active wall broadcasts appear as a bold red `WALL:` segment.
-
-`biff install` includes status bar setup. For standalone management: `biff install-statusline` / `biff uninstall-statusline`.
-
-## Agents Welcome
-
-Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can `/plan` what it's working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else.
-
-But presence is just the beginning. When you have multiple agents working in the same codebase — on the same machine, in the same directory — they need to coordinate to avoid stepping on each other's files. Biff solves this with two coordination planes:
-
-**Logical plane (cross-machine):** What work is everyone doing? `/plan` shows the task each agent is working on. `/who` shows all plans across all machines. This prevents duplicate work.
-
-**Physical plane (same-machine):** Are we sharing a filesystem? `/who` shows host and directory per session. When two agents share the same machine and directory, they coordinate via `/write` and create git worktrees to work in isolation.
-
-Biff is the communication layer for the entire hive of humans and agents building software together.
-
-## Vision
-
-Biff is built on a simple thesis: the terminal is the new center of gravity for software engineering, and the communication tools haven't caught up. Slack was built for the open-office, always-online workplace. Biff is built for the deep-focus, AI-accelerated one.
-
-Every command implies intent. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
-
-As engineering teams grow to include both humans and autonomous agents, coordination becomes the bottleneck. Biff provides the primitives — presence, messaging, broadcast, targeted delivery — that let a mixed team of humans and agents work together without stepping on each other.
-
-## Roadmap
-
-### Shipped
-
-Core communication is live: presence (`/who`, `/finger`, `/plan`), messaging (`/write`, `/read`), availability control (`/mesg`), session history (`/last`), and team broadcast (`/wall`) — all working over a NATS relay for cross-machine communication.
-
-TTY sessions (`/tty`) give each agent a distinct identity — one user with 3 sessions shows 3 entries in `/who`, targetable via `/write @user:tty`. Enriched presence shows host and directory per session. Per-session status bar with `user:tty(N)` format. `/mesg n` suppresses the unread count on the status line.
-
-`/last` shows login/logout history modeled after Unix `last(1)`, with three-layer logout detection: sentinel-based (SIGTERM/SIGINT), orphan detection (crash recovery), and KV watcher (TTL expiry).
-
-`/wall` broadcasts time-limited announcements visible on every teammate's status bar. Duration-based expiry (default 1h, max 3d). Poll-based cross-session refresh so all sessions see wall changes within seconds.
-
-Per-project activation via `/biff y` (or `biff enable` from CLI). Biff starts dormant — no NATS connection, no consumers, no status line — until you opt in. Lazy NATS connection management releases the TCP connection after 5 minutes idle and reconnects briefly every 10 minutes to fetch messages (POP-mode polling), so a terminal left open for hours doesn't hold a persistent connection.
-
-Workflow hooks integrate biff into the development lifecycle automatically:
-
-- **Plan auto-expand** — `/plan biff-bf8` resolves the issue title so teammates see what you're working on, not just an opaque ID.
-- **Session lifecycle** — on startup, biff auto-assigns a tty, sets your plan from the current git branch (with bead ID expansion), and checks for unread messages. On session end, active sessions are cleaned up immediately instead of waiting for TTL expiry.
-- **Git hooks** — `biff enable` deploys post-checkout, post-commit, and pre-push hooks into `.git/hooks/`. Branch switches update your plan automatically (`→ feature/auth`). Commits update it with a checkmark (`✓ feat: add auth`). Pushing to main suggests a `/wall` announcement. All hooks coexist with existing git hooks (e.g. beads) and gate on `.biff.local` — silent when biff is not enabled.
-
-Real-time talk is live: `/talk @user` opens a bidirectional conversation with instant NATS notification wake-up. `/talk_listen` blocks until a message arrives. `biff talk @user` provides a standalone terminal REPL for talking to agents or teammates from any device.
-
-### Next: Security and Hosting
-
-| Phase | What Ships |
-|-------|-----------|
-| **Security** | E2E encryption (NaCl/libsodium), GitHub identity and auth, per-repo NATS credentials |
-| **Real-time** | `/pair` for session sharing with explicit consent |
-| **Hosted relay** | Managed service with admin controls, audit logs, team isolation |
-
----
-
 ## Setup
 
-Biff requires a git repo and a GitHub identity. Your username and display name are resolved automatically from `gh auth` — no manual configuration needed.
+Biff requires a git repo and a GitHub identity. Your username and display name are resolved automatically from `gh auth` --- no manual configuration needed.
 
-### 1. Create a `.biff` file
+### Create a `.biff` file
 
 Commit a `.biff` file in your repo root (TOML format):
 
@@ -255,9 +191,71 @@ members = ["kai", "eric", "priya"]
 url = "tls://connect.ngs.global"
 ```
 
-Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see the [relay configuration](#relay-configuration) section below.
+Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see [relay configuration](docs/INSTALLING.md#relay-configuration).
 
-`biff install` (from Quick Start) registers the MCP server, installs slash commands, and enables the plugin — there is no separate "start the server" step. `biff enable` activates biff in the current repo and deploys git hooks (post-checkout, post-commit, pre-push) that keep your plan current as you work. Run `biff doctor` to verify everything is wired up.
+`biff install` registers the MCP server, installs slash commands, and enables the plugin. `biff enable` activates biff in the current repo and deploys git hooks. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
+
+## Status Bar
+
+Biff appends to your existing Claude Code status line --- it never replaces it:
+
+```text
+Line 1: your-existing-status | kai:tty1(3)
+Line 2: ▶ WALL: release freeze until 5pm
+```
+
+Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off. Line 2 shows active `/talk` messages (bold yellow), wall broadcasts (bold red), or an idle marker.
+
+## Agents Welcome
+
+Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can `/plan` what it's working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else.
+
+Biff coordinates hybrid teams across two planes:
+
+- **Logical plane (cross-machine):** `/plan` shows the task each agent is working on. `/who` shows all plans across all machines. This prevents duplicate work.
+- **Physical plane (same-machine):** `/who` shows host and directory per session. When two agents share the same machine and directory, they coordinate via `/write` and create git worktrees to work in isolation.
+
+See [Agent Workflow](docs/AGENT_WORKFLOW.md) for patterns and examples.
+
+## Vision
+
+Biff is built on a simple thesis: the terminal is the new center of gravity for software engineering, and the communication tools haven't caught up. Slack was built for the open-office, always-online workplace. Biff is built for the deep-focus, AI-accelerated one.
+
+Every command implies intent. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
+
+## Roadmap
+
+### Shipped
+
+- Presence: `/who`, `/finger`, `/plan`, `/tty`, `/last`
+- Messaging: `/write`, `/read`, `/mesg`
+- Broadcast: `/wall` with duration-based expiry
+- Real-time: `/talk` with NATS instant wake-up and status bar display
+- NATS relay for cross-machine communication
+- Per-project activation (`/biff y`) with lazy connection management
+- Status bar with live unread count, wall, and talk display
+- Workflow hooks: plan auto-expand, session lifecycle, git integration
+
+### Next
+
+| Phase | What Ships |
+|-------|-----------|
+| **Security** | E2E encryption (NaCl/libsodium), GitHub identity and auth, per-repo NATS credentials |
+| **Real-time** | `/pair` for session sharing with explicit consent |
+| **Hosted relay** | Managed service with admin controls, audit logs, team isolation |
+
+## Documentation
+
+[Installing](docs/INSTALLING.md) |
+[Agent Workflow](docs/AGENT_WORKFLOW.md) |
+[Claude Setup](docs/CLAUDE_SETUP.md) |
+[FAQ](docs/FAQ.md) |
+[Troubleshooting](docs/TROUBLESHOOTING.md)
+
+[Design Log](DESIGN.md) |
+[Installer Design](DESIGN-INSTALLER.md) |
+[Changelog](CHANGELOG.md) |
+[Contributing](CONTRIBUTING.md)
 
 ## Development
 
@@ -268,43 +266,8 @@ uv run ruff format .       # Format
 uv run mypy src/ tests/    # Type check
 uv run pytest              # Test (unit + integration)
 uv run pytest -m nats      # NATS tests (requires local nats-server)
-uv run pytest -m hosted    # Hosted NATS tests (see below)
+uv run pytest -m hosted    # Hosted NATS tests (see CONTRIBUTING.md)
 ```
-
-### Hosted NATS tests
-
-Tests against a real hosted NATS account (Synadia Cloud or self-hosted):
-
-```bash
-BIFF_TEST_NATS_URL=tls://connect.ngs.global \
-BIFF_TEST_NATS_CREDS=/path/to/user.creds \
-    uv run pytest -m hosted -v
-```
-
-Environment variables (set exactly one auth var, or none for anonymous):
-
-| Variable | Purpose |
-|----------|---------|
-| `BIFF_TEST_NATS_URL` | Required. Server URL (e.g. `tls://connect.ngs.global`) |
-| `BIFF_TEST_NATS_TOKEN` | Token auth |
-| `BIFF_TEST_NATS_NKEYS_SEED` | Path to NKey seed file |
-| `BIFF_TEST_NATS_CREDS` | Path to credentials file |
-
-### Relay configuration
-
-The demo relay works out of the box. To run your own NATS relay, update `.biff`:
-
-```toml
-[relay]
-url = "tls://your-nats-server:4222"
-
-# Authentication (pick at most one):
-# token = "s3cret"                          # shared secret
-# nkeys_seed = "/path/to/user.nk"          # NKey seed file
-# user_credentials = "/path/to/user.creds" # JWT + NKey creds (Synadia Cloud)
-```
-
-Use `nats://` for unencrypted local connections, `tls://` for encrypted remote connections.
 
 ## License
 
