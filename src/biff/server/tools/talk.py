@@ -45,7 +45,7 @@ def _reset_talk() -> None:
     _talk_partner = None
 
 
-def _format_talk_messages(messages: list[Message]) -> str:
+def format_talk_messages(messages: list[Message]) -> str:
     """Format messages in chat style for talk output."""
     lines: list[str] = []
     for m in messages:
@@ -54,7 +54,7 @@ def _format_talk_messages(messages: list[Message]) -> str:
     return "\n".join(lines)
 
 
-async def _fetch_all_unread(
+async def fetch_all_unread(
     relay: NatsRelay, session_key: str, user: str
 ) -> list[Message]:
     """Fetch and merge unread messages from both inboxes, sorted by time."""
@@ -87,10 +87,10 @@ async def _do_talk_listen(
     )
     try:
         # Check for existing unread messages.
-        all_unread = await _fetch_all_unread(relay, session_key, user)
+        all_unread = await fetch_all_unread(relay, session_key, user)
         if all_unread:
             await refresh_read_messages(mcp, state)
-            return _format_talk_messages(all_unread)
+            return format_talk_messages(all_unread)
 
         # No messages — wait for notification.
         try:
@@ -99,12 +99,12 @@ async def _do_talk_listen(
             return _NO_MESSAGES
 
         # Notification received — fetch messages.
-        all_unread = await _fetch_all_unread(relay, session_key, user)
+        all_unread = await fetch_all_unread(relay, session_key, user)
         if not all_unread:
             return _NO_MESSAGES
 
         await refresh_read_messages(mcp, state)
-        return _format_talk_messages(all_unread)
+        return format_talk_messages(all_unread)
     finally:
         await sub.unsubscribe()
 

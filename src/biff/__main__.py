@@ -7,12 +7,18 @@ Provides ``biff serve``, ``biff version``, ``biff enable``, ``biff disable``,
 
 from __future__ import annotations
 
+import asyncio
+import queue as queue_mod
+import threading as threading_mod
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import click
 import typer
+
+if TYPE_CHECKING:
+    from nats.aio.client import Client as NatsClient
 
 from biff.config import (
     DEMO_RELAY_URL,
@@ -279,22 +285,109 @@ def talk(
     _asyncio.run(_talk_repl(to, message))
 
 
-async def _talk_print_unread(relay: object, session_key: str, user: str) -> None:
-    """Fetch and print any unread messages."""
+async def _talk_fetch_and_print(relay: object, session_key: str, user: str) -> None:
+    """Fetch and print any unread messages using shared formatting."""
+    from biff.nats_relay import NatsRelay
+    from biff.server.tools.talk import fetch_all_unread, format_talk_messages
+
+    if not isinstance(relay, NatsRelay):
+        return
+    messages = await fetch_all_unread(relay, session_key, user)
+    if messages:
+        print(format_talk_messages(messages))
+
+
+def _stdin_reader(
+    input_queue: queue_mod.Queue[str | None], stop: threading_mod.Event
+) -> None:
+    """Read lines from stdin in a dedicated thread.
+
+    Runs until EOF or ``stop`` is set.  Each line is put into ``input_queue``
+    as a string.  Sentinel ``None`` signals EOF.
+    """
+    while not stop.is_set():
+        try:
+            line = input("you> ")
+        except EOFError:
+            input_queue.put(None)
+            return
+        input_queue.put(line)
+
+
+async def _talk_loop(
+    relay: object,
+    nc: NatsClient,
+    subject: str,
+    session_key: str,
+    user: str,
+    target: str,
+) -> None:
+    """Run the talk conversation loop with notification-driven message display."""
+    from biff.models import Message
     from biff.nats_relay import NatsRelay
 
     if not isinstance(relay, NatsRelay):
         return
-    tty_unread = await relay.fetch(session_key)
-    user_unread = await relay.fetch_user_inbox(user)
-    for m in sorted(tty_unread + user_unread, key=lambda m: m.timestamp):
-        ts = m.timestamp.strftime("%H:%M:%S")
-        print(f"[{ts}] @{m.from_user}: {m.body}")
+
+    input_queue: queue_mod.Queue[str | None] = queue_mod.Queue()
+    stop_flag = threading_mod.Event()
+    threading_mod.Thread(
+        target=_stdin_reader, args=(input_queue, stop_flag), daemon=True
+    ).start()
+
+    notify_event = asyncio.Event()
+
+    async def _on_notify(_msg: object) -> None:
+        notify_event.set()
+
+    sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+        subject, cb=_on_notify
+    )
+    try:
+        while True:
+            await _talk_fetch_and_print(relay, session_key, user)
+            notify_event.clear()
+
+            loop = asyncio.get_running_loop()
+            input_fut = asyncio.ensure_future(
+                loop.run_in_executor(None, input_queue.get, True, 2.0)
+            )
+            notify_fut = asyncio.ensure_future(notify_event.wait())
+
+            futs: set[asyncio.Future[object]] = {
+                input_fut,  # type: ignore[arg-type]
+                notify_fut,  # type: ignore[arg-type]
+            }
+            await asyncio.wait(futs, return_when=asyncio.FIRST_COMPLETED)
+
+            if notify_fut.done():
+                if not input_fut.done():
+                    input_fut.cancel()
+                    continue
+                line = input_fut.result()
+            elif input_fut.done():
+                notify_fut.cancel()
+                line = input_fut.result()
+            else:
+                # Both timed out.
+                input_fut.cancel()
+                notify_fut.cancel()
+                continue
+
+            if line is None:
+                break  # EOF
+            line = line.strip()
+            if not line:
+                continue
+            msg = Message(from_user=user, to_user=target, body=line[:512])
+            await relay.deliver(msg)
+    finally:
+        stop_flag.set()
+        await sub.unsubscribe()
 
 
 async def _talk_repl(to: str, opening: str) -> None:
     """Interactive talk loop: send messages, receive replies in real-time."""
-    import asyncio
     import sys
 
     from biff.config import load_config
@@ -318,13 +411,16 @@ async def _talk_repl(to: str, opening: str) -> None:
     tty = generate_tty()
 
     try:
-        session = UserSession(
-            user=config.user,
-            tty=tty,
-            tty_name="talk",
-            plan=f"talking to @{user}",
+        sessions = await relay.get_sessions_for_user(user)
+        if not sessions:
+            print(f"@{user} is not online.")
+            return
+
+        await relay.update_session(
+            UserSession(
+                user=config.user, tty=tty, tty_name="talk", plan=f"talking to @{user}"
+            )
         )
-        await relay.update_session(session)
 
         if opening:
             msg = Message(from_user=config.user, to_user=user, body=opening[:512])
@@ -337,42 +433,7 @@ async def _talk_repl(to: str, opening: str) -> None:
         subject = relay.talk_notify_subject(config.user)
         session_key = f"{config.user}:{tty}"
 
-        from collections.abc import Awaitable, Callable
-
-        def _make_notify_cb(
-            evt: asyncio.Event,
-        ) -> Callable[[object], Awaitable[None]]:
-            async def _on_notify(_msg: object) -> None:
-                evt.set()
-
-            return _on_notify
-
-        while True:
-            event = asyncio.Event()
-            sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
-                subject, cb=_make_notify_cb(event)
-            )
-            try:
-                await _talk_print_unread(relay, session_key, config.user)
-                try:
-                    line = await asyncio.wait_for(
-                        asyncio.get_running_loop().run_in_executor(
-                            None, lambda: input("you> ")
-                        ),
-                        timeout=5.0,
-                    )
-                except TimeoutError:
-                    continue
-                except EOFError:
-                    break
-
-                line = line.strip()
-                if not line:
-                    continue
-                msg = Message(from_user=config.user, to_user=user, body=line[:512])
-                await relay.deliver(msg)
-            finally:
-                await sub.unsubscribe()
+        await _talk_loop(relay, nc, subject, session_key, config.user, user)
 
     except KeyboardInterrupt:
         print("\nTalk session ended.")

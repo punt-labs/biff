@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from biff.models import Message
 from biff.server.tools.talk import (
     _NO_MESSAGES,
-    _format_talk_messages,
     _reset_talk,
+    format_talk_messages,
 )
 
 
@@ -20,7 +20,7 @@ class TestFormatTalkMessages:
             body="check PR #42",
             timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
         )
-        result = _format_talk_messages([msg])
+        result = format_talk_messages([msg])
         assert result == "[10:30:45] @kai: check PR #42"
 
     def test_multiple_messages(self) -> None:
@@ -38,14 +38,14 @@ class TestFormatTalkMessages:
                 timestamp=datetime(2026, 1, 15, 10, 0, 5, tzinfo=UTC),
             ),
         ]
-        result = _format_talk_messages(msgs)
+        result = format_talk_messages(msgs)
         lines = result.split("\n")
         assert len(lines) == 2
         assert "@kai: first" in lines[0]
         assert "@eric: second" in lines[1]
 
     def test_empty_list(self) -> None:
-        assert _format_talk_messages([]) == ""
+        assert format_talk_messages([]) == ""
 
 
 class TestTalkState:
