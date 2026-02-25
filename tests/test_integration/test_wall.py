@@ -58,6 +58,23 @@ class TestWallReplace:
         assert "first wall" not in result
 
 
+class TestWallSenderTty:
+    async def test_wall_includes_sender_tty(self, kai: RecordingClient) -> None:
+        """Wall output includes the sender's tty name."""
+        await kai.call("tty", name="main")
+        await kai.call("wall", message="deploy freeze")
+        result = await kai.call("wall")
+        assert "kai" in result
+        assert "main" in result
+
+    async def test_wall_without_tty_omits_parens(self, kai: RecordingClient) -> None:
+        """Wall output omits tty when sender has no tty_name set."""
+        await kai.call("wall", message="no tty set")
+        result = await kai.call("wall")
+        assert "kai" in result
+        assert "()" not in result
+
+
 class TestWallCrossUser:
     async def test_wall_visible_to_other_user(
         self, kai: RecordingClient, eric: RecordingClient

@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from biff.models import WallPost
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_wall
-from biff.server.tools._session import update_current_session
+from biff.server.tools._session import get_or_create_session, update_current_session
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -84,9 +84,10 @@ def format_remaining(expires_at: datetime) -> str:
 def _format_wall(wall: WallPost) -> str:
     """Format a wall post for display."""
     remaining = format_remaining(wall.expires_at)
-    return (
-        f"\u25b6  WALL from @{wall.from_user} ({remaining} remaining)\n   {wall.text}"
-    )
+    sender = f"@{wall.from_user}"
+    if wall.from_tty:
+        sender += f" ({wall.from_tty})"
+    return f"\u25b6  WALL from {sender} ({remaining} remaining)\n   {wall.text}"
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -128,12 +129,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         except ValueError as exc:
             return str(exc)
 
+        session = await get_or_create_session(state)
         now = datetime.now(UTC)
         message = message[:512]
         try:
             post = WallPost(
                 text=message,
                 from_user=state.config.user,
+                from_tty=session.tty_name,
                 posted_at=now,
                 expires_at=now + ttl,
             )

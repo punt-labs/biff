@@ -194,6 +194,7 @@ class WallPost(BaseModel):
 
     text: str = Field(min_length=1, max_length=512)
     from_user: str = Field(min_length=1)
+    from_tty: str = Field(default="", description="Sender's human-readable tty name")
     posted_at: datetime = Field(default_factory=_utc_now)
     expires_at: datetime
 

@@ -200,8 +200,11 @@ async def refresh_wall(
         _wall_from = ""
     else:
         remaining = format_remaining(current.expires_at)
+        sender = f"@{current.from_user}"
+        if current.from_tty:
+            sender += f" ({current.from_tty})"
         tool.description = (
-            f"[WALL] {current.text} — @{current.from_user}, "
+            f"[WALL] {current.text} — {sender}, "
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
