@@ -389,12 +389,16 @@ paid tier.
 \end{faqpair}
 
 \begin{faqpair}{Will biff support real-time pairing or live conversation?}\label{faq:realtime}
-  Real-time features are on the roadmap but not yet shipped.
-  \texttt{/talk} would open a live text conversation between two terminals.
-  \texttt{/pair} would allow a teammate to send input to your Claude Code
-  session, with explicit per-session consent, full visibility for the
-  session owner, and a kill switch at any time. Both features require
-  careful security design and are scoped to a future phase.
+  \texttt{/talk} is shipped. It opens a real-time bidirectional conversation
+  between any two biff sessions---human to human, human to agent, or agent
+  to agent. Uses NATS core pub/sub for instant notification: \texttt{/talk\_listen}
+  blocks until a message arrives, waking immediately when one is delivered.
+  \texttt{biff talk @user} provides a standalone terminal REPL for steering
+  an agent from any device.
+
+  \texttt{/pair}---allowing a teammate to send input to your Claude Code
+  session with explicit consent---is on the roadmap. It requires
+  careful security design and is scoped to a future phase.
 \end{faqpair}
 
 \begin{faqpair}{Can agents use biff?}\label{faq:agents}
@@ -656,22 +660,21 @@ paid tier.
 
 \begin{faqpair}{What is the estimated development timeline?}\label{faq:timeline}
   \begin{description}[leftmargin=1.5em, labelwidth=10em, font=\bfseries]
-    \item[Shipped] All nine core commands: messaging (\texttt{/write},
+    \item[Shipped] All twelve core commands: messaging (\texttt{/write},
     \texttt{/read}), presence (\texttt{/who}, \texttt{/finger},
     \texttt{/plan}), session identity (\texttt{/tty}), availability
-    (\texttt{/mesg}), session history (\texttt{/last}), and team broadcast
-    (\texttt{/wall}). Cross-machine relay on Synadia Cloud with zero
-    infrastructure setup. Per-project activation (\texttt{/biff y}) with
-    idle connection management. Status bar integration showing unread
-    counts. Workflow hooks for plan and wall automation. GitHub identity
-    for display names. Released and in daily use.
+    (\texttt{/mesg}), session history (\texttt{/last}), team broadcast
+    (\texttt{/wall}), and real-time conversation (\texttt{/talk},
+    \texttt{/talk\_listen}, \texttt{/talk\_end}). Cross-machine relay on
+    Synadia Cloud with zero infrastructure setup. Per-project activation
+    (\texttt{/biff y}) with idle connection management. Status bar
+    integration showing unread counts. Workflow hooks for plan and wall
+    automation. GitHub identity for display names. Released and in daily use.
     See Appendix~A for the full command reference.
-    \item[Next: Agentic Coordination] Plan auto-expand (\texttt{/plan
-    biff-bf8} shows the task title).
     \item[Future: Security] End-to-end encryption (NaCl/libsodium),
     GitHub identity and auth, per-repo NATS credentials.
-    \item[Future: Real-Time] \texttt{/talk} for live conversation,
-    \texttt{/pair} for session sharing with explicit consent.
+    \item[Future: Real-Time] \texttt{/pair} for session sharing with
+    explicit consent.
     \item[Future: Hosted] Managed relay service (biff teams). Admin
     controls, audit logs, retention policies. Billing integration.
   \end{description}
@@ -1042,6 +1045,12 @@ paid tier.
   opted in. Lazy NATS connection releases TCP after 5 minutes idle,
   reconnects briefly every 10 minutes (POP-mode polling). \\
 
+  \texttt{/talk @user ``msg''} & BSD \texttt{talk} &
+  Start a real-time bidirectional conversation. Uses NATS core pub/sub
+  for instant notification. \texttt{/talk\_listen} blocks until a message
+  arrives. \texttt{/talk\_end} closes the session. Also available as
+  \texttt{biff talk @user} from any terminal. \\
+
   Workflow hooks & --- &
   Claiming a bead suggests \texttt{/plan}. Creating or merging a PR
   suggests \texttt{/wall} announcement. Hooks gate on \texttt{.biff.local}
@@ -1084,17 +1093,13 @@ paid tier.
   \bottomrule
 \end{tabularx}
 
-\subsection*{Future: Real-Time \& Pairing}
+\subsection*{Future: Pairing}
 
 \renewcommand{\arraystretch}{1.4}
 \begin{tabularx}{\textwidth}{@{}l l X@{}}
   \toprule
   \textbf{Command} & \textbf{Origin} & \textbf{Description} \\
   \midrule
-
-  \texttt{/talk @user} & BSD \texttt{talk} &
-  Open a real-time bidirectional conversation via model-mediated message
-  exchange. \\
 
   \texttt{/pair @user} & --- &
   Invite a user to send input to your Claude Code session. Requires
