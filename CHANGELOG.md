@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.10.2 — 2026-02-25
+
+### Fixed
+
+- **Talk self-echo on status bar** — when both sides of a `/talk` are the same
+  user (different ttys), outgoing messages echoed on the sender's own status bar.
+  Notification payload now includes `from_key` (sender session key) so the
+  callback rejects notifications from the current session.
+- **talk_listen no longer encourages loop** — updated tool description to say
+  "agent-to-agent only" and "human sessions should NOT call this." The old
+  description actively encouraged `talk_listen` loops, overriding the `/talk`
+  command's status-bar auto-read instructions.
+
 ## 0.10.1 — 2026-02-25
 
 ### Fixed

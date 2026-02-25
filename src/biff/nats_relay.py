@@ -439,7 +439,7 @@ class NatsRelay:
 
     # -- Messages --
 
-    async def deliver(self, message: Message) -> None:
+    async def deliver(self, message: Message, *, sender_key: str = "") -> None:
         """Publish a message to the recipient's JetStream subject.
 
         If ``to_user`` contains a ``:`` (targeted), publish to the
@@ -450,6 +450,10 @@ class NatsRelay:
         on a core NATS subject so any active ``talk_listen`` call wakes
         immediately.  The notification is best-effort — delivery succeeds
         even if notification fails.
+
+        ``sender_key`` is the sender's session key (``user:tty``) so
+        the notification payload can identify the originating session.
+        Receivers use this to reject self-echo (same user, different tty).
         """
         self._validate_user(message.from_user)
         js, _ = await self._ensure_connected()
@@ -465,17 +469,19 @@ class NatsRelay:
             await js.publish(subject, message.model_dump_json().encode())
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
-        # Extract user part from targeted addresses (user:tty → user).
-        await self._publish_talk_notification(message.to_user, message)
+        await self._publish_talk_notification(message.to_user, message, sender_key)
 
     async def _publish_talk_notification(
-        self, to_user: str, message: Message | None = None
+        self,
+        to_user: str,
+        message: Message | None = None,
+        sender_key: str = "",
     ) -> None:
         """Publish a talk notification so ``talk_listen`` wakes up.
 
-        The payload carries the sender and message body so the status
-        line poller can display incoming talk messages without fetching
-        from the inbox.  Falls back to ``b"1"`` if no message provided.
+        The payload carries the sender, message body, and sender session
+        key so the status line poller can display incoming talk messages
+        and reject self-echo.  Falls back to ``b"1"`` if no message.
 
         Best-effort: failures are logged at debug level and never
         propagate — the JetStream delivery (the critical path) has
@@ -487,9 +493,13 @@ class NatsRelay:
         try:
             subject = self.talk_notify_subject(user)
             if message is not None:
-                payload = json.dumps(
-                    {"from": message.from_user, "body": message.body}
-                ).encode()
+                data: dict[str, str] = {
+                    "from": message.from_user,
+                    "body": message.body,
+                }
+                if sender_key:
+                    data["from_key"] = sender_key
+                payload = json.dumps(data).encode()
             else:
                 payload = b"1"
             await self._nc.publish(subject, payload)

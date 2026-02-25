@@ -297,6 +297,13 @@ async def _manage_talk_subscription(
                 data = json.loads(msg.data)  # type: ignore[attr-defined]
                 sender = data.get("from", "")
                 body = data.get("body", "")
+                from_key = data.get("from_key", "")
+
+                # Reject self-echo: if the notification came from
+                # this session, ignore it (same user, different tty).
+                if from_key and from_key == state.session_key:
+                    return
+
                 # _talk_partner may be "user:tty" but notification
                 # from field is always just the username.
                 partner_user = (

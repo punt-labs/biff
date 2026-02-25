@@ -153,7 +153,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 to_user=target,
                 body=message[:512],
             )
-            await relay.deliver(msg)
+            await relay.deliver(msg, sender_key=state.session_key)
             await refresh_read_messages(mcp, state)
 
         return (
@@ -164,26 +164,18 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @mcp.tool(
         name="talk_listen",
         description=(
-            "Wait for the next message in a conversation. "
-            "Blocks until a message arrives or times out. "
-            "Call repeatedly in a loop to maintain the conversation."
+            "Block until a message arrives (agent-to-agent only). "
+            "Human sessions should NOT call this — incoming messages "
+            "appear on the status bar automatically after /talk."
         ),
     )
     @auto_enable(state)
     async def talk_listen(timeout: int = 30) -> str:
         """Block until a message arrives or timeout expires.
 
-        Subscribes to NATS core notifications, checks the inbox for
-        existing messages, and blocks if empty.  Returns all unread
-        messages on wake-up.
-
-        Call repeatedly in a loop to maintain a talk session::
-
-            talk @user "hello"
-            talk_listen  → messages
-            write @user "reply"
-            talk_listen  → more messages
-            talk_end
+        For agent-to-agent conversations where status bar display
+        is not available.  Human sessions use status bar auto-read
+        after ``/talk`` — do not call ``talk_listen`` in that case.
         """
         relay = state.relay
         if not isinstance(relay, NatsRelay):

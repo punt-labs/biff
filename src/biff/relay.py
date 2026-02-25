@@ -79,7 +79,7 @@ class Relay(Protocol):
 
     # -- Messages (TTY inbox) --
 
-    async def deliver(self, message: Message) -> None: ...
+    async def deliver(self, message: Message, *, sender_key: str = "") -> None: ...
 
     async def fetch(self, session_key: str) -> list[Message]: ...
 
@@ -142,7 +142,7 @@ class DormantRelay:
     errors — the server runs but does nothing on the network.
     """
 
-    async def deliver(self, message: Message) -> None:
+    async def deliver(self, message: Message, *, sender_key: str = "") -> None:
         pass
 
     async def fetch(self, session_key: str) -> list[Message]:  # noqa: ARG002 — Protocol impl
@@ -254,7 +254,12 @@ class LocalRelay:
 
     # -- Messages --
 
-    async def deliver(self, message: Message) -> None:
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",  # noqa: ARG002
+    ) -> None:
         """Deliver a message to the recipient's inbox.
 
         If ``to_user`` contains a ``:`` (targeted), deliver to the

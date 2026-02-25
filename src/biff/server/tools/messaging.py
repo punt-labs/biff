@@ -68,7 +68,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             to_user=to_user,
             body=message[:512],
         )
-        await state.relay.deliver(msg)
+        await state.relay.deliver(msg, sender_key=state.session_key)
         await refresh_read_messages(mcp, state)
         return f"Message sent to {display}."
 
