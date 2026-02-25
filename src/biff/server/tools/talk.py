@@ -6,9 +6,13 @@
 
 Talk uses NATS core pub/sub for instant message notification.  When
 ``/write`` delivers a message, :class:`~biff.nats_relay.NatsRelay`
-publishes a lightweight notification on a core NATS subject.  A blocking
-``talk_listen`` call subscribes to that subject and wakes immediately
-when notified, then fetches messages from the inbox.
+publishes a JSON notification on a core NATS subject carrying the
+sender and message body.  The background poller in ``_descriptions.py``
+subscribes to these notifications and writes the latest talk message
+to the unread status file so the status bar displays it within 0-2s.
+
+``talk_listen`` still exists for agent-to-agent conversations where
+blocking is appropriate.
 
 Talk is NATS-only.  LocalRelay and DormantRelay return an error message.
 """
@@ -22,7 +26,11 @@ from typing import TYPE_CHECKING
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.server.tools._activate import auto_enable
-from biff.server.tools._descriptions import refresh_read_messages
+from biff.server.tools._descriptions import (
+    get_talk_partner,
+    refresh_read_messages,
+    set_talk_partner,
+)
 from biff.server.tools._session import update_current_session
 from biff.tty import parse_address
 
@@ -35,14 +43,10 @@ logger = logging.getLogger(__name__)
 
 _NO_MESSAGES = "No new messages. Still listening."
 
-# Module-level talk state (per-process, like _tty_name in _descriptions.py).
-_talk_partner: str | None = None
-
 
 def _reset_talk() -> None:
     """Clear talk state — test isolation."""
-    global _talk_partner
-    _talk_partner = None
+    set_talk_partner(None)
 
 
 def format_talk_messages(messages: list[Message]) -> str:
@@ -116,7 +120,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="talk",
         description=(
             "Start a real-time conversation with a teammate or agent. "
-            "Use talk_listen to wait for replies. Use talk_end to close."
+            "Incoming messages appear on the status bar automatically. "
+            "Use /write to reply. Use talk_end to close."
         ),
     )
     @auto_enable(state)
@@ -125,11 +130,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         ``to`` is an address like ``@user`` or ``@user:tty``.
         An optional opening message is sent immediately.
-        After starting, use ``talk_listen`` to wait for replies
-        and ``write`` to send messages.
+        Once started, incoming messages from the partner appear on
+        the status bar within 0-2s.  Use ``/write`` to reply.
         """
-        global _talk_partner
-
         relay = state.relay
         if not isinstance(relay, NatsRelay):
             return "Talk requires a NATS relay connection."
@@ -141,7 +144,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not sessions:
             return f"@{user} is not online."
 
-        _talk_partner = user
+        set_talk_partner(user)
 
         if message:
             msg = Message(
@@ -153,7 +156,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await refresh_read_messages(mcp, state)
 
         return (
-            f"Talk session started with @{user}. Use talk_listen to wait for replies."
+            f"Talk session started with @{user}. "
+            f"Replies appear on the status bar. Use /write to reply."
         )
 
     @mcp.tool(
@@ -194,11 +198,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @auto_enable(state)
     async def talk_end() -> str:
         """Close the active talk session."""
-        global _talk_partner
+        partner = get_talk_partner()
 
-        if _talk_partner is None:
+        if partner is None:
             return "No active talk session."
 
-        partner = _talk_partner
-        _talk_partner = None
+        set_talk_partner(None)
         return f"Talk session with @{partner} ended."

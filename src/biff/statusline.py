@@ -173,6 +173,7 @@ def run_statusline(
 
     unread = _read_session_unread(unread_dir / f"{find_session_key()}.json")
     biff = _biff_segment(unread)
+    talk = _talk_segment(unread.talk_message if unread else "")
     wall = _wall_segment(
         unread.wall if unread else "",
         unread.wall_from if unread else "",
@@ -180,7 +181,8 @@ def run_statusline(
 
     segments = [s for s in [*base_segments, biff] if s.strip()]
     line1 = " | ".join(segments)
-    line2 = wall if wall.strip() else _LINE2_IDLE
+    # Priority: talk (real-time conversation) > wall (broadcast) > idle
+    line2 = talk if talk.strip() else (wall if wall.strip() else _LINE2_IDLE)
     return f"{line1}\n{line2}"
 
 
@@ -370,6 +372,8 @@ class SessionUnread:
     biff_enabled: bool = True
     wall: str = ""
     wall_from: str = ""
+    talk_partner: str = ""
+    talk_message: str = ""
 
 
 def _read_session_unread(path: Path) -> SessionUnread | None:
@@ -384,6 +388,8 @@ def _read_session_unread(path: Path) -> SessionUnread | None:
             biff_enabled=bool(biff_enabled),
             wall=str(data.get("wall", "")),
             wall_from=str(data.get("wall_from", "")),
+            talk_partner=str(data.get("talk_partner", "")),
+            talk_message=str(data.get("talk_message", "")),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None
@@ -443,6 +449,23 @@ def _wall_segment(wall_text: str, wall_from: str = "") -> str:
         return ""
     sender = f"@{wall_from}: " if wall_from else ""
     return f"▶ \033[1;31m{sender}{clean}\033[0m"
+
+
+def _talk_segment(talk_message: str) -> str:
+    """Format an active talk message for line 2 of the status bar.
+
+    Returns empty string when no talk message is active (caller falls
+    through to wall or idle).  Bold yellow with ``▶`` prefix.
+    Sanitizes ANSI and control characters like :func:`_wall_segment`.
+    """
+    if not talk_message:
+        return ""
+    clean = _ANSI_RE.sub("", talk_message)
+    clean = _CTRL_RE.sub("", clean)
+    clean = " ".join(clean.split())
+    if not clean:
+        return ""
+    return f"▶ \033[1;33m{clean}\033[0m"
 
 
 def _run_original(command: str, stdin_data: str) -> str | None:

@@ -26,6 +26,7 @@ from biff.statusline import (
     _read_session_unread,
     _resolve_original_command,
     _run_original,
+    _talk_segment,
     _wall_segment,
     install,
     read_settings,
@@ -491,6 +492,43 @@ class TestWallSegment:
         assert "release freeze" in result
 
 
+# --- Talk Segment -----------------------------------------------------------
+
+
+class TestTalkSegment:
+    def test_empty_returns_empty(self) -> None:
+        assert _talk_segment("") == ""
+
+    def test_active_talk(self) -> None:
+        result = _talk_segment("@kai: check PR #42")
+        assert result.startswith("▶")
+        assert "@kai: check PR #42" in result
+
+    def test_bold_yellow(self) -> None:
+        result = _talk_segment("@kai: hello")
+        assert "\033[1;33m" in result
+        assert "\033[0m" in result
+
+    def test_sanitizes_ansi(self) -> None:
+        result = _talk_segment("@kai: \033[31mred\033[0m text")
+        assert "\033[31m" not in result
+        assert "red text" in result
+
+    def test_sanitizes_control_chars(self) -> None:
+        result = _talk_segment("@kai: hello\x00world")
+        assert "\x00" not in result
+        assert "helloworld" in result
+
+    def test_whitespace_only_returns_empty(self) -> None:
+        assert _talk_segment("   ") == ""
+
+    def test_long_message_preserved(self) -> None:
+        long_msg = "@kai: " + "x" * 200
+        result = _talk_segment(long_msg)
+        assert "..." not in result
+        assert long_msg in result
+
+
 # --- Read Session Unread ----------------------------------------------------
 
 
@@ -555,6 +593,32 @@ class TestReadSessionUnread:
         assert result is not None
         assert result.biff_enabled is True
 
+    def test_talk_fields_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "user": "kai",
+                    "count": 0,
+                    "tty_name": "tty1",
+                    "talk_partner": "eric",
+                    "talk_message": "@eric: hello",
+                }
+            )
+        )
+        result = _read_session_unread(path)
+        assert result is not None
+        assert result.talk_partner == "eric"
+        assert result.talk_message == "@eric: hello"
+
+    def test_missing_talk_fields_default_empty(self, tmp_path: Path) -> None:
+        path = tmp_path / "12345.json"
+        path.write_text(json.dumps({"user": "kai", "count": 0, "tty_name": "tty1"}))
+        result = _read_session_unread(path)
+        assert result is not None
+        assert result.talk_partner == ""
+        assert result.talk_message == ""
+
 
 # --- Resolve Original Command -----------------------------------------------
 
@@ -613,22 +677,24 @@ def _write_ppid_unread(
     preview: str = "",
     wall: str = "",
     wall_from: str = "",
+    talk_partner: str = "",
+    talk_message: str = "",
 ) -> None:
     """Write a PPID-keyed unread file for the current process."""
     unread_dir.mkdir(parents=True, exist_ok=True)
     path = unread_dir / f"{os.getppid()}.json"
-    path.write_text(
-        json.dumps(
-            {
-                "user": user,
-                "count": count,
-                "tty_name": tty_name,
-                "preview": preview,
-                "wall": wall,
-                "wall_from": wall_from,
-            }
-        )
-    )
+    data: dict[str, object] = {
+        "user": user,
+        "count": count,
+        "tty_name": tty_name,
+        "preview": preview,
+        "wall": wall,
+        "wall_from": wall_from,
+    }
+    if talk_partner:
+        data["talk_partner"] = talk_partner
+        data["talk_message"] = talk_message
+    path.write_text(json.dumps(data))
 
 
 @patch("biff.statusline.find_session_key", return_value=os.getppid())
@@ -764,6 +830,50 @@ class TestRunStatusline:
         assert len(lines) == 2
         assert "kai:tty1(0)" in lines[0]
         assert lines[1] == _LINE2_IDLE
+
+    def test_talk_on_line_2(self, _mock_key: object, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(
+            unread_dir,
+            "kai",
+            0,
+            "tty1",
+            talk_partner="eric",
+            talk_message="@eric: check PR #42",
+        )
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = "{}"
+            result = run_statusline(stash_path, unread_dir)
+        lines = result.split("\n")
+        assert len(lines) == 2
+        assert "kai:tty1(0)" in lines[0]
+        assert lines[1].startswith("▶")
+        assert "@eric: check PR #42" in lines[1]
+        # Bold yellow, not bold red (that's wall)
+        assert "\033[1;33m" in lines[1]
+
+    def test_talk_overrides_wall(self, _mock_key: object, tmp_path: Path) -> None:
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_ppid_unread(
+            unread_dir,
+            "kai",
+            0,
+            "tty1",
+            wall="release freeze",
+            wall_from="admin",
+            talk_partner="eric",
+            talk_message="@eric: hey",
+        )
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = "{}"
+            result = run_statusline(stash_path, unread_dir)
+        lines = result.split("\n")
+        assert len(lines) == 2
+        # Talk wins over wall on line 2
+        assert "@eric: hey" in lines[1]
+        assert "release freeze" not in lines[1]
 
     def test_empty_original_falls_back_to_native(
         self, _mock_key: object, tmp_path: Path
