@@ -404,7 +404,7 @@ async def _talk_loop(
             line = result.strip()
             if line:
                 msg = Message(from_user=user, to_user=target, body=line[:512])
-                await relay.deliver(msg)
+                await relay.deliver(msg, sender_key=session_key)
     finally:
         stop_flag.set()
         bridge_task.cancel()
@@ -448,16 +448,17 @@ async def _talk_repl(to: str, opening: str) -> None:
             )
         )
 
+        session_key = f"{config.user}:{tty}"
+
         if opening:
             msg = Message(from_user=config.user, to_user=target, body=opening[:512])
-            await relay.deliver(msg)
+            await relay.deliver(msg, sender_key=session_key)
             print(f"you> {opening}")
 
         print(f"Connected to @{target}. Type and press Enter. Ctrl+C to end.\n")
 
         nc = await relay.get_nc()
         subject = relay.talk_notify_subject(config.user)
-        session_key = f"{config.user}:{tty}"
 
         await _talk_loop(relay, nc, subject, session_key, config.user, target)
 

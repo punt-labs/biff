@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 _READ_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 
 _DEFAULT_POLL_INTERVAL = 2.0
-_DEFAULT_IDLE_THRESHOLD = 300.0  # 5 minutes — transition to napping
+_DEFAULT_IDLE_THRESHOLD = 30.0  # 30 seconds — transition to napping
 _DEFAULT_POP_INTERVAL = 600.0  # 10 minutes — POP fetch while napping
 
 # Updated on every tool call so the background poller can send
@@ -297,6 +297,13 @@ async def _manage_talk_subscription(
                 data = json.loads(msg.data)  # type: ignore[attr-defined]
                 sender = data.get("from", "")
                 body = data.get("body", "")
+                from_key = data.get("from_key", "")
+
+                # Reject self-echo: if the notification came from
+                # this session, ignore it (same user, different tty).
+                if from_key and from_key == state.session_key:
+                    return
+
                 # _talk_partner may be "user:tty" but notification
                 # from field is always just the username.
                 partner_user = (

@@ -379,6 +379,18 @@ class NatsRelay:
             raise ValueError(msg)
         return tty
 
+    @staticmethod
+    def _validated_sender_key(sender_key: str, from_user: str) -> str:
+        """Return *sender_key* if well-formed and consistent, else ``""``."""
+        if not sender_key:
+            return ""
+        parts = sender_key.split(":", maxsplit=1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return ""
+        if parts[0] != from_user:
+            return ""
+        return sender_key
+
     def _subject_for_key(self, session_key: str) -> str:
         """NATS subject for a session key: ``biff.{repo}.inbox.{user}.{tty}``."""
         user, tty = session_key.split(":", maxsplit=1)
@@ -439,7 +451,7 @@ class NatsRelay:
 
     # -- Messages --
 
-    async def deliver(self, message: Message) -> None:
+    async def deliver(self, message: Message, *, sender_key: str = "") -> None:
         """Publish a message to the recipient's JetStream subject.
 
         If ``to_user`` contains a ``:`` (targeted), publish to the
@@ -450,8 +462,15 @@ class NatsRelay:
         on a core NATS subject so any active ``talk_listen`` call wakes
         immediately.  The notification is best-effort — delivery succeeds
         even if notification fails.
+
+        ``sender_key`` is the sender's session key (``user:tty``) so
+        the notification payload can identify the originating session.
+        Receivers use this to reject self-echo (same user, different tty).
+        If ``sender_key`` fails validation (bad format, user mismatch),
+        it is silently dropped rather than propagated.
         """
         self._validate_user(message.from_user)
+        sender_key = self._validated_sender_key(sender_key, message.from_user)
         js, _ = await self._ensure_connected()
 
         if ":" in message.to_user:
@@ -465,17 +484,19 @@ class NatsRelay:
             await js.publish(subject, message.model_dump_json().encode())
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
-        # Extract user part from targeted addresses (user:tty → user).
-        await self._publish_talk_notification(message.to_user, message)
+        await self._publish_talk_notification(message.to_user, message, sender_key)
 
     async def _publish_talk_notification(
-        self, to_user: str, message: Message | None = None
+        self,
+        to_user: str,
+        message: Message | None = None,
+        sender_key: str = "",
     ) -> None:
         """Publish a talk notification so ``talk_listen`` wakes up.
 
-        The payload carries the sender and message body so the status
-        line poller can display incoming talk messages without fetching
-        from the inbox.  Falls back to ``b"1"`` if no message provided.
+        The payload carries the sender, message body, and sender session
+        key so the status line poller can display incoming talk messages
+        and reject self-echo.  Falls back to ``b"1"`` if no message.
 
         Best-effort: failures are logged at debug level and never
         propagate — the JetStream delivery (the critical path) has
@@ -487,9 +508,13 @@ class NatsRelay:
         try:
             subject = self.talk_notify_subject(user)
             if message is not None:
-                payload = json.dumps(
-                    {"from": message.from_user, "body": message.body}
-                ).encode()
+                data: dict[str, str] = {
+                    "from": message.from_user,
+                    "body": message.body,
+                }
+                if sender_key:
+                    data["from_key"] = sender_key
+                payload = json.dumps(data).encode()
             else:
                 payload = b"1"
             await self._nc.publish(subject, payload)
@@ -659,18 +684,28 @@ class NatsRelay:
         return [s for s in all_sessions if s.user == user]
 
     async def heartbeat(self, session_key: str) -> None:
-        """Update ``last_active``, creating session if needed."""
+        """Update ``last_active`` for an existing session.
+
+        If the session is missing from KV (expired, deleted, or not yet
+        created), the heartbeat is skipped.  Writing a bare
+        ``UserSession(user, tty)`` would destroy tty_name, plan,
+        hostname, and other fields that only the lifespan or tool
+        handlers know how to set.  The 3-day TTL means one skipped
+        heartbeat is harmless; overwriting with a bare session is not.
+        """
         kv_key = self._kv_key(session_key)
         _, kv = await self._ensure_connected()
         try:
             entry = await kv.get(kv_key)
             if entry.value is None:
-                raise KeyNotFoundError
+                return  # No session to heartbeat
             existing = UserSession.model_validate_json(entry.value)
-            updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
-        except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
-            user, tty = session_key.split(":", maxsplit=1)
-            updated = UserSession(user=user, tty=tty)
+        except (KeyNotFoundError, BucketNotFoundError):
+            return  # Session not found — nothing to heartbeat
+        except (ValidationError, ValueError):
+            logger.warning("Corrupt session for %s, skip heartbeat", session_key)
+            return
+        updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
         await kv.put(kv_key, updated.model_dump_json().encode())
 
     async def get_sessions(self) -> list[UserSession]:
