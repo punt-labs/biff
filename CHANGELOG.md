@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.10.3 — 2026-02-25
+
+### Fixed
+
+- **Heartbeat no longer overwrites session metadata** — the heartbeat error path
+  created a bare `UserSession(user, tty)` when KV reads failed, destroying
+  `tty_name`, `plan`, `hostname`, and other fields. On hosted NATS, transient
+  network issues triggered this regularly, wiping session identity. Now heartbeat
+  skips missing or corrupt sessions instead of overwriting them.
+- **Talk resolves tty_name before delivery** — `/talk @user:tty1` now maps
+  friendly tty names to hex session keys via `resolve_session` before message
+  delivery. Without this, messages addressed to tty_name failed to route.
+- **Validate sender_key in deliver()** — `_validated_sender_key()` checks format
+  (`user:tty`) and user-part consistency before embedding in talk notifications.
+  Invalid keys are silently dropped.
+
+### Changed
+
+- **POP interval lowered to 10s** — idle sessions now check for messages every
+  10 seconds (was 10 minutes). Idle threshold restored to 120s (was 30s).
+  Status bar updates are no longer delayed by minutes during nap cycles.
+
 ## 0.10.2 — 2026-02-25
 
 ### Fixed
