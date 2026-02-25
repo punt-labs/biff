@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.10.1 — 2026-02-25
+
+### Fixed
+
+- **Talk honors `:tty` address targeting** — `/talk @user:tty` was parsing the
+  address but discarding the tty, delivering messages to the user-level inbox
+  instead of the targeted session. Now `set_talk_partner` stores the full address,
+  `deliver()` targets the specific tty, and the notification filter extracts the
+  user-part for comparison.
+
 ## 0.10.0 — 2026-02-25
 
 ### Changed
