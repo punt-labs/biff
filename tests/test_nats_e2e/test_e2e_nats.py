@@ -7,6 +7,8 @@ FastMCPTransport -> FastMCP -> tool -> NatsRelay -> NATS <- other server.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 import nats
@@ -480,3 +482,128 @@ class TestConsumerCleanup:
         finally:
             await relay.delete_infrastructure()
             await relay.close()
+
+
+class TestTalkSelfEchoFilter:
+    """Self-echo rejection in the talk notification callback.
+
+    The ``_on_talk_msg`` callback inside ``_manage_talk_subscription``
+    compares ``from_key`` in the NATS notification payload against
+    ``state.session_key`` and drops self-originated messages.
+    """
+
+    async def test_self_echo_rejected(
+        self,
+        nats_server: str,
+        shared_data_dir: Path,
+        transcript: Transcript,
+    ) -> None:
+        """Notification with from_key == session_key must NOT update talk message."""
+        from biff.models import BiffConfig
+        from biff.server.app import create_server
+        from biff.server.state import create_state
+        from biff.server.tools._descriptions import (
+            _manage_talk_subscription,
+            _reset_session,
+            set_talk_partner,
+        )
+
+        _reset_session()
+        repo = f"_test-selfecho-{id(self)}"
+        cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
+        state = create_state(
+            cfg, shared_data_dir / "kai", tty="aa11bb22", hostname="test", pwd="/test"
+        )
+        mcp = create_server(state)
+
+        async with Client(FastMCPTransport(mcp)) as kai_raw:
+            RecordingClient(client=kai_raw, transcript=transcript, user="kai")
+
+            # Set up talk subscription to "eric"
+            set_talk_partner("eric")
+            _, sub = await _manage_talk_subscription(state, None, None)
+            assert sub is not None
+
+            # Publish a talk notification FROM this session (self-echo)
+            relay = state.relay
+            assert isinstance(relay, NatsRelay)
+            nc = await relay.get_nc()
+            subject = relay.talk_notify_subject("kai")
+            payload = json.dumps(
+                {
+                    "from": "kai",
+                    "body": "self-echo should be ignored",
+                    "from_key": state.session_key,
+                }
+            ).encode()
+            await nc.publish(subject, payload)
+            await asyncio.sleep(0.1)
+
+            # Import _talk_message to check it was NOT set
+            from biff.server.tools._descriptions import _talk_message
+
+            assert _talk_message == "", (
+                f"Self-echo was not rejected: _talk_message={_talk_message!r}"
+            )
+
+            # Clean up subscription
+            await sub.unsubscribe()  # type: ignore[attr-defined]
+
+        _reset_session()
+
+    async def test_other_session_accepted(
+        self,
+        nats_server: str,
+        shared_data_dir: Path,
+        transcript: Transcript,
+    ) -> None:
+        """Notification with from_key != session_key updates talk message."""
+        from biff.models import BiffConfig
+        from biff.server.app import create_server
+        from biff.server.state import create_state
+        from biff.server.tools._descriptions import (
+            _manage_talk_subscription,
+            _reset_session,
+            set_talk_partner,
+        )
+
+        _reset_session()
+        repo = f"_test-selfecho-accept-{id(self)}"
+        cfg = BiffConfig(user="kai", repo_name=repo, relay_url=nats_server)
+        state = create_state(
+            cfg, shared_data_dir / "kai", tty="cc33dd44", hostname="test", pwd="/test"
+        )
+        mcp = create_server(state)
+
+        async with Client(FastMCPTransport(mcp)) as kai_raw:
+            RecordingClient(client=kai_raw, transcript=transcript, user="kai")
+
+            # Set up talk subscription — kai is talking to eric
+            set_talk_partner("eric")
+            _, sub = await _manage_talk_subscription(state, None, None)
+            assert sub is not None
+
+            # Publish a talk notification FROM eric's session (different key)
+            relay = state.relay
+            assert isinstance(relay, NatsRelay)
+            nc = await relay.get_nc()
+            subject = relay.talk_notify_subject("kai")
+            payload = json.dumps(
+                {
+                    "from": "eric",
+                    "body": "hello from eric",
+                    "from_key": "eric:tty2",
+                }
+            ).encode()
+            await nc.publish(subject, payload)
+            await asyncio.sleep(0.1)
+
+            from biff.server.tools._descriptions import _talk_message
+
+            assert _talk_message == "@eric: hello from eric", (
+                f"Expected talk message update, got: {_talk_message!r}"
+            )
+
+            await sub.unsubscribe()  # type: ignore[attr-defined]
+
+        _reset_session()

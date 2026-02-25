@@ -379,6 +379,18 @@ class NatsRelay:
             raise ValueError(msg)
         return tty
 
+    @staticmethod
+    def _validated_sender_key(sender_key: str, from_user: str) -> str:
+        """Return *sender_key* if well-formed and consistent, else ``""``."""
+        if not sender_key:
+            return ""
+        parts = sender_key.split(":", maxsplit=1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return ""
+        if parts[0] != from_user:
+            return ""
+        return sender_key
+
     def _subject_for_key(self, session_key: str) -> str:
         """NATS subject for a session key: ``biff.{repo}.inbox.{user}.{tty}``."""
         user, tty = session_key.split(":", maxsplit=1)
@@ -454,8 +466,11 @@ class NatsRelay:
         ``sender_key`` is the sender's session key (``user:tty``) so
         the notification payload can identify the originating session.
         Receivers use this to reject self-echo (same user, different tty).
+        If ``sender_key`` fails validation (bad format, user mismatch),
+        it is silently dropped rather than propagated.
         """
         self._validate_user(message.from_user)
+        sender_key = self._validated_sender_key(sender_key, message.from_user)
         js, _ = await self._ensure_connected()
 
         if ":" in message.to_user:

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from biff.models import BiffConfig, Message, UserSession
+from biff.nats_relay import NatsRelay
 from biff.server.state import create_state
 from biff.server.tools.talk import (
     _NO_MESSAGES,
@@ -119,6 +120,29 @@ class TestResolveTalkTarget:
         relay_key, display = await _resolve_talk_target(state.relay, "eric", "unknown")
         assert relay_key == "eric:unknown"
         assert display == "eric:unknown"
+
+
+class TestValidatedSenderKey:
+    """NatsRelay._validated_sender_key drops invalid or mismatched keys."""
+
+    def test_valid_key(self) -> None:
+        result = NatsRelay._validated_sender_key("kai:abc123", "kai")
+        assert result == "kai:abc123"
+
+    def test_empty_key(self) -> None:
+        assert NatsRelay._validated_sender_key("", "kai") == ""
+
+    def test_no_colon(self) -> None:
+        assert NatsRelay._validated_sender_key("kai", "kai") == ""
+
+    def test_user_mismatch(self) -> None:
+        assert NatsRelay._validated_sender_key("eric:abc123", "kai") == ""
+
+    def test_empty_tty_part(self) -> None:
+        assert NatsRelay._validated_sender_key("kai:", "kai") == ""
+
+    def test_empty_user_part(self) -> None:
+        assert NatsRelay._validated_sender_key(":abc123", "kai") == ""
 
 
 class TestConstants:
