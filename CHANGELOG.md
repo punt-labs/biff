@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.1 — 2026-02-24
+
+### Fixed
+
+- **Wall sender tty** — `/wall` now includes the sender's tty name (e.g.
+  `@kai (main)`) in the wall output, tool description, and status bar. Previously
+  only the username was shown. (#biff-nw9)
+
 ## 0.8.0 — 2026-02-24
 
 ### Added
