@@ -314,6 +314,47 @@ def _stdin_reader(
         input_queue.put(line)
 
 
+_NO_INPUT = object()
+
+
+async def _wait_for_input_or_notify(
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+) -> str | None | object:
+    """Wait for user input, a NATS notification, or a 2s timeout.
+
+    Returns the input line (``str``), ``None`` for EOF, or
+    :data:`_NO_INPUT` for timeout/notification-only.
+    """
+    input_task = asyncio.create_task(aqueue.get())
+    notify_task = asyncio.create_task(notify_event.wait())
+
+    done, pending = await asyncio.wait(
+        {input_task, notify_task},
+        return_when=asyncio.FIRST_COMPLETED,
+        timeout=2.0,
+    )
+    for p in pending:
+        p.cancel()
+
+    if input_task in done:
+        return input_task.result()
+    return _NO_INPUT
+
+
+async def _bridge_stdin(
+    input_queue: queue_mod.Queue[str | None],
+    aqueue: asyncio.Queue[str | None],
+) -> None:
+    """Bridge a threading.Queue to an asyncio.Queue via a single executor thread."""
+    loop = asyncio.get_running_loop()
+    while True:
+        line = await loop.run_in_executor(None, input_queue.get)
+        await aqueue.put(line)
+        if line is None:
+            break
+
+
 async def _talk_loop(
     relay: object,
     nc: NatsClient,
@@ -322,7 +363,12 @@ async def _talk_loop(
     user: str,
     target: str,
 ) -> None:
-    """Run the talk conversation loop with notification-driven message display."""
+    """Run the talk conversation loop with notification-driven message display.
+
+    Uses :func:`_bridge_stdin` to move lines from the stdin threading.Queue
+    into an asyncio.Queue, avoiding per-iteration executor threads that
+    exhaust the thread pool on cancellation.
+    """
     from biff.models import Message
     from biff.nats_relay import NatsRelay
 
@@ -335,6 +381,8 @@ async def _talk_loop(
         target=_stdin_reader, args=(input_queue, stop_flag), daemon=True
     ).start()
 
+    aqueue: asyncio.Queue[str | None] = asyncio.Queue()
+    bridge_task = asyncio.create_task(_bridge_stdin(input_queue, aqueue))
     notify_event = asyncio.Event()
 
     async def _on_notify(_msg: object) -> None:
@@ -348,41 +396,18 @@ async def _talk_loop(
             await _talk_fetch_and_print(relay, session_key, user)
             notify_event.clear()
 
-            loop = asyncio.get_running_loop()
-            input_fut = asyncio.ensure_future(
-                loop.run_in_executor(None, input_queue.get, True, 2.0)
-            )
-            notify_fut = asyncio.ensure_future(notify_event.wait())
-
-            futs: set[asyncio.Future[object]] = {
-                input_fut,  # type: ignore[arg-type]
-                notify_fut,  # type: ignore[arg-type]
-            }
-            await asyncio.wait(futs, return_when=asyncio.FIRST_COMPLETED)
-
-            if notify_fut.done():
-                if not input_fut.done():
-                    input_fut.cancel()
-                    continue
-                line = input_fut.result()
-            elif input_fut.done():
-                notify_fut.cancel()
-                line = input_fut.result()
-            else:
-                # Both timed out.
-                input_fut.cancel()
-                notify_fut.cancel()
+            result = await _wait_for_input_or_notify(aqueue, notify_event)
+            if result is _NO_INPUT:
                 continue
-
-            if line is None:
-                break  # EOF
-            line = line.strip()
-            if not line:
-                continue
-            msg = Message(from_user=user, to_user=target, body=line[:512])
-            await relay.deliver(msg)
+            if not isinstance(result, str):
+                break  # EOF (None) or unexpected type
+            line = result.strip()
+            if line:
+                msg = Message(from_user=user, to_user=target, body=line[:512])
+                await relay.deliver(msg)
     finally:
         stop_flag.set()
+        bridge_task.cancel()
         await sub.unsubscribe()
 
 
