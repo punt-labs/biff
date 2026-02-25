@@ -51,16 +51,16 @@ class TestFormatTalkMessages:
 class TestTalkState:
     def test_initial_state_is_none(self) -> None:
         _reset_talk()
-        from biff.server.tools import talk
+        from biff.server.tools._descriptions import get_talk_partner
 
-        assert talk._talk_partner is None
+        assert get_talk_partner() is None
 
     def test_reset_clears_partner(self) -> None:
-        from biff.server.tools import talk
+        from biff.server.tools._descriptions import get_talk_partner, set_talk_partner
 
-        talk._talk_partner = "eric"
+        set_talk_partner("eric")
         _reset_talk()
-        assert talk._talk_partner is None
+        assert get_talk_partner() is None
 
 
 class TestConstants:

@@ -17,9 +17,11 @@ Examples:
 
 ## Task
 
-1. Call `mcp__plugin_biff-dev_tty__talk` with the parsed values.
-2. If the talk tool succeeds, immediately call `mcp__plugin_biff-dev_tty__talk_listen` to wait for a reply.
-3. When a reply arrives, show it and ask what to reply. Send replies with `mcp__plugin_biff-dev_tty__write` to the same user, then call `mcp__plugin_biff-dev_tty__talk_listen` again.
-4. Continue the listen → reply loop until the user says to stop, then call `mcp__plugin_biff-dev_tty__talk_end`.
+1. Call `mcp__plugin_biff_tty__talk` with the parsed values.
+2. Incoming messages from the partner appear on the status bar automatically (0-2s). No need to poll or call talk_listen.
+3. When the user wants to reply, send with `mcp__plugin_biff_tty__write` to the same user.
+4. When the user says to stop, call `mcp__plugin_biff_tty__talk_end`.
+
+If `$ARGUMENTS` is "end", call `mcp__plugin_biff_tty__talk_end` directly.
 
 Do not repeat or reformat tool output — it is already formatted by hooks.

@@ -23,6 +23,7 @@ only — zero consumers created (DES-015).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Sequence
 from contextlib import suppress
@@ -465,10 +466,16 @@ class NatsRelay:
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
         # Extract user part from targeted addresses (user:tty → user).
-        await self._publish_talk_notification(message.to_user)
+        await self._publish_talk_notification(message.to_user, message)
 
-    async def _publish_talk_notification(self, to_user: str) -> None:
+    async def _publish_talk_notification(
+        self, to_user: str, message: Message | None = None
+    ) -> None:
         """Publish a talk notification so ``talk_listen`` wakes up.
+
+        The payload carries the sender and message body so the status
+        line poller can display incoming talk messages without fetching
+        from the inbox.  Falls back to ``b"1"`` if no message provided.
 
         Best-effort: failures are logged at debug level and never
         propagate — the JetStream delivery (the critical path) has
@@ -479,7 +486,13 @@ class NatsRelay:
         user = to_user.split(":")[0] if ":" in to_user else to_user
         try:
             subject = self.talk_notify_subject(user)
-            await self._nc.publish(subject, b"1")
+            if message is not None:
+                payload = json.dumps(
+                    {"from": message.from_user, "body": message.body}
+                ).encode()
+            else:
+                payload = b"1"
+            await self._nc.publish(subject, payload)
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Talk notification failed for %s", user)
 

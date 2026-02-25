@@ -75,6 +75,12 @@ Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging
 
 Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
+### Quarry Knowledge Base
+
+All punt-labs repos are indexed in quarry (local semantic search) as separate collections: biff, quarry, punt-kit, prfaq, langlearn-tts, public-website, claude-code-docs, and more. Use `/find <query>` to quickly look up design decisions, NATS configuration, test patterns, architecture details, and cross-project knowledge without reading entire files. Results are ranked by relevance with page references.
+
+Use quarry first when answering questions about prior design decisions, TTL values, protocol details, or "why was X built this way." It is faster than grepping through DESIGN.md's 100+ pages.
+
 ### Installer Is Source of Truth
 
 User-facing config (`~/.claude/commands/`, `~/.claude/plugins/biff/`, MCP registration, status line) is deployed by `biff install`. Do not hand-edit these paths — changes will be overwritten on next install. To change command behavior, edit the bundled source in `src/biff/plugins/biff/commands/` and re-run `biff install`.

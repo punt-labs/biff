@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-02-25
+
+### Changed
+
+- **Talk v2: status-line auto-read** — `/talk` now displays incoming messages on
+  the status bar within 0-2s instead of blocking on `talk_listen`. The background
+  poller subscribes to NATS core pub/sub notifications and writes talk messages to
+  the unread status file. Line 2 priority: talk (bold yellow) > wall (bold red) >
+  idle. Both parties agree to `/talk`, then auto-read each other — no `/read`
+  needed. (#biff-q97)
+- **NATS talk notifications carry message body** — `_publish_talk_notification`
+  now sends JSON with sender and body (was a bare `b"1"` wake signal). The poller
+  NATS subscription captures message content for status bar display.
+- **`/talk` command updated** — no more `talk_listen` loop. Incoming messages
+  appear on the status bar automatically. Use `/write` to reply, `/talk end` to
+  close.
+
 ## 0.9.1 — 2026-02-25
 
 ### Fixed

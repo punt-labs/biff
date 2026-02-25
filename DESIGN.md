@@ -1354,3 +1354,50 @@ These are not separate codebases or plugins. They are matcher groups in `hooks/h
 | PreToolUse for safety checks | Biff observes, it doesn't block. Blocking developer actions is not biff's job. |
 | Separate biff-git, biff-beads plugins | Over-engineering. These are matcher groups and dispatch branches, not separate plugin surfaces. |
 | Auto-wall on every commit | Too noisy. Only suggest wall for pushes to default branch and PR events. |
+
+## DES-018: Talk v2 — Status-Line Auto-Read
+
+**Date:** 2026-02-25
+**Status:** Implemented
+**Bead:** biff-q97
+
+### Problem
+
+Talk v1 (v0.9.0) used a blocking `talk_listen` loop: subscribe → check inbox → block
+until message → return → prompt LLM → repeat.  Each inbound message required a full
+LLM round-trip (2-5s) just to display it.  Outbound messages also required an LLM
+round-trip (unavoidable), making the conversation feel sluggish at 4-10s per exchange.
+
+### Decision
+
+Replace blocking `talk_listen` with status-line auto-read.  When both parties `/talk`
+each other, incoming messages display on the status bar within 0-2s — no LLM in the
+inbound path.  Outbound uses `/write` (one LLM round-trip, unavoidable).
+
+**Key CX distinction from `/write` + `/read`:**
+
+- `/write` + `/read` is a mailbox (async).  Someone has to `/read`.
+- `/talk` is mutual presence.  Both agree, then auto-read each other on the status bar.
+
+### Implementation
+
+1. **NATS notifications carry message body** — `_publish_talk_notification` sends
+   JSON `{"from": sender, "body": text}` instead of bare `b"1"` wake signal.
+2. **Poller manages NATS subscription** — `_manage_talk_subscription` in
+   `_descriptions.py` subscribes when `_talk_partner` is set, unsubscribes when
+   cleared.  The callback filters messages from the talk partner and sets
+   `_talk_message`.
+3. **Status line displays talk** — `_talk_segment` renders on line 2 (bold yellow).
+   Priority: talk > wall > idle.
+4. **Shared state in `_descriptions.py`** — `_talk_partner` and `_talk_message` are
+   module-level variables following the existing pattern (wall, tty_name, biff_enabled).
+   Written to `unread.json` by the poller, read by the statusline process.
+
+### Alternatives Considered
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Keep blocking `talk_listen` | 4-10s per exchange, each inbound message hits LLM. Unusable for real-time conversation. |
+| Notification hooks (PreToolUse/PostToolUse) | Would need LLM to process the notification — same latency problem. |
+| WebSocket/SSE push from MCP server | Claude Code doesn't support server-initiated push outside tool responses and `notifications/tools/list_changed`. |
+| Separate talk line on status bar (line 3) | Claude Code status bar supports exactly 2 lines. Must share line 2 with wall. |

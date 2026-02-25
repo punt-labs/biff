@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -62,6 +63,11 @@ _biff_enabled: bool = True
 _wall_text: str = ""
 _wall_from: str = ""
 
+# Set by the ``talk`` tool and background poller NATS subscription so
+# the unread file includes the active talk message for status bar display.
+_talk_partner: str | None = None
+_talk_message: str = ""
+
 
 def get_tty_name() -> str:
     """Return the module-level TTY name."""
@@ -80,14 +86,36 @@ def set_biff_enabled(*, enabled: bool) -> None:
     _biff_enabled = enabled
 
 
+def get_talk_partner() -> str | None:
+    """Return the active talk partner username, or ``None``."""
+    return _talk_partner
+
+
+def set_talk_partner(partner: str | None) -> None:
+    """Update the active talk partner.  Clears talk message when ending."""
+    global _talk_partner, _talk_message
+    _talk_partner = partner
+    if partner is None:
+        _talk_message = ""
+
+
+def set_talk_message(message: str) -> None:
+    """Update the latest talk message for status bar display."""
+    global _talk_message
+    _talk_message = message
+
+
 def _reset_session() -> None:
-    """Clear stored session, tty name, biff_enabled, wall — test isolation."""
+    """Clear stored session, tty name, biff_enabled, wall, talk — test isolation."""
     global _session, _tty_name, _biff_enabled, _wall_text, _wall_from
+    global _talk_partner, _talk_message
     _session = None
     _tty_name = ""
     _biff_enabled = True
     _wall_text = ""
     _wall_from = ""
+    _talk_partner = None
+    _talk_message = ""
 
 
 async def _notify_tool_list_changed() -> None:
@@ -164,6 +192,8 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
             biff_enabled=_biff_enabled,
             wall_text=_wall_text,
             wall_from=_wall_from,
+            talk_partner=_talk_partner,
+            talk_message=_talk_message,
         )
 
 
@@ -226,7 +256,118 @@ async def refresh_wall(
             biff_enabled=_biff_enabled,
             wall_text=_wall_text,
             wall_from=_wall_from,
+            talk_partner=_talk_partner,
+            talk_message=_talk_message,
         )
+
+
+async def _manage_talk_subscription(
+    state: ServerState,
+    current_partner: str | None,
+    sub: object | None,
+) -> tuple[str | None, object | None]:
+    """Subscribe or unsubscribe to talk notifications as partner changes.
+
+    Returns ``(new_partner, new_sub)`` for the caller to track.
+    When the talk partner changes, the old subscription is dropped and
+    a new one created.  NATS-only — no-ops for non-NATS relays.
+    """
+    from biff.nats_relay import NatsRelay  # noqa: PLC0415
+
+    wanted = _talk_partner
+    if wanted == current_partner:
+        return current_partner, sub
+
+    # Unsubscribe old
+    if sub is not None:
+        with suppress(Exception):
+            await sub.unsubscribe()  # type: ignore[attr-defined]
+        sub = None
+
+    if wanted is None or not isinstance(state.relay, NatsRelay):
+        return wanted, None
+
+    # Subscribe new — capture messages from talk partner on status line
+    try:
+        nc = await state.relay.get_nc()
+        subject = state.relay.talk_notify_subject(state.config.user)
+
+        async def _on_talk_msg(msg: object) -> None:
+            try:
+                data = json.loads(msg.data)  # type: ignore[attr-defined]
+                sender = data.get("from", "")
+                body = data.get("body", "")
+                if sender and sender == _talk_partner and body:
+                    set_talk_message(f"@{sender}: {body}")
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                pass
+
+        sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+            subject, cb=_on_talk_msg
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to subscribe to talk notifications")
+        sub = None
+
+    return wanted, sub
+
+
+async def _sync_talk_to_file(state: ServerState) -> None:
+    """Rewrite the unread file with current talk state.
+
+    Called when the NATS subscription callback updates ``_talk_message``
+    between poller ticks.
+    """
+    if state.unread_path is None:
+        return
+    summary = await state.relay.get_unread_summary(state.session_key)
+    _write_unread_file(
+        state.unread_path,
+        summary,
+        repo_name=state.config.repo_name,
+        user=state.config.user,
+        tty_name=_tty_name,
+        biff_enabled=_biff_enabled,
+        wall_text=_wall_text,
+        wall_from=_wall_from,
+        talk_partner=_talk_partner,
+        talk_message=_talk_message,
+    )
+
+
+async def _active_tick(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    last_count: int,
+    last_wall: tuple[str, str],
+    last_talk: str,
+) -> tuple[int, tuple[str, str], str]:
+    """One active-mode poller tick: check inbox, wall, and talk changes.
+
+    Returns updated ``(count, wall_key, talk_message)`` tracking state.
+    """
+    summary = await state.relay.get_unread_summary(state.session_key)
+    if summary.count != last_count:
+        last_count = summary.count
+        await refresh_read_messages(mcp, state)
+
+    # Check wall — key on (text, posted_at) so re-posts trigger refresh.
+    current_wall = await state.relay.get_wall()
+    wall_key = (
+        (current_wall.text, current_wall.posted_at.isoformat())
+        if current_wall
+        else ("", "")
+    )
+    if wall_key != last_wall:
+        last_wall = wall_key
+        await refresh_wall(mcp, state, wall=current_wall)
+
+    # Rewrite unread file when talk message changes (NATS callback updates it)
+    if _talk_message != last_talk:
+        last_talk = _talk_message
+        await _sync_talk_to_file(state)
+
+    return last_count, last_wall, last_talk
 
 
 async def poll_inbox(
@@ -253,50 +394,54 @@ async def poll_inbox(
 
     When *shutdown* is set, exits cleanly between iterations —
     no NATS operations are interrupted mid-flight.
+
+    Also manages a NATS subscription for talk notifications: when a
+    talk partner is active, incoming messages are captured and written
+    to the unread status file for status bar display.
     """
     tracker = state.activity
     last_count = -1  # Force initial refresh
-    last_wall: tuple[str, str] = ("", "")  # (text, posted_at) — Force initial refresh
-    while shutdown is None or not shutdown.is_set():
-        if shutdown is not None:
-            try:
-                await asyncio.wait_for(shutdown.wait(), timeout=interval)
-                return  # Shutdown requested
-            except TimeoutError:
-                pass
-        else:
-            await asyncio.sleep(interval)
+    last_wall: tuple[str, str] = ("", "")  # Force initial refresh
+    last_talk = ""
+    talk_partner_tracked: str | None = None
+    talk_sub: object | None = None
 
-        # Transition: active → napping
-        if not tracker.napping and tracker.idle_seconds() > idle_threshold:
-            tracker.enter_nap()
-            await state.relay.disconnect()
-            continue
+    try:
+        while shutdown is None or not shutdown.is_set():
+            if shutdown is not None:
+                try:
+                    await asyncio.wait_for(shutdown.wait(), timeout=interval)
+                    return  # Shutdown requested
+                except TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(interval)
 
-        # Napping: skip unless POP interval reached
-        if tracker.napping:
-            if tracker.seconds_since_pop() < pop_interval:
+            # Manage talk subscription lifecycle
+            talk_partner_tracked, talk_sub = await _manage_talk_subscription(
+                state, talk_partner_tracked, talk_sub
+            )
+
+            # Transition: active → napping
+            if not tracker.napping and tracker.idle_seconds() > idle_threshold:
+                tracker.enter_nap()
+                await state.relay.disconnect()
                 continue
-            last_count, last_wall = await _pop_fetch(mcp, state, tracker)
-            continue
 
-        # Active: normal polling
-        summary = await state.relay.get_unread_summary(state.session_key)
-        if summary.count != last_count:
-            last_count = summary.count
-            await refresh_read_messages(mcp, state)
+            # Napping: skip unless POP interval reached
+            if tracker.napping:
+                if tracker.seconds_since_pop() < pop_interval:
+                    continue
+                last_count, last_wall = await _pop_fetch(mcp, state, tracker)
+                continue
 
-        # Check wall state — another session may have posted or cleared.
-        # Key on (text, posted_at) so re-posts with different expiry trigger refresh.
-        current_wall = await state.relay.get_wall()
-        wall_key = (
-            (current_wall.text, current_wall.posted_at.isoformat())
-            if current_wall
-            else ("", "")
-        )
-        if wall_key != last_wall:
-            last_wall = wall_key
-            await refresh_wall(mcp, state, wall=current_wall)
+            last_count, last_wall, last_talk = await _active_tick(
+                mcp, state, last_count, last_wall, last_talk
+            )
+    finally:
+        if talk_sub is not None:
+            with suppress(Exception):
+                await talk_sub.unsubscribe()  # type: ignore[attr-defined]
 
 
 async def _pop_fetch(
@@ -337,17 +482,20 @@ def _write_unread_file(
     biff_enabled: bool,
     wall_text: str = "",
     wall_from: str = "",
+    talk_partner: str | None = None,
+    talk_message: str = "",
 ) -> None:
     """Write unread count to a JSON status file.
 
     Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``,
-    ``wall``, and ``wall_from`` metadata so the status line can display
-    identity, session, availability, and wall banner information.
+    ``wall``, ``wall_from``, and talk state so the status line can
+    display identity, session, availability, wall banner, and active
+    talk messages.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
     """
-    data = {
+    data: dict[str, object] = {
         "user": user,
         "repo": repo_name,
         "count": summary.count,
@@ -356,6 +504,9 @@ def _write_unread_file(
         "wall": wall_text,
         "wall_from": wall_from,
     }
+    if talk_partner is not None:
+        data["talk_partner"] = talk_partner
+        data["talk_message"] = talk_message
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")
     except OSError:
