@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 _READ_MESSAGES_BASE = "Check your inbox for new messages. Marks all as read."
 
 _DEFAULT_POLL_INTERVAL = 2.0
-_DEFAULT_IDLE_THRESHOLD = 300.0  # 5 minutes — transition to napping
+_DEFAULT_IDLE_THRESHOLD = 30.0  # 30 seconds — transition to napping
 _DEFAULT_POP_INTERVAL = 600.0  # 10 minutes — POP fetch while napping
 
 # Updated on every tool call so the background poller can send

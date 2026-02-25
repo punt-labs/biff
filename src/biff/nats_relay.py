@@ -669,18 +669,28 @@ class NatsRelay:
         return [s for s in all_sessions if s.user == user]
 
     async def heartbeat(self, session_key: str) -> None:
-        """Update ``last_active``, creating session if needed."""
+        """Update ``last_active`` for an existing session.
+
+        If the session is missing from KV (expired, deleted, or not yet
+        created), the heartbeat is skipped.  Writing a bare
+        ``UserSession(user, tty)`` would destroy tty_name, plan,
+        hostname, and other fields that only the lifespan or tool
+        handlers know how to set.  The 3-day TTL means one skipped
+        heartbeat is harmless; overwriting with a bare session is not.
+        """
         kv_key = self._kv_key(session_key)
         _, kv = await self._ensure_connected()
         try:
             entry = await kv.get(kv_key)
             if entry.value is None:
-                raise KeyNotFoundError
+                return  # No session to heartbeat
             existing = UserSession.model_validate_json(entry.value)
-            updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
-        except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
-            user, tty = session_key.split(":", maxsplit=1)
-            updated = UserSession(user=user, tty=tty)
+        except (KeyNotFoundError, BucketNotFoundError):
+            return  # Session not found — nothing to heartbeat
+        except (ValidationError, ValueError):
+            logger.warning("Corrupt session for %s, skip heartbeat", session_key)
+            return
+        updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
         await kv.put(kv_key, updated.model_dump_json().encode())
 
     async def get_sessions(self) -> list[UserSession]:

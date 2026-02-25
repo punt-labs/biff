@@ -322,12 +322,15 @@ class TestGetSessions:
 
 
 class TestHeartbeat:
-    async def test_creates_new_session(self, relay: NatsRelay) -> None:
+    async def test_skips_missing_session(self, relay: NatsRelay) -> None:
+        """Heartbeat is a no-op when no session exists in KV.
+
+        Creating a bare session would destroy tty_name, plan, hostname,
+        and other fields that only the lifespan or tool handlers set.
+        """
         await relay.heartbeat(f"kai:{_KAI_TTY}")
         result = await relay.get_session(f"kai:{_KAI_TTY}")
-        assert result is not None
-        assert result.user == "kai"
-        assert result.plan == ""
+        assert result is None
 
     async def test_updates_last_active(self, relay: NatsRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
@@ -361,6 +364,15 @@ class TestHeartbeat:
         result = await relay.get_session(f"kai:{_KAI_TTY}")
         assert result is not None
         assert result.biff_enabled is False
+
+    async def test_preserves_tty_name(self, relay: NatsRelay) -> None:
+        await relay.update_session(
+            UserSession(user="kai", tty=_KAI_TTY, tty_name="dev-laptop")
+        )
+        await relay.heartbeat(f"kai:{_KAI_TTY}")
+        result = await relay.get_session(f"kai:{_KAI_TTY}")
+        assert result is not None
+        assert result.tty_name == "dev-laptop"
 
 
 # -- Cross-relay (simulates two MCP servers) --
