@@ -118,7 +118,14 @@ git commit -m "chore: release vX.Y.Z — short description"
 git tag vX.Y.Z
 git push origin main vX.Y.Z
 
-# 5. Verify
+# 5. Update marketplace registry (punt-labs/claude-plugins)
+# The UI discovery reads from this file, NOT from individual repo plugin.json
+# Update version + description in .claude-plugin/marketplace.json
+
+# 6. Create GitHub Release (UI discovery also uses this)
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "See CHANGELOG.md"
+
+# 7. Verify
 claude plugin update biff@punt-labs  # Should show new version
 ```
 
