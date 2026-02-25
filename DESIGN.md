@@ -582,6 +582,56 @@ The original design used `~/.biff/unread/{repo-name}.json` with the status line 
 | Scan all per-TTY files | Status line wouldn't know which file is "mine" — showing all TTYs is noisy and unusable |
 | Session ID from stdin JSON | Available to the status line but not to the MCP server — no way to agree on a file key |
 
+### DES-011b: Local Plugin Process Tree Divergence (2026-02-25)
+
+**New evidence:** The ancestor walk from DES-011a assumes the MCP server and status line are both descendants of the same `claude` process. This holds for **marketplace plugins** but breaks for **local plugins** installed via `biff install`.
+
+**Marketplace plugin** — MCP server is a direct child of the session's `claude`:
+
+```text
+37600 (claude)                ← session UI + MCP manager (SAME process)
+├── 37609 (biff serve)        ← MCP server: find_session_key() → 37600
+├── 37859 (quarry serve)
+├── /bin/zsh                  ← shells, status line: find_session_key() → 37600
+└── ...                       ✓ CONVERGE on 37600
+```
+
+**Local plugin** — Claude Code spawns a separate `claude` process for local plugin MCP servers:
+
+```text
+81802 (-zsh)
+├── 30234 (claude)            ← session UI, runs status line
+│   ├── /bin/zsh              ← find_session_key() → 30234
+│   ├── quarry serve
+│   └── sourcekit-lsp
+│
+97746 (-zsh)
+└── 27528 (claude)            ← separate MCP manager for local plugins
+    └── 27538 (biff serve)    ← find_session_key() → 27528
+                              ✗ DIVERGE: 30234 ≠ 27528
+```
+
+Biff writes to `27528.json`; status line looks for `30234.json`. File not found, status bar shows bare `biff`.
+
+**Verified (2026-02-25):** Single session, all other sessions closed. Confirmed with live process tree walks from both sides. Uninstalling local plugin and installing marketplace version immediately fixed the status line — both sides converged on the same `claude` PID.
+
+**Root cause:** Claude Code runs local plugin MCP servers under a separate `claude` process tree, not under the session's own `claude`. This is an architectural difference in how Claude Code manages local vs marketplace plugins. The ancestor walk cannot bridge two disjoint process trees.
+
+**Impact:** The `biff install` local development workflow produces a broken status line. Marketplace installs work correctly. This means:
+
+1. **Production users** (marketplace install) are unaffected
+2. **Developers** testing local changes see bare `biff` instead of `user:tty(N)`
+3. The dev/prod isolation strategy (`biff-dev` name) needs a different approach to status line testing
+
+**Status:** OPEN — no fix yet. Potential approaches:
+
+| Approach | Trade-off |
+|----------|-----------|
+| Write unread file keyed by session_key from NATS (not PID) | Status line can't resolve NATS session key without MCP call |
+| MCP server writes PID mapping file on startup | Extra file, cleanup needed |
+| Status line scans all unread files, picks freshest for this repo | Returns to the multi-session stomping problem from DES-011 |
+| Accept marketplace-only status line during dev | Limits dev testing fidelity |
+
 ---
 
 ## DES-012: Config File — .biff TOML
