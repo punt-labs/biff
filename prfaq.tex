@@ -1042,8 +1042,9 @@ paid tier.
   Per-project activation toggle. \texttt{/biff y} (or \texttt{biff enable}
   from CLI) opts in via \texttt{.biff.local}; \texttt{/biff n} opts out.
   Dormant mode: no NATS connection, no consumers, no status line until
-  opted in. Lazy NATS connection releases TCP after 5 minutes idle,
-  reconnects briefly every 10 minutes (POP-mode polling). \\
+  opted in. Persistent NATS connection with nap mode: after 2 minutes idle,
+  polling reduces to 30s but connection stays alive for KV watches and
+  subscriptions (DES-019). \\
 
   \texttt{/talk @user ``msg''} & BSD \texttt{talk} &
   Start a real-time bidirectional conversation. Uses NATS core pub/sub

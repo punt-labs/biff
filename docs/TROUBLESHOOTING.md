@@ -92,9 +92,9 @@ gh auth login     # Re-authenticate if needed
 
 Your biff username matches your GitHub username. There is no separate biff identity to configure.
 
-### High idle time / POP mode
+### High idle time / nap mode
 
-**Cause:** After about 30 seconds with no tool calls, biff enters POP mode --- it releases the NATS TCP connection and only reconnects every 10 minutes to fetch messages. This is by design to avoid holding persistent connections on idle terminals.
+**Cause:** After about 2 minutes with no tool calls, biff enters nap mode — it reduces polling frequency from 2s to 30s but keeps the NATS connection alive. Wall changes and talk messages are still delivered in real-time via KV watches and NATS subscriptions.
 
 **Not a bug.** Any tool call (`/who`, `/write`, `/read`) wakes biff immediately. The poller transitions back to active mode (2-second polling) on the next tool call.
 

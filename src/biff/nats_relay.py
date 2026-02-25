@@ -422,10 +422,15 @@ class NatsRelay:
         self._validate_tty(tty)
         return f"{self._repo_name}.{user}.{tty}"
 
+    @staticmethod
+    def wall_kv_key(repo_name: str) -> str:
+        """KV key for the team wall: ``{repo}.wall`` (DES-016)."""
+        return f"{repo_name}.wall"
+
     @property
     def _wall_kv_key(self) -> str:
-        """KV key for the team wall: ``{repo}.wall`` (DES-016)."""
-        return f"{self._repo_name}.wall"
+        """Instance shorthand for :meth:`wall_kv_key`."""
+        return self.wall_kv_key(self._repo_name)
 
     def talk_notify_subject(self, user: str) -> str:
         """NATS core subject for talk notifications to a user.
