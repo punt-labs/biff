@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.2 — 2026-02-24
+
+### Fixed
+
+- **Wall tty in status bar** — `_wall_from` now includes the sender's tty name
+  so the status bar shows it (was only in tool description after v0.8.1).
+- **Redundant session fetch** — wall tool reuses `update_current_session` return
+  value instead of calling `get_or_create_session` a second time.
+- **README image on PyPI** — use absolute GitHub URL for `biff.png` so it renders
+  on pypi.org (relative paths don't resolve there).
+
 ## 0.8.1 — 2026-02-24
 
 ### Fixed
