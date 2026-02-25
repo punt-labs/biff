@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.9.1 — 2026-02-25
+
+### Fixed
+
+- **Missing `/talk` slash command** — added `talk.md` command file so `/talk`
+  appears in the skills list and deploys via SessionStart hook. The MCP tools
+  existed since v0.9.0 but the slash command was never created.
+- **Uninstall cleanup** — added `talk.md` to `BIFF_COMMANDS` in installer so
+  `biff uninstall` removes it from `~/.claude/commands/`.
+
 ## 0.9.0 — 2026-02-25
 
 ### Added

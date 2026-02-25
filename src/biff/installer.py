@@ -34,6 +34,7 @@ BIFF_COMMANDS = (
     "mesg.md",
     "plan.md",
     "read.md",
+    "talk.md",
     "tty.md",
     "wall.md",
     "who.md",
