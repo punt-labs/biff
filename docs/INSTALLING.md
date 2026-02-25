@@ -13,6 +13,8 @@
 curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/6ce60b3/install.sh | sh
 ```
 
+The commit hash pins the installer to an auditable snapshot. It is updated on each release.
+
 This installs [uv](https://docs.astral.sh/uv/) (if missing), installs `punt-biff` as a uv tool, registers the Claude Code plugin, and runs `biff doctor` to verify.
 
 Restart Claude Code twice after installing:

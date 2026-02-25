@@ -94,7 +94,7 @@ Your biff username matches your GitHub username. There is no separate biff ident
 
 ### High idle time / POP mode
 
-**Cause:** After 5 minutes with no tool calls, biff enters POP mode --- it releases the NATS TCP connection and only reconnects every 10 minutes to fetch messages. This is by design to avoid holding persistent connections on idle terminals.
+**Cause:** After about 30 seconds with no tool calls, biff enters POP mode --- it releases the NATS TCP connection and only reconnects every 10 minutes to fetch messages. This is by design to avoid holding persistent connections on idle terminals.
 
 **Not a bug.** Any tool call (`/who`, `/write`, `/read`) wakes biff immediately. The poller transitions back to active mode (2-second polling) on the next tool call.
 

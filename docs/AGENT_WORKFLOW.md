@@ -98,7 +98,7 @@ Biff's git hooks automate coordination overhead:
 
 | Hook | Trigger | Effect |
 |------|---------|--------|
-| **post-checkout** | Branch switch | Plan updates to `-> feature/auth` |
+| **post-checkout** | Branch switch | Plan updates to `→ feature/auth` |
 | **post-commit** | Commit | Plan updates to `✓ feat: add auth` |
 | **pre-push** | Push to main | Suggests `/wall` announcement |
 | **SessionStart** | New session | Auto-assigns TTY, sets plan from branch, checks messages |

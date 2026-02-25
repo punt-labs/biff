@@ -200,10 +200,11 @@ Biff ships with a shared demo relay so your team can start immediately. When you
 Biff appends to your existing Claude Code status line --- it never replaces it:
 
 ```text
-your-existing-status | kai:tty1(3) | WALL: release freeze
+Line 1: your-existing-status | kai:tty1(3)
+Line 2: ▶ WALL: release freeze until 5pm
 ```
 
-Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off. Active wall broadcasts appear as bold red `WALL:` text. Active `/talk` messages show as bold yellow on line 2.
+Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off. Line 2 shows active `/talk` messages (bold yellow), wall broadcasts (bold red), or an idle marker.
 
 ## Agents Welcome
 
