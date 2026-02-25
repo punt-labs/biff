@@ -313,6 +313,8 @@ async def _manage_talk_subscription(
                 )
                 if sender and sender == partner_user and body:
                     set_talk_message(f"@{sender}: {body}")
+                    await _sync_talk_to_file(state)
+                    await _notify_tool_list_changed()
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
 

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.10.4 — 2026-02-25
+
+### Fixed
+
+- **Talk push notifications are immediate** — incoming talk messages now trigger
+  `_sync_talk_to_file()` and `_notify_tool_list_changed()` directly in the NATS
+  callback instead of waiting for the 2s poller tick. Status bar updates appear
+  within 0-2s instead of 4-6s (or never, if the poller was napping).
+
+### Changed
+
+- **Release process updated in CLAUDE.md** — both channels (marketplace + PyPI)
+  now ship together on every version bump. Removed "milestone only" PyPI policy.
+  Documented that local editable installs must never be used and that `twine upload`
+  must never be run manually.
+
 ## 0.10.3 — 2026-02-25
 
 ### Fixed

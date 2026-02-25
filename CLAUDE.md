@@ -98,11 +98,17 @@ Version lives in two files that must stay in sync:
 | `pyproject.toml` | `version = "X.Y.Z"` |
 | `.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
 
-After editing both, run `uv lock` to update `uv.lock`. Then reinstall: `uv tool install --force --editable .`
+After editing both, run `uv lock` to update `uv.lock`.
 
 Use semver: patch for fixes, minor for features, major for breaking changes. Bump on every PR that changes user-facing behavior.
 
 **IMPORTANT:** `plugin.json` must always have `"name": "biff"` on main. During local development, the name may be `"biff-dev"` for dev/prod isolation — **never commit `"biff-dev"` to main**. Verify before pushing.
+
+**IMPORTANT:** Never use `uv tool install --force --editable .` as a release or testing step. Local editable installs break the status line (see DESIGN.md DES-011b) and do not represent what users experience. The only way to test is to release through the real channels.
+
+#### Both Channels Ship Together
+
+The marketplace plugin ships config (hooks, commands, plugin.json) but the `biff` CLI binary that it invokes (`biff serve`) comes from PyPI. If only the marketplace updates, users get new hooks calling old code. **Both channels must release on every version bump.**
 
 #### Channel 1: Plugin Marketplace
 
@@ -110,67 +116,47 @@ The plugin marketplace serves Claude Code users via `claude plugin install biff@
 
 **When:** Every version bump merged to main.
 
-**Process:**
-
-```bash
-# 1. Version already bumped in PR (pyproject.toml + plugin.json)
-# 2. CHANGELOG updated with release section
-# 3. Verify plugin.json name is "biff" (not "biff-dev")
-grep '"name"' .claude-plugin/plugin.json  # Must be "biff"
-
-# 4. Commit, tag, push
-git add .claude-plugin/plugin.json CHANGELOG.md
-git commit -m "chore: release vX.Y.Z — short description"
-git tag vX.Y.Z
-git push origin main vX.Y.Z
-
-# 5. Update marketplace registry (punt-labs/claude-plugins)
-# The UI discovery reads from this file, NOT from individual repo plugin.json
-# Update version + description in .claude-plugin/marketplace.json
-
-# 6. Create GitHub Release (UI discovery also uses this)
-gh release create vX.Y.Z --title "vX.Y.Z" --notes "See CHANGELOG.md"
-
-# 7. Verify
-claude plugin update biff@punt-labs  # Should show new version
-```
-
-**Bar:** Quality gates pass. That's it. The marketplace release is the plugin definition + hook scripts + commands — no Python runtime. Low risk.
-
 #### Channel 2: PyPI (`punt-biff`)
 
-PyPI serves `pip install punt-biff` / `uv tool install punt-biff`. This ships the Python runtime (MCP server, relay, CLI).
+PyPI serves `uv tool install punt-biff`. This ships the Python runtime (MCP server, relay, CLI).
 
-**When:** Milestone releases only. Not every version bump.
+**When:** Every version bump merged to main (same as Channel 1).
+
+#### Release Process
+
+Both channels release from a single workflow. The git tag triggers `.github/workflows/release.yml` which handles build → TestPyPI → test-install → PyPI automatically.
 
 **Bar:**
 
-- [ ] **All test tiers pass** — unit, integration, subprocess, local NATS, hosted NATS
-- [ ] **No resource leaks** — NATS consumers, asyncio tasks, file handles, connections
-- [ ] **Hosted NATS E2E validates relay path** — full round-trip against Synadia Cloud
-- [ ] **Scale smoke test** — concurrent multi-user load without resource exhaustion
-
-**Scale target:** 243+ concurrent committers. If biff can't handle that without resource exhaustion, connection failures, or degraded UX, it is not ready to ship.
+- [ ] **Quality gates pass** — ruff, mypy, pyright, tier 1-2 tests
+- [ ] **Hosted NATS tests pass locally** if relay code changed
 
 **Process:**
 
 ```bash
-# 1. All of Channel 1 already done (tag exists, marketplace updated)
-# 2. Run full test suite including hosted NATS
-BIFF_TEST_NATS_URL=tls://connect.ngs.global \
-BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
-uv run pytest -m hosted -v
+# 1. Version already bumped in PR (pyproject.toml + plugin.json + uv lock)
+# 2. CHANGELOG updated with release section
+# 3. PR merged to main
 
-# 3. Build and publish
-rm -rf dist/ && uv build && uvx twine check dist/*
-uvx twine upload dist/*
+# 4. Tag and push (triggers release.yml → TestPyPI → PyPI)
+git checkout main && git pull origin main
+git tag vX.Y.Z
+git push origin vX.Y.Z
 
-# 4. GitHub release
+# 5. Create GitHub Release
 gh release create vX.Y.Z --title "vX.Y.Z" --notes "See CHANGELOG.md"
 
-# 5. Verify
-uv tool install --upgrade punt-biff && biff --version
+# 6. Update marketplace registry (punt-labs/claude-plugins)
+# The UI discovery reads from this file, NOT from individual repo plugin.json
+# Update version in .claude-plugin/marketplace.json, commit, push
+
+# 7. Verify both channels
+claude plugin update biff@punt-labs     # Plugin → new version
+uv tool install --upgrade punt-biff     # CLI → new version
+biff doctor                             # Both match
 ```
+
+**NEVER manually run `twine upload`.** The release workflow handles PyPI publication with TestPyPI verification. Manual upload bypasses that safety net.
 
 **Specialized agents for release validation:**
 
