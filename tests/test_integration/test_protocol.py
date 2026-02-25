@@ -74,6 +74,9 @@ class TestToolListing:
             "wall",
             "who",
             "plan",
+            "talk",
+            "talk_listen",
+            "talk_end",
             "tty",
             "last",
         }
