@@ -25,14 +25,15 @@ from typing import TYPE_CHECKING
 
 from biff.models import Message
 from biff.nats_relay import NatsRelay
+from biff.relay import Relay
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import (
     get_talk_partner,
     refresh_read_messages,
     set_talk_partner,
 )
-from biff.server.tools._session import update_current_session
-from biff.tty import parse_address
+from biff.server.tools._session import resolve_session, update_current_session
+from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -65,6 +66,24 @@ async def fetch_all_unread(
     tty_unread = await relay.fetch(session_key)
     user_unread = await relay.fetch_user_inbox(user)
     return sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
+
+
+async def _resolve_talk_target(
+    relay: Relay, user: str, tty: str | None
+) -> tuple[str, str]:
+    """Resolve a talk address to ``(relay_key, display_target)``.
+
+    Same resolution as :func:`messaging._resolve_recipient` — tries the
+    literal hex key first, then falls back to ``tty_name`` matching.
+    """
+    if tty:
+        session = await resolve_session(relay, user, tty)
+        if session:
+            relay_key = build_session_key(session.user, session.tty)
+        else:
+            relay_key = f"{user}:{tty}"
+        return relay_key, f"{user}:{tty}"
+    return user, user
 
 
 async def _do_talk_listen(
@@ -144,20 +163,20 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not sessions:
             return f"@{user} is not online."
 
-        target = f"{user}:{tty}" if tty else user
-        set_talk_partner(target)
+        relay_key, display_target = await _resolve_talk_target(relay, user, tty)
+        set_talk_partner(display_target)
 
         if message:
             msg = Message(
                 from_user=state.config.user,
-                to_user=target,
+                to_user=relay_key,
                 body=message[:512],
             )
             await relay.deliver(msg, sender_key=state.session_key)
             await refresh_read_messages(mcp, state)
 
         return (
-            f"Talk session started with @{target}. "
+            f"Talk session started with @{display_target}. "
             f"Replies appear on the status bar. Use /write to reply."
         )
 
