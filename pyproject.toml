@@ -41,6 +41,7 @@ biff = "biff.__main__:app"
 
 [project.urls]
 Homepage = "https://github.com/punt-labs/biff"
+Repository = "https://github.com/punt-labs/biff"
 "Bug Tracker" = "https://github.com/punt-labs/biff/issues"
 
 [build-system]
