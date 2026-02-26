@@ -4,7 +4,7 @@ argument-hint: "[@user] [count]"
 ---
 <!-- markdownlint-disable MD041 -->
 
-Call `mcp__plugin_biff-dev_tty__last` with optional `user` (e.g. `@kai`) and `count` (default 25) arguments.
+Call `mcp__plugin_biff_tty__last` with optional `user` (e.g. `@kai`) and `count` (default 25) arguments.
 
 If the result says "No session history.", say "No session history available."
 
