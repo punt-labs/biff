@@ -1469,11 +1469,15 @@ fully closed.  This killed all KV watches (wall, sessions) and NATS subscription
 notifications).  The POP cycle reconnected every 10s for a brief fetch, then disconnected
 again — meaning updates could only land during the narrow reconnect window.
 
-The key insight: `_notify_tool_list_changed()` is the forcing function that makes Claude
+The key insight: `notify_tool_list_changed()` is the forcing function that makes Claude
 Code re-read tool descriptions.  Without a live NATS connection, wall changes cannot
 trigger this notification.  Polling alone can never achieve 2s latency because the poller
 runs on a 2s tick but the unread file write only helps the human-visible status line —
 the model-visible tool description still requires `tools/list_changed` to fire.
+
+**Refinement (DES-020):** The notification alone is necessary but not sufficient.  Claude
+Code must see an actual tool description change when it re-reads, or the re-render that
+refreshes the status bar does not trigger.  See DES-020 for the full analysis.
 
 ### Decision
 
@@ -1519,3 +1523,87 @@ connections but broke the real-time push notification pipeline.  The 10s reconne
 meant worst-case 10s + processing latency for wall updates — and in practice, the
 combination of reconnect time, KV watch restart, and poller timing resulted in 2+ minute
 visible latency.
+
+---
+
+## DES-020: Talk Notification Parity with Wall — Tool Description Mutation
+
+**Date:** 2026-02-25
+**Status:** SETTLED
+**Related:** DES-018 (Talk v2), DES-019 (Persistent NATS)
+
+### Problem
+
+Wall messages appear on the status bar within 0-2 seconds.  Talk messages during an
+active `/talk` session do not — they reach the unread JSON file but the status bar
+only picks them up on Claude Code's next scheduled status line poll (interval unknown,
+observed as multiple seconds to tens of seconds).
+
+Both paths call `_notify_tool_list_changed()`.  Both write the unread file.  The
+NATS subscription callback fires correctly (confirmed by inspecting unread files on
+disk — `talk_message` is populated).  Yet wall triggers an immediate status bar
+refresh and talk does not.
+
+### Root Cause
+
+`_notify_tool_list_changed()` sends the MCP `notifications/tools/list_changed` signal
+to Claude Code.  Claude Code responds by re-reading the tool list.  The critical
+difference is what Claude Code **sees** when it re-reads:
+
+| Path | Tool Description Mutated? | Claude Code Sees Change? | Re-render? |
+|------|--------------------------|-------------------------|------------|
+| **Wall** | Yes — `wall` tool description becomes `[WALL] message text...` | Yes | Yes → status bar refreshes |
+| **Talk** | No — no tool description changes | No | No → status bar stale |
+
+The notification is necessary but not sufficient.  Claude Code must observe an actual
+tool description change to trigger the UI re-render that also refreshes the status bar.
+Writing the unread file is invisible to Claude Code's MCP layer — the file is only read
+by the external `biff statusline` process, which runs on Claude Code's own schedule.
+
+### Two Notification Channels
+
+There are two independent channels that update the status bar:
+
+1. **MCP protocol** (`notifications/tools/list_changed` → tool re-read → UI re-render)
+   — instant when a tool description actually changes.  This is how wall achieves 0-2s.
+
+2. **Status line file** (`~/.biff/unread/{session}.json` → `biff statusline` command)
+   — polled by Claude Code at its own interval.  This is the only channel talk uses.
+
+Wall uses both channels.  Talk uses only channel 2.  That is the asymmetry.
+
+### Decision
+
+Mutate the `talk` tool description when a talk message arrives, mirroring the wall
+pattern.  New `refresh_talk()` function updates the talk tool description to
+`[TALK] @sender: message — Use /write @partner to reply. Use talk_end to close.`
+and clears it on `talk_end`.  This gives Claude Code a visible change to react to,
+triggering the re-render that refreshes the status bar.
+
+### Implementation
+
+1. **`_TALK_BASE_DESCRIPTION` constant** in `_descriptions.py` — single source of truth
+   for the talk tool's default description.  Used by both `talk.py` registration and
+   `refresh_talk()` reset.
+
+2. **`refresh_talk(mcp, state)`** — mirrors `refresh_wall()`.  Mutates talk tool
+   description, calls `notify_tool_list_changed()` on change, rewrites unread file.
+
+3. **`_manage_talk_subscription(mcp, state, ...)`** — now accepts `mcp` so the
+   `_on_talk_msg` NATS callback can call `refresh_talk(mcp, state)` instead of
+   the old `_sync_talk_to_file()` + event-based approach.
+
+4. **`_sync_talk_to_file` deleted** — replaced entirely by `refresh_talk()` which
+   handles both tool description mutation and unread file write.
+
+5. **`_active_tick` poller** — belt path also calls `refresh_talk()` when talk message
+   changes, ensuring any message missed by the NATS callback is still picked up.
+
+### Prior Approach (Rejected)
+
+An `asyncio.Event` bridge was attempted: the NATS callback set an event, a watcher
+task awaited it and fired `notify_tool_list_changed()` from a different task context.
+This was based on the incorrect hypothesis that `_session.send_tool_list_changed()`
+failed from the NATS callback context.  The real issue was that the notification
+delivered correctly but Claude Code saw no tool description change, so no re-render
+occurred.

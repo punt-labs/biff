@@ -521,7 +521,7 @@ class TestTalkSelfEchoFilter:
 
             # Set up talk subscription to "eric"
             set_talk_partner("eric")
-            _, sub = await _manage_talk_subscription(state, None, None)
+            _, sub = await _manage_talk_subscription(mcp, state, None, None)
             assert sub is not None
 
             # Publish a talk notification FROM this session (self-echo)
@@ -580,7 +580,7 @@ class TestTalkSelfEchoFilter:
 
             # Set up talk subscription — kai is talking to eric
             set_talk_partner("eric")
-            _, sub = await _manage_talk_subscription(state, None, None)
+            _, sub = await _manage_talk_subscription(mcp, state, None, None)
             assert sub is not None
 
             # Publish a talk notification FROM eric's session (different key)
