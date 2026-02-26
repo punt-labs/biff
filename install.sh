@@ -14,9 +14,7 @@ info() { printf '%b==>%b %s\n' "$BOLD" "$NC" "$1"; }
 ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
-# TODO: revert to "punt-biff" once PyPI org prefix is approved
-PACKAGE="punt-biff@git+https://github.com/punt-labs/biff.git"
-PACKAGE_SHORT="punt-biff"
+PACKAGE="punt-biff"
 BINARY="biff"
 
 # --- Step 1: Python ---
@@ -75,11 +73,11 @@ fi
 
 # --- Step 4: punt-biff ---
 
-info "Installing $PACKAGE_SHORT..."
+info "Installing $PACKAGE..."
 
 # --force: overwrites existing binary (may exist from old package name or prior install)
-uv tool install --force "$PACKAGE" || fail "Failed to install $PACKAGE_SHORT"
-ok "$PACKAGE_SHORT installed"
+uv tool install --force "$PACKAGE" || fail "Failed to install $PACKAGE"
+ok "$PACKAGE installed"
 
 if ! command -v "$BINARY" >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
@@ -93,13 +91,36 @@ ok "$BINARY $(command -v "$BINARY")"
 # --- Step 5: biff install (marketplace + plugin) ---
 
 info "Setting up Claude Code plugin..."
-"$BINARY" install
+
+# claude plugin install clones via SSH (git@github.com:...).
+# Users without SSH keys need an HTTPS fallback.
+NEED_HTTPS_REWRITE=0
+if ! ssh -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+  printf '  ℹ SSH auth to GitHub unavailable, using HTTPS fallback\n'
+  git config --global url."https://github.com/".insteadOf "git@github.com:"
+  NEED_HTTPS_REWRITE=1
+fi
+
+if ! "$BINARY" install; then
+  # Clean up HTTPS rewrite before exiting on failure.
+  if [ "$NEED_HTTPS_REWRITE" = "1" ]; then
+    git config --global --unset url."https://github.com/".insteadOf 2>/dev/null || true
+  fi
+  fail "Plugin install failed"
+fi
+
+# Clean up the HTTPS rewrite after successful install.
+if [ "$NEED_HTTPS_REWRITE" = "1" ]; then
+  git config --global --unset url."https://github.com/".insteadOf 2>/dev/null || true
+fi
 
 # --- Step 6: biff doctor ---
 
 info "Verifying installation..."
 printf '\n'
-"$BINARY" doctor
+if ! "$BINARY" doctor; then
+  fail "Doctor check failed"
+fi
 printf '\n'
 
 # --- Done ---
