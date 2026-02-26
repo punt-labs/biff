@@ -67,6 +67,12 @@ _wall_from: str = ""
 _talk_partner: str | None = None
 _talk_message: str = ""
 
+# Signalled by the NATS talk callback so a watcher task in app.py can
+# fire notify_tool_list_changed() from its own asyncio task context.
+# The NATS callback writes the unread file directly, but the notification
+# must be sent from a task that shares the MCP session's write stream.
+_talk_notify_event: asyncio.Event | None = None
+
 
 def get_tty_name() -> str:
     """Return the module-level TTY name."""
@@ -104,10 +110,22 @@ def set_talk_message(message: str) -> None:
     _talk_message = message
 
 
+def get_talk_notify_event() -> asyncio.Event:
+    """Return the talk notification event, creating it on first call.
+
+    The event is lazily created so the asyncio event loop exists by the
+    time it is instantiated.
+    """
+    global _talk_notify_event
+    if _talk_notify_event is None:
+        _talk_notify_event = asyncio.Event()
+    return _talk_notify_event
+
+
 def _reset_session() -> None:
     """Clear stored session, tty name, biff_enabled, wall, talk — test isolation."""
     global _session, _tty_name, _biff_enabled, _wall_text, _wall_from
-    global _talk_partner, _talk_message
+    global _talk_partner, _talk_message, _talk_notify_event
     _session = None
     _tty_name = ""
     _biff_enabled = True
@@ -115,9 +133,10 @@ def _reset_session() -> None:
     _wall_from = ""
     _talk_partner = None
     _talk_message = ""
+    _talk_notify_event = None
 
 
-async def _notify_tool_list_changed() -> None:
+async def notify_tool_list_changed() -> None:
     """Fire ``notifications/tools/list_changed`` via the best available path.
 
     Belt path (inside a tool handler): queues the notification on the
@@ -180,7 +199,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
             f"Check messages ({summary.count} unread). Marks all as read."
         )
     if tool.description != old_desc:
-        await _notify_tool_list_changed()
+        await notify_tool_list_changed()
     if state.unread_path is not None:
         _write_unread_file(
             state.unread_path,
@@ -242,7 +261,7 @@ async def refresh_wall(
         if current.from_tty:
             _wall_from += f" ({current.from_tty})"
     if tool.description != old_desc:
-        await _notify_tool_list_changed()
+        await notify_tool_list_changed()
     # Re-write the unread file so wall text is synced to status bar
     if state.unread_path is not None:
         summary = await state.relay.get_unread_summary(state.session_key)
@@ -313,7 +332,9 @@ async def _manage_talk_subscription(
                 if sender and sender == partner_user and body:
                     set_talk_message(f"@{sender}: {body}")
                     await _sync_talk_to_file(state)
-                    await _notify_tool_list_changed()
+                    # Signal the watcher task in app.py to fire
+                    # notify_tool_list_changed() from its own context.
+                    get_talk_notify_event().set()
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
 

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.10.6 — 2026-02-25
+
+### Fixed
+
+- **Talk status bar updates are now instant** — talk notifications from the NATS
+  subscription callback were silently failing to trigger `tools/list_changed`
+  because `_session.send_tool_list_changed()` does not reliably deliver from
+  the nats.py client's internal task context. Added a `_talk_notify_loop` that
+  bridges the gap: the callback sets an `asyncio.Event`, the loop awaits it
+  and fires the notification from a regular asyncio task where delivery succeeds.
+
+### Changed
+
+- **`_notify_tool_list_changed` → `notify_tool_list_changed`** — made public
+  since it is now called from `app.py` (talk notify loop).
+
 ## 0.10.5 — 2026-02-25
 
 ### Fixed
