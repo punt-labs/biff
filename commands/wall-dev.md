@@ -1,5 +1,5 @@
 ---
-description: Broadcast a message to all teammates
+description: "[DEV] Broadcast a message to all teammates"
 argument-hint: '"message" [duration] | clear'
 ---
 <!-- markdownlint-disable MD041 -->
@@ -25,4 +25,4 @@ Examples:
 
 ## Task
 
-Call `mcp__plugin_biff_tty__wall` with the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.
+Call `mcp__plugin_biff_dev_tty__wall` with the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

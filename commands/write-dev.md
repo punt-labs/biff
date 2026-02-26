@@ -1,5 +1,5 @@
 ---
-description: Send a message to a teammate
+description: "[DEV] Send a message to a teammate"
 argument-hint: "@user <message>"
 ---
 <!-- markdownlint-disable MD041 -->
@@ -14,4 +14,4 @@ Example: `@kai hey, ready for code review?` → `to="kai"`, `message="hey, ready
 
 ## Task
 
-Call `mcp__plugin_biff_tty__write` with `to` and `message` set to the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.
+Call `mcp__plugin_biff_dev_tty__write` with `to` and `message` set to the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

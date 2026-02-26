@@ -1,9 +1,9 @@
 ---
-description: List active team members and what they're working on
+description: "[DEV] List active team members and what they're working on"
 ---
 <!-- markdownlint-disable MD041 -->
 
-Call `mcp__plugin_biff_tty__who` with no arguments.
+Call `mcp__plugin_biff_dev_tty__who` with no arguments.
 
 If the result says "No sessions.", do not emit any text.
 

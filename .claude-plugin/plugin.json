@@ -1,5 +1,5 @@
 {
-  "name": "biff",
+  "name": "biff-dev",
   "description": "UNIX-style team communication for Claude Code: /who, /finger, /plan, /write, /read, /mesg, /tty, /last, /wall, /talk",
   "version": "0.10.6",
   "author": {
@@ -9,8 +9,8 @@
   "mcpServers": {
     "tty": {
       "type": "stdio",
-      "command": "biff",
-      "args": ["serve", "--transport", "stdio"]
+      "command": "uv",
+      "args": ["run", "biff", "serve", "--transport", "stdio"]
     }
   }
 }
