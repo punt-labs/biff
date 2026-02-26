@@ -186,7 +186,8 @@ class DisplayQueue:
         return False
 
     def snapshot(self) -> list[DisplayItem]:
-        """Return a shallow copy of the queue for inspection/testing."""
+        """Return a shallow copy of the queue with expired items removed."""
+        self._purge_expired()
         return list(self._items)
 
     def _purge_expired(self) -> None:

@@ -256,6 +256,9 @@ async def refresh_wall(
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
+        # Duration arithmetic: wall-clock difference → monotonic expiry.
+        # Safe because we convert to a relative seconds delta, not an
+        # absolute timestamp, before passing to the monotonic-based queue.
         seconds_remaining = (current.expires_at - datetime.now(UTC)).total_seconds()
         queue.add(
             DisplayItem(
