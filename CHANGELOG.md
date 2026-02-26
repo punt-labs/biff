@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.11.2 — 2026-02-26
+
+### Fixed
+
+- **Dev commands no longer ship to marketplace users** — moved `*-dev.md`
+  commands from `commands/` (plugin-shipped) to `.claude/commands/`
+  (project-local). Dev commands now only load when working in the biff repo.
+
 ## 0.11.1 — 2026-02-26
 
 ### Fixed
