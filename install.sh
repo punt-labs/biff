@@ -95,24 +95,25 @@ info "Setting up Claude Code plugin..."
 # claude plugin install clones via SSH (git@github.com:...).
 # Users without SSH keys need an HTTPS fallback.
 NEED_HTTPS_REWRITE=0
-if ! ssh -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+cleanup_https_rewrite() {
+  if [ "$NEED_HTTPS_REWRITE" = "1" ]; then
+    git config --global --unset url."https://github.com/".insteadOf 2>/dev/null || true
+    NEED_HTTPS_REWRITE=0
+  fi
+}
+trap cleanup_https_rewrite EXIT INT TERM
+
+if ! ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
   printf '  ℹ SSH auth to GitHub unavailable, using HTTPS fallback\n'
   git config --global url."https://github.com/".insteadOf "git@github.com:"
   NEED_HTTPS_REWRITE=1
 fi
 
 if ! "$BINARY" install; then
-  # Clean up HTTPS rewrite before exiting on failure.
-  if [ "$NEED_HTTPS_REWRITE" = "1" ]; then
-    git config --global --unset url."https://github.com/".insteadOf 2>/dev/null || true
-  fi
   fail "Plugin install failed"
 fi
 
-# Clean up the HTTPS rewrite after successful install.
-if [ "$NEED_HTTPS_REWRITE" = "1" ]; then
-  git config --global --unset url."https://github.com/".insteadOf 2>/dev/null || true
-fi
+cleanup_https_rewrite
 
 # --- Step 6: biff doctor ---
 
