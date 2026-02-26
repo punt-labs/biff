@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.11.4 — 2026-02-26
+
+### Fixed
+
+- **Installer now installs from PyPI** — `install.sh` installs the released
+  `punt-biff` package instead of building from git source. Faster installs,
+  tested artifacts.
+- **Re-running installer upgrades the plugin** — `biff install` now calls
+  `claude plugin update` when the plugin is already installed, so existing
+  users get new versions without manual intervention.
+- **SSH-less users can install** — `install.sh` detects missing SSH keys and
+  temporarily rewrites git URLs to HTTPS for `claude plugin install`.
+- **Install failures show error messages** — `biff install` and `biff doctor`
+  are now wrapped in `if !` guards so `set -eu` doesn't cause silent exits.
+
 ## 0.11.3 — 2026-02-26
 
 ### Fixed
