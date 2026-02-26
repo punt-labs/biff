@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -325,9 +324,9 @@ async def _manage_talk_subscription(
             await sub.unsubscribe()  # type: ignore[attr-defined]
         sub = None
 
-    # Clear talk items when talk ends
-    if wanted is None:
-        state.display_queue.remove_by_kind("talk")
+    # Clear talk items whenever the partner changes (including talk end) —
+    # stale messages from the previous partner must not rotate into view.
+    state.display_queue.remove_by_kind("talk")
 
     if wanted is None or not isinstance(state.relay, NatsRelay):
         await refresh_talk(mcp, state)
@@ -360,12 +359,15 @@ async def _manage_talk_subscription(
                 if sender and sender == partner_user and body:
                     display_text = f"@{sender}: {body}"
                     set_talk_message(display_text)
-                    # Add to display queue — each message gets its own
-                    # slot and is shown once before being discarded.
+                    # Add to display queue — coalesce per sender so rapid
+                    # messages replace the previous one instead of growing
+                    # the queue without bound.
+                    source_key = f"talk:{sender}"
+                    state.display_queue.remove_by_source_key(source_key)
                     item = DisplayItem(
                         kind="talk",
                         text=display_text,
-                        source_key=f"talk:{sender}:{time.monotonic_ns()}",
+                        source_key=source_key,
                     )
                     state.display_queue.add(item)
                     state.display_queue.force_to_front(item.source_key)

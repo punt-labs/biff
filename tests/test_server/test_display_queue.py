@@ -261,17 +261,23 @@ class TestForceToFront:
         assert q.force_to_front("nonexistent") is False
 
     def test_resets_slot_timer(self) -> None:
-        q = DisplayQueue(turn_duration=0.0)
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=5.0, clock=clock)
         q.add(_wall(key="w1"))
         q.add(_talk(key="t1"))
+        # Advance past the turn duration so the slot is expired
+        clock.advance(6.0)
+        assert q.advance_if_due() is True
         # Force talk to front — slot timer resets
         q.force_to_front("t1")
-        # Even with turn_duration=0, the reset just happened so
-        # monotonic time hasn't advanced enough for another advance.
-        # We verify the current item is the forced one.
         item = q.current()
         assert item is not None
         assert item.source_key == "t1"
+        # Slot timer was reset, so advance should NOT fire yet
+        assert q.advance_if_due() is False
+        # Advance past the turn duration again — now it fires
+        clock.advance(5.1)
+        assert q.advance_if_due() is True
 
 
 class TestTimingIntegration:

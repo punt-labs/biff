@@ -16,8 +16,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from typing import Literal
 
 
@@ -37,7 +36,6 @@ class DisplayItem:
     kind: Literal["wall", "talk"]
     text: str
     source_key: str
-    added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 type ClockFn = Callable[[], float]

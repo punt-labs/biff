@@ -154,7 +154,8 @@ def run_statusline(
     """Produce the status bar text for Claude Code.
 
     Line 1: ``repo:branch | ctx% | $cost | biff``
-    Line 2 (when active): ``WALL: <message>`` (bold red, full width)
+    Line 2: current display queue item — wall (bold red) or talk
+    (bold yellow), falling back to an idle marker when the queue is empty.
 
     If a stashed original command exists and succeeds, its output replaces
     the repo/context/cost segments (the user chose their own base).  The
