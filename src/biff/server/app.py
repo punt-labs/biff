@@ -22,9 +22,7 @@ from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
-    get_talk_notify_event,
     get_tty_name,
-    notify_tool_list_changed,
     poll_inbox,
     refresh_read_messages,
     refresh_wall,
@@ -257,36 +255,6 @@ async def _kv_watcher_loop(
             logger.debug("KV watcher restarting after error", exc_info=True)
             with suppress(TimeoutError):
                 await asyncio.wait_for(shutdown.wait(), timeout=2.0)
-
-
-async def _talk_notify_loop(shutdown: asyncio.Event) -> None:
-    """Wait for talk notifications and fire ``notify_tool_list_changed``.
-
-    The NATS talk subscription callback runs in the nats.py client's
-    internal task context.  ``_session.send_tool_list_changed()`` does
-    not reliably deliver from that context — it works from asyncio tasks
-    that share the MCP server's event loop (like the KV watcher), but
-    silently fails from NATS callback tasks.
-
-    This loop bridges the gap: the callback sets an ``asyncio.Event``,
-    and this loop (running as a regular ``asyncio.create_task``) awaits
-    it and fires the notification from a context where delivery succeeds.
-    """
-    event = get_talk_notify_event()
-    while not shutdown.is_set():
-        # Wait for either the event or shutdown
-        _done, _ = await asyncio.wait(
-            [
-                asyncio.ensure_future(event.wait()),
-                asyncio.ensure_future(shutdown.wait()),
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if shutdown.is_set():
-            return
-        event.clear()
-        with suppress(Exception):
-            await notify_tool_list_changed()
 
 
 async def _handle_kv_entry(
@@ -567,7 +535,6 @@ async def _active_lifespan(
     reaper = asyncio.create_task(_reap_loop(state, shutdown))
     heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
     watcher = asyncio.create_task(_kv_watcher_loop(mcp, state, shutdown))
-    talk_notify = asyncio.create_task(_talk_notify_loop(shutdown))
     try:
         yield state
     finally:
@@ -577,9 +544,7 @@ async def _active_lifespan(
         # must happen while the NATS connection is still healthy.
         if state.owns_relay:
             await _append_logout_event(state)
-        await _shutdown_tasks(
-            shutdown, [poller, reaper, heartbeat, watcher, talk_notify]
-        )
+        await _shutdown_tasks(shutdown, [poller, reaper, heartbeat, watcher])
         if state.unread_path is not None:
             with suppress(FileNotFoundError):
                 state.unread_path.unlink()

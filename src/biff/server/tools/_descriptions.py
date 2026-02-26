@@ -67,12 +67,6 @@ _wall_from: str = ""
 _talk_partner: str | None = None
 _talk_message: str = ""
 
-# Signalled by the NATS talk callback so a watcher task in app.py can
-# fire notify_tool_list_changed() from its own asyncio task context.
-# The NATS callback writes the unread file directly, but the notification
-# must be sent from a task that shares the MCP session's write stream.
-_talk_notify_event: asyncio.Event | None = None
-
 
 def get_tty_name() -> str:
     """Return the module-level TTY name."""
@@ -110,22 +104,10 @@ def set_talk_message(message: str) -> None:
     _talk_message = message
 
 
-def get_talk_notify_event() -> asyncio.Event:
-    """Return the talk notification event, creating it on first call.
-
-    The event is lazily created so the asyncio event loop exists by the
-    time it is instantiated.
-    """
-    global _talk_notify_event
-    if _talk_notify_event is None:
-        _talk_notify_event = asyncio.Event()
-    return _talk_notify_event
-
-
 def _reset_session() -> None:
     """Clear stored session, tty name, biff_enabled, wall, talk — test isolation."""
     global _session, _tty_name, _biff_enabled, _wall_text, _wall_from
-    global _talk_partner, _talk_message, _talk_notify_event
+    global _talk_partner, _talk_message
     _session = None
     _tty_name = ""
     _biff_enabled = True
@@ -133,7 +115,6 @@ def _reset_session() -> None:
     _wall_from = ""
     _talk_partner = None
     _talk_message = ""
-    _talk_notify_event = None
 
 
 async def notify_tool_list_changed() -> None:
@@ -279,7 +260,57 @@ async def refresh_wall(
         )
 
 
+TALK_BASE_DESCRIPTION = (
+    "Start a real-time conversation with a teammate or agent. "
+    "Incoming messages appear on the status bar automatically. "
+    "Use /write to reply. Use talk_end to close."
+)
+
+
+async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
+    """Update the ``talk`` tool description with the latest talk message.
+
+    Mirrors :func:`refresh_wall` — mutates the tool description so that
+    ``notify_tool_list_changed()`` causes Claude Code to re-read the tool
+    list, see a changed description, and trigger a UI re-render.  Without
+    the description change, the notification is a no-op from Claude Code's
+    perspective (it re-reads the same descriptions and does nothing).
+
+    Also re-writes the unread file so the status bar picks up the change.
+    """
+    tool = await mcp.get_tool("talk")
+    if tool is None:
+        return
+    old_desc = tool.description
+    if _talk_partner and _talk_message:
+        tool.description = (
+            f"[TALK] {_talk_message} — "
+            f"Use /write @{_talk_partner} to reply. "
+            "Use talk_end to close."
+        )
+    else:
+        tool.description = TALK_BASE_DESCRIPTION
+    if tool.description != old_desc:
+        await notify_tool_list_changed()
+    # Re-write the unread file so the status bar picks up the change
+    if state.unread_path is not None:
+        summary = await state.relay.get_unread_summary(state.session_key)
+        _write_unread_file(
+            state.unread_path,
+            summary,
+            repo_name=state.config.repo_name,
+            user=state.config.user,
+            tty_name=_tty_name,
+            biff_enabled=_biff_enabled,
+            wall_text=_wall_text,
+            wall_from=_wall_from,
+            talk_partner=_talk_partner,
+            talk_message=_talk_message,
+        )
+
+
 async def _manage_talk_subscription(
+    mcp: FastMCP[ServerState],
     state: ServerState,
     current_partner: str | None,
     sub: object | None,
@@ -296,13 +327,15 @@ async def _manage_talk_subscription(
     if wanted == current_partner:
         return current_partner, sub
 
-    # Unsubscribe old
+    # Unsubscribe old — and reset talk tool description
     if sub is not None:
         with suppress(Exception):
             await sub.unsubscribe()  # type: ignore[attr-defined]
         sub = None
 
     if wanted is None or not isinstance(state.relay, NatsRelay):
+        # Reset description when talk ends
+        await refresh_talk(mcp, state)
         return wanted, None
 
     # Subscribe new — capture messages from talk partner on status line
@@ -331,10 +364,9 @@ async def _manage_talk_subscription(
                 )
                 if sender and sender == partner_user and body:
                     set_talk_message(f"@{sender}: {body}")
-                    await _sync_talk_to_file(state)
-                    # Signal the watcher task in app.py to fire
-                    # notify_tool_list_changed() from its own context.
-                    get_talk_notify_event().set()
+                    # Mutate the talk tool description so Claude Code
+                    # sees a change on re-read and triggers a UI re-render.
+                    await refresh_talk(mcp, state)
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
 
@@ -346,29 +378,6 @@ async def _manage_talk_subscription(
         sub = None
 
     return wanted, sub
-
-
-async def _sync_talk_to_file(state: ServerState) -> None:
-    """Rewrite the unread file with current talk state.
-
-    Called when the NATS subscription callback updates ``_talk_message``
-    between poller ticks.
-    """
-    if state.unread_path is None:
-        return
-    summary = await state.relay.get_unread_summary(state.session_key)
-    _write_unread_file(
-        state.unread_path,
-        summary,
-        repo_name=state.config.repo_name,
-        user=state.config.user,
-        tty_name=_tty_name,
-        biff_enabled=_biff_enabled,
-        wall_text=_wall_text,
-        wall_from=_wall_from,
-        talk_partner=_talk_partner,
-        talk_message=_talk_message,
-    )
 
 
 async def _active_tick(
@@ -398,10 +407,10 @@ async def _active_tick(
         last_wall = wall_key
         await refresh_wall(mcp, state, wall=current_wall)
 
-    # Rewrite unread file when talk message changes (NATS callback updates it)
+    # Refresh talk tool description when talk message changes
     if _talk_message != last_talk:
         last_talk = _talk_message
-        await _sync_talk_to_file(state)
+        await refresh_talk(mcp, state)
 
     return last_count, last_wall, last_talk
 
@@ -456,7 +465,7 @@ async def poll_inbox(
 
             # Manage talk subscription lifecycle
             talk_partner_tracked, talk_sub = await _manage_talk_subscription(
-                state, talk_partner_tracked, talk_sub
+                mcp, state, talk_partner_tracked, talk_sub
             )
 
             # Transition: active → napping (connection stays open)

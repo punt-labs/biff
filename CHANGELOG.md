@@ -6,17 +6,19 @@
 
 ### Fixed
 
-- **Talk status bar updates are now instant** — talk notifications from the NATS
-  subscription callback were silently failing to trigger `tools/list_changed`
-  because `_session.send_tool_list_changed()` does not reliably deliver from
-  the nats.py client's internal task context. Added a `_talk_notify_loop` that
-  bridges the gap: the callback sets an `asyncio.Event`, the loop awaits it
-  and fires the notification from a regular asyncio task where delivery succeeds.
+- **Talk status bar updates are now instant** — the `talk` tool description is now
+  mutated when talk messages arrive (e.g. `[TALK] @sender: message...`), mirroring
+  the wall pattern. Previously, `notify_tool_list_changed()` fired but Claude Code
+  saw no tool description change and skipped the UI re-render. (DES-020)
 
 ### Changed
 
+- **`refresh_talk()` added** — mirrors `refresh_wall()`. Mutates the talk tool
+  description, fires `notify_tool_list_changed()`, and rewrites the unread file.
+- **`_sync_talk_to_file` deleted** — replaced by `refresh_talk()` which handles
+  both tool description mutation and file write.
 - **`_notify_tool_list_changed` → `notify_tool_list_changed`** — made public
-  since it is now called from `app.py` (talk notify loop).
+  since it is called from `refresh_talk()` and `refresh_wall()`.
 
 ## 0.10.5 — 2026-02-25
 

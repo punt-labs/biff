@@ -28,6 +28,7 @@ from biff.nats_relay import NatsRelay
 from biff.relay import Relay
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import (
+    TALK_BASE_DESCRIPTION,
     get_talk_partner,
     refresh_read_messages,
     set_talk_partner,
@@ -137,11 +138,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
     @mcp.tool(
         name="talk",
-        description=(
-            "Start a real-time conversation with a teammate or agent. "
-            "Incoming messages appear on the status bar automatically. "
-            "Use /write to reply. Use talk_end to close."
-        ),
+        description=TALK_BASE_DESCRIPTION,
     )
     @auto_enable(state)
     async def talk(to: str, message: str = "") -> str:
