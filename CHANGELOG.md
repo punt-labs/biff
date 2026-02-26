@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.11.3 — 2026-02-26
+
+### Fixed
+
+- **MCP server launch no longer requires `uv`** — production `plugin.json`
+  now invokes `biff serve` directly instead of `uv run biff serve`. Users
+  who install via `uv tool install punt-biff` have the binary on their PATH;
+  the `uv run` wrapper was an unnecessary dependency that could also pick up
+  wrong project environments.
+
 ## 0.11.2 — 2026-02-26
 
 ### Fixed
