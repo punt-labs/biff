@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.statusline import (
     _LINE2_IDLE,
+    DisplayItemView,
     InstallResult,
     SessionUnread,
     UninstallResult,
@@ -460,48 +461,66 @@ class TestBiffSegment:
 # --- Display Segment --------------------------------------------------------
 
 
+def _item(text: str, kind: str = "wall") -> DisplayItemView:
+    return DisplayItemView(kind=kind, text=text)
+
+
 class TestDisplaySegment:
+    def test_empty_items_returns_empty(self) -> None:
+        assert _display_segment(()) == ""
+
     def test_empty_text_returns_empty(self) -> None:
-        assert _display_segment("", "wall") == ""
-        assert _display_segment("", "talk") == ""
-        assert _display_segment("", "") == ""
+        assert _display_segment((_item("", "wall"),)) == ""
 
     def test_wall_bold_red(self) -> None:
-        result = _display_segment("@eric: release freeze", "wall")
+        result = _display_segment((_item("@eric: release freeze", "wall"),))
         assert result.startswith("▶")
         assert "@eric: release freeze" in result
         assert "\033[1;31m" in result
         assert "\033[0m" in result
 
     def test_talk_bold_yellow(self) -> None:
-        result = _display_segment("@kai: check PR #42", "talk")
+        result = _display_segment((_item("@kai: check PR #42", "talk"),))
         assert result.startswith("▶")
         assert "@kai: check PR #42" in result
         assert "\033[1;33m" in result
         assert "\033[0m" in result
 
     def test_unknown_kind_defaults_yellow(self) -> None:
-        result = _display_segment("some text", "other")
+        result = _display_segment((_item("some text", "other"),))
         assert "\033[1;33m" in result
 
     def test_sanitizes_ansi(self) -> None:
-        result = _display_segment("@kai: \033[31mred\033[0m text", "talk")
+        result = _display_segment((_item("@kai: \033[31mred\033[0m text", "talk"),))
         assert "\033[31m" not in result
         assert "red text" in result
 
     def test_sanitizes_control_chars(self) -> None:
-        result = _display_segment("@kai: hello\x00world", "talk")
+        result = _display_segment((_item("@kai: hello\x00world", "talk"),))
         assert "\x00" not in result
         assert "helloworld" in result
 
     def test_whitespace_only_returns_empty(self) -> None:
-        assert _display_segment("   ", "talk") == ""
+        assert _display_segment((_item("   ", "talk"),)) == ""
 
     def test_long_text_preserved(self) -> None:
         long_text = "x" * 200
-        result = _display_segment(long_text, "wall")
+        result = _display_segment((_item(long_text, "wall"),))
         assert "..." not in result
         assert long_text in result
+
+    def test_time_based_rotation(self) -> None:
+        items = (
+            _item("first", "wall"),
+            _item("second", "wall"),
+            _item("third", "wall"),
+        )
+        # With 3 items, time-based index cycles through 0, 1, 2
+        # We can't control time.time() easily, but we can verify
+        # exactly one item is selected and formatted
+        result = _display_segment(items)
+        assert result.startswith("▶")
+        assert any(text in result for text in ("first", "second", "third"))
 
 
 # --- Read Session Unread ----------------------------------------------------
@@ -568,7 +587,7 @@ class TestReadSessionUnread:
         assert result is not None
         assert result.biff_enabled is True
 
-    def test_display_fields_round_trip(self, tmp_path: Path) -> None:
+    def test_display_items_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / "12345.json"
         path.write_text(
             json.dumps(
@@ -576,23 +595,31 @@ class TestReadSessionUnread:
                     "user": "kai",
                     "count": 0,
                     "tty_name": "tty1",
-                    "display_text": "@eric: hello",
-                    "display_kind": "talk",
+                    "display_items": [
+                        {"kind": "talk", "text": "@eric: hello"},
+                        {"kind": "wall", "text": "@admin: freeze"},
+                    ],
                 }
             )
         )
         result = _read_session_unread(path)
         assert result is not None
-        assert result.display_text == "@eric: hello"
-        assert result.display_kind == "talk"
+        assert len(result.display_items) == 2
+        assert result.display_items[0] == DisplayItemView(
+            kind="talk",
+            text="@eric: hello",
+        )
+        assert result.display_items[1] == DisplayItemView(
+            kind="wall",
+            text="@admin: freeze",
+        )
 
-    def test_missing_display_fields_default_empty(self, tmp_path: Path) -> None:
+    def test_missing_display_items_defaults_empty(self, tmp_path: Path) -> None:
         path = tmp_path / "12345.json"
         path.write_text(json.dumps({"user": "kai", "count": 0, "tty_name": "tty1"}))
         result = _read_session_unread(path)
         assert result is not None
-        assert result.display_text == ""
-        assert result.display_kind == ""
+        assert result.display_items == ()
 
 
 # --- Resolve Original Command -----------------------------------------------
@@ -649,8 +676,7 @@ def _write_ppid_unread(
     user: str,
     count: int,
     tty_name: str = "",
-    display_text: str = "",
-    display_kind: str = "",
+    display_items: list[dict[str, str]] | None = None,
 ) -> None:
     """Write a PPID-keyed unread file for the current process."""
     unread_dir.mkdir(parents=True, exist_ok=True)
@@ -659,8 +685,7 @@ def _write_ppid_unread(
         "user": user,
         "count": count,
         "tty_name": tty_name,
-        "display_text": display_text,
-        "display_kind": display_kind,
+        "display_items": display_items or [],
     }
     path.write_text(json.dumps(data))
 
@@ -780,8 +805,7 @@ class TestRunStatusline:
             "kai",
             0,
             "tty1",
-            display_text="@eric: release freeze",
-            display_kind="wall",
+            display_items=[{"kind": "wall", "text": "@eric: release freeze"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
@@ -813,8 +837,7 @@ class TestRunStatusline:
             "kai",
             0,
             "tty1",
-            display_text="@eric: check PR #42",
-            display_kind="talk",
+            display_items=[{"kind": "talk", "text": "@eric: check PR #42"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
@@ -839,8 +862,7 @@ class TestRunStatusline:
             "kai",
             0,
             "tty1",
-            display_text="@admin: release freeze",
-            display_kind="wall",
+            display_items=[{"kind": "wall", "text": "@admin: release freeze"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
