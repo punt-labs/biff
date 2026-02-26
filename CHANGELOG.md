@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.11.1 — 2026-02-26
+
+### Fixed
+
+- **Wall messages now actually rotate** — each wall post gets a unique source
+  key (`wall:{posted_at}`) so multiple walls accumulate in the display queue
+  instead of replacing each other. Old walls expire naturally based on their
+  original duration.
+- **Statusline reads all display items** — unread file now contains a
+  `display_items` array (replacing single `display_text`/`display_kind`).
+  The statusline does time-based rotation (`int(time / 15) % n`) — stateless,
+  deterministic, no persisted index needed.
+
+### Added
+
+- **`DisplayItem.expires_at`** — optional monotonic timestamp for automatic
+  expiry. Expired items are purged on `current()` and `advance_if_due()`.
+- **`DisplayQueue.expires_from_now()`** — helper for computing monotonic expiry
+  from wall-clock remaining seconds.
+
 ## 0.11.0 — 2026-02-26
 
 ### Added
@@ -17,7 +37,7 @@
   replace the previous queue item instead of growing the queue without bound.
 - **Talk queue clears on partner switch** — changing talk partners removes stale
   messages from the previous conversation immediately.
-- **Unified unread file schema** — `display_text`/`display_kind` replaces
+- **Unified unread file schema** — `display_items` array replaces
   separate `wall`/`wall_from`/`talk_partner`/`talk_message` fields.
 - **Injected clock for DisplayQueue** — `clock` parameter (defaults to
   `time.monotonic`) enables deterministic testing without `time.sleep`.

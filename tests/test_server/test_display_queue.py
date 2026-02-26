@@ -316,3 +316,114 @@ class TestTimingIntegration:
         assert item is not None
         assert item.source_key == "t2"
         assert len(q.snapshot()) == 2
+
+
+class TestExpiry:
+    """Tests for time-based item expiry via ``expires_at``."""
+
+    def test_expired_item_purged_by_current(self) -> None:
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=15.0, clock=clock)
+        q.add(DisplayItem(kind="wall", text="old", source_key="w1", expires_at=10.0))
+        q.add(_wall(key="w2", text="fresh"))
+        assert len(q.snapshot()) == 2
+        # Advance past expiry of w1
+        clock.advance(10.0)
+        item = q.current()
+        assert item is not None
+        assert item.source_key == "w2"
+        assert len(q.snapshot()) == 1
+
+    def test_expired_item_purged_by_advance(self) -> None:
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=5.0, clock=clock)
+        q.add(DisplayItem(kind="wall", text="old", source_key="w1", expires_at=3.0))
+        q.add(_wall(key="w2", text="stays"))
+        # Advance past both expiry and turn duration
+        clock.advance(6.0)
+        q.advance_if_due()
+        # w1 expired, only w2 remains
+        assert len(q.snapshot()) == 1
+        item = q.current()
+        assert item is not None
+        assert item.source_key == "w2"
+
+    def test_no_expiry_means_permanent(self) -> None:
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=5.0, clock=clock)
+        q.add(_wall(key="w1"))  # no expires_at
+        clock.advance(10000.0)
+        item = q.current()
+        assert item is not None
+        assert item.source_key == "w1"
+
+    def test_expires_from_now(self) -> None:
+        clock = _FakeClock(start=100.0)
+        q = DisplayQueue(clock=clock)
+        assert q.expires_from_now(60.0) == 160.0
+
+    def test_multiple_walls_accumulate_and_rotate(self) -> None:
+        """Multiple wall items with unique keys coexist and rotate."""
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=5.0, clock=clock)
+        q.add(
+            DisplayItem(
+                kind="wall",
+                text="first",
+                source_key="wall:t1",
+                expires_at=60.0,
+            )
+        )
+        q.add(
+            DisplayItem(
+                kind="wall",
+                text="second",
+                source_key="wall:t2",
+                expires_at=120.0,
+            )
+        )
+        q.add(
+            DisplayItem(
+                kind="wall",
+                text="third",
+                source_key="wall:t3",
+                expires_at=180.0,
+            )
+        )
+        assert len(q.snapshot()) == 3
+        # Rotate through all three
+        items_seen: list[str] = []
+        for _ in range(3):
+            item = q.current()
+            assert item is not None
+            items_seen.append(item.text)
+            clock.advance(5.0)
+            q.advance_if_due()
+        assert items_seen == ["first", "second", "third"]
+
+    def test_walls_expire_individually(self) -> None:
+        """Older walls expire while newer ones persist."""
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=5.0, clock=clock)
+        q.add(
+            DisplayItem(
+                kind="wall",
+                text="short",
+                source_key="wall:t1",
+                expires_at=30.0,
+            )
+        )
+        q.add(
+            DisplayItem(
+                kind="wall",
+                text="long",
+                source_key="wall:t2",
+                expires_at=120.0,
+            )
+        )
+        # After 30s, first wall expires
+        clock.advance(30.0)
+        item = q.current()
+        assert item is not None
+        assert item.text == "long"
+        assert len(q.snapshot()) == 1

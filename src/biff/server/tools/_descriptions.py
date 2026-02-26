@@ -157,9 +157,9 @@ async def _sync_unread_file(
 ) -> None:
     """Write the unread status file with current display queue state.
 
-    Reads the queue's current item to determine ``display_text`` and
-    ``display_kind`` for the status bar.  Called after any state change
-    that might affect what the status bar shows.
+    Serializes the full queue snapshot to ``display_items`` so the
+    status bar can rotate through all items independently.  Called
+    after any state change that might affect what the status bar shows.
 
     Pass *summary* to reuse an already-fetched :class:`UnreadSummary`
     and avoid a redundant relay call.
@@ -168,7 +168,7 @@ async def _sync_unread_file(
         return
     if summary is None:
         summary = await state.relay.get_unread_summary(state.session_key)
-    current = state.display_queue.current()
+    items = state.display_queue.snapshot()
     _write_unread_file(
         state.unread_path,
         summary,
@@ -176,8 +176,7 @@ async def _sync_unread_file(
         user=state.config.user,
         tty_name=_tty_name,
         biff_enabled=_biff_enabled,
-        display_text=current.text if current else "",
-        display_kind=current.kind if current else "",
+        display_items=items,
     )
 
 
@@ -220,13 +219,19 @@ async def refresh_wall(
     """Update the ``wall`` tool description and display queue.
 
     When a wall is active, the description shows the current banner
-    and a ``DisplayItem`` is added to the rotation queue.  When no
-    wall is active, the description reverts to base text and the
-    wall item is removed from the queue.
+    and a ``DisplayItem`` is added to the rotation queue with a unique
+    source key (``wall:{posted_at}``).  Old walls stay in the queue
+    until they expire naturally — the queue accumulates walls so the
+    status bar can rotate through them.
+
+    When no wall is active (cleared or all expired), all wall items
+    are removed from the queue.
 
     Pass *wall* to skip the relay fetch when the caller already has
     the current wall (e.g. :func:`poll_inbox`).
     """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
     from biff.server.tools.wall import (  # noqa: PLC0415
         WALL_BASE_DESCRIPTION,
         format_remaining,
@@ -238,9 +243,9 @@ async def refresh_wall(
     current = await state.relay.get_wall() if isinstance(wall, _Sentinel) else wall
     old_desc = tool.description
     queue = state.display_queue
-    queue.remove_by_source_key("wall:current")
     if current is None:
         tool.description = WALL_BASE_DESCRIPTION
+        queue.remove_by_kind("wall")
     else:
         remaining = format_remaining(current.expires_at)
         sender = f"@{current.from_user}"
@@ -251,11 +256,16 @@ async def refresh_wall(
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
+        # Duration arithmetic: wall-clock difference → monotonic expiry.
+        # Safe because we convert to a relative seconds delta, not an
+        # absolute timestamp, before passing to the monotonic-based queue.
+        seconds_remaining = (current.expires_at - datetime.now(UTC)).total_seconds()
         queue.add(
             DisplayItem(
                 kind="wall",
                 text=f"{sender}: {current.text}",
-                source_key="wall:current",
+                source_key=f"wall:{current.posted_at.isoformat()}",
+                expires_at=queue.expires_from_now(max(0.0, seconds_remaining)),
             )
         )
     if tool.description != old_desc:
@@ -508,27 +518,27 @@ def _write_unread_file(
     user: str,
     tty_name: str,
     biff_enabled: bool,
-    display_text: str = "",
-    display_kind: str = "",
+    display_items: list[DisplayItem] | None = None,
 ) -> None:
     """Write unread count to a JSON status file.
 
     Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``, and
-    the current display queue item (``display_text``, ``display_kind``)
-    so the status line shows identity, session, availability, and
-    whatever the display queue has rotated into view.
+    the full ``display_items`` list so the status bar can rotate
+    through all items independently using time-based indexing.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
     """
+    items_list: list[dict[str, str]] = [
+        {"kind": item.kind, "text": item.text} for item in (display_items or [])
+    ]
     data: dict[str, object] = {
         "user": user,
         "repo": repo_name,
         "count": summary.count,
         "tty_name": tty_name,
         "biff_enabled": biff_enabled,
-        "display_text": display_text,
-        "display_kind": display_kind,
+        "display_items": items_list,
     }
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")

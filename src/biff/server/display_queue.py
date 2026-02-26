@@ -30,12 +30,14 @@ class DisplayItem:
 
     ``text`` is the rendered display string, ready for the status bar.
     ``source_key`` prevents duplicates (idempotent ``add``).
-    ``added_at`` records when this item entered the queue.
+    ``expires_at`` is an optional monotonic timestamp; items past their
+    expiry are purged automatically on the next queue access.
     """
 
     kind: Literal["wall", "talk"]
     text: str
     source_key: str
+    expires_at: float | None = None
 
 
 type ClockFn = Callable[[], float]
@@ -114,11 +116,20 @@ class DisplayQueue:
         if self._items:
             self._slot_start = self._clock()
 
+    def expires_from_now(self, seconds: float) -> float:
+        """Return a clock timestamp *seconds* in the future.
+
+        Uses the queue's clock so injected test clocks work correctly.
+        """
+        return self._clock() + seconds
+
     def current(self) -> DisplayItem | None:
         """Return the item currently in the display slot.
 
+        Purges expired items first so callers never see stale data.
         Returns ``None`` when the queue is empty.
         """
+        self._purge_expired()
         if not self._items:
             return None
         return self._items[self._current_index]
@@ -137,6 +148,7 @@ class DisplayQueue:
         Returns ``False`` if the slot timer has not yet expired or the
         queue is empty (no advancement performed).
         """
+        self._purge_expired()
         if not self._items:
             return False
         elapsed = self._clock() - self._slot_start
@@ -174,8 +186,20 @@ class DisplayQueue:
         return False
 
     def snapshot(self) -> list[DisplayItem]:
-        """Return a shallow copy of the queue for inspection/testing."""
+        """Return a shallow copy of the queue with expired items removed."""
+        self._purge_expired()
         return list(self._items)
+
+    def _purge_expired(self) -> None:
+        """Remove items whose ``expires_at`` is in the past."""
+        now = self._clock()
+        i = 0
+        while i < len(self._items):
+            item = self._items[i]
+            if item.expires_at is not None and now >= item.expires_at:
+                self._remove_at(i)
+            else:
+                i += 1
 
     def _remove_at(self, index: int) -> None:
         """Remove the item at *index* and fix the current index invariant.

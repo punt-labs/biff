@@ -174,10 +174,7 @@ def run_statusline(
 
     unread = _read_session_unread(unread_dir / f"{find_session_key()}.json")
     biff = _biff_segment(unread)
-    display = _display_segment(
-        unread.display_text if unread else "",
-        unread.display_kind if unread else "",
-    )
+    display = _display_segment(unread.display_items if unread else ())
 
     segments = [s for s in [*base_segments, biff] if s.strip()]
     line1 = " | ".join(segments)
@@ -205,6 +202,27 @@ def _as_str_dict(val: object) -> dict[str, object]:
     if isinstance(val, dict):
         return cast("dict[str, object]", val)
     return {}
+
+
+def _parse_display_items(val: object) -> list[DisplayItemView]:
+    """Parse the ``display_items`` array from the unread status file.
+
+    Accepts the raw JSON value and returns a typed list, silently
+    skipping malformed entries.
+    """
+    if not isinstance(val, list):
+        return []
+    result: list[DisplayItemView] = []
+    for raw in cast("list[object]", val):
+        if isinstance(raw, dict):
+            d = cast("dict[str, object]", raw)
+            result.append(
+                DisplayItemView(
+                    kind=str(d.get("kind", "")),
+                    text=str(d.get("text", "")),
+                )
+            )
+    return result
 
 
 # Base segments (repo, context, cost) ---------------------------------------
@@ -362,6 +380,14 @@ def _resolve_original_command(stash_path: Path) -> str | None:
 
 
 @dataclass(frozen=True)
+class DisplayItemView:
+    """A display item as read from the unread status file."""
+
+    kind: str
+    text: str
+
+
+@dataclass(frozen=True)
 class SessionUnread:
     """Unread state for a single session, parsed from a PPID-keyed file."""
 
@@ -369,21 +395,20 @@ class SessionUnread:
     count: int
     tty_name: str
     biff_enabled: bool = True
-    display_text: str = ""
-    display_kind: str = ""
+    display_items: tuple[DisplayItemView, ...] = ()
 
 
 def _read_session_unread(path: Path) -> SessionUnread | None:
     """Read a PPID-keyed unread file, returning ``None`` on any error."""
     try:
         data = json.loads(path.read_text())
+        items = _parse_display_items(data.get("display_items"))
         return SessionUnread(
             user=str(data.get("user", "")),
             count=int(data.get("count", 0)),
             tty_name=str(data.get("tty_name", "")),
             biff_enabled=bool(data.get("biff_enabled", True)),
-            display_text=str(data.get("display_text", "")),
-            display_kind=str(data.get("display_kind", "")),
+            display_items=tuple(items),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None
@@ -423,22 +448,35 @@ _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _LINE2_IDLE = "▶"
 
 
-def _display_segment(display_text: str, display_kind: str) -> str:
-    """Format the current display queue item for line 2 of the status bar.
+_TURN_DURATION = 15  # seconds per item in rotation
+
+
+def _display_segment(items: tuple[DisplayItemView, ...]) -> str:
+    """Pick the current display item via time-based rotation.
+
+    Uses ``int(time.time() / _TURN_DURATION) % len(items)`` so every
+    invocation within the same 15-second window shows the same item,
+    and rotation advances deterministically without any persisted state.
 
     Wall items are bold red, talk items are bold yellow.  Both use the
     ``▶`` prefix for visual consistency across idle and active states.
     Sanitizes ANSI escape sequences and control characters but does not
     truncate — Claude Code's renderer manages line width.
     """
-    if not display_text:
+    if not items:
         return ""
-    clean = _ANSI_RE.sub("", display_text)
+    import time  # noqa: PLC0415
+
+    index = int(time.time() / _TURN_DURATION) % len(items)
+    item = items[index]
+    if not item.text:
+        return ""
+    clean = _ANSI_RE.sub("", item.text)
     clean = _CTRL_RE.sub("", clean)
     clean = " ".join(clean.split())
     if not clean:
         return ""
-    if display_kind == "wall":
+    if item.kind == "wall":
         return f"▶ \033[1;31m{clean}\033[0m"
     return f"▶ \033[1;33m{clean}\033[0m"
 
