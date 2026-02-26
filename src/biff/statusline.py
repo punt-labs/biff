@@ -154,7 +154,8 @@ def run_statusline(
     """Produce the status bar text for Claude Code.
 
     Line 1: ``repo:branch | ctx% | $cost | biff``
-    Line 2 (when active): ``WALL: <message>`` (bold red, full width)
+    Line 2: current display queue item — wall (bold red) or talk
+    (bold yellow), falling back to an idle marker when the queue is empty.
 
     If a stashed original command exists and succeeds, its output replaces
     the repo/context/cost segments (the user chose their own base).  The
@@ -173,16 +174,14 @@ def run_statusline(
 
     unread = _read_session_unread(unread_dir / f"{find_session_key()}.json")
     biff = _biff_segment(unread)
-    talk = _talk_segment(unread.talk_message if unread else "")
-    wall = _wall_segment(
-        unread.wall if unread else "",
-        unread.wall_from if unread else "",
+    display = _display_segment(
+        unread.display_text if unread else "",
+        unread.display_kind if unread else "",
     )
 
     segments = [s for s in [*base_segments, biff] if s.strip()]
     line1 = " | ".join(segments)
-    # Priority: talk (real-time conversation) > wall (broadcast) > idle
-    line2 = talk if talk.strip() else (wall if wall.strip() else _LINE2_IDLE)
+    line2 = display if display.strip() else _LINE2_IDLE
     return f"{line1}\n{line2}"
 
 
@@ -370,26 +369,21 @@ class SessionUnread:
     count: int
     tty_name: str
     biff_enabled: bool = True
-    wall: str = ""
-    wall_from: str = ""
-    talk_partner: str = ""
-    talk_message: str = ""
+    display_text: str = ""
+    display_kind: str = ""
 
 
 def _read_session_unread(path: Path) -> SessionUnread | None:
     """Read a PPID-keyed unread file, returning ``None`` on any error."""
     try:
         data = json.loads(path.read_text())
-        biff_enabled = data.get("biff_enabled", True)
         return SessionUnread(
             user=str(data.get("user", "")),
             count=int(data.get("count", 0)),
             tty_name=str(data.get("tty_name", "")),
-            biff_enabled=bool(biff_enabled),
-            wall=str(data.get("wall", "")),
-            wall_from=str(data.get("wall_from", "")),
-            talk_partner=str(data.get("talk_partner", "")),
-            talk_message=str(data.get("talk_message", "")),
+            biff_enabled=bool(data.get("biff_enabled", True)),
+            display_text=str(data.get("display_text", "")),
+            display_kind=str(data.get("display_kind", "")),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None
@@ -429,42 +423,23 @@ _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _LINE2_IDLE = "▶"
 
 
-def _wall_segment(wall_text: str, wall_from: str = "") -> str:
-    """Format the wall banner for line 2 of the status bar.
+def _display_segment(display_text: str, display_kind: str) -> str:
+    """Format the current display queue item for line 2 of the status bar.
 
-    Returns empty string when no wall is active (caller substitutes
-    ``_LINE2_IDLE``).  Bold red with ``▶`` prefix when active, keeping
-    the marker consistent across idle and wall states.  Includes
-    ``@sender`` when available.  Sanitizes ANSI escape sequences and
-    control characters but does not truncate — Claude Code's renderer
-    manages line width.
+    Wall items are bold red, talk items are bold yellow.  Both use the
+    ``▶`` prefix for visual consistency across idle and active states.
+    Sanitizes ANSI escape sequences and control characters but does not
+    truncate — Claude Code's renderer manages line width.
     """
-    if not wall_text:
+    if not display_text:
         return ""
-    # Sanitize: strip ANSI escapes and control chars, collapse whitespace
-    clean = _ANSI_RE.sub("", wall_text)
+    clean = _ANSI_RE.sub("", display_text)
     clean = _CTRL_RE.sub("", clean)
     clean = " ".join(clean.split())
     if not clean:
         return ""
-    sender = f"@{wall_from}: " if wall_from else ""
-    return f"▶ \033[1;31m{sender}{clean}\033[0m"
-
-
-def _talk_segment(talk_message: str) -> str:
-    """Format an active talk message for line 2 of the status bar.
-
-    Returns empty string when no talk message is active (caller falls
-    through to wall or idle).  Bold yellow with ``▶`` prefix.
-    Sanitizes ANSI and control characters like :func:`_wall_segment`.
-    """
-    if not talk_message:
-        return ""
-    clean = _ANSI_RE.sub("", talk_message)
-    clean = _CTRL_RE.sub("", clean)
-    clean = " ".join(clean.split())
-    if not clean:
-        return ""
+    if display_kind == "wall":
+        return f"▶ \033[1;31m{clean}\033[0m"
     return f"▶ \033[1;33m{clean}\033[0m"
 
 

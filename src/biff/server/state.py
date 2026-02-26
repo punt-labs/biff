@@ -13,6 +13,7 @@ from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay, Relay
 from biff.server.activity import ActivityTracker
+from biff.server.display_queue import DisplayQueue
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
 
 
@@ -23,6 +24,7 @@ class ServerState:
     config: BiffConfig
     relay: Relay
     activity: ActivityTracker = field(default_factory=ActivityTracker)
+    display_queue: DisplayQueue = field(default_factory=DisplayQueue)
     tty: str = ""
     hostname: str = ""
     pwd: str = ""
