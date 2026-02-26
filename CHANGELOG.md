@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.11.0 — 2026-02-26
+
+### Added
+
+- **Display queue for status bar rotation** — wall and talk items now rotate on
+  status bar line 2 (15s per turn). Wall items cycle indefinitely until they
+  expire or are cleared. Talk items show once then discard. Multiple wall
+  broadcasts rotate so none are hidden. (#biff-j8b)
+
+### Changed
+
+- **Talk messages coalesce per sender** — rapid messages from the same sender
+  replace the previous queue item instead of growing the queue without bound.
+- **Talk queue clears on partner switch** — changing talk partners removes stale
+  messages from the previous conversation immediately.
+- **Unified unread file schema** — `display_text`/`display_kind` replaces
+  separate `wall`/`wall_from`/`talk_partner`/`talk_message` fields.
+- **Injected clock for DisplayQueue** — `clock` parameter (defaults to
+  `time.monotonic`) enables deterministic testing without `time.sleep`.
+- **Dev/prod namespace isolation** — plugin commands and MCP server names are
+  namespaced for dev/prod isolation per punt-kit plugins.md standard. (#81)
+- **Repository URL in project metadata** — `pyproject.toml` now includes
+  `project.urls` per punt-kit standard. (#80)
+
 ## 0.10.6 — 2026-02-25
 
 ### Fixed
