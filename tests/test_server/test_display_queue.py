@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-import time
-
 from biff.server.display_queue import DisplayItem, DisplayQueue
+
+
+class _FakeClock:
+    """Deterministic clock for testing — no ``time.sleep`` needed."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self._now = start
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
 
 
 def _wall(text: str = "deploy freeze", key: str = "wall:deploy") -> DisplayItem:
@@ -264,23 +275,25 @@ class TestForceToFront:
 
 
 class TestTimingIntegration:
-    """Tests that verify real timing behavior with small durations."""
+    """Tests with injected clock — deterministic, no ``time.sleep``."""
 
-    def test_advance_respects_real_time(self) -> None:
-        q = DisplayQueue(turn_duration=0.05)
+    def test_advance_respects_clock(self) -> None:
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=5.0, clock=clock)
         q.add(_wall(key="a"))
         q.add(_wall(key="b"))
         # Should not advance immediately
         assert q.advance_if_due() is False
-        # Wait past the turn duration
-        time.sleep(0.06)
+        # Advance past the turn duration
+        clock.advance(5.1)
         assert q.advance_if_due() is True
         item = q.current()
         assert item is not None
         assert item.source_key == "b"
 
     def test_rapid_talk_messages_queue(self) -> None:
-        q = DisplayQueue(turn_duration=0.05)
+        clock = _FakeClock()
+        q = DisplayQueue(turn_duration=5.0, clock=clock)
         q.add(_talk(key="t1", text="first"))
         q.add(_talk(key="t2", text="second"))
         q.add(_talk(key="t3", text="third"))
@@ -291,7 +304,7 @@ class TestTimingIntegration:
         assert item is not None
         assert item.source_key == "t1"
         # After turn, first is discarded, second shows
-        time.sleep(0.06)
+        clock.advance(5.1)
         q.advance_if_due()
         item = q.current()
         assert item is not None

@@ -15,6 +15,7 @@ See DES-020 for the notification model that makes this low-latency.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
@@ -39,6 +40,9 @@ class DisplayItem:
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+type ClockFn = Callable[[], float]
+
+
 class DisplayQueue:
     """Rotation queue for status bar line 2 display items.
 
@@ -48,14 +52,23 @@ class DisplayQueue:
     All methods are synchronous — asyncio is single-threaded so no
     locking is needed.  The queue is driven by the poller's 2s tick
     calling :meth:`advance_if_due`.
+
+    *clock* defaults to :func:`time.monotonic` but can be injected
+    for deterministic testing (no ``time.sleep`` needed).
     """
 
-    __slots__ = ("_current_index", "_items", "_slot_start", "_turn_duration")
+    __slots__ = ("_clock", "_current_index", "_items", "_slot_start", "_turn_duration")
 
-    def __init__(self, turn_duration: float = 15.0) -> None:
+    def __init__(
+        self,
+        turn_duration: float = 15.0,
+        *,
+        clock: ClockFn = time.monotonic,
+    ) -> None:
         self._items: list[DisplayItem] = []
         self._current_index: int = 0
-        self._slot_start: float = time.monotonic()
+        self._clock: ClockFn = clock
+        self._slot_start: float = clock()
         self._turn_duration: float = turn_duration
 
     def add(self, item: DisplayItem) -> bool:
@@ -72,7 +85,7 @@ class DisplayQueue:
         self._items.append(item)
         if was_empty:
             self._current_index = 0
-            self._slot_start = time.monotonic()
+            self._slot_start = self._clock()
         return True
 
     def remove_by_source_key(self, source_key: str) -> bool:
@@ -101,7 +114,7 @@ class DisplayQueue:
             else:
                 i += 1
         if self._items:
-            self._slot_start = time.monotonic()
+            self._slot_start = self._clock()
 
     def current(self) -> DisplayItem | None:
         """Return the item currently in the display slot.
@@ -115,17 +128,20 @@ class DisplayQueue:
     def advance_if_due(self) -> bool:
         """Advance rotation if the current slot has exceeded its turn.
 
-        Talk items are discarded after their turn.  Wall items cycle
-        back to the end of the rotation.
+        Talk items are discarded after their turn.  Wall items remain
+        in the rotation; when there are multiple items, the cursor
+        advances to the next one.  With a single wall item, it stays
+        selected but its slot timer is still reset.
 
-        Returns ``True`` if the slot timer expired (caller should
-        trigger a status file refresh — e.g. to update "expires in"
-        text).  The displayed item may or may not have changed.
-        Returns ``False`` if no change occurred.
+        Returns ``True`` if the slot timer expired and the queue state
+        (timer and/or cursor) was advanced.  The displayed item may or
+        may not have changed (for example, with a single wall item).
+        Returns ``False`` if the slot timer has not yet expired or the
+        queue is empty (no advancement performed).
         """
         if not self._items:
             return False
-        elapsed = time.monotonic() - self._slot_start
+        elapsed = self._clock() - self._slot_start
         if elapsed < self._turn_duration:
             return False
 
@@ -140,7 +156,7 @@ class DisplayQueue:
             # Single wall item: cursor stays at 0, but we still reset
             # the slot timer so the description gets a fresh "expires in"
 
-        self._slot_start = time.monotonic()
+        self._slot_start = self._clock()
         return True
 
     def force_to_front(self, source_key: str) -> bool:
@@ -155,7 +171,7 @@ class DisplayQueue:
         for i, item in enumerate(self._items):
             if item.source_key == source_key:
                 self._current_index = i
-                self._slot_start = time.monotonic()
+                self._slot_start = self._clock()
                 return True
         return False
 

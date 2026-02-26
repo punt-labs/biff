@@ -151,16 +151,24 @@ async def notify_tool_list_changed() -> None:
             )
 
 
-async def _sync_unread_file(state: ServerState) -> None:
+async def _sync_unread_file(
+    state: ServerState,
+    *,
+    summary: UnreadSummary | None = None,
+) -> None:
     """Write the unread status file with current display queue state.
 
     Reads the queue's current item to determine ``display_text`` and
     ``display_kind`` for the status bar.  Called after any state change
     that might affect what the status bar shows.
+
+    Pass *summary* to reuse an already-fetched :class:`UnreadSummary`
+    and avoid a redundant relay call.
     """
     if state.unread_path is None:
         return
-    summary = await state.relay.get_unread_summary(state.session_key)
+    if summary is None:
+        summary = await state.relay.get_unread_summary(state.session_key)
     current = state.display_queue.current()
     _write_unread_file(
         state.unread_path,
@@ -201,7 +209,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
         )
     if tool.description != old_desc:
         await notify_tool_list_changed()
-    await _sync_unread_file(state)
+    await _sync_unread_file(state, summary=summary)
 
 
 async def refresh_wall(
@@ -409,7 +417,7 @@ async def _active_tick(
 
     # Rotate display queue — talk items expire, wall items cycle
     if state.display_queue.advance_if_due():
-        await _sync_unread_file(state)
+        await _sync_unread_file(state, summary=summary)
 
     return last_count, last_wall, last_talk
 
