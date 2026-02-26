@@ -104,9 +104,12 @@ cleanup_https_rewrite() {
 trap cleanup_https_rewrite EXIT INT TERM
 
 if ! ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-  printf '  ℹ SSH auth to GitHub unavailable, using HTTPS fallback\n'
-  git config --global url."https://github.com/".insteadOf "git@github.com:"
-  NEED_HTTPS_REWRITE=1
+  # Only add the rewrite if the user doesn't already have one.
+  if ! git config --global --get url."https://github.com/".insteadOf >/dev/null 2>&1; then
+    printf '  ℹ SSH auth to GitHub unavailable, using HTTPS fallback\n'
+    git config --global url."https://github.com/".insteadOf "git@github.com:"
+    NEED_HTTPS_REWRITE=1
+  fi
 fi
 
 if ! "$BINARY" install; then
