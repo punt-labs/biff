@@ -19,12 +19,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
+from biff.server.display_queue import DisplayItem
 
 
 class _Sentinel:
@@ -57,13 +59,10 @@ _tty_name: str = ""
 # Set by the ``mesg`` tool so the unread file includes availability state.
 _biff_enabled: bool = True
 
-# Set by the ``wall`` tool and background poller so the unread file
-# includes the active wall text and sender for status bar display.
-_wall_text: str = ""
-_wall_from: str = ""
-
-# Set by the ``talk`` tool and background poller NATS subscription so
-# the unread file includes the active talk message for status bar display.
+# Set by the ``talk`` tool and background poller NATS subscription.
+# ``_talk_partner`` drives subscription lifecycle in
+# ``_manage_talk_subscription``; ``_talk_message`` feeds the talk
+# tool description (always shows latest message for Claude).
 _talk_partner: str | None = None
 _talk_message: str = ""
 
@@ -105,14 +104,12 @@ def set_talk_message(message: str) -> None:
 
 
 def _reset_session() -> None:
-    """Clear stored session, tty name, biff_enabled, wall, talk — test isolation."""
-    global _session, _tty_name, _biff_enabled, _wall_text, _wall_from
+    """Clear stored session, tty name, biff_enabled, talk — test isolation."""
+    global _session, _tty_name, _biff_enabled
     global _talk_partner, _talk_message
     _session = None
     _tty_name = ""
     _biff_enabled = True
-    _wall_text = ""
-    _wall_from = ""
     _talk_partner = None
     _talk_message = ""
 
@@ -154,6 +151,29 @@ async def notify_tool_list_changed() -> None:
             )
 
 
+async def _sync_unread_file(state: ServerState) -> None:
+    """Write the unread status file with current display queue state.
+
+    Reads the queue's current item to determine ``display_text`` and
+    ``display_kind`` for the status bar.  Called after any state change
+    that might affect what the status bar shows.
+    """
+    if state.unread_path is None:
+        return
+    summary = await state.relay.get_unread_summary(state.session_key)
+    current = state.display_queue.current()
+    _write_unread_file(
+        state.unread_path,
+        summary,
+        repo_name=state.config.repo_name,
+        user=state.config.user,
+        tty_name=_tty_name,
+        biff_enabled=_biff_enabled,
+        display_text=current.text if current else "",
+        display_kind=current.kind if current else "",
+    )
+
+
 async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Update the ``read_messages`` tool description with unread count.
 
@@ -181,19 +201,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
         )
     if tool.description != old_desc:
         await notify_tool_list_changed()
-    if state.unread_path is not None:
-        _write_unread_file(
-            state.unread_path,
-            summary,
-            repo_name=state.config.repo_name,
-            user=state.config.user,
-            tty_name=_tty_name,
-            biff_enabled=_biff_enabled,
-            wall_text=_wall_text,
-            wall_from=_wall_from,
-            talk_partner=_talk_partner,
-            talk_message=_talk_message,
-        )
+    await _sync_unread_file(state)
 
 
 async def refresh_wall(
@@ -202,17 +210,16 @@ async def refresh_wall(
     *,
     wall: WallPost | None | _Sentinel = _SENTINEL,
 ) -> None:
-    """Update the ``wall`` tool description and module-level wall text.
+    """Update the ``wall`` tool description and display queue.
 
-    When a wall is active, the description shows the current banner.
-    When no wall is active, the description reverts to base text.
-    Also syncs ``_wall_text`` so the next unread file write includes it.
+    When a wall is active, the description shows the current banner
+    and a ``DisplayItem`` is added to the rotation queue.  When no
+    wall is active, the description reverts to base text and the
+    wall item is removed from the queue.
 
     Pass *wall* to skip the relay fetch when the caller already has
     the current wall (e.g. :func:`poll_inbox`).
     """
-    global _wall_text, _wall_from
-
     from biff.server.tools.wall import (  # noqa: PLC0415
         WALL_BASE_DESCRIPTION,
         format_remaining,
@@ -223,10 +230,10 @@ async def refresh_wall(
         return
     current = await state.relay.get_wall() if isinstance(wall, _Sentinel) else wall
     old_desc = tool.description
+    queue = state.display_queue
+    queue.remove_by_source_key("wall:current")
     if current is None:
         tool.description = WALL_BASE_DESCRIPTION
-        _wall_text = ""
-        _wall_from = ""
     else:
         remaining = format_remaining(current.expires_at)
         sender = f"@{current.from_user}"
@@ -237,27 +244,16 @@ async def refresh_wall(
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
-        _wall_text = current.text
-        _wall_from = current.from_user
-        if current.from_tty:
-            _wall_from += f" ({current.from_tty})"
+        queue.add(
+            DisplayItem(
+                kind="wall",
+                text=f"{sender}: {current.text}",
+                source_key="wall:current",
+            )
+        )
     if tool.description != old_desc:
         await notify_tool_list_changed()
-    # Re-write the unread file so wall text is synced to status bar
-    if state.unread_path is not None:
-        summary = await state.relay.get_unread_summary(state.session_key)
-        _write_unread_file(
-            state.unread_path,
-            summary,
-            repo_name=state.config.repo_name,
-            user=state.config.user,
-            tty_name=_tty_name,
-            biff_enabled=_biff_enabled,
-            wall_text=_wall_text,
-            wall_from=_wall_from,
-            talk_partner=_talk_partner,
-            talk_message=_talk_message,
-        )
+    await _sync_unread_file(state)
 
 
 TALK_BASE_DESCRIPTION = (
@@ -276,7 +272,9 @@ async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
     the description change, the notification is a no-op from Claude Code's
     perspective (it re-reads the same descriptions and does nothing).
 
-    Also re-writes the unread file so the status bar picks up the change.
+    Queue management (add/remove talk items) is handled by callers:
+    ``_on_talk_msg`` adds items, ``_manage_talk_subscription`` removes
+    them on talk end.
     """
     tool = await mcp.get_tool("talk")
     if tool is None:
@@ -292,21 +290,7 @@ async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
         tool.description = TALK_BASE_DESCRIPTION
     if tool.description != old_desc:
         await notify_tool_list_changed()
-    # Re-write the unread file so the status bar picks up the change
-    if state.unread_path is not None:
-        summary = await state.relay.get_unread_summary(state.session_key)
-        _write_unread_file(
-            state.unread_path,
-            summary,
-            repo_name=state.config.repo_name,
-            user=state.config.user,
-            tty_name=_tty_name,
-            biff_enabled=_biff_enabled,
-            wall_text=_wall_text,
-            wall_from=_wall_from,
-            talk_partner=_talk_partner,
-            talk_message=_talk_message,
-        )
+    await _sync_unread_file(state)
 
 
 async def _manage_talk_subscription(
@@ -333,8 +317,11 @@ async def _manage_talk_subscription(
             await sub.unsubscribe()  # type: ignore[attr-defined]
         sub = None
 
+    # Clear talk items when talk ends
+    if wanted is None:
+        state.display_queue.remove_by_kind("talk")
+
     if wanted is None or not isinstance(state.relay, NatsRelay):
-        # Reset description when talk ends
         await refresh_talk(mcp, state)
         return wanted, None
 
@@ -363,9 +350,17 @@ async def _manage_talk_subscription(
                     else _talk_partner
                 )
                 if sender and sender == partner_user and body:
-                    set_talk_message(f"@{sender}: {body}")
-                    # Mutate the talk tool description so Claude Code
-                    # sees a change on re-read and triggers a UI re-render.
+                    display_text = f"@{sender}: {body}"
+                    set_talk_message(display_text)
+                    # Add to display queue — each message gets its own
+                    # slot and is shown once before being discarded.
+                    item = DisplayItem(
+                        kind="talk",
+                        text=display_text,
+                        source_key=f"talk:{sender}:{time.monotonic_ns()}",
+                    )
+                    state.display_queue.add(item)
+                    state.display_queue.force_to_front(item.source_key)
                     await refresh_talk(mcp, state)
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
@@ -411,6 +406,10 @@ async def _active_tick(
     if _talk_message != last_talk:
         last_talk = _talk_message
         await refresh_talk(mcp, state)
+
+    # Rotate display queue — talk items expire, wall items cycle
+    if state.display_queue.advance_if_due():
+        await _sync_unread_file(state)
 
     return last_count, last_wall, last_talk
 
@@ -499,17 +498,15 @@ def _write_unread_file(
     user: str,
     tty_name: str,
     biff_enabled: bool,
-    wall_text: str = "",
-    wall_from: str = "",
-    talk_partner: str | None = None,
-    talk_message: str = "",
+    display_text: str = "",
+    display_kind: str = "",
 ) -> None:
     """Write unread count to a JSON status file.
 
-    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``,
-    ``wall``, ``wall_from``, and talk state so the status line can
-    display identity, session, availability, wall banner, and active
-    talk messages.
+    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``, and
+    the current display queue item (``display_text``, ``display_kind``)
+    so the status line shows identity, session, availability, and
+    whatever the display queue has rotated into view.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
@@ -520,12 +517,9 @@ def _write_unread_file(
         "count": summary.count,
         "tty_name": tty_name,
         "biff_enabled": biff_enabled,
-        "wall": wall_text,
-        "wall_from": wall_from,
+        "display_text": display_text,
+        "display_kind": display_kind,
     }
-    if talk_partner is not None:
-        data["talk_partner"] = talk_partner
-        data["talk_message"] = talk_message
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")
     except OSError:
