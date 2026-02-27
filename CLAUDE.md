@@ -75,6 +75,26 @@ Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging
 
 Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
+### Push Policy
+
+**All code changes go through a PR** — even small cleanups, script deletions, and one-line fixes. Branch protection requires CI checks and review; bypassing it risks broken main.
+
+**Exceptions (direct push to main allowed):**
+
+- `README.md` edits (but run `npx markdownlint-cli2 README.md` first)
+- `bd sync` commits (beads bookkeeping, auto-generated)
+- Release version bump commits from `/punt:release` (the release workflow is its own gate)
+
+When in doubt, use a branch.
+
+**After creating a PR**, wait for CI to finish before reading review feedback:
+
+```bash
+gh pr checks <number> --watch
+```
+
+Then check for Copilot and Bugbot review comments before merging.
+
 ### Quarry Knowledge Base
 
 All punt-labs repos are indexed in quarry (local semantic search) as separate collections: biff, quarry, punt-kit, prfaq, langlearn-tts, public-website, claude-code-docs, and more. Use `/find <query>` to quickly look up design decisions, NATS configuration, test patterns, architecture details, and cross-project knowledge without reading entire files. Results are ranked by relevance with page references.
@@ -102,7 +122,7 @@ After editing both, run `uv lock` to update `uv.lock`.
 
 Use semver: patch for fixes, minor for features, major for breaking changes. Bump on every PR that changes user-facing behavior.
 
-**IMPORTANT:** `plugin.json` must always have `"name": "biff"` on main. During local development, the name may be `"biff-dev"` for dev/prod isolation — **never commit `"biff-dev"` to main**. Verify before pushing.
+**IMPORTANT:** `plugin.json` must always have `"name": "biff"` on main. Dev/prod isolation uses `.claude/commands/` for dev-only commands (project-local, not shipped to marketplace users). The plugin name is always `"biff"` — no `"biff-dev"` swapping.
 
 **IMPORTANT:** Never use `uv tool install --force --editable .` as a release or testing step. Local editable installs break the status line (see DESIGN.md DES-011b) and do not represent what users experience. The only way to test is to release through the real channels.
 
