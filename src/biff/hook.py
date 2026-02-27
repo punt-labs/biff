@@ -411,32 +411,35 @@ def _detect_collisions() -> list[str]:
     current_worktree = _get_worktree_root()
 
     active_dir = pathlib.Path.home() / ".biff" / "active"
-    if not active_dir.exists():
+    if not active_dir.is_dir():
         return []
 
     collisions: list[str] = []
-    for f in active_dir.iterdir():
-        if not f.is_file():
-            continue
-        try:
-            lines = f.read_text().strip().splitlines()
-            if len(lines) < 2:
+    try:
+        for f in active_dir.iterdir():
+            if not f.is_file():
                 continue
-            session_key, repo_name = lines[0], lines[1]
-        except OSError:
-            continue
+            try:
+                lines = f.read_text().strip().splitlines()
+                if len(lines) < 2:
+                    continue
+                session_key, repo_name = lines[0], lines[1]
+            except OSError:
+                continue
 
-        if repo_name != current_repo:
-            continue
+            if repo_name != current_repo:
+                continue
 
-        # Third line is worktree_root (optional — old format lacks it).
-        file_worktree = lines[2] if len(lines) >= 3 else ""
+            # Third line is worktree_root (optional — old format lacks it).
+            file_worktree = lines[2] if len(lines) >= 3 else ""
 
-        # Conservative: if either side has no worktree info, assume collision.
-        if file_worktree and current_worktree and file_worktree != current_worktree:
-            continue
+            # Conservative: if either side has no worktree info, assume collision.
+            if file_worktree and current_worktree and file_worktree != current_worktree:
+                continue
 
-        collisions.append(session_key)
+            collisions.append(session_key)
+    except OSError:
+        return []
     return collisions
 
 
@@ -471,7 +474,7 @@ def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
         keys = ", ".join(collisions)
         n = len(collisions)
         parts.append(
-            f"\u26a0 {n} other session(s) active in this directory ({keys}). "
+            f"\u26a0 {n} other session(s) active in this worktree ({keys}). "
             "Run /who for details. Consider using a worktree to avoid conflicts."
         )
 
