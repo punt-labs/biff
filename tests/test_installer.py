@@ -11,6 +11,7 @@ from biff.installer import (
     MARKETPLACE_KEY,
     PLUGIN_ID,
     TOOL_PERMISSION,
+    _refresh_marketplace,
     _register_marketplace,
     _remove_commands,
     _remove_permissions,
@@ -80,6 +81,55 @@ class TestUnregisterMarketplace:
         # Marketplace entry still present
         data = json.loads(mp_path.read_text())
         assert MARKETPLACE_KEY in data
+
+
+# -- Marketplace refresh ----------------------------------------------------
+
+
+class TestRefreshMarketplace:
+    def test_skips_when_not_cloned(self, tmp_path: Path) -> None:
+        with patch("biff.installer.MARKETPLACE_CLONE", tmp_path / "nonexistent"):
+            result = _refresh_marketplace()
+        assert result.passed
+        assert "fresh install" in result.message
+
+    def test_pulls_when_clone_exists(self, tmp_path: Path) -> None:
+        clone_dir = tmp_path / "marketplace"
+        clone_dir.mkdir()
+        with (
+            patch("biff.installer.MARKETPLACE_CLONE", clone_dir),
+            patch("biff.installer.subprocess.run") as mock_run,
+            patch("biff.installer.shutil.which", return_value="/usr/bin/git"),
+        ):
+            mock_run.return_value.returncode = 0
+            result = _refresh_marketplace()
+        assert result.passed
+        assert "updated" in result.message
+
+    def test_fails_when_git_missing(self, tmp_path: Path) -> None:
+        clone_dir = tmp_path / "marketplace"
+        clone_dir.mkdir()
+        with (
+            patch("biff.installer.MARKETPLACE_CLONE", clone_dir),
+            patch("biff.installer.shutil.which", return_value=None),
+        ):
+            result = _refresh_marketplace()
+        assert not result.passed
+        assert "git not found" in result.message
+
+    def test_fails_when_pull_fails(self, tmp_path: Path) -> None:
+        clone_dir = tmp_path / "marketplace"
+        clone_dir.mkdir()
+        with (
+            patch("biff.installer.MARKETPLACE_CLONE", clone_dir),
+            patch("biff.installer.subprocess.run") as mock_run,
+            patch("biff.installer.shutil.which", return_value="/usr/bin/git"),
+        ):
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = "fatal: not a git repository"
+            result = _refresh_marketplace()
+        assert not result.passed
+        assert "git pull failed" in result.message
 
 
 # -- Command removal --------------------------------------------------------
@@ -183,18 +233,26 @@ class TestPluginUninstall:
 
 class TestInstallOrchestrator:
     @patch("biff.installer._install_plugin")
-    def test_install_runs_all_steps(self, mock_plugin: object, tmp_path: Path) -> None:
+    @patch("biff.installer._refresh_marketplace")
+    def test_install_runs_all_steps(
+        self, mock_refresh: object, mock_plugin: object, tmp_path: Path
+    ) -> None:
         from biff.installer import StepResult
 
+        mock_refresh.return_value = StepResult("Marketplace refresh", True, "updated")  # type: ignore[attr-defined]
         mock_plugin.return_value = StepResult("Plugin", True, "installed")  # type: ignore[attr-defined]
         result = install(marketplace_path=tmp_path / "known_marketplaces.json")
         assert result.installed
-        assert len(result.steps) == 2
+        assert len(result.steps) == 3
 
     @patch("biff.installer._install_plugin")
-    def test_install_reports_failure(self, mock_plugin: object, tmp_path: Path) -> None:
+    @patch("biff.installer._refresh_marketplace")
+    def test_install_reports_failure(
+        self, mock_refresh: object, mock_plugin: object, tmp_path: Path
+    ) -> None:
         from biff.installer import StepResult
 
+        mock_refresh.return_value = StepResult("Marketplace refresh", True, "updated")  # type: ignore[attr-defined]
         mock_plugin.return_value = StepResult("Plugin", False, "failed")  # type: ignore[attr-defined]
         result = install(marketplace_path=tmp_path / "known_marketplaces.json")
         assert not result.installed

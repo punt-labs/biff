@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Installer now refreshes marketplace clone before plugin install, ensuring existing users get the correct `source.ref` pins
+
 ## 0.11.4 — 2026-02-26
 
 ### Fixed
