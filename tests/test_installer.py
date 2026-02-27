@@ -87,49 +87,32 @@ class TestUnregisterMarketplace:
 
 
 class TestRefreshMarketplace:
-    def test_skips_when_not_cloned(self, tmp_path: Path) -> None:
-        with patch("biff.installer.MARKETPLACE_CLONE", tmp_path / "nonexistent"):
-            result = _refresh_marketplace()
-        assert result.passed
-        assert "fresh install" in result.message
-
-    def test_pulls_when_clone_exists(self, tmp_path: Path) -> None:
-        clone_dir = tmp_path / "marketplace"
-        clone_dir.mkdir()
+    def test_succeeds(self) -> None:
         with (
-            patch("biff.installer.MARKETPLACE_CLONE", clone_dir),
             patch("biff.installer.subprocess.run") as mock_run,
-            patch("biff.installer.shutil.which", return_value="/usr/bin/git"),
+            patch("biff.installer.shutil.which", return_value="/usr/bin/claude"),
         ):
             mock_run.return_value.returncode = 0
             result = _refresh_marketplace()
         assert result.passed
         assert "updated" in result.message
 
-    def test_fails_when_git_missing(self, tmp_path: Path) -> None:
-        clone_dir = tmp_path / "marketplace"
-        clone_dir.mkdir()
-        with (
-            patch("biff.installer.MARKETPLACE_CLONE", clone_dir),
-            patch("biff.installer.shutil.which", return_value=None),
-        ):
+    def test_fails_when_claude_missing(self) -> None:
+        with patch("biff.installer.shutil.which", return_value=None):
             result = _refresh_marketplace()
         assert not result.passed
-        assert "git not found" in result.message
+        assert "claude CLI not found" in result.message
 
-    def test_fails_when_pull_fails(self, tmp_path: Path) -> None:
-        clone_dir = tmp_path / "marketplace"
-        clone_dir.mkdir()
+    def test_fails_when_update_fails(self) -> None:
         with (
-            patch("biff.installer.MARKETPLACE_CLONE", clone_dir),
             patch("biff.installer.subprocess.run") as mock_run,
-            patch("biff.installer.shutil.which", return_value="/usr/bin/git"),
+            patch("biff.installer.shutil.which", return_value="/usr/bin/claude"),
         ):
             mock_run.return_value.returncode = 1
-            mock_run.return_value.stderr = "fatal: not a git repository"
+            mock_run.return_value.stderr = "network error"
             result = _refresh_marketplace()
         assert not result.passed
-        assert "git pull failed" in result.message
+        assert "marketplace update failed" in result.message
 
 
 # -- Command removal --------------------------------------------------------
