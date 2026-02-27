@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from biff.doctor import (
+    BIFF_COMMANDS,
     CheckResult,
     _check_biff_file,
     _check_gh_cli,
@@ -18,7 +19,6 @@ from biff.doctor import (
     _resolve_relay_config,
     check_environment,
 )
-from biff.installer import BIFF_COMMANDS
 
 # -- Individual checks -------------------------------------------------------
 

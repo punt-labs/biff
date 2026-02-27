@@ -22,9 +22,23 @@ from biff.config import (
     is_enabled,
     load_biff_file,
 )
-from biff.installer import BIFF_COMMANDS, COMMANDS_DIR, PLUGIN_ID
 from biff.models import RelayAuth
 from biff.statusline import STASH_PATH
+
+PLUGIN_ID = "biff@punt-labs"
+COMMANDS_DIR = Path.home() / ".claude" / "commands"
+BIFF_COMMANDS = (
+    "finger.md",
+    "last.md",
+    "mesg.md",
+    "plan.md",
+    "read.md",
+    "talk.md",
+    "tty.md",
+    "wall.md",
+    "who.md",
+    "write.md",
+)
 
 
 @dataclass(frozen=True)

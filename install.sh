@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install biff — UNIX-style team communication for Claude Code.
-# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/<SHA>/install.sh | sh
 set -eu
 
 # --- Colors (disabled when not a terminal) ---
@@ -15,10 +15,23 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1"; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
+MARKETPLACE_REPO="punt-labs/claude-plugins"
+MARKETPLACE_NAME="punt-labs"
+PLUGIN_NAME="biff"
 PACKAGE="punt-biff"
 BINARY="biff"
 
-# --- Step 1: Python ---
+# --- Step 1: Claude Code CLI ---
+
+info "Checking Claude Code..."
+
+if command -v claude >/dev/null 2>&1; then
+  ok "claude CLI found"
+else
+  fail "'claude' CLI not found. Install Claude Code first: https://docs.anthropic.com/en/docs/claude-code"
+fi
+
+# --- Step 2: Python + uv ---
 
 info "Checking Python..."
 
@@ -38,8 +51,6 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 13 ]; }
 fi
 
 ok "Python ${PY_MAJOR}.${PY_MINOR}"
-
-# --- Step 2: uv ---
 
 info "Checking uv..."
 
@@ -62,21 +73,10 @@ else
   ok "uv installed"
 fi
 
-# --- Step 3: Claude Code CLI ---
-
-info "Checking Claude Code..."
-
-if command -v claude >/dev/null 2>&1; then
-  ok "claude CLI found"
-else
-  fail "'claude' CLI not found. Install Claude Code first: https://docs.anthropic.com/en/docs/claude-code"
-fi
-
-# --- Step 4: punt-biff ---
+# --- Step 3: Install biff CLI ---
 
 info "Installing $PACKAGE..."
 
-# --force: overwrites existing binary (may exist from old package name or prior install)
 uv tool install --force "$PACKAGE" || fail "Failed to install $PACKAGE"
 ok "$PACKAGE installed"
 
@@ -89,9 +89,19 @@ fi
 
 ok "$BINARY $(command -v "$BINARY")"
 
-# --- Step 5: biff install (marketplace + plugin) ---
+# --- Step 4: Register marketplace ---
 
-info "Setting up Claude Code plugin..."
+info "Registering Punt Labs marketplace..."
+
+if claude plugin marketplace list 2>/dev/null | grep -q "$MARKETPLACE_NAME"; then
+  ok "marketplace already registered"
+  claude plugin marketplace update "$MARKETPLACE_NAME" 2>/dev/null || true
+else
+  claude plugin marketplace add "$MARKETPLACE_REPO" || fail "Failed to register marketplace"
+  ok "marketplace registered"
+fi
+
+# --- Step 5: SSH fallback for plugin install ---
 
 # claude plugin install clones via SSH (git@github.com:...).
 # Users without SSH keys need an HTTPS fallback.
@@ -105,32 +115,33 @@ cleanup_https_rewrite() {
 trap cleanup_https_rewrite EXIT INT TERM
 
 if ! ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-  # Only add the rewrite if the user doesn't already have one.
-  if ! git config --global --get url."https://github.com/".insteadOf >/dev/null 2>&1; then
-    warn "SSH auth to GitHub unavailable, using HTTPS fallback"
-    git config --global url."https://github.com/".insteadOf "git@github.com:"
-    NEED_HTTPS_REWRITE=1
-  fi
+  warn "SSH auth to GitHub unavailable, using HTTPS fallback"
+  git config --global url."https://github.com/".insteadOf "git@github.com:"
+  NEED_HTTPS_REWRITE=1
 fi
 
-if ! "$BINARY" install; then
-  fail "Plugin install failed"
+# --- Step 6: Install plugin ---
+
+info "Installing $PLUGIN_NAME plugin..."
+
+if ! claude plugin install "${PLUGIN_NAME}@${MARKETPLACE_NAME}"; then
+  cleanup_https_rewrite
+  fail "Failed to install $PLUGIN_NAME"
 fi
+ok "$PLUGIN_NAME plugin installed"
 
 cleanup_https_rewrite
 
-# --- Step 6: biff doctor ---
+# --- Step 7: Verify ---
 
 info "Verifying installation..."
 printf '\n'
-if ! "$BINARY" doctor; then
-  fail "Doctor check failed"
-fi
+"$BINARY" doctor
 printf '\n'
 
 # --- Done ---
 
-printf '%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$PACKAGE" "$NC"
+printf '%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$PLUGIN_NAME" "$NC"
 printf 'Restart Claude Code twice to activate:\n'
 printf '  First restart  → SessionStart hook runs setup\n'
 printf '  Second restart → slash commands active (/who, /write, etc.)\n\n'

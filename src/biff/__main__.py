@@ -213,19 +213,27 @@ def disable(
     print("biff disabled. Restart Claude Code for changes to take effect.")
 
 
+_PLUGIN_ID = "biff@punt-labs"
+
+
 @app.command()
 def install() -> None:
     """Install biff via the punt-labs marketplace."""
-    from biff.installer import install as do_install
+    import shutil
+    import subprocess
 
-    result = do_install()
-    for step in result.steps:
-        symbol = "\u2713" if step.passed else "\u2717"
-        print(f"  {symbol} {step.name}: {step.message}")
-    print()
-    print(result.message)
-    if not result.installed:
+    claude = shutil.which("claude")
+    if not claude:
+        print("Error: claude CLI not found on PATH")
         raise typer.Exit(code=1)
+
+    result = subprocess.run(  # noqa: S603
+        [claude, "plugin", "install", _PLUGIN_ID, "--scope", "user"],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise typer.Exit(code=1)
+    print("Installed. Restart Claude Code to activate.")
 
 
 @app.command()
@@ -241,16 +249,21 @@ def doctor() -> None:
 @app.command()
 def uninstall() -> None:
     """Uninstall biff plugin and clean up artifacts."""
-    from biff.installer import uninstall as do_uninstall
+    import shutil
+    import subprocess
 
-    result = do_uninstall()
-    for step in result.steps:
-        symbol = "\u2713" if step.passed else "\u2717"
-        print(f"  {symbol} {step.name}: {step.message}")
-    print()
-    print(result.message)
-    if not result.uninstalled:
+    claude = shutil.which("claude")
+    if not claude:
+        print("Error: claude CLI not found on PATH")
         raise typer.Exit(code=1)
+
+    result = subprocess.run(  # noqa: S603
+        [claude, "plugin", "uninstall", _PLUGIN_ID, "--scope", "user"],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise typer.Exit(code=1)
+    print("Uninstalled.")
 
 
 @app.command()
