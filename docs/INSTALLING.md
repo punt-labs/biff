@@ -10,7 +10,7 @@
 ## One-Line Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/6ce60b3/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/419ac99/install.sh | sh
 ```
 
 The commit hash pins the installer to an auditable snapshot. It is updated on each release.
@@ -25,7 +25,7 @@ Restart Claude Code twice after installing:
 ### Verify before running
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/6ce60b3/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/419ac99/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh

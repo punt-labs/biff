@@ -31,7 +31,7 @@ The `biff` CLI also provides standalone access to some features (`biff talk`, `b
 Run the one-line installer, restart Claude Code twice, and type `/who`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/6ce60b3/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/419ac99/install.sh | sh
 ```
 
 Biff ships with a shared demo relay on Synadia Cloud, so there is no infrastructure to provision. If your repo has a `.biff` file (committed by a teammate), biff picks up the team roster automatically. Your display name is resolved from your GitHub identity. No account creation, no workspace to configure.
