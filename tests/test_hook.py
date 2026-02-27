@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from biff.hook import (
+    _detect_collisions,
     _expand_branch_plan,
     check_plan_hint,
     check_wall_hint,
@@ -840,3 +841,148 @@ class TestWorktreeIsolation:
 
         assert result is not None
         assert "feature/auth" in result
+
+
+# ── _detect_collisions ─────────────────────────────────────────────
+
+
+def _collision_mocks(
+    tmp_path: Path,
+    *,
+    worktree: str = _FAKE_WORKTREE,
+    repo_root: Path | None = None,
+    repo_slug: str | None = None,
+):
+    """Build mock context managers for collision detection tests."""
+    fake_root = repo_root or tmp_path / "my-repo"
+    return (
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("biff.hook._get_worktree_root", return_value=worktree),
+        patch("biff.config.find_git_root", return_value=fake_root),
+        patch("biff.config.get_repo_slug", return_value=repo_slug),
+    )
+
+
+class TestDetectCollisions:
+    """Collision detection for concurrent sessions in the same worktree."""
+
+    def test_no_active_dir(self, tmp_path: Path) -> None:
+        """No ~/.biff/active/ directory → empty list."""
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with m_home, m_wt, m_git, m_slug:
+            assert _detect_collisions() == []
+
+    def test_empty_active_dir(self, tmp_path: Path) -> None:
+        """Empty active directory → empty list."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with m_home, m_wt, m_git, m_slug:
+            assert _detect_collisions() == []
+
+    def test_different_repo_ignored(self, tmp_path: Path) -> None:
+        """Active session in a different repo → not a collision."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc").write_text(f"kai:abc\nother-repo\n{_FAKE_WORKTREE}\n")
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with m_home, m_wt, m_git, m_slug:
+            assert _detect_collisions() == []
+
+    def test_different_worktree_ignored(self, tmp_path: Path) -> None:
+        """Same repo but different worktree → not a collision."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc").write_text("kai:abc\nmy-repo\n/other/worktree\n")
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with m_home, m_wt, m_git, m_slug:
+            assert _detect_collisions() == []
+
+    def test_same_repo_same_worktree_detected(self, tmp_path: Path) -> None:
+        """Same repo AND same worktree → collision."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc").write_text(f"kai:abc\nmy-repo\n{_FAKE_WORKTREE}\n")
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with m_home, m_wt, m_git, m_slug:
+            result = _detect_collisions()
+        assert result == ["kai:abc"]
+
+    def test_old_format_no_worktree_conservative(self, tmp_path: Path) -> None:
+        """Old 2-line format (no worktree) → treated as collision."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc").write_text("kai:abc\nmy-repo\n")
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with m_home, m_wt, m_git, m_slug:
+            result = _detect_collisions()
+        assert result == ["kai:abc"]
+
+    def test_multiple_collisions(self, tmp_path: Path) -> None:
+        """Multiple sessions in same repo+worktree → all returned."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc").write_text(f"kai:abc\nmy-repo\n{_FAKE_WORKTREE}\n")
+        (active_dir / "eric-def").write_text(f"eric:def\nmy-repo\n{_FAKE_WORKTREE}\n")
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with m_home, m_wt, m_git, m_slug:
+            result = _detect_collisions()
+        assert sorted(result) == ["eric:def", "kai:abc"]
+
+    def test_no_git_root(self, tmp_path: Path) -> None:
+        """No git root → empty list."""
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.config.find_git_root", return_value=None),
+        ):
+            assert _detect_collisions() == []
+
+    def test_session_start_includes_advisory(self, tmp_path: Path) -> None:
+        """handle_session_start() includes collision advisory."""
+        active_dir = tmp_path / ".biff" / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "kai-abc").write_text(f"kai:abc\nmy-repo\n{_FAKE_WORKTREE}\n")
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with (
+            patch("biff.hook._get_git_branch", return_value="main"),
+            m_home,
+            m_wt,
+            m_git,
+            m_slug,
+        ):
+            result = handle_session_start({})
+        assert "\u26a0" in result
+        assert "kai:abc" in result
+        assert "/who" in result
+        assert "worktree" in result
+
+    def test_session_start_no_collision_no_advisory(self, tmp_path: Path) -> None:
+        """handle_session_start() without collisions has no advisory."""
+        fake_root = tmp_path / "my-repo"
+        fake_root.mkdir()
+        m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)
+        with (
+            patch("biff.hook._get_git_branch", return_value="main"),
+            m_home,
+            m_wt,
+            m_git,
+            m_slug,
+        ):
+            result = handle_session_start({})
+        assert "\u26a0" not in result

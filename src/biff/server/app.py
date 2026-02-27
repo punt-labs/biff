@@ -40,17 +40,20 @@ def _active_dir() -> Path:
     return Path.home() / ".biff" / "active"
 
 
-def write_active_session(repo_name: str, session_key: str) -> None:
+def write_active_session(
+    repo_name: str, session_key: str, worktree_root: str = ""
+) -> None:
     """Mark a session as active so SessionEnd hooks can find it.
 
-    Writes ``~/.biff/active/{safe_key}`` containing the session key
-    and repo name.  The SessionEnd hook reads these files and converts
-    them to sentinels for the reaper to process.
+    Writes ``~/.biff/active/{safe_key}`` containing the session key,
+    repo name, and worktree root (one per line).  The SessionEnd hook
+    reads these files and converts them to sentinels for the reaper
+    to process.  The third line is optional for backwards compatibility.
     """
     d = _active_dir()
     d.mkdir(parents=True, exist_ok=True)
     safe = session_key.replace(":", "-")
-    (d / safe).write_text(f"{session_key}\n{repo_name}\n")
+    (d / safe).write_text(f"{session_key}\n{repo_name}\n{worktree_root}\n")
 
 
 def remove_active_session(session_key: str) -> None:
@@ -507,7 +510,11 @@ async def _active_lifespan(
 
     # Register this session as active so SessionEnd hooks can find it.
     with suppress(OSError):
-        write_active_session(state.config.repo_name, state.session_key)
+        write_active_session(
+            state.config.repo_name,
+            state.session_key,
+            worktree_root=str(state.repo_root) if state.repo_root else "",
+        )
 
     # Auto-assign a ttyN name so the status bar always has identity.
     sessions = await state.relay.get_sessions()
