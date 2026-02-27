@@ -389,6 +389,57 @@ def check_wall_hint() -> str | None:
     )
 
 
+def _detect_collisions() -> list[str]:
+    """Find other active sessions in the same worktree.
+
+    Reads ``~/.biff/active/`` files and returns session keys whose
+    repo_name matches AND whose worktree_root matches (or is absent,
+    which conservatively counts as a collision).
+
+    Returns an empty list when there is no git root or no active dir.
+    """
+    from biff.config import (  # noqa: PLC0415
+        find_git_root,
+        get_repo_slug,
+        sanitize_repo_name,
+    )
+
+    repo_root = find_git_root()
+    if repo_root is None:
+        return []
+    current_repo = sanitize_repo_name(get_repo_slug(repo_root) or repo_root.name)
+    current_worktree = _get_worktree_root()
+
+    active_dir = pathlib.Path.home() / ".biff" / "active"
+    if not active_dir.exists():
+        return []
+
+    collisions: list[str] = []
+    for f in active_dir.iterdir():
+        if not f.is_file():
+            continue
+        try:
+            lines = f.read_text().strip().splitlines()
+            if len(lines) < 2:
+                continue
+            session_key, repo_name = lines[0], lines[1]
+        except OSError:
+            continue
+
+        if repo_name != current_repo:
+            continue
+
+        # Third line is worktree_root (optional — old format lacks it).
+        file_worktree = lines[2] if len(lines) >= 3 else ""
+
+        # Conservative: if either side has no worktree info, assume collision.
+        if file_worktree and current_worktree and file_worktree != current_worktree:
+            continue
+
+        collisions.append(session_key)
+    return collisions
+
+
 def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
     """Build SessionStart(startup) additionalContext.
 
@@ -414,6 +465,16 @@ def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
         )
 
     parts.append("Check /read for unread messages.")
+
+    collisions = _detect_collisions()
+    if collisions:
+        keys = ", ".join(collisions)
+        n = len(collisions)
+        parts.append(
+            f"\u26a0 {n} other session(s) active in this directory ({keys}). "
+            "Run /who for details. Consider using a worktree to avoid conflicts."
+        )
+
     return " ".join(parts)
 
 
