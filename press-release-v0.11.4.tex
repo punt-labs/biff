@@ -1,0 +1,285 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ── Geometry ──────────────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+
+% ── Pagination ────────────────────────────────────────────────────────────────
+\usepackage[all]{nowidow}
+\brokenpenalty=10000
+\raggedbottom
+
+% ── Fonts ─────────────────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage{newpxtext}     % Palatino-based serif (TeX Gyre Pagella)
+\usepackage{newpxmath}     % Matching math font
+
+% ── Colors ────────────────────────────────────────────────────────────────────
+\usepackage[dvipsnames]{xcolor}
+\definecolor{SectionBlue}{HTML}{1B3A5C}
+\definecolor{AccentGray}{HTML}{4A4A4A}
+\definecolor{QuoteBorder}{HTML}{8B9DAF}
+\definecolor{BoxBg}{HTML}{F7F8FA}
+
+% ── Boxes ─────────────────────────────────────────────────────────────────────
+\usepackage[framemethod=tikz]{mdframed}
+
+% ── Lists ─────────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+
+% ── Hyperlinks ────────────────────────────────────────────────────────────────
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=SectionBlue,
+  urlcolor=SectionBlue,
+  pdfauthor={punt-labs},
+  pdftitle={biff --- Team Communication for Engineers Who Never Leave the Terminal},
+  pdfsubject={Product Launch},
+}
+
+% ── Section styling ──────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}
+  {\Large\bfseries\color{SectionBlue}}
+  {}
+  {0pt}
+  {}
+
+% ── Header/footer ────────────────────────────────────────────────────────────
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[R]{\footnotesize\textcolor{AccentGray}{\thepage}}
+\renewcommand{\headrulewidth}{0pt}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Custom environments
+% ══════════════════════════════════════════════════════════════════════════════
+
+% ── \prsection{title} — styled press release section header ──────────────────
+\newcommand{\prsection}[1]{%
+  \vspace{1em}%
+  {\large\bfseries\color{SectionBlue}#1}%
+  \vspace{0.3em}\par%
+}
+
+% ── customerquote — indented, italic customer quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=QuoteBorder,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{customerquote}
+
+% ── spokespersonquote — indented spokesperson quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=SectionBlue,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{spokespersonquote}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Document
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{document}
+
+% ── Headline block ──────────────────────────────────────────────────────────
+\begin{center}
+  {\LARGE\bfseries\color{SectionBlue}
+    punt-labs Launches biff: Team Communication \\
+    for Engineers Who (Almost) Never Leave the Terminal} \\[0.8em]
+  {\large\color{AccentGray}
+    Open-source tool resurrects BSD Unix commands as MCP-native \\
+    slash commands inside Claude Code --- ten commands, one install, zero context switches}
+\end{center}
+
+\vspace{0.5em}
+
+% ── Dateline + Lede ─────────────────────────────────────────────────────────
+Seattle, WA --- March 2, 2026 --- Today, punt-labs announced
+\textbf{biff}, an open-source communication tool that lets software
+engineers message teammates, check presence, see what their AI agents are
+doing, and broadcast to their team --- all without leaving the terminal.
+Unlike Slack and Discord, which demand a separate window and constant
+attention, biff runs inside the engineer's existing Claude Code session as
+MCP-native slash commands. Engineers type \texttt{/write @kai} the same way
+they type \texttt{git push} --- in flow, with intent, and then move on.
+
+\prsection{Problem}
+
+Software engineers using AI-assisted coding tools like Claude Code are
+experiencing a step change in productivity. Entire features that once took
+days now take hours. But every time these engineers need to coordinate with
+a teammate --- asking a question, sharing a diff, requesting a code review
+--- they context-switch to Slack or Discord, tools designed for managers
+and all-day-online knowledge workers, not for makers in deep focus. Those
+tools show \emph{everything} --- every channel, every project, every server
+--- regardless of which codebase is open in the terminal right now.
+
+The cost is measurable. Gloria Mark's research at UC Irvine found that a
+single interruption costs an average of 23 minutes and 15 seconds before a
+worker returns to the original task. For an engineer shipping three
+features a day with AI assistance, three Slack interruptions can erase an
+entire feature's worth of productive time. Slack's always-on presence model
+compounds the problem: even \emph{checking} for messages breaks flow, and
+the social expectation of quick replies creates anxiety that degrades
+concentration even when no message arrives.
+
+The engineers building the future of software --- spending their entire day
+inside a terminal, collaborating with AI agents, iterating at speeds that
+would have seemed absurd two years ago --- have no communication tool that
+matches how they actually work.
+
+\prsection{Solution}
+
+Biff brings communication into the terminal as slash commands borrowed from
+the BSD Unix utilities that shipped with every workstation in the 1980s ---
+\texttt{write}, \texttt{wall}, \texttt{finger}, \texttt{who}, and
+\texttt{mesg} --- updated for the MCP era. Ten commands cover messaging,
+presence, real-time conversation, broadcast, and availability control:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=0.2em]
+  \item \texttt{/who} --- see who's online, what they're working on, and
+    where each session is running
+  \item \texttt{/write @kai ``ready for review''} --- send a directed
+    message
+  \item \texttt{/read} --- check your inbox when you're ready
+  \item \texttt{/finger @kai} --- see what someone is working on without
+    interrupting them
+  \item \texttt{/talk @kai} --- start a real-time conversation with instant
+    status bar display
+  \item \texttt{/wall ``release freeze'' 2h} --- broadcast a time-limited
+    announcement to the team
+  \item \texttt{/plan ``refactoring auth''} --- set your status so
+    teammates can see your focus
+  \item \texttt{/tty main} --- name your session for multi-session work
+  \item \texttt{/last} --- view session login/logout history
+  \item \texttt{/mesg n} --- go do-not-disturb; \texttt{/mesg y} to
+    come back
+\end{itemize}
+
+Every command implies intent. There are no channels to monitor, no threads
+to catch up on, no emoji reactions to parse. The repository \emph{is} the
+channel. When you open a project, you see only the teammates and messages
+for \emph{that} project --- not the ten others on the back burner. Switch
+repos, and your communication context switches with you. This is why biff
+works for focused engineering: the same scoping that keeps your code
+organized keeps your communication organized. When someone sends you a
+message, your status bar shows a live indicator ---
+\texttt{kai:tty1(3)} in bold yellow when you have unreads,
+\texttt{kai:tty1(0)} when caught up. You decide when to engage.
+
+Because biff speaks MCP, agents participate alongside humans as natural
+members of the team. An autonomous coding agent can \texttt{/plan} what it
+is working on, \texttt{/write} a human when it needs a decision, and show
+up in \texttt{/who} alongside everyone else. Workflow hooks tie into the
+development process: switching branches auto-sets your plan, creating a PR
+triggers a \texttt{/wall} announcement. Biff is designed for hybrid teams
+--- humans and agents working together --- with the same intentional,
+human-scale communication vocabulary that made BSD utilities great.
+
+% TODO: Replace with a real customer testimonial
+\prsection{Customer Quote}
+
+\begin{customerquote}
+\textit{``I used to mass-quit my Slack channels once a month out of
+frustration and then guiltily rejoin them. With biff, I just set
+\texttt{/mesg n} when I'm deep in a problem and \texttt{/mesg y} when I
+come up for air. My teammates can \texttt{/finger @priya} to see what I'm
+on without interrupting. Now I run three agents alongside my own session
+--- \texttt{/who} shows all four of us, each with its own plan, and when
+one of them needs a decision it just \texttt{/write}s me. Last week I
+shipped more in three days than I used to ship in two weeks, and I didn't
+miss a single important message.''}
+
+\raggedleft --- \textbf{Priya Chandrasekaran}, Senior Engineer at a
+Series~B startup
+\end{customerquote}
+
+\prsection{Getting Started}
+
+Getting started with biff takes two steps --- install it, then enable it
+in your repo:
+
+\begin{mdframed}[
+  topline=false, bottomline=false, rightline=false, leftline=false,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt, innerrightmargin=12pt,
+  innertopmargin=8pt, innerbottommargin=8pt,
+  skipabove=\baselineskip, skipbelow=\baselineskip,
+]
+\ttfamily\footnotesize
+\textcolor{AccentGray}{\$} curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/419ac99/install.sh | sh \\[0.6em]
+\textcolor{AccentGray}{\$} biff enable
+\end{mdframed}
+
+\noindent The first command installs the CLI and registers the Claude Code
+plugin. The second activates biff in the current repository and deploys
+git hooks for workflow integration. Restart Claude Code, and you are live.
+
+Biff ships with a shared relay on Synadia Cloud, so there is zero
+infrastructure to provision. Team configuration lives in a \texttt{.biff}
+file committed to the git repository --- the repo is both the codebase and
+the communication scope. Display names are resolved automatically from
+GitHub identity. When a teammate clones a repo that has a \texttt{.biff}
+file, biff connects them to the right team automatically. There is no
+account to create, no workspace to configure, and no browser to open. Type
+\texttt{/who} to see your teammates.
+
+\prsection{Spokesperson Quote}
+
+\begin{spokespersonquote}
+``We built biff because we watched the best engineers in the world
+disappear into their terminals --- shipping at speeds that make the old
+sprint-and-standup cadence look quaint --- and then lose hours every day to
+communication tools designed for a different era. Slack was built for the
+open-office, always-online workplace. Biff is built for the deep-focus,
+AI-accelerated one. We didn't add a chat feature to the terminal. We
+resurrected the Unix communication vocabulary --- \texttt{write},
+\texttt{wall}, \texttt{finger}, \texttt{who}, \texttt{mesg} --- because
+those commands understood something Slack forgot: communication should be
+purposeful, not ambient.''
+
+\raggedleft --- \textbf{Jim Freeman}, Founder, punt-labs
+\end{spokespersonquote}
+
+\prsection{Call to Action}
+
+Biff is open source and available today at
+\href{https://github.com/punt-labs/biff}{github.com/punt-labs/biff}.
+Install with one command, restart Claude Code, and type \texttt{/who}. The
+core tool and the shared relay are free under the MIT license.
+
+% ── Boilerplate ─────────────────────────────────────────────────────────────
+\vspace{2em}
+\noindent\rule{\textwidth}{0.4pt}
+\vspace{0.5em}
+
+\noindent\textbf{About punt-labs}
+
+\noindent punt-labs builds open-source developer tools for engineers who
+live in the terminal. Its projects include biff (team communication),
+quarry (local semantic search), and a suite of language-learning tools ---
+all built as CLI applications and MCP servers that integrate natively with
+AI coding assistants. More at
+\href{https://github.com/punt-labs}{github.com/punt-labs}.
+
+\end{document}
