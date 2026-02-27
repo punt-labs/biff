@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.12.0 — 2026-02-27
+
+### Added
+
+- **SessionStart collision detection** — when multiple Claude Code sessions are
+  active in the same worktree, the SessionStart hook emits an advisory suggesting
+  `/who` and worktree usage to avoid conflicts. Active session files now include
+  worktree root for precise matching.
+
 ### Fixed
 
 - Installer now refreshes marketplace clone before plugin install, ensuring existing users get the correct `source.ref` pins
