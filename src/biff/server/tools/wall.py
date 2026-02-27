@@ -135,7 +135,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             post = WallPost(
                 text=message,
                 from_user=state.config.user,
-                from_tty=session.tty_name,
+                from_tty=session.tty_name or session.tty,
                 posted_at=now,
                 expires_at=now + ttl,
             )
