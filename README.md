@@ -8,6 +8,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/biff/test.yml?label=CI)](https://github.com/punt-labs/biff/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/punt-biff)](https://pypi.org/project/punt-biff/)
 [![Python](https://img.shields.io/pypi/pyversions/punt-biff)](https://pypi.org/project/punt-biff/)
+[![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
 Named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `talk`, `wall`, `finger`, `who`, and `mesg`. Biff resurrects the Unix communication vocabulary as MCP-native slash commands inside Claude Code.
 
