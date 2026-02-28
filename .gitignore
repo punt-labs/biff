@@ -56,3 +56,7 @@ tests/transcripts/
 
 # OS
 .DS_Store
+
+# Claude Code (settings.json is tracked; everything else is local/runtime)
+.claude/
+!.claude/settings.json
