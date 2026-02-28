@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.12.2 — 2026-02-28
+
+### Fixed
+
+- `gh` CLI check in `biff doctor` is now optional — users without `gh auth login` no longer see a required failure or a non-zero exit code
+- Installer uses `doctor || true` so diagnostic failures don't abort the install script under `set -eu`
+
 ## 0.12.1 — 2026-02-28
 
 ### Fixed
