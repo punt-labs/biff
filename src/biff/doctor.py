@@ -62,6 +62,7 @@ def _check_gh_cli() -> CheckResult:
             "gh CLI",
             False,
             "not found (install: brew install gh)",
+            required=False,
         )
     result = subprocess.run(
         [gh, "auth", "status"],
@@ -70,7 +71,9 @@ def _check_gh_cli() -> CheckResult:
         check=False,
     )
     if result.returncode != 0:
-        return CheckResult("gh CLI", False, "not authenticated (run: gh auth login)")
+        return CheckResult(
+            "gh CLI", False, "not authenticated (run: gh auth login)", required=False
+        )
     return CheckResult("gh CLI", True, "authenticated")
 
 

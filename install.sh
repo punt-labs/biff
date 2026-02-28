@@ -151,7 +151,7 @@ cleanup_https_rewrite
 
 info "Verifying installation..."
 printf '\n'
-"$BINARY" doctor
+"$BINARY" doctor || true
 printf '\n'
 
 # --- Done ---
