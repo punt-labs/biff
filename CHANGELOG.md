@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.12.1 — 2026-02-28
+
+### Fixed
+
+- Installer auto-installs Python 3.13 via `uv python install` when system Python is too old (Ubuntu 24.04 ships 3.12)
+- Installer checks for git before marketplace operations, failing fast with a clear message instead of opaque errors
+- Installer uses uninstall-before-install for idempotency (`claude plugin update` is unreliable)
+- Installer adds read-after-write verification after plugin install
+
 ## 0.12.0 — 2026-02-27
 
 ### Added

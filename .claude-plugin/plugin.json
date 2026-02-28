@@ -1,7 +1,7 @@
 {
   "name": "biff",
   "description": "UNIX-style team communication for Claude Code: /who, /finger, /plan, /write, /read, /mesg, /tty, /last, /wall, /talk",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "author": {
     "name": "Punt Labs",
     "email": "hello@punt-labs.com"
