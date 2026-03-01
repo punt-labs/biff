@@ -424,8 +424,10 @@ class TestBaseSegments:
 
 
 class TestBiffSegment:
-    def test_none_shows_plain(self) -> None:
-        assert _biff_segment(None) == "biff"
+    def test_none_shows_enable_hint(self) -> None:
+        result = _biff_segment(None)
+        assert "/biff y" in result
+        assert "enable" in result
 
     def test_zero_count_shows_identity(self) -> None:
         assert _biff_segment(SessionUnread("kai", 0, "tty1")) == "kai:tty1(0)"
@@ -698,7 +700,8 @@ class TestRunStatusline:
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
-        assert result == f"biff\n{_LINE2_IDLE}"
+        assert "/biff y" in result
+        assert _LINE2_IDLE in result
 
     def test_no_original_with_unreads(self, _mock_key: object, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
@@ -730,7 +733,7 @@ class TestRunStatusline:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
         assert "42%" in result
-        assert "biff" in result
+        assert "/biff y" in result
         assert "(0)" not in result
         assert " | " in result
 
