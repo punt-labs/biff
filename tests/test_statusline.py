@@ -428,6 +428,8 @@ class TestBiffSegment:
         result = _biff_segment(None)
         assert "/biff y" in result
         assert "enable" in result
+        assert "\033[2m" in result
+        assert "\033[0m" in result
 
     def test_zero_count_shows_identity(self) -> None:
         assert _biff_segment(SessionUnread("kai", 0, "tty1")) == "kai:tty1(0)"
