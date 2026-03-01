@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Status line shows dim `/biff y to enable team communication` hint when biff is not enabled for the repo, replacing the unhelpful bare `biff` label
+
 ## 0.12.2 — 2026-02-28
 
 ### Fixed
