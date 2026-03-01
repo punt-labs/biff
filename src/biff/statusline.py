@@ -417,13 +417,13 @@ def _read_session_unread(path: Path) -> SessionUnread | None:
 def _biff_segment(unread: SessionUnread | None) -> str:
     """Format the biff status segment for a single session.
 
-    No file → ``biff`` (plain fallback).
+    No file → dim enable hint (``/biff y to enable team communication``).
     Mesg off → ``user:tty(n)`` plain (regardless of actual count).
     Zero count → ``user:tty(0)`` plain.
     Nonzero → ``user:tty(N)`` bold yellow.
     """
     if unread is None:
-        return "biff"
+        return "\033[2m/biff y to enable team communication\033[0m"
     name = unread.user or "biff"
     if not unread.biff_enabled:
         if unread.tty_name:
