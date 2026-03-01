@@ -191,7 +191,7 @@ Before creating a PR, verify:
 
 - [ ] **Version bumped** in both `pyproject.toml` and `plugin.json` if user-facing behavior changed
 - [ ] **`plugin.json` name is `"biff"`** (not `"biff-dev"`)
-- [ ] **CHANGELOG entry** added under `## Unreleased` or new version section
+- [ ] **CHANGELOG entry included in the PR diff** under `## Unreleased` (not retroactively on main)
 - [ ] **README updated** if user-facing behavior changed
 - [ ] **Quality gates pass**
 - [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m hosted -v`
