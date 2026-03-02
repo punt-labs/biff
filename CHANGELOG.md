@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Talk push notifications from CLI now reach MCP session — `_session` is eagerly captured during `initialize` via `SessionCaptureMiddleware`, fixing the suspenders notification path for NATS callbacks (biff-8g0)
+
 ### Changed
 
 - Status line shows dim `/biff y to enable team communication` hint when biff is not enabled for the repo, replacing the unhelpful bare `biff` label

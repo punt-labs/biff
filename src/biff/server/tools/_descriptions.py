@@ -48,9 +48,27 @@ _DEFAULT_POLL_INTERVAL = 2.0
 _DEFAULT_IDLE_THRESHOLD = 120.0  # 2 minutes — transition to napping
 _DEFAULT_NAP_INTERVAL = 30.0  # 30 seconds — reduced polling while napping
 
-# Updated on every tool call so the background poller can send
-# notifications outside a request context.
+# Captured eagerly during ``initialize`` (via SessionCaptureMiddleware)
+# and refreshed on every tool call (belt path) so the background poller
+# and NATS callbacks can send notifications outside a request context.
+# See notification.tex CaptureSession operation.
 _session: ServerSession | None = None
+
+
+def capture_session(session: ServerSession) -> None:
+    """Eagerly store the MCP session reference.
+
+    Called from :class:`~biff.server.app._SessionCaptureMiddleware`
+    during ``initialize`` so the suspenders notification path is
+    available before any tool call or NATS subscription fires.
+
+    The belt path in :func:`notify_tool_list_changed` continues to
+    refresh the reference on every tool call, keeping it current
+    if the client reconnects.
+    """
+    global _session
+    _session = session
+
 
 # Set by the ``tty`` tool so the unread file includes the session name.
 _tty_name: str = ""
