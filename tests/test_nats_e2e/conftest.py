@@ -19,9 +19,10 @@ from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
-from biff.server.state import create_state
+from biff.server.state import ServerState, create_state
+from biff.server.tools._descriptions import _reset_session
 from biff.server.tools.talk import _reset_talk
-from biff.testing import RecordingClient, Transcript
+from biff.testing import NotificationTracker, RecordingClient, Transcript
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 _TEST_REPO = "_test-nats-e2e"
@@ -112,3 +113,37 @@ async def eric(
 ) -> RecordingClient:
     """Recording client for eric in NATS E2E tests."""
     return RecordingClient(client=eric_client, transcript=transcript, user="eric")
+
+
+@pytest.fixture
+async def kai_tracked(
+    nats_server: str, shared_data_dir: Path
+) -> AsyncIterator[tuple[Client[Any], NotificationTracker, ServerState]]:
+    """MCP client for kai with notification tracking and NatsRelay."""
+    _reset_session()
+    _reset_talk()
+    tracker = NotificationTracker()
+    config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
+    state = create_state(
+        config, shared_data_dir / "kai", tty="tty1", hostname="test-host", pwd="/test"
+    )
+    mcp = create_server(state)
+    async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
+        yield client, tracker, state
+    _reset_session()
+    _reset_talk()
+
+
+@pytest.fixture
+async def eric_tracked(
+    nats_server: str, shared_data_dir: Path
+) -> AsyncIterator[tuple[Client[Any], NotificationTracker, ServerState]]:
+    """MCP client for eric with notification tracking and NatsRelay."""
+    tracker = NotificationTracker()
+    config = BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server)
+    state = create_state(
+        config, shared_data_dir / "eric", tty="tty2", hostname="test-host", pwd="/test"
+    )
+    mcp = create_server(state)
+    async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
+        yield client, tracker, state

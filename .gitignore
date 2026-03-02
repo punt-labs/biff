@@ -60,3 +60,11 @@ tests/transcripts/
 # Claude Code (settings.json is tracked; everything else is local/runtime)
 .claude/
 !.claude/settings.json
+docs/fuzz.sty
+docs/*.mf
+docs/*.pk
+docs/*.tfm
+docs/*.aux
+docs/*.log
+docs/*.fuzz
+docs/*.toc
