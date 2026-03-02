@@ -221,9 +221,7 @@ See [Agent Workflow](docs/AGENT_WORKFLOW.md) for patterns and examples.
 
 ## Vision
 
-Biff is built on a simple thesis: the terminal is the new center of gravity for software engineering, and the communication tools haven't caught up. Slack was built for the open-office, always-online workplace. Biff is built for the deep-focus, AI-accelerated one.
-
-Every command implies intent. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
+Biff assumes the terminal is where you're already working — so that's where your team communication should be. Every command implies intent. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
 
 ## Roadmap
 
