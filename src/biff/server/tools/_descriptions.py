@@ -48,6 +48,13 @@ _DEFAULT_POLL_INTERVAL = 2.0
 _DEFAULT_IDLE_THRESHOLD = 120.0  # 2 minutes — transition to napping
 _DEFAULT_NAP_INTERVAL = 30.0  # 30 seconds — reduced polling while napping
 
+MAX_UNREAD_COUNT: int = 100
+"""Maximum unread count written to the status file.
+
+Corresponds to ``maxUnreadCount`` in the Z specification
+(notification.tex §4).  Counts above this are clamped.
+"""
+
 # Captured eagerly during ``initialize`` (via SessionCaptureMiddleware)
 # and refreshed on every tool call (belt path) so the background poller
 # and NATS callbacks can send notifications outside a request context.
@@ -550,10 +557,11 @@ def _write_unread_file(
     items_list: list[dict[str, str]] = [
         {"kind": item.kind, "text": item.text} for item in (display_items or [])
     ]
+    clamped_count = min(summary.count, MAX_UNREAD_COUNT)
     data: dict[str, object] = {
         "user": user,
         "repo": repo_name,
-        "count": summary.count,
+        "count": clamped_count,
         "tty_name": tty_name,
         "biff_enabled": biff_enabled,
         "display_items": items_list,

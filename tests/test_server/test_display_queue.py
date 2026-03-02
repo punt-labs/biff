@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from biff.server.display_queue import DisplayItem, DisplayQueue
+from biff.server.display_queue import MAX_QUEUE_SIZE, DisplayItem, DisplayQueue
 
 
 class _FakeClock:
@@ -61,6 +61,18 @@ class TestAdd:
         q = DisplayQueue()
         q.add(_wall())
         assert q.add(_wall()) is False
+
+    def test_evicts_oldest_when_full(self) -> None:
+        q = DisplayQueue()
+        for i in range(MAX_QUEUE_SIZE):
+            q.add(_wall(key=f"wall:{i}", text=f"item {i}"))
+        assert len(q.snapshot()) == MAX_QUEUE_SIZE
+        # Adding one more evicts the oldest (index 0)
+        q.add(_wall(key="wall:overflow", text="new"))
+        assert len(q.snapshot()) == MAX_QUEUE_SIZE
+        keys = [item.source_key for item in q.snapshot()]
+        assert "wall:0" not in keys
+        assert "wall:overflow" in keys
 
     def test_different_source_keys_are_not_duplicates(self) -> None:
         q = DisplayQueue()

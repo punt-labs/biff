@@ -10,11 +10,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from biff.models import BiffConfig, Message, WallPost
+from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
+    MAX_UNREAD_COUNT,
+    _write_unread_file,
     poll_inbox,
     refresh_read_messages,
 )
@@ -161,6 +163,20 @@ class TestUnreadFile:
         await refresh_read_messages(mcp, state_with_path)
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
+
+    async def test_clamps_unread_count_at_max(self, tmp_path: Path) -> None:
+        path = tmp_path / "unread.json"
+        summary = UnreadSummary(count=999)
+        _write_unread_file(
+            path,
+            summary,
+            repo_name=_TEST_REPO,
+            user="kai",
+            tty_name="tty1",
+            biff_enabled=True,
+        )
+        data = json.loads(path.read_text())
+        assert data["count"] == MAX_UNREAD_COUNT
 
     async def test_no_write_when_path_is_none(self, state: ServerState) -> None:
         assert state.unread_path is None

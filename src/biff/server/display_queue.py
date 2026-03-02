@@ -42,6 +42,13 @@ class DisplayItem:
 
 type ClockFn = Callable[[], float]
 
+MAX_QUEUE_SIZE: int = 20
+"""Maximum number of items in the display rotation queue.
+
+Corresponds to ``maxQueueSize`` in the Z specification
+(notification.tex §4).
+"""
+
 
 class DisplayQueue:
     """Rotation queue for status bar line 2 display items.
@@ -81,6 +88,8 @@ class DisplayQueue:
         for existing in self._items:
             if existing.source_key == item.source_key:
                 return False
+        if len(self._items) >= MAX_QUEUE_SIZE:
+            self._remove_at(0)
         was_empty = len(self._items) == 0
         self._items.append(item)
         if was_empty:
