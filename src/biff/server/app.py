@@ -13,15 +13,22 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from biff.models import SessionEvent, UserSession
+
+if TYPE_CHECKING:
+    from mcp.types import InitializeRequest, InitializeResult
+
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import LocalRelay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
+    capture_session,
     get_tty_name,
     poll_inbox,
     refresh_read_messages,
@@ -33,6 +40,33 @@ from biff.server.tools.tty import next_tty_name
 from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
+
+
+class _SessionCaptureMiddleware(Middleware):
+    """Capture the MCP session during ``initialize``.
+
+    Corresponds to the ``CaptureSession`` operation in the Z
+    specification (notification.tex §6).  Ensures the suspenders
+    notification path has a valid session reference before any
+    tool call or NATS subscription can fire.
+
+    The MCP session does not exist during the server lifespan
+    (it is created when the client sends ``initialize``), so
+    this middleware is the earliest possible capture point.
+    """
+
+    async def on_initialize(
+        self,
+        context: MiddlewareContext[InitializeRequest],
+        call_next: CallNext[InitializeRequest, InitializeResult | None],
+    ) -> InitializeResult | None:
+        result = await call_next(context)
+        if context.fastmcp_context is not None:
+            try:
+                capture_session(context.fastmcp_context.session)
+            except RuntimeError:
+                logger.debug("Session not available during initialize")
+        return result
 
 
 def _active_dir() -> Path:
@@ -600,5 +634,6 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         lifespan=lifespan,
     )
 
+    mcp.add_middleware(_SessionCaptureMiddleware())
     register_all_tools(mcp, state)
     return mcp

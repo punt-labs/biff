@@ -7,47 +7,32 @@ Client -> FastMCPTransport -> FastMCP server -> tool closure -> response.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 from fastmcp import Client
-from fastmcp.client.messages import MessageHandler
 from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent
 
 from biff.models import UserSession
 from biff.server.app import create_server
 from biff.server.state import ServerState
+from biff.testing import NotificationTracker
 
 from .conftest import CallToolResult
 
-if TYPE_CHECKING:
-    from mcp import types as mcp_types
-
 _ERIC_TTY = "tty2"
-
-
-class _NotificationTracker(MessageHandler):
-    """Message handler that counts tools/list_changed notifications."""
-
-    def __init__(self) -> None:
-        self.tool_list_changed_count = 0
-
-    async def on_tool_list_changed(  # pyright: ignore[reportUnusedParameter]
-        self, message: mcp_types.ToolListChangedNotification
-    ) -> None:
-        self.tool_list_changed_count += 1
 
 
 @pytest.fixture
 async def tracked_client(
     state: ServerState,
-) -> AsyncIterator[tuple[Client[Any], _NotificationTracker]]:
+) -> AsyncIterator[tuple[Client[Any], NotificationTracker]]:
     """MCP client with notification tracking."""
     from biff.server.tools._descriptions import _reset_session
 
     _reset_session()
-    tracker = _NotificationTracker()
+    tracker = NotificationTracker()
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
         yield client, tracker
@@ -59,6 +44,48 @@ def _text(result: CallToolResult) -> str:
     block = result.content[0]
     assert isinstance(block, TextContent)
     return block.text
+
+
+class TestSessionCapture:
+    """Verify CaptureSession: session captured during initialize (biff-8g0 fix)."""
+
+    async def test_session_captured_on_initialize(
+        self,
+        tracked_client: tuple[Client[Any], NotificationTracker],
+    ) -> None:
+        """Session reference is captured during initialize, not first tool call.
+
+        Before the fix, _session was None until the first tool call's belt
+        path captured it.  The SessionCaptureMiddleware now captures it
+        during on_initialize, corresponding to the CaptureSession operation
+        in notification.tex §6.
+        """
+        import biff.server.tools._descriptions as desc
+
+        # No tool call has been made — only initialize has fired.
+        # The middleware should have captured the session.
+        assert desc._session is not None
+
+    async def test_suspenders_path_before_first_tool_call(
+        self,
+        tracked_client: tuple[Client[Any], NotificationTracker],
+    ) -> None:
+        """Suspenders notification works before any tool call (biff-8g0 fix).
+
+        Calls notify_tool_list_changed() outside tool context.  Before the
+        fix, this was a no-op (session None).  After the fix, the stored
+        session from on_initialize is used.
+        """
+        import asyncio
+
+        import biff.server.tools._descriptions as desc
+
+        _, tracker = tracked_client
+        before = tracker.tool_list_changed_count
+        # Simulate what the poller does: send notification outside tool context
+        await desc.notify_tool_list_changed()
+        await asyncio.sleep(0.05)
+        assert tracker.tool_list_changed_count > before
 
 
 class TestToolListing:
@@ -279,7 +306,7 @@ class TestDynamicDescriptionProtocol:
 
     async def test_fires_tool_list_changed_notification(
         self,
-        tracked_client: tuple[Client[Any], _NotificationTracker],
+        tracked_client: tuple[Client[Any], NotificationTracker],
         state: ServerState,
     ) -> None:
         """Tool call that changes the description sends list_changed."""
@@ -300,7 +327,7 @@ class TestDynamicDescriptionProtocol:
 
     async def test_no_notification_when_description_unchanged(
         self,
-        tracked_client: tuple[Client[Any], _NotificationTracker],
+        tracked_client: tuple[Client[Any], NotificationTracker],
     ) -> None:
         """Tool call with no description change skips notification."""
         client, tracker = tracked_client

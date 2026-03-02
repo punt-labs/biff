@@ -1607,3 +1607,204 @@ This was based on the incorrect hypothesis that `_session.send_tool_list_changed
 failed from the NATS callback context.  The real issue was that the notification
 delivered correctly but Claude Code saw no tool description change, so no re-render
 occurred.
+
+---
+
+## DES-021: Suspenders Path Session Capture Bug — `_session` Never Initialized
+
+**Date:** 2026-03-02
+**Status:** RESOLVED (PR #96)
+**Related:** DES-004 (Belt-and-Suspenders), DES-020 (Talk Description Mutation)
+**Bead:** biff-8g0
+**Specification:** `docs/notification.tex` (Z specification)
+
+### Problem
+
+Talk push notifications from CLI to MCP session are broken.  The NATS latency
+diagnostic (`test_notification_latency.py`) proved core pub/sub delivers reliably
+in under 1ms.  DES-020 fixed the tool description mutation gap (Claude Code now
+sees a changed description).  Yet `notifications/tools/list_changed` still does
+not reach the client.
+
+### Root Cause
+
+The suspenders path in `notify_tool_list_changed()` (line 143 of
+`_descriptions.py`) requires a stored `ServerSession` reference:
+
+```python
+if _session is not None:
+    await _session.send_tool_list_changed()
+```
+
+`_session` is **only** set inside the belt path (line 135):
+
+```python
+ctx = get_context()
+await ctx.send_notification(ToolListChangedNotification())
+_session = ctx.session  # <-- only assignment
+```
+
+The belt path only runs when `notify_tool_list_changed()` is called from inside
+a tool handler (where `get_context()` succeeds).  But
+`notify_tool_list_changed()` is only called when a tool description actually
+changes (the `if tool.description != old_desc` guard in `refresh_read_messages`,
+`refresh_wall`, and `refresh_talk`).
+
+In the talk push notification path, the sequence is:
+
+1. User calls `/plan` (0 unread → description stays `_READ_MESSAGES_BASE` → no
+   change → `notify_tool_list_changed()` never called → `_session` stays `None`)
+2. User calls `/talk @eric` (talk tool doesn't call `refresh_read_messages` when
+   no opening message → `_session` still `None`)
+3. Poller tick establishes NATS subscription via `_manage_talk_subscription`
+4. External NATS notification arrives → `_on_talk_msg` → `refresh_talk` →
+   `notify_tool_list_changed()` → belt path fails (`RuntimeError`: no request
+   context in a NATS callback) → suspenders path finds `_session is None` →
+   **notification silently dropped**
+
+The description mutation works — the talk tool description DOES update to
+`[TALK] @eric: message`.  The client discovers this on the next `list_tools()`
+poll.  But the *push* notification that tells the client to re-read never fires.
+
+### Evidence
+
+Five integration tests in `tests/test_nats_e2e/test_talk_push.py` exercise the
+full `_on_talk_msg` → `refresh_talk` → `notify_tool_list_changed` chain:
+
+| Test | Result | Proves |
+|------|--------|--------|
+| `test_notification_updates_talk_description` | PASS | `_on_talk_msg` correctly mutates the talk tool description |
+| `test_notification_fires_tool_list_changed` | PASS | Suspenders path delivers notification (was xfail before fix) |
+| `test_notification_adds_display_item` | PASS | Display queue receives talk items correctly |
+| `test_notification_coalesces_rapid_messages` | PASS | Rapid messages produce exactly 1 display item |
+| `test_self_echo_rejected` | PASS | Self-echo filter works (own `from_key` ignored) |
+
+### Why This Was Not Caught Earlier
+
+DES-004 describes `_session` capture as happening "from the first tool call."
+This is true only if the first tool call triggers a description change.  The
+integration tests in `test_protocol.py` always deliver a message before calling
+a tool, guaranteeing a description change → belt path → `_session` captured.
+The NATS E2E tests exercise the real startup sequence where no messages exist
+yet.
+
+### Impact
+
+The talk tool description updates work (server-side mutation is correct), but
+Claude Code is never notified to re-read.  The human sees talk messages on the
+status bar (channel 2, the unread file), but the model does not see the changed
+tool description until its next tool call triggers `list_tools()`.  This means
+Claude cannot proactively respond to incoming talk messages.
+
+### Resolution: Approach A — `SessionCaptureMiddleware`
+
+Approach A (middleware) was chosen over Approach B (unconditional refresh capture).
+The middleware is cleaner because it captures the session at the *earliest possible
+point* — during `on_initialize`, before any tool call or NATS subscription fires.
+This is stronger than Approach B, which would still require a tool call to trigger.
+
+#### Z Specification
+
+The fix was modeled formally in `docs/notification.tex` before implementation.
+The specification defines the `CaptureSession` operation (§6) and the key state
+invariant:
+
+> `natsConn = natsConnected ⟹ session = sessCaptured`
+
+This invariant makes the bug class structurally impossible.  The specification
+was type-checked with fuzz (zero errors) and compiled to PDF.
+
+#### Implementation
+
+**`_SessionCaptureMiddleware`** (`src/biff/server/app.py`):
+
+```python
+class _SessionCaptureMiddleware(Middleware):
+    async def on_initialize(self, context, call_next):
+        result = await call_next(context)
+        if context.fastmcp_context is not None:
+            capture_session(context.fastmcp_context.session)
+        return result
+```
+
+**`capture_session()`** (`src/biff/server/tools/_descriptions.py`):
+
+Sets the module-level `_session` reference.  The belt path in
+`notify_tool_list_changed()` continues to refresh it on every tool call,
+keeping it current if the client reconnects.
+
+**Why `on_initialize` works:** The MCP session does not exist during the server
+lifespan (created when the client sends `initialize` after `yield state`).
+FastMCP's `MiddlewareServerSession._received_request()` creates a
+`Context(session=self)` for `InitializeRequest`, and the `Context.session`
+property has a fallback path that returns `self._session` during `on_initialize`.
+
+**Temporal safety:** NATS talk subscriptions are only created during tool calls
+(via `_manage_talk_subscription` in `poll_inbox`), which happen after
+`initialize`.  So the session is always captured before any callback fires.
+
+#### Startup Sequence (matches Z spec §12)
+
+1. `Init` — all state zeroed, NATS disconnected, session uncaptured
+2. `CaptureSession` — middleware captures session during `on_initialize`
+3. `EnsureConnected` — NATS connects (invariant satisfied: session captured)
+4. Poller starts, subscriptions begin — suspenders path available
+
+#### Audit-Driven Bounds Enforcement
+
+A `/z-spec:audit` against the test suite found two spec-code divergences where
+the Z specification declared bounds that the code did not enforce:
+
+| Spec Constant | Code Constant | Enforcement |
+|---------------|---------------|-------------|
+| `maxQueueSize = 20` | `MAX_QUEUE_SIZE` in `display_queue.py` | `DisplayQueue.add()` evicts oldest item when full |
+| `maxUnreadCount = 100` | `MAX_UNREAD_COUNT` in `_descriptions.py` | `_write_unread_file` clamps count |
+
+The audit also identified that the `test_notification_fires_tool_list_changed`
+xfail marker should now pass — it was removed.
+
+### Why Approach B Was Rejected
+
+Approach B (capture in `refresh_*` unconditionally) would have been a smaller
+diff but weaker guarantee.  It still requires *some* tool call to trigger the
+first capture.  In the talk push path, the NATS callback can fire before any
+tool call triggers a `refresh_*` function.  Approach A eliminates this race by
+capturing during `initialize` — the earliest possible point.
+
+### Test Coverage
+
+**Integration tests** (`tests/test_integration/test_protocol.py`):
+
+| Test | Proves |
+|------|--------|
+| `test_session_captured_on_initialize` | `_session is not None` after initialize — no tool call needed |
+| `test_suspenders_path_before_first_tool_call` | `notify_tool_list_changed()` works outside tool context |
+
+**NATS E2E tests** (`tests/test_nats_e2e/test_talk_push.py`):
+
+| Test | Result | Proves |
+|------|--------|--------|
+| `test_notification_updates_talk_description` | PASS | `_on_talk_msg` correctly mutates the talk tool description |
+| `test_notification_fires_tool_list_changed` | PASS | Suspenders path delivers notification (was xfail, now passes) |
+| `test_notification_adds_display_item` | PASS | Display queue receives talk items correctly |
+| `test_notification_coalesces_rapid_messages` | PASS | Rapid messages produce exactly 1 display item |
+| `test_self_echo_rejected` | PASS | Self-echo filter works (own `from_key` ignored) |
+
+**Bounds tests** (from Z spec audit):
+
+| Test | File | Proves |
+|------|------|--------|
+| `test_evicts_oldest_when_full` | `test_display_queue.py` | `MAX_QUEUE_SIZE=20` enforced |
+| `test_clamps_unread_count_at_max` | `test_descriptions.py` | `MAX_UNREAD_COUNT=100` enforced |
+
+### Test Infrastructure
+
+- **`src/biff/testing/notifications.py`** — Reusable `NotificationTracker`
+  (`MessageHandler` subclass that counts `tool_list_changed` notifications).
+  Exported from `biff.testing`.
+- **`tests/test_nats_e2e/conftest.py`** — `kai_tracked` and `eric_tracked`
+  fixtures yielding `(Client, NotificationTracker, ServerState)` tuples with
+  NatsRelay backing.
+- **`tests/test_nats_e2e/test_talk_push.py`** — Five tests exercising the full
+  push notification chain.  Reusable `_publish_talk_notification` and
+  `_wait_for_talk_description` helpers.

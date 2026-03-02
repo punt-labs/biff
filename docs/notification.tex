@@ -1,0 +1,845 @@
+%
+% notification.tex
+%
+% Z Specification for Biff Notification System
+% Formal model of NATS connection, MCP server, filesystem, and
+% status bar states and transitions in the send and receive flow.
+%
+% Corrected model: eager session capture during server lifespan
+% ensures the suspenders path always has a valid session reference.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Notification System: A Z Specification}
+\author{Formal Model of Push Notification State Transitions}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Biff Notification System: A Z Specification},
+  pdfauthor={punt-labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+Biff's push notification system delivers real-time updates (wall
+broadcasts and talk messages) to Claude~Code's status bar through two
+independent channels: the MCP protocol (fast, tool-list-changed
+notification) and a filesystem status file (slow, polled by the status
+bar command).
+
+The notification pipeline has a ``belt and suspenders'' design: tool
+handlers fire notifications via the MCP request context (belt path),
+while a background poller and NATS callbacks fire them via a stored
+\texttt{ServerSession} reference (suspenders path).
+
+The session reference is captured eagerly during the server's lifespan
+startup, before the NATS connection is established and before the
+background poller begins.  This ensures the suspenders path always has
+a valid session reference whenever it needs to fire a notification.
+
+The key invariant is: \emph{a connected NATS client implies a captured
+session}.  Since NATS subscription is the mechanism that delivers
+external talk messages, and since the session is captured before NATS
+connects, every callback and poller tick has a valid notification path.
+
+This specification models the four state spaces---NATS connection,
+MCP server session, filesystem, and status bar---and the operations
+that transition them during the wall and talk notification flows.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  [USER, MSG, SOURCEKEY]
+\end{zed}
+
+$USER$ identifies a biff user.  $MSG$ is an opaque message body.
+$SOURCEKEY$ uniquely identifies a display queue item (e.g.\
+\texttt{wall:2026-03-01T12:00:00} or \texttt{talk:eric}).
+
+%%----------------------------------------------------------------------
+\section{Free Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  NatsState ::= natsDisconnected | natsConnected | natsClosed
+\end{zed}
+
+The NATS client connection lifecycle: initially disconnected, lazily
+connected on first use, and permanently closed on shutdown.
+
+\begin{zed}
+  SessionState ::= sessNone | sessCaptured
+\end{zed}
+
+The MCP \texttt{ServerSession} reference: either not yet captured
+(\texttt{sessNone}) or captured during server lifespan startup
+(\texttt{sessCaptured}).  Once captured, the session reference
+is never invalidated.
+
+\begin{zed}
+  ItemKind ::= itemWall | itemTalk
+\end{zed}
+
+Display queue items are either persistent wall announcements or
+ephemeral talk messages.
+
+\begin{zed}
+  NotifyResult ::= notifySent | notifyDropped
+\end{zed}
+
+The outcome of a \texttt{notify\_tool\_list\_changed} attempt.
+In the corrected system, $notifyDropped$ is only the initial
+default value; all notification-triggering operations produce
+$notifySent$.
+
+%%----------------------------------------------------------------------
+\section{Global Constants}
+%%----------------------------------------------------------------------
+
+\begin{axdef}
+  maxQueueSize : \nat \\
+  maxUnreadCount : \nat
+  \where
+  maxQueueSize = 20 \\
+  maxUnreadCount = 100
+\end{axdef}
+
+Default descriptions and the idle marker are opaque constants:
+
+\begin{axdef}
+  wallDescDefault : MSG \\
+  talkDescDefault : MSG \\
+  idleMarker : MSG
+\end{axdef}
+
+%%----------------------------------------------------------------------
+\section{State}
+%%----------------------------------------------------------------------
+
+The system state is flattened into a single schema for ProB
+compatibility.  It covers four subsystems: NATS connection state,
+MCP session capture, the display queue, the filesystem status file,
+the status bar, and the last notification outcome.
+
+\begin{schema}{NotificationState}
+  natsConn : NatsState \\
+  kvProvisioned : ZBOOL \\
+  talkSubscribed : ZBOOL \\
+  session : SessionState \\
+  toolContext : ZBOOL \\
+  wallDesc : MSG \\
+  talkDesc : MSG \\
+  wallDescChanged : ZBOOL \\
+  talkDescChanged : ZBOOL \\
+  queueItems : \seq SOURCEKEY \\
+  queueKinds : SOURCEKEY \pfun ItemKind \\
+  queueTexts : SOURCEKEY \pfun MSG \\
+  currentIndex : \nat \\
+  fileExists : ZBOOL \\
+  fileUnreadCount : \nat \\
+  fileItems : \seq SOURCEKEY \\
+  barLine2 : MSG \\
+  barStale : ZBOOL \\
+  lastNotifyResult : NotifyResult
+  \where
+  \dom queueKinds = \ran queueItems \\
+  \dom queueTexts = \ran queueItems \\
+  \# queueItems \leq maxQueueSize \\
+  (queueItems \neq \langle \rangle \implies
+  currentIndex < \# queueItems) \\
+  (queueItems = \langle \rangle \implies
+  currentIndex = 0) \\
+  fileUnreadCount \leq maxUnreadCount \\
+  (talkSubscribed = ztrue \implies
+  natsConn = natsConnected) \\
+  (kvProvisioned = ztrue \implies
+  natsConn = natsConnected) \\
+  (natsConn = natsConnected \implies
+  session = sessCaptured)
+\end{schema}
+
+Key invariants: queue metadata maps have the same domain as the
+queue sequence range; subscription and KV require a live connection;
+the current index is always within bounds.  The critical invariant
+is the last: \emph{a connected NATS client implies a captured session}.
+This ensures the suspenders notification path is always available
+when NATS callbacks fire.
+
+%%----------------------------------------------------------------------
+\section{Initialization}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Init}
+  NotificationState'
+  \where
+  natsConn' = natsDisconnected \\
+  kvProvisioned' = zfalse \\
+  talkSubscribed' = zfalse \\
+  session' = sessNone \\
+  toolContext' = zfalse \\
+  wallDesc' = wallDescDefault \\
+  talkDesc' = talkDescDefault \\
+  wallDescChanged' = zfalse \\
+  talkDescChanged' = zfalse \\
+  queueItems' = \langle \rangle \\
+  queueKinds' = \emptyset \\
+  queueTexts' = \emptyset \\
+  currentIndex' = 0 \\
+  fileExists' = zfalse \\
+  fileUnreadCount' = 0 \\
+  fileItems' = \langle \rangle \\
+  barLine2' = idleMarker \\
+  barStale' = ztrue \\
+  lastNotifyResult' = notifyDropped
+\end{schema}
+
+The initial state has $session' = sessNone$ and
+$natsConn' = natsDisconnected$.  The invariant
+$natsConn = natsConnected \implies session = sessCaptured$
+holds vacuously because $natsConn \neq natsConnected$.
+
+%%----------------------------------------------------------------------
+\section{Session Capture}
+%%----------------------------------------------------------------------
+
+The MCP server lifespan startup captures the session reference
+eagerly, before the NATS connection is established and before the
+background poller begins.  This is the key operation that prevents
+the biff-8g0 bug class: by the time any NATS callback can fire,
+the session is guaranteed to be captured.
+
+\begin{schema}{CaptureSession}
+  \Delta NotificationState
+  \where
+  session = sessNone \\
+  natsConn = natsDisconnected \\
+  session' = sessCaptured \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+After $CaptureSession$, the system has $session = sessCaptured$
+with $natsConn = natsDisconnected$.  The invariant holds, and
+$EnsureConnected$ can now be applied---the resulting post-state
+$natsConn' = natsConnected \land session' = sessCaptured$ satisfies
+the invariant.
+
+%%----------------------------------------------------------------------
+\section{NATS Connection Operations}
+%%----------------------------------------------------------------------
+
+\subsection{Ensure Connected}
+
+Lazy connection: transitions from disconnected to connected,
+provisioning KV and stream infrastructure.  Idempotent when
+already connected.
+
+The state invariant
+$natsConn = natsConnected \implies session = sessCaptured$
+creates an implicit precondition: since this operation sets
+$natsConn' = natsConnected$ and preserves $session' = session$,
+the post-state requires $session = sessCaptured$.  The system
+must execute $CaptureSession$ before $EnsureConnected$.
+
+\begin{schema}{EnsureConnected}
+  \Delta NotificationState
+  \where
+  natsConn = natsDisconnected \lor natsConn = natsConnected \\
+  natsConn' = natsConnected \\
+  kvProvisioned' = ztrue \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\subsection{Close Connection}
+
+Permanent shutdown.  Clears all NATS-dependent state.  The session
+reference is preserved---it is not invalidated by disconnection.
+The invariant holds because $natsConn' = natsClosed$, so the
+antecedent $natsConn = natsConnected$ is false.
+
+\begin{schema}{CloseConnection}
+  \Delta NotificationState
+  \where
+  natsConn' = natsClosed \\
+  kvProvisioned' = zfalse \\
+  talkSubscribed' = zfalse \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Notification Core}
+%%----------------------------------------------------------------------
+
+This is the central mechanism.  Two paths send the MCP
+\texttt{tools/list\_changed} notification.  Both always succeed.
+
+\subsection{Belt Path (Tool Context Available)}
+
+Inside a tool handler: notification piggybacks on the MCP response.
+This is the preferred path when tool context is available because
+it guarantees synchronous delivery within the request-response cycle.
+
+\begin{schema}{NotifyBelt}
+  \Delta NotificationState
+  \where
+  toolContext = ztrue \\
+  lastNotifyResult' = notifySent \\
+  session' = session \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = zfalse \\
+  talkDescChanged' = zfalse \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = zfalse
+\end{schema}
+
+\subsection{Suspenders Path (No Tool Context)}
+
+Background poller or NATS callback: no request context, but the
+eagerly captured session reference is used to send the notification.
+The state invariant guarantees $session = sessCaptured$ whenever
+NATS is connected, so this path always succeeds when needed.
+
+\begin{schema}{NotifySuspenders}
+  \Delta NotificationState
+  \where
+  toolContext = zfalse \\
+  session = sessCaptured \\
+  lastNotifyResult' = notifySent \\
+  session' = session \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = zfalse \\
+  talkDescChanged' = zfalse \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = zfalse
+\end{schema}
+
+\subsection{Total Notification}
+
+The complete notification operation is the disjunction of the two
+paths.  Exactly one fires: $NotifyBelt$ when $toolContext = ztrue$,
+$NotifySuspenders$ when $toolContext = zfalse$.
+
+Because the state invariant guarantees $session = sessCaptured$
+whenever NATS is connected, and because all notification-triggering
+operations require a NATS connection, $NotifySuspenders$ is always
+applicable when $toolContext = zfalse$ and a description has changed.
+No notification is ever dropped.
+
+%%----------------------------------------------------------------------
+\section{Send Flow Operations}
+%%----------------------------------------------------------------------
+
+\subsection{Wall Post (Tool Handler)}
+
+The wall tool executes inside a tool handler context.  It
+mutates the wall description, adds a display item, and fires
+notification via the belt path.  The precondition requires
+tool context and a live NATS connection.
+
+\begin{schema}{WallPost}
+  \Delta NotificationState \\
+  wallText? : MSG \\
+  wallKey? : SOURCEKEY
+  \where
+  toolContext = ztrue \\
+  natsConn = natsConnected \\
+  wallDesc' \neq wallDesc \\
+  wallDescChanged' = ztrue \\
+  (wallKey? \notin \ran queueItems \implies
+    queueItems' = queueItems \cat \langle wallKey? \rangle \land
+    queueKinds' = queueKinds \cup \{ wallKey? \mapsto itemWall \} \land
+  queueTexts' = queueTexts \cup \{ wallKey? \mapsto wallText? \}) \\
+  (wallKey? \in \ran queueItems \implies
+    queueItems' = queueItems \land
+    queueKinds' = queueKinds \land
+  queueTexts' = queueTexts) \\
+  session' = session \\
+  lastNotifyResult' = notifySent \\
+  barStale' = zfalse \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = zfalse \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2
+\end{schema}
+
+\subsection{Talk Start (Tool Handler)}
+
+The talk tool initiates a conversation.  Runs inside tool context,
+and arranges for the background poller to subscribe to NATS talk
+notifications.
+
+\begin{schema}{TalkStart}
+  \Delta NotificationState \\
+  partner? : USER
+  \where
+  toolContext = ztrue \\
+  natsConn = natsConnected \\
+  session' = session \\
+  lastNotifyResult' = notifySent \\
+  talkSubscribed' = ztrue \\
+  barStale' = zfalse \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  wallDescChanged' = zfalse \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = zfalse \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2
+\end{schema}
+
+\subsection{External Message Deliver (CLI)}
+
+A CLI client or another MCP server delivers a message via NATS.
+This publishes to JetStream (reliable) and then publishes a
+talk notification on core NATS (fire-and-forget).  No tool
+context exists on the sender side.  The receiver's $NatsTalkCallback$
+handles the receive-side effects.
+
+\begin{schema}{ExternalDeliver}
+  \Delta NotificationState \\
+  body? : MSG \\
+  toUser? : USER
+  \where
+  natsConn = natsConnected \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Receive Flow Operations}
+%%----------------------------------------------------------------------
+
+\subsection{NATS Talk Callback}
+
+Fires when a core NATS message arrives on the talk notification
+subject.  Runs \emph{outside} any tool handler context.  Mutates the
+talk description, adds the talk item to the display queue, and
+fires notification via the suspenders path.
+
+The precondition $talkSubscribed = ztrue$ implies
+$natsConn = natsConnected$ (by state invariant), which in turn implies
+$session = sessCaptured$.  Therefore the suspenders path always
+succeeds---the notification is never dropped.
+
+\begin{schema}{NatsTalkCallback}
+  \Delta NotificationState \\
+  senderBody? : MSG \\
+  senderKey? : SOURCEKEY
+  \where
+  talkSubscribed = ztrue \\
+  toolContext = zfalse \\
+  talkDesc' \neq talkDesc \\
+  talkDescChanged' = ztrue \\
+  queueItems' = queueItems \cat \langle senderKey? \rangle \\
+  queueKinds' = queueKinds \oplus \{ senderKey? \mapsto itemTalk \} \\
+  queueTexts' = queueTexts \oplus \{ senderKey? \mapsto senderBody? \} \\
+  currentIndex' = \# queueItems \\
+  lastNotifyResult' = notifySent \\
+  barStale' = zfalse \\
+  session' = session \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  wallDescChanged' = zfalse \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2
+\end{schema}
+
+\subsection{Sync Unread File}
+
+Writes the display queue snapshot to the filesystem status file.
+Called after any state change that affects what the status bar shows.
+
+\begin{schema}{SyncUnreadFile}
+  \Delta NotificationState \\
+  count? : \nat
+  \where
+  count? \leq maxUnreadCount \\
+  fileExists' = ztrue \\
+  fileUnreadCount' = count? \\
+  fileItems' = queueItems \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\subsection{Poll Tick (Background Poller)}
+
+The 2-second background poller tick.  Runs outside tool context.
+If a description has changed, fires notification via the suspenders
+path.  The state invariant guarantees $session = sessCaptured$
+whenever NATS is connected, so the suspenders path always succeeds.
+Clears the changed flags regardless.
+
+\begin{schema}{PollTick}
+  \Delta NotificationState
+  \where
+  toolContext = zfalse \\
+  ((wallDescChanged = ztrue \lor talkDescChanged = ztrue) \implies
+  lastNotifyResult' = notifySent \land barStale' = zfalse) \\
+  ((wallDescChanged = zfalse \land talkDescChanged = zfalse) \implies
+  lastNotifyResult' = lastNotifyResult \land barStale' = barStale) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = zfalse \\
+  talkDescChanged' = zfalse \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2
+\end{schema}
+
+\subsection{Status Bar Refresh}
+
+Claude~Code polls the status line command on its own schedule.
+Reads the filesystem status file and updates the display.
+This is the slow path---no MCP involvement.
+
+\begin{schema}{StatusBarRefresh}
+  \Delta NotificationState
+  \where
+  (fileExists = ztrue \land fileItems \neq \langle \rangle \implies
+  barLine2' \neq idleMarker) \\
+  (fileExists = zfalse \implies
+  barLine2' = idleMarker) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Display Queue Operations}
+%%----------------------------------------------------------------------
+
+\subsection{Advance If Due}
+
+Rotation: wall items cycle (persistent), talk items are
+ephemeral (removed after one display turn).  The $currentIndex + 1$
+expression indexes into the 1-based sequence.
+
+Talk items at the current position are removed (ephemeral).
+Wall items cycle: the cursor advances, but the item stays in the
+queue.  With a single wall item, the cursor stays at zero.
+
+\begin{schema}{AdvanceTalk}
+  \Delta NotificationState
+  \where
+  queueItems \neq \langle \rangle \\
+  queueKinds(queueItems(currentIndex + 1)) = itemTalk \\
+  \# queueItems' = \# queueItems - 1 \\
+  queueKinds' = \{ queueItems(currentIndex + 1) \} \ndres queueKinds \\
+  queueTexts' = \{ queueItems(currentIndex + 1) \} \ndres queueTexts \\
+  \ran queueItems' = \ran queueItems \setminus \{
+  queueItems(currentIndex + 1) \} \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\begin{schema}{AdvanceWall}
+  \Delta NotificationState
+  \where
+  queueItems \neq \langle \rangle \\
+  queueKinds(queueItems(currentIndex + 1)) = itemWall \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  (\# queueItems > 1 \implies
+  currentIndex' = (currentIndex + 1) \mod \# queueItems) \\
+  (\# queueItems = 1 \implies
+  currentIndex' = 0) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{System Properties}
+%%----------------------------------------------------------------------
+
+\subsection{Notification Delivery Guarantee}
+
+The safety property: whenever a tool description changes,
+Claude~Code is notified.  In the corrected system this holds
+by construction---no operation produces $notifyDropped$ after
+a description change.
+
+\begin{schema}{NotifyGuarantee}
+  NotificationState
+  \where
+  (wallDescChanged = ztrue \lor talkDescChanged = ztrue)
+  \implies lastNotifyResult = notifySent
+\end{schema}
+
+\emph{Proof sketch}: Every operation that sets $wallDescChanged' = ztrue$
+or $talkDescChanged' = ztrue$ also sets $lastNotifyResult' = notifySent$.
+Specifically: $WallPost$ (belt path, tool context), $NatsTalkCallback$
+(suspenders path, session guaranteed by invariant chain
+$talkSubscribed \implies natsConnected \implies sessCaptured$),
+and $PollTick$ (suspenders path, same invariant chain).
+
+\subsection{Session Invariant}
+
+The key structural invariant: NATS connectivity implies
+session capture.
+
+\begin{schema}{SessionInvariant}
+  NotificationState
+  \where
+  natsConn = natsConnected \implies session = sessCaptured
+\end{schema}
+
+This holds because:
+\begin{enumerate}
+  \item $Init$ sets $natsConn = natsDisconnected$ (antecedent false).
+  \item $CaptureSession$ sets $session = sessCaptured$ while
+    $natsConn$ remains $natsDisconnected$ (antecedent false).
+  \item $EnsureConnected$ sets $natsConn = natsConnected$ and
+    preserves $session$. The invariant in $NotificationState$
+    forces $session = sessCaptured$ as an implicit precondition.
+  \item No operation transitions $session$ from $sessCaptured$
+    back to $sessNone$.
+  \item $CloseConnection$ sets $natsConn = natsClosed$ (antecedent false).
+\end{enumerate}
+
+\subsection{Suspenders Always Available}
+
+When NATS is connected and no tool context is active, the
+suspenders path is always applicable:
+
+\begin{schema}{SuspendersAvailable}
+  NotificationState
+  \where
+  natsConn = natsConnected \\
+  toolContext = zfalse \\
+  session = sessCaptured
+\end{schema}
+
+The last conjunct is not an additional requirement---it follows from
+the first conjunct via $SessionInvariant$.  This means every NATS
+callback and every poller tick with pending changes can successfully
+send a notification.
+
+\subsection{Wall and Talk Symmetry}
+
+In the corrected system, both wall and talk notifications always
+reach Claude~Code.  Wall uses the belt path (tool context);
+talk from external CLI uses the suspenders path (stored session).
+Both produce $lastNotifyResult = notifySent$.
+
+\begin{schema}{WallNotifySuccess}
+  NotificationState
+  \where
+  wallDescChanged = ztrue \\
+  lastNotifyResult = notifySent
+\end{schema}
+
+\begin{schema}{TalkNotifySuccess}
+  NotificationState
+  \where
+  talkDescChanged = ztrue \\
+  lastNotifyResult = notifySent
+\end{schema}
+
+\subsection{Startup Sequence}
+
+The correct startup sequence is:
+\begin{enumerate}
+  \item $Init$ --- all state zeroed, NATS disconnected, session uncaptured.
+  \item $CaptureSession$ --- session captured from server lifespan context.
+  \item $EnsureConnected$ --- NATS connected (invariant satisfied).
+  \item Poller starts, subscriptions begin --- suspenders path available.
+\end{enumerate}
+
+Any reordering that attempts $EnsureConnected$ before $CaptureSession$
+would violate the state invariant and is therefore rejected by the
+specification.
+
+\end{document}
