@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.0 — 2026-03-02
+
 ### Fixed
 
 - Talk push notifications from CLI now reach MCP session — `_session` is eagerly captured during `initialize` via `SessionCaptureMiddleware`, fixing the suspenders notification path for NATS callbacks (biff-8g0)
