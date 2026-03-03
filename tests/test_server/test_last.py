@@ -7,13 +7,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from biff.models import SessionEvent
-from biff.server.tools.last import (
+from biff.formatting import (
     _format_duration,
-    _format_last,
     _format_timestamp,
-    _pair_events,
+    format_last as _format_last,
+    pair_events as _pair_events,
 )
+from biff.models import SessionEvent
 
 
 class TestSessionEventModel:

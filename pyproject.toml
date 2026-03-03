@@ -1,6 +1,6 @@
 [project]
 name = "punt-biff"
-version = "0.13.0"
+version = "0.14.0"
 description = "The dog that barked when messages arrived. A modern CLI communication tool for software engineers."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -95,6 +95,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S106", "S108", "T20", "SLF001", "ARG", "FBT", "PLC0415", "A002"]
 "src/biff/__main__.py" = ["T20", "FBT", "PLC0415"]
+"src/biff/cli_session.py" = ["T20"]
 "src/biff/installer.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/doctor.py" = ["T20", "FBT", "S603", "PLC0415"]
 "src/biff/statusline.py" = ["S602", "T20"]

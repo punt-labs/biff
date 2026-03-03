@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from biff.server.tools._formatting import (
+from biff._formatting import (
     ColumnSpec,
     format_idle,
     format_table,

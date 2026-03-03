@@ -1,14 +1,21 @@
 """Biff CLI entry point.
 
-Provides ``biff serve``, ``biff version``, ``biff enable``, ``biff disable``,
-``biff install``, ``biff doctor``, ``biff uninstall``, ``biff hook``,
-``biff talk``, and status line management.
+Provides product commands (``biff who``, ``biff finger``, ``biff write``,
+``biff read``, ``biff plan``, ``biff last``, ``biff wall``, ``biff mesg``,
+``biff tty``, ``biff status``), admin commands (``biff serve``, ``biff enable``,
+``biff disable``, ``biff install``, ``biff doctor``, ``biff uninstall``),
+``biff talk`` for real-time chat, and status line management.
+
+Every product command is also available as an MCP tool — the CLI is the
+complete product, MCP tools are projections of CLI functionality.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import queue as queue_mod
+import sys
 import threading as threading_mod
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -35,14 +42,491 @@ from biff.hook import hook_app
 from biff.server.app import create_server
 from biff.server.state import create_state
 
+# ---------------------------------------------------------------------------
+# Global --json flag
+# ---------------------------------------------------------------------------
+
+_json_output = False
+
+
+def _print_json(data: object) -> None:
+    """Print JSON to stdout."""
+    print(json.dumps(data, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
+
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
 
 
+@app.callback()
+def main(
+    json_flag: Annotated[
+        bool,
+        typer.Option("--json", help="Output JSON instead of human-readable text."),
+    ] = False,
+) -> None:
+    """Biff: team communication for software engineers."""
+    global _json_output
+    _json_output = json_flag
+
+
+# ---------------------------------------------------------------------------
+# Product commands — CLI projections of MCP tools
+# ---------------------------------------------------------------------------
+
+
 @app.command()
+def who() -> None:
+    """List active team members and what they're working on."""
+    asyncio.run(_who_async())
+
+
+async def _who_async() -> None:
+    from biff.cli_session import cli_relay
+    from biff.formatting import format_who
+
+    async with cli_relay() as ctx:
+        sessions = await ctx.relay.get_sessions()
+        sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)
+        if _json_output:
+            _print_json([s.model_dump(mode="json") for s in sorted_sessions])
+        elif not sessions:
+            print("No sessions.")
+        else:
+            print(format_who(sorted_sessions))
+
+
+@app.command()
+def finger(
+    user: Annotated[str, typer.Argument(help="User to query, e.g. @kai or @kai:tty1")],
+) -> None:
+    """Check what a user is working on and their availability."""
+    asyncio.run(_finger_async(user))
+
+
+async def _finger_async(user: str) -> None:
+    from biff.cli_session import cli_relay
+    from biff.formatting import format_finger, format_finger_multi
+    from biff.server.tools._session import resolve_session
+    from biff.tty import parse_address
+
+    async with cli_relay() as ctx:
+        bare_user, tty = parse_address(user)
+        if tty:
+            session = await resolve_session(ctx.relay, bare_user, tty)
+            if session is None:
+                if _json_output:
+                    _print_json({"error": f"No session on tty {tty}."})
+                else:
+                    print(f"Login: {bare_user}\nNo session on tty {tty}.")
+                return
+            if _json_output:
+                _print_json(session.model_dump(mode="json"))
+            else:
+                print(format_finger(session))
+        else:
+            sessions = await ctx.relay.get_sessions_for_user(bare_user)
+            if not sessions:
+                if _json_output:
+                    _print_json({"error": f"@{bare_user} never logged in."})
+                else:
+                    print(f"Login: {bare_user}\nNever logged in.")
+                return
+            if _json_output:
+                _print_json([s.model_dump(mode="json") for s in sessions])
+            else:
+                print(format_finger_multi(sessions))
+
+
+@app.command("write")
+def write_cmd(
+    to: Annotated[str, typer.Argument(help="Recipient, e.g. @kai or @kai:tty1")],
+    message: Annotated[str, typer.Argument(help="Message to send (max 512 chars)")],
+) -> None:
+    """Send a message to a teammate's inbox."""
+    asyncio.run(_write_async(to, message))
+
+
+async def _write_async(to: str, message: str) -> None:
+    from biff.cli_session import cli_relay
+    from biff.models import Message
+    from biff.server.tools._session import resolve_session
+    from biff.tty import build_session_key, parse_address
+
+    async with cli_relay() as ctx:
+        bare_user, tty = parse_address(to)
+        if tty:
+            session = await resolve_session(ctx.relay, bare_user, tty)
+            if session:
+                relay_key = build_session_key(session.user, session.tty)
+            else:
+                relay_key = f"{bare_user}:{tty}"
+        else:
+            relay_key = bare_user
+        display = f"@{bare_user}:{tty}" if tty else f"@{bare_user}"
+
+        msg = Message(
+            from_user=ctx.user,
+            to_user=relay_key,
+            body=message[:512],
+        )
+        await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+        if _json_output:
+            _print_json({"status": "sent", "to": display})
+        else:
+            print(f"Message sent to {display}.")
+
+
+@app.command("read")
+def read_cmd() -> None:
+    """Check inbox for new messages. Marks all as read."""
+    asyncio.run(_read_async())
+
+
+async def _read_async() -> None:
+    from biff.cli_session import cli_relay
+    from biff.formatting import format_read
+
+    async with cli_relay() as ctx:
+        tty_unread = await ctx.relay.fetch(ctx.session_key)
+        user_unread = await ctx.relay.fetch_user_inbox(ctx.user)
+        all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
+
+        if not all_unread:
+            if _json_output:
+                _print_json([])
+            else:
+                print("No new messages.")
+            return
+
+        tty_ids = [m.id for m in tty_unread]
+        user_ids = [m.id for m in user_unread]
+        if tty_ids:
+            await ctx.relay.mark_read(ctx.session_key, tty_ids)
+        if user_ids:
+            await ctx.relay.mark_read_user_inbox(ctx.user, user_ids)
+
+        if _json_output:
+            _print_json([m.model_dump(mode="json") for m in all_unread])
+        else:
+            print(format_read(all_unread))
+
+
+@app.command()
+def plan(
+    message: Annotated[str, typer.Argument(help="What you're working on")],
+) -> None:
+    """Set what you're currently working on."""
+    asyncio.run(_plan_async(message))
+
+
+async def _plan_async(message: str) -> None:
+    from biff.cli_session import cli_relay
+    from biff.models import UserSession
+    from biff.server.tools.plan import expand_bead_id
+    from biff.tty import get_hostname, get_pwd
+
+    message = expand_bead_id(message)
+    async with cli_relay() as ctx:
+        session = await ctx.relay.get_session(ctx.session_key)
+        if session is None:
+            session = UserSession(
+                user=ctx.user,
+                tty=ctx.tty,
+                tty_name="cli",
+                hostname=get_hostname(),
+                pwd=get_pwd(),
+            )
+        updated = session.model_copy(update={"plan": message, "plan_source": "manual"})
+        await ctx.relay.update_session(updated)
+        if _json_output:
+            _print_json({"plan": message})
+        else:
+            print(f"Plan: {message}")
+
+
+@app.command("last")
+def last_cmd(
+    user: Annotated[str, typer.Argument(help="Filter by user (optional)")] = "",
+    count: Annotated[int, typer.Option(help="Number of entries")] = 25,
+) -> None:
+    """Show session login/logout history."""
+    asyncio.run(_last_async(user, count))
+
+
+async def _last_async(user: str, count: int) -> None:
+    from biff.cli_session import cli_relay
+    from biff.formatting import format_last, pair_events
+    from biff.tty import build_session_key
+
+    async with cli_relay() as ctx:
+        count = max(1, min(count, 100))
+        filter_user: str | None = None
+        if user:
+            filter_user = user.strip().lstrip("@")
+
+        events = await ctx.relay.get_wtmp(user=filter_user, count=count * 2)
+        if not events:
+            if _json_output:
+                _print_json([])
+            else:
+                print("No session history.")
+            return
+
+        current_sessions = await ctx.relay.get_sessions()
+        active_keys = {build_session_key(s.user, s.tty) for s in current_sessions}
+        pairs = pair_events(events)
+        pairs = pairs[:count]
+
+        if _json_output:
+            result: list[dict[str, object]] = []
+            for login, logout in pairs:
+                entry: dict[str, object] = {
+                    "user": login.user,
+                    "tty": login.tty_name or login.tty[:8],
+                    "login": login.timestamp.isoformat(),
+                    "logout": logout.timestamp.isoformat() if logout else None,
+                    "active": login.session_key in active_keys,
+                }
+                result.append(entry)
+            _print_json(result)
+        else:
+            print(format_last(pairs, active_keys))
+
+
+@app.command("wall")
+def wall_cmd(
+    message: Annotated[str, typer.Argument(help="Broadcast message")] = "",
+    duration: Annotated[str, typer.Option(help="Duration (e.g. 30m, 2h, 1d)")] = "",
+    clear: Annotated[bool, typer.Option("--clear", help="Remove active wall")] = False,
+) -> None:
+    """Post, read, or clear a team broadcast."""
+    asyncio.run(_wall_async(message, duration, clear))
+
+
+def _wall_output(data: object, text: str) -> None:
+    """Print wall output in JSON or human format."""
+    if _json_output:
+        _print_json(data)
+    else:
+        print(text)
+
+
+async def _wall_async(message: str, duration: str, clear: bool) -> None:
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    from biff.cli_session import cli_relay
+    from biff.formatting import (
+        format_remaining,
+        format_wall,
+        parse_duration,
+        sanitize_wall_message,
+    )
+    from biff.models import WallPost
+
+    async with cli_relay() as ctx:
+        if clear:
+            await ctx.relay.set_wall(None)
+            _wall_output({"status": "cleared"}, "Wall cleared.")
+            return
+
+        message = sanitize_wall_message(message)
+        if not message:
+            current = await ctx.relay.get_wall()
+            if current is None:
+                _wall_output(None, "No active wall.")
+            else:
+                _wall_output(current.model_dump(mode="json"), format_wall(current))
+            return
+
+        try:
+            ttl = parse_duration(duration)
+        except ValueError as exc:
+            _wall_output({"error": str(exc)}, str(exc))
+            raise typer.Exit(code=1) from None
+
+        now = datetime.now(UTC)
+        message = message[:512]
+        try:
+            post = WallPost(
+                text=message,
+                from_user=ctx.user,
+                from_tty="cli",
+                posted_at=now,
+                expires_at=now + ttl,
+            )
+        except ValidationError as exc:
+            _wall_output({"error": str(exc)}, str(exc))
+            raise typer.Exit(code=1) from None
+
+        await ctx.relay.set_wall(post)
+        remaining = format_remaining(post.expires_at)
+        _wall_output(
+            post.model_dump(mode="json"),
+            f"Wall posted ({remaining}): {message}",
+        )
+
+
+@app.command()
+def mesg(
+    enabled: Annotated[
+        str,
+        typer.Argument(help="'on' to accept messages, 'off' to block them"),
+    ],
+) -> None:
+    """Control message reception (on/off)."""
+    value = enabled.strip().lower()
+    if value not in ("on", "off", "y", "n"):
+        print("Usage: biff mesg <on|off>", file=sys.stderr)
+        raise typer.Exit(code=1)
+    asyncio.run(_mesg_async(value in ("on", "y")))
+
+
+async def _mesg_async(enabled: bool) -> None:
+    from biff.cli_session import cli_relay
+    from biff.models import UserSession
+    from biff.tty import get_hostname, get_pwd
+
+    async with cli_relay() as ctx:
+        session = await ctx.relay.get_session(ctx.session_key)
+        if session is None:
+            session = UserSession(
+                user=ctx.user,
+                tty=ctx.tty,
+                tty_name="cli",
+                hostname=get_hostname(),
+                pwd=get_pwd(),
+            )
+        updated = session.model_copy(update={"biff_enabled": enabled})
+        await ctx.relay.update_session(updated)
+        if _json_output:
+            _print_json({"mesg": "y" if enabled else "n"})
+        else:
+            print(f"is {'y' if enabled else 'n'}")
+
+
+@app.command("tty")
+def tty_cmd(
+    name: Annotated[str, typer.Argument(help="Session name (optional)")] = "",
+) -> None:
+    """Name the current CLI session."""
+    asyncio.run(_tty_async(name))
+
+
+async def _tty_async(name: str) -> None:
+    from biff.cli_session import cli_relay
+    from biff.models import UserSession
+    from biff.server.tools.tty import next_tty_name
+    from biff.tty import get_hostname, get_pwd
+
+    async with cli_relay() as ctx:
+        name = name.strip()
+        sessions = await ctx.relay.get_sessions()
+
+        if not name:
+            existing = [s.tty_name for s in sessions if s.tty_name]
+            name = next_tty_name(existing)
+
+        if len(name) > 20:
+            msg = "Error: name must be 20 characters or fewer."
+            if _json_output:
+                _print_json({"error": msg})
+            else:
+                print(msg, file=sys.stderr)
+            raise typer.Exit(code=1)
+
+        for s in sessions:
+            if s.user == ctx.user and s.tty != ctx.tty and s.tty_name == name:
+                msg = f"Error: name {name!r} already in use by another session."
+                if _json_output:
+                    _print_json({"error": msg})
+                else:
+                    print(msg, file=sys.stderr)
+                raise typer.Exit(code=1)
+
+        session = await ctx.relay.get_session(ctx.session_key)
+        if session is None:
+            session = UserSession(
+                user=ctx.user,
+                tty=ctx.tty,
+                tty_name=name,
+                hostname=get_hostname(),
+                pwd=get_pwd(),
+            )
+        else:
+            session = session.model_copy(update={"tty_name": name})
+        await ctx.relay.update_session(session)
+        if _json_output:
+            _print_json({"tty": name})
+        else:
+            print(f"TTY: {name}")
+
+
+@app.command()
+def status() -> None:
+    """Show connection state, session info, and pending messages."""
+    asyncio.run(_status_async())
+
+
+async def _status_async() -> None:
+    from biff.cli_session import cli_relay
+
+    ver = pkg_version("punt-biff")
+
+    async with cli_relay() as ctx:
+        session = await ctx.relay.get_session(ctx.session_key)
+        summary = await ctx.relay.get_unread_summary(ctx.session_key)
+        user_unread = await ctx.relay.get_user_unread_count(ctx.user)
+        total_unread = summary.count + user_unread
+        wall = await ctx.relay.get_wall()
+
+        if _json_output:
+            data: dict[str, object] = {
+                "version": ver,
+                "relay": ctx.config.relay_url,
+                "user": ctx.user,
+                "session_key": ctx.session_key,
+                "tty_name": session.tty_name if session else "cli",
+                "unread": total_unread,
+                "wall": wall.model_dump(mode="json") if wall else None,
+            }
+            _print_json(data)
+        else:
+            from biff.formatting import format_idle, format_remaining
+
+            print(f"biff {ver}")
+            print(f"relay: {ctx.config.relay_url} (connected)")
+            print(f"user: {ctx.user}")
+            tty_name = session.tty_name if session else "cli"
+            idle = format_idle(session.last_active) if session else "?"
+            print(f"session: {tty_name} ({ctx.tty[:8]}), idle {idle}")
+            print(f"unread: {total_unread} message{'s' if total_unread != 1 else ''}")
+            if wall:
+                remaining = format_remaining(wall.expires_at)
+                print(f"wall: @{wall.from_user}: {wall.text} ({remaining})")
+            else:
+                print("wall: (none)")
+
+
+# ---------------------------------------------------------------------------
+# Admin commands
+# ---------------------------------------------------------------------------
+
+
+@app.command("version")
 def version() -> None:
     """Print the biff version."""
-    print(f"biff {pkg_version('punt-biff')}")
+    ver = pkg_version("punt-biff")
+    if _json_output:
+        _print_json({"version": ver})
+    else:
+        print(f"biff {ver}")
 
 
 @app.command()
@@ -106,9 +590,9 @@ def serve(
 @app.command("install-statusline")
 def install_statusline() -> None:
     """Install biff into Claude Code's status bar."""
-    from biff.statusline import install
+    from biff.statusline import install as do_install
 
-    result = install()
+    result = do_install()
     print(result.message)
     if not result.installed:
         raise typer.Exit(code=1)
@@ -117,9 +601,9 @@ def install_statusline() -> None:
 @app.command("uninstall-statusline")
 def uninstall_statusline() -> None:
     """Remove biff from Claude Code's status bar."""
-    from biff.statusline import uninstall
+    from biff.statusline import uninstall as do_uninstall
 
-    result = uninstall()
+    result = do_uninstall()
     print(result.message)
     if not result.uninstalled:
         raise typer.Exit(code=1)
@@ -216,8 +700,8 @@ def disable(
 _PLUGIN_ID = "biff@punt-labs"
 
 
-@app.command()
-def install() -> None:
+@app.command("install")
+def install_cmd() -> None:
     """Install biff via the punt-labs marketplace."""
     import shutil
     import subprocess
@@ -246,8 +730,8 @@ def doctor() -> None:
         raise typer.Exit(code=code)
 
 
-@app.command()
-def uninstall() -> None:
+@app.command("uninstall")
+def uninstall_cmd() -> None:
     """Uninstall biff plugin and clean up artifacts."""
     import shutil
     import subprocess
@@ -272,6 +756,11 @@ def statusline() -> None:
     from biff.statusline import run_statusline
 
     print(run_statusline())
+
+
+# ---------------------------------------------------------------------------
+# Talk (interactive REPL — existing implementation)
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -426,14 +915,12 @@ async def _talk_loop(
 
 async def _talk_repl(to: str, opening: str) -> None:
     """Interactive talk loop: send messages, receive replies in real-time."""
-    import sys
-
-    from biff.config import load_config
+    from biff.config import load_config as _load_config
     from biff.models import Message, UserSession
     from biff.nats_relay import NatsRelay
     from biff.tty import generate_tty, parse_address
 
-    resolved = load_config()
+    resolved = _load_config()
     config = resolved.config
     if not config.relay_url:
         print("Talk requires a NATS relay. Configure relay_url in .biff.")
