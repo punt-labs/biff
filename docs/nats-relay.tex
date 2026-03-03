@@ -1,0 +1,478 @@
+%
+% nats-relay.tex
+%
+% Z Specification for Biff NATS Relay
+% Formal model of connection lifecycle, KV watcher state machine,
+% and session presence management.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff NATS Relay: A Z Specification}
+\author{Formal Model of Connection Lifecycle and KV Watcher}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Biff NATS Relay: A Z Specification},
+  pdfauthor={punt-labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+The NATS relay is the networked backend for biff's communication
+system.  It manages a TCP connection to a NATS server, lazily
+provisions infrastructure (KV bucket, JetStream streams), and runs
+a KV watcher that detects session changes and wall broadcasts in
+real-time.
+
+This specification models three interacting state machines:
+
+\begin{enumerate}
+  \item \textbf{Connection lifecycle} --- lazy connect, disconnect,
+    reconnect, and close transitions.
+  \item \textbf{KV watcher} --- the long-lived watcher that observes
+    session and wall changes, survives snapshot-done markers and
+    timeouts, and restarts only on errors.
+  \item \textbf{Session presence} --- KV-backed sessions with TTL
+    expiry, heartbeat refresh, and logout detection.
+\end{enumerate}
+
+The key invariant proven by this model: the KV watcher remains
+alive across snapshot-done markers and idle timeouts.  Only
+explicit shutdown or unrecoverable errors terminate it.  This
+captures the fix for biff-udp.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  [USER, TTY, REPO, KVKEY, KVVALUE, SESSIONKEY]
+\end{zed}
+
+$USER$ identifies a human user.  $TTY$ identifies a terminal
+session (random 8-char hex).  $REPO$ scopes all state to a
+repository.  $KVKEY$ and $KVVALUE$ are opaque KV store keys and
+values.  $SESSIONKEY$ is the composite $\{user\}:\{tty\}$ identifier.
+
+%%----------------------------------------------------------------------
+\section{Free Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  ConnState ::= disconnected | connected | closed
+\end{zed}
+
+The connection has three states: $disconnected$ (no TCP connection
+but can reconnect), $connected$ (active TCP connection with
+provisioned infrastructure), and $closed$ (permanently shut down,
+no reconnection possible).
+
+\begin{zed}
+  WatcherPhase ::= idle | snapshotting | streaming | stopped
+\end{zed}
+
+The KV watcher progresses through phases: $idle$ (not yet started),
+$snapshotting$ (receiving the initial KV snapshot), $streaming$
+(receiving live updates post-snapshot), and $stopped$ (shutdown
+complete).
+
+\begin{zed}
+  KVOp ::= kvPut | kvDelete | kvPurge
+\end{zed}
+
+Operations observed on KV entries.  $kvPut$ stores or updates a
+value.  $kvDelete$ and $kvPurge$ remove entries (TTL expiry
+produces $kvDelete$).
+
+\begin{zed}
+  WatcherEvent ::=
+  weEntry | weSnapshotDone | weTimeout | weError | weShutdown
+\end{zed}
+
+Events that the KV watcher loop must handle.  $weEntry$ is a KV
+change.  $weSnapshotDone$ is the $None$ marker from
+\texttt{watcher.updates()}.  $weTimeout$ is a
+\texttt{TimeoutError} from idle periods.  $weError$ is an
+unrecoverable NATS error.  $weShutdown$ is the shutdown signal.
+
+%%----------------------------------------------------------------------
+\section{Global Constants}
+%%----------------------------------------------------------------------
+
+\begin{axdef}
+  kvTtlSeconds : \nat \\
+  watcherTimeoutSeconds : \nat \\
+  maxSessions : \nat \\
+  restartDelaySeconds : \nat
+  \where
+  kvTtlSeconds = 259200 \\
+  watcherTimeoutSeconds = 5 \\
+  maxSessions = 1000 \\
+  restartDelaySeconds = 2
+\end{axdef}
+
+$kvTtlSeconds$ is the NATS KV TTL (3 days).
+$watcherTimeoutSeconds$ is the \texttt{updates()} timeout that
+keeps the shutdown check responsive.  $maxSessions$ bounds the
+model for animation.
+
+%%----------------------------------------------------------------------
+\section{Connection State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Connection}
+  connState : ConnState \\
+  kvProvisioned : ZBOOL \\
+  streamsProvisioned : ZBOOL \\
+  wtmpAvailable : ZBOOL
+  \where
+  connState = disconnected \implies
+  kvProvisioned = zfalse \land
+  streamsProvisioned = zfalse \\
+  connState = closed \implies
+  kvProvisioned = zfalse \land
+  streamsProvisioned = zfalse \\
+  connState = connected \implies
+  kvProvisioned = ztrue \land
+  streamsProvisioned = ztrue
+\end{schema}
+
+When disconnected or closed, no infrastructure handles exist.
+When connected, KV and streams are always provisioned (lazy
+connect provisions both atomically).  $wtmpAvailable$ degrades
+independently --- wtmp provisioning failure is non-fatal.
+
+\begin{schema}{InitConnection}
+  Connection'
+  \where
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Connection Operations}
+%%----------------------------------------------------------------------
+
+\subsection{Ensure Connected (Lazy Connect)}
+
+\begin{schema}{EnsureConnected}
+  \Delta Connection
+  \where
+  connState \neq closed \\
+  connState' = connected \\
+  kvProvisioned' = ztrue \\
+  streamsProvisioned' = ztrue \\
+  wtmpAvailable' = wtmpAvailable
+\end{schema}
+
+Idempotent: if already connected, state is unchanged.  Fails
+if closed (no reconnection after close).  $wtmpAvailable$ is
+preserved --- it only changes during provisioning.
+
+\subsection{Disconnect (Reversible)}
+
+\begin{schema}{Disconnect}
+  \Delta Connection
+  \where
+  connState = connected \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+Releases the TCP connection.  The next relay call will
+reconnect via $EnsureConnected$.
+
+\subsection{Close (Permanent)}
+
+\begin{schema}{Close}
+  \Delta Connection
+  \where
+  connState' = closed \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+Permanent shutdown.  No further operations are possible.
+
+\subsection{Reset Infrastructure}
+
+\begin{schema}{ResetInfrastructure}
+  \Delta Connection
+  \where
+  connState' = connState \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+Clears cached handles without closing the TCP connection.
+The next relay call re-provisions.
+
+%%----------------------------------------------------------------------
+\section{Session Presence}
+%%----------------------------------------------------------------------
+
+\begin{schema}{SessionStore}
+  sessions : SESSIONKEY \pinj KVVALUE \\
+  wallValue : KVKEY \pfun KVVALUE
+  \where
+  \# sessions \leq maxSessions \\
+  \# wallValue \leq 1
+\end{schema}
+
+Sessions are a partial injection: each session key maps to
+exactly one value (the serialised $UserSession$).  $wallValue$
+is either empty (no wall) or a single mapping (active wall).
+
+\begin{schema}{InitSessionStore}
+  SessionStore'
+  \where
+  sessions' = \emptyset \\
+  wallValue' = \emptyset
+\end{schema}
+
+\subsection{Update Session (Heartbeat / Login)}
+
+\begin{schema}{UpdateSession}
+  \Delta SessionStore \\
+  key? : SESSIONKEY \\
+  value? : KVVALUE
+  \where
+  sessions' = sessions \oplus \{ key? \mapsto value? \} \\
+  wallValue' = wallValue \\
+  \# sessions' \leq maxSessions
+\end{schema}
+
+Creates or refreshes a session.  Override ($\oplus$) ensures
+idempotent updates.
+
+\subsection{Delete Session (Logout / TTL Expiry)}
+
+\begin{schema}{DeleteSession}
+  \Delta SessionStore \\
+  key? : SESSIONKEY
+  \where
+  key? \in \dom sessions \\
+  sessions' = \{ key? \} \ndres sessions \\
+  wallValue' = wallValue
+\end{schema}
+
+Removes a session.  In production, this is triggered by
+explicit delete or KV TTL expiry.
+
+\subsection{Set Wall}
+
+\begin{schema}{SetWall}
+  \Delta SessionStore \\
+  wallKey? : KVKEY \\
+  wallVal? : KVVALUE
+  \where
+  sessions' = sessions \\
+  wallValue' = \{ wallKey? \mapsto wallVal? \}
+\end{schema}
+
+\subsection{Clear Wall}
+
+\begin{schema}{ClearWall}
+  \Delta SessionStore
+  \where
+  sessions' = sessions \\
+  wallValue' = \emptyset
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{KV Watcher State Machine}
+%%----------------------------------------------------------------------
+
+This section models the watcher loop from \texttt{\_run\_kv\_watch}
+and its supervisor \texttt{\_kv\_watcher\_loop}.
+
+\begin{schema}{Watcher}
+  phase : WatcherPhase \\
+  shutdownRequested : ZBOOL \\
+  restartCount : \nat
+  \where
+  restartCount \leq 100 \\
+  phase = stopped \implies shutdownRequested = ztrue
+\end{schema}
+
+The watcher tracks its current phase, whether shutdown has been
+requested, and how many times the supervisor has restarted it.
+A stopped watcher implies shutdown was requested.
+
+\begin{schema}{InitWatcher}
+  Watcher'
+  \where
+  phase' = idle \\
+  shutdownRequested' = zfalse \\
+  restartCount' = 0
+\end{schema}
+
+\subsection{Start Watching}
+
+\begin{schema}{StartWatching}
+  \Delta Watcher
+  \where
+  phase = idle \\
+  shutdownRequested = zfalse \\
+  phase' = snapshotting \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+Transitions from idle to snapshotting when the watcher is
+created.  The first entries from \texttt{watchall()} are the
+snapshot.
+
+\subsection{Snapshot Done}
+
+\begin{schema}{SnapshotDone}
+  \Delta Watcher
+  \where
+  phase = snapshotting \\
+  shutdownRequested = zfalse \\
+  phase' = streaming \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+The $None$ marker from \texttt{updates()} signals the end of
+the snapshot.  \textbf{The watcher continues into streaming
+phase.}  This is the key property: the old \texttt{async~for}
+pattern terminated here (biff-udp).
+
+\subsection{Receive Entry}
+
+\begin{schema}{ReceiveEntry}
+  \Delta Watcher
+  \where
+  (phase = snapshotting \lor phase = streaming) \\
+  shutdownRequested = zfalse \\
+  phase' = phase \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+A KV entry is received.  The phase does not change --- entries
+arrive during both snapshotting and streaming.
+
+\subsection{Handle Timeout}
+
+\begin{schema}{HandleTimeout}
+  \Delta Watcher
+  \where
+  phase = streaming \\
+  shutdownRequested = zfalse \\
+  phase' = streaming \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+A \texttt{TimeoutError} from \texttt{updates(timeout=5.0)} is
+caught and the loop continues.  \textbf{The watcher stays in
+streaming phase.}  Without the catch, this would propagate to
+the supervisor and trigger a restart.
+
+\subsection{Handle Error (Supervisor Restart)}
+
+\begin{schema}{HandleError}
+  \Delta Watcher
+  \where
+  phase \neq idle \\
+  phase \neq stopped \\
+  shutdownRequested = zfalse \\
+  phase' = snapshotting \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount + 1
+\end{schema}
+
+An unrecoverable error causes the supervisor to restart the
+watcher.  The new watcher begins in snapshotting phase
+(a fresh \texttt{watchall()}).
+
+\subsection{Request Shutdown}
+
+\begin{schema}{RequestShutdown}
+  \Delta Watcher
+  \where
+  shutdownRequested = zfalse \\
+  shutdownRequested' = ztrue \\
+  phase' = stopped \\
+  restartCount' = restartCount
+\end{schema}
+
+The shutdown event signals the watcher to exit.  The loop
+checks \texttt{shutdown.is\_set()} on every iteration.
+
+%%----------------------------------------------------------------------
+\section{Composed System State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{NatsRelayState}
+  Connection \\
+  SessionStore \\
+  Watcher
+  \where
+  phase \neq idle \implies connState = connected \\
+  phase = streaming \implies kvProvisioned = ztrue
+\end{schema}
+
+The watcher can only be active when the connection is
+established.  Streaming implies KV is provisioned (the watcher
+reads from it).
+
+\begin{schema}{Init}
+  InitConnection \\
+  InitSessionStore \\
+  InitWatcher
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Key Properties}
+%%----------------------------------------------------------------------
+
+The specification captures these properties, each of which can be
+verified by model checking with probcli:
+
+\begin{enumerate}
+  \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
+    $streaming$, never to $idle$ or $stopped$.  The watcher
+    remains alive.
+
+  \item \textbf{Timeout resilience}: $HandleTimeout$ keeps the
+    watcher in $streaming$ phase.  No restart, no phase change.
+
+  \item \textbf{Error restart}: Only $HandleError$ increments
+    $restartCount$.  Snapshot-done and timeout do not.
+
+  \item \textbf{Connection prerequisite}: The watcher cannot be
+    active ($phase \neq idle$) when disconnected.
+
+  \item \textbf{Session uniqueness}: The partial injection
+    ($\pinj$) on sessions guarantees each session key maps to
+    exactly one value.
+\end{enumerate}
+
+\end{document}
