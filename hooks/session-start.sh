@@ -10,21 +10,36 @@ STASH_PATH="$HOME/.biff/statusline-original.json"
 
 ACTIONS=()
 
+# ── Detect dev mode ──────────────────────────────────────────────────
+# When plugin.json has "biff-dev", we're running as the dev plugin
+# alongside the production "biff" plugin. Skip top-level command
+# deployment — the prod plugin handles those.
+IS_DEV=false
+if command -v python3 &>/dev/null && [[ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]]; then
+  plugin_name="$(python3 -c "import json; print(json.load(open('$PLUGIN_ROOT/.claude-plugin/plugin.json'))['name'])" 2>/dev/null || true)"
+  if [[ "$plugin_name" == *-dev ]]; then
+    IS_DEV=true
+  fi
+fi
+
 # ── Deploy top-level commands if missing ──────────────────────────────
 # Skip *-dev.md files — dev commands use plugin namespace (biff-dev:who-dev)
-DEPLOYED=()
-for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
-  name="$(basename "$cmd_file")"
-  [[ "$name" == *-dev.md ]] && continue
-  dest="$COMMANDS_DIR/$name"
-  if [[ ! -f "$dest" ]]; then
-    mkdir -p "$COMMANDS_DIR"
-    cp "$cmd_file" "$dest"
-    DEPLOYED+=("/${name%.md}")
+# Skip entirely in dev mode — prod plugin deploys top-level commands
+if [[ "$IS_DEV" == "false" ]]; then
+  DEPLOYED=()
+  for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
+    name="$(basename "$cmd_file")"
+    [[ "$name" == *-dev.md ]] && continue
+    dest="$COMMANDS_DIR/$name"
+    if [[ ! -f "$dest" ]]; then
+      mkdir -p "$COMMANDS_DIR"
+      cp "$cmd_file" "$dest"
+      DEPLOYED+=("/${name%.md}")
+    fi
+  done
+  if [[ ${#DEPLOYED[@]} -gt 0 ]]; then
+    ACTIONS+=("Deployed commands: ${DEPLOYED[*]}")
   fi
-done
-if [[ ${#DEPLOYED[@]} -gt 0 ]]; then
-  ACTIONS+=("Deployed commands: ${DEPLOYED[*]}")
 fi
 
 # ── Allow MCP tools in user settings if not already allowed ──────────

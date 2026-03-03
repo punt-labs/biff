@@ -122,7 +122,7 @@ After editing both, run `uv lock` to update `uv.lock`.
 
 Use semver: patch for fixes, minor for features, major for breaking changes. Bump on every PR that changes user-facing behavior.
 
-**IMPORTANT:** `plugin.json` must always have `"name": "biff"` on main. Dev/prod isolation uses `.claude/commands/` for dev-only commands (project-local, not shipped to marketplace users). The plugin name is always `"biff"` — no `"biff-dev"` swapping.
+**IMPORTANT:** `plugin.json` must always have `"name": "biff-dev"` on main. Release scripts (`scripts/release-plugin.sh`) swap to `"biff"` on the tagged commit only; `scripts/restore-dev-plugin.sh` restores `"biff-dev"` afterward. This prevents namespace collisions when developing with `--plugin-dir` alongside the installed production plugin. Dev commands (`commands/*-dev.md`) route to `mcp__plugin_biff-dev_tty__*`; prod commands route to `mcp__plugin_biff_tty__*`.
 
 **IMPORTANT:** Never use `uv tool install --force --editable .` as a release or testing step. Local editable installs break the status line (see DESIGN.md DES-011b) and do not represent what users experience. The only way to test is to release through the real channels.
 
@@ -190,7 +190,7 @@ biff doctor                             # Both match
 Before creating a PR, verify:
 
 - [ ] **Version bumped** in both `pyproject.toml` and `plugin.json` if user-facing behavior changed
-- [ ] **`plugin.json` name is `"biff"`** (not `"biff-dev"`)
+- [ ] **`plugin.json` name is `"biff-dev"`** (not `"biff"` — release scripts handle the swap)
 - [ ] **CHANGELOG entry included in the PR diff** under `## Unreleased` (not retroactively on main)
 - [ ] **README updated** if user-facing behavior changed
 - [ ] **Quality gates pass**
