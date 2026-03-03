@@ -54,12 +54,14 @@ if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
     CHANGED=true
   fi
 
-  # Allow dev tools
-  if ! jq -e ".permissions.allow // [] | map(select(contains(\"$DEV_TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
-    TMPFILE="$(mktemp)"
-    jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_biff-dev_tty__*"]' "$SETTINGS" > "$TMPFILE"
-    mv "$TMPFILE" "$SETTINGS"
-    CHANGED=true
+  # Allow dev tools (only when running as biff-dev)
+  if [[ "$IS_DEV" == "true" ]]; then
+    if ! jq -e ".permissions.allow // [] | map(select(contains(\"$DEV_TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
+      TMPFILE="$(mktemp)"
+      jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_biff-dev_tty__*"]' "$SETTINGS" > "$TMPFILE"
+      mv "$TMPFILE" "$SETTINGS"
+      CHANGED=true
+    fi
   fi
 
   if [[ "$CHANGED" == "true" ]]; then
