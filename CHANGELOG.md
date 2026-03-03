@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Adopt dev/prod plugin namespace isolation: `plugin.json` name is `"biff-dev"` on main,
+  release scripts swap to `"biff"` on tagged commits only. Dev commands (`*-dev.md`) route
+  to `mcp__plugin_biff-dev_tty__*` to avoid collisions with the installed production plugin.
+
 ## 0.13.0 — 2026-03-02
 
 ### Fixed

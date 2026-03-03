@@ -122,7 +122,7 @@ After editing both, run `uv lock` to update `uv.lock`.
 
 Use semver: patch for fixes, minor for features, major for breaking changes. Bump on every PR that changes user-facing behavior.
 
-**IMPORTANT:** `plugin.json` must always have `"name": "biff"` on main. Dev/prod isolation uses `.claude/commands/` for dev-only commands (project-local, not shipped to marketplace users). The plugin name is always `"biff"` — no `"biff-dev"` swapping.
+**IMPORTANT:** `plugin.json` must always have `"name": "biff-dev"` on main. Release scripts (`scripts/release-plugin.sh`) swap to `"biff"` on the tagged commit only; `scripts/restore-dev-plugin.sh` restores `"biff-dev"` afterward. This prevents namespace collisions when developing with `--plugin-dir` alongside the installed production plugin. Dev commands (`commands/*-dev.md`) route to `mcp__plugin_biff-dev_tty__*`; prod commands route to `mcp__plugin_biff_tty__*`.
 
 **IMPORTANT:** Never use `uv tool install --force --editable .` as a release or testing step. Local editable installs break the status line (see DESIGN.md DES-011b) and do not represent what users experience. The only way to test is to release through the real channels.
 
@@ -158,19 +158,26 @@ Both channels release from a single workflow. The git tag triggers `.github/work
 # 2. CHANGELOG updated with release section
 # 3. PR merged to main
 
-# 4. Tag and push (triggers release.yml → TestPyPI → PyPI)
+# 4. Prepare plugin for release (swap biff-dev → biff, remove dev commands)
 git checkout main && git pull origin main
+scripts/release-plugin.sh
+
+# 5. Tag the release-prep commit and push (triggers release.yml → TestPyPI → PyPI)
 git tag vX.Y.Z
 git push origin vX.Y.Z
 
-# 5. Create GitHub Release
+# 6. Restore dev state on main (biff → biff-dev, restore dev commands)
+scripts/restore-dev-plugin.sh
+git push origin main
+
+# 7. Create GitHub Release
 gh release create vX.Y.Z --title "vX.Y.Z" --notes "See CHANGELOG.md"
 
-# 6. Update marketplace registry (punt-labs/claude-plugins)
+# 8. Update marketplace registry (punt-labs/claude-plugins)
 # The UI discovery reads from this file, NOT from individual repo plugin.json
 # Update version in .claude-plugin/marketplace.json, commit, push
 
-# 7. Verify both channels
+# 9. Verify both channels
 claude plugin update biff@punt-labs     # Plugin → new version
 uv tool install --upgrade punt-biff     # CLI → new version
 biff doctor                             # Both match
@@ -190,7 +197,7 @@ biff doctor                             # Both match
 Before creating a PR, verify:
 
 - [ ] **Version bumped** in both `pyproject.toml` and `plugin.json` if user-facing behavior changed
-- [ ] **`plugin.json` name is `"biff"`** (not `"biff-dev"`)
+- [ ] **`plugin.json` name is `"biff-dev"`** (not `"biff"` — release scripts handle the swap)
 - [ ] **CHANGELOG entry included in the PR diff** under `## Unreleased` (not retroactively on main)
 - [ ] **README updated** if user-facing behavior changed
 - [ ] **Quality gates pass**
