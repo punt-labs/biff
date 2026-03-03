@@ -241,9 +241,18 @@ async def _run_kv_watch(
     kv = await relay.get_kv()
     watcher = await kv.watchall()  # pyright: ignore[reportUnknownMemberType]
     try:
-        async for entry in watcher:  # pyright: ignore[reportUnknownVariableType]
-            if shutdown.is_set():
-                return
+        # Use watcher.updates() instead of ``async for`` because nats.py's
+        # __anext__ raises StopAsyncIteration on the snapshot-done None
+        # marker, terminating the iterator and creating a blind window
+        # where notifications can be missed before the restart loop
+        # re-creates the watcher.  See biff-udp.
+        while not shutdown.is_set():
+            try:
+                entry = await watcher.updates(timeout=5.0)  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
+            except TimeoutError:
+                continue  # No updates within timeout window
+            if entry is None:
+                continue  # Snapshot-done marker
             key = str(entry.key)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType,reportAttributeAccessIssue]
             if key == NatsRelay.wall_kv_key(state.config.repo_name):
                 await refresh_wall(mcp, state)
