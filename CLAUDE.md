@@ -158,19 +158,26 @@ Both channels release from a single workflow. The git tag triggers `.github/work
 # 2. CHANGELOG updated with release section
 # 3. PR merged to main
 
-# 4. Tag and push (triggers release.yml → TestPyPI → PyPI)
+# 4. Prepare plugin for release (swap biff-dev → biff, remove dev commands)
 git checkout main && git pull origin main
+scripts/release-plugin.sh
+
+# 5. Tag the release-prep commit and push (triggers release.yml → TestPyPI → PyPI)
 git tag vX.Y.Z
 git push origin vX.Y.Z
 
-# 5. Create GitHub Release
+# 6. Restore dev state on main (biff → biff-dev, restore dev commands)
+scripts/restore-dev-plugin.sh
+git push origin main
+
+# 7. Create GitHub Release
 gh release create vX.Y.Z --title "vX.Y.Z" --notes "See CHANGELOG.md"
 
-# 6. Update marketplace registry (punt-labs/claude-plugins)
+# 8. Update marketplace registry (punt-labs/claude-plugins)
 # The UI discovery reads from this file, NOT from individual repo plugin.json
 # Update version in .claude-plugin/marketplace.json, commit, push
 
-# 7. Verify both channels
+# 9. Verify both channels
 claude plugin update biff@punt-labs     # Plugin → new version
 uv tool install --upgrade punt-biff     # CLI → new version
 biff doctor                             # Both match

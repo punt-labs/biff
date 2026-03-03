@@ -32,7 +32,7 @@ echo "Restoring dev state from parent of ${RELEASE_PREP_COMMIT:0:12}"
 git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- "$PLUGIN_JSON"
 
 # Restore dev commands if the parent commit had a commands/ directory
-if git -C "$REPO_ROOT" ls-tree -d "${RELEASE_PREP_COMMIT}^" -- commands/ | grep -q .; then
+if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- commands/ | grep -q .; then
   git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- commands/
 fi
 
