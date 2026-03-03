@@ -227,10 +227,11 @@ def pair_events(
 ) -> list[tuple[SessionEvent, SessionEvent | None]]:
     """Pair login events with their corresponding logout events.
 
-    Returns a list of ``(login, logout | None)`` tuples sorted by
-    login time descending.  A ``None`` logout means the session is
-    still active or no logout was recorded — the caller uses
-    ``active_keys`` to distinguish between the two.
+    Returns a list of ``(login, logout | None)`` tuples in the same
+    relative order as their login events appear in *events*.  A
+    ``None`` logout means the session is still active or no logout
+    was recorded — the caller uses ``active_keys`` to distinguish
+    between the two.
     """
     logouts: dict[str, list[SessionEvent]] = {}
     logins: list[SessionEvent] = []

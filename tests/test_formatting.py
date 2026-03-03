@@ -36,9 +36,10 @@ class TestFormatWho:
         assert "working on biff" in result
 
     def test_empty_sessions(self):
-        # format_who with empty list would fail on format_table (no rows),
-        # but the caller handles the empty case — verify the caller pattern.
-        pass
+        result = format_who([])
+        # Header-only table — no data rows, but no crash
+        assert "NAME" in result
+        assert "@" not in result
 
     def test_no_plan(self):
         session = UserSession(

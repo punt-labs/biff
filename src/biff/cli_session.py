@@ -58,12 +58,14 @@ def _load_session(repo_name: str) -> tuple[str, str] | None:
     try:
         data = json.loads(path.read_text())
         last_active = datetime.fromisoformat(data["last_active"])
+        if last_active.tzinfo is None:
+            last_active = last_active.replace(tzinfo=UTC)
         if datetime.now(UTC) - last_active > _SESSION_TTL:
             return None
         user: str = data["user"]
         tty: str = data["tty"]
         return user, tty
-    except (json.JSONDecodeError, KeyError, ValueError, OSError):
+    except (json.JSONDecodeError, KeyError, ValueError, OSError, TypeError):
         return None
 
 
@@ -103,9 +105,9 @@ async def cli_relay() -> AsyncIterator[CliContext]:
         repo_name=config.repo_name,
     )
 
-    # Reuse or create session
+    # Reuse or create session (invalidate if user identity changed)
     existing = _load_session(config.repo_name)
-    if existing is not None:
+    if existing is not None and existing[0] == config.user:
         user, tty = existing
     else:
         user = config.user

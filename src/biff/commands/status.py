@@ -15,8 +15,7 @@ async def status(ctx: CliContext) -> CommandResult:
 
     session = await ctx.relay.get_session(ctx.session_key)
     summary = await ctx.relay.get_unread_summary(ctx.session_key)
-    user_unread = await ctx.relay.get_user_unread_count(ctx.user)
-    total_unread = summary.count + user_unread
+    total_unread = summary.count
     wall_post = await ctx.relay.get_wall()
 
     json_data: dict[str, object] = {
