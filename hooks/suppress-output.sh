@@ -51,7 +51,7 @@ if [[ "$TOOL_NAME" == "who" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
     jq -n --arg summary "${COUNT} online" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
