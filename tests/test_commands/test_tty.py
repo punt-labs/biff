@@ -64,6 +64,20 @@ class TestTty:
         assert not result.error
         assert result.json_data == {"tty": name}
 
+    async def test_rename_existing_session(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await relay.update_session(
+            UserSession(user="kai", tty="abc12345", tty_name="old")
+        )
+        result = await tty(ctx, "new")
+        assert not result.error
+        assert result.text == "TTY: new"
+
+        session = await relay.get_session("kai:abc12345")
+        assert session is not None
+        assert session.tty_name == "new"
+
     async def test_whitespace_only_name_gets_auto(self, ctx: CliContext) -> None:
         result = await tty(ctx, "   ")
         assert not result.error

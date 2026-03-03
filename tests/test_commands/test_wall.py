@@ -6,6 +6,7 @@ from typing import cast
 
 from biff.cli_session import CliContext
 from biff.commands.wall import wall
+from biff.models import BiffConfig
 from biff.relay import LocalRelay
 
 
@@ -99,3 +100,17 @@ class TestWall:
 
         result = await wall(ctx, "", "", clear=False)
         assert result.text == "No active wall."
+
+    async def test_validation_error_on_empty_user(self, relay: LocalRelay) -> None:
+        # Bypass BiffConfig validation to exercise the WallPost
+        # ValidationError catch (from_user min_length=1).
+        bad_config = BiffConfig.model_construct(user="", repo_name="test")
+        bad_ctx = CliContext(
+            relay=relay,
+            config=bad_config,
+            session_key=":abc12345",
+            user="",
+            tty="abc12345",
+        )
+        result = await wall(bad_ctx, "test", "1h", clear=False)
+        assert result.error
