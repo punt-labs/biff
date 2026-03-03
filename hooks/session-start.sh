@@ -15,8 +15,8 @@ ACTIONS=()
 # alongside the production "biff" plugin. Skip top-level command
 # deployment — the prod plugin handles those.
 IS_DEV=false
-if command -v python3 &>/dev/null && [[ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]]; then
-  plugin_name="$(python3 -c "import json; print(json.load(open('$PLUGIN_ROOT/.claude-plugin/plugin.json'))['name'])" 2>/dev/null || true)"
+if command -v jq &>/dev/null && [[ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]]; then
+  plugin_name="$(jq -r '.name // ""' "$PLUGIN_ROOT/.claude-plugin/plugin.json")"
   if [[ "$plugin_name" == *-dev ]]; then
     IS_DEV=true
   fi
