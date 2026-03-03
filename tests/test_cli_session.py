@@ -8,10 +8,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-import pytest
+from typing import TYPE_CHECKING
 
 from biff.cli_session import _load_session, _save_session, _session_path
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestSessionPath:
@@ -57,7 +59,9 @@ class TestSaveAndLoad:
         result = _load_session("test-repo")
         assert result is None
 
-    def test_fresh_session_within_ttl(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_fresh_session_within_ttl(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         monkeypatch.setattr("biff.cli_session._SESSION_DIR", tmp_path)
         # Write a session with recent timestamp
         data = {

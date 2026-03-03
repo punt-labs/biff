@@ -24,6 +24,7 @@ from pathlib import Path
 from biff.config import load_config
 from biff.models import BiffConfig, UserSession
 from biff.nats_relay import NatsRelay
+from biff.relay import Relay
 from biff.tty import generate_tty, get_hostname, get_pwd
 
 _SESSION_TTL = timedelta(minutes=5)
@@ -34,7 +35,7 @@ _SESSION_DIR = Path.home() / ".biff" / "cli-sessions"
 class CliContext:
     """Context for a CLI command: relay connection + identity."""
 
-    relay: NatsRelay
+    relay: Relay
     config: BiffConfig
     session_key: str
     user: str
