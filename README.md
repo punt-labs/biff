@@ -177,6 +177,71 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 
+## CLI
+
+Every slash command has a matching `biff` CLI command. The CLI works outside Claude Code --- from any terminal, SSH session, or CI script.
+
+### Product commands
+
+```bash
+biff who                                   # List active sessions
+biff finger @kai                           # Check what someone is working on
+biff write @kai "review the PR"            # Send a message
+biff read                                  # Check your inbox
+biff plan "debugging websocket reconnect"  # Set your status
+biff last                                  # Session login/logout history
+biff last @kai --count 10                  # Filter by user, limit results
+biff wall "deploy freeze" --duration 2h    # Broadcast to the team
+biff wall                                  # Read active wall
+biff wall --clear                          # Remove active wall
+biff mesg off                              # Go do-not-disturb
+biff mesg on                               # Accept messages again
+biff tty dev                               # Name this session "dev"
+biff status                                # Connection state + unread count
+biff talk @kai "can you review?"           # Real-time conversation (REPL)
+```
+
+### Admin commands
+
+```bash
+biff install                # Install plugin via marketplace
+biff enable                 # Activate biff in current repo (creates .biff)
+biff disable                # Deactivate biff in current repo
+biff doctor                 # Check installation health
+biff serve                  # Start MCP server (stdio, called by plugin)
+biff uninstall              # Remove plugin and clean up
+biff version                # Print version
+```
+
+### JSON output
+
+Every product command supports `--json` for machine-readable output. The flag goes before the subcommand (standard typer global option):
+
+```bash
+biff --json who             # JSON array of sessions
+biff --json status          # JSON object with version, unread, wall
+biff --json read            # JSON array of messages
+```
+
+### Library API
+
+Commands are also importable as pure async functions:
+
+```python
+from biff import commands, CliContext, CommandResult
+from biff.relay import LocalRelay
+
+relay = LocalRelay(data_dir)
+ctx = CliContext(relay=relay, config=config, session_key="kai:abc123", user="kai", tty="abc123")
+
+result: CommandResult = await commands.who(ctx)
+print(result.text)       # Human-readable output
+print(result.json_data)  # JSON-serializable data
+print(result.error)      # True if command failed
+```
+
+All 10 product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`) follow this pattern. See the [design log](DESIGN.md#des-022-library-api--command-extraction-via-humble-object-pattern) for architecture details.
+
 ## Setup
 
 Biff requires a git repo and a GitHub identity. Your username and display name are resolved automatically from `gh auth` --- no manual configuration needed.

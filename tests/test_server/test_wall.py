@@ -7,8 +7,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
+from biff.formatting import (
+    format_remaining,
+    format_wall as _format_wall,
+    parse_duration as _parse_duration,
+)
 from biff.models import WallPost
-from biff.server.tools.wall import _format_wall, _parse_duration, format_remaining
 
 
 class TestFormatWall:

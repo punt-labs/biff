@@ -36,8 +36,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
-from biff.server.tools.tty import next_tty_name
-from biff.tty import build_session_key
+from biff.tty import build_session_key, next_tty_name
 
 logger = logging.getLogger(__name__)
 

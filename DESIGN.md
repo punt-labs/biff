@@ -1808,3 +1808,173 @@ capturing during `initialize` — the earliest possible point.
 - **`tests/test_nats_e2e/test_talk_push.py`** — Five tests exercising the full
   push notification chain.  Reusable `_publish_talk_notification` and
   `_wait_for_talk_description` helpers.
+
+## DES-022: Library API — Command Extraction via Humble Object Pattern
+
+**Date:** 2026-03-03
+**Status:** SETTLED
+**Related:** DES-005 (Command Vocabulary), DES-006 (Relay Protocol)
+
+### Problem
+
+All 10 product commands (`who`, `finger`, `write`, `read`, `plan`, `last`,
+`wall`, `mesg`, `tty`, `status`) lived as `_*_async` functions inside
+`__main__.py`.  Each embedded the same infrastructure: `cli_relay()` context
+manager, `_json_output` branching, `print()`, `typer.Exit`.  This made commands:
+
+1. **Untestable without mocking** — every test needed to mock `cli_relay()`,
+   capture stdout, and inspect exit codes.
+2. **Uncallable from library code** — no way to invoke `who()` from Python
+   without going through the CLI boundary.
+3. **Duplicated** — 10 copies of the same relay/output/exit plumbing.
+
+### Decision: Humble Object + CommandResult
+
+Each command becomes a **pure async function** in `src/biff/commands/`:
+
+```python
+async def who(ctx: CliContext) -> CommandResult:
+    sessions = await ctx.relay.get_sessions()
+    ...
+    return CommandResult(text=format_who(sessions), json_data=[...])
+```
+
+A single `_run()` adapter in `__main__.py` handles all CLI plumbing:
+
+```python
+def _run(coro_factory: Callable[[CliContext], Awaitable[CommandResult]]) -> None:
+    async def _inner() -> None:
+        async with cli_relay() as ctx:
+            result = await coro_factory(ctx)
+            if _json_output:
+                data = result.json_data if result.json_data is not None else result.text
+                _print_json(data)
+            elif result.error:
+                print(result.text, file=sys.stderr)
+            else:
+                print(result.text)
+            if result.error:
+                raise typer.Exit(code=1)
+    asyncio.run(_inner())
+```
+
+Typer commands become one-liners:
+
+```python
+@app.command()
+def who() -> None:
+    _run(commands.who)
+
+@app.command()
+def finger(user: Annotated[str, typer.Argument(...)]) -> None:
+    _run(lambda ctx: commands.finger(ctx, user))
+```
+
+### Why This Shape
+
+**`CommandResult` over exceptions.** Commands return errors as
+`CommandResult(error=True)` rather than raising.  This keeps error paths
+testable with simple assertions (`assert result.error`) instead of
+`pytest.raises`.  The `_run()` adapter translates `error=True` to
+`typer.Exit(code=1)` at the CLI boundary.
+
+**`CliContext.relay` widened to `Relay` protocol.** Was `NatsRelay` — now
+accepts any `Relay` implementation.  This is the key change that makes
+`LocalRelay(tmp_path)` work in tests without NATS, mocks, or network.
+
+**No decorator.** A plain `_run()` function is simpler than a decorator.
+The typer wiring stays explicit — each `@app.command()` function shows its
+argument definitions, and the lambda captures only what the command needs.
+
+**Keyword-only booleans.** `wall(..., *, clear: bool)` and
+`mesg(ctx, *, enabled: bool)` satisfy ruff FBT001 and prevent positional
+boolean confusion at call sites.
+
+### Alternatives Rejected
+
+**A. Decorator pattern.** Wrapping commands with `@cli_command` that handles
+`_run()` plumbing.  Rejected: obscures the typer argument definitions, makes
+IDE navigation harder, adds indirection without reducing code.
+
+**B. Return tuples instead of `CommandResult`.** `(text, json_data, error)`
+three-tuples.  Rejected: unnamed fields are error-prone, no default for
+`json_data`, worse IDE support.
+
+**C. Keep `_*_async` functions, test via subprocess.**  Already have tier 3
+subprocess tests.  Rejected: slow (5s vs 0.15s), can't inspect intermediate
+state, no library API.
+
+### Key Design Details
+
+**`CommandResult.json_data: object`.**  Not `dict | list | None` — commands
+return whatever JSON-serializable structure fits.  `status` returns a dict,
+`who` returns a list, `wall` returns a `WallPost` dict or `None`.  The `object`
+type is narrowed with `cast()` in tests where needed (pyright requires this
+when narrowing `object` through `isinstance`).
+
+**`_run()` owns the relay lifecycle.**  Commands never call `cli_relay()`
+themselves — `_run()` creates the context and passes it in.  This means
+commands are pure functions of their arguments with no hidden state.
+
+**Validation stays at the boundary.**  The `mesg` command in `__main__.py`
+validates `on/off/y/n` input strings and converts to `bool` before calling
+`commands.mesg(ctx, enabled=True)`.  The library function takes `bool`, not
+strings — CLI parsing is a CLI concern.
+
+### Test Architecture
+
+Tests use `LocalRelay(tmp_path)` with no mocks and no NATS:
+
+```python
+@pytest.fixture()
+def ctx(relay: LocalRelay) -> CliContext:
+    return CliContext(
+        relay=relay,
+        config=BiffConfig(user="kai", repo_name="test"),
+        session_key="kai:abc12345",
+        user="kai",
+        tty="abc12345",
+    )
+
+async def test_who_empty(ctx: CliContext) -> None:
+    result = await who(ctx)
+    assert result.text == "No sessions."
+    assert result.json_data == []
+    assert not result.error
+```
+
+**`WtmpRelay`** extends `LocalRelay` with in-memory wtmp storage for `last`
+command tests.  `LocalRelay.get_wtmp()` returns empty by design (no persistence
+layer) — `WtmpRelay` overrides it with a list that tests can populate.
+
+**Multi-user tests** use two fixtures (`ctx` for kai, `ctx_eric` for eric)
+sharing the same `LocalRelay` instance, verifying message isolation, wall
+visibility, and session independence.
+
+### Coverage
+
+71 tests across 11 files.  100% line coverage on all 12 modules in
+`biff.commands` (208/208 statements).
+
+| Module | Stmts | Cover |
+|--------|-------|-------|
+| `__init__.py` | 13 | 100% |
+| `_result.py` | 7 | 100% |
+| `finger.py` | 17 | 100% |
+| `last.py` | 22 | 100% |
+| `mesg.py` | 13 | 100% |
+| `plan.py` | 14 | 100% |
+| `read.py` | 17 | 100% |
+| `status.py` | 22 | 100% |
+| `tty.py` | 25 | 100% |
+| `wall.py` | 30 | 100% |
+| `who.py` | 10 | 100% |
+| `write.py` | 18 | 100% |
+
+### Net Effect
+
+- `__main__.py`: −298 lines (366 deleted, 68 added — `_run()` + one-liners)
+- `src/biff/commands/`: +208 lines across 12 modules
+- `tests/test_commands/`: +71 tests running in 0.15s
+- Library API: `from biff.commands import who, CommandResult`
+- MCP tools: unchanged (they call the relay directly, not the CLI commands)

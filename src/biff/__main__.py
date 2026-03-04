@@ -1,15 +1,23 @@
 """Biff CLI entry point.
 
-Provides ``biff serve``, ``biff version``, ``biff enable``, ``biff disable``,
-``biff install``, ``biff doctor``, ``biff uninstall``, ``biff hook``,
-``biff talk``, and status line management.
+Provides product commands (``biff who``, ``biff finger``, ``biff write``,
+``biff read``, ``biff plan``, ``biff last``, ``biff wall``, ``biff mesg``,
+``biff tty``, ``biff status``), admin commands (``biff serve``, ``biff enable``,
+``biff disable``, ``biff install``, ``biff doctor``, ``biff uninstall``),
+``biff talk`` for real-time chat, and status line management.
+
+Every product command is also available as an MCP tool — the CLI is the
+complete product, MCP tools are projections of CLI functionality.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import queue as queue_mod
+import sys
 import threading as threading_mod
+from collections.abc import Awaitable, Callable
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -20,6 +28,9 @@ import typer
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
 
+from biff import commands
+from biff.cli_session import CliContext
+from biff.commands import CommandResult
 from biff.config import (
     DEMO_RELAY_URL,
     build_biff_toml,
@@ -35,14 +46,185 @@ from biff.hook import hook_app
 from biff.server.app import create_server
 from biff.server.state import create_state
 
+# ---------------------------------------------------------------------------
+# Global --json flag
+#
+# Typer/Click requires group-level options before the subcommand name.
+# Move --json to the front of argv so both ``biff --json who`` and
+# ``biff who --json`` work.
+# ---------------------------------------------------------------------------
+
+if "--json" in sys.argv[1:]:
+    sys.argv = [
+        sys.argv[0],
+        "--json",
+        *(a for a in sys.argv[1:] if a != "--json"),
+    ]
+
+_json_output = False
+
+
+def _print_json(data: object) -> None:
+    """Print JSON to stdout."""
+    print(json.dumps(data, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
+
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
 
 
+@app.callback()
+def main(
+    json_flag: Annotated[
+        bool,
+        typer.Option("--json", help="Output JSON instead of human-readable text."),
+    ] = False,
+) -> None:
+    """Biff: team communication for software engineers."""
+    global _json_output
+    _json_output = json_flag
+
+
+# ---------------------------------------------------------------------------
+# Product commands — CLI projections of MCP tools
+#
+# Each command delegates to a pure async function in ``biff.commands``
+# that returns a ``CommandResult``.  The ``_run()`` adapter handles
+# relay session setup, JSON/text branching, and exit codes.
+# ---------------------------------------------------------------------------
+
+
+def _run(
+    coro_factory: Callable[[CliContext], Awaitable[CommandResult]],
+) -> None:
+    """Run a command function inside a CLI relay session.
+
+    Handles JSON/text branching, stderr for errors, and exit codes.
+    """
+    from biff.cli_session import cli_relay
+
+    async def _inner() -> None:
+        try:
+            async with cli_relay() as ctx:
+                result = await coro_factory(ctx)
+        except ValueError as exc:
+            if _json_output:
+                _print_json({"error": str(exc)})
+            else:
+                print(f"Error: {exc}", file=sys.stderr)
+            raise typer.Exit(code=1) from None
+
+        if _json_output:
+            data = result.json_data if result.json_data is not None else result.text
+            _print_json(data)
+        elif result.error:
+            print(result.text, file=sys.stderr)
+        else:
+            print(result.text)
+        if result.error:
+            raise typer.Exit(code=1)
+
+    asyncio.run(_inner())
+
+
 @app.command()
+def who() -> None:
+    """List active team members and what they're working on."""
+    _run(commands.who)
+
+
+@app.command()
+def finger(
+    user: Annotated[str, typer.Argument(help="User to query, e.g. @kai or @kai:tty1")],
+) -> None:
+    """Check what a user is working on and their availability."""
+    _run(lambda ctx: commands.finger(ctx, user))
+
+
+@app.command("write")
+def write_cmd(
+    to: Annotated[str, typer.Argument(help="Recipient, e.g. @kai or @kai:tty1")],
+    message: Annotated[str, typer.Argument(help="Message to send (max 512 chars)")],
+) -> None:
+    """Send a message to a teammate's inbox."""
+    _run(lambda ctx: commands.write(ctx, to, message))
+
+
+@app.command("read")
+def read_cmd() -> None:
+    """Check inbox for new messages. Marks all as read."""
+    _run(commands.read)
+
+
+@app.command()
+def plan(
+    message: Annotated[str, typer.Argument(help="What you're working on")],
+) -> None:
+    """Set what you're currently working on."""
+    _run(lambda ctx: commands.plan(ctx, message))
+
+
+@app.command("last")
+def last_cmd(
+    user: Annotated[str, typer.Argument(help="Filter by user (optional)")] = "",
+    count: Annotated[int, typer.Option(help="Number of entries")] = 25,
+) -> None:
+    """Show session login/logout history."""
+    _run(lambda ctx: commands.last(ctx, user, count))
+
+
+@app.command("wall")
+def wall_cmd(
+    message: Annotated[str, typer.Argument(help="Broadcast message")] = "",
+    duration: Annotated[str, typer.Option(help="Duration (e.g. 30m, 2h, 1d)")] = "",
+    clear: Annotated[bool, typer.Option("--clear", help="Remove active wall")] = False,
+) -> None:
+    """Post, read, or clear a team broadcast."""
+    _run(lambda ctx: commands.wall(ctx, message, duration, clear=clear))
+
+
+@app.command()
+def mesg(
+    enabled: Annotated[
+        str,
+        typer.Argument(help="on/off (or y/n) to accept or block messages"),
+    ],
+) -> None:
+    """Control message reception (on/off/y/n)."""
+    _run(lambda ctx: commands.mesg(ctx, enabled))
+
+
+@app.command("tty")
+def tty_cmd(
+    name: Annotated[str, typer.Argument(help="Session name (optional)")] = "",
+) -> None:
+    """Name the current CLI session."""
+    _run(lambda ctx: commands.tty(ctx, name))
+
+
+@app.command()
+def status() -> None:
+    """Show connection state, session info, and pending messages."""
+    _run(commands.status)
+
+
+# ---------------------------------------------------------------------------
+# Admin commands
+# ---------------------------------------------------------------------------
+
+
+@app.command("version")
 def version() -> None:
     """Print the biff version."""
-    print(f"biff {pkg_version('punt-biff')}")
+    ver = pkg_version("punt-biff")
+    if _json_output:
+        _print_json({"version": ver})
+    else:
+        print(f"biff {ver}")
 
 
 @app.command()
@@ -106,9 +288,9 @@ def serve(
 @app.command("install-statusline")
 def install_statusline() -> None:
     """Install biff into Claude Code's status bar."""
-    from biff.statusline import install
+    from biff.statusline import install as do_install
 
-    result = install()
+    result = do_install()
     print(result.message)
     if not result.installed:
         raise typer.Exit(code=1)
@@ -117,9 +299,9 @@ def install_statusline() -> None:
 @app.command("uninstall-statusline")
 def uninstall_statusline() -> None:
     """Remove biff from Claude Code's status bar."""
-    from biff.statusline import uninstall
+    from biff.statusline import uninstall as do_uninstall
 
-    result = uninstall()
+    result = do_uninstall()
     print(result.message)
     if not result.uninstalled:
         raise typer.Exit(code=1)
@@ -216,8 +398,8 @@ def disable(
 _PLUGIN_ID = "biff@punt-labs"
 
 
-@app.command()
-def install() -> None:
+@app.command("install")
+def install_cmd() -> None:
     """Install biff via the punt-labs marketplace."""
     import shutil
     import subprocess
@@ -246,8 +428,8 @@ def doctor() -> None:
         raise typer.Exit(code=code)
 
 
-@app.command()
-def uninstall() -> None:
+@app.command("uninstall")
+def uninstall_cmd() -> None:
     """Uninstall biff plugin and clean up artifacts."""
     import shutil
     import subprocess
@@ -272,6 +454,11 @@ def statusline() -> None:
     from biff.statusline import run_statusline
 
     print(run_statusline())
+
+
+# ---------------------------------------------------------------------------
+# Talk (interactive REPL — existing implementation)
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -426,14 +613,12 @@ async def _talk_loop(
 
 async def _talk_repl(to: str, opening: str) -> None:
     """Interactive talk loop: send messages, receive replies in real-time."""
-    import sys
-
-    from biff.config import load_config
+    from biff.config import load_config as _load_config
     from biff.models import Message, UserSession
     from biff.nats_relay import NatsRelay
     from biff.tty import generate_tty, parse_address
 
-    resolved = load_config()
+    resolved = _load_config()
     config = resolved.config
     if not config.relay_url:
         print("Talk requires a NATS relay. Configure relay_url in .biff.")

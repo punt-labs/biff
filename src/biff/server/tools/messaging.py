@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._formatting import ColumnSpec, format_table
 from biff.server.tools._session import resolve_session, update_current_session
 from biff.tty import build_session_key, parse_address
 
@@ -21,12 +21,6 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-
-_READ_SPECS: list[ColumnSpec] = [
-    ColumnSpec("FROM", min_width=4),
-    ColumnSpec("DATE", min_width=16),
-    ColumnSpec("MESSAGE", min_width=10, fixed=False),
-]
 
 
 async def _resolve_recipient(state: ServerState, to: str) -> tuple[str, str]:
@@ -112,8 +106,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await state.relay.mark_read_user_inbox(user, user_ids)
 
         await refresh_read_messages(mcp, state)
-        rows: list[list[str]] = []
-        for m in all_unread:
-            ts = m.timestamp.strftime("%a %b %d %H:%M")
-            rows.append([m.from_user, ts, m.body])
-        return format_table(_READ_SPECS, rows)
+        return format_read(all_unread)

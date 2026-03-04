@@ -257,10 +257,8 @@ async def refresh_wall(
     """
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    from biff.server.tools.wall import (  # noqa: PLC0415
-        WALL_BASE_DESCRIPTION,
-        format_remaining,
-    )
+    from biff.formatting import format_remaining  # noqa: PLC0415
+    from biff.server.tools.wall import WALL_BASE_DESCRIPTION  # noqa: PLC0415
 
     tool = await mcp.get_tool("wall")
     if tool is None:

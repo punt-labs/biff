@@ -2,8 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- **CLI parity with MCP tools** — every MCP product tool is now available as `biff <command>`:
+  `who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`
+- **`--json` global flag** — machine-readable JSON output on all CLI commands
+- **`biff status`** — connection state, active session, unread count, wall posts
+- **Library API** — `from biff import commands, CliContext, CommandResult` for programmatic use;
+  each CLI command is a pure async function that takes context + args and returns `CommandResult`
+- **Testable command functions** — `biff.commands` module with 10 pure async functions
+  (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`);
+  callable directly with `LocalRelay` for unit testing without NATS
+- **Shared formatting module** — `biff.formatting` extracts domain-level format functions
+  from MCP tool closures for reuse by both CLI and MCP surfaces
+- **CLI session manager** — pseudo-ephemeral NATS sessions with 5-minute TTL for
+  consecutive CLI commands (`biff.cli_session`)
+
 ### Changed
 
+- CLI product commands now delegate to `biff.commands` pure async functions via a `_run()` adapter,
+  replacing inline `_*_async` implementations with one-liner delegations
+- `CliContext.relay` widened from `NatsRelay` to `Relay` protocol, enabling `LocalRelay` in tests
+- Moved primitive formatting layer from `biff.server.tools._formatting` to `biff._formatting`
+  to break circular import between `biff.formatting` and the server tools package
 - Adopt dev/prod plugin namespace isolation: `plugin.json` name is `"biff-dev"` on main,
   release scripts swap to `"biff"` on tagged commits only. Dev commands (`*-dev.md`) route
   to `mcp__plugin_biff-dev_tty__*` to avoid collisions with the installed production plugin.
