@@ -75,6 +75,27 @@ def _print_json(data: object) -> None:
 # App setup
 # ---------------------------------------------------------------------------
 
+
+class _EofReceivedFilter(logging.Filter):
+    """Drop asyncio's 'eof_received' warning from NATS SSL disconnect."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.msg if isinstance(record.msg, str) else record.getMessage()
+        return "eof_received" not in msg
+
+
+_eof_filter_installed = False
+
+
+def _install_eof_received_filter() -> None:
+    """Add the filter to the asyncio logger exactly once."""
+    global _eof_filter_installed
+    if _eof_filter_installed:
+        return
+    logging.getLogger("asyncio").addFilter(_EofReceivedFilter())
+    _eof_filter_installed = True
+
+
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
 
@@ -99,11 +120,7 @@ def main(
     # effect when using ssl" on NATS disconnect. All asyncio modules share
     # one logger (logging.getLogger("asyncio")); we can't raise its level
     # without hiding real errors. A filter drops only this specific message.
-    class _EofReceivedFilter(logging.Filter):
-        def filter(self, record: logging.LogRecord) -> bool:
-            return "eof_received" not in record.getMessage()
-
-    logging.getLogger("asyncio").addFilter(_EofReceivedFilter())
+    _install_eof_received_filter()
 
 
 # ---------------------------------------------------------------------------
