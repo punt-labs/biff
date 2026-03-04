@@ -29,7 +29,10 @@ async def wall(
     if not message:
         current = await ctx.relay.get_wall()
         if current is None:
-            return CommandResult(text="No active wall.", json_data=None)
+            return CommandResult(
+                text="No active wall.",
+                json_data={"status": "inactive", "wall": None},
+            )
         return CommandResult(
             text=format_wall(current),
             json_data=current.model_dump(mode="json"),

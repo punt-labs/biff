@@ -15,7 +15,7 @@ class TestWall:
         result = await wall(ctx, "", "", clear=False)
         assert not result.error
         assert result.text == "No active wall."
-        assert result.json_data is None
+        assert result.json_data == {"status": "inactive", "wall": None}
 
     async def test_post_wall(self, ctx: CliContext) -> None:
         result = await wall(ctx, "deploy freeze", "1h", clear=False)
