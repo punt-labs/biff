@@ -67,3 +67,8 @@ class TestFinger:
         result = await finger(ctx, "eric")
         assert not result.error
         assert "eric" in result.text
+
+    async def test_invalid_address_empty_tty(self, ctx: CliContext) -> None:
+        result = await finger(ctx, "@eric:")
+        assert result.error
+        assert "Empty TTY" in result.text

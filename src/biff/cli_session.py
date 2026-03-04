@@ -14,7 +14,6 @@ The local file just tracks which tty to reconnect to.
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -94,9 +93,8 @@ async def cli_relay() -> AsyncIterator[CliContext]:
     config = resolved.config
 
     if not config.relay_url:
-        print("Error: CLI commands require a NATS relay.", file=sys.stderr)
-        print("Configure relay_url in .biff.", file=sys.stderr)
-        sys.exit(1)
+        msg = "CLI commands require a NATS relay. Configure relay_url in .biff."
+        raise ValueError(msg)
 
     relay = NatsRelay(
         url=config.relay_url,

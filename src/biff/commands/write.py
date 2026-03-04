@@ -11,7 +11,14 @@ from biff.tty import build_session_key, parse_address
 
 async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
     """Send a message to a teammate's inbox."""
-    bare_user, tty = parse_address(to)
+    try:
+        bare_user, tty = parse_address(to)
+    except ValueError as exc:
+        return CommandResult(
+            text=str(exc),
+            json_data={"status": "error", "to": to, "error": str(exc)},
+            error=True,
+        )
     if tty:
         session = await resolve_session(ctx.relay, bare_user, tty)
         if session:

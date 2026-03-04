@@ -215,7 +215,7 @@ biff version                # Print version
 
 ### JSON output
 
-Every product command supports `--json` for machine-readable output:
+Every product command supports `--json` for machine-readable output. The flag goes before the subcommand (standard typer global option):
 
 ```bash
 biff --json who             # JSON array of sessions

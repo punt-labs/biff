@@ -15,6 +15,7 @@ class TestStatus:
         assert not result.error
         assert "biff" in result.text
         assert "kai" in result.text
+        assert "relay: local (connected)" in result.text
         assert "unread: 0" in result.text
         assert "wall: (none)" in result.text
         json_data = result.json_data

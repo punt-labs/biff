@@ -11,7 +11,14 @@ from biff.tty import parse_address
 
 async def finger(ctx: CliContext, user: str) -> CommandResult:
     """Check what a user is working on and their availability."""
-    bare_user, tty = parse_address(user)
+    try:
+        bare_user, tty = parse_address(user)
+    except ValueError as exc:
+        return CommandResult(
+            text=str(exc),
+            json_data={"error": str(exc)},
+            error=True,
+        )
     if tty:
         session = await resolve_session(ctx.relay, bare_user, tty)
         if session is None:

@@ -53,3 +53,13 @@ class TestWrite:
         msgs = await relay.fetch_user_inbox("eric")
         assert len(msgs) == 1
         assert msgs[0].body == "no prefix"
+
+    async def test_invalid_address_empty_tty(self, ctx: CliContext) -> None:
+        result = await write(ctx, "@eric:", "hello")
+        assert result.error
+        assert "Empty TTY" in result.text
+        assert result.json_data == {
+            "status": "error",
+            "to": "@eric:",
+            "error": result.text,
+        }

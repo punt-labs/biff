@@ -33,7 +33,7 @@ async def status(ctx: CliContext) -> CommandResult:
     plural = "s" if total_unread != 1 else ""
     lines = [
         f"biff {ver}",
-        f"relay: {ctx.config.relay_url} (connected)",
+        f"relay: {ctx.config.relay_url or 'local'} (connected)",
         f"user: {ctx.user}",
         f"session: {tty_name} ({ctx.tty[:8]}), idle {idle}",
         f"unread: {total_unread} message{plural}",
