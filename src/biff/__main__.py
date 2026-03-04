@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import queue as queue_mod
 import sys
 import threading as threading_mod
+import warnings
 from collections.abc import Awaitable, Callable
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -87,6 +89,12 @@ def main(
     """Biff: team communication for software engineers."""
     global _json_output
     _json_output = json_flag
+
+    # Suppress nats.py noise on Python 3.14+ and NATS/SSL chatter
+    # during normal CLI exit. Scoped to CLI invocation, not import.
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="nats")
+    logging.getLogger("biff.nats_relay").setLevel(logging.ERROR)
+    logging.getLogger("asyncio.sslproto").setLevel(logging.ERROR)
 
 
 # ---------------------------------------------------------------------------
