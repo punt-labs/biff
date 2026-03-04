@@ -1,4 +1,4 @@
-"""TTY session identity — generation and address parsing.
+"""TTY session identity — generation, naming, and address parsing.
 
 Each biff server instance gets a unique TTY identifier at startup,
 analogous to a Unix PTY device name.  Combined with the username,
@@ -7,9 +7,12 @@ this forms a session key: ``{user}:{tty}``.
 
 from __future__ import annotations
 
+import re
 import secrets
 import socket
 from pathlib import Path
+
+_TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
 
 
 def generate_tty() -> str:
@@ -30,6 +33,16 @@ def get_pwd() -> str:
 def build_session_key(user: str, tty: str) -> str:
     """Build a session key from user and tty: ``{user}:{tty}``."""
     return f"{user}:{tty}"
+
+
+def next_tty_name(existing_names: list[str]) -> str:
+    """Return the next sequential ``ttyN`` not already in use."""
+    highest = 0
+    for name in existing_names:
+        m = _TTY_SEQ_RE.match(name)
+        if m:
+            highest = max(highest, int(m.group(1)))
+    return f"tty{highest + 1}"
 
 
 def parse_address(address: str) -> tuple[str, str | None]:

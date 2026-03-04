@@ -6,12 +6,12 @@ Without arguments, auto-assigns the next sequential ``ttyN``.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages, set_tty_name
 from biff.server.tools._session import update_current_session
+from biff.tty import next_tty_name
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -19,17 +19,6 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 _MAX_TTY_NAME = 20
-_TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
-
-
-def next_tty_name(existing_names: list[str]) -> str:
-    """Return the next sequential ``ttyN`` not already in use."""
-    highest = 0
-    for name in existing_names:
-        m = _TTY_SEQ_RE.match(name)
-        if m:
-            highest = max(highest, int(m.group(1)))
-    return f"tty{highest + 1}"
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:

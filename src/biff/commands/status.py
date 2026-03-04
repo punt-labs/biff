@@ -20,7 +20,7 @@ async def status(ctx: CliContext) -> CommandResult:
 
     json_data: dict[str, object] = {
         "version": ver,
-        "relay": ctx.config.relay_url,
+        "relay": ctx.config.relay_url or "local",
         "user": ctx.user,
         "session_key": ctx.session_key,
         "tty_name": session.tty_name if session else "cli",

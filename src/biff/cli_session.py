@@ -23,7 +23,7 @@ from pathlib import Path
 from biff.config import load_config
 from biff.models import BiffConfig, UserSession
 from biff.nats_relay import NatsRelay
-from biff.relay import Relay
+from biff.relay import Relay, atomic_write
 from biff.tty import generate_tty, get_hostname, get_pwd
 
 _SESSION_TTL = timedelta(minutes=5)
@@ -70,14 +70,13 @@ def _load_session(repo_name: str) -> tuple[str, str] | None:
 
 def _save_session(repo_name: str, user: str, tty: str) -> None:
     """Save session to disk with current timestamp."""
-    _SESSION_DIR.mkdir(parents=True, exist_ok=True)
     data = {
         "user": user,
         "tty": tty,
         "tty_name": "cli",
         "last_active": datetime.now(UTC).isoformat(),
     }
-    _session_path(repo_name).write_text(json.dumps(data, indent=2) + "\n")
+    atomic_write(_session_path(repo_name), json.dumps(data, indent=2) + "\n")
 
 
 @asynccontextmanager
@@ -132,8 +131,8 @@ async def cli_relay() -> AsyncIterator[CliContext]:
             user=user,
             tty=tty,
         )
-
-        # Update last_active on success
-        _save_session(config.repo_name, user, tty)
     finally:
+        # Always save session so the next invocation reuses the same tty,
+        # preventing orphaned NATS sessions on command failure.
+        _save_session(config.repo_name, user, tty)
         await relay.close()

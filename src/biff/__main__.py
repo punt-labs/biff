@@ -176,11 +176,7 @@ def mesg(
     ],
 ) -> None:
     """Control message reception (on/off)."""
-    value = enabled.strip().lower()
-    if value not in ("on", "off", "y", "n"):
-        print("Usage: biff mesg <on|off>", file=sys.stderr)
-        raise typer.Exit(code=1)
-    _run(lambda ctx: commands.mesg(ctx, enabled=value in ("on", "y")))
+    _run(lambda ctx: commands.mesg(ctx, enabled))
 
 
 @app.command("tty")

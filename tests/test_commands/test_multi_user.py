@@ -156,8 +156,8 @@ class TestMesgIsolation:
     async def test_mesg_per_user(
         self, ctx: CliContext, ctx_eric: CliContext, relay: LocalRelay
     ) -> None:
-        await mesg(ctx, enabled=False)
-        await mesg(ctx_eric, enabled=True)
+        await mesg(ctx, "off")
+        await mesg(ctx_eric, "on")
 
         kai_session = await relay.get_session("kai:abc12345")
         eric_session = await relay.get_session("eric:def67890")

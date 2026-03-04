@@ -21,6 +21,7 @@ class TestStatus:
         json_data = result.json_data
         assert isinstance(json_data, dict)
         assert json_data["user"] == "kai"
+        assert json_data["relay"] == "local"
         assert json_data["unread"] == 0
         assert json_data["wall"] is None
 

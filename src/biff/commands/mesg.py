@@ -7,9 +7,20 @@ from biff.commands._result import CommandResult
 from biff.models import UserSession
 from biff.tty import get_hostname, get_pwd
 
+_VALID_VALUES = frozenset(("on", "off", "y", "n"))
 
-async def mesg(ctx: CliContext, *, enabled: bool) -> CommandResult:
-    """Control message reception (on/off)."""
+
+async def mesg(ctx: CliContext, value: str) -> CommandResult:
+    """Control message reception (on/off).
+
+    *value* must be one of ``on``, ``off``, ``y``, ``n``.
+    """
+    value = value.strip().lower()
+    if value not in _VALID_VALUES:
+        msg = "Usage: biff mesg <on|off>"
+        return CommandResult(text=msg, json_data={"error": msg}, error=True)
+
+    enabled = value in ("on", "y")
     session = await ctx.relay.get_session(ctx.session_key)
     if session is None:
         session = UserSession(

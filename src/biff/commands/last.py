@@ -28,7 +28,7 @@ async def last(ctx: CliContext, user: str, count: int) -> CommandResult:
     for login, logout in pairs:
         entry: dict[str, object] = {
             "user": login.user,
-            "tty": login.tty_name or login.tty[:8],
+            "tty": login.tty_name or login.tty[:8] or "-",
             "login": login.timestamp.isoformat(),
             "logout": logout.timestamp.isoformat() if logout else None,
             "active": login.session_key in active_keys,

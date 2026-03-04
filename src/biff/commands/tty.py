@@ -5,8 +5,7 @@ from __future__ import annotations
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import UserSession
-from biff.server.tools.tty import next_tty_name
-from biff.tty import get_hostname, get_pwd
+from biff.tty import get_hostname, get_pwd, next_tty_name
 
 
 async def tty(ctx: CliContext, name: str) -> CommandResult:
