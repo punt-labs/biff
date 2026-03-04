@@ -94,7 +94,16 @@ def main(
     # during normal CLI exit. Scoped to CLI invocation, not import.
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="nats")
     logging.getLogger("biff.nats_relay").setLevel(logging.ERROR)
-    logging.getLogger("asyncio.sslproto").setLevel(logging.ERROR)
+
+    # asyncio's sslproto logs "returning true from eof_received() has no
+    # effect when using ssl" on NATS disconnect. All asyncio modules share
+    # one logger (logging.getLogger("asyncio")); we can't raise its level
+    # without hiding real errors. A filter drops only this specific message.
+    class _EofReceivedFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "eof_received" not in record.getMessage()
+
+    logging.getLogger("asyncio").addFilter(_EofReceivedFilter())
 
 
 # ---------------------------------------------------------------------------
