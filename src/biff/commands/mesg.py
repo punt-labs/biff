@@ -17,7 +17,7 @@ async def mesg(ctx: CliContext, value: str) -> CommandResult:
     """
     value = value.strip().lower()
     if value not in _VALID_VALUES:
-        msg = "Usage: biff mesg <on|off>"
+        msg = "Usage: biff mesg <on|off|y|n>"
         return CommandResult(text=msg, json_data={"error": msg}, error=True)
 
     enabled = value in ("on", "y")

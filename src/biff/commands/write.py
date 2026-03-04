@@ -34,7 +34,14 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
         to_user=relay_key,
         body=message[:512],
     )
-    await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+    try:
+        await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+    except ValueError as exc:
+        return CommandResult(
+            text=str(exc),
+            json_data={"status": "error", "to": to, "error": str(exc)},
+            error=True,
+        )
     return CommandResult(
         text=f"Message sent to {display}.",
         json_data={"status": "sent", "to": display},

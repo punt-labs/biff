@@ -48,7 +48,18 @@ from biff.server.state import create_state
 
 # ---------------------------------------------------------------------------
 # Global --json flag
+#
+# Typer/Click requires group-level options before the subcommand name.
+# Move --json to the front of argv so both ``biff --json who`` and
+# ``biff who --json`` work.
 # ---------------------------------------------------------------------------
+
+if "--json" in sys.argv[1:]:
+    sys.argv = [
+        sys.argv[0],
+        "--json",
+        *(a for a in sys.argv[1:] if a != "--json"),
+    ]
 
 _json_output = False
 
@@ -97,17 +108,25 @@ def _run(
     from biff.cli_session import cli_relay
 
     async def _inner() -> None:
-        async with cli_relay() as ctx:
-            result = await coro_factory(ctx)
+        try:
+            async with cli_relay() as ctx:
+                result = await coro_factory(ctx)
+        except ValueError as exc:
             if _json_output:
-                data = result.json_data if result.json_data is not None else result.text
-                _print_json(data)
-            elif result.error:
-                print(result.text, file=sys.stderr)
+                _print_json({"error": str(exc)})
             else:
-                print(result.text)
-            if result.error:
-                raise typer.Exit(code=1)
+                print(f"Error: {exc}", file=sys.stderr)
+            raise typer.Exit(code=1) from None
+
+        if _json_output:
+            data = result.json_data if result.json_data is not None else result.text
+            _print_json(data)
+        elif result.error:
+            print(result.text, file=sys.stderr)
+        else:
+            print(result.text)
+        if result.error:
+            raise typer.Exit(code=1)
 
     asyncio.run(_inner())
 
@@ -172,10 +191,10 @@ def wall_cmd(
 def mesg(
     enabled: Annotated[
         str,
-        typer.Argument(help="'on' to accept messages, 'off' to block them"),
+        typer.Argument(help="on/off (or y/n) to accept or block messages"),
     ],
 ) -> None:
-    """Control message reception (on/off)."""
+    """Control message reception (on/off/y/n)."""
     _run(lambda ctx: commands.mesg(ctx, enabled))
 
 
