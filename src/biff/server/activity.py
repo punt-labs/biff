@@ -34,14 +34,20 @@ class ActivityTracker:
         self._napping = False
 
     def wake(self) -> None:
-        """Exit napping without updating the tool-call timestamp.
+        """Exit napping and force an immediate nap poll.
 
-        Called by NATS callbacks to ensure the next 2s poller tick
-        runs ``_active_tick`` instead of skipping as a nap no-op.
+        Called by NATS callbacks and KV watchers to ensure the next
+        2s poller tick runs ``_active_tick`` instead of skipping as
+        a nap no-op.  Resets ``_last_nap_poll`` to epoch so the
+        ``seconds_since_nap_poll() < nap_interval`` guard passes
+        even if the poller re-enters napping on the same tick
+        (because ``idle_seconds()`` still exceeds the threshold).
+
         Unlike ``touch()``, this does not reset the idle timer —
         the server will re-enter napping after the next idle check.
         """
         self._napping = False
+        self._last_nap_poll = datetime.min.replace(tzinfo=UTC)
 
     def enter_nap(self) -> None:
         """Transition to napping state."""

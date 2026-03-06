@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -141,25 +141,22 @@ class TestKvWatchSnapshotSurvival:
         fake_relay = FakeNatsRelay(kv=fake_kv)
 
         cache: dict[str, UserSession] = {}
-        wall_refreshed = asyncio.Event()
+        wake_called = asyncio.Event()
 
-        async def _mock_refresh_wall(*_args: object, **_kwargs: object) -> None:
-            wall_refreshed.set()
+        def _tracking_wake(_self: object) -> None:
+            wake_called.set()
 
-        # Signal shutdown after the watcher drains its script and blocks
+        # Signal shutdown after the watcher processes the wall entry
         async def _shutdown_after_drain() -> None:
-            # Wait for the wall refresh (proves post-snapshot entry was processed)
-            await asyncio.wait_for(wall_refreshed.wait(), timeout=5.0)
+            await asyncio.wait_for(wake_called.wait(), timeout=5.0)
             # Give time for the session entry after wall to be processed
             await asyncio.sleep(0.05)
             shutdown.set()
 
-        mcp = AsyncMock()
         shutdown_task = asyncio.create_task(_shutdown_after_drain())
 
-        with patch("biff.server.app.refresh_wall", _mock_refresh_wall):
+        with patch("biff.server.activity.ActivityTracker.wake", _tracking_wake):
             await _run_kv_watch(
-                mcp,
                 fake_relay,  # type: ignore[arg-type]
                 state,
                 shutdown,
@@ -168,10 +165,8 @@ class TestKvWatchSnapshotSurvival:
 
         await shutdown_task
 
-        # The wall entry after None was processed
-        assert wall_refreshed.is_set(), (
-            "Wall refresh not triggered for post-snapshot entry"
-        )
+        # The wall entry after None woke the poller
+        assert wake_called.is_set(), "Poller not woken for post-snapshot wall entry"
         # The session entry after None was cached
         assert "kai:tty1" in cache, "Session entry after snapshot-done was not cached"
         assert watcher.stopped, "Watcher was not stopped in finally block"
@@ -195,21 +190,19 @@ class TestKvWatchSnapshotSurvival:
         fake_relay = FakeNatsRelay(kv=fake_kv)
 
         cache: dict[str, UserSession] = {}
-        wall_refreshed = asyncio.Event()
+        wake_called = asyncio.Event()
 
-        async def _mock_refresh_wall(*_args: object, **_kwargs: object) -> None:
-            wall_refreshed.set()
+        def _tracking_wake(_self: object) -> None:
+            wake_called.set()
 
         async def _shutdown_after_wall() -> None:
-            await asyncio.wait_for(wall_refreshed.wait(), timeout=5.0)
+            await asyncio.wait_for(wake_called.wait(), timeout=5.0)
             shutdown.set()
 
-        mcp = AsyncMock()
         shutdown_task = asyncio.create_task(_shutdown_after_wall())
 
-        with patch("biff.server.app.refresh_wall", _mock_refresh_wall):
+        with patch("biff.server.activity.ActivityTracker.wake", _tracking_wake):
             await _run_kv_watch(
-                mcp,
                 fake_relay,  # type: ignore[arg-type]
                 state,
                 shutdown,
@@ -217,9 +210,7 @@ class TestKvWatchSnapshotSurvival:
             )
 
         await shutdown_task
-        assert wall_refreshed.is_set(), (
-            "Wall entry after multiple Nones was not processed"
-        )
+        assert wake_called.is_set(), "Wall after multiple Nones did not wake poller"
 
     async def test_timeout_does_not_terminate_loop(self, state: ServerState) -> None:
         """TimeoutError from watcher.updates() is caught and the loop continues.
@@ -243,21 +234,19 @@ class TestKvWatchSnapshotSurvival:
         fake_relay = FakeNatsRelay(kv=fake_kv)
 
         cache: dict[str, UserSession] = {}
-        wall_refreshed = asyncio.Event()
+        wake_called = asyncio.Event()
 
-        async def _mock_refresh_wall(*_args: object, **_kwargs: object) -> None:
-            wall_refreshed.set()
+        def _tracking_wake(_self: object) -> None:
+            wake_called.set()
 
         async def _shutdown_after_wall() -> None:
-            await asyncio.wait_for(wall_refreshed.wait(), timeout=5.0)
+            await asyncio.wait_for(wake_called.wait(), timeout=5.0)
             shutdown.set()
 
-        mcp = AsyncMock()
         shutdown_task = asyncio.create_task(_shutdown_after_wall())
 
-        with patch("biff.server.app.refresh_wall", _mock_refresh_wall):
+        with patch("biff.server.activity.ActivityTracker.wake", _tracking_wake):
             await _run_kv_watch(
-                mcp,
                 fake_relay,  # type: ignore[arg-type]
                 state,
                 shutdown,
@@ -265,9 +254,7 @@ class TestKvWatchSnapshotSurvival:
             )
 
         await shutdown_task
-        assert wall_refreshed.is_set(), (
-            "Wall entry after TimeoutErrors was not processed"
-        )
+        assert wake_called.is_set(), "Wall after TimeoutErrors did not wake poller"
 
     async def test_shutdown_exits_cleanly(self, state: ServerState) -> None:
         """Setting shutdown causes the loop to exit without processing more entries."""
@@ -279,12 +266,10 @@ class TestKvWatchSnapshotSurvival:
         fake_relay = FakeNatsRelay(kv=fake_kv)
 
         cache: dict[str, UserSession] = {}
-        mcp = AsyncMock()
 
         # Should return immediately
         await asyncio.wait_for(
             _run_kv_watch(
-                mcp,
                 fake_relay,  # type: ignore[arg-type]
                 state,
                 shutdown,

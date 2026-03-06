@@ -14,7 +14,7 @@ import pytest
 
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
-from biff.server.app import _run_kv_watch, create_server
+from biff.server.app import _run_kv_watch
 from biff.server.state import create_state
 
 pytestmark = pytest.mark.nats
@@ -28,7 +28,7 @@ class TestKvWatchSurvivalE2E:
     async def test_post_snapshot_wall_update_detected(
         self, nats_server: str, tmp_path: Path
     ) -> None:
-        """Wall KV entry after snapshot triggers refresh_wall."""
+        """Wall KV entry after snapshot wakes the poller."""
         config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
         state = create_state(
             config, tmp_path, tty="tty1", hostname="test-host", pwd="/test"
@@ -42,18 +42,16 @@ class TestKvWatchSurvivalE2E:
         await kv.put(wall_key, b"initial-wall")  # pyright: ignore[reportUnknownMemberType]
 
         shutdown = asyncio.Event()
-        wall_refreshed = asyncio.Event()
-        refresh_count = 0
+        wake_detected = asyncio.Event()
+        wake_count = 0
 
-        async def _mock_refresh_wall(*_args: object, **_kwargs: object) -> None:
-            nonlocal refresh_count
-            refresh_count += 1
-            # The first refresh is from the snapshot entry.
+        def _counting_wake(_self: object) -> None:
+            nonlocal wake_count
+            wake_count += 1
+            # The first wake is from the snapshot entry.
             # The second is the post-snapshot live update.
-            if refresh_count >= 2:
-                wall_refreshed.set()
-
-        mcp = create_server(state)
+            if wake_count >= 2:
+                wake_detected.set()
 
         async def _write_after_snapshot() -> None:
             # Wait a bit for the watcher to drain its snapshot
@@ -63,7 +61,7 @@ class TestKvWatchSurvivalE2E:
 
         async def _shutdown_after_detection() -> None:
             try:
-                await asyncio.wait_for(wall_refreshed.wait(), timeout=10.0)
+                await asyncio.wait_for(wake_detected.wait(), timeout=10.0)
             finally:
                 shutdown.set()
 
@@ -72,9 +70,8 @@ class TestKvWatchSurvivalE2E:
 
         cache: dict[str, object] = {}
 
-        with patch("biff.server.app.refresh_wall", _mock_refresh_wall):
+        with patch("biff.server.activity.ActivityTracker.wake", _counting_wake):
             await _run_kv_watch(
-                mcp,
                 relay,
                 state,
                 shutdown,
@@ -84,8 +81,8 @@ class TestKvWatchSurvivalE2E:
         await writer_task
         await shutdown_task
 
-        assert wall_refreshed.is_set(), (
-            f"Post-snapshot wall update not detected (refresh_count={refresh_count}). "
+        assert wake_detected.is_set(), (
+            f"Post-snapshot wall update not detected (wake_count={wake_count}). "
             "The watcher likely terminated on the snapshot-done marker."
         )
 
@@ -134,11 +131,10 @@ class TestKvWatchSurvivalE2E:
                 await asyncio.sleep(0.1)
             shutdown.set()
 
-        mcp = create_server(state)
         writer_task = asyncio.create_task(_write_eric_after_snapshot())
         shutdown_task = asyncio.create_task(_shutdown_when_cached())
 
-        await _run_kv_watch(mcp, relay, state, shutdown, cache)
+        await _run_kv_watch(relay, state, shutdown, cache)
 
         await writer_task
         await shutdown_task
