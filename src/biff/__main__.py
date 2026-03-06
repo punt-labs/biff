@@ -140,7 +140,7 @@ def main(
         logger.setLevel(logging.DEBUG)
         has_stderr = any(
             isinstance(h, logging.StreamHandler)
-            and getattr(h, "stream", None) is sys.stderr
+            and getattr(h, "stream", None) is sys.stderr  # pyright: ignore[reportUnknownArgumentType]
             for h in logger.handlers
         )
         if not has_stderr:
