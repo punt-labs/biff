@@ -44,9 +44,9 @@ The notification pipeline has a ``belt and suspenders'' design: tool
 handlers fire notifications via the MCP request context (belt path),
 while a background poller fires them via a stored
 \texttt{ServerSession} reference (suspenders path).  NATS subscription
-callbacks and KV watchers only mutate state (display queue,
-description-changed flags); the poller detects the changes and fires
-the notification from the MCP server's own coroutine context.
+callbacks and KV watchers only wake the poller from napping; the
+poller detects the changes on its next active tick and fires the
+notification from the MCP server's own coroutine context.
 
 The session reference is captured eagerly during the server's lifespan
 startup, before the NATS connection is established and before the
@@ -58,9 +58,9 @@ session}.  Since NATS subscription is the mechanism that delivers
 external talk messages, and since the session is captured before NATS
 connects, the poller always has a valid notification path.  NATS
 callbacks and KV watchers do not fire notifications directly---they
-are unreliable from background coroutine contexts---but they mutate
-state and wake the poller from napping, so the next active tick
-(2~seconds) detects the changes and fires the notification.
+are unreliable from background coroutine contexts---but they wake the
+poller from napping, so the next active tick (2~seconds) detects the
+changes via its own reads and fires the notification.
 
 This specification models the four state spaces---NATS connection,
 MCP server session, filesystem, and status bar---and the operations
@@ -543,16 +543,19 @@ handles the receive-side effects.
 
 \subsection{KV Wall Receive}
 
-Fires when the NATS KV watcher detects a wall change from another
-user.  Runs \emph{outside} any tool handler context in a background
-asyncio task.  Updates the wall description and adds a display queue
-item, but does \emph{not} fire an MCP notification directly---sending
-notifications from a background task is unreliable for the same reason
-as NATS subscription callbacks.
+Models the effects that occur when the periodic status poller, running
+in the MCP server coroutine context, detects that the wall KV entry
+has changed (typically after being woken by the NATS KV watcher).
+The watcher itself runs \emph{outside} any tool handler context in a
+background asyncio task and only wakes the poller; it does \emph{not}
+update the wall description, modify the display queue, or fire an MCP
+notification directly---sending notifications from a background task
+is unreliable for the same reason as NATS subscription callbacks.
 
-Instead, the watcher wakes the poller from napping so the next active
-tick (2~seconds) detects the wall change via its own KV read and fires
-the notification from the MCP server's coroutine context.
+After being woken, the poller performs its next active tick (every
+2~seconds), reads the wall value from KV, detects any change, applies
+this schema to update the wall description and display queue, and then
+fires the notification from the MCP server's coroutine context.
 
 The precondition $natsConn = natsConnected$ implies
 $session = sessCaptured$ (by state invariant), so the poller will
