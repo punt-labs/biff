@@ -58,8 +58,9 @@ session}.  Since NATS subscription is the mechanism that delivers
 external talk messages, and since the session is captured before NATS
 connects, the poller always has a valid notification path.  NATS
 callbacks do not fire notifications directly---they are unreliable
-from a different coroutine context---but they set flags that the
-poller picks up within one tick interval (2~seconds).
+from a different coroutine context---but they mutate state and wake
+the poller from napping, so the next active tick (2~seconds) detects
+the changes and fires the notification.
 
 This specification models the four state spaces---NATS connection,
 MCP server session, filesystem, and status bar---and the operations
@@ -421,8 +422,8 @@ Because the state invariant guarantees $session = sessCaptured$
 whenever NATS is connected, and because all notification-triggering
 operations require a NATS connection, $NotifySuspenders$ is always
 applicable when $toolContext = zfalse$ and a description has changed.
-No notification is ever dropped---NATS callbacks defer to the poller,
-which fires the notification within one tick interval (2~seconds).
+No notification is ever dropped---NATS callbacks defer to the poller
+and wake it from napping, so the next active tick fires the notification.
 
 %%----------------------------------------------------------------------
 \section{Send Flow Operations}
@@ -781,9 +782,12 @@ also sets $lastNotifyResult' = notifySent$ ($WallPost$, belt path).
 $NatsTalkCallback$ sets $talkDescChanged' = ztrue$ but defers
 notification to the poller: it preserves $lastNotifyResult$, and
 $PollTick$ detects $talkDescChanged = ztrue$ and sets
-$lastNotifyResult' = notifySent$.  The invariant holds because
-the poller fires within one tick interval---no changed flag persists
-across two consecutive ticks without producing $notifySent$.
+$lastNotifyResult' = notifySent$.  The invariant holds because,
+whenever a description change sets a ``changed'' flag, the next execution
+of $PollTick$ that observes this flag produces $notifySent$; thus no
+changed flag can persist across two consecutive $PollTick$ executions
+without producing $notifySent$.  NATS callbacks wake the poller from
+napping, ensuring $PollTick$ runs promptly even during idle periods.
 
 \subsection{Session Invariant}
 
