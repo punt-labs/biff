@@ -404,7 +404,12 @@ async def _manage_talk_subscription(
                     )
                     state.display_queue.add(item)
                     state.display_queue.force_to_front(item.source_key)
-                    await refresh_talk(mcp, state)
+                    # Wake the poller from napping so the next 2s
+                    # tick runs _active_tick and fires the MCP
+                    # notification.  Do NOT call refresh_talk here
+                    # — sending notifications from a NATS callback
+                    # is unreliable (different coroutine context).
+                    state.activity.wake()
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
 

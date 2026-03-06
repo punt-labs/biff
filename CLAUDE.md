@@ -292,3 +292,32 @@ Biff is a CLI communication tool for software engineers, named after the Berkele
 - **Permissions are explicit.** Who can message you, who can request steering — all configurable.
 - **Audit trail.** Every message, every steering request is logged.
 - **Sandboxed by default.** Remote interactions are read-only unless explicitly escalated.
+
+## Agent Instructions
+
+This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit).
+
+## Quality Gates
+
+Run before every commit. Zero violations, zero errors, all tests green.
+
+```bash
+uv run ruff check . && uv run ruff format --check . && uv run mypy src/ tests/ && uv run pyright && uv run pytest
+```
+
+## Standards References
+
+- [Python](https://github.com/punt-labs/punt-kit/blob/main/standards/python.md)
+- [Plugins](https://github.com/punt-labs/punt-kit/blob/main/standards/plugins.md)
+- [GitHub](https://github.com/punt-labs/punt-kit/blob/main/standards/github.md)
+- [Workflow](https://github.com/punt-labs/punt-kit/blob/main/standards/workflow.md)
+- [CLI](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md)
+
+## Available Tooling
+
+| Tool | What It Does |
+|------|-------------|
+| `punt init` | Scaffold missing files (CI, config, permissions, beads) |
+| `punt audit` | Check compliance against Punt Labs standards |
+| `punt audit --fix` | Auto-create missing mechanical files |
+| `/punt reconcile` | LLM-powered contextual reconciliation (workflows, CLAUDE.md, permissions) |
