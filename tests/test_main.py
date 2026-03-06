@@ -111,7 +111,7 @@ class TestMcpCommand:
         mock_server: MagicMock,
     ) -> None:
         mock_server.return_value = MagicMock()
-        runner.invoke(app, ["serve", "--user", "kai", "--data-dir", "/custom/dir"])
+        runner.invoke(app, ["mcp", "--user", "kai", "--data-dir", "/custom/dir"])
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["data_dir_override"] == Path("/custom/dir")
 
@@ -125,7 +125,7 @@ class TestMcpCommand:
         mock_server: MagicMock,
     ) -> None:
         mock_server.return_value = MagicMock()
-        runner.invoke(app, ["serve", "--user", "kai", "--prefix", "/var/spool"])
+        runner.invoke(app, ["mcp", "--user", "kai", "--prefix", "/var/spool"])
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["prefix"] == Path("/var/spool")
 
@@ -140,7 +140,7 @@ class TestMcpCommand:
     ) -> None:
         """When --user is omitted, load_config gets user_override=None."""
         mock_server.return_value = MagicMock()
-        runner.invoke(app, ["serve"])
+        runner.invoke(app, ["mcp"])
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["user_override"] is None
 
