@@ -303,6 +303,9 @@ Biff assumes the terminal is where you're already working — so that's where yo
 - Per-project activation (`/biff y`) with lazy connection management
 - Status bar with live unread count, wall, and talk display
 - Workflow hooks: plan auto-expand, session lifecycle, git integration
+- CLI parity: every MCP tool available as `biff <command>` with `--json` output
+- Library API: pure async functions for programmatic use and testing
+- Notification deferral: ≤2s latency for wall and talk in all states (active and napping)
 
 ### Next
 
