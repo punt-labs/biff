@@ -225,9 +225,3 @@ COVERAGE_CORE=sysmon uv run coverage run --source=biff -m pytest -q
 uv run coverage report -m --include="*/__main__.py,*/commands/*.py"
 ```
 
-## Known issues
-
-Three `test_config.py` tests fail locally because `TMPDIR` (set via
-`.envrc`) points to `.tmp/` inside the biff repo. `find_git_root`
-walks up from `tmp_path` and finds biff's own `.git` instead of
-returning `None`. These pass in CI where `TMPDIR` is `/tmp`.

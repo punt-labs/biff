@@ -37,7 +37,18 @@ class TestFindGitRoot:
         assert find_git_root(nested) == tmp_path
 
     def test_returns_none_when_no_git(self, tmp_path: Path) -> None:
-        assert find_git_root(tmp_path) is None
+        # Patch exists() so the parent walk never finds a .git directory.
+        # Without this, TMPDIR inside a git repo (e.g. .tmp/) causes the
+        # walk to find the host repo's .git.
+        orig_exists = Path.exists
+
+        def _no_git_exists(self: Path) -> bool:
+            if self.name == ".git":
+                return False
+            return orig_exists(self)
+
+        with patch.object(Path, "exists", _no_git_exists):
+            assert find_git_root(tmp_path) is None
 
 
 # -- get_github_identity (GitHub CLI) --
@@ -411,8 +422,11 @@ class TestLoadConfig:
         with pytest.raises(SystemExit, match="No user configured"):
             load_config(start=tmp_path)
 
+    @patch("biff.config.find_git_root", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_no_repo_exits(self, _mock: object, tmp_path: Path) -> None:
+    def test_no_repo_exits(
+        self, _mock: object, _mock_root: object, tmp_path: Path
+    ) -> None:
         # No .git directory — must error, not silently fall back
         with pytest.raises(SystemExit, match="Not in a git repository"):
             load_config(start=tmp_path)
@@ -424,9 +438,10 @@ class TestLoadConfig:
         assert resolved.config.team == ()
         assert resolved.config.relay_url is None
 
+    @patch("biff.config.find_git_root", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_no_repo_exits_even_with_data_dir_override(
-        self, _mock: object, tmp_path: Path
+        self, _mock: object, _mock_root: object, tmp_path: Path
     ) -> None:
         custom = tmp_path / "data"
         with pytest.raises(SystemExit, match="Not in a git repository"):
