@@ -51,28 +51,11 @@ from biff.server.app import create_server
 from biff.server.state import create_state
 
 # ---------------------------------------------------------------------------
-# Global --json flag
+# Global flags
 #
-# Typer/Click requires group-level options before the subcommand name.
-# Move global flags to the front of argv so both ``biff --json who`` and
-# ``biff who --json`` work (same for --verbose/-v and --quiet/-q).
+# Global flags (--json, --verbose, --quiet) go before the subcommand,
+# following beads convention: ``biff --json who``, not ``biff who --json``.
 # ---------------------------------------------------------------------------
-
-_GLOBAL_FLAGS = {"--json", "--verbose", "-v", "--quiet", "-q"}
-
-_front: list[str] = []
-_rest: list[str] = []
-_seen_end_of_opts = False
-for _arg in sys.argv[1:]:
-    if _arg == "--":
-        _seen_end_of_opts = True
-        _rest.append(_arg)
-    elif not _seen_end_of_opts and _arg in _GLOBAL_FLAGS:
-        _front.append(_arg)
-    else:
-        _rest.append(_arg)
-if _front:
-    sys.argv = [sys.argv[0], *_front, *_rest]
 
 _json_output = False
 _quiet_output = False
@@ -299,8 +282,8 @@ def version() -> None:
     ver = pkg_version("punt-biff")
     if _json_output:
         _print_json({"version": ver})
-    else:
-        print(f"biff {ver}")
+        return
+    print(f"biff {ver}")
 
 
 def _create_mcp_server(
