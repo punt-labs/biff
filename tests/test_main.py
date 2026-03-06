@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff.cli_session import CliContext
+from biff.commands import CommandResult
 from biff.config import GitHubIdentity, ResolvedConfig
 from biff.models import BiffConfig
 
@@ -18,6 +22,25 @@ _RESOLVED = ResolvedConfig(
     data_dir=Path("/tmp/biff/myrepo"),
     repo_root=Path("/proj/myrepo"),
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for product-command tests
+# ---------------------------------------------------------------------------
+
+_MOCK_CTX = CliContext(
+    relay=MagicMock(),
+    config=BiffConfig(user="kai", repo_name="myrepo"),
+    session_key="kai:abc123",
+    user="kai",
+    tty="abc123",
+)
+
+
+@asynccontextmanager
+async def _fake_relay() -> AsyncIterator[CliContext]:
+    """Drop-in replacement for ``cli_relay`` that needs no NATS."""
+    yield _MOCK_CTX
 
 
 class TestGlobalFlags:
@@ -244,3 +267,187 @@ class TestDisableCommand:
         runner.invoke(app, ["disable"])
         runner.invoke(app, ["disable"])
         assert (tmp_path / ".biff.local").read_text() == "enabled = false\n"
+
+
+class TestNoArgsHelp:
+    def test_no_args_shows_help(self) -> None:
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0
+        assert "Usage:" in result.output
+        assert "who" in result.output
+        assert "write" in result.output
+
+    def test_help_flag(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "Usage:" in result.output
+
+
+class TestProductCommands:
+    """Smoke tests for all 10 product commands via CliRunner.
+
+    Each test mocks ``cli_relay`` (no NATS needed) and the underlying
+    ``commands.*`` function, then verifies the CLI parsed args correctly
+    and forwarded them to the command function.
+    """
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_who(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(text="no sessions")
+        result = runner.invoke(app, ["who"])
+        assert result.exit_code == 0
+        assert "no sessions" in result.output
+        mock_who.assert_awaited_once_with(_MOCK_CTX)
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.finger", new_callable=AsyncMock)
+    def test_finger(self, mock_finger: AsyncMock) -> None:
+        mock_finger.return_value = CommandResult(text="Login: kai")
+        result = runner.invoke(app, ["finger", "@kai"])
+        assert result.exit_code == 0
+        assert "Login: kai" in result.output
+        mock_finger.assert_awaited_once_with(_MOCK_CTX, "@kai")
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.write", new_callable=AsyncMock)
+    def test_write(self, mock_write: AsyncMock) -> None:
+        mock_write.return_value = CommandResult(text="Message sent to @eric.")
+        result = runner.invoke(app, ["write", "@eric", "hello"])
+        assert result.exit_code == 0
+        assert "Message sent" in result.output
+        mock_write.assert_awaited_once_with(_MOCK_CTX, "@eric", "hello")
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.read", new_callable=AsyncMock)
+    def test_read(self, mock_read: AsyncMock) -> None:
+        mock_read.return_value = CommandResult(text="No messages.")
+        result = runner.invoke(app, ["read"])
+        assert result.exit_code == 0
+        assert "No messages" in result.output
+        mock_read.assert_awaited_once_with(_MOCK_CTX)
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.plan", new_callable=AsyncMock)
+    def test_plan(self, mock_plan: AsyncMock) -> None:
+        mock_plan.return_value = CommandResult(text="Plan: fixing tests")
+        result = runner.invoke(app, ["plan", "fixing tests"])
+        assert result.exit_code == 0
+        assert "fixing tests" in result.output
+        mock_plan.assert_awaited_once_with(_MOCK_CTX, "fixing tests")
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.last", new_callable=AsyncMock)
+    def test_last(self, mock_last: AsyncMock) -> None:
+        mock_last.return_value = CommandResult(text="no sessions")
+        result = runner.invoke(app, ["last"])
+        assert result.exit_code == 0
+        mock_last.assert_awaited_once_with(_MOCK_CTX, "", 25)
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.last", new_callable=AsyncMock)
+    def test_last_with_user_and_count(self, mock_last: AsyncMock) -> None:
+        mock_last.return_value = CommandResult(text="@kai sessions")
+        result = runner.invoke(app, ["last", "@kai", "--count", "5"])
+        assert result.exit_code == 0
+        mock_last.assert_awaited_once_with(_MOCK_CTX, "@kai", 5)
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.wall", new_callable=AsyncMock)
+    def test_wall_post(self, mock_wall: AsyncMock) -> None:
+        mock_wall.return_value = CommandResult(text="Wall posted")
+        result = runner.invoke(app, ["wall", "deploy freeze", "--duration", "2h"])
+        assert result.exit_code == 0
+        mock_wall.assert_awaited_once_with(
+            _MOCK_CTX, "deploy freeze", "2h", clear=False
+        )
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.wall", new_callable=AsyncMock)
+    def test_wall_read(self, mock_wall: AsyncMock) -> None:
+        mock_wall.return_value = CommandResult(text="No active wall.")
+        result = runner.invoke(app, ["wall"])
+        assert result.exit_code == 0
+        mock_wall.assert_awaited_once_with(_MOCK_CTX, "", "", clear=False)
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.wall", new_callable=AsyncMock)
+    def test_wall_clear(self, mock_wall: AsyncMock) -> None:
+        mock_wall.return_value = CommandResult(text="Wall cleared.")
+        result = runner.invoke(app, ["wall", "--clear"])
+        assert result.exit_code == 0
+        mock_wall.assert_awaited_once_with(_MOCK_CTX, "", "", clear=True)
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.mesg", new_callable=AsyncMock)
+    def test_mesg(self, mock_mesg: AsyncMock) -> None:
+        mock_mesg.return_value = CommandResult(text="is y")
+        result = runner.invoke(app, ["mesg", "on"])
+        assert result.exit_code == 0
+        assert "is y" in result.output
+        mock_mesg.assert_awaited_once_with(_MOCK_CTX, "on")
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.tty", new_callable=AsyncMock)
+    def test_tty_with_name(self, mock_tty: AsyncMock) -> None:
+        mock_tty.return_value = CommandResult(text="tty: dev")
+        result = runner.invoke(app, ["tty", "dev"])
+        assert result.exit_code == 0
+        mock_tty.assert_awaited_once_with(_MOCK_CTX, "dev")
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.tty", new_callable=AsyncMock)
+    def test_tty_no_name(self, mock_tty: AsyncMock) -> None:
+        mock_tty.return_value = CommandResult(text="tty: abc123")
+        result = runner.invoke(app, ["tty"])
+        assert result.exit_code == 0
+        mock_tty.assert_awaited_once_with(_MOCK_CTX, "")
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.status", new_callable=AsyncMock)
+    def test_status(self, mock_status: AsyncMock) -> None:
+        mock_status.return_value = CommandResult(text="connected")
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        assert "connected" in result.output
+        mock_status.assert_awaited_once_with(_MOCK_CTX)
+
+
+class TestProductCommandErrorHandling:
+    """Test _run() error paths: command errors, ValueError, JSON output."""
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_command_error_exits_1(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(text="something broke", error=True)
+        result = runner.invoke(app, ["who"])
+        assert result.exit_code == 1
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_json_output(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(
+            text="fallback", json_data=[{"user": "kai"}]
+        )
+        result = runner.invoke(app, ["--json", "who"])
+        assert result.exit_code == 0
+        assert '"user"' in result.output
+        assert "kai" in result.output
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_quiet_suppresses_output(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(text="some output")
+        result = runner.invoke(app, ["--quiet", "who"])
+        assert result.exit_code == 0
+        assert result.output.strip() == ""
+
+    @patch("biff.cli_session.cli_relay", new=_fake_relay)
+    @patch(
+        "biff.commands.who",
+        new_callable=AsyncMock,
+        side_effect=ValueError("no relay configured"),
+    )
+    def test_value_error_exits_1(self, _mock_who: AsyncMock) -> None:
+        result = runner.invoke(app, ["who"])
+        assert result.exit_code == 1
