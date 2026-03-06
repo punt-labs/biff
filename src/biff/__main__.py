@@ -112,8 +112,9 @@ app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     json_flag: Annotated[
         bool,
         typer.Option("--json", help="Output JSON instead of human-readable text."),
@@ -158,6 +159,10 @@ def main(
     # one logger (logging.getLogger("asyncio")); we can't raise its level
     # without hiding real errors. A filter drops only this specific message.
     _install_eof_received_filter()
+
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 # ---------------------------------------------------------------------------
