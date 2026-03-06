@@ -1978,3 +1978,182 @@ visibility, and session independence.
 - `tests/test_commands/`: +71 tests running in 0.15s
 - Library API: `from biff.commands import who, CommandResult`
 - MCP tools: unchanged (they call the relay directly, not the CLI commands)
+
+## DES-023: E2E Test Harness — Status Line Polling Gap
+
+**Date:** 2026-03-02
+**Status:** OPEN (bug characterized, fix pending)
+**Related:** DES-004 (Push Notifications), DES-007 (NATS Namespace Scoping), DES-011 (Status Line)
+**Script:** `scripts/test-talk-e2e.sh`
+
+### Problem
+
+Talk push notifications are not reaching the status bar in production.  DES-021
+fixed the `_session` capture bug (suspenders path now fires correctly), and all
+integration and NATS E2E tests pass.  Yet real users do not see talk or wall
+notifications in the status bar.
+
+### Approach — Tier 5: Human-Equivalent E2E
+
+Tiers 1–4 test components in isolation with increasing transport fidelity, but
+all bypass Claude Code's status line polling.  A new tier was needed:
+
+| Property | Value |
+|----------|-------|
+| Transport | Real Claude Code sessions (marketplace plugin, no mocks) |
+| Driver | `tmux send-keys` feeding slash commands |
+| Assertion | `tmux capture-pane` for status bar, `~/.biff/unread/*.json` for delivery |
+| Recording | Asciinema `.cast` file (automatic, kept on failure) |
+
+The script creates two isolated clones of the biff repo, launches Claude Code
+in each tmux pane, drives `/tty`, `/wall`, `/write`, and `/talk` commands, and
+checks for a unique needle string in the receiving pane's terminal output and
+unread files.
+
+### Key Decisions
+
+#### 1. Same directory name, different parents (DES-007)
+
+NATS namespaces are scoped by `repo_root.name` (`config.py:396-397`):
+`sanitize_repo_name(repo_slug or repo_root.name)`.  Two clones with different
+directory names (e.g. `biff-a`, `biff-b`) land in different NATS namespaces —
+sessions cannot see each other.
+
+**Fix:** Clone to `.../a/biff/` and `.../b/biff/`.  Both get `repo_root.name =
+"biff"`, sharing one NATS namespace.  The parent directories provide isolation.
+
+#### 2. `CLAUDECODE` environment variable
+
+Claude Code sets `CLAUDECODE=1` in its shell environment.  Launching `claude`
+from within a Claude Code session triggers nested-session detection:
+`"Error: Claude Code cannot be launched inside another Claude Code session."`
+
+**Fix:** `unset CLAUDECODE && claude` in each tmux pane.
+
+#### 3. Trust prompt for new directories
+
+Claude Code shows "Is this a project you created or one you trust?" on first
+visit to an unknown directory.  This blocks startup until the user responds.
+
+**Fix:** After launching, poll `capture-pane` for "trust" and send Enter to
+accept.
+
+#### 4. Slash command autocomplete picker
+
+Claude Code's slash command input shows an autocomplete picker on first Enter.
+A second Enter is required to execute the selected command.
+
+**Fix:** `send_slash()` function: send text + Enter (opens picker), sleep 1s,
+send Enter again (selects and executes).
+
+#### 5. Three-level assertion model
+
+Status bar visibility depends on Claude Code polling `biff statusline` at the
+right moment.  A binary pass/fail misses the critical middle state where NATS
+delivered the message but the UI didn't render it.
+
+**Levels:**
+
+| Result | Meaning |
+|--------|---------|
+| **PASS** | Needle visible in `tmux capture-pane` (user would see it) |
+| **DELIVERED** | Needle found in `~/.biff/unread/*.json` but not in pane capture |
+| **FAIL** | Needle not found anywhere (NATS delivery or file write broken) |
+
+DELIVERED is the most informative failure — it isolates the bug to the
+Claude Code ↔ status line boundary.
+
+#### 6. Asciinema re-exec wrapper
+
+The script re-executes itself under `asciinema rec` on first invocation.
+The recording captures all progress output, pane dumps, and results.
+On success the `.cast` file is deleted; on failure it is preserved for
+post-mortem analysis.  The `_BIFF_E2E_REC` environment variable prevents
+infinite re-exec.
+
+### Findings
+
+Three consecutive runs produced identical results:
+
+```text
+WALL:  DELIVERED  (file ok, not rendered)
+TALK:  DELIVERED  (file ok, not rendered)
+```
+
+**Evidence from `statusline.log`:**
+
+```text
+17:00:17.054 key=20607 exists=True items=[] display=''
+17:00:20.460 key=20605 exists=True items=[wall:@jmf-pobox (ttyA): ...] display='▶ ...'
+```
+
+Session A's status line correctly read the wall item (key 20605).  Session B's
+status line (key 20607) showed `items=[]` — the unread file had not yet been
+written at the time of its last poll.  After that, no more polls occurred.
+
+**Evidence from `~/.biff/unread/` files:**
+
+```json
+{
+  "user": "jmf-pobox",
+  "repo": "biff",
+  "count": 1,
+  "tty_name": "ttyB",
+  "biff_enabled": true,
+  "display_items": [
+    {"kind": "talk", "text": "@jmf-pobox: e2e-talk-..."}
+  ]
+}
+```
+
+The unread file for session B contained the correct talk display item.  The
+file was written correctly by the NATS callback → `_write_unread_file` path.
+The status bar never rendered it because Claude Code stopped polling.
+
+### Root Cause
+
+Claude Code polls `biff statusline` (via the status line shell command) on
+an internal schedule.  During idle periods — when no tool calls are in flight
+and no user input is arriving — **polling stops entirely**.  The status line
+shell command is only invoked when Claude Code's UI refresh loop runs, which
+appears to be gated on activity.
+
+This is a Claude Code runtime behavior, not a biff bug.  Biff correctly:
+
+1. Receives the NATS message
+2. Writes the unread file with `display_items`
+3. Returns the correct display string when `biff statusline` is called
+
+The gap is that `biff statusline` is never called during idle.
+
+### Implications
+
+- **Wall and talk are equally affected.** Both produce DELIVERED, not PASS.
+  This is not a talk-specific bug.
+- **The suspenders path fix (DES-021) is necessary but not sufficient.**
+  `notify_tool_list_changed()` fires correctly, but Claude Code's status line
+  is a separate channel that doesn't respond to tool-list-changed notifications.
+- **The unread file is a write-only artifact during idle.**  It is written
+  correctly but never read until the next user interaction.
+
+### Next Steps
+
+1. **File upstream:** Report the status line polling gap to Claude Code.  The
+   status line should poll on a timer independent of tool-call activity, or
+   respond to file-system change notifications on the unread file.
+2. **Workaround investigation:** Determine if `notify_tool_list_changed()` can
+   trigger a status line refresh (it triggers tool description re-reads, but
+   the status line is a separate shell command channel).
+3. **Expand test harness:** The script infrastructure (`send_slash`, `wait_for`,
+   `needle_in_unread`) is reusable for future E2E tests beyond talk.
+
+### Bugs Found During Harness Development
+
+| Bug | Symptom | Fix |
+|-----|---------|-----|
+| `CLAUDECODE` env var | Nested session detection error | `unset CLAUDECODE` before launch |
+| Trust prompt | Startup blocked indefinitely | Poll for "trust", send Enter |
+| Slash command picker | Command not executed on first Enter | Double-Enter via `send_slash()` |
+| NATS namespace scoping | Sessions invisible to each other | Same dir name, different parents |
+| `needle_in_unread` subshell | `return 0` inside `find \| while` exits subshell, not function | Replaced with `find -exec grep -lF` |
+| `dump_pane` empty lines | `tail -30` showed blank lines from TUI buffer | Filter with `grep '.'` first |
