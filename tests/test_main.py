@@ -20,6 +20,13 @@ _RESOLVED = ResolvedConfig(
 )
 
 
+class TestGlobalFlags:
+    def test_verbose_and_quiet_mutually_exclusive(self) -> None:
+        result = runner.invoke(app, ["--verbose", "--quiet", "version"])
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+
 class TestVersionCommand:
     def test_prints_version(self) -> None:
         result = runner.invoke(app, ["version"])

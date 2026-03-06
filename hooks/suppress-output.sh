@@ -88,7 +88,7 @@ fi
 
 # ── write ────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "write" ]]; then
-  if printf '%s' "$RESULT" | grep -qi "Message sent\|Delivered"; then
+  if printf '%s' "$RESULT" | grep -Eqi 'Message sent|Delivered'; then
     emit_simple "sent"
   else
     emit_simple "$RESULT"
@@ -148,8 +148,8 @@ fi
 
 # ── talk_listen ──────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "talk_listen" ]]; then
-  if [[ "$RESULT" == "No new messages." ]]; then
-    emit_simple "$RESULT"
+  if [[ "$RESULT" == "No new messages. Still listening." ]]; then
+    emit_simple "No new messages."
   else
     COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
     emit "${COUNT} new" "$RESULT"
