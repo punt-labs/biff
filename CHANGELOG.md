@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.15.0 — 2026-03-06
+
 ### Added
 
 - **CLI parity with MCP tools** — every MCP product tool is now available as `biff <command>`:
@@ -18,6 +20,19 @@
 - **CLI session manager** — pseudo-ephemeral NATS sessions with 5-minute TTL for
   consecutive CLI commands (`biff.cli_session`)
 
+### Fixed
+
+- **Notification deferral** — NATS talk callbacks and KV wall watchers no longer fire MCP
+  notifications directly (unreliable from background coroutine contexts). Both now wake the
+  poller via `ActivityTracker.wake()`, which resets `_last_nap_poll` to epoch so `_active_tick`
+  runs on the next 2s tick even during napping. Worst-case notification latency: ≤2s.
+- **KV watcher survives snapshot-done** — `_run_kv_watch` uses explicit `updates()` loop
+  instead of `async for`, surviving `None` snapshot-done markers and `TimeoutError` without
+  restarting the watcher
+- Suppress asyncio `eof_received` warning on NATS SSL disconnect
+- Suppress nats.py deprecation warnings and disconnect noise in CLI
+- Standards compliance — CLI flags, hooks, commands, suppress-output
+
 ### Changed
 
 - CLI product commands now delegate to `biff.commands` pure async functions via a `_run()` adapter,
@@ -28,6 +43,8 @@
 - Adopt dev/prod plugin namespace isolation: `plugin.json` name is `"biff-dev"` on main,
   release scripts swap to `"biff"` on tagged commits only. Dev commands (`*-dev.md`) route
   to `mcp__plugin_biff-dev_tty__*` to avoid collisions with the installed production plugin.
+- Z specification amended: `KVWallReceive` and `NatsTalkCallback` defer notification to
+  `PollTick`; formally verified with ProB (550K+ states, no counter-examples)
 
 ## 0.13.0 — 2026-03-02
 
