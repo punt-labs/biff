@@ -9,11 +9,11 @@
 # malformed input rather than failing the tool call.
 
 INPUT=$(cat)
-TOOL=$(echo "$INPUT" | jq -r '.tool_name')
+TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name')
 TOOL_NAME="${TOOL##*__}"
 
 # Single-pass unpack: handles string-encoded, array, or object responses.
-RESULT=$(echo "$INPUT" | jq -r '
+RESULT=$(printf '%s' "$INPUT" | jq -r '
   def unpack: if type == "string" then (fromjson? // .) else . end;
   if (.tool_response | type) == "array" then
     (.tool_response[0].text // "" | unpack)
@@ -21,7 +21,13 @@ RESULT=$(echo "$INPUT" | jq -r '
     (.tool_response | unpack)
   end
   | if type == "object" and has("result") then (.result | unpack) else . end
-')
+' 2>/dev/null)
+
+# Fallback: if unpack failed or yielded nothing, use raw tool_response.
+if [[ -z "$RESULT" ]]; then
+  RESULT=$(printf '%s' "$INPUT" | jq -r '.tool_response // empty' 2>/dev/null)
+  [[ -z "$RESULT" ]] && RESULT="(no output)"
+fi
 
 emit() {
   local summary="$1" ctx="$2"
@@ -45,7 +51,7 @@ emit_simple() {
 }
 
 # ── Error guard: surface tool errors directly ────────────────────────
-ERROR_MSG=$(echo "$RESULT" | jq -r '.error // empty' 2>/dev/null)
+ERROR_MSG=$(printf '%s' "$RESULT" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$ERROR_MSG" ]]; then
   emit_simple "error: ${ERROR_MSG}"
   exit 0
@@ -82,10 +88,10 @@ fi
 
 # ── write ────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "write" ]]; then
-  if printf '%s' "$RESULT" | grep -qi "error\|failed\|invalid"; then
-    emit_simple "$RESULT"
-  else
+  if printf '%s' "$RESULT" | grep -qi "Message sent\|Delivered"; then
     emit_simple "sent"
+  else
+    emit_simple "$RESULT"
   fi
   exit 0
 fi

@@ -62,8 +62,15 @@ _GLOBAL_FLAGS = {"--json", "--verbose", "-v", "--quiet", "-q"}
 
 _front: list[str] = []
 _rest: list[str] = []
+_seen_end_of_opts = False
 for _arg in sys.argv[1:]:
-    (_front if _arg in _GLOBAL_FLAGS else _rest).append(_arg)
+    if _arg == "--":
+        _seen_end_of_opts = True
+        _rest.append(_arg)
+    elif not _seen_end_of_opts and _arg in _GLOBAL_FLAGS:
+        _front.append(_arg)
+    else:
+        _rest.append(_arg)
 if _front:
     sys.argv = [sys.argv[0], *_front, *_rest]
 
@@ -129,10 +136,17 @@ def main(
     _quiet_output = quiet
 
     if verbose:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setLevel(logging.DEBUG)
-        logging.getLogger("biff").setLevel(logging.DEBUG)
-        logging.getLogger("biff").addHandler(handler)
+        logger = logging.getLogger("biff")
+        logger.setLevel(logging.DEBUG)
+        has_stderr = any(
+            isinstance(h, logging.StreamHandler)
+            and getattr(h, "stream", None) is sys.stderr
+            for h in logger.handlers
+        )
+        if not has_stderr:
+            handler = logging.StreamHandler(sys.stderr)
+            handler.setLevel(logging.DEBUG)
+            logger.addHandler(handler)
 
     # Suppress nats.py noise on Python 3.14+ and NATS/SSL chatter
     # during normal CLI exit. Scoped to CLI invocation, not import.
