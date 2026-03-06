@@ -68,3 +68,6 @@ docs/*.aux
 docs/*.log
 docs/*.fuzz
 docs/*.toc
+
+# Scratch/temp directory (TMPDIR set via .envrc)
+.tmp/
