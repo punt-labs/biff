@@ -1,6 +1,7 @@
 ---
 description: Name the current session (visible in /who and /finger)
 argument-hint: "[name]"
+allowed-tools: ["mcp__plugin_biff_tty__tty"]
 ---
 <!-- markdownlint-disable MD041 -->
 

@@ -208,20 +208,23 @@ biff install                # Install plugin via marketplace
 biff enable                 # Activate biff in current repo (creates .biff)
 biff disable                # Deactivate biff in current repo
 biff doctor                 # Check installation health
-biff serve                  # Start MCP server (stdio, called by plugin)
+biff mcp                    # Start MCP server (stdio, called by plugin)
+biff serve                  # Start MCP server (HTTP)
 biff uninstall              # Remove plugin and clean up
 biff version                # Print version
 ```
 
-### JSON output
-
-Every product command supports `--json` for machine-readable output. The flag goes before the subcommand (standard typer global option):
+### Global flags
 
 ```bash
 biff --json who             # JSON array of sessions
 biff --json status          # JSON object with version, unread, wall
 biff --json read            # JSON array of messages
+biff --verbose who          # Debug logging to stderr
+biff --quiet write @kai "msg"  # Suppress non-JSON output
 ```
+
+Global flags (`--json`, `--verbose`, `--quiet`) can go before or after the subcommand (e.g. `biff who --json` also works).
 
 ### Library API
 

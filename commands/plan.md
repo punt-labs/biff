@@ -1,6 +1,7 @@
 ---
 description: Set what you're currently working on (visible to teammates)
 argument-hint: "<message>"
+allowed-tools: ["mcp__plugin_biff_tty__plan"]
 ---
 <!-- markdownlint-disable MD041 -->
 

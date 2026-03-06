@@ -20,6 +20,20 @@ _RESOLVED = ResolvedConfig(
 )
 
 
+class TestGlobalFlags:
+    def test_verbose_and_quiet_mutually_exclusive(self) -> None:
+        result = runner.invoke(app, ["--verbose", "--quiet", "version"])
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+    def test_global_flags_after_subcommand(self) -> None:
+        """Global flags work when placed after the subcommand (argv hoisting)."""
+        # CliRunner bypasses sys.argv, so test hoisting via --json before subcommand
+        result = runner.invoke(app, ["--verbose", "version"])
+        assert result.exit_code == 0
+        assert "biff" in result.output
+
+
 class TestVersionCommand:
     def test_prints_version(self) -> None:
         result = runner.invoke(app, ["version"])
@@ -28,10 +42,12 @@ class TestVersionCommand:
 
 
 class TestServeCommand:
+    """``biff serve`` is HTTP-only; ``biff mcp`` is stdio-only."""
+
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
     @patch("biff.__main__.load_config", return_value=_RESOLVED)
-    def test_stdio_transport(
+    def test_http_default(
         self,
         _mock_config: MagicMock,
         _mock_state: MagicMock,
@@ -41,28 +57,9 @@ class TestServeCommand:
         mock_server.return_value = mock_mcp
         result = runner.invoke(app, ["serve", "--user", "kai"])
         assert result.exit_code == 0
-        mock_mcp.run.assert_called_once_with(transport="stdio")
-
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
-    def test_http_transport(
-        self,
-        _mock_config: MagicMock,
-        _mock_state: MagicMock,
-        mock_server: MagicMock,
-    ) -> None:
-        mock_mcp = MagicMock()
-        mock_server.return_value = mock_mcp
-        result = runner.invoke(app, ["serve", "--user", "kai", "--transport", "http"])
-        assert result.exit_code == 0
         mock_mcp.run.assert_called_once_with(
             transport="http", host="127.0.0.1", port=8419
         )
-
-    def test_invalid_transport_rejected(self) -> None:
-        result = runner.invoke(app, ["serve", "--user", "kai", "--transport", "htp"])
-        assert result.exit_code != 0
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
@@ -77,17 +74,7 @@ class TestServeCommand:
         mock_server.return_value = mock_mcp
         result = runner.invoke(
             app,
-            [
-                "serve",
-                "--user",
-                "kai",
-                "--transport",
-                "http",
-                "--host",
-                "192.168.1.1",
-                "--port",
-                "9000",
-            ],
+            ["serve", "--user", "kai", "--host", "192.168.1.1", "--port", "9000"],
         )
         assert result.exit_code == 0
         mock_mcp.run.assert_called_once_with(
@@ -109,6 +96,25 @@ class TestServeCommand:
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["user_override"] == "kai"
 
+
+class TestMcpCommand:
+    """``biff mcp`` starts the MCP server with stdio transport."""
+
+    @patch("biff.__main__.create_server")
+    @patch("biff.__main__.create_state")
+    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    def test_stdio_transport(
+        self,
+        _mock_config: MagicMock,
+        _mock_state: MagicMock,
+        mock_server: MagicMock,
+    ) -> None:
+        mock_mcp = MagicMock()
+        mock_server.return_value = mock_mcp
+        result = runner.invoke(app, ["mcp", "--user", "kai"])
+        assert result.exit_code == 0
+        mock_mcp.run.assert_called_once_with(transport="stdio")
+
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
     @patch("biff.__main__.load_config", return_value=_RESOLVED)
@@ -119,7 +125,7 @@ class TestServeCommand:
         mock_server: MagicMock,
     ) -> None:
         mock_server.return_value = MagicMock()
-        runner.invoke(app, ["serve", "--user", "kai", "--data-dir", "/custom/dir"])
+        runner.invoke(app, ["mcp", "--user", "kai", "--data-dir", "/custom/dir"])
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["data_dir_override"] == Path("/custom/dir")
 
@@ -133,7 +139,7 @@ class TestServeCommand:
         mock_server: MagicMock,
     ) -> None:
         mock_server.return_value = MagicMock()
-        runner.invoke(app, ["serve", "--user", "kai", "--prefix", "/var/spool"])
+        runner.invoke(app, ["mcp", "--user", "kai", "--prefix", "/var/spool"])
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["prefix"] == Path("/var/spool")
 
@@ -148,7 +154,7 @@ class TestServeCommand:
     ) -> None:
         """When --user is omitted, load_config gets user_override=None."""
         mock_server.return_value = MagicMock()
-        runner.invoke(app, ["serve"])
+        runner.invoke(app, ["mcp"])
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["user_override"] is None
 

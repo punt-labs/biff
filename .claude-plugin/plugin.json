@@ -10,7 +10,7 @@
     "tty": {
       "type": "stdio",
       "command": "biff",
-      "args": ["serve"]
+      "args": ["mcp"]
     }
   }
 }

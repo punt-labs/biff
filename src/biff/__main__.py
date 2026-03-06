@@ -24,11 +24,13 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
-import click
 import typer
 
 if TYPE_CHECKING:
+    from fastmcp import FastMCP
     from nats.aio.client import Client as NatsClient
+
+    from biff.server.state import ServerState
 
 from biff import commands
 from biff.cli_session import CliContext
@@ -52,18 +54,28 @@ from biff.server.state import create_state
 # Global --json flag
 #
 # Typer/Click requires group-level options before the subcommand name.
-# Move --json to the front of argv so both ``biff --json who`` and
-# ``biff who --json`` work.
+# Move global flags to the front of argv so both ``biff --json who`` and
+# ``biff who --json`` work (same for --verbose/-v and --quiet/-q).
 # ---------------------------------------------------------------------------
 
-if "--json" in sys.argv[1:]:
-    sys.argv = [
-        sys.argv[0],
-        "--json",
-        *(a for a in sys.argv[1:] if a != "--json"),
-    ]
+_GLOBAL_FLAGS = {"--json", "--verbose", "-v", "--quiet", "-q"}
+
+_front: list[str] = []
+_rest: list[str] = []
+_seen_end_of_opts = False
+for _arg in sys.argv[1:]:
+    if _arg == "--":
+        _seen_end_of_opts = True
+        _rest.append(_arg)
+    elif not _seen_end_of_opts and _arg in _GLOBAL_FLAGS:
+        _front.append(_arg)
+    else:
+        _rest.append(_arg)
+if _front:
+    sys.argv = [sys.argv[0], *_front, *_rest]
 
 _json_output = False
+_quiet_output = False
 
 
 def _print_json(data: object) -> None:
@@ -106,10 +118,35 @@ def main(
         bool,
         typer.Option("--json", help="Output JSON instead of human-readable text."),
     ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Debug logging to stderr."),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress product command output."),
+    ] = False,
 ) -> None:
     """Biff: team communication for software engineers."""
-    global _json_output
+    if verbose and quiet:
+        raise typer.BadParameter("--verbose and --quiet are mutually exclusive.")
+
+    global _json_output, _quiet_output
     _json_output = json_flag
+    _quiet_output = quiet
+
+    if verbose:
+        logger = logging.getLogger("biff")
+        logger.setLevel(logging.DEBUG)
+        has_stderr = any(
+            isinstance(h, logging.StreamHandler)
+            and getattr(h, "stream", None) is sys.stderr  # pyright: ignore[reportUnknownArgumentType]
+            for h in logger.handlers
+        )
+        if not has_stderr:
+            handler = logging.StreamHandler(sys.stderr)
+            handler.setLevel(logging.DEBUG)
+            logger.addHandler(handler)
 
     # Suppress nats.py noise on Python 3.14+ and NATS/SSL chatter
     # during normal CLI exit. Scoped to CLI invocation, not import.
@@ -157,7 +194,7 @@ def _run(
             _print_json(data)
         elif result.error:
             print(result.text, file=sys.stderr)
-        else:
+        elif not _quiet_output:
             print(result.text)
         if result.error:
             raise typer.Exit(code=1)
@@ -261,37 +298,14 @@ def version() -> None:
         print(f"biff {ver}")
 
 
-@app.command()
-def serve(
-    user: Annotated[
-        str | None,
-        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
-    ] = None,
-    data_dir: Annotated[
-        Path | None,
-        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
-    ] = None,
-    relay_url: Annotated[
-        str | None,
-        typer.Option(help="Relay URL override. Empty string forces local relay."),
-    ] = None,
-    prefix: Annotated[
-        Path,
-        typer.Option(help="Base path for data directory (default: /tmp)."),
-    ] = Path("/tmp"),  # noqa: S108
-    transport: Annotated[
-        str,
-        typer.Option(
-            help="Transport: 'stdio' or 'http'.",
-            click_type=click.Choice(["stdio", "http"]),
-        ),
-    ] = "stdio",
-    host: Annotated[
-        str, typer.Option(help="HTTP host (http transport only).")
-    ] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="HTTP port (http transport only).")] = 8419,
-) -> None:
-    """Start the biff MCP server."""
+def _create_mcp_server(
+    *,
+    user: str | None,
+    data_dir: Path | None,
+    relay_url: str | None,
+    prefix: Path,
+) -> FastMCP[ServerState]:
+    """Shared config → state → server setup for serve/mcp."""
     from biff.config import RELAY_URL_UNSET
     from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
@@ -310,13 +324,68 @@ def serve(
         dormant=dormant,
         repo_root=resolved.repo_root,
     )
-    mcp = create_server(state)
+    return create_server(state)
 
-    if transport == "http":
-        print(f"Starting biff MCP server on http://{host}:{port}")
-        mcp.run(transport="http", host=host, port=port)
-    else:
-        mcp.run(transport="stdio")
+
+@app.command()
+def serve(
+    user: Annotated[
+        str | None,
+        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
+    ] = None,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
+    ] = None,
+    relay_url: Annotated[
+        str | None,
+        typer.Option(help="Relay URL override. Empty string forces local relay."),
+    ] = None,
+    prefix: Annotated[
+        Path,
+        typer.Option(help="Base path for data directory (default: /tmp)."),
+    ] = Path("/tmp"),  # noqa: S108
+    host: Annotated[str, typer.Option(help="HTTP host.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="HTTP port.")] = 8419,
+) -> None:
+    """Start the biff MCP server (HTTP transport)."""
+    server = _create_mcp_server(
+        user=user,
+        data_dir=data_dir,
+        relay_url=relay_url,
+        prefix=prefix,
+    )
+    print(f"Starting biff MCP server on http://{host}:{port}")
+    server.run(transport="http", host=host, port=port)
+
+
+@app.command("mcp")
+def mcp_cmd(
+    user: Annotated[
+        str | None,
+        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
+    ] = None,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
+    ] = None,
+    relay_url: Annotated[
+        str | None,
+        typer.Option(help="Relay URL override. Empty string forces local relay."),
+    ] = None,
+    prefix: Annotated[
+        Path,
+        typer.Option(help="Base path for data directory (default: /tmp)."),
+    ] = Path("/tmp"),  # noqa: S108
+) -> None:
+    """Start the biff MCP server (stdio transport)."""
+    server = _create_mcp_server(
+        user=user,
+        data_dir=data_dir,
+        relay_url=relay_url,
+        prefix=prefix,
+    )
+    server.run(transport="stdio")
 
 
 @app.command("install-statusline")

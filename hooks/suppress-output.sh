@@ -1,110 +1,167 @@
 #!/usr/bin/env bash
 # Format biff MCP tool output for the UI panel.
 #
-# updatedMCPToolOutput sets the text displayed in the tool-result panel.
-# additionalContext passes the full tool data to the model separately,
-# so the model can emit the table while the panel stays compact.
+# Two-channel display (see punt-kit/patterns/two-channel-display.md):
+#   updatedMCPToolOutput  -> compact panel line (max 80 cols)
+#   additionalContext     -> full data for the model to reference
 #
-# tool_response arrives as a JSON-encoded STRING, not an object.
-# We must parse it twice: once to extract the string, once to
-# read the .result field inside it.
-#
-# Supports both prod (mcp__plugin_biff_tty__*) and dev
-# (mcp__plugin_biff-dev_tty__*) tool prefixes by extracting the
-# bare tool name via ${TOOL##*__}.
+# No `set -euo pipefail` — hooks must degrade gracefully on
+# malformed input rather than failing the tool call.
 
 INPUT=$(cat)
-TOOL=$(echo "$INPUT" | jq -r '.tool_name')
+TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 TOOL_NAME="${TOOL##*__}"
 
-# read_messages: summary in panel, full data via additionalContext.
-if [[ "$TOOL_NAME" == "read_messages" ]]; then
-  RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-  if [[ "$RESULT" == "No new messages." ]]; then
-    jq -n --arg r "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
-      }
-    }'
+# Single-pass unpack: handles string-encoded, array, or object responses.
+RESULT=$(printf '%s' "$INPUT" | jq -r '
+  def unpack: if type == "string" then (fromjson? // .) else . end;
+  if (.tool_response | type) == "array" then
+    (.tool_response[0].text // "" | unpack)
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
-    jq -n --arg summary "${COUNT} new" --arg ctx "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $summary,
-        additionalContext: $ctx
-      }
-    }'
-  fi
-  exit 0
+    (.tool_response | unpack)
+  end
+  | if type == "object" and has("result") then (.result | unpack) else . end
+' 2>/dev/null)
+
+# Fallback: if unpack failed or yielded nothing, use raw tool_response.
+if [[ -z "$RESULT" ]]; then
+  RESULT=$(printf '%s' "$INPUT" | jq -r '.tool_response // empty' 2>/dev/null)
+  [[ -z "$RESULT" ]] && RESULT="(no output)"
 fi
 
-# who: summary in panel, full data via additionalContext.
-if [[ "$TOOL_NAME" == "who" ]]; then
-  RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-  if [[ "$RESULT" == "No sessions." ]]; then
-    jq -n --arg r "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
-      }
-    }'
-  else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
-    jq -n --arg summary "${COUNT} online" --arg ctx "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $summary,
-        additionalContext: $ctx
-      }
-    }'
-  fi
-  exit 0
-fi
-
-# last: summary in panel, full data via additionalContext.
-if [[ "$TOOL_NAME" == "last" ]]; then
-  RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-  if [[ "$RESULT" == "No session history." ]]; then
-    jq -n --arg r "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
-      }
-    }'
-  else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
-    jq -n --arg summary "${COUNT} sessions" --arg ctx "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $summary,
-        additionalContext: $ctx
-      }
-    }'
-  fi
-  exit 0
-fi
-
-# finger: username in panel, full data via additionalContext.
-if [[ "$TOOL_NAME" == "finger" ]]; then
-  RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-  USER=$(printf '%s' "$RESULT" | head -1 | sed 's/.*Login: *\([^ ]*\).*/\1/')
-  jq -n --arg summary "@${USER}" --arg ctx "$RESULT" '{
+emit() {
+  local summary="$1" ctx="$2"
+  jq -n --arg summary "$summary" --arg ctx "$ctx" '{
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
       updatedMCPToolOutput: $summary,
       additionalContext: $ctx
     }
   }'
+}
+
+emit_simple() {
+  local summary="$1"
+  jq -n --arg summary "$summary" '{
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      updatedMCPToolOutput: $summary
+    }
+  }'
+}
+
+# ── Error guard: surface tool errors directly ────────────────────────
+ERROR_MSG=$(printf '%s' "$RESULT" | jq -r '.error // empty' 2>/dev/null)
+if [[ -n "$ERROR_MSG" ]]; then
+  emit_simple "error: ${ERROR_MSG}"
   exit 0
 fi
 
-# Pass other biff tools through unchanged
-RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
-jq -n --arg r "$RESULT" '{
-  hookSpecificOutput: {
-    hookEventName: "PostToolUse",
-    updatedMCPToolOutput: $r
-  }
-}'
+# ── who ──────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "who" ]]; then
+  if [[ "$RESULT" == "No sessions." ]]; then
+    emit_simple "$RESULT"
+  else
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
+    emit "${COUNT} online" "$RESULT"
+  fi
+  exit 0
+fi
+
+# ── finger ───────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "finger" ]]; then
+  USER=$(printf '%s' "$RESULT" | head -1 | sed 's/.*Login: *\([^ ]*\).*/\1/')
+  emit "@${USER}" "$RESULT"
+  exit 0
+fi
+
+# ── read_messages ────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "read_messages" ]]; then
+  if [[ "$RESULT" == "No new messages." ]]; then
+    emit_simple "$RESULT"
+  else
+    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    emit "${COUNT} new" "$RESULT"
+  fi
+  exit 0
+fi
+
+# ── write ────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "write" ]]; then
+  if printf '%s' "$RESULT" | grep -Eqi 'Message sent|Delivered'; then
+    emit_simple "sent"
+  else
+    emit_simple "$RESULT"
+  fi
+  exit 0
+fi
+
+# ── plan ─────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "plan" ]]; then
+  PLAN=$(printf '%s' "$RESULT" | head -1 | cut -c1-60)
+  emit_simple "${PLAN}"
+  exit 0
+fi
+
+# ── last ─────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "last" ]]; then
+  if [[ "$RESULT" == "No session history." ]]; then
+    emit_simple "$RESULT"
+  else
+    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    emit "${COUNT} sessions" "$RESULT"
+  fi
+  exit 0
+fi
+
+# ── wall ─────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "wall" ]]; then
+  FIRST=$(printf '%s' "$RESULT" | head -1 | cut -c1-60)
+  emit_simple "${FIRST}"
+  exit 0
+fi
+
+# ── mesg ─────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "mesg" ]]; then
+  emit_simple "$RESULT"
+  exit 0
+fi
+
+# ── tty ──────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "tty" ]]; then
+  emit_simple "$RESULT"
+  exit 0
+fi
+
+# ── biff (toggle) ────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "biff" ]]; then
+  emit_simple "$RESULT"
+  exit 0
+fi
+
+# ── talk ─────────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "talk" ]]; then
+  FIRST=$(printf '%s' "$RESULT" | head -1 | cut -c1-60)
+  emit_simple "${FIRST}"
+  exit 0
+fi
+
+# ── talk_listen ──────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "talk_listen" ]]; then
+  if [[ "$RESULT" == "No new messages. Still listening." ]]; then
+    emit_simple "No new messages."
+  else
+    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    emit "${COUNT} new" "$RESULT"
+  fi
+  exit 0
+fi
+
+# ── talk_end ─────────────────────────────────────────────────────────
+if [[ "$TOOL_NAME" == "talk_end" ]]; then
+  emit_simple "talk ended"
+  exit 0
+fi
+
+# ── Fallback: full output in panel ───────────────────────────────────
+emit_simple "$RESULT"
