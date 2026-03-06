@@ -445,14 +445,16 @@ tool context and a live NATS connection.
   natsConn = natsConnected \\
   wallDesc' \neq wallDesc \\
   wallDescChanged' = ztrue \\
-  (wallKey? \notin \ran queueItems \implies
-    queueItems' = queueItems \cat \langle wallKey? \rangle \land
-    queueKinds' = queueKinds \cup \{ wallKey? \mapsto itemWall \} \land
-  queueTexts' = queueTexts \cup \{ wallKey? \mapsto wallText? \}) \\
-  (wallKey? \in \ran queueItems \implies
-    queueItems' = queueItems \land
-    queueKinds' = queueKinds \land
-  queueTexts' = queueTexts) \\
+  (wallKey? \notin \ran queueItems \implies \\
+  \quad~ queueItems' = queueItems \cat \langle wallKey? \rangle \land \\
+  \quad~ queueKinds' = queueKinds \cup \\
+  \quad~ \quad~ \{ wallKey? \mapsto itemWall \} \land \\
+  \quad~ queueTexts' = queueTexts \cup \\
+  \quad~ \quad~ \{ wallKey? \mapsto wallText? \}) \\
+  (wallKey? \in \ran queueItems \implies \\
+  \quad~ queueItems' = queueItems \land \\
+  \quad~ queueKinds' = queueKinds \land \\
+  \quad~ queueTexts' = queueTexts) \\
   session' = session \\
   lastNotifyResult' = notifySent \\
   barStale' = zfalse \\
@@ -570,14 +572,16 @@ have a valid session when it fires the deferred notification.
   toolContext = zfalse \\
   wallDesc' \neq wallDesc \\
   wallDescChanged' = ztrue \\
-  (wallKey? \notin \ran queueItems \implies
-    queueItems' = queueItems \cat \langle wallKey? \rangle \land
-    queueKinds' = queueKinds \cup \{ wallKey? \mapsto itemWall \} \land
-  queueTexts' = queueTexts \cup \{ wallKey? \mapsto wallText? \}) \\
-  (wallKey? \in \ran queueItems \implies
-    queueItems' = queueItems \land
-    queueKinds' = queueKinds \land
-  queueTexts' = queueTexts) \\
+  (wallKey? \notin \ran queueItems \implies \\
+  \quad~ queueItems' = queueItems \cat \langle wallKey? \rangle \land \\
+  \quad~ queueKinds' = queueKinds \cup \\
+  \quad~ \quad~ \{ wallKey? \mapsto itemWall \} \land \\
+  \quad~ queueTexts' = queueTexts \cup \\
+  \quad~ \quad~ \{ wallKey? \mapsto wallText? \}) \\
+  (wallKey? \in \ran queueItems \implies \\
+  \quad~ queueItems' = queueItems \land \\
+  \quad~ queueKinds' = queueKinds \land \\
+  \quad~ queueTexts' = queueTexts) \\
   lastNotifyResult' = lastNotifyResult \\
   barStale' = barStale \\
   session' = session \\
@@ -625,8 +629,10 @@ session when it fires the deferred notification.
   talkDesc' \neq talkDesc \\
   talkDescChanged' = ztrue \\
   queueItems' = queueItems \cat \langle senderKey? \rangle \\
-  queueKinds' = queueKinds \oplus \{ senderKey? \mapsto itemTalk \} \\
-  queueTexts' = queueTexts \oplus \{ senderKey? \mapsto senderBody? \} \\
+  queueKinds' = queueKinds \oplus \\
+  \quad~ \{ senderKey? \mapsto itemTalk \} \\
+  queueTexts' = queueTexts \oplus \\
+  \quad~ \{ senderKey? \mapsto senderBody? \} \\
   currentIndex' = \# queueItems \\
   lastNotifyResult' = lastNotifyResult \\
   barStale' = barStale \\
@@ -686,10 +692,14 @@ Clears the changed flags regardless.
   \Delta NotificationState
   \where
   toolContext = zfalse \\
-  ((wallDescChanged = ztrue \lor talkDescChanged = ztrue) \implies
-  lastNotifyResult' = notifySent \land barStale' = zfalse) \\
-  ((wallDescChanged = zfalse \land talkDescChanged = zfalse) \implies
-  lastNotifyResult' = lastNotifyResult \land barStale' = barStale) \\
+  ((wallDescChanged = ztrue \lor \\
+  \quad~ talkDescChanged = ztrue) \implies \\
+  \quad~ lastNotifyResult' = notifySent \land \\
+  \quad~ barStale' = zfalse) \\
+  ((wallDescChanged = zfalse \land \\
+  \quad~ talkDescChanged = zfalse) \implies \\
+  \quad~ lastNotifyResult' = lastNotifyResult \land \\
+  \quad~ barStale' = barStale) \\
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
@@ -718,8 +728,9 @@ This is the slow path---no MCP involvement.
 \begin{schema}{StatusBarRefresh}
   \Delta NotificationState
   \where
-  (fileExists = ztrue \land fileItems \neq \langle \rangle \implies
-  barLine2' \neq idleMarker) \\
+  (fileExists = ztrue \land \\
+  \quad~ fileItems \neq \langle \rangle \implies \\
+  \quad~ barLine2' \neq idleMarker) \\
   (fileExists = zfalse \implies
   barLine2' = idleMarker) \\
   natsConn' = natsConn \\
@@ -762,10 +773,12 @@ queue.  With a single wall item, the cursor stays at zero.
   queueItems \neq \langle \rangle \\
   queueKinds(queueItems(currentIndex + 1)) = itemTalk \\
   \# queueItems' = \# queueItems - 1 \\
-  queueKinds' = \{ queueItems(currentIndex + 1) \} \ndres queueKinds \\
-  queueTexts' = \{ queueItems(currentIndex + 1) \} \ndres queueTexts \\
-  \ran queueItems' = \ran queueItems \setminus \{
-  queueItems(currentIndex + 1) \} \\
+  queueKinds' = \\
+  \quad~ \{ queueItems(currentIndex + 1) \} \ndres queueKinds \\
+  queueTexts' = \\
+  \quad~ \{ queueItems(currentIndex + 1) \} \ndres queueTexts \\
+  \ran queueItems' = \ran queueItems \setminus \\
+  \quad~ \{ queueItems(currentIndex + 1) \} \\
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
@@ -791,8 +804,9 @@ queue.  With a single wall item, the cursor stays at zero.
   queueItems' = queueItems \\
   queueKinds' = queueKinds \\
   queueTexts' = queueTexts \\
-  (\# queueItems > 1 \implies
-  currentIndex' = (currentIndex + 1) \mod \# queueItems) \\
+  (\# queueItems > 1 \implies \\
+  \quad~ currentIndex' = (currentIndex + 1) \mod \\
+  \quad~ \quad~ \# queueItems) \\
   (\# queueItems = 1 \implies
   currentIndex' = 0) \\
   natsConn' = natsConn \\
