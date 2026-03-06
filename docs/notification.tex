@@ -43,10 +43,10 @@ bar command).
 The notification pipeline has a ``belt and suspenders'' design: tool
 handlers fire notifications via the MCP request context (belt path),
 while a background poller fires them via a stored
-\texttt{ServerSession} reference (suspenders path).  NATS callbacks
-only mutate state (display queue, description-changed flags); the
-poller detects the changes and fires the notification from the MCP
-server's own coroutine context.
+\texttt{ServerSession} reference (suspenders path).  NATS subscription
+callbacks and KV watchers only mutate state (display queue,
+description-changed flags); the poller detects the changes and fires
+the notification from the MCP server's own coroutine context.
 
 The session reference is captured eagerly during the server's lifespan
 startup, before the NATS connection is established and before the
@@ -57,10 +57,10 @@ The key invariant is: \emph{a connected NATS client implies a captured
 session}.  Since NATS subscription is the mechanism that delivers
 external talk messages, and since the session is captured before NATS
 connects, the poller always has a valid notification path.  NATS
-callbacks do not fire notifications directly---they are unreliable
-from a different coroutine context---but they mutate state and wake
-the poller from napping, so the next active tick (2~seconds) detects
-the changes and fires the notification.
+callbacks and KV watchers do not fire notifications directly---they
+are unreliable from background coroutine contexts---but they mutate
+state and wake the poller from napping, so the next active tick
+(2~seconds) detects the changes and fires the notification.
 
 This specification models the four state spaces---NATS connection,
 MCP server session, filesystem, and status bar---and the operations
@@ -541,6 +541,56 @@ handles the receive-side effects.
 \section{Receive Flow Operations}
 %%----------------------------------------------------------------------
 
+\subsection{KV Wall Receive}
+
+Fires when the NATS KV watcher detects a wall change from another
+user.  Runs \emph{outside} any tool handler context in a background
+asyncio task.  Updates the wall description and adds a display queue
+item, but does \emph{not} fire an MCP notification directly---sending
+notifications from a background task is unreliable for the same reason
+as NATS subscription callbacks.
+
+Instead, the watcher wakes the poller from napping so the next active
+tick (2~seconds) detects the wall change via its own KV read and fires
+the notification from the MCP server's coroutine context.
+
+The precondition $natsConn = natsConnected$ implies
+$session = sessCaptured$ (by state invariant), so the poller will
+have a valid session when it fires the deferred notification.
+
+\begin{schema}{KVWallReceive}
+  \Delta NotificationState \\
+  wallText? : MSG \\
+  wallKey? : SOURCEKEY
+  \where
+  natsConn = natsConnected \\
+  toolContext = zfalse \\
+  wallDesc' \neq wallDesc \\
+  wallDescChanged' = ztrue \\
+  (wallKey? \notin \ran queueItems \implies
+    queueItems' = queueItems \cat \langle wallKey? \rangle \land
+    queueKinds' = queueKinds \cup \{ wallKey? \mapsto itemWall \} \land
+  queueTexts' = queueTexts \cup \{ wallKey? \mapsto wallText? \}) \\
+  (wallKey? \in \ran queueItems \implies
+    queueItems' = queueItems \land
+    queueKinds' = queueKinds \land
+  queueTexts' = queueTexts) \\
+  lastNotifyResult' = lastNotifyResult \\
+  barStale' = barStale \\
+  session' = session \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = talkDescChanged \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2
+\end{schema}
+
 \subsection{NATS Talk Callback}
 
 Fires when a core NATS message arrives on the talk notification
@@ -777,17 +827,18 @@ a description change.
   \implies lastNotifyResult = notifySent
 \end{schema}
 
-\emph{Proof sketch}: Every operation that sets $wallDescChanged' = ztrue$
-also sets $lastNotifyResult' = notifySent$ ($WallPost$, belt path).
-$NatsTalkCallback$ sets $talkDescChanged' = ztrue$ but defers
-notification to the poller: it preserves $lastNotifyResult$, and
-$PollTick$ detects $talkDescChanged = ztrue$ and sets
+\emph{Proof sketch}: $WallPost$ sets $wallDescChanged' = ztrue$ and
+$lastNotifyResult' = notifySent$ (belt path, tool context).
+$KVWallReceive$ and $NatsTalkCallback$ set their respective changed
+flags but defer notification to the poller: they preserve
+$lastNotifyResult$, and $PollTick$ detects the changed flags and sets
 $lastNotifyResult' = notifySent$.  The invariant holds because,
 whenever a description change sets a ``changed'' flag, the next execution
 of $PollTick$ that observes this flag produces $notifySent$; thus no
 changed flag can persist across two consecutive $PollTick$ executions
-without producing $notifySent$.  NATS callbacks wake the poller from
-napping, ensuring $PollTick$ runs promptly even during idle periods.
+without producing $notifySent$.  Both KV watchers and NATS callbacks
+wake the poller from napping, ensuring $PollTick$ runs promptly even
+during idle periods.
 
 \subsection{Session Invariant}
 
@@ -829,16 +880,16 @@ suspenders path is always applicable:
 The last conjunct is not an additional requirement---it follows from
 the first conjunct via $SessionInvariant$.  This means every poller
 tick with pending changes can successfully send a notification.
-NATS callbacks do not send notifications directly; they set flags
-that the poller consumes.
+Neither NATS callbacks nor KV watchers send notifications directly;
+they set flags that the poller consumes.
 
 \subsection{Wall and Talk Symmetry}
 
 In the corrected system, both wall and talk notifications always
-reach Claude~Code.  Wall uses the belt path (tool context);
-talk from external CLI sets state in the NATS callback, and the
-poller fires the notification via the suspenders path (stored session).
-Both ultimately produce $lastNotifyResult = notifySent$.
+reach Claude~Code.  Wall posting uses the belt path (tool context);
+wall reception from another user uses $KVWallReceive$ which defers to
+the poller.  Talk reception uses $NatsTalkCallback$ which also defers
+to the poller.  Both ultimately produce $lastNotifyResult = notifySent$.
 
 \begin{schema}{WallNotifySuccess}
   NotificationState
