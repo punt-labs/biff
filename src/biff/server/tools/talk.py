@@ -169,7 +169,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 to_user=relay_key,
                 body=message[:512],
             )
-            await relay.deliver(msg, sender_key=state.session_key)
+            task = asyncio.create_task(
+                relay.deliver(msg, sender_key=state.session_key)
+            )
+            task.add_done_callback(
+                lambda t: logger.warning("talk delivery failed: %s", t.exception())
+                if not t.cancelled() and t.exception() is not None
+                else None
+            )
             await refresh_read_messages(mcp, state)
 
         return (

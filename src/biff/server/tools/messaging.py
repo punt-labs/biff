@@ -8,6 +8,8 @@ them read.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 from biff.formatting import format_read
@@ -38,6 +40,15 @@ async def _resolve_recipient(state: ServerState, to: str) -> tuple[str, str]:
     return relay_key, display
 
 
+_log = logging.getLogger(__name__)
+
+
+def _log_delivery_error(task: asyncio.Task[None]) -> None:
+    """Log exceptions from fire-and-forget delivery tasks."""
+    if not task.cancelled() and task.exception() is not None:
+        _log.warning("message delivery failed: %s", task.exception())
+
+
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register messaging tools."""
 
@@ -62,7 +73,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             to_user=to_user,
             body=message[:512],
         )
-        await state.relay.deliver(msg, sender_key=state.session_key)
+        task = asyncio.create_task(
+            state.relay.deliver(msg, sender_key=state.session_key)
+        )
+        task.add_done_callback(_log_delivery_error)
         await refresh_read_messages(mcp, state)
         return f"Message sent to {display}."
 

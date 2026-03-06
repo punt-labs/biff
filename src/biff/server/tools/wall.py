@@ -10,6 +10,8 @@ duration-based persistence and explicit clearing.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -30,6 +32,15 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
+
+_log = logging.getLogger(__name__)
+
+
+def _log_wall_error(task: asyncio.Task[None]) -> None:
+    """Log exceptions from fire-and-forget wall tasks."""
+    if not task.cancelled() and task.exception() is not None:
+        _log.warning("wall operation failed: %s", task.exception())
+
 
 WALL_BASE_DESCRIPTION = (
     "Broadcast a message to the whole team. "
@@ -57,8 +68,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         # Clear mode
         if clear:
-            await state.relay.set_wall(None)
-            await refresh_wall(mcp, state)
+            task = asyncio.create_task(state.relay.set_wall(None))
+            task.add_done_callback(_log_wall_error)
+            await refresh_wall(mcp, state, wall=None)
             return "Wall cleared."
 
         # Sanitize: strip control chars, collapse to single line
@@ -91,8 +103,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 if err.get("type") == "string_too_short":
                     return "Message cannot be blank."
             return str(exc)
-        await state.relay.set_wall(post)
-        await refresh_wall(mcp, state)
+        task = asyncio.create_task(state.relay.set_wall(post))
+        task.add_done_callback(_log_wall_error)
+        await refresh_wall(mcp, state, wall=post)
 
         remaining = format_remaining(post.expires_at)
         return f"Wall posted ({remaining}): {message}"
