@@ -669,8 +669,12 @@ paid tier.
     Synadia Cloud with zero infrastructure setup. Per-project activation
     (\texttt{/biff y}) with idle connection management. Status bar
     integration showing unread counts. Workflow hooks for plan and wall
-    automation. GitHub identity for display names. Released and in daily use.
-    See Appendix~A for the full command reference.
+    automation. GitHub identity for display names. CLI parity with MCP
+    tools (\texttt{biff who}, \texttt{biff finger}, etc.). Machine-readable
+    output via \texttt{-{}-json} global flag. Library API
+    (\texttt{from biff import commands}). Dev/prod plugin namespace
+    isolation (\texttt{biff-dev} vs \texttt{biff}). Released and in daily
+    use. See Appendix~A for the full command reference.
     \item[Future: Security] End-to-end encryption (NaCl/libsodium),
     GitHub identity and auth, per-repo NATS credentials.
     \item[Future: Real-Time] \texttt{/pair} for session sharing with
@@ -1056,6 +1060,24 @@ paid tier.
   Claiming a bead suggests \texttt{/plan}. Creating or merging a PR
   suggests \texttt{/wall} announcement. Hooks gate on \texttt{.biff.local}
   --- silent when biff is not enabled. \\
+
+  CLI parity & --- &
+  Every MCP tool is also a CLI command: \texttt{biff who},
+  \texttt{biff finger}, \texttt{biff write}, etc. Enables scripting and
+  use outside Claude Code sessions. \\
+
+  \texttt{-{}-json} global flag & --- &
+  Machine-readable JSON output for all commands. Enables programmatic
+  consumption by scripts and other tools. \\
+
+  Library API & --- &
+  \texttt{from biff import commands, CliContext, CommandResult}. Use biff
+  as a Python library in your own tools --- same logic, no subprocess. \\
+
+  Dev/prod isolation & --- &
+  Plugin uses \texttt{biff-dev} namespace during development; release
+  scripts swap to \texttt{biff} for production. Both can run side-by-side
+  in the same Claude Code session. \\
 
   \bottomrule
 \end{tabularx}
