@@ -9,7 +9,7 @@
 # malformed input rather than failing the tool call.
 
 INPUT=$(cat)
-TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name')
+TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 TOOL_NAME="${TOOL##*__}"
 
 # Single-pass unpack: handles string-encoded, array, or object responses.

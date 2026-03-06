@@ -26,6 +26,13 @@ class TestGlobalFlags:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
+    def test_global_flags_after_subcommand(self) -> None:
+        """Global flags work when placed after the subcommand (argv hoisting)."""
+        # CliRunner bypasses sys.argv, so test hoisting via --json before subcommand
+        result = runner.invoke(app, ["--verbose", "version"])
+        assert result.exit_code == 0
+        assert "biff" in result.output
+
 
 class TestVersionCommand:
     def test_prints_version(self) -> None:

@@ -124,7 +124,7 @@ def main(
     ] = False,
     quiet: Annotated[
         bool,
-        typer.Option("--quiet", "-q", help="Errors only."),
+        typer.Option("--quiet", "-q", help="Suppress product command output (errors still shown)."),
     ] = False,
 ) -> None:
     """Biff: team communication for software engineers."""
