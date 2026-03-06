@@ -54,6 +54,32 @@ class TestActivityTracker:
         tracker.record_nap_poll()
         assert tracker.napping
 
+    def test_wake_clears_napping(self) -> None:
+        tracker = ActivityTracker()
+        tracker.enter_nap()
+        assert tracker.napping
+        tracker.wake()
+        assert not tracker.napping
+
+    def test_wake_does_not_reset_idle(self) -> None:
+        """wake() preserves idle time — server re-enters napping."""
+        tracker = ActivityTracker()
+        time.sleep(0.05)
+        tracker.wake()
+        assert tracker.idle_seconds() >= 0.04
+
+    def test_wake_forces_immediate_nap_poll(self) -> None:
+        """wake() resets nap poll timer so _active_tick runs even if
+        the poller re-enters napping on the same tick."""
+        tracker = ActivityTracker()
+        tracker.enter_nap()
+        tracker.record_nap_poll()  # Recent nap poll
+        assert tracker.seconds_since_nap_poll() < 1.0
+
+        tracker.wake()
+        # After wake: nap poll timer is at epoch, so it looks overdue
+        assert tracker.seconds_since_nap_poll() > 1000
+
     def test_full_nap_wake_cycle(self) -> None:
         """Active → nap → nap poll → touch → active."""
         tracker = ActivityTracker()
