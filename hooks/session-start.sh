@@ -26,13 +26,13 @@ fi
 # Skip *-dev.md files — dev commands use plugin namespace (biff-dev:who-dev)
 # Skip entirely in dev mode — prod plugin deploys top-level commands
 if [[ "$IS_DEV" == "false" ]]; then
+  mkdir -p "$COMMANDS_DIR"
   DEPLOYED=()
   for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
     name="$(basename "$cmd_file")"
     [[ "$name" == *-dev.md ]] && continue
     dest="$COMMANDS_DIR/$name"
-    if [[ ! -f "$dest" ]]; then
-      mkdir -p "$COMMANDS_DIR"
+    if [[ ! -f "$dest" ]] || ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
       cp "$cmd_file" "$dest"
       DEPLOYED+=("/${name%.md}")
     fi

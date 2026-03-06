@@ -1,6 +1,7 @@
 ---
 description: Start a real-time conversation with a teammate or agent
 argument-hint: "@user [message]"
+allowed-tools: ["mcp__plugin_biff_tty__talk", "mcp__plugin_biff_tty__talk_end", "mcp__plugin_biff_tty__write"]
 ---
 <!-- markdownlint-disable MD041 -->
 

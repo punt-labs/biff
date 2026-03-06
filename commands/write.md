@@ -1,6 +1,7 @@
 ---
 description: Send a message to a teammate
 argument-hint: "@user <message>"
+allowed-tools: ["mcp__plugin_biff_tty__write"]
 ---
 <!-- markdownlint-disable MD041 -->
 

@@ -1,6 +1,7 @@
 ---
 description: Broadcast a message to all teammates
 argument-hint: '"message" [duration] | clear'
+allowed-tools: ["mcp__plugin_biff_tty__wall"]
 ---
 <!-- markdownlint-disable MD041 -->
 

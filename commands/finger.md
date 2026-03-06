@@ -1,6 +1,7 @@
 ---
 description: Check what a teammate is working on and their availability
 argument-hint: "@user"
+allowed-tools: ["mcp__plugin_biff_tty__finger"]
 ---
 <!-- markdownlint-disable MD041 -->
 

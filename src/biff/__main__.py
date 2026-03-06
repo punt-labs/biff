@@ -64,6 +64,7 @@ if "--json" in sys.argv[1:]:
     ]
 
 _json_output = False
+_quiet_output = False
 
 
 def _print_json(data: object) -> None:
@@ -106,10 +107,28 @@ def main(
         bool,
         typer.Option("--json", help="Output JSON instead of human-readable text."),
     ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Debug logging to stderr."),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Errors only."),
+    ] = False,
 ) -> None:
     """Biff: team communication for software engineers."""
-    global _json_output
+    if verbose and quiet:
+        raise typer.BadParameter("--verbose and --quiet are mutually exclusive.")
+
+    global _json_output, _quiet_output
     _json_output = json_flag
+    _quiet_output = quiet
+
+    if verbose:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setLevel(logging.DEBUG)
+        logging.getLogger("biff").setLevel(logging.DEBUG)
+        logging.getLogger("biff").addHandler(handler)
 
     # Suppress nats.py noise on Python 3.14+ and NATS/SSL chatter
     # during normal CLI exit. Scoped to CLI invocation, not import.
@@ -157,7 +176,7 @@ def _run(
             _print_json(data)
         elif result.error:
             print(result.text, file=sys.stderr)
-        else:
+        elif not _quiet_output:
             print(result.text)
         if result.error:
             raise typer.Exit(code=1)
@@ -317,6 +336,48 @@ def serve(
         mcp.run(transport="http", host=host, port=port)
     else:
         mcp.run(transport="stdio")
+
+
+@app.command("mcp")
+def mcp_cmd(
+    user: Annotated[
+        str | None,
+        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
+    ] = None,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
+    ] = None,
+    relay_url: Annotated[
+        str | None,
+        typer.Option(help="Relay URL override. Empty string forces local relay."),
+    ] = None,
+    prefix: Annotated[
+        Path,
+        typer.Option(help="Base path for data directory (default: /tmp)."),
+    ] = Path("/tmp"),  # noqa: S108
+) -> None:
+    """Start the biff MCP server (stdio transport)."""
+    from biff.config import RELAY_URL_UNSET
+    from biff.session_key import find_session_key
+    from biff.statusline import UNREAD_DIR
+
+    resolved = load_config(
+        user_override=user,
+        data_dir_override=data_dir,
+        relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
+        prefix=prefix,
+    )
+    dormant = not is_enabled(resolved.repo_root)
+    state = create_state(
+        resolved.config,
+        resolved.data_dir,
+        unread_path=UNREAD_DIR / f"{find_session_key()}.json",
+        dormant=dormant,
+        repo_root=resolved.repo_root,
+    )
+    server = create_server(state)
+    server.run(transport="stdio")
 
 
 @app.command("install-statusline")

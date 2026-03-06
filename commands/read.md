@@ -1,5 +1,6 @@
 ---
 description: Check your inbox for new messages
+allowed-tools: ["mcp__plugin_biff_tty__read_messages"]
 ---
 <!-- markdownlint-disable MD041 -->
 
