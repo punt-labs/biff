@@ -404,7 +404,13 @@ async def _manage_talk_subscription(
                     )
                     state.display_queue.add(item)
                     state.display_queue.force_to_front(item.source_key)
-                    await refresh_talk(mcp, state)
+                    # Do NOT call refresh_talk here.  The poller
+                    # (_active_tick) detects _talk_message changes
+                    # and fires the notification from the MCP
+                    # server's own coroutine context — the same
+                    # path wall uses.  Sending notifications from
+                    # a NATS subscription callback is unreliable:
+                    # Claude Code intermittently ignores them.
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
 

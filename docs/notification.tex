@@ -42,8 +42,11 @@ bar command).
 
 The notification pipeline has a ``belt and suspenders'' design: tool
 handlers fire notifications via the MCP request context (belt path),
-while a background poller and NATS callbacks fire them via a stored
-\texttt{ServerSession} reference (suspenders path).
+while a background poller fires them via a stored
+\texttt{ServerSession} reference (suspenders path).  NATS callbacks
+only mutate state (display queue, description-changed flags); the
+poller detects the changes and fires the notification from the MCP
+server's own coroutine context.
 
 The session reference is captured eagerly during the server's lifespan
 startup, before the NATS connection is established and before the
@@ -53,7 +56,10 @@ a valid session reference whenever it needs to fire a notification.
 The key invariant is: \emph{a connected NATS client implies a captured
 session}.  Since NATS subscription is the mechanism that delivers
 external talk messages, and since the session is captured before NATS
-connects, every callback and poller tick has a valid notification path.
+connects, the poller always has a valid notification path.  NATS
+callbacks do not fire notifications directly---they are unreliable
+from a different coroutine context---but they set flags that the
+poller picks up within one tick interval (2~seconds).
 
 This specification models the four state spaces---NATS connection,
 MCP server session, filesystem, and status bar---and the operations
@@ -181,8 +187,8 @@ Key invariants: queue metadata maps have the same domain as the
 queue sequence range; subscription and KV require a live connection;
 the current index is always within bounds.  The critical invariant
 is the last: \emph{a connected NATS client implies a captured session}.
-This ensures the suspenders notification path is always available
-when NATS callbacks fire.
+This ensures the suspenders notification path (the background poller)
+is always available when description-changed flags are set.
 
 %%----------------------------------------------------------------------
 \section{Initialization}
@@ -372,10 +378,12 @@ it guarantees synchronous delivery within the request-response cycle.
 
 \subsection{Suspenders Path (No Tool Context)}
 
-Background poller or NATS callback: no request context, but the
-eagerly captured session reference is used to send the notification.
-The state invariant guarantees $session = sessCaptured$ whenever
-NATS is connected, so this path always succeeds when needed.
+Background poller: no request context, but the eagerly captured
+session reference is used to send the notification.  NATS callbacks
+do not use this path directly---they set description-changed flags
+that the poller detects on its next tick.  The state invariant
+guarantees $session = sessCaptured$ whenever NATS is connected,
+so the poller always succeeds when needed.
 
 \begin{schema}{NotifySuspenders}
   \Delta NotificationState
@@ -413,7 +421,8 @@ Because the state invariant guarantees $session = sessCaptured$
 whenever NATS is connected, and because all notification-triggering
 operations require a NATS connection, $NotifySuspenders$ is always
 applicable when $toolContext = zfalse$ and a description has changed.
-No notification is ever dropped.
+No notification is ever dropped---NATS callbacks defer to the poller,
+which fires the notification within one tick interval (2~seconds).
 
 %%----------------------------------------------------------------------
 \section{Send Flow Operations}
@@ -534,14 +543,23 @@ handles the receive-side effects.
 \subsection{NATS Talk Callback}
 
 Fires when a core NATS message arrives on the talk notification
-subject.  Runs \emph{outside} any tool handler context.  Mutates the
-talk description, adds the talk item to the display queue, and
-fires notification via the suspenders path.
+subject.  Runs \emph{outside} any tool handler context in a NATS
+subscription callback coroutine.  Mutates the talk description and
+adds the talk item to the display queue, but does \emph{not} fire
+an MCP notification directly---sending notifications from a NATS
+callback is unreliable because Claude~Code intermittently ignores
+them (different coroutine context from the MCP server).
+
+Instead, the callback sets $talkDescChanged' = ztrue$ and the
+background poller ($PollTick$) detects the change on its next tick
+and fires the notification from the MCP server's own coroutine
+context.  This is the same pattern wall uses: state mutation is
+decoupled from notification delivery.
 
 The precondition $talkSubscribed = ztrue$ implies
 $natsConn = natsConnected$ (by state invariant), which in turn implies
-$session = sessCaptured$.  Therefore the suspenders path always
-succeeds---the notification is never dropped.
+$session = sessCaptured$.  The poller will therefore have a valid
+session when it fires the deferred notification.
 
 \begin{schema}{NatsTalkCallback}
   \Delta NotificationState \\
@@ -556,15 +574,15 @@ succeeds---the notification is never dropped.
   queueKinds' = queueKinds \oplus \{ senderKey? \mapsto itemTalk \} \\
   queueTexts' = queueTexts \oplus \{ senderKey? \mapsto senderBody? \} \\
   currentIndex' = \# queueItems \\
-  lastNotifyResult' = notifySent \\
-  barStale' = zfalse \\
+  lastNotifyResult' = lastNotifyResult \\
+  barStale' = barStale \\
   session' = session \\
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
   wallDesc' = wallDesc \\
-  wallDescChanged' = zfalse \\
+  wallDescChanged' = wallDescChanged \\
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
@@ -759,11 +777,13 @@ a description change.
 \end{schema}
 
 \emph{Proof sketch}: Every operation that sets $wallDescChanged' = ztrue$
-or $talkDescChanged' = ztrue$ also sets $lastNotifyResult' = notifySent$.
-Specifically: $WallPost$ (belt path, tool context), $NatsTalkCallback$
-(suspenders path, session guaranteed by invariant chain
-$talkSubscribed \implies natsConnected \implies sessCaptured$),
-and $PollTick$ (suspenders path, same invariant chain).
+also sets $lastNotifyResult' = notifySent$ ($WallPost$, belt path).
+$NatsTalkCallback$ sets $talkDescChanged' = ztrue$ but defers
+notification to the poller: it preserves $lastNotifyResult$, and
+$PollTick$ detects $talkDescChanged = ztrue$ and sets
+$lastNotifyResult' = notifySent$.  The invariant holds because
+the poller fires within one tick interval---no changed flag persists
+across two consecutive ticks without producing $notifySent$.
 
 \subsection{Session Invariant}
 
@@ -803,16 +823,18 @@ suspenders path is always applicable:
 \end{schema}
 
 The last conjunct is not an additional requirement---it follows from
-the first conjunct via $SessionInvariant$.  This means every NATS
-callback and every poller tick with pending changes can successfully
-send a notification.
+the first conjunct via $SessionInvariant$.  This means every poller
+tick with pending changes can successfully send a notification.
+NATS callbacks do not send notifications directly; they set flags
+that the poller consumes.
 
 \subsection{Wall and Talk Symmetry}
 
 In the corrected system, both wall and talk notifications always
 reach Claude~Code.  Wall uses the belt path (tool context);
-talk from external CLI uses the suspenders path (stored session).
-Both produce $lastNotifyResult = notifySent$.
+talk from external CLI sets state in the NATS callback, and the
+poller fires the notification via the suspenders path (stored session).
+Both ultimately produce $lastNotifyResult = notifySent$.
 
 \begin{schema}{WallNotifySuccess}
   NotificationState
