@@ -44,6 +44,13 @@ emit_simple() {
   }'
 }
 
+# ── Error guard: surface tool errors directly ────────────────────────
+ERROR_MSG=$(echo "$RESULT" | jq -r '.error // empty' 2>/dev/null)
+if [[ -n "$ERROR_MSG" ]]; then
+  emit_simple "error: ${ERROR_MSG}"
+  exit 0
+fi
+
 # ── who ──────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "who" ]]; then
   if [[ "$RESULT" == "No sessions." ]]; then
@@ -75,7 +82,11 @@ fi
 
 # ── write ────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "write" ]]; then
-  emit_simple "sent"
+  if printf '%s' "$RESULT" | grep -qi "error\|failed\|invalid"; then
+    emit_simple "$RESULT"
+  else
+    emit_simple "sent"
+  fi
   exit 0
 fi
 

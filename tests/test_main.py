@@ -28,10 +28,12 @@ class TestVersionCommand:
 
 
 class TestServeCommand:
+    """``biff serve`` is HTTP-only; ``biff mcp`` is stdio-only."""
+
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
     @patch("biff.__main__.load_config", return_value=_RESOLVED)
-    def test_stdio_transport(
+    def test_http_default(
         self,
         _mock_config: MagicMock,
         _mock_state: MagicMock,
@@ -41,28 +43,9 @@ class TestServeCommand:
         mock_server.return_value = mock_mcp
         result = runner.invoke(app, ["serve", "--user", "kai"])
         assert result.exit_code == 0
-        mock_mcp.run.assert_called_once_with(transport="stdio")
-
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
-    def test_http_transport(
-        self,
-        _mock_config: MagicMock,
-        _mock_state: MagicMock,
-        mock_server: MagicMock,
-    ) -> None:
-        mock_mcp = MagicMock()
-        mock_server.return_value = mock_mcp
-        result = runner.invoke(app, ["serve", "--user", "kai", "--transport", "http"])
-        assert result.exit_code == 0
         mock_mcp.run.assert_called_once_with(
             transport="http", host="127.0.0.1", port=8419
         )
-
-    def test_invalid_transport_rejected(self) -> None:
-        result = runner.invoke(app, ["serve", "--user", "kai", "--transport", "htp"])
-        assert result.exit_code != 0
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
@@ -77,17 +60,7 @@ class TestServeCommand:
         mock_server.return_value = mock_mcp
         result = runner.invoke(
             app,
-            [
-                "serve",
-                "--user",
-                "kai",
-                "--transport",
-                "http",
-                "--host",
-                "192.168.1.1",
-                "--port",
-                "9000",
-            ],
+            ["serve", "--user", "kai", "--host", "192.168.1.1", "--port", "9000"],
         )
         assert result.exit_code == 0
         mock_mcp.run.assert_called_once_with(
@@ -108,6 +81,25 @@ class TestServeCommand:
         mock_config.assert_called_once()
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["user_override"] == "kai"
+
+
+class TestMcpCommand:
+    """``biff mcp`` starts the MCP server with stdio transport."""
+
+    @patch("biff.__main__.create_server")
+    @patch("biff.__main__.create_state")
+    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    def test_stdio_transport(
+        self,
+        _mock_config: MagicMock,
+        _mock_state: MagicMock,
+        mock_server: MagicMock,
+    ) -> None:
+        mock_mcp = MagicMock()
+        mock_server.return_value = mock_mcp
+        result = runner.invoke(app, ["mcp", "--user", "kai"])
+        assert result.exit_code == 0
+        mock_mcp.run.assert_called_once_with(transport="stdio")
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")

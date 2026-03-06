@@ -24,11 +24,13 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
-import click
 import typer
 
 if TYPE_CHECKING:
+    from fastmcp import FastMCP
     from nats.aio.client import Client as NatsClient
+
+    from biff.server.state import ServerState
 
 from biff import commands
 from biff.cli_session import CliContext
@@ -52,16 +54,18 @@ from biff.server.state import create_state
 # Global --json flag
 #
 # Typer/Click requires group-level options before the subcommand name.
-# Move --json to the front of argv so both ``biff --json who`` and
-# ``biff who --json`` work.
+# Move global flags to the front of argv so both ``biff --json who`` and
+# ``biff who --json`` work (same for --verbose/-v and --quiet/-q).
 # ---------------------------------------------------------------------------
 
-if "--json" in sys.argv[1:]:
-    sys.argv = [
-        sys.argv[0],
-        "--json",
-        *(a for a in sys.argv[1:] if a != "--json"),
-    ]
+_GLOBAL_FLAGS = {"--json", "--verbose", "-v", "--quiet", "-q"}
+
+_front: list[str] = []
+_rest: list[str] = []
+for _arg in sys.argv[1:]:
+    (_front if _arg in _GLOBAL_FLAGS else _rest).append(_arg)
+if _front:
+    sys.argv = [sys.argv[0], *_front, *_rest]
 
 _json_output = False
 _quiet_output = False
@@ -280,37 +284,14 @@ def version() -> None:
         print(f"biff {ver}")
 
 
-@app.command()
-def serve(
-    user: Annotated[
-        str | None,
-        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
-    ] = None,
-    data_dir: Annotated[
-        Path | None,
-        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
-    ] = None,
-    relay_url: Annotated[
-        str | None,
-        typer.Option(help="Relay URL override. Empty string forces local relay."),
-    ] = None,
-    prefix: Annotated[
-        Path,
-        typer.Option(help="Base path for data directory (default: /tmp)."),
-    ] = Path("/tmp"),  # noqa: S108
-    transport: Annotated[
-        str,
-        typer.Option(
-            help="Transport: 'stdio' or 'http'.",
-            click_type=click.Choice(["stdio", "http"]),
-        ),
-    ] = "stdio",
-    host: Annotated[
-        str, typer.Option(help="HTTP host (http transport only).")
-    ] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="HTTP port (http transport only).")] = 8419,
-) -> None:
-    """Start the biff MCP server."""
+def _create_mcp_server(
+    *,
+    user: str | None,
+    data_dir: Path | None,
+    relay_url: str | None,
+    prefix: Path,
+) -> FastMCP[ServerState]:
+    """Shared config → state → server setup for serve/mcp."""
     from biff.config import RELAY_URL_UNSET
     from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
@@ -329,13 +310,39 @@ def serve(
         dormant=dormant,
         repo_root=resolved.repo_root,
     )
-    mcp = create_server(state)
+    return create_server(state)
 
-    if transport == "http":
-        print(f"Starting biff MCP server on http://{host}:{port}")
-        mcp.run(transport="http", host=host, port=port)
-    else:
-        mcp.run(transport="stdio")
+
+@app.command()
+def serve(
+    user: Annotated[
+        str | None,
+        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
+    ] = None,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
+    ] = None,
+    relay_url: Annotated[
+        str | None,
+        typer.Option(help="Relay URL override. Empty string forces local relay."),
+    ] = None,
+    prefix: Annotated[
+        Path,
+        typer.Option(help="Base path for data directory (default: /tmp)."),
+    ] = Path("/tmp"),  # noqa: S108
+    host: Annotated[str, typer.Option(help="HTTP host.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="HTTP port.")] = 8419,
+) -> None:
+    """Start the biff MCP server (HTTP transport)."""
+    server = _create_mcp_server(
+        user=user,
+        data_dir=data_dir,
+        relay_url=relay_url,
+        prefix=prefix,
+    )
+    print(f"Starting biff MCP server on http://{host}:{port}")
+    server.run(transport="http", host=host, port=port)
 
 
 @app.command("mcp")
@@ -358,25 +365,12 @@ def mcp_cmd(
     ] = Path("/tmp"),  # noqa: S108
 ) -> None:
     """Start the biff MCP server (stdio transport)."""
-    from biff.config import RELAY_URL_UNSET
-    from biff.session_key import find_session_key
-    from biff.statusline import UNREAD_DIR
-
-    resolved = load_config(
-        user_override=user,
-        data_dir_override=data_dir,
-        relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
+    server = _create_mcp_server(
+        user=user,
+        data_dir=data_dir,
+        relay_url=relay_url,
         prefix=prefix,
     )
-    dormant = not is_enabled(resolved.repo_root)
-    state = create_state(
-        resolved.config,
-        resolved.data_dir,
-        unread_path=UNREAD_DIR / f"{find_session_key()}.json",
-        dormant=dormant,
-        repo_root=resolved.repo_root,
-    )
-    server = create_server(state)
     server.run(transport="stdio")
 
 
