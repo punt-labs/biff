@@ -148,6 +148,9 @@ def main(
     _suppress_nats_noise()
 
     if ctx.invoked_subcommand is None:
+        if _json_output or _quiet_output:
+            flag = "--json" if _json_output else "--quiet"
+            raise typer.BadParameter(f"{flag} is not supported in REPL mode.")
         # No subcommand → launch the REPL.
         asyncio.run(_repl())
 
@@ -746,10 +749,11 @@ async def _talk_interactive(to: str, opening: str) -> None:
     """Interactive talk loop using the shared CLI session lifecycle."""
     from biff.models import Message
     from biff.nats_relay import NatsRelay
-    from biff.tty import parse_address
+    from biff.server.tools._session import resolve_session
+    from biff.tty import build_session_key, parse_address
 
     user_target, tty_target = parse_address(to)
-    target = f"{user_target}:{tty_target}" if tty_target else user_target
+    display = f"@{user_target}:{tty_target}" if tty_target else f"@{user_target}"
 
     try:
         async with cli_session(interactive=True) as ctx:
@@ -762,18 +766,29 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 print(f"@{user_target} is not online.")
                 return
 
+            # Resolve :tty suffix to a relay key (hex ID or tty_name match).
+            if tty_target:
+                resolved = await resolve_session(ctx.relay, user_target, tty_target)
+                if resolved:
+                    target = build_session_key(resolved.user, resolved.tty)
+                else:
+                    target = f"{user_target}:{tty_target}"
+            else:
+                target = user_target
+
             # Update plan to show talk activity.
             session = await ctx.relay.get_session(ctx.session_key)
             if session is not None:
-                updated = session.model_copy(update={"plan": f"talking to @{target}"})
+                updated = session.model_copy(update={"plan": f"talking to {display}"})
                 await ctx.relay.update_session(updated)
 
             if opening:
-                msg = Message(from_user=ctx.user, to_user=target, body=opening[:512])
+                body = opening[:512]
+                msg = Message(from_user=ctx.user, to_user=target, body=body)
                 await ctx.relay.deliver(msg, sender_key=ctx.session_key)
-                print(f"you> {opening}")
+                print(f"you> {body}")
 
-            print(f"Connected to @{target}. Type and press Enter. Ctrl+C to end.\n")
+            print(f"Connected to {display}. Type and press Enter. Ctrl+C to end.\n")
 
             nc = await ctx.relay.get_nc()
             subject = ctx.relay.talk_notify_subject(ctx.user)

@@ -83,7 +83,11 @@ async def _last(ctx: CliContext, args: list[str]) -> CommandResult:
 
 async def _wall(ctx: CliContext, args: list[str]) -> CommandResult:
     if args and args[0] == "--clear":
+        if len(args) > 1:
+            return CommandResult(text="Usage: wall --clear", error=True)
         return await commands.wall(ctx, "", "", clear=True)
+    if len(args) > 2:
+        return CommandResult(text='Usage: wall ["message" [duration]]', error=True)
     message = ""
     duration = ""
     if args:
@@ -100,6 +104,8 @@ async def _mesg(ctx: CliContext, args: list[str]) -> CommandResult:
 
 
 async def _tty(ctx: CliContext, args: list[str]) -> CommandResult:
+    if len(args) > 1:
+        return CommandResult(text="Usage: tty [name]", error=True)
     name = args[0] if args else ""
     return await commands.tty(ctx, name)
 
