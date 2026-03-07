@@ -281,7 +281,7 @@ def _drain_talk_messages(
         body = data.get("body", "")
         if body:
             label = f"{sender}:{sender_tty}" if sender_tty else sender
-            lines.append(f"{label} ▶ {body}")
+            lines.append(f"\033[36m{label} ▶ {body}\033[0m")
     return lines
 
 
