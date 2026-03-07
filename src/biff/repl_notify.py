@@ -6,13 +6,10 @@ snapshot. Returns notification lines to print before the prompt.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 from biff.formatting import format_remaining
 from biff.models import WallPost
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,7 +17,7 @@ class NotifyState:
     """Mutable state for between-command notification checks."""
 
     last_unread: int = 0
-    last_wall_text: str = ""
+    last_wall_key: str = ""
 
     def check(self, unread: int, wall: WallPost | None) -> list[str]:
         """Compare current state with previous and return notification lines.
@@ -39,20 +36,22 @@ class NotifyState:
             # Went from unread to caught up (someone read elsewhere).
             pass
 
-        # Wall changes.
-        wall_text = wall.text if wall else ""
-        if wall_text and wall_text != self.last_wall_text:
+        # Wall changes — keyed on (text, posted_at) so re-posts and
+        # expiry extensions are detected even when text is unchanged.
+        wall_key = _wall_key(wall)
+        if wall_key and wall_key != self.last_wall_key:
             remaining = format_remaining(wall.expires_at) if wall else ""
             from_user = wall.from_user if wall else ""
+            wall_text = wall.text if wall else ""
             lines.append(
                 f"  \033[1;31m📢 WALL @{from_user}: {wall_text} ({remaining})\033[0m"
             )
-        elif not wall_text and self.last_wall_text:
+        elif not wall_key and self.last_wall_key:
             lines.append("  \033[2m📢 Wall cleared\033[0m")
 
         # Update state.
         self.last_unread = unread
-        self.last_wall_text = wall_text
+        self.last_wall_key = wall_key
 
         return lines
 
@@ -64,4 +63,15 @@ class NotifyState:
         next poll.
         """
         self.last_unread = unread
-        self.last_wall_text = wall.text if wall else ""
+        self.last_wall_key = _wall_key(wall)
+
+
+def _wall_key(wall: WallPost | None) -> str:
+    """Fingerprint a wall post for change detection.
+
+    Includes text and posted_at so re-posts with the same text
+    but different timestamps are detected as changes.
+    """
+    if wall is None:
+        return ""
+    return f"{wall.text}|{wall.posted_at.isoformat()}"

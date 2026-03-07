@@ -257,9 +257,9 @@ async def _repl() -> None:
     """Interactive REPL: connect once, run commands, clean up on exit.
 
     Uses a stdin reader thread so the event loop stays unblocked —
-    heartbeat, NATS subscriptions, and notification polling run while
-    the user is idle at the prompt.  Wall and message notifications
-    print in real-time (NATS-driven) between input lines.
+    heartbeat and notification polling run while the user is idle at
+    the prompt.  Message notifications are NATS-driven (instant);
+    wall changes are detected via 2s timeout polling.
 
     Readline provides line editing (arrow keys), command history
     (up/down, persisted to ``~/.biff/repl_history``), and tab
@@ -282,8 +282,8 @@ async def _repl() -> None:
             notify = NotifyState()
             prompt = f"{ctx.user}:{ctx.tty_name}> "
 
-            # Seed initial state.
-            await _poll_notify(ctx, notify, prompt)
+            # Seed initial state without emitting notifications.
+            await _sync_notify(ctx, notify)
 
             # Start stdin reader thread + asyncio bridge.
             input_queue: queue_mod.Queue[str | None] = queue_mod.Queue()
@@ -345,6 +345,8 @@ async def _repl() -> None:
                 if sub is not None:
                     with suppress(Exception):
                         await sub.unsubscribe()
+    except KeyboardInterrupt:
+        print()
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise typer.Exit(code=1) from None
