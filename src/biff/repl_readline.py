@@ -42,11 +42,13 @@ def setup(command_names: list[str]) -> None:
         return completions[state] if state < len(completions) else None
 
     readline.set_completer(_completer)
-    readline.parse_and_bind("tab: complete")
 
-    # macOS uses libedit which needs a different binding syntax.
-    # parse_and_bind is idempotent — both forms are harmless.
-    readline.parse_and_bind("bind ^I rl_complete")
+    # libedit (macOS) and GNU readline use different binding syntax.
+    # Detect libedit via the module docstring (standard detection method).
+    if "libedit" in (readline.__doc__ or ""):
+        readline.parse_and_bind("bind ^I rl_complete")
+    else:
+        readline.parse_and_bind("tab: complete")
 
     # Load persisted history.
     try:
