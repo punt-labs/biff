@@ -178,9 +178,16 @@ class TestDispatchCommands:
         assert "release freeze" in result.text
 
     @pytest.mark.anyio()
-    async def test_wall_clear(self, ctx: CliContext) -> None:
+    async def test_wall_clear_flag(self, ctx: CliContext) -> None:
         await dispatch('wall "test" 1h', ctx)
         result = await dispatch("wall --clear", ctx)
+        assert result is not None
+        assert "cleared" in result.text.lower()
+
+    @pytest.mark.anyio()
+    async def test_wall_clear_keyword(self, ctx: CliContext) -> None:
+        await dispatch("wall test 1h", ctx)
+        result = await dispatch("wall clear", ctx)
         assert result is not None
         assert "cleared" in result.text.lower()
 
@@ -198,15 +205,20 @@ class TestDispatchCommands:
         assert "multi word plan" in result.text
 
     @pytest.mark.anyio()
-    async def test_wall_extra_args(self, ctx: CliContext) -> None:
-        result = await dispatch("wall msg dur extra", ctx)
+    async def test_wall_multiword_with_duration(self, ctx: CliContext) -> None:
+        result = await dispatch("wall preparing to merge pr 10m", ctx)
         assert result is not None
-        assert result.error
-        assert "Usage" in result.text
+        assert "preparing to merge pr" in result.text
+
+    @pytest.mark.anyio()
+    async def test_wall_multiword_no_duration(self, ctx: CliContext) -> None:
+        result = await dispatch("wall deploy freeze until 5pm", ctx)
+        assert result is not None
+        assert "deploy freeze until 5pm" in result.text
 
     @pytest.mark.anyio()
     async def test_wall_clear_extra_args(self, ctx: CliContext) -> None:
-        result = await dispatch("wall --clear extra", ctx)
+        result = await dispatch("wall clear extra", ctx)
         assert result is not None
         assert result.error
         assert "Usage" in result.text
