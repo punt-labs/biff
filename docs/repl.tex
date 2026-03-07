@@ -1,0 +1,641 @@
+%
+% repl.tex
+%
+% Z Specification for Biff REPL Lifecycle
+% Formal model of session lifecycle, command dispatch, prompt display
+% coordination, and notification state for the interactive REPL.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff REPL Lifecycle: A Z Specification}
+\author{Formal Model of Session, Dispatch, Prompt, and Notification State}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Biff REPL Lifecycle: A Z Specification},
+  pdfauthor={punt-labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+The biff REPL (\texttt{biff} with no arguments) provides an interactive
+command loop with a proper session lifecycle that mirrors the MCP
+server.  This specification models four concurrent state domains and
+their interactions:
+
+\begin{enumerate}
+\item \textbf{Session lifecycle} --- connect to NATS, register in KV
+  with an auto-assigned \texttt{ttyN} name, write wtmp login, run
+  heartbeat, and clean up on exit (wtmp logout, KV delete, disconnect).
+
+\item \textbf{Command dispatch} --- the stdin reader thread puts lines
+  into an asyncio queue; the event loop drains the queue and dispatches
+  commands via \texttt{shlex}-based parsing.  Commands return a
+  \texttt{CommandResult} with text and optional JSON.  The special
+  commands \texttt{exit}/\texttt{quit} terminate the loop; \texttt{talk}
+  enters a modal sub-loop (modelled in \texttt{docs/talk.tex}).
+
+\item \textbf{Prompt display} --- a threading gate (prompt gate)
+  synchronises the stdin reader thread and the async event loop.
+  The thread waits for the gate before calling \texttt{input(prompt)};
+  the async loop sets the gate after finishing command output.  This
+  prevents the prompt from interleaving with output.
+
+\item \textbf{Notification state} --- \texttt{NotifyState} tracks the
+  last-known unread count and wall fingerprint.  On each poll (2-second
+  timeout or NATS notification wake), the current values are compared
+  with the snapshot.  Changes produce inline banner lines.  After the
+  user's own command, \texttt{sync()} updates the snapshot without
+  emitting banners (self-notification prevention).
+\end{enumerate}
+
+The prompt gate is the critical coordination mechanism.  It is the
+formal equivalent of a semaphore controlling terminal write access
+between the stdin reader thread and the async event loop.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  [USER, TTY, SESSIONKEY, CMDLINE, CMDOUTPUT, WALLKEY]
+\end{zed}
+
+$USER$ identifies a biff user.  $TTY$ is a session identifier.
+$SESSIONKEY$ is a composite \texttt{user:tty} key.  $CMDLINE$ is
+a raw input line from the user.  $CMDOUTPUT$ is the text produced
+by a command.  $WALLKEY$ is a wall fingerprint (text + posted\_at).
+
+%%----------------------------------------------------------------------
+\section{Free Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  SessionPhase ::= spDisconnected | spConnected | spShuttingDown
+\end{zed}
+
+The session connection lifecycle: initially disconnected, connected
+after \texttt{cli\_session} enters, and shutting down during the
+\texttt{finally} block.
+
+\begin{zed}
+  ReplMode ::= rmNormal | rmTalk
+\end{zed}
+
+The REPL is either in normal command mode or in the modal talk
+sub-loop.  The talk sub-loop is modelled in \texttt{docs/talk.tex};
+this specification models the mode transition.
+
+\begin{zed}
+  DispatchResult ::= drOutput | drExit | drTalk | drError | drEmpty
+\end{zed}
+
+The five outcomes of dispatching a command line:
+\begin{itemize}
+\item $drOutput$ --- command produced output to display.
+\item $drExit$ --- user typed \texttt{exit} or \texttt{quit}.
+\item $drTalk$ --- user typed \texttt{talk @user}; enter talk mode.
+\item $drError$ --- command raised an error.
+\item $drEmpty$ --- blank line; no action.
+\end{itemize}
+
+%%----------------------------------------------------------------------
+\section{Global Constants}
+%%----------------------------------------------------------------------
+
+\begin{axdef}
+  maxUnread : \nat \\
+  heartbeatInterval : \nat \\
+  pollTimeout : \nat
+\where
+  maxUnread = 100 \\
+  heartbeatInterval = 60 \\
+  pollTimeout = 2
+\end{axdef}
+
+$maxUnread$ caps the unread count (DES-015).  $heartbeatInterval$
+is the KV refresh period in seconds.  $pollTimeout$ is the
+notification poll cycle in seconds.
+
+%%----------------------------------------------------------------------
+\section{REPL State}
+%%----------------------------------------------------------------------
+
+All state is flattened into a single schema for ProB compatibility.
+
+\begin{schema}{ReplState}
+  sessionPhase : SessionPhase \\
+  replMode : ReplMode \\
+  myUser : USER \\
+  myTty : TTY \\
+  myKey : SESSIONKEY \\
+  registered : ZBOOL \\
+  promptGateOpen : ZBOOL \\
+  lastUnread : \nat \\
+  lastWallKey : WALLKEY \\
+  currentUnread : \nat \\
+  currentWallKey : WALLKEY \\
+  pendingOutput : ZBOOL \\
+  inputAvailable : ZBOOL
+\where
+  lastUnread \leq maxUnread \\
+  currentUnread \leq maxUnread \\
+  sessionPhase = spDisconnected \implies registered = zfalse \\
+  sessionPhase = spDisconnected \implies promptGateOpen = zfalse \\
+  replMode = rmTalk \implies sessionPhase = spConnected \\
+  pendingOutput = ztrue \implies promptGateOpen = zfalse
+\end{schema}
+
+The key invariants:
+\begin{itemize}
+\item A disconnected session is never registered and has no open
+  prompt gate.
+\item Talk mode requires an active connection.
+\item When output is pending (the async loop is printing), the prompt
+  gate is closed --- the stdin thread cannot print a prompt.
+\end{itemize}
+
+%%----------------------------------------------------------------------
+\section{Initialization}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Init}
+  ReplState'
+\where
+  sessionPhase' = spDisconnected \\
+  replMode' = rmNormal \\
+  registered' = zfalse \\
+  promptGateOpen' = zfalse \\
+  lastUnread' = 0 \\
+  currentUnread' = 0 \\
+  pendingOutput' = zfalse \\
+  inputAvailable' = zfalse
+\end{schema}
+
+The initial state before \texttt{cli\_session} connects.  Wall keys
+and identity ($myUser$, $myTty$, $myKey$) are unconstrained
+(assigned during connect).
+
+%%----------------------------------------------------------------------
+\section{Session Lifecycle Operations}
+%%----------------------------------------------------------------------
+
+%%----------------------------------------------------------------------
+\subsection{Connect}
+%%----------------------------------------------------------------------
+
+\texttt{cli\_session} enters: connect to NATS, register session in
+KV, auto-assign ttyN, write wtmp login, start heartbeat, seed
+notification state.
+
+\begin{schema}{Connect}
+  \Delta ReplState
+\where
+  sessionPhase = spDisconnected \\
+  sessionPhase' = spConnected \\
+  registered' = ztrue \\
+  promptGateOpen' = ztrue \\
+  replMode' = rmNormal \\
+  pendingOutput' = zfalse \\
+  inputAvailable' = zfalse \\
+  lastUnread' = currentUnread' \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+After connect, the prompt gate opens to allow the first prompt.
+Notification state is seeded ($lastUnread' = currentUnread'$) so
+pre-existing unread messages do not trigger a banner.
+
+%%----------------------------------------------------------------------
+\subsection{Heartbeat}
+%%----------------------------------------------------------------------
+
+Periodic KV refresh.  No state change visible to the REPL; modelled
+as a query to show it preserves all invariants.
+
+\begin{schema}{Heartbeat}
+  \Xi ReplState
+\where
+  sessionPhase = spConnected
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{Disconnect}
+%%----------------------------------------------------------------------
+
+\texttt{cli\_session} exits: write wtmp logout, delete KV entry,
+close NATS connection.
+
+\begin{schema}{Disconnect}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  sessionPhase' = spShuttingDown \\
+  registered' = zfalse \\
+  promptGateOpen' = zfalse \\
+  replMode' = rmNormal \\
+  pendingOutput' = zfalse \\
+  inputAvailable' = zfalse \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Input/Dispatch/Output Cycle}
+%%----------------------------------------------------------------------
+
+%%----------------------------------------------------------------------
+\subsection{InputReady}
+%%----------------------------------------------------------------------
+
+The stdin reader thread has put a line into the asyncio queue.
+The prompt gate was open (thread was allowed to read); now it
+closes because the async loop needs exclusive terminal access to
+print output.
+
+\begin{schema}{InputReady}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  promptGateOpen = ztrue \\
+  inputAvailable = zfalse \\
+  inputAvailable' = ztrue \\
+  promptGateOpen' = zfalse \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  pendingOutput' = pendingOutput \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DispatchCommand}
+%%----------------------------------------------------------------------
+
+The async loop takes a line from the queue and dispatches it.
+Output is generated; the input is consumed.
+
+\begin{schema}{DispatchCommand}
+  \Delta ReplState \\
+  result? : DispatchResult
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  inputAvailable = ztrue \\
+  result? = drOutput \\
+  inputAvailable' = zfalse \\
+  pendingOutput' = ztrue \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  promptGateOpen' = promptGateOpen \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DispatchExit}
+%%----------------------------------------------------------------------
+
+User typed \texttt{exit} or \texttt{quit}.  Triggers disconnect.
+
+\begin{schema}{DispatchExit}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  inputAvailable = ztrue \\
+  inputAvailable' = zfalse \\
+  sessionPhase' = spShuttingDown \\
+  promptGateOpen' = zfalse \\
+  replMode' = rmNormal \\
+  registered' = registered \\
+  pendingOutput' = zfalse \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DispatchEmpty}
+%%----------------------------------------------------------------------
+
+Blank line.  No output, re-open the prompt gate immediately.
+
+\begin{schema}{DispatchEmpty}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  inputAvailable = ztrue \\
+  inputAvailable' = zfalse \\
+  promptGateOpen' = ztrue \\
+  pendingOutput' = zfalse \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DispatchError}
+%%----------------------------------------------------------------------
+
+Command raised a \texttt{ValueError}.  Error printed to stderr,
+prompt gate re-opened.
+
+\begin{schema}{DispatchError}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  inputAvailable = ztrue \\
+  inputAvailable' = zfalse \\
+  promptGateOpen' = ztrue \\
+  pendingOutput' = zfalse \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{OutputComplete}
+%%----------------------------------------------------------------------
+
+Command output has been printed and notification state synced.
+Re-open the prompt gate so the stdin thread can print the next
+prompt.
+
+\begin{schema}{OutputComplete}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  pendingOutput = ztrue \\
+  pendingOutput' = zfalse \\
+  promptGateOpen' = ztrue \\
+  lastUnread' = currentUnread \\
+  lastWallKey' = currentWallKey \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  inputAvailable' = inputAvailable \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+The \texttt{sync()} call happens here: $lastUnread' = currentUnread$
+and $lastWallKey' = currentWallKey$.  This prevents the next poll
+from generating a self-notification for changes the user's own
+command just made.
+
+%%----------------------------------------------------------------------
+\subsection{EnterTalkMode}
+%%----------------------------------------------------------------------
+
+User typed \texttt{talk @user}.  REPL transitions to talk mode
+(modelled in \texttt{docs/talk.tex}).
+
+\begin{schema}{EnterTalkMode}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  inputAvailable = ztrue \\
+  replMode' = rmTalk \\
+  inputAvailable' = zfalse \\
+  promptGateOpen' = zfalse \\
+  pendingOutput' = zfalse \\
+  sessionPhase' = sessionPhase \\
+  registered' = registered \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ExitTalkMode}
+%%----------------------------------------------------------------------
+
+Talk sub-loop ended (local or remote hangup).  Return to normal
+mode, re-open prompt gate.
+
+\begin{schema}{ExitTalkMode}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmTalk \\
+  replMode' = rmNormal \\
+  promptGateOpen' = ztrue \\
+  pendingOutput' = zfalse \\
+  inputAvailable' = zfalse \\
+  sessionPhase' = sessionPhase \\
+  registered' = registered \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Notification Operations}
+%%----------------------------------------------------------------------
+
+%%----------------------------------------------------------------------
+\subsection{PollNoChange}
+%%----------------------------------------------------------------------
+
+2-second timeout fires.  Current unread count and wall key are the
+same as the snapshot.  No banners emitted.
+
+\begin{schema}{PollNoChange}
+  \Xi ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  currentUnread = lastUnread \\
+  currentWallKey = lastWallKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{PollNewMessages}
+%%----------------------------------------------------------------------
+
+Unread count increased since last snapshot.  A banner is emitted
+inline (clear line, print, reshow prompt).  Snapshot updated.
+
+\begin{schema}{PollNewMessages}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  currentUnread > lastUnread \\
+  lastUnread' = currentUnread \\
+  lastWallKey' = lastWallKey \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  promptGateOpen' = promptGateOpen \\
+  pendingOutput' = pendingOutput \\
+  inputAvailable' = inputAvailable \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{PollWallChanged}
+%%----------------------------------------------------------------------
+
+Wall fingerprint changed (new wall posted, or wall expired/cleared).
+A banner is emitted inline.  Snapshot updated.
+
+\begin{schema}{PollWallChanged}
+  \Delta ReplState
+\where
+  sessionPhase = spConnected \\
+  replMode = rmNormal \\
+  currentWallKey \neq lastWallKey \\
+  lastWallKey' = currentWallKey \\
+  lastUnread' = lastUnread \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  promptGateOpen' = promptGateOpen \\
+  pendingOutput' = pendingOutput \\
+  inputAvailable' = inputAvailable \\
+  currentUnread' = currentUnread \\
+  currentWallKey' = currentWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ExternalStateChange}
+%%----------------------------------------------------------------------
+
+An external event changes the unread count or wall key (message
+arrival, wall post by another user).  This is the ``world'' updating
+the current values that the next poll will compare against the
+snapshot.
+
+\begin{schema}{ExternalStateChange}
+  \Delta ReplState \\
+  newUnread? : \nat \\
+  newWallKey? : WALLKEY
+\where
+  newUnread? \leq maxUnread \\
+  currentUnread' = newUnread? \\
+  currentWallKey' = newWallKey? \\
+  sessionPhase' = sessionPhase \\
+  replMode' = replMode \\
+  registered' = registered \\
+  promptGateOpen' = promptGateOpen \\
+  pendingOutput' = pendingOutput \\
+  inputAvailable' = inputAvailable \\
+  lastUnread' = lastUnread \\
+  lastWallKey' = lastWallKey \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{System Invariants}
+%%----------------------------------------------------------------------
+
+The following properties must hold in all reachable states:
+
+\begin{enumerate}
+\item \textbf{Prompt gate closed during output.}  When
+  $pendingOutput = ztrue$, $promptGateOpen = zfalse$.  The stdin
+  thread never prints a prompt while the async loop is writing
+  command output.
+
+\item \textbf{Disconnected implies no registration.}  When
+  $sessionPhase = spDisconnected$, $registered = zfalse$.
+
+\item \textbf{Talk requires connection.}  When $replMode = rmTalk$,
+  $sessionPhase = spConnected$.
+
+\item \textbf{Notification snapshot bounded.}  $lastUnread$ and
+  $currentUnread$ are both at most $maxUnread$.
+
+\item \textbf{Self-notification prevention.}  After
+  $OutputComplete$, $lastUnread = currentUnread$ and
+  $lastWallKey = currentWallKey$.  The next $PollNoChange$ will
+  emit no banners.
+
+\item \textbf{Prompt gate lifecycle.}  The prompt gate is opened
+  exactly once per command cycle: either in $OutputComplete$ (after
+  successful command), $DispatchEmpty$ (blank line), $DispatchError$
+  (error), or $ExitTalkMode$ (returning from talk).  It is closed
+  by $InputReady$ when the stdin thread delivers a line.
+\end{enumerate}
+
+\end{document}
