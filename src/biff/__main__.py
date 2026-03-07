@@ -172,16 +172,22 @@ async def _repl() -> None:
     Uses ``run_in_executor`` for ``input()`` so the event loop stays
     unblocked — heartbeat and other background tasks keep running
     while the user is idle at the prompt.
+
+    Readline provides line editing (arrow keys), command history
+    (up/down, persisted to ``~/.biff/repl_history``), and tab
+    completion for command names.
     """
     from biff.dispatch import available_commands, dispatch
+    from biff.repl_readline import setup as setup_readline
 
     loop = asyncio.get_running_loop()
+    cmds = available_commands()
+    setup_readline(cmds)
 
     try:
         async with cli_session(interactive=True) as ctx:
-            cmds = ", ".join(available_commands())
             print(f"biff {pkg_version('punt-biff')} — {ctx.user}:{ctx.tty_name}")
-            print(f"Commands: {cmds}, exit")
+            print(f"Commands: {', '.join(cmds)}, exit")
             print()
 
             prompt = f"{ctx.user}> "
