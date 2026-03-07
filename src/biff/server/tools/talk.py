@@ -34,6 +34,7 @@ from biff.server.tools._descriptions import (
     set_talk_partner,
 )
 from biff.server.tools._session import resolve_session, update_current_session
+from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
@@ -43,20 +44,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Strong references prevent GC of fire-and-forget tasks (CPython weak-refs).
-_background_tasks: set[asyncio.Task[None]] = set()
-
 _NO_MESSAGES = "No new messages. Still listening."
-
-
-def _log_talk_error(task: asyncio.Task[None]) -> None:
-    """Log exceptions from fire-and-forget talk delivery tasks."""
-    _background_tasks.discard(task)
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.warning("talk delivery failed: %s", exc)
 
 
 def _reset_talk() -> None:
@@ -183,9 +171,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 body=message[:512],
             )
             await refresh_read_messages(mcp, state)
-            task = asyncio.create_task(relay.deliver(msg, sender_key=state.session_key))
-            _background_tasks.add(task)
-            task.add_done_callback(_log_talk_error)
+            fire_and_forget(
+                relay.deliver(msg, sender_key=state.session_key),
+                logger=logger,
+                description="talk delivery",
+            )
 
         return (
             f"Talk session started with @{display_target}. "

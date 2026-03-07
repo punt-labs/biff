@@ -8,7 +8,6 @@ them read.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -17,6 +16,7 @@ from biff.models import Message
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import resolve_session, update_current_session
+from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
@@ -41,19 +41,6 @@ async def _resolve_recipient(state: ServerState, to: str) -> tuple[str, str]:
 
 
 _log = logging.getLogger(__name__)
-
-# Strong references prevent GC of fire-and-forget tasks (CPython weak-refs).
-_background_tasks: set[asyncio.Task[None]] = set()
-
-
-def _log_delivery_error(task: asyncio.Task[None]) -> None:
-    """Log exceptions from fire-and-forget delivery tasks."""
-    _background_tasks.discard(task)
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.warning("message delivery failed: %s", exc)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -81,11 +68,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             body=message[:512],
         )
         await refresh_read_messages(mcp, state)
-        task = asyncio.create_task(
-            state.relay.deliver(msg, sender_key=state.session_key)
+        fire_and_forget(
+            state.relay.deliver(msg, sender_key=state.session_key),
+            logger=_log,
+            description="message delivery",
         )
-        _background_tasks.add(task)
-        task.add_done_callback(_log_delivery_error)
         return f"Message sent to {display}."
 
     @mcp.tool(

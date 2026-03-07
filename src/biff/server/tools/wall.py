@@ -10,7 +10,6 @@ duration-based persistence and explicit clearing.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -27,6 +26,7 @@ from biff.models import WallPost
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_wall
 from biff.server.tools._session import update_current_session
+from biff.server.tools._tasks import fire_and_forget
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -34,19 +34,6 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 _log = logging.getLogger(__name__)
-
-# Strong references prevent GC of fire-and-forget tasks (CPython weak-refs).
-_background_tasks: set[asyncio.Task[None]] = set()
-
-
-def _log_wall_error(task: asyncio.Task[None]) -> None:
-    """Log exceptions from fire-and-forget wall tasks."""
-    _background_tasks.discard(task)
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log.warning("wall operation failed: %s", exc)
 
 
 WALL_BASE_DESCRIPTION = (
@@ -76,9 +63,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         # Clear mode
         if clear:
             await refresh_wall(mcp, state, wall=None)
-            task = asyncio.create_task(state.relay.set_wall(None))
-            _background_tasks.add(task)
-            task.add_done_callback(_log_wall_error)
+            fire_and_forget(
+                state.relay.set_wall(None), logger=_log, description="wall clear"
+            )
             return "Wall cleared."
 
         # Sanitize: strip control chars, collapse to single line
@@ -112,9 +99,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                     return "Message cannot be blank."
             return str(exc)
         await refresh_wall(mcp, state, wall=post)
-        task = asyncio.create_task(state.relay.set_wall(post))
-        _background_tasks.add(task)
-        task.add_done_callback(_log_wall_error)
+        fire_and_forget(
+            state.relay.set_wall(post), logger=_log, description="wall post"
+        )
 
         remaining = format_remaining(post.expires_at)
         return f"Wall posted ({remaining}): {message}"
