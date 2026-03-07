@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.15.1 — 2026-03-06
+
+### Fixed
+
+- Show help when `biff` is invoked with no command
+- Fire-and-forget MCP tools no longer block on NATS publish; argv hoisting removed
+- Test suite respects TMPDIR for config isolation
+
+### Changed
+
+- Add Makefile per makefile.md standard
+
 ## 0.15.0 — 2026-03-06
 
 ### Added

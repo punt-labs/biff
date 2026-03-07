@@ -71,3 +71,17 @@ docs/*.toc
 
 # Scratch/temp directory (TMPDIR set via .envrc)
 .tmp/
+
+# Plugin runtime state (vox, tts)
+.tts/
+.vox/
+
+# Dev scratch files
+*.tmp
+conv.json
+docs/notification.synctex.gz
+docs/plan-audio-notifications.md
+mcp-message/
+scripts/demo.md
+scripts/quarry-statusline.sh
+scripts/test-talk-e2e.sh
