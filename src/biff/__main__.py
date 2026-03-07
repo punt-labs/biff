@@ -182,8 +182,11 @@ def _drain_talk_notifications(
         # Skip self-echo.
         if data.get("from_key", "") == session_key:
             continue
+        msg_type = data.get("type", "message")
         sender = data.get("from", "?")
         body = data.get("body", "")
+        if msg_type == "accept":
+            continue  # Silent — handled by _wait_for_talk_accept.
         if body:
             lines.append(f"  \033[1;33m📞 @{sender}: {body}\033[0m")
     return lines
@@ -378,6 +381,146 @@ async def _repl_loop(
         prompt_gate.set()
 
 
+def _has_pending_invite(
+    talk_notifications: asyncio.Queue[dict[str, str]],
+    from_user: str,
+) -> bool:
+    """Check if there's a pending invite from a specific user.
+
+    Peeks at the queue without draining non-matching items.
+    Returns ``True`` if an invite from ``from_user`` was found.
+    """
+    # Drain and re-queue items, checking for an invite.
+    found = False
+    items: list[dict[str, str]] = []
+    while not talk_notifications.empty():
+        try:
+            data = talk_notifications.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        if data.get("type") == "invite" and data.get("from", "") == from_user:
+            found = True
+            # Don't re-queue the consumed invite.
+        else:
+            items.append(data)
+    # Re-queue non-matching items.
+    for item in items:
+        talk_notifications.put_nowait(item)
+    return found
+
+
+def _check_for_accept(
+    talk_notifications: asyncio.Queue[dict[str, str]],
+    session_key: str,
+) -> bool:
+    """Drain notifications, return True if an accept was found."""
+    found = False
+    while not talk_notifications.empty():
+        try:
+            data = talk_notifications.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        if data.get("from_key", "") == session_key:
+            continue
+        if data.get("type") == "accept":
+            found = True
+            continue
+        # Display non-accept notifications as banners.
+        sender = data.get("from", "?")
+        body = data.get("body", "")
+        if body:
+            print(f"\r\033[K  \033[1;33m📞 @{sender}: {body}\033[0m")
+    return found
+
+
+async def _wait_for_talk_accept(
+    ctx: CliContext,
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+    talk_notifications: asyncio.Queue[dict[str, str]],
+    prompt_gate: threading_mod.Event,
+) -> bool:
+    """Wait for the target to accept the talk invitation.
+
+    Returns ``True`` if an accept notification was received,
+    ``False`` if the user typed ``end`` or EOF.
+    """
+    while True:
+        result = await _wait_for_input_or_notify(aqueue, notify_event)
+        if result is _NO_INPUT:
+            notify_event.clear()
+            if _check_for_accept(talk_notifications, ctx.session_key):
+                return True
+            continue
+
+        if result is None or not isinstance(result, str):
+            return False
+        if result.strip().lower() in ("end", "exit", "quit"):
+            return False
+        prompt_gate.set()
+
+
+async def _talk_handshake(
+    ctx: CliContext,
+    nc: object,
+    target_subject: str,
+    display: str,
+    args: list[str],
+    responding: bool,
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+    talk_notifications: asyncio.Queue[dict[str, str]],
+    prompt_gate: threading_mod.Event,
+) -> bool:
+    """Execute the talk handshake. Returns True if talk should proceed."""
+    if responding:
+        # We're accepting an existing invite. Send accept, enter talk.
+        accept_data = json.dumps(
+            {
+                "type": "accept",
+                "from": ctx.user,
+                "from_key": ctx.session_key,
+            }
+        ).encode()
+        await nc.publish(target_subject, accept_data)  # type: ignore[attr-defined]
+        return True
+
+    # We're initiating. Send invite and wait for accept.
+    invite_body = f"wants to talk — reply with: talk @{ctx.user}:{ctx.tty_name}"
+    if len(args) > 1:
+        invite_body = " ".join(args[1:])[:512]
+
+    invite_data = json.dumps(
+        {
+            "type": "invite",
+            "from": ctx.user,
+            "body": invite_body,
+            "from_key": ctx.session_key,
+        }
+    ).encode()
+    await nc.publish(target_subject, invite_data)  # type: ignore[attr-defined]
+
+    if len(args) > 1:
+        print(f"you> {invite_body}")
+
+    print(f"Waiting for {display} to respond... (type 'end' to cancel)")
+    prompt_gate.set()
+
+    accepted = await _wait_for_talk_accept(
+        ctx, aqueue, notify_event, talk_notifications, prompt_gate
+    )
+    if not accepted:
+        print(f"Talk with {display} cancelled.")
+        try:
+            s = await ctx.relay.get_session(ctx.session_key)
+            if s is not None:
+                await ctx.relay.update_session(s.model_copy(update={"plan": ""}))
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).debug("Failed to clear plan")
+        return False
+    return True
+
+
 async def _handle_repl_talk(
     ctx: CliContext,
     args: list[str],
@@ -430,27 +573,26 @@ async def _handle_repl_talk(
         updated = session.model_copy(update={"plan": f"talking to {display}"})
         await ctx.relay.update_session(updated)
 
-    # Send talk invitation as a NATS notification (banner, not inbox).
-    # Include tty_name so the recipient knows which session to talk to.
-    invite_body = f"wants to talk — reply with: talk @{ctx.user}:{ctx.tty_name}"
-    if len(args) > 1:
-        invite_body = " ".join(args[1:])[:512]
-
     nc = await ctx.relay.get_nc()
-    invite_data = json.dumps(
-        {
-            "from": ctx.user,
-            "body": invite_body,
-            "from_key": ctx.session_key,
-        }
-    ).encode()
-    # Publish to the target user's talk notification subject.
-    target_user = user_target
-    target_subject = ctx.relay.talk_notify_subject(target_user)
-    await nc.publish(target_subject, invite_data)
+    target_subject = ctx.relay.talk_notify_subject(user_target)
 
-    if len(args) > 1:
-        print(f"you> {invite_body}")
+    # Two-phase handshake: check if we're responding to an invite
+    # or initiating a new conversation.
+    responding = _has_pending_invite(talk_notifications, user_target)
+
+    if not await _talk_handshake(
+        ctx,
+        nc,
+        target_subject,
+        display,
+        args,
+        responding,
+        aqueue,
+        notify_event,
+        talk_notifications,
+        prompt_gate,
+    ):
+        return
 
     await _repl_talk(
         ctx,
