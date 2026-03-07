@@ -1,10 +1,10 @@
 """CLI session lifecycle — unified session management for all CLI modes.
 
-Provides ``CliSession``, an async context manager that mirrors the MCP
-server's ``_active_lifespan``.  Both the REPL (``biff`` with no args)
-and inline commands (``biff who``) use this for a proper session:
+Provides ``cli_session()``, an async context manager that mirrors the
+MCP server's ``_active_lifespan``.  Both the REPL (``biff`` with no
+args) and inline commands (``biff who``) use this for a proper session::
 
-    async with CliSession() as ctx:
+    async with cli_session() as ctx:
         result = await commands.who(ctx)
         print(result.text)
 

@@ -1,4 +1,4 @@
-"""Command dispatcher for the REPL and scripted modes.
+"""Command dispatcher for the REPL.
 
 Parses a command line string into a command function call::
 
@@ -12,14 +12,14 @@ strings work naturally.
 from __future__ import annotations
 
 import shlex
+from collections.abc import Awaitable, Callable
 
 from biff import commands
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 
-# Map of command name → (async function, arg parsing helper).
-# Each handler takes (ctx, *args) where args are the shlex-split tokens
-# after the command name.
+# Handler signature: (ctx, args) -> CommandResult
+type Handler = Callable[[CliContext, list[str]], Awaitable[CommandResult]]
 
 
 async def _who(ctx: CliContext, args: list[str]) -> CommandResult:
@@ -101,7 +101,7 @@ async def _status(ctx: CliContext, args: list[str]) -> CommandResult:
     return await commands.status(ctx)
 
 
-_COMMANDS: dict[str, object] = {
+_COMMANDS: dict[str, Handler] = {
     "who": _who,
     "finger": _finger,
     "write": _write,
@@ -123,14 +123,15 @@ def available_commands() -> list[str]:
 async def dispatch(line: str, ctx: CliContext) -> CommandResult | None:
     """Parse and execute a command line.
 
-    Returns ``None`` for empty input or the ``exit``/``quit`` command.
+    Returns ``None`` for the ``exit``/``quit`` command (case-insensitive).
+    Returns ``CommandResult(text="")`` for empty/whitespace input.
     Returns a ``CommandResult`` for all other input.
     """
     line = line.strip()
     if not line:
         return CommandResult(text="")
 
-    if line in ("exit", "quit"):
+    if line.lower() in ("exit", "quit"):
         return None
 
     try:
@@ -152,7 +153,4 @@ async def dispatch(line: str, ctx: CliContext) -> CommandResult | None:
             error=True,
         )
 
-    from collections.abc import Awaitable, Callable  # noqa: PLC0415
-
-    typed: Callable[[CliContext, list[str]], Awaitable[CommandResult]] = handler  # type: ignore[assignment]
-    return await typed(ctx, args)
+    return await handler(ctx, args)

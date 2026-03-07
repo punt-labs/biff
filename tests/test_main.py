@@ -294,7 +294,7 @@ class TestNoArgsRepl:
 class TestProductCommands:
     """Smoke tests for all 10 product commands via CliRunner.
 
-    Each test mocks ``cli_relay`` (no NATS needed) and the underlying
+    Each test mocks ``cli_session`` (no NATS needed) and the underlying
     ``commands.*`` function, then verifies the CLI parsed args correctly
     and forwarded them to the command function.
     """

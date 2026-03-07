@@ -1,10 +1,9 @@
 """Biff CLI entry point.
 
-Three modes, one session lifecycle::
+Two modes, one session lifecycle::
 
     biff              # Interactive REPL (like python3)
     biff who          # Inline command (like python3 -c "...")
-    biff < cmds.txt   # Scripted (stdin is not a tty)
 
 Product commands (``biff who``, ``biff finger``, ``biff write``,
 ``biff read``, ``biff plan``, ``biff last``, ``biff wall``, ``biff mesg``,
@@ -26,6 +25,7 @@ import sys
 import threading as threading_mod
 import warnings
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -662,6 +662,8 @@ async def _wait_for_input_or_notify(
     )
     for p in pending:
         p.cancel()
+        with suppress(asyncio.CancelledError):
+            await p
 
     if input_task in done:
         return input_task.result()
@@ -729,7 +731,10 @@ async def _talk_loop(
     finally:
         stop_flag.set()
         bridge_task.cancel()
-        await sub.unsubscribe()
+        with suppress(asyncio.CancelledError):
+            await bridge_task
+        with suppress(Exception):
+            await sub.unsubscribe()
 
 
 async def _talk_interactive(to: str, opening: str) -> None:

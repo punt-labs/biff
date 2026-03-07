@@ -77,6 +77,11 @@ class TestDispatchBasics:
         assert result is None
 
     @pytest.mark.anyio()
+    async def test_exit_case_insensitive(self, ctx: CliContext) -> None:
+        assert await dispatch("EXIT", ctx) is None
+        assert await dispatch("Quit", ctx) is None
+
+    @pytest.mark.anyio()
     async def test_unknown_command(self, ctx: CliContext) -> None:
         result = await dispatch("foobar", ctx)
         assert result is not None
