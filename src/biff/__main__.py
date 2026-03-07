@@ -432,7 +432,7 @@ async def _handle_repl_talk(
 
     # Send talk invitation as a NATS notification (banner, not inbox).
     # Include tty_name so the recipient knows which session to talk to.
-    invite_body = f"📞 wants to talk (talk @{ctx.user}:{ctx.tty_name})"
+    invite_body = f"wants to talk — reply with: talk @{ctx.user}:{ctx.tty_name}"
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
 
