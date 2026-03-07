@@ -34,6 +34,7 @@ from biff.server.tools._descriptions import (
     set_talk_partner,
 )
 from biff.server.tools._session import resolve_session, update_current_session
+from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
@@ -169,8 +170,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 to_user=relay_key,
                 body=message[:512],
             )
-            await relay.deliver(msg, sender_key=state.session_key)
             await refresh_read_messages(mcp, state)
+            fire_and_forget(
+                relay.deliver(msg, sender_key=state.session_key),
+                logger=logger,
+                description="talk delivery",
+            )
 
         return (
             f"Talk session started with @{display_target}. "

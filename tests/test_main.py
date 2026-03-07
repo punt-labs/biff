@@ -63,6 +63,11 @@ class TestVersionCommand:
         assert result.exit_code == 0
         assert "biff" in result.output
 
+    def test_json_output(self) -> None:
+        result = runner.invoke(app, ["--json", "version"])
+        assert result.exit_code == 0
+        assert '"version"' in result.output
+
 
 class TestServeCommand:
     """``biff serve`` is HTTP-only; ``biff mcp`` is stdio-only."""

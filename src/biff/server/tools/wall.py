@@ -10,6 +10,7 @@ duration-based persistence and explicit clearing.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -25,11 +26,15 @@ from biff.models import WallPost
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_wall
 from biff.server.tools._session import update_current_session
+from biff.server.tools._tasks import fire_and_forget
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
+
+_log = logging.getLogger(__name__)
+
 
 WALL_BASE_DESCRIPTION = (
     "Broadcast a message to the whole team. "
@@ -57,8 +62,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         # Clear mode
         if clear:
-            await state.relay.set_wall(None)
-            await refresh_wall(mcp, state)
+            await refresh_wall(mcp, state, wall=None)
+            fire_and_forget(
+                state.relay.set_wall(None), logger=_log, description="wall clear"
+            )
             return "Wall cleared."
 
         # Sanitize: strip control chars, collapse to single line
@@ -91,8 +98,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 if err.get("type") == "string_too_short":
                     return "Message cannot be blank."
             return str(exc)
-        await state.relay.set_wall(post)
-        await refresh_wall(mcp, state)
+        await refresh_wall(mcp, state, wall=post)
+        fire_and_forget(
+            state.relay.set_wall(post), logger=_log, description="wall post"
+        )
 
         remaining = format_remaining(post.expires_at)
         return f"Wall posted ({remaining}): {message}"

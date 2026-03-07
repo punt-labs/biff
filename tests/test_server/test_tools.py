@@ -6,6 +6,7 @@ the registered closure, verifying it reads/writes state correctly.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -424,6 +425,7 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="hey, PR is ready")
         assert "@eric" in result
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
         assert unread[0].from_user == "kai"
@@ -435,12 +437,14 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
         assert "@eric" in result
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
     async def test_strips_at_prefix(self, state: ServerState) -> None:
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"@eric:{_ERIC_TTY}", message="hello")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
         assert unread[0].to_user == f"eric:{_ERIC_TTY}"
@@ -452,13 +456,16 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="urgent fix needed")
         assert "@eric" in result
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
 
     async def test_multiple_messages(self, state: ServerState) -> None:
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"eric:{_ERIC_TTY}", message="first")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         await fn(to=f"eric:{_ERIC_TTY}", message="second")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 2
 
@@ -478,6 +485,7 @@ class TestCheckMessagesTool:
         # Use targeted delivery to kai's session
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="review my PR please")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()
@@ -493,6 +501,7 @@ class TestCheckMessagesTool:
         )
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="hello")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         await check_fn()
@@ -514,8 +523,10 @@ class TestCheckMessagesTool:
         )
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="from eric")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         priya_send = await _get_tool_fn(priya_state, "write")
         await priya_send(to=f"kai:{_KAI_TTY}", message="from priya")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()

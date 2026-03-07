@@ -8,6 +8,7 @@ them read.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from biff.formatting import format_read
@@ -15,6 +16,7 @@ from biff.models import Message
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import resolve_session, update_current_session
+from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
@@ -36,6 +38,9 @@ async def _resolve_recipient(state: ServerState, to: str) -> tuple[str, str]:
         relay_key = user
     display = f"@{user}:{tty}" if tty else f"@{user}"
     return relay_key, display
+
+
+_log = logging.getLogger(__name__)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -62,8 +67,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             to_user=to_user,
             body=message[:512],
         )
-        await state.relay.deliver(msg, sender_key=state.session_key)
         await refresh_read_messages(mcp, state)
+        fire_and_forget(
+            state.relay.deliver(msg, sender_key=state.session_key),
+            logger=_log,
+            description="message delivery",
+        )
         return f"Message sent to {display}."
 
     @mcp.tool(
