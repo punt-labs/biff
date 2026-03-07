@@ -35,11 +35,18 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+# Strong references prevent GC of fire-and-forget tasks (CPython weak-refs).
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 def _log_wall_error(task: asyncio.Task[None]) -> None:
     """Log exceptions from fire-and-forget wall tasks."""
-    if not task.cancelled() and task.exception() is not None:
-        _log.warning("wall operation failed: %s", task.exception())
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.warning("wall operation failed: %s", exc)
 
 
 WALL_BASE_DESCRIPTION = (
@@ -68,9 +75,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         # Clear mode
         if clear:
-            task = asyncio.create_task(state.relay.set_wall(None))
-            task.add_done_callback(_log_wall_error)
             await refresh_wall(mcp, state, wall=None)
+            task = asyncio.create_task(state.relay.set_wall(None))
+            _background_tasks.add(task)
+            task.add_done_callback(_log_wall_error)
             return "Wall cleared."
 
         # Sanitize: strip control chars, collapse to single line
@@ -103,9 +111,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 if err.get("type") == "string_too_short":
                     return "Message cannot be blank."
             return str(exc)
-        task = asyncio.create_task(state.relay.set_wall(post))
-        task.add_done_callback(_log_wall_error)
         await refresh_wall(mcp, state, wall=post)
+        task = asyncio.create_task(state.relay.set_wall(post))
+        _background_tasks.add(task)
+        task.add_done_callback(_log_wall_error)
 
         remaining = format_remaining(post.expires_at)
         return f"Wall posted ({remaining}): {message}"

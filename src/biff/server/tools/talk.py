@@ -43,7 +43,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Strong references prevent GC of fire-and-forget tasks (CPython weak-refs).
+_background_tasks: set[asyncio.Task[None]] = set()
+
 _NO_MESSAGES = "No new messages. Still listening."
+
+
+def _log_talk_error(task: asyncio.Task[None]) -> None:
+    """Log exceptions from fire-and-forget talk delivery tasks."""
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("talk delivery failed: %s", exc)
 
 
 def _reset_talk() -> None:
@@ -169,15 +182,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 to_user=relay_key,
                 body=message[:512],
             )
-            task = asyncio.create_task(relay.deliver(msg, sender_key=state.session_key))
-            task.add_done_callback(
-                lambda t: (
-                    logger.warning("talk delivery failed: %s", t.exception())
-                    if not t.cancelled() and t.exception() is not None
-                    else None
-                )
-            )
             await refresh_read_messages(mcp, state)
+            task = asyncio.create_task(relay.deliver(msg, sender_key=state.session_key))
+            _background_tasks.add(task)
+            task.add_done_callback(_log_talk_error)
 
         return (
             f"Talk session started with @{display_target}. "

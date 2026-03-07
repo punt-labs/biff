@@ -42,11 +42,18 @@ async def _resolve_recipient(state: ServerState, to: str) -> tuple[str, str]:
 
 _log = logging.getLogger(__name__)
 
+# Strong references prevent GC of fire-and-forget tasks (CPython weak-refs).
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 def _log_delivery_error(task: asyncio.Task[None]) -> None:
     """Log exceptions from fire-and-forget delivery tasks."""
-    if not task.cancelled() and task.exception() is not None:
-        _log.warning("message delivery failed: %s", task.exception())
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.warning("message delivery failed: %s", exc)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -73,11 +80,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             to_user=to_user,
             body=message[:512],
         )
+        await refresh_read_messages(mcp, state)
         task = asyncio.create_task(
             state.relay.deliver(msg, sender_key=state.session_key)
         )
+        _background_tasks.add(task)
         task.add_done_callback(_log_delivery_error)
-        await refresh_read_messages(mcp, state)
         return f"Message sent to {display}."
 
     @mcp.tool(

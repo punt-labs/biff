@@ -84,7 +84,7 @@ Same MCP protocol as production but without stdio or HTTP.
 
 ### Tier 3a: Subprocess tests
 
-Spawns real `biff serve --transport stdio` subprocesses connected via
+Spawns real `biff mcp` subprocesses connected via
 `StdioTransport`. Tests wire protocol, CLI argument parsing, process
 lifecycle, and graceful shutdown.
 
@@ -143,7 +143,7 @@ back through the full stack.
 uv run pytest -m sdk
 ```
 
-**Transport**: Claude Agent SDK → `biff serve --transport stdio` subprocess.
+**Transport**: Claude Agent SDK → `biff mcp` subprocess.
 Claude is the caller — tests validate that tool descriptions are clear
 enough for the model to use correctly.
 
