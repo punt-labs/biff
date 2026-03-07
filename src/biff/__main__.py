@@ -169,8 +169,14 @@ def main(
 def _drain_talk_notifications(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
+    pending_invites: set[str] | None = None,
 ) -> list[str]:
-    """Drain talk notification queue and return banner lines."""
+    """Drain talk notification queue and return banner lines.
+
+    When *pending_invites* is provided, invite senders are recorded
+    so ``_has_pending_invite`` can check later (after the notification
+    has been displayed and drained from the queue).
+    """
     lines: list[str] = []
     if talk_notifications is None:
         return lines
@@ -187,6 +193,8 @@ def _drain_talk_notifications(
         body = data.get("body", "")
         if msg_type == "accept":
             continue  # Silent — handled by _wait_for_talk_accept.
+        if msg_type == "invite" and pending_invites is not None:
+            pending_invites.add(sender)
         if body:
             lines.append(f"  \033[1;33m📞 @{sender}: {body}\033[0m")
     return lines
@@ -197,6 +205,7 @@ async def _poll_notify(
     notify: object,
     prompt: str,
     talk_notifications: asyncio.Queue[dict[str, str]] | None = None,
+    pending_invites: set[str] | None = None,
     *,
     inline: bool = False,
 ) -> None:
@@ -213,7 +222,9 @@ async def _poll_notify(
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).debug("Notify check failed", exc_info=True)
 
-    notes.extend(_drain_talk_notifications(talk_notifications, ctx.session_key))
+    notes.extend(
+        _drain_talk_notifications(talk_notifications, ctx.session_key, pending_invites)
+    )
 
     if notes and inline:
         print("\r\033[K", end="")
@@ -329,12 +340,21 @@ async def _repl_loop(
     """Core REPL input loop — dispatches commands and handles notifications."""
     from biff.dispatch import dispatch
 
+    pending_invites: set[str] = set()
+
     while True:
         result = await _wait_for_input_or_notify(aqueue, notify_event)
         if result is _NO_INPUT:
             # Timeout or notification — check for changes inline.
             notify_event.clear()
-            await _poll_notify(ctx, notify, prompt, talk_notifications, inline=True)
+            await _poll_notify(
+                ctx,
+                notify,
+                prompt,
+                talk_notifications,
+                pending_invites,
+                inline=True,
+            )
             continue
 
         if result is None:
@@ -357,6 +377,7 @@ async def _repl_loop(
                 current_prompt,
                 prompt,
                 talk_notifications,
+                pending_invites,
             )
             prompt_gate.set()
             continue
@@ -381,32 +402,15 @@ async def _repl_loop(
         prompt_gate.set()
 
 
-def _has_pending_invite(
-    talk_notifications: asyncio.Queue[dict[str, str]],
-    from_user: str,
-) -> bool:
+def _has_pending_invite(pending_invites: set[str], from_user: str) -> bool:
     """Check if there's a pending invite from a specific user.
 
-    Peeks at the queue without draining non-matching items.
-    Returns ``True`` if an invite from ``from_user`` was found.
+    Consumes the invite from the set so it's one-shot.
     """
-    # Drain and re-queue items, checking for an invite.
-    found = False
-    items: list[dict[str, str]] = []
-    while not talk_notifications.empty():
-        try:
-            data = talk_notifications.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-        if data.get("type") == "invite" and data.get("from", "") == from_user:
-            found = True
-            # Don't re-queue the consumed invite.
-        else:
-            items.append(data)
-    # Re-queue non-matching items.
-    for item in items:
-        talk_notifications.put_nowait(item)
-    return found
+    if from_user in pending_invites:
+        pending_invites.discard(from_user)
+        return True
+    return False
 
 
 def _check_for_accept(
@@ -530,6 +534,7 @@ async def _handle_repl_talk(
     current_prompt: list[str],
     repl_prompt: str,
     talk_notifications: asyncio.Queue[dict[str, str]],
+    pending_invites: set[str],
 ) -> None:
     """Parse talk args and enter modal talk mode."""
     from biff.nats_relay import NatsRelay
@@ -578,7 +583,7 @@ async def _handle_repl_talk(
 
     # Two-phase handshake: check if we're responding to an invite
     # or initiating a new conversation.
-    responding = _has_pending_invite(talk_notifications, user_target)
+    responding = _has_pending_invite(pending_invites, user_target)
 
     if not await _talk_handshake(
         ctx,
