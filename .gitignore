@@ -39,7 +39,7 @@ tests/transcripts/
 .env
 .envrc
 
-# LaTeX
+# LaTeX (root-level artifacts from prfaq.tex compilation)
 *.aux
 *.log
 *.out
@@ -68,6 +68,9 @@ docs/*.aux
 docs/*.log
 docs/*.fuzz
 docs/*.toc
+docs/*.out
+docs/*.pdf
+docs/*.synctex.gz
 
 # Scratch/temp directory (TMPDIR set via .envrc)
 .tmp/
@@ -79,7 +82,6 @@ docs/*.toc
 # Dev scratch files
 *.tmp
 conv.json
-docs/notification.synctex.gz
 docs/plan-audio-notifications.md
 mcp-message/
 scripts/demo.md
