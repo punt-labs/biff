@@ -67,6 +67,16 @@ Each tier provides `kai` and `eric` fixtures representing two users sharing a `t
 
 Tests marked `@pytest.mark.transcript` auto-save human-readable transcripts to `tests/transcripts/`.
 
+See [TESTING.md](TESTING.md) for the full testing guide including environment setup, fixture details, and transcript usage.
+
+### Fire-and-Forget Side Effects
+
+MCP tools with relay side effects (`write`, `wall`, `talk`) use `fire_and_forget()` from `src/biff/server/tools/_tasks.py` to return immediately.  Key rules:
+
+- `await refresh_*()` BEFORE `fire_and_forget()` to avoid racing `relay._ensure_connected()`
+- Unit tests must `await asyncio.sleep(0)` after calling these tool handlers to yield for the background task
+- See DES-024 in DESIGN.md for the full rationale
+
 ## Biff-Specific Workflow
 
 ### GitHub Operations

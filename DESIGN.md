@@ -2157,3 +2157,53 @@ The gap is that `biff statusline` is never called during idle.
 | NATS namespace scoping | Sessions invisible to each other | Same dir name, different parents |
 | `needle_in_unread` subshell | `return 0` inside `find \| while` exits subshell, not function | Replaced with `find -exec grep -lF` |
 | `dump_pane` empty lines | `tail -30` showed blank lines from TUI buffer | Filter with `grep '.'` first |
+
+## DES-024: Fire-and-Forget MCP Side-Effect Tools
+
+**Date:** 2026-03-06
+**Status:** SETTLED
+**Related:** DES-004 (Push Notifications), punt-kit §Sync vs Async
+
+### Problem
+
+MCP side-effect tools (`write`, `wall`, `talk`) awaited their relay call before
+returning.  This blocked the caller for the full relay round-trip (NATS publish +
+JetStream ack).  Per punt-kit §Sync vs Async, side-effect-only operations should
+return immediately and complete asynchronously.
+
+### Decision
+
+Side-effect relay calls use `fire_and_forget()` from `_tasks.py`.  The tool
+returns the user-facing confirmation string immediately; the relay call completes
+in the background.
+
+**Ordering constraint:** `await refresh_*()` MUST run BEFORE `fire_and_forget()`
+to avoid racing `relay._ensure_connected()`.  The refresh call triggers the first
+relay connection; if the background task races it, both paths call
+`_ensure_connected()` concurrently.
+
+### Implementation — `_tasks.py`
+
+Shared module at `src/biff/server/tools/_tasks.py`.  Key design choices:
+
+1. **GC-safe task set.** `asyncio.create_task()` returns a normal `Task`, but the
+   event loop only weakly references background tasks.  A module-level `set[Task]`
+   holds strong references to prevent premature garbage collection; the done
+   callback calls `discard()` to avoid unbounded growth.
+2. **Structured error logging.** The done callback checks `task.exception()`
+   and logs with `exc_info=exc` for full stack traces.
+3. **Single extraction point.** Extracted after Copilot review flagged
+   triplication across `messaging.py`, `wall.py`, and `talk.py`.
+
+### Testing
+
+Unit tests that call tool handlers directly must `await asyncio.sleep(0)` after
+the tool call to yield the event loop for the background task.  Without this, the
+relay `.deliver()` never executes and inbox assertions fail.
+
+### Alternatives Rejected
+
+- **`TaskGroup`:** Overkill for independent fire-and-forget operations with no
+  structured cancellation needs.
+- **Awaiting inline:** The previous design.  Correct but unnecessarily slow for
+  the caller.
