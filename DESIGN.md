@@ -2186,9 +2186,10 @@ relay connection; if the background task races it, both paths call
 
 Shared module at `src/biff/server/tools/_tasks.py`.  Key design choices:
 
-1. **GC-safe task set.** `asyncio.create_task()` returns a weak reference.  A
-   module-level `set[Task]` prevents garbage collection.  The done callback
-   calls `discard()` to avoid unbounded growth.
+1. **GC-safe task set.** `asyncio.create_task()` returns a normal `Task`, but the
+   event loop only weakly references background tasks.  A module-level `set[Task]`
+   holds strong references to prevent premature garbage collection; the done
+   callback calls `discard()` to avoid unbounded growth.
 2. **Structured error logging.** The done callback checks `task.exception()`
    and logs with `exc_info=exc` for full stack traces.
 3. **Single extraction point.** Extracted after Copilot review flagged
