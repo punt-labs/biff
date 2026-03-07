@@ -55,3 +55,13 @@ class NotifyState:
         self.last_wall_text = wall_text
 
         return lines
+
+    def sync(self, unread: int, wall: WallPost | None) -> None:
+        """Update state without generating notifications.
+
+        Call after the user's own command changes state (e.g., posting
+        a wall or reading messages) to prevent self-notification on the
+        next poll.
+        """
+        self.last_unread = unread
+        self.last_wall_text = wall.text if wall else ""

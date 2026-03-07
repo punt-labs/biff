@@ -192,6 +192,20 @@ async def _poll_notify(
         _log.debug("Notify check failed", exc_info=True)
 
 
+async def _sync_notify(ctx: CliContext, notify: object) -> None:
+    """Sync notification state after a user command to prevent self-notification."""
+    from biff.repl_notify import NotifyState
+
+    if not isinstance(notify, NotifyState):
+        return
+    try:
+        summary = await ctx.relay.get_unread_summary(ctx.session_key)
+        wall_post = await ctx.relay.get_wall()
+        notify.sync(summary.count, wall_post)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).debug("Notify sync failed")
+
+
 async def _repl_loop(
     ctx: CliContext,
     notify: object,
@@ -231,6 +245,10 @@ async def _repl_loop(
             break
         if cmd_result.text:
             print(cmd_result.text)
+
+        # Sync state after the user's own command so the next poll
+        # doesn't notify about changes the user just made.
+        await _sync_notify(ctx, notify)
 
 
 async def _repl() -> None:
@@ -273,7 +291,7 @@ async def _repl() -> None:
                 while not stop_flag.is_set():
                     try:
                         ln = input(prompt)
-                    except EOFError:
+                    except (EOFError, KeyboardInterrupt):
                         input_queue.put(None)
                         return
                     input_queue.put(ln)
@@ -300,6 +318,9 @@ async def _repl() -> None:
                 await _repl_loop(ctx, notify, prompt, aqueue, notify_event)
             finally:
                 stop_flag.set()
+                # Unblock the bridge task so it doesn't hang on
+                # the stdin reader thread.
+                input_queue.put(None)
                 bridge_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await bridge_task
