@@ -212,6 +212,7 @@ async def _repl_loop(
     prompt: str,
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
+    prompt_gate: threading_mod.Event,
 ) -> None:
     """Core REPL input loop — dispatches commands and handles notifications."""
     from biff.dispatch import dispatch
@@ -236,6 +237,7 @@ async def _repl_loop(
             cmd_result = await dispatch(line, ctx)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
+            prompt_gate.set()
             continue
 
         if cmd_result is None:
@@ -246,6 +248,9 @@ async def _repl_loop(
         # Sync state after the user's own command so the next poll
         # doesn't notify about changes the user just made.
         await _sync_notify(ctx, notify)
+
+        # Allow the stdin thread to print the next prompt.
+        prompt_gate.set()
 
 
 async def _repl() -> None:
@@ -283,14 +288,24 @@ async def _repl() -> None:
             # Start stdin reader thread + asyncio bridge.
             input_queue: queue_mod.Queue[str | None] = queue_mod.Queue()
             stop_flag = threading_mod.Event()
+            # Gate: the thread waits for this event before printing
+            # the prompt and reading the next line. The async loop
+            # sets it after command output is complete.
+            prompt_gate = threading_mod.Event()
+            prompt_gate.set()  # Allow the first prompt immediately.
 
             def _read_stdin() -> None:
                 """Read lines via input(prompt) for full readline support.
 
-                Checks ``stop_flag`` before each read to avoid printing
-                a ghost prompt after the REPL loop has exited.
+                Waits for ``prompt_gate`` before each read so the prompt
+                only appears after the async loop has finished printing
+                command output.
                 """
                 while not stop_flag.is_set():
+                    prompt_gate.wait()
+                    if stop_flag.is_set():
+                        return
+                    prompt_gate.clear()
                     try:
                         ln = input(prompt)
                     except (EOFError, KeyboardInterrupt):
@@ -317,11 +332,10 @@ async def _repl() -> None:
                 )
 
             try:
-                await _repl_loop(ctx, notify, prompt, aqueue, notify_event)
+                await _repl_loop(ctx, notify, prompt, aqueue, notify_event, prompt_gate)
             finally:
                 stop_flag.set()
-                # Erase the ghost prompt the stdin thread already printed.
-                print("\r\033[K", end="", flush=True)
+                prompt_gate.set()  # Unblock thread so it sees stop_flag.
                 # Unblock the bridge task so it doesn't hang on
                 # the stdin reader thread.
                 input_queue.put(None)
