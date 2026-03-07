@@ -320,6 +320,8 @@ async def _repl() -> None:
                 await _repl_loop(ctx, notify, prompt, aqueue, notify_event)
             finally:
                 stop_flag.set()
+                # Erase the ghost prompt the stdin thread already printed.
+                print("\r\033[K", end="", flush=True)
                 # Unblock the bridge task so it doesn't hang on
                 # the stdin reader thread.
                 input_queue.put(None)
