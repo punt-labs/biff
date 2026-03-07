@@ -1,10 +1,15 @@
 """Biff CLI entry point.
 
-Provides product commands (``biff who``, ``biff finger``, ``biff write``,
+Two modes, one session lifecycle::
+
+    biff              # Interactive REPL (like python3)
+    biff who          # Inline command (like python3 -c "...")
+
+Product commands (``biff who``, ``biff finger``, ``biff write``,
 ``biff read``, ``biff plan``, ``biff last``, ``biff wall``, ``biff mesg``,
-``biff tty``, ``biff status``), admin commands (``biff serve``, ``biff enable``,
-``biff disable``, ``biff install``, ``biff doctor``, ``biff uninstall``),
-``biff talk`` for real-time chat, and status line management.
+``biff tty``, ``biff status``, ``biff talk``), admin commands
+(``biff serve``, ``biff enable``, ``biff disable``, ``biff install``,
+``biff doctor``, ``biff uninstall``), and status line management.
 
 Every product command is also available as an MCP tool — the CLI is the
 complete product, MCP tools are projections of CLI functionality.
@@ -20,6 +25,7 @@ import sys
 import threading as threading_mod
 import warnings
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -33,7 +39,7 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 from biff import commands
-from biff.cli_session import CliContext
+from biff.cli_session import CliContext, cli_session
 from biff.commands import CommandResult
 from biff.config import (
     DEMO_RELAY_URL,
@@ -91,6 +97,13 @@ def _install_eof_received_filter() -> None:
     _eof_filter_installed = True
 
 
+def _suppress_nats_noise() -> None:
+    """Suppress nats.py noise common to all CLI invocations."""
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="nats")
+    logging.getLogger("biff.nats_relay").setLevel(logging.ERROR)
+    _install_eof_received_filter()
+
+
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
 
@@ -132,20 +145,58 @@ def main(
             handler.setLevel(logging.DEBUG)
             logger.addHandler(handler)
 
-    # Suppress nats.py noise on Python 3.14+ and NATS/SSL chatter
-    # during normal CLI exit. Scoped to CLI invocation, not import.
-    warnings.filterwarnings("ignore", category=DeprecationWarning, module="nats")
-    logging.getLogger("biff.nats_relay").setLevel(logging.ERROR)
-
-    # asyncio's sslproto logs "returning true from eof_received() has no
-    # effect when using ssl" on NATS disconnect. All asyncio modules share
-    # one logger (logging.getLogger("asyncio")); we can't raise its level
-    # without hiding real errors. A filter drops only this specific message.
-    _install_eof_received_filter()
+    _suppress_nats_noise()
 
     if ctx.invoked_subcommand is None:
-        typer.echo(ctx.get_help())
-        raise typer.Exit(0)
+        # No subcommand → launch the REPL.
+        asyncio.run(_repl())
+
+
+# ---------------------------------------------------------------------------
+# REPL — interactive command loop
+# ---------------------------------------------------------------------------
+
+
+async def _repl() -> None:
+    """Interactive REPL: connect once, run commands, clean up on exit.
+
+    Uses ``run_in_executor`` for ``input()`` so the event loop stays
+    unblocked — heartbeat and other background tasks keep running
+    while the user is idle at the prompt.
+    """
+    from biff.dispatch import available_commands, dispatch
+
+    loop = asyncio.get_running_loop()
+
+    try:
+        async with cli_session(interactive=True) as ctx:
+            cmds = ", ".join(available_commands())
+            print(f"biff {pkg_version('punt-biff')} — {ctx.user}:{ctx.tty_name}")
+            print(f"Commands: {cmds}, exit")
+            print()
+
+            prompt = f"{ctx.user}> "
+            while True:
+                try:
+                    line = await loop.run_in_executor(None, input, prompt)
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
+
+                try:
+                    result = await dispatch(line, ctx)
+                except ValueError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    continue
+
+                if result is None:
+                    # exit/quit
+                    break
+                if result.text:
+                    print(result.text)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1) from None
 
 
 # ---------------------------------------------------------------------------
@@ -160,15 +211,14 @@ def main(
 def _run(
     coro_factory: Callable[[CliContext], Awaitable[CommandResult]],
 ) -> None:
-    """Run a command function inside a CLI relay session.
+    """Run a command function inside a CLI session.
 
     Handles JSON/text branching, stderr for errors, and exit codes.
     """
-    from biff.cli_session import cli_relay
 
     async def _inner() -> None:
         try:
-            async with cli_relay() as ctx:
+            async with cli_session() as ctx:
                 result = await coro_factory(ctx)
         except ValueError as exc:
             if _json_output:
@@ -548,7 +598,7 @@ def statusline() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Talk (interactive REPL — existing implementation)
+# Talk — interactive conversation (uses shared session lifecycle)
 # ---------------------------------------------------------------------------
 
 
@@ -571,9 +621,7 @@ def talk(
     This is the phone/terminal use case — steer an agent session
     from any device that can run ``biff talk``.
     """
-    import asyncio as _asyncio
-
-    _asyncio.run(_talk_repl(to, message))
+    asyncio.run(_talk_interactive(to, message))
 
 
 async def _talk_fetch_and_print(relay: object, session_key: str, user: str) -> None:
@@ -591,11 +639,7 @@ async def _talk_fetch_and_print(relay: object, session_key: str, user: str) -> N
 def _stdin_reader(
     input_queue: queue_mod.Queue[str | None], stop: threading_mod.Event
 ) -> None:
-    """Read lines from stdin in a dedicated thread.
-
-    Runs until EOF or ``stop`` is set.  Each line is put into ``input_queue``
-    as a string.  Sentinel ``None`` signals EOF.
-    """
+    """Read lines from stdin in a dedicated thread."""
     while not stop.is_set():
         try:
             line = input("you> ")
@@ -612,11 +656,7 @@ async def _wait_for_input_or_notify(
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
 ) -> str | None | object:
-    """Wait for user input, a NATS notification, or a 2s timeout.
-
-    Returns the input line (``str``), ``None`` for EOF, or
-    :data:`_NO_INPUT` for timeout/notification-only.
-    """
+    """Wait for user input, a NATS notification, or a 2s timeout."""
     input_task = asyncio.create_task(aqueue.get())
     notify_task = asyncio.create_task(notify_event.wait())
 
@@ -627,6 +667,8 @@ async def _wait_for_input_or_notify(
     )
     for p in pending:
         p.cancel()
+        with suppress(asyncio.CancelledError):
+            await p
 
     if input_task in done:
         return input_task.result()
@@ -654,12 +696,7 @@ async def _talk_loop(
     user: str,
     target: str,
 ) -> None:
-    """Run the talk conversation loop with notification-driven message display.
-
-    Uses :func:`_bridge_stdin` to move lines from the stdin threading.Queue
-    into an asyncio.Queue, avoiding per-iteration executor threads that
-    exhaust the thread pool on cancellation.
-    """
+    """Run the talk conversation loop with notification-driven message display."""
     from biff.models import Message
     from biff.nats_relay import NatsRelay
 
@@ -699,68 +736,54 @@ async def _talk_loop(
     finally:
         stop_flag.set()
         bridge_task.cancel()
-        await sub.unsubscribe()
+        with suppress(asyncio.CancelledError):
+            await bridge_task
+        with suppress(Exception):
+            await sub.unsubscribe()
 
 
-async def _talk_repl(to: str, opening: str) -> None:
-    """Interactive talk loop: send messages, receive replies in real-time."""
-    from biff.config import load_config as _load_config
-    from biff.models import Message, UserSession
+async def _talk_interactive(to: str, opening: str) -> None:
+    """Interactive talk loop using the shared CLI session lifecycle."""
+    from biff.models import Message
     from biff.nats_relay import NatsRelay
-    from biff.tty import generate_tty, parse_address
+    from biff.tty import parse_address
 
-    resolved = _load_config()
-    config = resolved.config
-    if not config.relay_url:
-        print("Talk requires a NATS relay. Configure relay_url in .biff.")
-        sys.exit(1)
-
-    user, tty_target = parse_address(to)
-    target = f"{user}:{tty_target}" if tty_target else user
-    relay = NatsRelay(
-        url=config.relay_url,
-        auth=config.relay_auth,
-        name=f"biff-talk-{config.user}",
-        repo_name=config.repo_name,
-    )
-    tty = generate_tty()
+    user_target, tty_target = parse_address(to)
+    target = f"{user_target}:{tty_target}" if tty_target else user_target
 
     try:
-        sessions = await relay.get_sessions_for_user(user)
-        if not sessions:
-            print(f"@{user} is not online.")
-            return
+        async with cli_session(interactive=True) as ctx:
+            if not isinstance(ctx.relay, NatsRelay):
+                print("Talk requires a NATS relay.")
+                return
 
-        await relay.update_session(
-            UserSession(
-                user=config.user, tty=tty, tty_name="talk", plan=f"talking to @{target}"
-            )
-        )
+            sessions = await ctx.relay.get_sessions_for_user(user_target)
+            if not sessions:
+                print(f"@{user_target} is not online.")
+                return
 
-        session_key = f"{config.user}:{tty}"
+            # Update plan to show talk activity.
+            session = await ctx.relay.get_session(ctx.session_key)
+            if session is not None:
+                updated = session.model_copy(update={"plan": f"talking to @{target}"})
+                await ctx.relay.update_session(updated)
 
-        if opening:
-            msg = Message(from_user=config.user, to_user=target, body=opening[:512])
-            await relay.deliver(msg, sender_key=session_key)
-            print(f"you> {opening}")
+            if opening:
+                msg = Message(from_user=ctx.user, to_user=target, body=opening[:512])
+                await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+                print(f"you> {opening}")
 
-        print(f"Connected to @{target}. Type and press Enter. Ctrl+C to end.\n")
+            print(f"Connected to @{target}. Type and press Enter. Ctrl+C to end.\n")
 
-        nc = await relay.get_nc()
-        subject = relay.talk_notify_subject(config.user)
+            nc = await ctx.relay.get_nc()
+            subject = ctx.relay.talk_notify_subject(ctx.user)
 
-        await _talk_loop(relay, nc, subject, session_key, config.user, target)
-
+            await _talk_loop(ctx.relay, nc, subject, ctx.session_key, ctx.user, target)
     except KeyboardInterrupt:
         print("\nTalk session ended.")
-    finally:
-        from contextlib import suppress
-
-        from biff.tty import build_session_key
-
-        with suppress(Exception):
-            await relay.delete_session(build_session_key(config.user, tty))
-        await relay.close()
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1) from None
 
 
 if __name__ == "__main__":

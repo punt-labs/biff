@@ -1,33 +1,42 @@
-"""Pseudo-ephemeral CLI sessions for product commands.
+"""CLI session lifecycle — unified session management for all CLI modes.
 
-Each ``biff <command>`` invocation needs a NATS relay to call relay
-methods. This module manages a reusable session: two back-to-back
-``biff who`` calls share the same tty/session identity. A 5-minute
-TTL on the local session file triggers a fresh session.
+Provides ``cli_session()``, an async context manager that mirrors the
+MCP server's ``_active_lifespan``.  Both the REPL (``biff`` with no
+args) and inline commands (``biff who``) use this for a proper session::
 
-Session file: ``~/.biff/cli-sessions/{repo_name}.json``
+    async with cli_session() as ctx:
+        result = await commands.who(ctx)
+        print(result.text)
 
-The NATS session persists until its own KV TTL expires (3 days).
-The local file just tracks which tty to reconnect to.
+The session is registered in KV on entry, assigned a ``ttyN`` name,
+writes a wtmp login event, and is cleaned up on exit (KV delete,
+wtmp logout).  Interactive mode adds a heartbeat loop.
+
+This replaces the old pseudo-ephemeral session with a 5-minute TTL.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
+import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from datetime import UTC, datetime
 
 from biff.config import load_config
-from biff.models import BiffConfig, UserSession
+from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.nats_relay import NatsRelay
-from biff.relay import Relay, atomic_write
-from biff.tty import generate_tty, get_hostname, get_pwd
+from biff.relay import Relay
+from biff.tty import (
+    build_session_key,
+    generate_tty,
+    get_hostname,
+    get_pwd,
+    next_tty_name,
+)
 
-_SESSION_TTL = timedelta(minutes=5)
-_SESSION_DIR = Path.home() / ".biff" / "cli-sessions"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,54 +48,33 @@ class CliContext:
     session_key: str
     user: str
     tty: str
+    tty_name: str = ""
 
 
-def _session_path(repo_name: str) -> Path:
-    """Path to the local session file for a repo."""
-    return _SESSION_DIR / f"{repo_name}.json"
-
-
-def _load_session(repo_name: str) -> tuple[str, str] | None:
-    """Load a valid (non-expired) session from disk.
-
-    Returns ``(user, tty)`` or ``None`` if expired/missing.
-    """
-    path = _session_path(repo_name)
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-        last_active = datetime.fromisoformat(data["last_active"])
-        if last_active.tzinfo is None:
-            last_active = last_active.replace(tzinfo=UTC)
-        if datetime.now(UTC) - last_active > _SESSION_TTL:
-            return None
-        user: str = data["user"]
-        tty: str = data["tty"]
-        return user, tty
-    except (json.JSONDecodeError, KeyError, ValueError, OSError, TypeError):
-        return None
-
-
-def _save_session(repo_name: str, user: str, tty: str) -> None:
-    """Save session to disk with current timestamp."""
-    data = {
-        "user": user,
-        "tty": tty,
-        "tty_name": "cli",
-        "last_active": datetime.now(UTC).isoformat(),
-    }
-    atomic_write(_session_path(repo_name), json.dumps(data, indent=2) + "\n")
+async def _heartbeat_loop(
+    relay: Relay, session_key: str, shutdown: asyncio.Event, *, interval: float = 60.0
+) -> None:
+    """Periodic heartbeat to keep the CLI session alive in KV."""
+    while not shutdown.is_set():
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=interval)
+            return
+        except TimeoutError:
+            pass
+        try:
+            await relay.heartbeat(session_key)
+        except Exception:  # noqa: BLE001
+            logger.warning("CLI heartbeat failed", exc_info=True)
 
 
 @asynccontextmanager
-async def cli_relay() -> AsyncIterator[CliContext]:
-    """Provide a NatsRelay + session for a CLI command.
+async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]:
+    """Provide a NATS relay + session with proper lifecycle.
 
-    Reuses an existing session if the local file is fresh (< 5 min).
-    Creates a new session otherwise. Updates ``last_active`` on exit.
+    On entry: connect, register session (KV), auto-assign ttyN,
+    write wtmp login event.  If *interactive*, start a heartbeat loop.
 
-    Requires NATS — exits with an error if no relay_url is configured.
+    On exit: write wtmp logout event, delete session (KV), disconnect.
     """
     resolved = load_config()
     config = resolved.config
@@ -102,37 +90,97 @@ async def cli_relay() -> AsyncIterator[CliContext]:
         repo_name=config.repo_name,
     )
 
-    # Reuse or create session (invalidate if user identity changed)
-    existing = _load_session(config.repo_name)
-    if existing is not None and existing[0] == config.user:
-        user, tty = existing
-    else:
-        user = config.user
-        tty = generate_tty()
-
-    session_key = f"{user}:{tty}"
+    user = config.user
+    tty = generate_tty()
+    session_key = build_session_key(user, tty)
+    tty_name = ""
+    session: UserSession | None = None
+    shutdown = asyncio.Event()
+    heartbeat_task: asyncio.Task[None] | None = None
 
     try:
-        # Register/heartbeat the session
-        await relay.update_session(
-            UserSession(
-                user=user,
-                tty=tty,
-                tty_name="cli",
-                hostname=get_hostname(),
-                pwd=get_pwd(),
-            )
-        )
+        # Register session and auto-assign ttyN name.
+        sessions = await relay.get_sessions()
+        existing_names = [s.tty_name for s in sessions if s.tty_name]
+        tty_name = next_tty_name(existing_names)
 
-        yield CliContext(
+        session = UserSession(
+            user=user,
+            tty=tty,
+            tty_name=tty_name,
+            hostname=get_hostname(),
+            pwd=get_pwd(),
+        )
+        await relay.update_session(session)
+
+        # Write wtmp login event.
+        login_event = SessionEvent(
+            session_key=session_key,
+            event="login",
+            user=user,
+            tty=tty,
+            tty_name=tty_name,
+            hostname=session.hostname,
+            pwd=session.pwd,
+            timestamp=datetime.now(UTC),
+        )
+        try:
+            await relay.append_wtmp(login_event)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to write CLI wtmp login", exc_info=True)
+
+        if interactive:
+            heartbeat_task = asyncio.create_task(
+                _heartbeat_loop(relay, session_key, shutdown)
+            )
+
+        ctx = CliContext(
             relay=relay,
             config=config,
             session_key=session_key,
             user=user,
             tty=tty,
+            tty_name=tty_name,
         )
+
+        yield ctx
     finally:
-        # Always save session so the next invocation reuses the same tty,
-        # preventing orphaned NATS sessions on command failure.
-        _save_session(config.repo_name, user, tty)
-        await relay.close()
+        # Stop heartbeat.
+        shutdown.set()
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+        # Write wtmp logout event (only if session was registered).
+        if session is not None:
+            logout_event = SessionEvent(
+                session_key=session_key,
+                event="logout",
+                user=user,
+                tty=tty,
+                tty_name=tty_name,
+                hostname=session.hostname,
+                pwd=session.pwd,
+                timestamp=datetime.now(UTC),
+            )
+            try:
+                await relay.append_wtmp(logout_event)
+                await relay.flush()
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to write CLI wtmp logout", exc_info=True)
+
+            # Delete session from KV.
+            try:
+                await relay.delete_session(session_key)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to delete CLI session %s",
+                    session_key,
+                    exc_info=True,
+                )
+
+        try:
+            await relay.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to close CLI relay", exc_info=True)
