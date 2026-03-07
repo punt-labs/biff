@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format prfaq clean-tex
+.PHONY: help test lint type check format fuzz prob prfaq clean-tex
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -15,6 +15,31 @@ type: ## Type check with mypy and pyright
 	uv run pyright
 
 check: lint type test ## Run all quality gates
+
+PROBCLI ?= $(HOME)/Applications/ProB/probcli
+PROB_SETSIZE ?= 2
+PROB_MAXINT ?= 4
+PROB_TIMEOUT ?= 60000
+PROB_FLAGS = -p DEFAULT_SETSIZE $(PROB_SETSIZE) -p MAXINT $(PROB_MAXINT) -p TIME_OUT $(PROB_TIMEOUT)
+
+fuzz: ## Type-check a Z spec with fuzz (usage: make fuzz SPEC=docs/foo.tex)
+	@fuzz -t "$(SPEC)" > /dev/null
+	@echo "fuzz: $(SPEC) OK"
+
+prob: ## Animate and model-check a Z spec with ProB (usage: make prob SPEC=docs/foo.tex)
+	@echo "--- init ---"
+	@$(PROBCLI) "$(SPEC)" -init $(PROB_FLAGS) 2>&1 | grep -v "^Promoting\|^Z op\|^% given\|fuzz AST\|^Writing"
+	@echo "--- animate ---"
+	@$(PROBCLI) "$(SPEC)" -animate 20 $(PROB_FLAGS) 2>&1 | grep -E "COVERED|not_covered|Runtime"
+	@echo "--- cbc assertions ---"
+	@$(PROBCLI) "$(SPEC)" -cbc_assertions $(PROB_FLAGS) 2>&1 | grep -E "counter|ASSERTION"
+	@echo "--- cbc deadlock ---"
+	@$(PROBCLI) "$(SPEC)" -cbc_deadlock $(PROB_FLAGS) 2>&1 | grep -E "deadlock|DEADLOCK"
+	@echo "--- model check ---"
+	@$(PROBCLI) "$(SPEC)" -model_check $(PROB_FLAGS) \
+		-p MAX_INITIALISATIONS 100 -p MAX_OPERATIONS 5000 2>&1 | \
+		grep -E "states|COUNTER|No counter|COVERED|all open|not all"
+	@echo "prob: $(SPEC) OK"
 
 format: ## Auto-format code
 	uv run ruff check --fix .

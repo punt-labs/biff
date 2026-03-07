@@ -1,0 +1,475 @@
+%
+% talk.tex
+%
+% Z Specification for Biff REPL Talk Subsystem
+% Formal model of the two-phase handshake protocol, modal conversation,
+% notification queue, and mutual hangup for the biff REPL talk command.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff REPL Talk: A Z Specification}
+\author{Formal Model of the Two-Phase Talk Handshake and Conversation Protocol}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Biff REPL Talk: A Z Specification},
+  pdfauthor={punt-labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+The biff REPL talk command implements a modal conversation between two
+sessions, modelled on BSD \texttt{talk(1)}.  The protocol has three
+phases:
+
+\begin{enumerate}
+\item \textbf{Handshake} --- the inviter publishes an \textit{invite}
+  notification and enters a waiting state.  The responder sees the
+  invite as a banner, types \texttt{talk @inviter:tty}, and publishes
+  an \textit{accept} notification.  The inviter receives the accept
+  and both sides enter the connected state.
+
+\item \textbf{Conversation} --- both sides exchange \textit{message}
+  notifications via NATS core publish (ephemeral, no inbox).  Messages
+  are received via a notification queue drained on a 2-second timeout
+  poll.
+
+\item \textbf{Hangup} --- either side types \texttt{end}, which
+  publishes an \textit{end} notification.  The remote side detects it
+  during the drain and exits talk mode.  Both sides return to the REPL.
+\end{enumerate}
+
+This specification models the state of a single session's talk
+subsystem and the operations that transition it.  A two-session
+system is modelled by composing two instances.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  [USER, TTY, MSGBODY, SESSIONKEY]
+\end{zed}
+
+$USER$ identifies a biff user.  $TTY$ identifies a session (hex ID or
+tty name).  $MSGBODY$ is an opaque message body (max 512 chars).
+$SESSIONKEY$ is a composite \texttt{user:tty} key.
+
+%%----------------------------------------------------------------------
+\section{Free Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  TalkPhase ::= tpIdle | tpInviting | tpConnected
+\end{zed}
+
+The three phases of a talk session from one side's perspective:
+\begin{itemize}
+\item $tpIdle$ --- normal REPL mode, not in talk.
+\item $tpInviting$ --- sent an invite, waiting for accept.
+\item $tpConnected$ --- in the talk sub-loop, exchanging messages.
+\end{itemize}
+
+Note: there is no explicit ``accepting'' phase.  When a responder
+types \texttt{talk @inviter:tty} and a pending invite exists, the
+accept is sent and the state transitions directly from $tpIdle$
+to $tpConnected$ (via $RespondToInvite$).
+
+\begin{zed}
+  NotifType ::= ntInvite | ntAccept | ntMessage | ntEnd
+\end{zed}
+
+The four notification types in the talk protocol.  These correspond
+to the \texttt{type} field in the NATS JSON payload.
+
+%%----------------------------------------------------------------------
+\section{Global Constants}
+%%----------------------------------------------------------------------
+
+\begin{axdef}
+  maxQueueLen : \nat \\
+  maxBodyLen : \nat
+\where
+  maxQueueLen = 100 \\
+  maxBodyLen = 512
+\end{axdef}
+
+$maxQueueLen$ bounds the notification queue for animation.
+$maxBodyLen$ is the message body truncation limit.
+
+%%----------------------------------------------------------------------
+\section{Notification}
+%%----------------------------------------------------------------------
+
+A notification is a typed message in the queue, carrying the sender
+identity and an optional body.
+
+\begin{schema}{Notification}
+  ntype : NotifType \\
+  nfrom : USER \\
+  nfromTty : TTY \\
+  nfromKey : SESSIONKEY \\
+  nbody : MSGBODY
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Talk State}
+%%----------------------------------------------------------------------
+
+The talk state for a single REPL session.
+
+\begin{schema}{TalkState}
+  phase : TalkPhase \\
+  myUser : USER \\
+  myTty : TTY \\
+  myKey : SESSIONKEY \\
+  partner : USER \\
+  partnerTty : TTY \\
+  pendingInvites : \power USER \\
+  queue : \seq Notification \\
+  queueLen : \nat
+\where
+  queueLen = \# queue \\
+  queueLen \leq maxQueueLen \\
+  phase = tpIdle \implies partner = myUser \\
+  phase = tpIdle \implies partnerTty = myTty
+\end{schema}
+
+When idle, $partner$ and $partnerTty$ are set to $myUser$ and
+$myTty$ as sentinel values (no active partner).  The
+$pendingInvites$ set records users who have sent us an invite
+that has been displayed but not yet consumed by a \texttt{talk}
+command.  $queue$ is the notification queue populated by the
+NATS subscription callback.
+
+%%----------------------------------------------------------------------
+\section{Initialization}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Init}
+  TalkState'
+\where
+  phase' = tpIdle \\
+  pendingInvites' = \emptyset \\
+  queue' = \langle \rangle \\
+  queueLen' = 0 \\
+  partner' = myUser' \\
+  partnerTty' = myTty'
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Operations}
+%%----------------------------------------------------------------------
+
+%%----------------------------------------------------------------------
+\subsection{ReceiveNotification}
+%%----------------------------------------------------------------------
+
+A notification arrives from NATS and is appended to the queue.
+Self-echo (notifications from our own session key) is silently
+dropped.  The queue is bounded; overflow drops the notification.
+
+\begin{schema}{ReceiveNotification}
+  \Delta TalkState \\
+  notif? : Notification
+\where
+  notif?.nfromKey \neq myKey \\
+  queueLen < maxQueueLen \\
+  queue' = queue \cat \langle notif? \rangle \\
+  queueLen' = queueLen + 1 \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ReceiveSelfEcho}
+%%----------------------------------------------------------------------
+
+A notification from our own session key is silently dropped.
+
+\begin{schema}{ReceiveSelfEcho}
+  \Xi TalkState \\
+  notif? : Notification
+\where
+  notif?.nfromKey = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ReceiveOverflow}
+%%----------------------------------------------------------------------
+
+Queue is full; notification is dropped.
+
+\begin{schema}{ReceiveOverflow}
+  \Xi TalkState \\
+  notif? : Notification
+\where
+  queueLen = maxQueueLen \\
+  notif?.nfromKey \neq myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainInvite}
+%%----------------------------------------------------------------------
+
+During the REPL notification poll, an invite is drained from the
+queue.  The sender is recorded in $pendingInvites$ so that a
+subsequent \texttt{talk} command can detect it.
+
+\begin{schema}{DrainInvite}
+  \Delta TalkState
+\where
+  phase = tpIdle \\
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntInvite \\
+  pendingInvites' = pendingInvites \cup \{ (head~queue).nfrom \} \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainAcceptWhileInviting}
+%%----------------------------------------------------------------------
+
+While in the inviting phase, an accept is drained from the queue.
+This completes the handshake and transitions to connected.
+
+\begin{schema}{DrainAcceptWhileInviting}
+  \Delta TalkState
+\where
+  phase = tpInviting \\
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntAccept \\
+  phase' = tpConnected \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainMessage}
+%%----------------------------------------------------------------------
+
+During talk mode, a message notification is drained and displayed
+to the user.
+
+\begin{schema}{DrainMessage}
+  \Delta TalkState
+\where
+  phase = tpConnected \\
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntMessage \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainEnd}
+%%----------------------------------------------------------------------
+
+During talk mode, an end notification is drained.  The remote side
+has hung up.  Transitions back to idle.
+
+\begin{schema}{DrainEnd}
+  \Delta TalkState
+\where
+  phase = tpConnected \\
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntEnd \\
+  phase' = tpIdle \\
+  partner' = myUser \\
+  partnerTty' = myTty \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{SendInvite}
+%%----------------------------------------------------------------------
+
+User types \texttt{talk @target} with no pending invite from
+target.  Publishes an invite and enters the inviting phase.
+
+\begin{schema}{SendInvite}
+  \Delta TalkState \\
+  target? : USER \\
+  targetTty? : TTY
+\where
+  phase = tpIdle \\
+  target? \notin pendingInvites \\
+  phase' = tpInviting \\
+  partner' = target? \\
+  partnerTty' = targetTty? \\
+  queue' = queue \\
+  queueLen' = queueLen \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{RespondToInvite}
+%%----------------------------------------------------------------------
+
+User types \texttt{talk @inviter:tty} and a pending invite from
+that user exists.  Consumes the invite, publishes an accept, and
+transitions directly to connected.
+
+\begin{schema}{RespondToInvite}
+  \Delta TalkState \\
+  target? : USER \\
+  targetTty? : TTY
+\where
+  phase = tpIdle \\
+  target? \in pendingInvites \\
+  phase' = tpConnected \\
+  partner' = target? \\
+  partnerTty' = targetTty? \\
+  pendingInvites' = pendingInvites \setminus \{ target? \} \\
+  queue' = queue \\
+  queueLen' = queueLen \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{SendMessage}
+%%----------------------------------------------------------------------
+
+User types a line during talk mode.  Publishes a message
+notification to the partner.
+
+\begin{schema}{SendMessage}
+  \Xi TalkState \\
+  body? : MSGBODY
+\where
+  phase = tpConnected
+\end{schema}
+
+Sending a message does not change the local talk state.  The
+message is published via NATS core (fire-and-forget, ephemeral).
+
+%%----------------------------------------------------------------------
+\subsection{LocalEnd}
+%%----------------------------------------------------------------------
+
+User types \texttt{end} during talk mode.  Publishes an end
+notification and transitions to idle.
+
+\begin{schema}{LocalEnd}
+  \Delta TalkState
+\where
+  phase = tpConnected \\
+  phase' = tpIdle \\
+  partner' = myUser \\
+  partnerTty' = myTty \\
+  queue' = queue \\
+  queueLen' = queueLen \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{CancelInvite}
+%%----------------------------------------------------------------------
+
+User types \texttt{end} while waiting for an accept (inviting
+phase).  Cancels the invitation and returns to idle.
+
+\begin{schema}{CancelInvite}
+  \Delta TalkState
+\where
+  phase = tpInviting \\
+  phase' = tpIdle \\
+  partner' = myUser \\
+  partnerTty' = myTty \\
+  queue' = queue \\
+  queueLen' = queueLen \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{System Invariants}
+%%----------------------------------------------------------------------
+
+The following properties must hold in all reachable states:
+
+\begin{enumerate}
+\item \textbf{Idle implies no partner.}  When $phase = tpIdle$,
+  $partner = myUser$ and $partnerTty = myTty$ (sentinel values).
+
+\item \textbf{Queue bounded.}  $\# queue \leq maxQueueLen$.
+
+\item \textbf{Self-echo never queued.}  For all $n$ in $\ran queue$,
+  $n.nfromKey \neq myKey$.
+
+\item \textbf{Pending invites only while idle.}  Invites are consumed
+  on entering talk mode ($RespondToInvite$) or remain in the set
+  until the next \texttt{talk} command.  The set is not modified
+  during the inviting or connected phases (except by
+  $RespondToInvite$ which transitions from idle).
+
+\item \textbf{Handshake symmetry.}  If session~A is in $tpInviting$
+  with $partner = B$, then session~B must either be in $tpIdle$
+  (invite not yet seen) or about to transition to $tpConnected$
+  (via $RespondToInvite$).  Both cannot be in $tpInviting$
+  simultaneously with each other as partner (the pending invite
+  detection prevents this).
+
+\item \textbf{Mutual hangup.}  $LocalEnd$ on one side publishes
+  $ntEnd$.  $DrainEnd$ on the other side transitions to $tpIdle$.
+  After both operations, both sides are idle.
+\end{enumerate}
+
+\end{document}
