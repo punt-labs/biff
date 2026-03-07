@@ -93,54 +93,56 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
     user = config.user
     tty = generate_tty()
     session_key = build_session_key(user, tty)
-
-    # Register session and auto-assign ttyN name.
-    sessions = await relay.get_sessions()
-    existing_names = [s.tty_name for s in sessions if s.tty_name]
-    tty_name = next_tty_name(existing_names)
-
-    session = UserSession(
-        user=user,
-        tty=tty,
-        tty_name=tty_name,
-        hostname=get_hostname(),
-        pwd=get_pwd(),
-    )
-    await relay.update_session(session)
-
-    # Write wtmp login event.
-    login_event = SessionEvent(
-        session_key=session_key,
-        event="login",
-        user=user,
-        tty=tty,
-        tty_name=tty_name,
-        hostname=session.hostname,
-        pwd=session.pwd,
-        timestamp=datetime.now(UTC),
-    )
-    try:
-        await relay.append_wtmp(login_event)
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to write CLI wtmp login", exc_info=True)
-
+    tty_name = ""
+    session: UserSession | None = None
     shutdown = asyncio.Event()
     heartbeat_task: asyncio.Task[None] | None = None
-    if interactive:
-        heartbeat_task = asyncio.create_task(
-            _heartbeat_loop(relay, session_key, shutdown)
-        )
-
-    ctx = CliContext(
-        relay=relay,
-        config=config,
-        session_key=session_key,
-        user=user,
-        tty=tty,
-        tty_name=tty_name,
-    )
 
     try:
+        # Register session and auto-assign ttyN name.
+        sessions = await relay.get_sessions()
+        existing_names = [s.tty_name for s in sessions if s.tty_name]
+        tty_name = next_tty_name(existing_names)
+
+        session = UserSession(
+            user=user,
+            tty=tty,
+            tty_name=tty_name,
+            hostname=get_hostname(),
+            pwd=get_pwd(),
+        )
+        await relay.update_session(session)
+
+        # Write wtmp login event.
+        login_event = SessionEvent(
+            session_key=session_key,
+            event="login",
+            user=user,
+            tty=tty,
+            tty_name=tty_name,
+            hostname=session.hostname,
+            pwd=session.pwd,
+            timestamp=datetime.now(UTC),
+        )
+        try:
+            await relay.append_wtmp(login_event)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to write CLI wtmp login", exc_info=True)
+
+        if interactive:
+            heartbeat_task = asyncio.create_task(
+                _heartbeat_loop(relay, session_key, shutdown)
+            )
+
+        ctx = CliContext(
+            relay=relay,
+            config=config,
+            session_key=session_key,
+            user=user,
+            tty=tty,
+            tty_name=tty_name,
+        )
+
         yield ctx
     finally:
         # Stop heartbeat.
@@ -150,29 +152,32 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
 
-        # Write wtmp logout event.
-        logout_event = SessionEvent(
-            session_key=session_key,
-            event="logout",
-            user=user,
-            tty=tty,
-            tty_name=tty_name,
-            hostname=session.hostname,
-            pwd=session.pwd,
-            timestamp=datetime.now(UTC),
-        )
-        try:
-            await relay.append_wtmp(logout_event)
-            await relay.flush()
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to write CLI wtmp logout", exc_info=True)
-
-        # Delete session from KV.
-        try:
-            await relay.delete_session(session_key)
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "Failed to delete CLI session %s", session_key, exc_info=True
+        # Write wtmp logout event (only if session was registered).
+        if session is not None:
+            logout_event = SessionEvent(
+                session_key=session_key,
+                event="logout",
+                user=user,
+                tty=tty,
+                tty_name=tty_name,
+                hostname=session.hostname,
+                pwd=session.pwd,
+                timestamp=datetime.now(UTC),
             )
+            try:
+                await relay.append_wtmp(logout_event)
+                await relay.flush()
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to write CLI wtmp logout", exc_info=True)
+
+            # Delete session from KV.
+            try:
+                await relay.delete_session(session_key)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to delete CLI session %s",
+                    session_key,
+                    exc_info=True,
+                )
 
         await relay.close()

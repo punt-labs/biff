@@ -158,8 +158,15 @@ def main(
 
 
 async def _repl() -> None:
-    """Interactive REPL: connect once, run commands, clean up on exit."""
+    """Interactive REPL: connect once, run commands, clean up on exit.
+
+    Uses ``run_in_executor`` for ``input()`` so the event loop stays
+    unblocked — heartbeat and other background tasks keep running
+    while the user is idle at the prompt.
+    """
     from biff.dispatch import available_commands, dispatch
+
+    loop = asyncio.get_running_loop()
 
     try:
         async with cli_session(interactive=True) as ctx:
@@ -168,9 +175,10 @@ async def _repl() -> None:
             print(f"Commands: {cmds}, exit")
             print()
 
+            prompt = f"{ctx.user}> "
             while True:
                 try:
-                    line = input(f"{ctx.user}> ")
+                    line = await loop.run_in_executor(None, input, prompt)
                 except (EOFError, KeyboardInterrupt):
                     print()
                     break
