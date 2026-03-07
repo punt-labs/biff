@@ -216,6 +216,9 @@ async def _repl_loop(
     """Core REPL input loop — dispatches commands and handles notifications."""
     from biff.dispatch import dispatch
 
+    # Print initial prompt (stdin thread reads without prompting).
+    print(prompt, end="", flush=True)
+
     while True:
         result = await _wait_for_input_or_notify(aqueue, notify_event)
         if result is _NO_INPUT:
@@ -232,13 +235,11 @@ async def _repl_loop(
 
         line = result
 
-        # Between-command notification check.
-        await _poll_notify(ctx, notify, prompt)
-
         try:
             cmd_result = await dispatch(line, ctx)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
+            print(prompt, end="", flush=True)
             continue
 
         if cmd_result is None:
@@ -249,6 +250,9 @@ async def _repl_loop(
         # Sync state after the user's own command so the next poll
         # doesn't notify about changes the user just made.
         await _sync_notify(ctx, notify)
+
+        # Print prompt for next input.
+        print(prompt, end="", flush=True)
 
 
 async def _repl() -> None:
@@ -288,9 +292,18 @@ async def _repl() -> None:
             stop_flag = threading_mod.Event()
 
             def _read_stdin() -> None:
+                """Read lines via input("") for readline support.
+
+                The prompt is printed by the async loop so it only
+                appears when the loop is ready for input — not
+                speculatively before the previous command is processed.
+                Using ``input("")`` preserves readline (history, tab
+                completion, line editing) while keeping the prompt
+                under async control.
+                """
                 while not stop_flag.is_set():
                     try:
-                        ln = input(prompt)
+                        ln = input("")
                     except (EOFError, KeyboardInterrupt):
                         input_queue.put(None)
                         return
