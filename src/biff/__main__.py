@@ -424,10 +424,17 @@ def read_cmd() -> None:
 
 @app.command()
 def plan(
-    message: Annotated[str, typer.Argument(help="What you're working on")],
+    message: Annotated[str, typer.Argument(help="What you're working on")] = "",
+    clear: Annotated[bool, typer.Option("--clear", help="Clear plan")] = False,
 ) -> None:
     """Set what you're currently working on."""
-    _run(lambda ctx: commands.plan(ctx, message))
+    if clear:
+        _run(lambda ctx: commands.plan(ctx, ""))
+    elif not message:
+        print("Usage: biff plan <message> | biff plan --clear", file=sys.stderr)
+        raise typer.Exit(code=1)
+    else:
+        _run(lambda ctx: commands.plan(ctx, message))
 
 
 @app.command("last")

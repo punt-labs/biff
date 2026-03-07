@@ -89,7 +89,7 @@ async def _last(ctx: CliContext, args: list[str]) -> CommandResult:
 async def _wall(ctx: CliContext, args: list[str]) -> CommandResult:
     if not args:
         return await commands.wall(ctx, "", "", clear=False)
-    if args[0] in ("--clear", "clear"):
+    if args[0] == "clear":
         if len(args) > 1:
             return CommandResult(text="Usage: wall clear", error=True)
         return await commands.wall(ctx, "", "", clear=True)

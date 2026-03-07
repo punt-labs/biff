@@ -178,14 +178,7 @@ class TestDispatchCommands:
         assert "release freeze" in result.text
 
     @pytest.mark.anyio()
-    async def test_wall_clear_flag(self, ctx: CliContext) -> None:
-        await dispatch('wall "test" 1h', ctx)
-        result = await dispatch("wall --clear", ctx)
-        assert result is not None
-        assert "cleared" in result.text.lower()
-
-    @pytest.mark.anyio()
-    async def test_wall_clear_keyword(self, ctx: CliContext) -> None:
+    async def test_wall_clear(self, ctx: CliContext) -> None:
         await dispatch("wall test 1h", ctx)
         result = await dispatch("wall clear", ctx)
         assert result is not None
