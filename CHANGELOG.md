@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
 
-## 0.15.1 — 2026-03-06
+## [0.15.1] - 2026-03-06
 
 ### Fixed
 
@@ -14,7 +14,7 @@
 
 - Add Makefile per makefile.md standard
 
-## 0.15.0 — 2026-03-06
+## [0.15.0] - 2026-03-06
 
 ### Added
 
@@ -58,7 +58,7 @@
 - Z specification amended: `KVWallReceive` and `NatsTalkCallback` defer notification to
   `PollTick`; formally verified with ProB (550K+ states, no counter-examples)
 
-## 0.13.0 — 2026-03-02
+## [0.13.0] - 2026-03-02
 
 ### Fixed
 
@@ -68,14 +68,14 @@
 
 - Status line shows dim `/biff y to enable team communication` hint when biff is not enabled for the repo, replacing the unhelpful bare `biff` label
 
-## 0.12.2 — 2026-02-28
+## [0.12.2] - 2026-02-28
 
 ### Fixed
 
 - `gh` CLI check in `biff doctor` is now optional — users without `gh auth login` no longer see a required failure or a non-zero exit code
 - Installer uses `doctor || true` so diagnostic failures don't abort the install script under `set -eu`
 
-## 0.12.1 — 2026-02-28
+## [0.12.1] - 2026-02-28
 
 ### Fixed
 
@@ -84,7 +84,7 @@
 - Installer uses uninstall-before-install for idempotency (`claude plugin update` is unreliable)
 - Installer adds read-after-write verification after plugin install
 
-## 0.12.0 — 2026-02-27
+## [0.12.0] - 2026-02-27
 
 ### Added
 
@@ -97,7 +97,7 @@
 
 - Installer now refreshes marketplace clone before plugin install, ensuring existing users get the correct `source.ref` pins
 
-## 0.11.4 — 2026-02-26
+## [0.11.4] - 2026-02-26
 
 ### Fixed
 
@@ -112,7 +112,7 @@
 - **Install failures show error messages** — `biff install` and `biff doctor`
   are now wrapped in `if !` guards so `set -eu` doesn't cause silent exits.
 
-## 0.11.3 — 2026-02-26
+## [0.11.3] - 2026-02-26
 
 ### Fixed
 
@@ -122,7 +122,7 @@
   the `uv run` wrapper was an unnecessary dependency that could also pick up
   wrong project environments.
 
-## 0.11.2 — 2026-02-26
+## [0.11.2] - 2026-02-26
 
 ### Fixed
 
@@ -130,7 +130,7 @@
   commands from `commands/` (plugin-shipped) to `.claude/commands/`
   (project-local). Dev commands now only load when working in the biff repo.
 
-## 0.11.1 — 2026-02-26
+## [0.11.1] - 2026-02-26
 
 ### Fixed
 
@@ -150,7 +150,7 @@
 - **`DisplayQueue.expires_from_now()`** — helper for computing monotonic expiry
   from wall-clock remaining seconds.
 
-## 0.11.0 — 2026-02-26
+## [0.11.0] - 2026-02-26
 
 ### Added
 
@@ -174,7 +174,7 @@
 - **Repository URL in project metadata** — `pyproject.toml` now includes
   `project.urls` per punt-kit standard. (#80)
 
-## 0.10.6 — 2026-02-25
+## [0.10.6] - 2026-02-25
 
 ### Fixed
 
@@ -192,7 +192,7 @@
 - **`_notify_tool_list_changed` → `notify_tool_list_changed`** — made public
   since it is called from `refresh_talk()` and `refresh_wall()`.
 
-## 0.10.5 — 2026-02-25
+## [0.10.5] - 2026-02-25
 
 ### Fixed
 
@@ -211,7 +211,7 @@
 - **POP-mode connection cycling eliminated** — `_pop_fetch()` removed, `disconnect()`
   no longer called during nap. NATS connection persists for the full server lifetime.
 
-## 0.10.4 — 2026-02-25
+## [0.10.4] - 2026-02-25
 
 ### Fixed
 
@@ -227,7 +227,7 @@
   Documented that local editable installs must never be used and that `twine upload`
   must never be run manually.
 
-## 0.10.3 — 2026-02-25
+## [0.10.3] - 2026-02-25
 
 ### Fixed
 
@@ -249,7 +249,7 @@
   10 seconds (was 10 minutes). Idle threshold restored to 120s (was 30s).
   Status bar updates are no longer delayed by minutes during nap cycles.
 
-## 0.10.2 — 2026-02-25
+## [0.10.2] - 2026-02-25
 
 ### Fixed
 
@@ -262,7 +262,7 @@
   description actively encouraged `talk_listen` loops, overriding the `/talk`
   command's status-bar auto-read instructions.
 
-## 0.10.1 — 2026-02-25
+## [0.10.1] - 2026-02-25
 
 ### Fixed
 
@@ -272,7 +272,7 @@
   `deliver()` targets the specific tty, and the notification filter extracts the
   user-part for comparison.
 
-## 0.10.0 — 2026-02-25
+## [0.10.0] - 2026-02-25
 
 ### Changed
 
@@ -289,7 +289,7 @@
   appear on the status bar automatically. Use `/write` to reply, `/talk end` to
   close.
 
-## 0.9.1 — 2026-02-25
+## [0.9.1] - 2026-02-25
 
 ### Fixed
 
@@ -299,7 +299,7 @@
 - **Uninstall cleanup** — added `talk.md` to `BIFF_COMMANDS` in installer so
   `biff uninstall` removes it from `~/.claude/commands/`.
 
-## 0.9.0 — 2026-02-25
+## [0.9.0] - 2026-02-25
 
 ### Added
 
@@ -312,7 +312,7 @@
   interactive conversations. Single persistent stdin reader thread, NATS
   notification-driven message display, online presence check before connecting.
 
-## 0.8.2 — 2026-02-24
+## [0.8.2] - 2026-02-24
 
 ### Fixed
 
@@ -323,7 +323,7 @@
 - **README image on PyPI** — use absolute GitHub URL for `biff.png` so it renders
   on pypi.org (relative paths don't resolve there).
 
-## 0.8.1 — 2026-02-24
+## [0.8.1] - 2026-02-24
 
 ### Fixed
 
@@ -331,7 +331,7 @@
   `@kai (main)`) in the wall output, tool description, and status bar. Previously
   only the username was shown. (#biff-nw9)
 
-## 0.8.0 — 2026-02-24
+## [0.8.0] - 2026-02-24
 
 ### Added
 
@@ -400,7 +400,7 @@
   quotes no longer break the `/plan with message="..."` prompt syntax. Content is
   now JSON-escaped before embedding.
 
-## 0.7.0 — 2026-02-24
+## [0.7.0] - 2026-02-24
 
 ### Changed
 
@@ -430,7 +430,7 @@
 - **Legacy stream cleanup** — startup migration deletes orphaned per-repo streams
   with error suppression to avoid crash on first boot after upgrade (#63)
 
-## 0.6.0 — 2026-02-23
+## [0.6.0] - 2026-02-23
 
 ### Added
 
