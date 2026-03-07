@@ -70,5 +70,7 @@ prfaq: ## Compile .tex to .pdf and clean artifacts
 	done
 	@rm -f $(LATEX_ARTIFACTS)
 
-clean-tex: ## Remove LaTeX intermediate files
+clean-tex: ## Remove all LaTeX artifacts (root + docs/)
 	@rm -f $(LATEX_ARTIFACTS)
+	@rm -f docs/*.aux docs/*.log docs/*.out docs/*.toc docs/*.fuzz \
+	       docs/*.synctex.gz docs/*.pdf docs/*.mf docs/*.pk docs/*.tfm
