@@ -148,9 +148,15 @@ def main(
     _suppress_nats_noise()
 
     if ctx.invoked_subcommand is None:
-        if _json_output or _quiet_output:
-            flag = "--json" if _json_output else "--quiet"
-            raise typer.BadParameter(f"{flag} is not supported in REPL mode.")
+        unsupported: list[str] = []
+        if _json_output:
+            unsupported.append("--json")
+        if _quiet_output:
+            unsupported.append("--quiet")
+        if unsupported:
+            flags = " and ".join(unsupported)
+            verb = "is" if len(unsupported) == 1 else "are"
+            raise typer.BadParameter(f"{flags} {verb} not supported in REPL mode.")
         # No subcommand → launch the REPL.
         asyncio.run(_repl())
 

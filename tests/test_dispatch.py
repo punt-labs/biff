@@ -198,6 +198,27 @@ class TestDispatchCommands:
         assert "multi word plan" in result.text
 
     @pytest.mark.anyio()
+    async def test_wall_extra_args(self, ctx: CliContext) -> None:
+        result = await dispatch("wall msg dur extra", ctx)
+        assert result is not None
+        assert result.error
+        assert "Usage" in result.text
+
+    @pytest.mark.anyio()
+    async def test_wall_clear_extra_args(self, ctx: CliContext) -> None:
+        result = await dispatch("wall --clear extra", ctx)
+        assert result is not None
+        assert result.error
+        assert "Usage" in result.text
+
+    @pytest.mark.anyio()
+    async def test_tty_extra_args(self, ctx: CliContext) -> None:
+        result = await dispatch("tty a b", ctx)
+        assert result is not None
+        assert result.error
+        assert "Usage" in result.text
+
+    @pytest.mark.anyio()
     async def test_bad_quotes(self, ctx: CliContext) -> None:
         result = await dispatch('plan "unterminated', ctx)
         assert result is not None

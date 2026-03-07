@@ -1,7 +1,7 @@
 """Tests for the CLI session lifecycle (biff.cli_session).
 
 Tests the ``CliContext`` dataclass and ``cli_session()`` lifecycle
-using ``LocalRelay`` — no NATS required.
+using mocked relays — no real NATS connection required.
 """
 
 from __future__ import annotations
@@ -159,12 +159,11 @@ class TestCliSessionLifecycle:
             patch("biff.cli_session.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session(interactive=True) as _ctx:
-                # Give heartbeat a chance to fire
+                # Allow the background heartbeat task to be started.
                 await asyncio.sleep(0.05)
 
-        # Heartbeat should have been called at least once
-        # (interval defaults to 60s, but the task is started and cancelled)
-        # At minimum, the task was created and cleaned up without error.
+        # Verifies interactive sessions with a heartbeat task still
+        # clean up the relay correctly when the context exits.
         mock_relay.close.assert_awaited_once()
 
     @pytest.mark.anyio()
@@ -185,12 +184,12 @@ class TestCliSessionLifecycle:
         # Relay still closed despite failure
         mock_relay.close.assert_awaited_once()
         # No logout written (session was never registered)
-        login_calls = [
+        logout_calls = [
             c
             for c in mock_relay.append_wtmp.call_args_list
             if c[0][0].event == "logout"
         ]
-        assert len(login_calls) == 0
+        assert len(logout_calls) == 0
 
     @pytest.mark.anyio()
     async def test_no_relay_url_raises(self, tmp_path: Path) -> None:
