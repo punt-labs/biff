@@ -9,6 +9,8 @@ Requires ``nats-server`` on PATH.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from biff import commands
@@ -116,14 +118,13 @@ class TestPlanVisibility:
 
 
 class TestSessionCleanup:
-    """Scenario 6: session cleanup on exit."""
+    """Scenario 5: session cleanup on exit."""
 
     @pytest.mark.anyio()
     async def test_session_disappears_after_exit(
-        self, kai: CliContext, nats_server: str, tmp_path: object
+        self, kai: CliContext, nats_server: str, tmp_path: Path
     ) -> None:
         """After eric's session exits, kai's /who no longer shows eric."""
-        from pathlib import Path
         from unittest.mock import patch
 
         from biff.cli_session import cli_session
@@ -136,8 +137,8 @@ class TestSessionCleanup:
                 repo_name="_test-cli-multi",
                 relay_url=nats_server,
             ),
-            data_dir=Path(str(tmp_path)) / "eric",
-            repo_root=Path(str(tmp_path)),
+            data_dir=tmp_path / "eric2",
+            repo_root=tmp_path,
         )
 
         # Eric connects and is visible.
@@ -148,13 +149,14 @@ class TestSessionCleanup:
 
         # Eric disconnected — no longer visible.
         result = await commands.who(kai)
-        users = result.text
-        # Eric's session should be deleted from KV.
-        assert "eric" not in users or "cli" not in users
+        assert result.json_data is not None
+        data: list[dict[str, object]] = result.json_data  # type: ignore[assignment]
+        users = [s["user"] for s in data]
+        assert "eric" not in users
 
 
 class TestWtmp:
-    """Scenario 7: wtmp login/logout events."""
+    """Scenario 6: wtmp login/logout events."""
 
     @pytest.mark.anyio()
     async def test_login_events_in_last(
@@ -173,7 +175,7 @@ class TestWtmp:
 
 
 class TestMesg:
-    """Scenario 8: mesg off — write still delivers to inbox."""
+    """Scenario 7: mesg off — write still delivers to inbox."""
 
     @pytest.mark.anyio()
     async def test_mesg_off_still_receives(
@@ -188,4 +190,4 @@ class TestMesg:
     async def test_mesg_status_visible(self, kai: CliContext, eric: CliContext) -> None:
         await commands.mesg(eric, "off")
         result = await commands.finger(kai, "@eric")
-        assert "off" in result.text.lower() or "-" in result.text
+        assert "messages: off" in result.text.lower()
