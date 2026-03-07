@@ -166,30 +166,60 @@ def main(
 # ---------------------------------------------------------------------------
 
 
+def _drain_talk_notifications(
+    talk_notifications: asyncio.Queue[dict[str, str]] | None,
+    session_key: str,
+) -> list[str]:
+    """Drain talk notification queue and return banner lines."""
+    lines: list[str] = []
+    if talk_notifications is None:
+        return lines
+    while not talk_notifications.empty():
+        try:
+            data = talk_notifications.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        # Skip self-echo.
+        if data.get("from_key", "") == session_key:
+            continue
+        sender = data.get("from", "?")
+        body = data.get("body", "")
+        if body:
+            lines.append(f"  \033[1;33m📞 @{sender}: {body}\033[0m")
+    return lines
+
+
 async def _poll_notify(
-    ctx: CliContext, notify: object, prompt: str, *, inline: bool = False
+    ctx: CliContext,
+    notify: object,
+    prompt: str,
+    talk_notifications: asyncio.Queue[dict[str, str]] | None = None,
+    *,
+    inline: bool = False,
 ) -> None:
     """Check for notification changes and print if any."""
     from biff.repl_notify import NotifyState
 
     if not isinstance(notify, NotifyState):
         return
-    _log = logging.getLogger(__name__)
+    notes: list[str] = []
     try:
         summary = await ctx.relay.get_unread_summary(ctx.session_key)
         wall_post = await ctx.relay.get_wall()
         notes = notify.check(summary.count, wall_post)
-        if notes and inline:
-            # Clear current input line, print notifications, reshow prompt.
-            print("\r\033[K", end="")
-            for note in notes:
-                print(note)
-            print(prompt, end="", flush=True)
-        elif notes:
-            for note in notes:
-                print(note)
     except Exception:  # noqa: BLE001
-        _log.debug("Notify check failed", exc_info=True)
+        logging.getLogger(__name__).debug("Notify check failed", exc_info=True)
+
+    notes.extend(_drain_talk_notifications(talk_notifications, ctx.session_key))
+
+    if notes and inline:
+        print("\r\033[K", end="")
+        for note in notes:
+            print(note)
+        print(prompt, end="", flush=True)
+    elif notes:
+        for note in notes:
+            print(note)
 
 
 async def _sync_notify(ctx: CliContext, notify: object) -> None:
@@ -288,6 +318,7 @@ async def _repl_loop(
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
     current_prompt: list[str],
+    talk_notifications: asyncio.Queue[dict[str, str]] | None = None,
 ) -> None:
     """Core REPL input loop — dispatches commands and handles notifications."""
     from biff.dispatch import dispatch
@@ -297,7 +328,7 @@ async def _repl_loop(
         if result is _NO_INPUT:
             # Timeout or notification — check for changes inline.
             notify_event.clear()
-            await _poll_notify(ctx, notify, prompt, inline=True)
+            await _poll_notify(ctx, notify, prompt, talk_notifications, inline=True)
             continue
 
         if result is None:
@@ -394,14 +425,24 @@ async def _handle_repl_talk(
         updated = session.model_copy(update={"plan": f"talking to {display}"})
         await ctx.relay.update_session(updated)
 
-    from biff.models import Message
-
-    # Send talk invitation to the target so they see a notification.
+    # Send talk invitation as a NATS notification (banner, not inbox).
     invite_body = "📞 wants to talk"
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
-    invite = Message(from_user=ctx.user, to_user=target, body=invite_body)
-    await ctx.relay.deliver(invite, sender_key=ctx.session_key)
+
+    nc = await ctx.relay.get_nc()
+    invite_data = json.dumps(
+        {
+            "from": ctx.user,
+            "body": invite_body,
+            "from_key": ctx.session_key,
+        }
+    ).encode()
+    # Publish to the target user's talk notification subject.
+    target_user = user_target
+    target_subject = ctx.relay.talk_notify_subject(target_user)
+    await nc.publish(target_subject, invite_data)
+
     if len(args) > 1:
         print(f"you> {invite_body}")
 
@@ -414,6 +455,44 @@ async def _handle_repl_talk(
         prompt_gate,
         current_prompt,
         repl_prompt,
+    )
+
+
+async def _setup_nats_subscription(
+    ctx: CliContext,
+    notify_event: asyncio.Event,
+    talk_notifications: asyncio.Queue[dict[str, str]],
+) -> object | None:
+    """Subscribe to NATS talk notifications for real-time alerts.
+
+    Returns the subscription object (for cleanup) or ``None`` if
+    the relay is not NATS-backed.
+    """
+    from biff.nats_relay import NatsRelay
+
+    if not isinstance(ctx.relay, NatsRelay):
+        return None
+
+    nc = await ctx.relay.get_nc()
+    subject = ctx.relay.talk_notify_subject(ctx.user)
+
+    async def _on_notify(msg: object) -> None:
+        data = getattr(msg, "data", b"")
+        if data and data != b"1":
+            try:
+                raw: object = json.loads(data)
+                if isinstance(raw, dict):
+                    notification: dict[str, str] = {
+                        str(k): str(v)  # pyright: ignore[reportUnknownArgumentType]
+                        for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+                    }
+                    await talk_notifications.put(notification)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        notify_event.set()
+
+    return await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+        subject, cb=_on_notify
     )
 
 
@@ -430,7 +509,6 @@ async def _repl() -> None:
     completion for command names.
     """
     from biff.dispatch import available_commands
-    from biff.nats_relay import NatsRelay
     from biff.repl_notify import NotifyState
     from biff.repl_readline import setup as setup_readline
 
@@ -484,19 +562,9 @@ async def _repl() -> None:
             aqueue: asyncio.Queue[str | None] = asyncio.Queue()
             bridge_task = asyncio.create_task(_bridge_stdin(input_queue, aqueue))
 
-            # Subscribe to NATS notifications for real-time alerts.
             notify_event = asyncio.Event()
-            sub = None
-            if isinstance(ctx.relay, NatsRelay):
-                nc = await ctx.relay.get_nc()
-                subject = ctx.relay.talk_notify_subject(ctx.user)
-
-                async def _on_notify(_msg: object) -> None:
-                    notify_event.set()
-
-                sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
-                    subject, cb=_on_notify
-                )
+            talk_notifications: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+            sub = await _setup_nats_subscription(ctx, notify_event, talk_notifications)
 
             try:
                 await _repl_loop(
@@ -507,6 +575,7 @@ async def _repl() -> None:
                     notify_event,
                     prompt_gate,
                     current_prompt,
+                    talk_notifications,
                 )
             finally:
                 stop_flag.set()
@@ -519,7 +588,7 @@ async def _repl() -> None:
                     await bridge_task
                 if sub is not None:
                     with suppress(Exception):
-                        await sub.unsubscribe()
+                        await sub.unsubscribe()  # type: ignore[attr-defined]
     except KeyboardInterrupt:
         print()
     except ValueError as exc:
