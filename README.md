@@ -224,7 +224,7 @@ biff --verbose who          # Debug logging to stderr
 biff --quiet write @kai "msg"  # Suppress non-JSON output
 ```
 
-Global flags (`--json`, `--verbose`, `--quiet`) can go before or after the subcommand (e.g. `biff who --json` also works).
+Global flags (`--json`, `--verbose`, `--quiet`) go before the subcommand.
 
 ### Library API
 
@@ -325,6 +325,7 @@ Biff assumes the terminal is where you're already working — so that's where yo
 
 [Design Log](DESIGN.md) |
 [Installer Design](DESIGN-INSTALLER.md) |
+[Testing Guide](TESTING.md) |
 [Changelog](CHANGELOG.md) |
 [Contributing](CONTRIBUTING.md)
 
