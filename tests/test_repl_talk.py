@@ -1,8 +1,12 @@
 """Tests for REPL talk functions (biff.__main__ talk subsystem).
 
 Coverage for the Z specification docs/talk.tex: handshake detection,
-notification queue draining, accept checking, and message publishing.
-All tests use mock queues — no NATS, no network.
+notification queue draining, accept checking, message publishing,
+rejected partitions, and boundary conditions.  All tests use mock
+queues — no NATS, no network.
+
+Partition numbers reference the TTF partition table generated from
+the Z spec via ``/z-spec:partition``.
 """
 
 from __future__ import annotations
@@ -141,6 +145,116 @@ class TestDrainTalkMessages:
         # No colon separator when from_tty is missing
         assert "eric ▶ hi" in lines[0]
 
+    def test_multiple_messages_all_formatted(self) -> None:
+        """Partition 26: two messages drained, both formatted."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "first",
+                    "from_key": OTHER_KEY,
+                },
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "second",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines, ended = _drain_talk_messages(q, MY_KEY)
+        assert ended is False
+        assert len(lines) == 2
+        assert "first" in lines[0]
+        assert "second" in lines[1]
+
+    def test_all_four_types_only_message_and_end_processed(self) -> None:
+        """Partition 4/12: queue with all 4 notification types."""
+        q = _make_queue(
+            [
+                {"type": "invite", "from": "a", "body": "inv", "from_key": "a:1"},
+                {"type": "accept", "from": "b", "from_key": "b:2"},
+                {
+                    "type": "message",
+                    "from": "c",
+                    "from_tty": "tty3",
+                    "body": "msg",
+                    "from_key": "c:3",
+                },
+                {"type": "end", "from": "d", "from_tty": "tty4", "from_key": "d:4"},
+            ]
+        )
+        lines, ended = _drain_talk_messages(q, MY_KEY)
+        assert ended is True
+        assert len(lines) == 2  # message + end, invite/accept skipped
+        assert "msg" in lines[0]
+        assert "ended the conversation" in lines[1]
+
+    def test_other_key_not_suppressed(self) -> None:
+        """Partition 20/8: other key messages are NOT suppressed."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "visible",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines, _ = _drain_talk_messages(q, MY_KEY)
+        assert len(lines) == 1
+        assert "visible" in lines[0]
+
+    def test_end_does_not_set_ended_for_message(self) -> None:
+        """Partition 35: ntMessage does NOT set ended."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "still here",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        _, ended = _drain_talk_messages(q, MY_KEY)
+        assert ended is False
+
+    def test_end_without_tty(self) -> None:
+        """Partition 30: end notification without from_tty."""
+        q = _make_queue(
+            [
+                {"type": "end", "from": "eric", "from_key": OTHER_KEY},
+            ]
+        )
+        lines, ended = _drain_talk_messages(q, MY_KEY)
+        assert ended is True
+        assert "eric" in lines[0]
+        # No colon when tty missing
+        assert "eric has ended" in lines[0]
+
+    def test_empty_body_message_not_formatted(self) -> None:
+        """Partition 47 boundary: message with empty body produces no line."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines, _ = _drain_talk_messages(q, MY_KEY)
+        assert lines == []
+
     def test_mixed_messages_and_end(self) -> None:
         q = _make_queue(
             [
@@ -216,6 +330,66 @@ class TestDrainTalkNotifications:
         lines = _drain_talk_notifications(None, MY_KEY)
         assert lines == []
 
+    def test_duplicate_invite_sender_idempotent(self) -> None:
+        """Partition 13: same sender invited twice, set unchanged."""
+        pending: set[str] = {"eric"}
+        q = _make_queue(
+            [
+                {
+                    "type": "invite",
+                    "from": "eric",
+                    "body": "again",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        _drain_talk_notifications(q, MY_KEY, pending)
+        assert pending == {"eric"}  # Set union is idempotent
+
+    def test_multiple_invite_senders(self) -> None:
+        """Partition 14: two different invite senders both recorded."""
+        pending: set[str] = set()
+        q = _make_queue(
+            [
+                {"type": "invite", "from": "eric", "body": "hi", "from_key": OTHER_KEY},
+                {
+                    "type": "invite",
+                    "from": "priya",
+                    "body": "hey",
+                    "from_key": "priya:xyz",
+                },
+            ]
+        )
+        _drain_talk_notifications(q, MY_KEY, pending)
+        assert pending == {"eric", "priya"}
+
+    def test_no_pending_invites_without_set(self) -> None:
+        """Invites are NOT recorded when pending_invites is None."""
+        q = _make_queue(
+            [
+                {"type": "invite", "from": "eric", "body": "hi", "from_key": OTHER_KEY},
+            ]
+        )
+        lines = _drain_talk_notifications(q, MY_KEY, None)
+        assert len(lines) == 1  # Still displayed
+        # But no set to record into
+
+    def test_end_notification_in_repl_mode(self) -> None:
+        """End notifications outside talk mode display with label."""
+        q = _make_queue(
+            [
+                {
+                    "type": "end",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines = _drain_talk_notifications(q, MY_KEY)
+        # end type has no body, so no line produced
+        assert lines == []
+
     def test_message_in_repl_mode(self) -> None:
         """Regular messages outside talk mode show with sender prefix."""
         q = _make_queue(
@@ -257,8 +431,21 @@ class TestHasPendingInvite:
         assert pending == set()
 
     def test_empty_set(self) -> None:
+        """Partition 37/31: empty set → initiator path."""
         pending: set[str] = set()
         assert _has_pending_invite(pending, "eric") is False
+
+    def test_consume_one_of_many(self) -> None:
+        """Partition 43/15: consume eric, priya remains."""
+        pending = {"eric", "priya"}
+        assert _has_pending_invite(pending, "eric") is True
+        assert pending == {"priya"}
+
+    def test_other_user_in_set(self) -> None:
+        """Partition 38/16: eric not in {priya} → initiator."""
+        pending = {"priya"}
+        assert _has_pending_invite(pending, "eric") is False
+        assert pending == {"priya"}
 
 
 # -----------------------------------------------------------------------
@@ -305,6 +492,66 @@ class TestCheckForAccept:
         captured = capsys.readouterr()
         assert "priya" in captured.out
         assert "wants to talk" in captured.out
+
+    def test_message_not_treated_as_accept(self) -> None:
+        """Partition 24: ntMessage at head → not accept."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "body": "hi",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        assert _check_for_accept(q, MY_KEY) is False
+
+    def test_end_not_treated_as_accept(self) -> None:
+        """Partition 24: ntEnd at head → not accept."""
+        q = _make_queue(
+            [
+                {"type": "end", "from": "eric", "from_key": OTHER_KEY},
+            ]
+        )
+        assert _check_for_accept(q, MY_KEY) is False
+
+    def test_invite_not_treated_as_accept(self) -> None:
+        """Partition 24: ntInvite at head → not accept."""
+        q = _make_queue(
+            [
+                {
+                    "type": "invite",
+                    "from": "eric",
+                    "body": "talk?",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        assert _check_for_accept(q, MY_KEY) is False
+
+    def test_accept_drains_entire_queue(self) -> None:
+        """Partition 8/20: accept with trailing items, all drained."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "priya",
+                    "body": "hey",
+                    "from_key": "priya:xyz",
+                },
+                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
+                {
+                    "type": "invite",
+                    "from": "bob",
+                    "body": "talk?",
+                    "from_key": "bob:123",
+                },
+            ]
+        )
+        result = _check_for_accept(q, MY_KEY)
+        assert result is True
+        assert q.empty()  # All items drained
 
     def test_accept_among_other_notifications(self) -> None:
         q = _make_queue(
@@ -382,6 +629,28 @@ class TestTalkPublish:
         # _talk_publish sends the body as-is; truncation is the caller's job
         # (line[:512] in _repl_talk). Verify the body passes through.
         assert payload["body"] == long_body
+
+    @pytest.mark.anyio()
+    async def test_publish_empty_body(self, mock_nats_ctx: CliContext) -> None:
+        """Partition 47: empty body is valid."""
+        await _talk_publish(mock_nats_ctx, "eric", "message", "")
+        _, payload = await self._get_published(mock_nats_ctx)
+        assert payload["body"] == ""
+
+    @pytest.mark.anyio()
+    async def test_publish_invite(self, mock_nats_ctx: CliContext) -> None:
+        """Partition: invite type published correctly."""
+        await _talk_publish(mock_nats_ctx, "eric", "invite", "wants to talk")
+        _, payload = await self._get_published(mock_nats_ctx)
+        assert payload["type"] == "invite"
+        assert payload["body"] == "wants to talk"
+
+    @pytest.mark.anyio()
+    async def test_publish_accept(self, mock_nats_ctx: CliContext) -> None:
+        """Partition: accept type published correctly."""
+        await _talk_publish(mock_nats_ctx, "eric", "accept")
+        _, payload = await self._get_published(mock_nats_ctx)
+        assert payload["type"] == "accept"
 
     @pytest.mark.anyio()
     async def test_non_nats_relay_noop(self) -> None:
