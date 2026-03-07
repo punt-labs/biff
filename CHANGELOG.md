@@ -4,6 +4,8 @@
 
 ## [0.15.1] - 2026-03-06
 
+## [0.15.1] - 2026-03-06
+
 ### Fixed
 
 - Show help when `biff` is invoked with no command
