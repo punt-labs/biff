@@ -523,8 +523,10 @@ class TestCheckMessagesTool:
         )
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="from eric")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         priya_send = await _get_tool_fn(priya_state, "write")
         await priya_send(to=f"kai:{_KAI_TTY}", message="from priya")
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()

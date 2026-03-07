@@ -36,7 +36,7 @@ def fire_and_forget(
             return
         exc = t.exception()
         if exc is not None:
-            logger.warning("%s failed: %s", description, exc)
+            logger.warning("%s failed: %s", description, exc, exc_info=exc)
 
     task.add_done_callback(_done)
     return task
