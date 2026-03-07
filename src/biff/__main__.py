@@ -326,6 +326,13 @@ async def _talk_publish(
     await nc.publish(ctx.relay.talk_notify_subject(target_user), data)
 
 
+def _print_hangup(notes: list[str]) -> None:
+    """Clear the stale prompt and print hangup notification lines."""
+    print("\r\033[K", end="")
+    for note in notes:
+        print(note)
+
+
 async def _repl_talk(
     ctx: CliContext,
     target_user: str,
@@ -358,9 +365,10 @@ async def _repl_talk(
             if result is _NO_INPUT:
                 notify_event.clear()
                 notes, ended = _drain_talk_messages(talk_notifications, ctx.session_key)
-                _print_inline_notifications(notes, talk_prompt)
                 if ended:
+                    _print_hangup(notes)
                     break
+                _print_inline_notifications(notes, talk_prompt)
                 continue
 
             if result is None:
@@ -388,7 +396,8 @@ async def _repl_talk(
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).debug("Failed to clear talk plan")
 
-    print(f"Talk with {display} ended.")
+    # Clear any stale prompt the stdin thread may have printed.
+    print(f"\r\033[KTalk with {display} ended.")
 
 
 async def _repl_loop(
