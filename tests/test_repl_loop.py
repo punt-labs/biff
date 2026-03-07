@@ -477,3 +477,154 @@ class TestNotificationSync:
             )
 
         mock_sync.assert_not_awaited()
+
+
+# -----------------------------------------------------------------------
+# Multi-command sequences
+# -----------------------------------------------------------------------
+
+
+class TestMultiCommandSequence:
+    """Verify prompt gate opens/closes across multiple commands."""
+
+    @pytest.mark.anyio()
+    async def test_two_commands_gate_set_after_each(self, tmp_path: object) -> None:
+        """Gate reopens after each command in a sequence."""
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()
+        gate.set()
+        notify = NotifyState()
+        aqueue = _make_aqueue(["who", "status"])
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        call_count = 0
+
+        async def _mock_dispatch(line: str, ctx: CliContext) -> CommandResult:
+            nonlocal call_count
+            call_count += 1
+            return CommandResult(text=f"output-{call_count}")
+
+        with patch("biff.dispatch.dispatch", side_effect=_mock_dispatch):
+            await _repl_loop(
+                ctx,
+                notify,
+                "prompt> ",
+                aqueue,
+                asyncio.Event(),
+                gate,
+                ["prompt> "],
+                talk_q,
+            )
+
+        assert call_count == 2
+        assert gate.is_set()
+
+    @pytest.mark.anyio()
+    async def test_command_then_exit(self, tmp_path: object) -> None:
+        """Command followed by exit: dispatch called twice."""
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()
+        gate.set()
+        notify = NotifyState()
+        q: asyncio.Queue[str | None] = asyncio.Queue()
+        q.put_nowait("who")
+        q.put_nowait("exit")
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        results: list[CommandResult | None] = [
+            CommandResult(text="3 online"),
+            None,
+        ]
+        call_idx = 0
+
+        async def _mock_dispatch(line: str, ctx: CliContext) -> CommandResult | None:
+            nonlocal call_idx
+            r = results[call_idx]
+            call_idx += 1
+            return r
+
+        with patch("biff.dispatch.dispatch", side_effect=_mock_dispatch):
+            await _repl_loop(
+                ctx,
+                notify,
+                "prompt> ",
+                q,
+                asyncio.Event(),
+                gate,
+                ["prompt> "],
+                talk_q,
+            )
+
+        assert call_idx == 2
+
+    @pytest.mark.anyio()
+    async def test_error_then_command(
+        self, tmp_path: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Error followed by successful command: both run, gate set."""
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()
+        gate.set()
+        notify = NotifyState()
+        aqueue = _make_aqueue(["bad", "who"])
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        call_idx = 0
+
+        async def _mock_dispatch(line: str, ctx: CliContext) -> CommandResult:
+            nonlocal call_idx
+            call_idx += 1
+            if call_idx == 1:
+                raise ValueError("unknown")
+            return CommandResult(text="ok")
+
+        with patch("biff.dispatch.dispatch", side_effect=_mock_dispatch):
+            await _repl_loop(
+                ctx,
+                notify,
+                "prompt> ",
+                aqueue,
+                asyncio.Event(),
+                gate,
+                ["prompt> "],
+                talk_q,
+            )
+
+        assert call_idx == 2
+        captured = capsys.readouterr()
+        assert "unknown" in captured.err
+        assert "ok" in captured.out
+        assert gate.is_set()
+
+    @pytest.mark.anyio()
+    async def test_talk_then_command(self, tmp_path: object) -> None:
+        """Talk mode then normal command: both handled correctly."""
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()
+        gate.set()
+        notify = NotifyState()
+        aqueue = _make_aqueue(["talk @eric", "who"])
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        with (
+            patch(
+                "biff.__main__._handle_repl_talk",
+                new_callable=AsyncMock,
+            ) as mock_talk,
+            patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
+        ):
+            mock_dispatch.return_value = CommandResult(text="output")
+            await _repl_loop(
+                ctx,
+                notify,
+                "prompt> ",
+                aqueue,
+                asyncio.Event(),
+                gate,
+                ["prompt> "],
+                talk_q,
+            )
+
+        mock_talk.assert_awaited_once()
+        mock_dispatch.assert_awaited_once()
+        assert gate.is_set()
