@@ -236,18 +236,13 @@ async def _sync_notify(ctx: CliContext, notify: object) -> None:
         logging.getLogger(__name__).debug("Notify sync failed")
 
 
-async def _talk_poll_inline(ctx: CliContext, talk_prompt: str) -> None:
-    """Fetch and display talk messages inline (clear line, print, reshow prompt)."""
-    from biff.nats_relay import NatsRelay
-    from biff.server.tools.talk import fetch_all_unread, format_talk_messages
-
-    if not isinstance(ctx.relay, NatsRelay):
-        return
-    msgs = await fetch_all_unread(ctx.relay, ctx.session_key, ctx.user)
-    if msgs:
+def _print_inline_notifications(notes: list[str], prompt: str) -> None:
+    """Print notification lines inline, clearing the line and reshowing prompt."""
+    if notes:
         print("\r\033[K", end="")
-        print(format_talk_messages(msgs))
-        print(talk_prompt, end="", flush=True)
+        for note in notes:
+            print(note)
+        print(prompt, end="", flush=True)
 
 
 async def _repl_talk(
@@ -259,12 +254,17 @@ async def _repl_talk(
     prompt_gate: threading_mod.Event,
     current_prompt: list[str],
     repl_prompt: str,
+    talk_notifications: asyncio.Queue[dict[str, str]],
 ) -> None:
     """Modal talk sub-loop — send lines to target, show incoming messages.
 
     Runs until the user types ``end`` or the input stream ends (EOF/Ctrl-C).
     Returns control to the REPL loop when done.  Swaps the prompt to
     a talk-specific one and restores the REPL prompt on exit.
+
+    Incoming messages are read from the ``talk_notifications`` queue
+    (populated by the NATS subscription callback) — no JetStream
+    consumer creation, no round-trips.
     """
     from biff.models import Message
 
@@ -279,7 +279,10 @@ async def _repl_talk(
             result = await _wait_for_input_or_notify(aqueue, notify_event)
             if result is _NO_INPUT:
                 notify_event.clear()
-                await _talk_poll_inline(ctx, talk_prompt)
+                _print_inline_notifications(
+                    _drain_talk_notifications(talk_notifications, ctx.session_key),
+                    talk_prompt,
+                )
                 continue
 
             if result is None:
@@ -318,7 +321,7 @@ async def _repl_loop(
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
     current_prompt: list[str],
-    talk_notifications: asyncio.Queue[dict[str, str]] | None = None,
+    talk_notifications: asyncio.Queue[dict[str, str]],
 ) -> None:
     """Core REPL input loop — dispatches commands and handles notifications."""
     from biff.dispatch import dispatch
@@ -350,6 +353,7 @@ async def _repl_loop(
                 prompt_gate,
                 current_prompt,
                 prompt,
+                talk_notifications,
             )
             prompt_gate.set()
             continue
@@ -382,6 +386,7 @@ async def _handle_repl_talk(
     prompt_gate: threading_mod.Event,
     current_prompt: list[str],
     repl_prompt: str,
+    talk_notifications: asyncio.Queue[dict[str, str]],
 ) -> None:
     """Parse talk args and enter modal talk mode."""
     from biff.nats_relay import NatsRelay
@@ -426,7 +431,8 @@ async def _handle_repl_talk(
         await ctx.relay.update_session(updated)
 
     # Send talk invitation as a NATS notification (banner, not inbox).
-    invite_body = "📞 wants to talk"
+    # Include tty_name so the recipient knows which session to talk to.
+    invite_body = f"📞 wants to talk (talk @{ctx.user}:{ctx.tty_name})"
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
 
@@ -455,6 +461,7 @@ async def _handle_repl_talk(
         prompt_gate,
         current_prompt,
         repl_prompt,
+        talk_notifications,
     )
 
 
