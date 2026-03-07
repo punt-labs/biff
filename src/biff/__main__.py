@@ -166,21 +166,110 @@ def main(
 # ---------------------------------------------------------------------------
 
 
+async def _poll_notify(
+    ctx: CliContext, notify: object, prompt: str, *, inline: bool = False
+) -> None:
+    """Check for notification changes and print if any."""
+    from biff.repl_notify import NotifyState
+
+    if not isinstance(notify, NotifyState):
+        return
+    _log = logging.getLogger(__name__)
+    try:
+        summary = await ctx.relay.get_unread_summary(ctx.session_key)
+        wall_post = await ctx.relay.get_wall()
+        notes = notify.check(summary.count, wall_post)
+        if notes and inline:
+            # Clear current input line, print notifications, reshow prompt.
+            print("\r\033[K", end="")
+            for note in notes:
+                print(note)
+            print(prompt, end="", flush=True)
+        elif notes:
+            for note in notes:
+                print(note)
+    except Exception:  # noqa: BLE001
+        _log.debug("Notify check failed", exc_info=True)
+
+
+async def _sync_notify(ctx: CliContext, notify: object) -> None:
+    """Sync notification state after a user command to prevent self-notification."""
+    from biff.repl_notify import NotifyState
+
+    if not isinstance(notify, NotifyState):
+        return
+    try:
+        summary = await ctx.relay.get_unread_summary(ctx.session_key)
+        wall_post = await ctx.relay.get_wall()
+        notify.sync(summary.count, wall_post)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).debug("Notify sync failed")
+
+
+async def _repl_loop(
+    ctx: CliContext,
+    notify: object,
+    prompt: str,
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+    prompt_gate: threading_mod.Event,
+) -> None:
+    """Core REPL input loop — dispatches commands and handles notifications."""
+    from biff.dispatch import dispatch
+
+    while True:
+        result = await _wait_for_input_or_notify(aqueue, notify_event)
+        if result is _NO_INPUT:
+            # Timeout or notification — check for changes inline.
+            notify_event.clear()
+            await _poll_notify(ctx, notify, prompt, inline=True)
+            continue
+
+        if result is None:
+            print()
+            break
+        if not isinstance(result, str):
+            break
+
+        line = result
+
+        try:
+            cmd_result = await dispatch(line, ctx)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            prompt_gate.set()
+            continue
+
+        if cmd_result is None:
+            break
+        if cmd_result.text:
+            print(cmd_result.text)
+
+        # Sync state after the user's own command so the next poll
+        # doesn't notify about changes the user just made.
+        await _sync_notify(ctx, notify)
+
+        # Allow the stdin thread to print the next prompt.
+        prompt_gate.set()
+
+
 async def _repl() -> None:
     """Interactive REPL: connect once, run commands, clean up on exit.
 
-    Uses ``run_in_executor`` for ``input()`` so the event loop stays
-    unblocked — heartbeat and other background tasks keep running
-    while the user is idle at the prompt.
+    Uses a stdin reader thread so the event loop stays unblocked —
+    heartbeat and notification polling run while the user is idle at
+    the prompt.  Message notifications are NATS-driven (instant);
+    wall changes are detected via 2s timeout polling.
 
     Readline provides line editing (arrow keys), command history
     (up/down, persisted to ``~/.biff/repl_history``), and tab
     completion for command names.
     """
-    from biff.dispatch import available_commands, dispatch
+    from biff.dispatch import available_commands
+    from biff.nats_relay import NatsRelay
+    from biff.repl_notify import NotifyState
     from biff.repl_readline import setup as setup_readline
 
-    loop = asyncio.get_running_loop()
     cmds = available_commands()
     setup_readline(cmds)
 
@@ -190,25 +279,74 @@ async def _repl() -> None:
             print(f"Commands: {', '.join(cmds)}, exit")
             print()
 
-            prompt = f"{ctx.user}> "
-            while True:
-                try:
-                    line = await loop.run_in_executor(None, input, prompt)
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    break
+            notify = NotifyState()
+            prompt = f"{ctx.user}:{ctx.tty_name}> "
 
-                try:
-                    result = await dispatch(line, ctx)
-                except ValueError as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    continue
+            # Seed initial state without emitting notifications.
+            await _sync_notify(ctx, notify)
 
-                if result is None:
-                    # exit/quit
-                    break
-                if result.text:
-                    print(result.text)
+            # Start stdin reader thread + asyncio bridge.
+            input_queue: queue_mod.Queue[str | None] = queue_mod.Queue()
+            stop_flag = threading_mod.Event()
+            # Gate: the thread waits for this event before printing
+            # the prompt and reading the next line. The async loop
+            # sets it after command output is complete.
+            prompt_gate = threading_mod.Event()
+            prompt_gate.set()  # Allow the first prompt immediately.
+
+            def _read_stdin() -> None:
+                """Read lines via input(prompt) for full readline support.
+
+                Waits for ``prompt_gate`` before each read so the prompt
+                only appears after the async loop has finished printing
+                command output.
+                """
+                while not stop_flag.is_set():
+                    prompt_gate.wait()
+                    if stop_flag.is_set():
+                        return
+                    prompt_gate.clear()
+                    try:
+                        ln = input(prompt)
+                    except (EOFError, KeyboardInterrupt):
+                        input_queue.put(None)
+                        return
+                    input_queue.put(ln)
+
+            threading_mod.Thread(target=_read_stdin, daemon=True).start()
+            aqueue: asyncio.Queue[str | None] = asyncio.Queue()
+            bridge_task = asyncio.create_task(_bridge_stdin(input_queue, aqueue))
+
+            # Subscribe to NATS notifications for real-time alerts.
+            notify_event = asyncio.Event()
+            sub = None
+            if isinstance(ctx.relay, NatsRelay):
+                nc = await ctx.relay.get_nc()
+                subject = ctx.relay.talk_notify_subject(ctx.user)
+
+                async def _on_notify(_msg: object) -> None:
+                    notify_event.set()
+
+                sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+                    subject, cb=_on_notify
+                )
+
+            try:
+                await _repl_loop(ctx, notify, prompt, aqueue, notify_event, prompt_gate)
+            finally:
+                stop_flag.set()
+                prompt_gate.set()  # Unblock thread so it sees stop_flag.
+                # Unblock the bridge task so it doesn't hang on
+                # the stdin reader thread.
+                input_queue.put(None)
+                bridge_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await bridge_task
+                if sub is not None:
+                    with suppress(Exception):
+                        await sub.unsubscribe()
+    except KeyboardInterrupt:
+        print()
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise typer.Exit(code=1) from None
@@ -286,10 +424,17 @@ def read_cmd() -> None:
 
 @app.command()
 def plan(
-    message: Annotated[str, typer.Argument(help="What you're working on")],
+    message: Annotated[str, typer.Argument(help="What you're working on")] = "",
+    clear: Annotated[bool, typer.Option("--clear", help="Clear plan")] = False,
 ) -> None:
     """Set what you're currently working on."""
-    _run(lambda ctx: commands.plan(ctx, message))
+    if clear:
+        _run(lambda ctx: commands.plan(ctx, ""))
+    elif not message:
+        print("Usage: biff plan <message> | biff plan --clear", file=sys.stderr)
+        raise typer.Exit(code=1)
+    else:
+        _run(lambda ctx: commands.plan(ctx, message))
 
 
 @app.command("last")

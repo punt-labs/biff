@@ -11,12 +11,15 @@ strings work naturally.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Awaitable, Callable
 
 from biff import commands
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
+
+_DURATION_RE = re.compile(r"^\d+[mhd]$")
 
 # Handler signature: (ctx, args) -> CommandResult
 type Handler = Callable[[CliContext, list[str]], Awaitable[CommandResult]]
@@ -36,7 +39,7 @@ async def _finger(ctx: CliContext, args: list[str]) -> CommandResult:
 
 async def _write(ctx: CliContext, args: list[str]) -> CommandResult:
     if len(args) < 2:
-        return CommandResult(text='Usage: write @user "message"', error=True)
+        return CommandResult(text="Usage: write @user message", error=True)
     to = args[0]
     message = " ".join(args[1:])
     return await commands.write(ctx, to, message)
@@ -50,7 +53,9 @@ async def _read(ctx: CliContext, args: list[str]) -> CommandResult:
 
 async def _plan(ctx: CliContext, args: list[str]) -> CommandResult:
     if not args:
-        return CommandResult(text='Usage: plan "message"', error=True)
+        return CommandResult(text="Usage: plan message | plan clear", error=True)
+    if args == ["clear"]:
+        return await commands.plan(ctx, "")
     message = " ".join(args)
     return await commands.plan(ctx, message)
 
@@ -82,18 +87,19 @@ async def _last(ctx: CliContext, args: list[str]) -> CommandResult:
 
 
 async def _wall(ctx: CliContext, args: list[str]) -> CommandResult:
-    if args and args[0] == "--clear":
+    if not args:
+        return await commands.wall(ctx, "", "", clear=False)
+    if args[0] == "clear":
         if len(args) > 1:
-            return CommandResult(text="Usage: wall --clear", error=True)
+            return CommandResult(text="Usage: wall clear", error=True)
         return await commands.wall(ctx, "", "", clear=True)
-    if len(args) > 2:
-        return CommandResult(text='Usage: wall ["message" [duration]]', error=True)
-    message = ""
+    # If the last token looks like a duration (e.g., 30m, 2h, 1d),
+    # treat it as the duration and join the rest as the message.
     duration = ""
-    if args:
-        message = args[0]
-    if len(args) > 1:
-        duration = args[1]
+    if len(args) > 1 and _DURATION_RE.match(args[-1]):
+        duration = args[-1]
+        args = args[:-1]
+    message = " ".join(args)
     return await commands.wall(ctx, message, duration, clear=False)
 
 
