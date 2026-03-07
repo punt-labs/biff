@@ -178,6 +178,7 @@ async def _repl() -> None:
     completion for command names.
     """
     from biff.dispatch import available_commands, dispatch
+    from biff.repl_notify import NotifyState
     from biff.repl_readline import setup as setup_readline
 
     loop = asyncio.get_running_loop()
@@ -190,8 +191,28 @@ async def _repl() -> None:
             print(f"Commands: {', '.join(cmds)}, exit")
             print()
 
+            notify = NotifyState()
+
+            # Seed initial state so the first prompt doesn't
+            # show stale notifications.
+            try:
+                summary = await ctx.relay.get_unread_summary(ctx.session_key)
+                wall = await ctx.relay.get_wall()
+                notify.check(summary.count, wall)
+            except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).debug("Initial notify check failed")
+
             prompt = f"{ctx.user}> "
             while True:
+                # Check for new notifications before each prompt.
+                try:
+                    summary = await ctx.relay.get_unread_summary(ctx.session_key)
+                    wall = await ctx.relay.get_wall()
+                    for note in notify.check(summary.count, wall):
+                        print(note)
+                except Exception:  # noqa: BLE001
+                    logging.getLogger(__name__).debug("Notify check failed")
+
                 try:
                     line = await loop.run_in_executor(None, input, prompt)
                 except (EOFError, KeyboardInterrupt):
