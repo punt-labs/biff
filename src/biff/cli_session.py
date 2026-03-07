@@ -63,6 +63,8 @@ async def _heartbeat_loop(
             pass
         try:
             await relay.heartbeat(session_key)
+        except asyncio.CancelledError:
+            return
         except Exception:  # noqa: BLE001
             logger.warning("CLI heartbeat failed", exc_info=True)
 
@@ -95,6 +97,7 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
     session_key = build_session_key(user, tty)
     tty_name = ""
     session: UserSession | None = None
+    registered = False
     shutdown = asyncio.Event()
     heartbeat_task: asyncio.Task[None] | None = None
 
@@ -112,6 +115,7 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
             pwd=get_pwd(),
         )
         await relay.update_session(session)
+        registered = True
 
         # Write wtmp login event.
         login_event = SessionEvent(
@@ -153,7 +157,7 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
                 await heartbeat_task
 
         # Write wtmp logout event (only if session was registered).
-        if session is not None:
+        if registered and session is not None:
             logout_event = SessionEvent(
                 session_key=session_key,
                 event="logout",
