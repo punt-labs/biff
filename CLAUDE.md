@@ -15,7 +15,7 @@ Follow [punt-kit standards](../punt-kit/standards/) for Python, workflow, GitHub
 - **`from __future__ import annotations`** in every Python file. Full type annotations on every function signature.
 - **Immutable data models.** `@dataclass(frozen=True)` or pydantic with immutability.
 - **Latest Python.** Target 3.13+. Use modern PEP conventions (`Annotated`, `type` statements, `X | Y` unions).
-- **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`. Zero violations, zero errors, all tests green.
+- **Quality gates pass before every commit.** Run `make check`. Zero violations, zero errors, all tests green.
 - **Markdown lint passes.** CI runs `npx markdownlint-cli2 "**/*.md"` on every push. All markdown files (DESIGN.md, CHANGELOG.md, README.md, CLAUDE.md) must pass. Common issues: fenced code blocks need a language tag (`text`, `bash`, `python`, `json`), lists need blank lines before and after.
 - **Double quotes.** Line length 88. Ruff with comprehensive rules.
 
@@ -316,7 +316,7 @@ Use `.tmp/` at the project root for scratch and temporary files — never `/tmp`
 Run before every commit. Zero violations, zero errors, all tests green.
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy src/ tests/ && uv run pyright && uv run pytest
+make check
 ```
 
 ## Standards References

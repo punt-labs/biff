@@ -333,12 +333,11 @@ Biff assumes the terminal is where you're already working — so that's where yo
 
 ```bash
 uv sync --extra dev        # Install dependencies
-uv run ruff check .        # Lint
-uv run ruff format .       # Format
-uv run mypy src/ tests/    # Type check
-uv run pytest              # Test (unit + integration)
-uv run pytest -m nats      # NATS tests (requires local nats-server)
-uv run pytest -m hosted    # Hosted NATS tests (see CONTRIBUTING.md)
+make check                 # Run all quality gates (lint, type, test)
+make test                  # Tests only (unit + integration)
+make lint                  # Lint and format check
+make format                # Auto-format code
+make help                  # List all targets
 ```
 
 ## License
