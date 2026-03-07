@@ -166,22 +166,90 @@ def main(
 # ---------------------------------------------------------------------------
 
 
+async def _poll_notify(
+    ctx: CliContext, notify: object, prompt: str, *, inline: bool = False
+) -> None:
+    """Check for notification changes and print if any."""
+    from biff.repl_notify import NotifyState
+
+    if not isinstance(notify, NotifyState):
+        return
+    _log = logging.getLogger(__name__)
+    try:
+        summary = await ctx.relay.get_unread_summary(ctx.session_key)
+        wall_post = await ctx.relay.get_wall()
+        notes = notify.check(summary.count, wall_post)
+        if notes and inline:
+            # Clear current input line, print notifications, reshow prompt.
+            print("\r\033[K", end="")
+            for note in notes:
+                print(note)
+            print(prompt, end="", flush=True)
+        elif notes:
+            for note in notes:
+                print(note)
+    except Exception:  # noqa: BLE001
+        _log.debug("Notify check failed", exc_info=True)
+
+
+async def _repl_loop(
+    ctx: CliContext,
+    notify: object,
+    prompt: str,
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+) -> None:
+    """Core REPL input loop — dispatches commands and handles notifications."""
+    from biff.dispatch import dispatch
+
+    while True:
+        result = await _wait_for_input_or_notify(aqueue, notify_event)
+        if result is _NO_INPUT:
+            # Timeout or notification — check for changes inline.
+            notify_event.clear()
+            await _poll_notify(ctx, notify, prompt, inline=True)
+            continue
+
+        if result is None:
+            print()
+            break
+        if not isinstance(result, str):
+            break
+
+        line = result
+
+        # Between-command notification check.
+        await _poll_notify(ctx, notify, prompt)
+
+        try:
+            cmd_result = await dispatch(line, ctx)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            continue
+
+        if cmd_result is None:
+            break
+        if cmd_result.text:
+            print(cmd_result.text)
+
+
 async def _repl() -> None:
     """Interactive REPL: connect once, run commands, clean up on exit.
 
-    Uses ``run_in_executor`` for ``input()`` so the event loop stays
-    unblocked — heartbeat and other background tasks keep running
-    while the user is idle at the prompt.
+    Uses a stdin reader thread so the event loop stays unblocked —
+    heartbeat, NATS subscriptions, and notification polling run while
+    the user is idle at the prompt.  Wall and message notifications
+    print in real-time (NATS-driven) between input lines.
 
     Readline provides line editing (arrow keys), command history
     (up/down, persisted to ``~/.biff/repl_history``), and tab
     completion for command names.
     """
-    from biff.dispatch import available_commands, dispatch
+    from biff.dispatch import available_commands
+    from biff.nats_relay import NatsRelay
     from biff.repl_notify import NotifyState
     from biff.repl_readline import setup as setup_readline
 
-    loop = asyncio.get_running_loop()
     cmds = available_commands()
     setup_readline(cmds)
 
@@ -192,44 +260,52 @@ async def _repl() -> None:
             print()
 
             notify = NotifyState()
+            prompt = f"{ctx.user}:{ctx.tty_name}> "
 
-            # Seed initial state so the first prompt doesn't
-            # show stale notifications.
+            # Seed initial state.
+            await _poll_notify(ctx, notify, prompt)
+
+            # Start stdin reader thread + asyncio bridge.
+            input_queue: queue_mod.Queue[str | None] = queue_mod.Queue()
+            stop_flag = threading_mod.Event()
+
+            def _read_stdin() -> None:
+                while not stop_flag.is_set():
+                    try:
+                        ln = input(prompt)
+                    except EOFError:
+                        input_queue.put(None)
+                        return
+                    input_queue.put(ln)
+
+            threading_mod.Thread(target=_read_stdin, daemon=True).start()
+            aqueue: asyncio.Queue[str | None] = asyncio.Queue()
+            bridge_task = asyncio.create_task(_bridge_stdin(input_queue, aqueue))
+
+            # Subscribe to NATS notifications for real-time alerts.
+            notify_event = asyncio.Event()
+            sub = None
+            if isinstance(ctx.relay, NatsRelay):
+                nc = await ctx.relay.get_nc()
+                subject = ctx.relay.talk_notify_subject(ctx.user)
+
+                async def _on_notify(_msg: object) -> None:
+                    notify_event.set()
+
+                sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+                    subject, cb=_on_notify
+                )
+
             try:
-                summary = await ctx.relay.get_unread_summary(ctx.session_key)
-                wall = await ctx.relay.get_wall()
-                notify.check(summary.count, wall)
-            except Exception:  # noqa: BLE001
-                logging.getLogger(__name__).debug("Initial notify check failed")
-
-            prompt = f"{ctx.user}> "
-            while True:
-                # Check for new notifications before each prompt.
-                try:
-                    summary = await ctx.relay.get_unread_summary(ctx.session_key)
-                    wall = await ctx.relay.get_wall()
-                    for note in notify.check(summary.count, wall):
-                        print(note)
-                except Exception:  # noqa: BLE001
-                    logging.getLogger(__name__).debug("Notify check failed")
-
-                try:
-                    line = await loop.run_in_executor(None, input, prompt)
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    break
-
-                try:
-                    result = await dispatch(line, ctx)
-                except ValueError as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    continue
-
-                if result is None:
-                    # exit/quit
-                    break
-                if result.text:
-                    print(result.text)
+                await _repl_loop(ctx, notify, prompt, aqueue, notify_event)
+            finally:
+                stop_flag.set()
+                bridge_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await bridge_task
+                if sub is not None:
+                    with suppress(Exception):
+                        await sub.unsubscribe()
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise typer.Exit(code=1) from None
