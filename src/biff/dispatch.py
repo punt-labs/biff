@@ -53,7 +53,9 @@ async def _read(ctx: CliContext, args: list[str]) -> CommandResult:
 
 async def _plan(ctx: CliContext, args: list[str]) -> CommandResult:
     if not args:
-        return CommandResult(text="Usage: plan message", error=True)
+        return CommandResult(text="Usage: plan message | plan clear", error=True)
+    if args == ["clear"]:
+        return await commands.plan(ctx, "")
     message = " ".join(args)
     return await commands.plan(ctx, message)
 
