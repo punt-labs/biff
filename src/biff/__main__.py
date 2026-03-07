@@ -206,6 +206,20 @@ async def _sync_notify(ctx: CliContext, notify: object) -> None:
         logging.getLogger(__name__).debug("Notify sync failed")
 
 
+async def _talk_poll_inline(ctx: CliContext, talk_prompt: str) -> None:
+    """Fetch and display talk messages inline (clear line, print, reshow prompt)."""
+    from biff.nats_relay import NatsRelay
+    from biff.server.tools.talk import fetch_all_unread, format_talk_messages
+
+    if not isinstance(ctx.relay, NatsRelay):
+        return
+    msgs = await fetch_all_unread(ctx.relay, ctx.session_key, ctx.user)
+    if msgs:
+        print("\r\033[K", end="")
+        print(format_talk_messages(msgs))
+        print(talk_prompt, end="", flush=True)
+
+
 async def _repl_talk(
     ctx: CliContext,
     target: str,
@@ -235,7 +249,7 @@ async def _repl_talk(
             result = await _wait_for_input_or_notify(aqueue, notify_event)
             if result is _NO_INPUT:
                 notify_event.clear()
-                await _talk_fetch_and_print(ctx.relay, ctx.session_key, ctx.user)
+                await _talk_poll_inline(ctx, talk_prompt)
                 continue
 
             if result is None:
@@ -254,6 +268,14 @@ async def _repl_talk(
             prompt_gate.set()
     finally:
         current_prompt[0] = repl_prompt
+        # Clear the talk plan when exiting talk mode.
+        try:
+            session = await ctx.relay.get_session(ctx.session_key)
+            if session is not None:
+                updated = session.model_copy(update={"plan": ""})
+                await ctx.relay.update_session(updated)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).debug("Failed to clear talk plan")
 
     print(f"Talk with {display} ended.")
 
@@ -372,14 +394,16 @@ async def _handle_repl_talk(
         updated = session.model_copy(update={"plan": f"talking to {display}"})
         await ctx.relay.update_session(updated)
 
-    # Send opening message if provided.
-    if len(args) > 1:
-        from biff.models import Message
+    from biff.models import Message
 
-        body = " ".join(args[1:])[:512]
-        msg = Message(from_user=ctx.user, to_user=target, body=body)
-        await ctx.relay.deliver(msg, sender_key=ctx.session_key)
-        print(f"you> {body}")
+    # Send talk invitation to the target so they see a notification.
+    invite_body = "📞 wants to talk"
+    if len(args) > 1:
+        invite_body = " ".join(args[1:])[:512]
+    invite = Message(from_user=ctx.user, to_user=target, body=invite_body)
+    await ctx.relay.deliver(invite, sender_key=ctx.session_key)
+    if len(args) > 1:
+        print(f"you> {invite_body}")
 
     await _repl_talk(
         ctx,
