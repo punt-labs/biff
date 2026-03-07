@@ -206,6 +206,58 @@ async def _sync_notify(ctx: CliContext, notify: object) -> None:
         logging.getLogger(__name__).debug("Notify sync failed")
 
 
+async def _repl_talk(
+    ctx: CliContext,
+    target: str,
+    display: str,
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+    prompt_gate: threading_mod.Event,
+    current_prompt: list[str],
+    repl_prompt: str,
+) -> None:
+    """Modal talk sub-loop — send lines to target, show incoming messages.
+
+    Runs until the user types ``end`` or the input stream ends (EOF/Ctrl-C).
+    Returns control to the REPL loop when done.  Swaps the prompt to
+    a talk-specific one and restores the REPL prompt on exit.
+    """
+    from biff.models import Message
+
+    talk_prompt = f"talk {display}> "
+    current_prompt[0] = talk_prompt
+
+    print(f"Connected to {display}. Type 'end' to return to REPL.\n")
+    prompt_gate.set()
+
+    try:
+        while True:
+            result = await _wait_for_input_or_notify(aqueue, notify_event)
+            if result is _NO_INPUT:
+                notify_event.clear()
+                await _talk_fetch_and_print(ctx.relay, ctx.session_key, ctx.user)
+                continue
+
+            if result is None:
+                break
+            if not isinstance(result, str):
+                break
+
+            line = result.strip()
+            if line.lower() == "end":
+                break
+
+            if line:
+                msg = Message(from_user=ctx.user, to_user=target, body=line[:512])
+                await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+
+            prompt_gate.set()
+    finally:
+        current_prompt[0] = repl_prompt
+
+    print(f"Talk with {display} ended.")
+
+
 async def _repl_loop(
     ctx: CliContext,
     notify: object,
@@ -213,6 +265,7 @@ async def _repl_loop(
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
+    current_prompt: list[str],
 ) -> None:
     """Core REPL input loop — dispatches commands and handles notifications."""
     from biff.dispatch import dispatch
@@ -233,6 +286,21 @@ async def _repl_loop(
 
         line = result
 
+        # Handle talk as a modal command — enters a sub-loop.
+        tokens = line.split(None, 2)
+        if tokens and tokens[0].lower() == "talk":
+            await _handle_repl_talk(
+                ctx,
+                tokens[1:],
+                aqueue,
+                notify_event,
+                prompt_gate,
+                current_prompt,
+                prompt,
+            )
+            prompt_gate.set()
+            continue
+
         try:
             cmd_result = await dispatch(line, ctx)
         except ValueError as exc:
@@ -251,6 +319,78 @@ async def _repl_loop(
 
         # Allow the stdin thread to print the next prompt.
         prompt_gate.set()
+
+
+async def _handle_repl_talk(
+    ctx: CliContext,
+    args: list[str],
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+    prompt_gate: threading_mod.Event,
+    current_prompt: list[str],
+    repl_prompt: str,
+) -> None:
+    """Parse talk args and enter modal talk mode."""
+    from biff.nats_relay import NatsRelay
+    from biff.server.tools._session import resolve_session
+    from biff.tty import build_session_key, parse_address
+
+    if not args:
+        print("Usage: talk @user [message]")
+        return
+
+    try:
+        user_target, tty_target = parse_address(args[0])
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return
+
+    display = f"@{user_target}:{tty_target}" if tty_target else f"@{user_target}"
+
+    if not isinstance(ctx.relay, NatsRelay):
+        print("Talk requires a NATS relay.")
+        return
+
+    sessions = await ctx.relay.get_sessions_for_user(user_target)
+    if not sessions:
+        print(f"{display} is not online.")
+        return
+
+    # Resolve :tty suffix to a relay key.
+    if tty_target:
+        resolved = await resolve_session(ctx.relay, user_target, tty_target)
+        if resolved:
+            target = build_session_key(resolved.user, resolved.tty)
+        else:
+            target = f"{user_target}:{tty_target}"
+    else:
+        target = user_target
+
+    # Update plan to show talk activity.
+    session = await ctx.relay.get_session(ctx.session_key)
+    if session is not None:
+        updated = session.model_copy(update={"plan": f"talking to {display}"})
+        await ctx.relay.update_session(updated)
+
+    # Send opening message if provided.
+    if len(args) > 1:
+        from biff.models import Message
+
+        body = " ".join(args[1:])[:512]
+        msg = Message(from_user=ctx.user, to_user=target, body=body)
+        await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+        print(f"you> {body}")
+
+    await _repl_talk(
+        ctx,
+        target,
+        display,
+        aqueue,
+        notify_event,
+        prompt_gate,
+        current_prompt,
+        repl_prompt,
+    )
 
 
 async def _repl() -> None:
@@ -276,11 +416,14 @@ async def _repl() -> None:
     try:
         async with cli_session(interactive=True) as ctx:
             print(f"biff {pkg_version('punt-biff')} — {ctx.user}:{ctx.tty_name}")
-            print(f"Commands: {', '.join(cmds)}, exit")
+            print(f"Commands: {', '.join(cmds)}, talk, exit")
             print()
 
             notify = NotifyState()
             prompt = f"{ctx.user}:{ctx.tty_name}> "
+            # Mutable prompt container — talk mode swaps the prompt
+            # string while reusing the same stdin thread.
+            current_prompt = [prompt]
 
             # Seed initial state without emitting notifications.
             await _sync_notify(ctx, notify)
@@ -307,7 +450,7 @@ async def _repl() -> None:
                         return
                     prompt_gate.clear()
                     try:
-                        ln = input(prompt)
+                        ln = input(current_prompt[0])
                     except (EOFError, KeyboardInterrupt):
                         input_queue.put(None)
                         return
@@ -332,7 +475,15 @@ async def _repl() -> None:
                 )
 
             try:
-                await _repl_loop(ctx, notify, prompt, aqueue, notify_event, prompt_gate)
+                await _repl_loop(
+                    ctx,
+                    notify,
+                    prompt,
+                    aqueue,
+                    notify_event,
+                    prompt_gate,
+                    current_prompt,
+                )
             finally:
                 stop_flag.set()
                 prompt_gate.set()  # Unblock thread so it sees stop_flag.
