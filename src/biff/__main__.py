@@ -183,7 +183,12 @@ async def _repl() -> None:
                     print()
                     break
 
-                result = await dispatch(line, ctx)
+                try:
+                    result = await dispatch(line, ctx)
+                except ValueError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    continue
+
                 if result is None:
                     # exit/quit
                     break

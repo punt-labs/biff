@@ -180,4 +180,7 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
                     exc_info=True,
                 )
 
-        await relay.close()
+        try:
+            await relay.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to close CLI relay", exc_info=True)

@@ -284,6 +284,7 @@ class TestNoArgsRepl:
         mock_repl.return_value = None
         result = runner.invoke(app, [])
         assert result.exit_code == 0
+        mock_repl.assert_awaited_once()
 
     def test_help_flag(self) -> None:
         result = runner.invoke(app, ["--help"])

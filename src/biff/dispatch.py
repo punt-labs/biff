@@ -58,16 +58,25 @@ async def _plan(ctx: CliContext, args: list[str]) -> CommandResult:
 async def _last(ctx: CliContext, args: list[str]) -> CommandResult:
     user = ""
     count = 25
+    seen_user = False
     i = 0
     while i < len(args):
-        if args[i] == "--count" and i + 1 < len(args):
+        arg = args[i]
+        if arg == "--count":
+            if i + 1 >= len(args):
+                return CommandResult(text="Usage: last [--count N] [@user]", error=True)
             try:
                 count = int(args[i + 1])
             except ValueError:
                 return CommandResult(text="--count must be a number", error=True)
             i += 2
+        elif arg.startswith("-"):
+            return CommandResult(text="Usage: last [--count N] [@user]", error=True)
         else:
-            user = args[i]
+            if seen_user:
+                return CommandResult(text="Usage: last [--count N] [@user]", error=True)
+            user = arg
+            seen_user = True
             i += 1
     return await commands.last(ctx, user, count)
 
