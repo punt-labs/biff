@@ -257,15 +257,19 @@ async def _sync_notify(ctx: CliContext, notify: object) -> None:
 def _drain_talk_messages(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
-) -> list[str]:
+) -> tuple[list[str], bool]:
     """Drain talk notifications and format as conversation lines.
 
     Used in talk mode — shows ``user:tty ▶ message`` style, no emoji.
     Skips invites and accepts (protocol messages, not conversation).
+
+    Returns ``(lines, ended)`` where *ended* is ``True`` if a
+    ``type: "end"`` notification was received (remote hangup).
     """
     lines: list[str] = []
+    ended = False
     if talk_notifications is None:
-        return lines
+        return lines, ended
     while not talk_notifications.empty():
         try:
             data = talk_notifications.get_nowait()
@@ -276,13 +280,20 @@ def _drain_talk_messages(
         msg_type = data.get("type", "message")
         if msg_type in ("invite", "accept"):
             continue
+        if msg_type == "end":
+            sender = data.get("from", "?")
+            sender_tty = data.get("from_tty", "")
+            label = f"{sender}:{sender_tty}" if sender_tty else sender
+            lines.append(f"\033[2m{label} has ended the conversation.\033[0m")
+            ended = True
+            continue
         sender = data.get("from", "?")
         sender_tty = data.get("from_tty", "")
         body = data.get("body", "")
         if body:
             label = f"{sender}:{sender_tty}" if sender_tty else sender
             lines.append(f"\033[36m{label} ▶ {body}\033[0m")
-    return lines
+    return lines, ended
 
 
 def _print_inline_notifications(notes: list[str], prompt: str) -> None:
@@ -292,6 +303,27 @@ def _print_inline_notifications(notes: list[str], prompt: str) -> None:
         for note in notes:
             print(note)
         print(prompt, end="", flush=True)
+
+
+async def _talk_publish(
+    ctx: CliContext, target_user: str, msg_type: str, body: str = ""
+) -> None:
+    """Publish a talk notification to the target user."""
+    from biff.nats_relay import NatsRelay
+
+    if not isinstance(ctx.relay, NatsRelay):
+        return
+    nc = await ctx.relay.get_nc()
+    data = json.dumps(
+        {
+            "type": msg_type,
+            "from": ctx.user,
+            "from_tty": ctx.tty_name,
+            "body": body,
+            "from_key": ctx.session_key,
+        }
+    ).encode()
+    await nc.publish(ctx.relay.talk_notify_subject(target_user), data)
 
 
 async def _repl_talk(
@@ -314,8 +346,6 @@ async def _repl_talk(
     Messages are sent via NATS core publish (ephemeral, no inbox) and
     received from the ``talk_notifications`` queue.
     """
-    from biff.nats_relay import NatsRelay
-
     talk_prompt = f"{ctx.user}:{ctx.tty_name} ▶ "
     current_prompt[0] = talk_prompt
 
@@ -327,9 +357,10 @@ async def _repl_talk(
             result = await _wait_for_input_or_notify(aqueue, notify_event)
             if result is _NO_INPUT:
                 notify_event.clear()
-                # Display incoming talk messages with sender prefix.
-                notes = _drain_talk_messages(talk_notifications, ctx.session_key)
+                notes, ended = _drain_talk_messages(talk_notifications, ctx.session_key)
                 _print_inline_notifications(notes, talk_prompt)
+                if ended:
+                    break
                 continue
 
             if result is None:
@@ -339,22 +370,11 @@ async def _repl_talk(
 
             line = result.strip()
             if line.lower() == "end":
+                await _talk_publish(ctx, target_user, "end")
                 break
 
-            if line and isinstance(ctx.relay, NatsRelay):
-                # Send via NATS core publish — ephemeral, no inbox.
-                nc = await ctx.relay.get_nc()
-                msg_data = json.dumps(
-                    {
-                        "type": "message",
-                        "from": ctx.user,
-                        "from_tty": ctx.tty_name,
-                        "body": line[:512],
-                        "from_key": ctx.session_key,
-                    }
-                ).encode()
-                target_subject = ctx.relay.talk_notify_subject(target_user)
-                await nc.publish(target_subject, msg_data)
+            if line:
+                await _talk_publish(ctx, target_user, "message", line[:512])
 
             prompt_gate.set()
     finally:
