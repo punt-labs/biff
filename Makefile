@@ -1,7 +1,7 @@
 .PHONY: help test lint type check format prfaq clean-tex
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 test: ## Run tests (unit + integration)
 	uv run pytest
@@ -17,8 +17,8 @@ type: ## Type check with mypy and pyright
 check: lint type test ## Run all quality gates
 
 format: ## Auto-format code
-	uv run ruff format .
 	uv run ruff check --fix .
+	uv run ruff format .
 
 # LaTeX intermediate files to remove after compilation
 LATEX_ARTIFACTS = *.aux *.log *.out *.bbl *.bcf *.blg *.run.xml *.fls \
@@ -30,6 +30,7 @@ prfaq: ## Compile .tex to .pdf and clean artifacts
 	@for f in $(TEX_FILES); do \
 	  echo "Compiling $$f ..."; \
 	  dir=$$(dirname "$$f"); base=$$(basename "$$f" .tex); \
+	  rm -f "$$dir/$$base.pdf"; \
 	  pdflatex -interaction=nonstopmode -output-directory="$$dir" "$$f" > /dev/null 2>&1; \
 	  if [ -f "$$dir/$$base.bib" ] && command -v biber > /dev/null 2>&1; then \
 	    (cd "$$dir" && biber "$$base") > /dev/null 2>&1 || true; \
