@@ -80,7 +80,7 @@ if [[ "$TOOL_NAME" == "read_messages" ]]; then
   if [[ "$RESULT" == "No new messages." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
     emit "${COUNT} new" "$RESULT"
   fi
   exit 0
@@ -108,7 +108,7 @@ if [[ "$TOOL_NAME" == "last" ]]; then
   if [[ "$RESULT" == "No session history." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
     emit "${COUNT} sessions" "$RESULT"
   fi
   exit 0
@@ -151,7 +151,7 @@ if [[ "$TOOL_NAME" == "talk_listen" ]]; then
   if [[ "$RESULT" == "No new messages. Still listening." ]]; then
     emit_simple "No new messages."
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
     emit "${COUNT} new" "$RESULT"
   fi
   exit 0
