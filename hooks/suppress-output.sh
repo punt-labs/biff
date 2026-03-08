@@ -80,7 +80,9 @@ if [[ "$TOOL_NAME" == "read_messages" ]]; then
   if [[ "$RESULT" == "No new messages." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    # Data rows start with 3-space indent + bare username (no @).
+    # Header row starts with ▶. Skip it.
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [a-zA-Z0-9]')
     emit "${COUNT} new" "$RESULT"
   fi
   exit 0
@@ -108,7 +110,7 @@ if [[ "$TOOL_NAME" == "last" ]]; then
   if [[ "$RESULT" == "No session history." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
     emit "${COUNT} sessions" "$RESULT"
   fi
   exit 0
@@ -151,7 +153,8 @@ if [[ "$TOOL_NAME" == "talk_listen" ]]; then
   if [[ "$RESULT" == "No new messages. Still listening." ]]; then
     emit_simple "No new messages."
   else
-    COUNT=$(printf '%s' "$RESULT" | wc -l | tr -d ' ')
+    # Talk messages start with [HH:MM:SS] @user: body
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^\[')
     emit "${COUNT} new" "$RESULT"
   fi
   exit 0
