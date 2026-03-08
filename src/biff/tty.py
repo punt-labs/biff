@@ -55,17 +55,24 @@ def next_tty_name(existing_names: list[str]) -> str:
 _MAX_TTY_RETRIES = 3
 
 
-async def assign_unique_tty_name(relay: Relay, session_key: str) -> str:
-    """Pick a ttyN name and verify uniqueness via optimistic retry.
+async def assign_unique_tty_name(
+    relay: Relay,
+    session_key: str,
+) -> str:
+    """Pick a unique ttyN name via read → compute → verify.
 
     Reads existing sessions, computes the next sequential name,
-    then re-reads to check for a concurrent duplicate.  If another
-    session grabbed the same name in the window between read and
-    write, increments and retries (up to 3 times).
+    and checks that no other session (excluding ours) already
+    holds that name.  Retries up to 3 times if a collision is
+    detected.
 
-    Returns the assigned name.  After max retries, returns the
-    last computed name even if a duplicate exists (cosmetic issue,
-    not worth blocking startup).
+    The caller is responsible for writing the name to KV (via
+    ``update_session``).  For full race protection, the caller
+    should write, then call :func:`verify_tty_name` to confirm
+    no duplicate appeared in the window between compute and write.
+
+    Returns the computed name.  After max retries, returns the
+    last computed name (cosmetic duplicate, not worth blocking).
     """
     name = "tty1"
     for attempt in range(_MAX_TTY_RETRIES):
@@ -73,23 +80,59 @@ async def assign_unique_tty_name(relay: Relay, session_key: str) -> str:
         existing = [s.tty_name for s in sessions if s.tty_name]
         name = next_tty_name(existing)
 
-        # Re-read to detect a concurrent assignment.
-        sessions = await relay.get_sessions()
-        taken = {
-            s.tty_name
+        # Check for a pre-existing duplicate (another session that
+        # already registered this name before we could).
+        duplicates = [
+            s
             for s in sessions
             if s.tty_name == name and build_session_key(s.user, s.tty) != session_key
-        }
-        if not taken:
+        ]
+        if not duplicates:
             return name
+
         logger.debug(
             "TTY name %s collision (attempt %d), retrying",
             name,
             attempt + 1,
         )
 
-    # Exhausted retries — use the last name anyway.
-    return name  # loop body always runs at least once
+    return name
+
+
+async def verify_tty_name(
+    relay: Relay,
+    session_key: str,
+    name: str,
+) -> str:
+    """Verify tty name uniqueness after writing to KV.
+
+    Re-reads sessions and checks for duplicates.  If another
+    session grabbed the same name concurrently, picks the next
+    available name and updates our session in KV.
+
+    Call this after ``update_session`` to close the TOCTOU window.
+    Returns the final (possibly updated) name.
+    """
+    for _attempt in range(_MAX_TTY_RETRIES):
+        sessions = await relay.get_sessions()
+        duplicates = [
+            s
+            for s in sessions
+            if s.tty_name == name and build_session_key(s.user, s.tty) != session_key
+        ]
+        if not duplicates:
+            return name
+
+        # Collision — pick next name and re-register.
+        existing = [s.tty_name for s in sessions if s.tty_name]
+        name = next_tty_name(existing)
+        session = await relay.get_session(session_key)
+        if session is not None:
+            updated = session.model_copy(update={"tty_name": name})
+            await relay.update_session(updated)
+        logger.debug("TTY name collision, reassigned to %s", name)
+
+    return name
 
 
 def parse_address(address: str) -> tuple[str, str | None]:

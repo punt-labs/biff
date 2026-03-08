@@ -34,6 +34,7 @@ from biff.tty import (
     generate_tty,
     get_hostname,
     get_pwd,
+    verify_tty_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,9 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
         )
         await relay.update_session(session)
         registered = True
+
+        # Verify no duplicate after write (closes TOCTOU window).
+        tty_name = await verify_tty_name(relay, session_key, tty_name)
 
         # Write wtmp login event.
         login_event = SessionEvent(
