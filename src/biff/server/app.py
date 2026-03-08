@@ -36,7 +36,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
-from biff.tty import build_session_key, next_tty_name
+from biff.tty import assign_unique_tty_name, build_session_key
 
 logger = logging.getLogger(__name__)
 
@@ -563,9 +563,7 @@ async def _active_lifespan(
         )
 
     # Auto-assign a ttyN name so the status bar always has identity.
-    sessions = await state.relay.get_sessions()
-    existing = [s.tty_name for s in sessions if s.tty_name]
-    auto_name = next_tty_name(existing)
+    auto_name = await assign_unique_tty_name(state.relay, state.session_key)
     set_tty_name(auto_name)
     await update_current_session(state, tty_name=auto_name)
 

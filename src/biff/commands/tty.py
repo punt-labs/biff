@@ -5,17 +5,17 @@ from __future__ import annotations
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import UserSession
-from biff.tty import get_hostname, get_pwd, next_tty_name
+from biff.tty import assign_unique_tty_name, get_hostname, get_pwd
 
 
 async def tty(ctx: CliContext, name: str) -> CommandResult:
     """Name the current CLI session."""
     name = name.strip()
-    sessions = await ctx.relay.get_sessions()
 
     if not name:
-        existing = [s.tty_name for s in sessions if s.tty_name]
-        name = next_tty_name(existing)
+        name = await assign_unique_tty_name(ctx.relay, ctx.session_key)
+
+    sessions = await ctx.relay.get_sessions()
 
     if len(name) > 20:
         msg = "Error: name must be 20 characters or fewer."

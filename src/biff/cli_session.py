@@ -29,11 +29,11 @@ from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
 from biff.tty import (
+    assign_unique_tty_name,
     build_session_key,
     generate_tty,
     get_hostname,
     get_pwd,
-    next_tty_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,9 +103,7 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
 
     try:
         # Register session and auto-assign ttyN name.
-        sessions = await relay.get_sessions()
-        existing_names = [s.tty_name for s in sessions if s.tty_name]
-        tty_name = next_tty_name(existing_names)
+        tty_name = await assign_unique_tty_name(relay, session_key)
 
         session = UserSession(
             user=user,

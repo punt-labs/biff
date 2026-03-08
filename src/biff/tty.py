@@ -7,10 +7,17 @@ this forms a session key: ``{user}:{tty}``.
 
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 import socket
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from biff.relay import Relay
+
+logger = logging.getLogger(__name__)
 
 _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
 
@@ -43,6 +50,46 @@ def next_tty_name(existing_names: list[str]) -> str:
         if m:
             highest = max(highest, int(m.group(1)))
     return f"tty{highest + 1}"
+
+
+_MAX_TTY_RETRIES = 3
+
+
+async def assign_unique_tty_name(relay: Relay, session_key: str) -> str:
+    """Pick a ttyN name and verify uniqueness via optimistic retry.
+
+    Reads existing sessions, computes the next sequential name,
+    then re-reads to check for a concurrent duplicate.  If another
+    session grabbed the same name in the window between read and
+    write, increments and retries (up to 3 times).
+
+    Returns the assigned name.  After max retries, returns the
+    last computed name even if a duplicate exists (cosmetic issue,
+    not worth blocking startup).
+    """
+    name = "tty1"
+    for attempt in range(_MAX_TTY_RETRIES):
+        sessions = await relay.get_sessions()
+        existing = [s.tty_name for s in sessions if s.tty_name]
+        name = next_tty_name(existing)
+
+        # Re-read to detect a concurrent assignment.
+        sessions = await relay.get_sessions()
+        taken = {
+            s.tty_name
+            for s in sessions
+            if s.tty_name == name and build_session_key(s.user, s.tty) != session_key
+        }
+        if not taken:
+            return name
+        logger.debug(
+            "TTY name %s collision (attempt %d), retrying",
+            name,
+            attempt + 1,
+        )
+
+    # Exhausted retries — use the last name anyway.
+    return name  # loop body always runs at least once
 
 
 def parse_address(address: str) -> tuple[str, str | None]:
