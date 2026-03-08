@@ -7,6 +7,7 @@ using the LocalRelay (filesystem-backed, in-memory transport).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from biff.models import WallPost
 from biff.testing import RecordingClient
@@ -135,3 +136,52 @@ class TestWallDurationValidation:
         """Whitespace-only message should fall through to read mode, not error."""
         result = await kai.call("wall", message="   ")
         assert "No active wall" in result
+
+
+class TestWallVoxIntegration:
+    """Vox speak fires on new wall (L1 integration)."""
+
+    async def test_speak_called_on_new_wall(self, kai: RecordingClient) -> None:
+        with (
+            patch(
+                "biff.integration.vox.vox_binary",
+                return_value="/usr/local/bin/vox",
+            ),
+            patch("biff.integration.vox.speak_fire_and_forget") as mock_speak,
+        ):
+            await kai.call("wall", message="deploy freeze")
+            mock_speak.assert_called_once()
+            text = mock_speak.call_args[0][0]
+            assert "deploy freeze" in text
+            assert "Wall from" in text
+
+    async def test_speak_not_called_on_clear(self, kai: RecordingClient) -> None:
+        await kai.call("wall", message="temp")
+        with patch("biff.integration.vox.speak_fire_and_forget") as mock_speak:
+            await kai.call("wall", clear=True)
+            mock_speak.assert_not_called()
+
+    async def test_vibes_from_emoticon(self, kai: RecordingClient) -> None:
+        with (
+            patch(
+                "biff.integration.vox.vox_binary",
+                return_value="/usr/local/bin/vox",
+            ),
+            patch("biff.integration.vox.speak_fire_and_forget") as mock_speak,
+        ):
+            await kai.call("wall", message="shipped :D")
+            vibes = mock_speak.call_args[1]["vibe_tags"]
+            assert "excited" in vibes
+
+    async def test_no_vox_is_silent(self, kai: RecordingClient) -> None:
+        with (
+            patch(
+                "biff.integration.vox.vox_binary",
+                return_value=None,
+            ),
+            patch("biff.integration.vox.speak_fire_and_forget") as mock_speak,
+        ):
+            await kai.call("wall", message="no vox here")
+            # speak_fire_and_forget is still called — it checks
+            # vox_binary internally and no-ops. But the wiring fires.
+            mock_speak.assert_called_once()

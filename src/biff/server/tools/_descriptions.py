@@ -293,6 +293,17 @@ async def refresh_wall(
         )
     if tool.description != old_desc:
         await notify_tool_list_changed()
+        # Voice new walls via vox (L1 integration — no-op if vox absent).
+        if current is not None:
+            from biff.integration.vox import (  # noqa: PLC0415
+                speak_fire_and_forget,
+                vibes_from_text,
+            )
+
+            speak_fire_and_forget(
+                f"Wall from {current.from_user}: {current.text}",
+                vibe_tags=vibes_from_text(current.text),
+            )
     await _sync_unread_file(state)
 
 

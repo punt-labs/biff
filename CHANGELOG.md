@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.16.0] - 2026-03-08
 
 ### Added
 
@@ -38,6 +38,10 @@
 - **Session identity model** — Z specification (`docs/session-model.tex`)
   modeling the full organizational hierarchy from orgs to processes, with design
   documents exploring dual identity for human+agent sessions.
+- **Wall broadcasts voiced via vox** — when vox is installed, wall messages are
+  spoken aloud with emoticon-to-vibe mapping (`:D` becomes excited, `!!` becomes
+  urgent). L0/L1 peer integration: graceful degradation when vox is absent.
+  (#biff-a4d)
 
 ### Fixed
 
