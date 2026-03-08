@@ -40,7 +40,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_biff(-dev)?_tty__.*",
+        "matcher": "mcp__(plugin_biff(-dev)?_)?tty__.*",
         "hooks": [
           {
             "type": "command",
