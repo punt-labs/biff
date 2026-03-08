@@ -29,17 +29,22 @@ fuzz: ## Type-check a Z spec with fuzz (usage: make fuzz SPEC=docs/foo.tex)
 prob: ## Animate and model-check a Z spec with ProB (usage: make prob SPEC=docs/foo.tex)
 	@echo "--- init ---"
 	@$(PROBCLI) "$(SPEC)" -init $(PROB_FLAGS) 2>&1 | grep -v "^Promoting\|^Z op\|^% given\|fuzz AST\|^Writing"
-	@echo "--- animate ---"
-	@$(PROBCLI) "$(SPEC)" -animate 20 $(PROB_FLAGS) 2>&1 | grep -E "COVERED|not_covered|Runtime"
+	@echo "--- animate (50 steps, setsize $(PROB_SETSIZE)) ---"
+	@$(PROBCLI) "$(SPEC)" -animate 50 $(PROB_FLAGS) 2>&1 | grep -E "COVERED|not_covered|Runtime"
 	@echo "--- cbc assertions ---"
 	@$(PROBCLI) "$(SPEC)" -cbc_assertions $(PROB_FLAGS) 2>&1 | grep -E "counter|ASSERTION"
 	@echo "--- cbc deadlock ---"
 	@$(PROBCLI) "$(SPEC)" -cbc_deadlock $(PROB_FLAGS) 2>&1 | grep -E "deadlock|DEADLOCK"
-	@echo "--- model check ---"
+	@echo "--- model check (setsize $(PROB_SETSIZE)) ---"
 	@$(PROBCLI) "$(SPEC)" -model_check $(PROB_FLAGS) \
 		-p MAX_INITIALISATIONS 100 -p MAX_OPERATIONS 5000 2>&1 | \
 		grep -E "states|COUNTER|No counter|COVERED|all open|not all"
 	@echo "prob: $(SPEC) OK"
+
+prob-session: ## Validate session-model.tex (fuzz + ProB, setsize 1)
+	@make fuzz SPEC=docs/session-model.tex
+	@make prob SPEC=docs/session-model.tex PROB_SETSIZE=1
+	@echo "prob-session: ALL CHECKS PASSED"
 
 format: ## Auto-format code
 	uv run ruff check --fix .

@@ -2,7 +2,64 @@
 
 ## [Unreleased]
 
-## [0.15.1] - 2026-03-06
+### Added
+
+- **Interactive REPL** — `biff` with no args launches a persistent interactive
+  session with full BSD command vocabulary. Unified session lifecycle (connect,
+  register in KV, auto-assign ttyN, wtmp login/logout, clean shutdown) replaces
+  the ephemeral 5-minute TTL session hack. All CLI modes (REPL, inline, talk)
+  share one `cli_session()` context manager. (#biff-vrk)
+- **REPL readline** — line editing (arrow keys, Home/End, Ctrl-A/E), command
+  history persisted to `~/.biff/repl_history`, and tab completion for command
+  names. Detects libedit (macOS) vs GNU readline for correct binding syntax.
+  (#biff-x6s)
+- **REPL inline notifications** — real-time NATS-driven message alerts and wall
+  broadcasts while idle at the prompt. Self-notification prevention via state
+  sync. Prompt gate prevents output/prompt interleave. Session prompt shows
+  `user:ttyN>`. (#biff-02y)
+- **REPL talk mode** — `talk @user` enters modal conversation mode (like BSD
+  talk). Typed lines deliver to target, `end` returns to REPL. Incoming messages
+  display as banners via NATS notification queue. Talk invitation includes tty
+  for easy reply. (#biff-q07)
+- **Two-phase talk handshake** — BSD-style talk protocol: inviter waits for
+  accept before entering talk mode, responder detects pending invite via
+  persistent set, mutual hangup ends both sides. Talk messages use NATS core
+  publish (no inbox pollution). Cyan color for incoming, `user:tty >` prompt
+  style. (#biff-1di)
+- **Z specifications** — formal Z specs for talk handshake (`docs/talk.tex`,
+  565K states) and REPL state machine (`docs/repl.tex`, 509K states), both
+  verified with ProB (no counter-examples). Makefile targets for fuzz
+  type-checking and ProB animation/model-checking. (#biff-1di)
+- **CLI multi-user test tier** — tier 2b integration tests: two CLI users
+  sharing a local NATS relay exercise who, finger, write, read, wall, plan,
+  talk, and last via `cli_session`. 102 new tests total across talk partition
+  tests, REPL loop control flow, and NotifyState boundary tests. (#biff-s8d,
+  #biff-1di)
+- **Session identity model** — Z specification (`docs/session-model.tex`)
+  modeling the full organizational hierarchy from orgs to processes, with design
+  documents exploring dual identity for human+agent sessions.
+
+### Fixed
+
+- **PostToolUse hook matches standalone MCP tool names** — the matcher
+  `mcp__plugin_biff(-dev)?_tty__.*` only matched plugin-namespaced tools.
+  Standalone MCP servers use `mcp__tty__*` which didn't match. Fix:
+  `mcp__(plugin_biff(-dev)?_)?tty__.*` matches both patterns. (#biff-hv5)
+- **TTY name race condition** — two sessions starting simultaneously could both
+  compute the same ttyN name (TOCTOU between get_sessions and update_session).
+  Fix: two-phase write-then-verify approach. `assign_unique_tty_name()` computes
+  the name, caller writes to KV, `verify_tty_name()` re-reads and reassigns on
+  collision. (#biff-1rn)
+- **suppress-output.sh counts data rows not wrapped lines** — `wc -l` inflated
+  row counts due to 80-char line wrapping. Each handler now uses format-specific
+  grep patterns matching actual output rows. (#biff-1hn)
+
+### Changed
+
+- **Makefile gains Z spec targets** — `make fuzz SPEC=...` for type-checking,
+  `make prob SPEC=...` for ProB animation and model-checking,
+  `make prob-session` for the session identity model. `clean-tex` covers
+  `docs/` artifacts.
 
 ## [0.15.1] - 2026-03-06
 

@@ -1,0 +1,847 @@
+%
+% session-model.tex
+%
+% Z Specification for Biff Session Identity Model
+%
+% Models the full organizational hierarchy: orgs, repos, machines,
+% clones, users, sessions, and processes (human operators and AI agents).
+%
+% Type-check: fuzz session-model.tex
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Session Identity Model:\\A Z Specification}
+\author{Punt Labs}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Biff Session Identity Model: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%--------------------------------------------------------------------
+\section{Introduction}
+%%--------------------------------------------------------------------
+
+This specification models the organizational hierarchy for biff's
+communication system.  The hierarchy spans from organizations down to
+individual processes within terminal sessions.
+
+\medskip
+\noindent\textbf{Containment hierarchy:}
+
+\begin{enumerate}
+  \item \textbf{Organization} --- owns repositories and has member users.
+  \item \textbf{Machine} --- a host that holds clones of repositories.
+  \item \textbf{Clone} --- a copy of a repository on a machine.
+  \item \textbf{Session} --- a terminal on a machine, working on a branch
+    of a cloned repository.  May have zero or one human operator.
+  \item \textbf{Process} --- a human operator or AI agent running within
+    a session.  Processes form a tree: a main agent spawns subagents.
+\end{enumerate}
+
+\noindent\textbf{Design principles:}
+
+\begin{itemize}
+  \item The session is the container; humans and agents are both processes
+    within it.
+  \item A session may have zero or one human operator.  Headless sessions
+    (CI, SDK, agent teams) have none.
+  \item A session may contain many agent processes, forming a tree rooted
+    at top-level agents.
+  \item A user may have sessions on multiple machines, branches, and
+    worktrees simultaneously.
+\end{itemize}
+
+%%--------------------------------------------------------------------
+\section{Types}
+%%--------------------------------------------------------------------
+
+\begin{zed}
+  [NAME, HOST, SESSION, PROCESS]
+\end{zed}
+
+$NAME$ identifies organizations, repositories, users, and branches.
+These are all string-valued in the implementation and share a namespace.
+$HOST$, $SESSION$, and $PROCESS$ are opaque identifiers for their
+respective entity types: machine hostnames, terminal session IDs, and
+process IDs.
+
+\begin{zed}
+  KIND ::= human | agent
+\end{zed}
+
+Every process is either a human operator or an AI agent.
+
+%%--------------------------------------------------------------------
+\section{State}
+%%--------------------------------------------------------------------
+
+The state captures the full hierarchy.  Each layer is modeled as a set
+of entities plus partial functions mapping each entity to its attributes.
+Invariants enforce referential integrity across layers.
+
+\begin{schema}{BiffWorld}
+  %% --- Organization layer ---
+  orgs : \power NAME \\
+  repos : NAME \rel NAME \\
+  members : NAME \rel NAME \\
+  %% --- Machine layer ---
+  machines : \power HOST \\
+  clones : HOST \rel (NAME \cross NAME) \\
+  %% --- Session layer ---
+  sessions : \power SESSION \\
+  smach : SESSION \pfun HOST \\
+  srepo : SESSION \pfun (NAME \cross NAME) \\
+  sbranch : SESSION \pfun NAME \\
+  soper : SESSION \pfun NAME \\
+  %% --- Process layer ---
+  processes : \power PROCESS \\
+  psess : PROCESS \pfun SESSION \\
+  pkind : PROCESS \pfun KIND \\
+  pname : PROCESS \pfun NAME \\
+  ppar : PROCESS \pfun PROCESS
+  \where
+  %%
+  %% Organization scope: repos and members belong to existing orgs
+  %%
+  \dom repos \subseteq orgs \\
+  \dom members \subseteq orgs \\
+  %%
+  %% Clone integrity: clones are on existing machines of existing repos
+  %%
+  \dom clones \subseteq machines \\
+  \ran clones \subseteq repos \\
+  %%
+  %% Session attribute domains match the session set
+  %%
+  \dom smach = sessions \\
+  \dom srepo = sessions \\
+  \dom sbranch = sessions \\
+  \dom soper \subseteq sessions \\
+  %%
+  %% Session references valid machine and clone
+  %%
+  \ran smach \subseteq machines \\
+  \forall s : sessions @ (smach(s), srepo(s)) \in clones \\
+  %%
+  %% Operator is a member of the session's organization
+  %%
+  \forall s : \dom soper @
+    (first(srepo(s)), soper(s)) \in members \\
+  %%
+  %% Process attribute domains match the process set
+  %%
+  \dom psess = processes \\
+  \dom pkind = processes \\
+  \dom pname = processes \\
+  \dom ppar \subseteq processes \\
+  %%
+  %% Processes reference existing sessions; parents are processes
+  %%
+  \ran psess \subseteq sessions \\
+  \ran ppar \subseteq processes \\
+  %%
+  %% Parent process is in the same session as the child
+  %%
+  \forall p : \dom ppar @
+    psess(ppar(p)) = psess(p) \\
+  %%
+  %% Process tree is acyclic: no process is its own ancestor
+  %%
+  \forall p : processes @ (p, p) \notin ppar \plus
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Initial State}
+%%--------------------------------------------------------------------
+
+The system starts empty: no organizations, machines, sessions, or
+processes.
+
+\begin{schema}{Init}
+  BiffWorld'
+  \where
+  orgs' = \emptyset \\
+  repos' = \emptyset \\
+  members' = \emptyset \\
+  machines' = \emptyset \\
+  clones' = \emptyset \\
+  sessions' = \emptyset \\
+  smach' = \emptyset \\
+  srepo' = \emptyset \\
+  sbranch' = \emptyset \\
+  soper' = \emptyset \\
+  processes' = \emptyset \\
+  psess' = \emptyset \\
+  pkind' = \emptyset \\
+  pname' = \emptyset \\
+  ppar' = \emptyset
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Organization Operations}
+%%--------------------------------------------------------------------
+
+%%--------------------------------------------------------------------
+\subsection{AddOrg}
+%%--------------------------------------------------------------------
+
+Register a new organization.
+
+\begin{schema}{AddOrg}
+  \Delta BiffWorld \\
+  org? : NAME
+  \where
+  org? \notin orgs \\
+  %%
+  orgs' = orgs \cup \{ org? \} \\
+  %%
+  %% Frame: everything else unchanged
+  %%
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{RemoveOrg}
+%%--------------------------------------------------------------------
+
+Remove an organization.  Precondition: no repos and no members remain.
+
+\begin{schema}{RemoveOrg}
+  \Delta BiffWorld \\
+  org? : NAME
+  \where
+  org? \in orgs \\
+  \{ org? \} \dres repos = \emptyset \\
+  \{ org? \} \dres members = \emptyset \\
+  %%
+  orgs' = orgs \setminus \{ org? \} \\
+  %%
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Repository Operations}
+%%--------------------------------------------------------------------
+
+%%--------------------------------------------------------------------
+\subsection{AddRepo}
+%%--------------------------------------------------------------------
+
+Add a repository to an existing organization.
+
+\begin{schema}{AddRepo}
+  \Delta BiffWorld \\
+  org? : NAME \\
+  repo? : NAME
+  \where
+  org? \in orgs \\
+  (org?, repo?) \notin repos \\
+  %%
+  repos' = repos \cup \{ (org?, repo?) \} \\
+  %%
+  orgs' = orgs \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{RemoveRepo}
+%%--------------------------------------------------------------------
+
+Remove a repository.  Precondition: no clones of this repo exist on any
+machine.
+
+\begin{schema}{RemoveRepo}
+  \Delta BiffWorld \\
+  org? : NAME \\
+  repo? : NAME
+  \where
+  (org?, repo?) \in repos \\
+  (org?, repo?) \notin \ran clones \\
+  %%
+  repos' = repos \setminus \{ (org?, repo?) \} \\
+  %%
+  orgs' = orgs \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Machine Operations}
+%%--------------------------------------------------------------------
+
+%%--------------------------------------------------------------------
+\subsection{AddMachine}
+%%--------------------------------------------------------------------
+
+Register a new machine.
+
+\begin{schema}{AddMachine}
+  \Delta BiffWorld \\
+  m? : HOST
+  \where
+  m? \notin machines \\
+  %%
+  machines' = machines \cup \{ m? \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{RemoveMachine}
+%%--------------------------------------------------------------------
+
+Remove a machine.  Precondition: no clones remain on it.
+
+\begin{schema}{RemoveMachine}
+  \Delta BiffWorld \\
+  m? : HOST
+  \where
+  m? \in machines \\
+  \{ m? \} \dres clones = \emptyset \\
+  %%
+  machines' = machines \setminus \{ m? \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Clone Operations}
+%%--------------------------------------------------------------------
+
+A clone represents a copy of a repository on a machine.  In practice
+this is a \texttt{git clone} or a worktree checkout.
+
+%%--------------------------------------------------------------------
+\subsection{AddClone}
+%%--------------------------------------------------------------------
+
+Clone a repository onto a machine.
+
+\begin{schema}{AddClone}
+  \Delta BiffWorld \\
+  m? : HOST \\
+  org? : NAME \\
+  repo? : NAME
+  \where
+  m? \in machines \\
+  (org?, repo?) \in repos \\
+  (m?, (org?, repo?)) \notin clones \\
+  %%
+  clones' = clones \cup \{ (m?, (org?, repo?)) \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{RemoveClone}
+%%--------------------------------------------------------------------
+
+Remove a clone from a machine.  Precondition: no sessions are using
+this clone.
+
+\begin{schema}{RemoveClone}
+  \Delta BiffWorld \\
+  m? : HOST \\
+  org? : NAME \\
+  repo? : NAME
+  \where
+  (m?, (org?, repo?)) \in clones \\
+  \lnot (\exists s : sessions @
+    smach(s) = m? \land srepo(s) = (org?, repo?)) \\
+  %%
+  clones' = clones \setminus \{ (m?, (org?, repo?)) \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Member Operations}
+%%--------------------------------------------------------------------
+
+Members are user identities within an organization.  A member may
+operate sessions and appear as a human process.
+
+%%--------------------------------------------------------------------
+\subsection{AddMember}
+%%--------------------------------------------------------------------
+
+Add a user to an organization.
+
+\begin{schema}{AddMember}
+  \Delta BiffWorld \\
+  org? : NAME \\
+  user? : NAME
+  \where
+  org? \in orgs \\
+  (org?, user?) \notin members \\
+  %%
+  members' = members \cup \{ (org?, user?) \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{RemoveMember}
+%%--------------------------------------------------------------------
+
+Remove a user from an organization.  Precondition: the user is not
+operating any session on this org's repositories.
+
+\begin{schema}{RemoveMember}
+  \Delta BiffWorld \\
+  org? : NAME \\
+  user? : NAME
+  \where
+  (org?, user?) \in members \\
+  \lnot (\exists s : \dom soper @
+    first(srepo(s)) = org? \land soper(s) = user?) \\
+  %%
+  members' = members \setminus \{ (org?, user?) \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Session Operations}
+%%--------------------------------------------------------------------
+
+A session is a terminal on a machine, working on a specific branch of a
+cloned repository.  It may have a human operator (typical Claude Code
+usage) or be headless (CI, SDK, agent teams).
+
+%%--------------------------------------------------------------------
+\subsection{OpenSession}
+%%--------------------------------------------------------------------
+
+Open a new session with a human operator.  The operator must be a member
+of the repository's organization.
+
+\begin{schema}{OpenSession}
+  \Delta BiffWorld \\
+  s? : SESSION \\
+  m? : HOST \\
+  org? : NAME \\
+  repo? : NAME \\
+  branch? : NAME \\
+  oper? : NAME
+  \where
+  s? \notin sessions \\
+  (m?, (org?, repo?)) \in clones \\
+  (org?, oper?) \in members \\
+  %%
+  sessions' = sessions \cup \{ s? \} \\
+  smach' = smach \cup \{ s? \mapsto m? \} \\
+  srepo' = srepo \cup \{ s? \mapsto (org?, repo?) \} \\
+  sbranch' = sbranch \cup \{ s? \mapsto branch? \} \\
+  soper' = soper \cup \{ s? \mapsto oper? \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{OpenHeadlessSession}
+%%--------------------------------------------------------------------
+
+Open a session with no human operator.  This models CI runs, SDK
+invocations, and autonomous agent teams.
+
+\begin{schema}{OpenHeadlessSession}
+  \Delta BiffWorld \\
+  s? : SESSION \\
+  m? : HOST \\
+  org? : NAME \\
+  repo? : NAME \\
+  branch? : NAME
+  \where
+  s? \notin sessions \\
+  (m?, (org?, repo?)) \in clones \\
+  %%
+  sessions' = sessions \cup \{ s? \} \\
+  smach' = smach \cup \{ s? \mapsto m? \} \\
+  srepo' = srepo \cup \{ s? \mapsto (org?, repo?) \} \\
+  sbranch' = sbranch \cup \{ s? \mapsto branch? \} \\
+  soper' = soper \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{CloseSession}
+%%--------------------------------------------------------------------
+
+Close a session.  Precondition: all processes in the session have been
+reaped.
+
+\begin{schema}{CloseSession}
+  \Delta BiffWorld \\
+  s? : SESSION
+  \where
+  s? \in sessions \\
+  s? \notin \ran psess \\
+  %%
+  sessions' = sessions \setminus \{ s? \} \\
+  smach' = sessions' \dres smach \\
+  srepo' = sessions' \dres srepo \\
+  sbranch' = sessions' \dres sbranch \\
+  soper' = sessions' \dres soper \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Process Operations}
+%%--------------------------------------------------------------------
+
+A process is any entity that can act within a session: a human operator
+or an AI agent.  Processes form a tree.  Top-level processes have no
+parent; subagents have a parent in the same session.
+
+%%--------------------------------------------------------------------
+\subsection{SpawnProcess}
+%%--------------------------------------------------------------------
+
+Spawn a new top-level process in a session.  This is used for the human
+operator, the main agent, and agent team members.
+
+\begin{schema}{SpawnProcess}
+  \Delta BiffWorld \\
+  p? : PROCESS \\
+  s? : SESSION \\
+  kind? : KIND \\
+  name? : NAME
+  \where
+  p? \notin processes \\
+  s? \in sessions \\
+  %%
+  processes' = processes \cup \{ p? \} \\
+  psess' = psess \cup \{ p? \mapsto s? \} \\
+  pkind' = pkind \cup \{ p? \mapsto kind? \} \\
+  pname' = pname \cup \{ p? \mapsto name? \} \\
+  ppar' = ppar \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{SpawnChild}
+%%--------------------------------------------------------------------
+
+Spawn a child process (subagent) under an existing parent process.  The
+child inherits the parent's session.
+
+\begin{schema}{SpawnChild}
+  \Delta BiffWorld \\
+  p? : PROCESS \\
+  parent? : PROCESS \\
+  kind? : KIND \\
+  name? : NAME
+  \where
+  p? \notin processes \\
+  parent? \in processes \\
+  %%
+  processes' = processes \cup \{ p? \} \\
+  psess' = psess \cup \{ p? \mapsto psess(parent?) \} \\
+  pkind' = pkind \cup \{ p? \mapsto kind? \} \\
+  pname' = pname \cup \{ p? \mapsto name? \} \\
+  ppar' = ppar \cup \{ p? \mapsto parent? \} \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{ReapProcess}
+%%--------------------------------------------------------------------
+
+Remove a process.  Precondition: no child processes remain.
+
+\begin{schema}{ReapProcess}
+  \Delta BiffWorld \\
+  p? : PROCESS
+  \where
+  p? \in processes \\
+  p? \notin \ran ppar \\
+  %%
+  processes' = processes \setminus \{ p? \} \\
+  psess' = processes' \dres psess \\
+  pkind' = processes' \dres pkind \\
+  pname' = processes' \dres pname \\
+  ppar' = processes' \dres ppar \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  sessions' = sessions \\
+  smach' = smach \\
+  srepo' = srepo \\
+  sbranch' = sbranch \\
+  soper' = soper
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Discussion}
+%%--------------------------------------------------------------------
+
+\subsection{What This Model Captures}
+
+The hierarchy from organization to process is fully represented.  Key
+properties enforced by the invariants:
+
+\begin{itemize}
+  \item A session can only exist on a machine that has a clone of the
+    repository it references.
+  \item An operator must be a member of the repository's organization.
+  \item A headless session (no operator) is a first-class citizen, not
+    an edge case.
+  \item Subagent processes are children of their spawning agent, always
+    in the same session.
+  \item The process tree is acyclic.
+  \item Removal at any level requires dependents to be removed first,
+    preventing dangling references.
+\end{itemize}
+
+\subsection{Scenarios}
+
+\noindent\textbf{Pair programming (typical Claude Code):}
+
+\begin{verbatim}
+  OpenSession(s1, macbook, punt-labs, biff, main, kai)
+  SpawnProcess(p1, s1, human, kai)
+  SpawnProcess(p2, s1, agent, claude)
+  SpawnChild(p3, p2, agent, explore)   -- subagent
+  SpawnChild(p4, p2, agent, explore)   -- another subagent
+\end{verbatim}
+
+\noindent\textbf{Headless CI:}
+
+\begin{verbatim}
+  OpenHeadlessSession(s2, ci-runner, punt-labs, biff, main)
+  SpawnProcess(p5, s2, agent, claude)
+  SpawnChild(p6, p5, agent, test-runner)
+\end{verbatim}
+
+\noindent\textbf{Agent team (no human):}
+
+\begin{verbatim}
+  OpenHeadlessSession(s3, workstation, punt-labs, biff, feature-x)
+  SpawnProcess(p7, s3, agent, architect)
+  SpawnProcess(p8, s3, agent, implementer)
+  SpawnProcess(p9, s3, agent, reviewer)
+\end{verbatim}
+
+\noindent\textbf{User across machines and branches:}
+
+\begin{verbatim}
+  OpenSession(s4, macbook, punt-labs, biff, main, kai)
+  OpenSession(s5, macbook, punt-labs, biff, feature-x, kai)
+  OpenSession(s6, server, punt-labs, quarry, main, kai)
+\end{verbatim}
+
+\subsection{What This Model Does Not Cover}
+
+This specification focuses on the structural containment hierarchy.
+It deliberately omits:
+
+\begin{itemize}
+  \item \textbf{Messaging} --- how messages are addressed, routed, and
+    delivered between processes and sessions.
+  \item \textbf{Presence} --- idle times, plans, active status, and the
+    display pipeline (\texttt{who}, \texttt{finger}, \texttt{ps}).
+  \item \textbf{Addressing syntax} --- the \texttt{@user:tty} and
+    \texttt{@tty/process} resolution rules.
+  \item \textbf{Permissions} --- who can message whom, who can steer
+    whose session, \texttt{mesg y/n}.
+  \item \textbf{Process lifecycle details} --- heartbeats, TTLs, orphan
+    detection, crash recovery.
+\end{itemize}
+
+These are natural extensions: messaging and addressing can be specified
+as operations on this state, and presence as derived views.
+
+\end{document}
