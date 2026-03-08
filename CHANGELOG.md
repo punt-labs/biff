@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-03-08
+
 ### Added
 
 - **Interactive REPL** — `biff` with no args launches a persistent interactive
