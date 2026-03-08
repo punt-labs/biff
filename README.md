@@ -48,6 +48,7 @@ sh install.sh
 ## Features
 
 - **MCP-native** --- runs inside Claude Code as slash commands, no separate app
+- **Interactive REPL** --- `biff` launches a terminal client with readline, real-time notifications, and modal talk
 - **BSD vocabulary** --- `/who`, `/write`, `/talk`, `/wall` --- commands engineers already know
 - **NATS relay** --- cross-machine presence and messaging over encrypted connections
 - **Agent-first** --- agents show up in `/who` alongside humans, coordinate via `/plan` and `/write`
@@ -145,10 +146,11 @@ Every teammate's status bar shows `WALL: release freeze` in bold red. Expires au
 ```text
 > /talk @kai "can you review PR #42?"
 
-Talk session started with @kai. Replies appear on the status bar.
+Waiting for @kai to respond...
+Connected to @kai. Type 'end' to return.
 ```
 
-Incoming messages show on your status bar automatically. Reply with `/write`, close with `/talk end`.
+BSD-style two-phase handshake: the inviter waits, the target accepts. Messages are ephemeral (NATS core pub/sub, no inbox). Either side types `end` to hang up.
 
 ### Go do-not-disturb
 
@@ -181,6 +183,33 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 
 Every slash command has a matching `biff` CLI command. The CLI works outside Claude Code --- from any terminal, SSH session, or CI script.
 
+### Interactive REPL
+
+```bash
+biff                                       # Launch interactive REPL
+```
+
+```text
+biff 0.15.1 — kai:tty1
+Commands: finger, last, mesg, plan, read, status, tty, wall, who, write, talk, exit
+
+kai:tty1 ▶ who
+▶  NAME    TTY   IDLE  S  HOST       DIR              PLAN
+   @kai    tty1  0:00  +  m2-mb-air  /code/myapp      debugging auth
+   @eric   tty2  1:22  +  m2-mb-air  /code/myapp      reviewing PR #47
+kai:tty1 ▶ talk @eric
+Waiting for @eric:tty2 to respond... (type 'end' to cancel)
+Connected to @eric:tty2. Type 'end' to return to REPL.
+
+kai:tty1 ▶ can you look at the auth fix?
+eric:tty2 ▶ on it now
+kai:tty1 ▶ end
+Talk with @eric:tty2 ended.
+kai:tty1 ▶ exit
+```
+
+The REPL provides a proper session lifecycle (login/logout events, heartbeat, KV presence), readline (history, tab completion), and real-time notifications (wall broadcasts and message alerts appear while you're idle at the prompt). `biff` with no args is the primary mode; `biff who` is a shortcut for a one-command session.
+
 ### Product commands
 
 ```bash
@@ -198,7 +227,7 @@ biff mesg off                              # Go do-not-disturb
 biff mesg on                               # Accept messages again
 biff tty dev                               # Name this session "dev"
 biff status                                # Connection state + unread count
-biff talk @kai "can you review?"           # Real-time conversation (REPL)
+biff talk @kai "can you review?"           # Real-time conversation
 ```
 
 ### Admin commands
@@ -298,14 +327,16 @@ Biff assumes the terminal is where you're already working — so that's where yo
 - Presence: `/who`, `/finger`, `/plan`, `/tty`, `/last`
 - Messaging: `/write`, `/read`, `/mesg`
 - Broadcast: `/wall` with duration-based expiry
-- Real-time: `/talk` with NATS instant wake-up and status bar display
+- Real-time: `/talk` with two-phase handshake and mutual hangup
 - NATS relay for cross-machine communication
 - Per-project activation (`/biff y`) with lazy connection management
 - Status bar with live unread count, wall, and talk display
 - Workflow hooks: plan auto-expand, session lifecycle, git integration
 - CLI parity: every MCP tool available as `biff <command>` with `--json` output
+- Interactive REPL: `biff` with readline, real-time notifications, modal talk
 - Library API: pure async functions for programmatic use and testing
 - Notification deferral: ≤2s latency for wall and talk in all states (active and napping)
+- Formal verification: Z specifications for talk and REPL, ProB model-checked
 
 ### Next
 

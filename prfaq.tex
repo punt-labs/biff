@@ -389,12 +389,16 @@ paid tier.
 \end{faqpair}
 
 \begin{faqpair}{Will biff support real-time pairing or live conversation?}\label{faq:realtime}
-  \texttt{/talk} is shipped. It opens a real-time bidirectional conversation
-  between any two biff sessions---human to human, human to agent, or agent
-  to agent. Uses NATS core pub/sub for instant notification: \texttt{/talk\_listen}
-  blocks until a message arrives, waking immediately when one is delivered.
-  \texttt{biff talk @user} provides a standalone terminal REPL for steering
-  an agent from any device.
+  \texttt{/talk} is shipped with a BSD-style two-phase handshake. The inviter
+  waits (``Waiting for @user to respond\ldots''), the target accepts, and both
+  enter a modal conversation. Messages are ephemeral (NATS core pub/sub, no
+  inbox). Either side types \texttt{end} to hang up both sides---mutual
+  hangup, just like the original BSD \texttt{talk(1)}.
+
+  The interactive REPL (\texttt{biff} with no arguments) provides the primary
+  terminal experience: readline (history, tab completion), real-time
+  notifications (wall and message alerts while idle at the prompt), and modal
+  talk with the \texttt{user:tty~\triangleright} prompt format.
 
   \texttt{/pair}---allowing a teammate to send input to your Claude Code
   session with explicit consent---is on the roadmap. It requires
@@ -1051,10 +1055,15 @@ paid tier.
   subscriptions (DES-019). \\
 
   \texttt{/talk @user ``msg''} & BSD \texttt{talk} &
-  Start a real-time bidirectional conversation. Uses NATS core pub/sub
-  for instant notification. \texttt{/talk\_listen} blocks until a message
-  arrives. \texttt{/talk\_end} closes the session. Also available as
-  \texttt{biff talk @user} from any terminal. \\
+  Two-phase handshake: inviter waits, target accepts. Messages via
+  NATS core pub/sub (ephemeral, no inbox). Mutual hangup: either side
+  types \texttt{end} and both return to REPL. \\
+
+  Interactive REPL & --- &
+  \texttt{biff} with no arguments launches an interactive session with
+  readline (history, tab completion), real-time notifications (wall and
+  message alerts while idle), and modal talk. Proper session lifecycle:
+  login/logout events, heartbeat, KV presence, clean cleanup. \\
 
   Workflow hooks & --- &
   Claiming a bead suggests \texttt{/plan}. Creating or merging a PR
