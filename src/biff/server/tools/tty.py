@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages, set_tty_name
 from biff.server.tools._session import update_current_session
-from biff.tty import next_tty_name
+from biff.tty import assign_unique_tty_name
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -42,11 +42,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             TTY: tty3
         """
         name = name.strip()
-        sessions = await state.relay.get_sessions()
 
         if not name:
-            existing = [s.tty_name for s in sessions if s.tty_name]
-            name = next_tty_name(existing)
+            name = await assign_unique_tty_name(state.relay, state.session_key)
+
+        sessions = await state.relay.get_sessions()
 
         if len(name) > _MAX_TTY_NAME:
             return f"Error: name must be {_MAX_TTY_NAME} characters or fewer."

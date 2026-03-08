@@ -36,7 +36,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
-from biff.tty import build_session_key, next_tty_name
+from biff.tty import assign_unique_tty_name, build_session_key, verify_tty_name
 
 logger = logging.getLogger(__name__)
 
@@ -563,11 +563,14 @@ async def _active_lifespan(
         )
 
     # Auto-assign a ttyN name so the status bar always has identity.
-    sessions = await state.relay.get_sessions()
-    existing = [s.tty_name for s in sessions if s.tty_name]
-    auto_name = next_tty_name(existing)
+    auto_name = await assign_unique_tty_name(state.relay, state.session_key)
     set_tty_name(auto_name)
     await update_current_session(state, tty_name=auto_name)
+    # Verify no duplicate after write (closes TOCTOU window).
+    final_name = await verify_tty_name(state.relay, state.session_key, auto_name)
+    if final_name != auto_name:
+        set_tty_name(final_name)
+        await update_current_session(state, tty_name=final_name)
 
     # Write the initial unread file and wall state immediately so the
     # status line has identity from the first render (before the poller ticks).
