@@ -144,6 +144,8 @@ async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
     """Attempt a NATS connection with a short timeout."""
     import nats
 
+    from biff.nats_relay import safe_close
+
     kwargs = auth.as_nats_kwargs() if auth else {}
     try:
         nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
@@ -151,7 +153,7 @@ async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
             connect_timeout=3,
             **kwargs,
         )
-        await nc.close()
+        await safe_close(nc)
     except Exception:  # noqa: BLE001
         return False
     return True

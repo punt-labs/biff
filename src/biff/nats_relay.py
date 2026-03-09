@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -80,6 +81,20 @@ _DEFAULT_STREAM_PREFIX = "biff"
 # KV key namespaces reserved for encryption (DES-016, biff-lff).
 # Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
 RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
+
+
+async def safe_close(nc: NatsClient) -> None:
+    """Close a NATS connection, suppressing Python 3.14+ SSL teardown errors.
+
+    Python 3.14 raises ``ssl.SSLError: APPLICATION_DATA_AFTER_CLOSE_NOTIFY``
+    when the server sends data after the TLS close_notify.  This is harmless
+    during intentional teardown — the connection is going away regardless.
+    """
+    try:
+        await nc.close()
+    except ssl.SSLError as exc:
+        if "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" not in str(exc):
+            raise
 
 
 class NatsRelay:
@@ -202,7 +217,7 @@ class NatsRelay:
             await self._provision_wtmp(js)
             await self._cleanup_legacy_streams(js)
         except Exception:
-            await nc.close()
+            await safe_close(nc)
             raise
 
         self._nc = nc
@@ -345,7 +360,7 @@ class NatsRelay:
         (the session is ending).
         """
         if self._nc is not None and not self._nc.is_closed:
-            await self._nc.close()
+            await safe_close(self._nc)
         self._nc = None
         self._js = None
         self._kv = None
@@ -353,7 +368,7 @@ class NatsRelay:
     async def close(self) -> None:
         """Close the NATS connection and release resources."""
         if self._nc is not None:
-            await self._nc.close()
+            await safe_close(self._nc)
             self._nc = None
             self._js = None
             self._kv = None
