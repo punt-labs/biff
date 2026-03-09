@@ -11,6 +11,7 @@ from biff.config import (
     GitHubIdentity,
     _parse_repo_slug,
     compute_data_dir,
+    ensure_github_actions_member,
     extract_biff_fields,
     find_git_root,
     get_github_identity,
@@ -477,3 +478,56 @@ class TestLoadConfig:
         resolved = load_config(start=tmp_path)
         assert resolved.config.user == "kai"
         assert resolved.config.display_name == ""
+
+
+# -- ensure_github_actions_member --
+
+
+class TestEnsureGithubActionsMember:
+    def test_adds_member(self, tmp_path: Path) -> None:
+        biff_file = tmp_path / ".biff"
+        biff_file.write_text('[team]\nmembers = ["kai", "eric"]\n')
+        assert ensure_github_actions_member(tmp_path) is True
+        content = biff_file.read_text()
+        assert '"github-actions"' in content
+        assert '"kai"' in content
+        assert '"eric"' in content
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        biff_file = tmp_path / ".biff"
+        biff_file.write_text('[team]\nmembers = ["kai", "github-actions"]\n')
+        assert ensure_github_actions_member(tmp_path) is False
+
+    def test_no_biff_file(self, tmp_path: Path) -> None:
+        assert ensure_github_actions_member(tmp_path) is False
+
+    def test_no_team_section(self, tmp_path: Path) -> None:
+        (tmp_path / ".biff").write_text('[relay]\nurl = "nats://localhost"\n')
+        assert ensure_github_actions_member(tmp_path) is False
+
+    def test_empty_members_array(self, tmp_path: Path) -> None:
+        biff_file = tmp_path / ".biff"
+        biff_file.write_text("[team]\nmembers = []\n")
+        assert ensure_github_actions_member(tmp_path) is True
+        content = biff_file.read_text()
+        assert '"github-actions"' in content
+        # Must NOT have leading comma: [, "github-actions"]
+        assert "[," not in content
+
+    def test_trailing_comma_in_members(self, tmp_path: Path) -> None:
+        biff_file = tmp_path / ".biff"
+        biff_file.write_text('[team]\nmembers = ["kai",]\n')
+        assert ensure_github_actions_member(tmp_path) is True
+        content = biff_file.read_text()
+        assert '"github-actions"' in content
+        # Must NOT have double comma: ["kai",, "github-actions"]
+        assert ",," not in content
+
+    def test_preserves_formatting(self, tmp_path: Path) -> None:
+        biff_file = tmp_path / ".biff"
+        original = '[team]\nmembers = ["kai"]\n\n[relay]\nurl = "nats://localhost"\n'
+        biff_file.write_text(original)
+        ensure_github_actions_member(tmp_path)
+        content = biff_file.read_text()
+        assert "[relay]" in content
+        assert "nats://localhost" in content

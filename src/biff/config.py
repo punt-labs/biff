@@ -329,6 +329,58 @@ def extract_biff_fields(
     return team, relay_url, relay_auth
 
 
+_GITHUB_ACTIONS_USER = "github-actions"
+
+
+def ensure_github_actions_member(repo_root: Path) -> bool:
+    """Add ``github-actions`` to ``.biff`` team members if not present.
+
+    Does a targeted text edit to preserve existing TOML formatting.
+    Returns ``True`` if the file was modified.
+    """
+    biff_file = repo_root / ".biff"
+    if not biff_file.exists():
+        return False
+
+    content = biff_file.read_text()
+    raw = load_biff_file(repo_root)
+    team_section: object = raw.get("team")
+    if not isinstance(team_section, dict):
+        return False
+
+    section = cast("dict[str, object]", team_section)
+    members: object = section.get("members", [])
+    if not isinstance(members, list):
+        return False
+
+    items = cast("list[object]", members)
+    member_list: list[str] = [m for m in items if isinstance(m, str)]
+    if _GITHUB_ACTIONS_USER in member_list:
+        return False
+
+    # Append to existing members array via text replacement.
+    # Find the closing bracket of the members array and insert before it.
+    import re  # noqa: PLC0415
+
+    pattern = re.compile(r"(members\s*=\s*\[.*?)(])", re.DOTALL)
+    match = pattern.search(content)
+    if match is None:
+        return False
+
+    prefix = match.group(1).rstrip().rstrip(",").rstrip()
+    quoted = _toml_basic_string(_GITHUB_ACTIONS_USER)
+    # Handle empty array: [] → ["github-actions"] (no leading comma)
+    separator = "" if prefix.endswith("[") else ", "
+    new_content = (
+        content[: match.start()]
+        + prefix
+        + f"{separator}{quoted}]"
+        + content[match.end() :]
+    )
+    biff_file.write_text(new_content)
+    return True
+
+
 RELAY_URL_UNSET = object()
 
 

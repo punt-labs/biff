@@ -2207,3 +2207,66 @@ relay `.deliver()` never executes and inbox assertions fail.
   structured cancellation needs.
 - **Awaiting inline:** The previous design.  Correct but unnecessarily slow for
   the caller.
+
+## DES-025: CI Notification Workflow — Standalone `workflow_run` Trigger
+
+**Date:** 2026-03-08
+**Status:** SETTLED
+**Related:** DES-017 (Hook Integration), PR #120 (inline CI notifications)
+
+### Problem
+
+PR #120 added CI failure notifications to biff's own `test.yml` as an inline
+step.  This worked but required manual YAML editing per-workflow per-repo.  For
+biff to serve as team infrastructure, any repo should get CI notifications by
+running `biff enable` — no workflow editing.
+
+### Decision
+
+Deploy a standalone `.github/workflows/biff-notify.yml` that uses GitHub's
+`workflow_run` trigger with `types: [completed]`.  This file fires after *any*
+workflow completes, checks for failure + push event, and posts `biff wall`.
+
+**Key design choices:**
+
+1. **`workflow_run` over per-workflow steps.** A single observer file replaces
+   N inline steps across N workflows.  Adding new workflows to a repo
+   automatically gets notification coverage with zero editing.
+2. **Push-only filter.** `github.event.workflow_run.event == 'push'` prevents
+   fork PR spam — external contributors' PRs don't trigger wall broadcasts.
+3. **`sparse-checkout: .biff`** — only checks out the team config file, keeping
+   the checkout step fast regardless of repo size.
+4. **`uvx punt-biff`** — runs biff as a standalone tool without `uv sync`,
+   avoiding dependency installation overhead.
+5. **2-minute timeout** — notification is fire-and-forget; if NATS is down the
+   step should fail fast, not hold a runner.
+6. **Template-as-data** — the YAML lives in `src/biff/data/biff-notify.yml`,
+   shipped via `importlib.resources`.  `check_ci_workflow()` compares the
+   deployed file against the bundled template to detect staleness.
+
+### Integration with `biff enable`/`biff disable`
+
+`enable` calls `deploy_ci_workflow()` and `ensure_github_actions_member()`.
+`disable` calls `remove_ci_workflow()`.  `doctor` reports workflow status as
+an informational check (not required — the workflow is useful but not essential
+for core biff functionality).
+
+`ensure_github_actions_member()` adds `github-actions` to the `.biff` team
+roster via targeted regex edit (not parse-serialize) to preserve existing TOML
+formatting.  The bot user must be in the roster for `wall` to accept its
+messages.
+
+### Module structure
+
+`ci_workflow.py` mirrors `git_hooks.py`: three public functions
+(`deploy_ci_workflow`, `remove_ci_workflow`, `check_ci_workflow`) with the same
+`repo_root: Path | None` parameter shape and idempotency guarantees.
+
+### Alternatives Rejected
+
+- **Reusable workflow (called workflow):** Requires the caller to add a `uses:`
+  job referencing the shared workflow.  Still requires per-workflow editing.
+- **GitHub App / webhook:** External infrastructure to maintain.  The
+  `workflow_run` trigger achieves the same result with zero servers.
+- **Keep inline steps:** Works but doesn't scale.  Every new workflow in every
+  repo needs manual editing — the opposite of `biff enable` doing it for you.
