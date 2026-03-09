@@ -15,7 +15,11 @@ jobs:
         with:
           sparse-checkout: .biff
       - uses: astral-sh/setup-uv@v5
-      - run: >-
+      - env:
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: >-
           uvx punt-biff --user github-actions wall
-          "CI failed: ${{ github.event.workflow_run.name }} on ${{ github.event.workflow_run.head_branch }} — ${{ github.event.workflow_run.html_url }}"
+          "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
           --duration 2h

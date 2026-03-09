@@ -369,8 +369,13 @@ def ensure_github_actions_member(repo_root: Path) -> bool:
 
     prefix = match.group(1).rstrip()
     quoted = _toml_basic_string(_GITHUB_ACTIONS_USER)
+    # Handle empty array: [] → ["github-actions"] (no leading comma)
+    separator = "" if prefix.endswith("[") else ", "
     new_content = (
-        content[: match.start()] + prefix + f", {quoted}]" + content[match.end() :]
+        content[: match.start()]
+        + prefix
+        + f"{separator}{quoted}]"
+        + content[match.end() :]
     )
     biff_file.write_text(new_content)
     return True

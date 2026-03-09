@@ -505,6 +505,15 @@ class TestEnsureGithubActionsMember:
         (tmp_path / ".biff").write_text('[relay]\nurl = "nats://localhost"\n')
         assert ensure_github_actions_member(tmp_path) is False
 
+    def test_empty_members_array(self, tmp_path: Path) -> None:
+        biff_file = tmp_path / ".biff"
+        biff_file.write_text("[team]\nmembers = []\n")
+        assert ensure_github_actions_member(tmp_path) is True
+        content = biff_file.read_text()
+        assert '"github-actions"' in content
+        # Must NOT have leading comma: [, "github-actions"]
+        assert "[," not in content
+
     def test_preserves_formatting(self, tmp_path: Path) -> None:
         biff_file = tmp_path / ".biff"
         original = '[team]\nmembers = ["kai"]\n\n[relay]\nurl = "nats://localhost"\n'
