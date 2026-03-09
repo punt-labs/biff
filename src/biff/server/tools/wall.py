@@ -66,6 +66,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             fire_and_forget(
                 state.relay.set_wall(None), logger=_log, description="wall clear"
             )
+            _update_wall_marker(state, wall=None)
             return "Wall cleared."
 
         # Sanitize: strip control chars, collapse to single line
@@ -102,6 +103,18 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         fire_and_forget(
             state.relay.set_wall(post), logger=_log, description="wall post"
         )
+        _update_wall_marker(state, wall=post)
 
         remaining = format_remaining(post.expires_at)
         return f"Wall posted ({remaining}): {message}"
+
+
+def _update_wall_marker(state: ServerState, wall: WallPost | None) -> None:
+    """Write or clear the wall marker for SessionStart hooks."""
+    from biff.markers import clear_wall_marker, write_wall_marker  # noqa: PLC0415
+
+    worktree = str(state.repo_root) if state.repo_root else ""
+    if wall is not None:
+        write_wall_marker(worktree, wall.text, wall.expires_at)
+    else:
+        clear_wall_marker(worktree)

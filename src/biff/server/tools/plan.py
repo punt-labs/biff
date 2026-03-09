@@ -90,4 +90,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         message = expand_bead_id(message)
         await update_current_session(state, plan=message, plan_source=source)
         await refresh_read_messages(mcp, state)
+
+        # Write/clear plan marker for PreToolUse gate (biff-vq5).
+        from biff.markers import clear_plan_marker, write_plan_marker  # noqa: PLC0415
+
+        worktree = str(state.repo_root) if state.repo_root else ""
+        if message:
+            write_plan_marker(worktree, message)
+        else:
+            clear_plan_marker(worktree)
+
         return f"Plan: {message}"

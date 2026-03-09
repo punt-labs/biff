@@ -4,6 +4,36 @@
 
 ### Added
 
+- **PreToolUse workflow gate** — Edit/Write tools are denied unless a plan is
+  set (`/plan`) and a bead is claimed (`bd update --status=in_progress`). The
+  gate returns actionable deny messages telling the agent what to do first.
+  Implements the core Z spec invariant: no file editing without plan + bead.
+- **Wall loading at SessionStart** — active wall broadcasts are injected into
+  session startup context so newly joining agents see team announcements.
+- **Stop hook unread reminder** — soft gate injects "You have N unread messages.
+  Run /read before finishing." into context when the agent stops with unread
+  messages. Never blocks — just reminds.
+- **PR announce wall dedup** — `handle_post_pr` checks for an active wall before
+  suggesting `/wall`. When a wall is already active, only suggests `/write`.
+- **`biff.markers` module** — shared marker file infrastructure for bridging
+  async relay state to synchronous hooks. Plan and wall markers enable the
+  PreToolUse gate and SessionStart wall injection without async relay queries.
+
+### Changed
+
+- **`_hint_dir` refactored** — hint directory computation extracted to
+  `biff.markers.hint_dir()` shared by both hook handlers and MCP tools.
+- **Plan tool side effect** — `/plan` writes/clears a `plan-active` marker file
+  for the PreToolUse gate.
+- **Wall tool side effect** — `/wall` writes/clears a `wall-active` marker file
+  with JSON payload including expiry timestamp.
+
+### Fixed
+
+- **Stale plan marker on new session** — `handle_session_start` clears the
+  plan-active marker to prevent a crashed session's marker from bypassing the
+  PreToolUse gate.
+
 - **CI notifications via `biff enable`** — `biff enable` deploys a standalone
   `biff-notify.yml` workflow using GitHub's `workflow_run` trigger. Fires on
   any workflow failure (push only), posts `biff wall` with a link to the broken
