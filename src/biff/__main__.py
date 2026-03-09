@@ -1013,7 +1013,7 @@ def serve(
 ) -> None:
     """Start the biff MCP server (HTTP transport)."""
     server = _create_mcp_server(
-        user=user,
+        user=user or _user_override,
         data_dir=data_dir,
         relay_url=relay_url,
         prefix=prefix,
@@ -1043,7 +1043,7 @@ def mcp_cmd(
 ) -> None:
     """Start the biff MCP server (stdio transport)."""
     server = _create_mcp_server(
-        user=user,
+        user=user or _user_override,
         data_dir=data_dir,
         relay_url=relay_url,
         prefix=prefix,

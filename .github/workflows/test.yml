@@ -26,7 +26,7 @@ jobs:
       - run: uv run pytest
 
       - name: Notify team on failure
-        if: failure()
+        if: failure() && github.event_name == 'push'
         run: |
           uv run biff --user github-actions wall \
             "CI failed on ${GITHUB_REF_NAME} (${GITHUB_EVENT_NAME}): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \

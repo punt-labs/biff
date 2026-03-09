@@ -60,13 +60,15 @@ class TestGlobalFlags:
         assert result.exit_code == 0
         assert "biff" in result.output
 
-    @patch("biff.__main__.cli_session", new=_fake_session)
     @patch("biff.commands.who", new_callable=AsyncMock)
     def test_user_override(self, mock_who: AsyncMock) -> None:
-        """--user sets global identity override for CLI commands."""
+        """--user propagates identity override to cli_session."""
         mock_who.return_value = CommandResult(text="ok")
-        result = runner.invoke(app, ["--user", "github-actions", "who"])
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            result = runner.invoke(app, ["--user", "github-actions", "who"])
         assert result.exit_code == 0
+        mock_sess.assert_called_once_with(user_override="github-actions")
+        mock_who.assert_awaited_once()
 
 
 class TestVersionCommand:
