@@ -97,10 +97,10 @@ Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 When in doubt, use a branch.
 
-**After creating a PR**, watch CI and review bots in the background — do not stop waiting:
+**After creating a PR**, watch CI and review bots without blocking your main shell — do not stop waiting:
 
 ```bash
-gh pr checks <number> --watch  # run in background, blocks until all checks resolve
+gh pr checks <number> --watch  # run in background task, blocks until all checks resolve
 ```
 
 **Expect 2-6 review cycles before merging.** Copilot and Bugbot often find real issues. Read their feedback using MCP GitHub tools:
