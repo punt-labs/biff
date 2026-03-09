@@ -65,6 +65,7 @@ from biff.server.state import create_state
 
 _json_output = False
 _quiet_output = False
+_user_override: str | None = None
 
 
 def _print_json(data: object) -> None:
@@ -123,14 +124,19 @@ def main(
         bool,
         typer.Option("--quiet", "-q", help="Suppress product command output."),
     ] = False,
+    user: Annotated[
+        str | None,
+        typer.Option("--user", help="Identity override (e.g. for CI bots)."),
+    ] = None,
 ) -> None:
     """Biff: team communication for software engineers."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive.")
 
-    global _json_output, _quiet_output
+    global _json_output, _quiet_output, _user_override
     _json_output = json_flag
     _quiet_output = quiet
+    _user_override = user
 
     if verbose:
         logger = logging.getLogger("biff")
@@ -731,7 +737,7 @@ async def _repl() -> None:
     setup_readline(cmds)
 
     try:
-        async with cli_session(interactive=True) as ctx:
+        async with cli_session(interactive=True, user_override=_user_override) as ctx:
             print(f"biff {pkg_version('punt-biff')} — {ctx.user}:{ctx.tty_name}")
             print(f"Commands: {', '.join(cmds)}, talk, exit")
             print()
@@ -830,7 +836,7 @@ def _run(
 
     async def _inner() -> None:
         try:
-            async with cli_session() as ctx:
+            async with cli_session(user_override=_user_override) as ctx:
                 result = await coro_factory(ctx)
         except ValueError as exc:
             if _json_output:
@@ -1007,7 +1013,7 @@ def serve(
 ) -> None:
     """Start the biff MCP server (HTTP transport)."""
     server = _create_mcp_server(
-        user=user,
+        user=user or _user_override,
         data_dir=data_dir,
         relay_url=relay_url,
         prefix=prefix,
@@ -1037,7 +1043,7 @@ def mcp_cmd(
 ) -> None:
     """Start the biff MCP server (stdio transport)."""
     server = _create_mcp_server(
-        user=user,
+        user=user or _user_override,
         data_dir=data_dir,
         relay_url=relay_url,
         prefix=prefix,
@@ -1372,7 +1378,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
     display = f"@{user_target}:{tty_target}" if tty_target else f"@{user_target}"
 
     try:
-        async with cli_session(interactive=True) as ctx:
+        async with cli_session(interactive=True, user_override=_user_override) as ctx:
             if not isinstance(ctx.relay, NatsRelay):
                 print("Talk requires a NATS relay.")
                 return

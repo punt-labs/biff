@@ -41,6 +41,7 @@ _MOCK_CTX = CliContext(
 async def _fake_session(
     *,
     interactive: bool = False,
+    user_override: str | None = None,
 ) -> AsyncIterator[CliContext]:
     """Drop-in replacement for ``cli_session`` that needs no NATS."""
     yield _MOCK_CTX
@@ -58,6 +59,16 @@ class TestGlobalFlags:
         result = runner.invoke(app, ["--verbose", "version"])
         assert result.exit_code == 0
         assert "biff" in result.output
+
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_user_override(self, mock_who: AsyncMock) -> None:
+        """--user propagates identity override to cli_session."""
+        mock_who.return_value = CommandResult(text="ok")
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            result = runner.invoke(app, ["--user", "github-actions", "who"])
+        assert result.exit_code == 0
+        mock_sess.assert_called_once_with(user_override="github-actions")
+        mock_who.assert_awaited_once()
 
 
 class TestVersionCommand:

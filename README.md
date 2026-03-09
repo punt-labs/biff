@@ -251,9 +251,10 @@ biff --json status          # JSON object with version, unread, wall
 biff --json read            # JSON array of messages
 biff --verbose who          # Debug logging to stderr
 biff --quiet write @kai "msg"  # Suppress non-JSON output
+biff --user github-actions wall "CI failed"  # Identity override for bots
 ```
 
-Global flags (`--json`, `--verbose`, `--quiet`) go before the subcommand.
+Global flags (`--json`, `--verbose`, `--quiet`, `--user`) go before the subcommand.
 
 ### Library API
 

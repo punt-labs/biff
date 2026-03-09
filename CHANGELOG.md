@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **CI notifications** — GitHub Actions workflow notifies the team via
+  `biff wall` when CI fails, with a direct link to the broken run
+- **`--user` global flag** — identity override for CI bots and headless
+  environments (`biff --user github-actions wall "CI failed"`)
+- **`github-actions` team member** — CI runner is a first-class biff identity
+
 ## [0.17.0] - 2026-03-08
 
 ### Added
