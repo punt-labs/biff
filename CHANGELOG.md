@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **install.sh missing VERSION pin** — install script now declares
+  `VERSION="X.Y.Z"` and uses `uv tool install punt-biff==$VERSION` per
+  distribution standards. The `punt release` CLI bumps this automatically.
+  Previously, the script installed whatever version PyPI returned, which
+  could lag behind during CDN propagation.
+- **Python 3.14 SSL error on NATS close** — suppress
+  `APPLICATION_DATA_AFTER_CLOSE_NOTIFY` raised by Python 3.14's stricter
+  SSL implementation during TLS teardown. Affects `biff doctor`, relay
+  disconnect, and relay close paths.
+
 ## [1.0.0] - 2026-03-09
 
 ### Added

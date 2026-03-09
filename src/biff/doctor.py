@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import ssl
 import subprocess
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -151,7 +153,8 @@ async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
             connect_timeout=3,
             **kwargs,
         )
-        await nc.close()
+        with suppress(ssl.SSLError):
+            await nc.close()  # Python 3.14+ raises during TLS teardown
     except Exception:  # noqa: BLE001
         return False
     return True
