@@ -4,11 +4,14 @@
 
 ### Added
 
-- **CI notifications** — GitHub Actions workflow notifies the team via
-  `biff wall` when CI fails, with a direct link to the broken run
+- **CI notifications via `biff enable`** — `biff enable` deploys a standalone
+  `biff-notify.yml` workflow using GitHub's `workflow_run` trigger. Fires on
+  any workflow failure (push only), posts `biff wall` with a link to the broken
+  run. `biff disable` removes it. `biff doctor` reports workflow status.
 - **`--user` global flag** — identity override for CI bots and headless
   environments (`biff --user github-actions wall "CI failed"`)
-- **`github-actions` team member** — CI runner is a first-class biff identity
+- **`github-actions` auto-enrolled** — `biff enable` adds `github-actions` to
+  the `.biff` team roster automatically so CI wall messages are accepted
 
 ## [0.17.0] - 2026-03-08
 
