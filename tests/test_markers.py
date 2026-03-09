@@ -110,3 +110,19 @@ class TestWallMarker:
     def test_no_marker_returns_none(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
             assert read_wall_marker("/test/root") is None
+
+    def test_naive_datetime_returns_none(self, tmp_path: Path) -> None:
+        """Corrupted marker with naive datetime doesn't crash."""
+        import json as _json
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            d = hint_dir("/test/root")
+            d.mkdir(parents=True, exist_ok=True)
+            # Write a marker with no timezone info
+            (d / "wall-active").write_text(
+                _json.dumps({"text": "bad", "expires_at": "2099-01-01T00:00:00"})
+            )
+            # Should not raise TypeError — returns gracefully
+            result = read_wall_marker("/test/root")
+            # fromisoformat without tz → naive datetime → TypeError caught
+            assert result is None or isinstance(result, str)

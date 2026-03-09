@@ -105,5 +105,5 @@ def read_wall_marker(worktree_root: str) -> str | None:
             path.unlink(missing_ok=True)
             return None
         return text
-    except (json.JSONDecodeError, ValueError, OSError):
+    except (json.JSONDecodeError, ValueError, TypeError, OSError):
         return None
