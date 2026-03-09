@@ -1337,6 +1337,55 @@ Each source gets a prefix that identifies *how* the plan was set:
 
 **Priority: manual > bead > git.** If the user explicitly called `/plan`, git hooks should not overwrite it. Implementation: store a `plan_source` field alongside the plan text. Git hooks only overwrite if `plan_source` is `"auto"`. Manual `/plan` and bead-claim set `plan_source` to `"manual"`. This prevents the annoying pattern where you set a careful plan and a git checkout immediately overwrites it.
 
+### Hint and Marker File Architecture (biff-4b5)
+
+Two categories of files bridge async relay state to synchronous hooks:
+
+**Hint files** are ephemeral signals written by one hook and consumed by another.
+Git hooks write them; Claude Code PostToolUse hooks read and delete them.
+
+| File | Writer | Reader | Purpose |
+|------|--------|--------|---------|
+| `plan-hint` | `git post-checkout`, `git post-commit` | PostToolUse Bash (`check_plan_hint`) | Nudge `/plan` after branch switch or commit |
+| `wall-hint` | `git pre-push` | PostToolUse Bash (`check_wall_hint`) | Nudge `/wall` after pushing to default branch |
+
+**Marker files** represent durable state written by MCP tools and read by hooks.
+MCP tools write them; SessionStart and PreToolUse hooks read them.
+
+| File | Writer | Reader | Purpose |
+|------|--------|--------|---------|
+| `plan-active` | `/plan` tool | PreToolUse gate (`has_plan_marker`) | Gate Edit/Write on plan-set |
+| `wall-active` | `/wall` tool | SessionStart (`read_wall_marker`) | Inject active wall into startup context |
+
+All files live in `~/.biff/hints/{hash}/` where `{hash}` is `sha256(worktree_root)[:16]`.
+Each git worktree gets its own directory to prevent cross-session races.
+
+**Why not query the relay directly?** The relay is async (NATS KV or local JSON behind
+an `async def`). Hooks run as synchronous subprocesses via `biff hook claude-code <event>`.
+Spinning up an event loop and connecting to the relay adds 200-500ms per hook invocation.
+Marker files are near-instant (`is_file()` or `read_text()`).
+
+**Hint vs. marker lifecycle:**
+
+- Hints are **consume-once**: the reader deletes the file after processing. This prevents
+  stale nudges from repeating on every Bash command.
+- Markers are **maintained**: the writer updates/deletes them as state changes. The
+  PreToolUse gate reads `plan-active` on every Edit/Write call; it must reflect current state.
+
+**Staleness and multi-session:**
+
+- `plan-active` is cleared at SessionStart to prevent stale markers from a crashed session.
+  In multi-session scenarios (same worktree), one session starting clears the other's marker.
+  Collision detection already warns about this case.
+- `wall-active` includes an `expires_at` timestamp. `read_wall_marker()` checks expiry
+  and auto-cleans expired markers.
+
+**Relationship to Z spec:** The Z spec models `SetPlanAuto` as a single PostToolUse
+operation. The implementation splits this into two phases (git hook writes hint,
+PostToolUse reads hint) because git hooks fire independently of Claude Code. The
+functional result is identical: after a branch checkout, the next Claude Code operation
+sees the plan nudge.
+
 ### Implementation Phases
 
 #### Phase 1: Session Lifecycle (immediate)

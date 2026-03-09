@@ -10,7 +10,6 @@ Layer 2: Git hooks — capture code lifecycle events.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import pathlib
 import re
@@ -102,6 +101,60 @@ def _parse_tool_response(raw: object) -> dict[str, object]:
 
 # ── Handlers (pure functions, testable without I/O) ──────────────────
 
+
+def _pre_tool_use_deny(reason: str) -> dict[str, object]:
+    """Build PreToolUse hook output that denies the tool call."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "reason": reason,
+        }
+    }
+
+
+def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  # noqa: ARG001
+    """Gate Edit/Write on plan-set AND bead-claimed.
+
+    Returns a deny response if either condition is missing, or ``None``
+    to allow (exit 0, no output).
+
+    The Z spec proves no path reaches file editing without both
+    conditions met (161K states, 789K transitions verified).
+    """
+    from biff.markers import check_bead_in_progress, has_plan_marker  # noqa: PLC0415
+
+    worktree = _get_worktree_root()
+    plan_set = has_plan_marker(worktree)
+    bead_status = check_bead_in_progress()
+
+    if not plan_set and bead_status != "yes":
+        if bead_status == "unavailable":
+            return _pre_tool_use_deny(
+                "Set your plan before editing files. "
+                "Run: /plan <what you're working on>. "
+                "Bead status could not be checked (bd unavailable)."
+            )
+        return _pre_tool_use_deny(
+            "Set your plan and claim a bead before editing files. "
+            "Run: /plan <what you're working on>, "
+            "then: bd update <bead-id> --status=in_progress"
+        )
+    if not plan_set:
+        return _pre_tool_use_deny(
+            "Set your plan before editing files. Run: /plan <what you're working on>"
+        )
+    if bead_status == "unavailable":
+        # Plan is set but bd is unavailable — allow gracefully.
+        return None
+    if bead_status == "no":
+        return _pre_tool_use_deny(
+            "Claim a bead before editing files. "
+            "Run: bd update <bead-id> --status=in_progress"
+        )
+    return None
+
+
 _BEAD_CLAIM_RE = re.compile(r"\bbd\s+update.*--status[=\s]in_progress")
 
 
@@ -173,6 +226,17 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
         return None
 
     safe_msg = json.dumps(msg, ensure_ascii=False)[1:-1]
+
+    # Check if a wall is already active to avoid redundant suggestions (biff-oqn).
+    from biff.markers import read_wall_marker  # noqa: PLC0415
+
+    wall_active = read_wall_marker(_get_worktree_root()) is not None
+
+    if wall_active:
+        return (
+            "This team uses biff for communication. "
+            f'Notify the relevant human directly: /write @human "{safe_msg}"'
+        )
     return (
         "This team uses biff for communication. "
         f"Consider announcing to the team: /wall {msg} "
@@ -241,9 +305,9 @@ def _hint_dir() -> pathlib.Path:
     in the same worktree share a hint directory — the coordination
     contract requires worktree isolation for concurrent sessions.
     """
-    root = _get_worktree_root()
-    h = hashlib.sha256(root.encode()).hexdigest()[:16] if root else "default"
-    return pathlib.Path.home() / ".biff" / "hints" / h
+    from biff.markers import hint_dir as _markers_hint_dir  # noqa: PLC0415
+
+    return _markers_hint_dir(_get_worktree_root())
 
 
 def _plan_hint_path() -> pathlib.Path:
@@ -450,7 +514,13 @@ def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
 
     Always returns context — at minimum, a /tty nudge.
     Reads the git branch and suggests /plan with auto source.
+    Clears stale plan marker so the PreToolUse gate starts fresh.
     """
+    from biff.markers import clear_plan_marker, read_wall_marker  # noqa: PLC0415
+
+    worktree = _get_worktree_root()
+    clear_plan_marker(worktree)
+
     parts: list[str] = [
         "Biff session starting.",
         "Call /tty to name this session (auto-assigns ttyN).",
@@ -470,6 +540,11 @@ def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
         )
 
     parts.append("Check /read for unread messages.")
+
+    # Load active wall broadcast (biff-41j).
+    wall_text = read_wall_marker(worktree)
+    if wall_text:
+        parts.append(f"Active wall: {wall_text}")
 
     collisions = _detect_collisions()
     if collisions:
@@ -492,6 +567,34 @@ def handle_session_resume() -> str:
     Re-orients Claude after context compaction or resume.
     """
     return "Biff session resumed. Check /read for unread messages."
+
+
+def handle_stop() -> str | None:
+    """Check for unread messages at session stop.
+
+    Reads the per-session unread file maintained by the MCP server.
+    Returns an ``additionalContext`` reminder, or ``None`` if no
+    unread messages.  This is a soft gate — always exit 0.
+    """
+    from biff.session_key import find_session_key  # noqa: PLC0415
+
+    unread_path = (
+        pathlib.Path.home() / ".biff" / "unread" / f"{find_session_key()}.json"
+    )
+    if not unread_path.is_file():
+        return None
+    try:
+        raw: object = cast("object", json.loads(unread_path.read_text()))
+        if not isinstance(raw, dict):
+            return None
+        data = cast("dict[str, object]", raw)
+        count = data.get("count", 0)
+        if not isinstance(count, int) or count <= 0:
+            return None
+        plural = "s" if count != 1 else ""
+        return f"You have {count} unread message{plural}. Run /read before finishing."
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def handle_session_end() -> int:
@@ -559,6 +662,17 @@ def handle_session_end() -> int:
 # ── Claude Code commands ─────────────────────────────────────────────
 
 
+@_cc_app.command("pre-tool-use")
+def cc_pre_tool_use() -> None:
+    """PreToolUse Edit|Write — gate on plan-set AND bead-claimed."""
+    if not _is_biff_enabled():
+        return
+    data = _read_hook_input()
+    result = handle_pre_tool_use(data)
+    if result is not None:
+        _emit(result)
+
+
 @_cc_app.command("post-bash")
 def cc_post_bash() -> None:
     """PostToolUse Bash — bead claims and git checkout nudges."""
@@ -612,10 +726,13 @@ def cc_session_end() -> None:
 
 @_cc_app.command("stop")
 def cc_stop() -> None:
-    """Stop — presence heartbeat.
-
-    Stub: full implementation in biff-cs5.
-    """
+    """Stop — unread message reminder (soft gate, never blocks)."""
+    if not _is_biff_enabled():
+        return
+    _read_hook_input()  # consume stdin
+    result = handle_stop()
+    if result is not None:
+        _emit(_hook_context("Stop", result))
 
 
 @_cc_app.command("pre-compact")

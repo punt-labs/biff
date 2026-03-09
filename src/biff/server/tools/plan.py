@@ -86,8 +86,25 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if source == "auto":
             session = await get_or_create_session(state)
             if session.plan_source == "manual" and session.plan:
+                # Re-write the marker even though the relay plan is unchanged.
+                # SessionStart clears the marker, so auto-plan calls after
+                # a new session starts must restore it.
+                from biff.markers import write_plan_marker  # noqa: PLC0415
+
+                worktree = str(state.repo_root) if state.repo_root else ""
+                write_plan_marker(worktree, session.plan)
                 return f"Plan unchanged (manual): {session.plan}"
         message = expand_bead_id(message)
         await update_current_session(state, plan=message, plan_source=source)
         await refresh_read_messages(mcp, state)
+
+        # Write/clear plan marker for PreToolUse gate (biff-vq5).
+        from biff.markers import clear_plan_marker, write_plan_marker  # noqa: PLC0415
+
+        worktree = str(state.repo_root) if state.repo_root else ""
+        if message:
+            write_plan_marker(worktree, message)
+        else:
+            clear_plan_marker(worktree)
+
         return f"Plan: {message}"
