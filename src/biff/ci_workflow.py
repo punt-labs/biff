@@ -17,7 +17,11 @@ _WORKFLOW_NAME = "biff-notify.yml"
 
 def _template_content() -> str:
     """Read the bundled workflow template."""
-    return importlib.resources.files("biff.data").joinpath(_WORKFLOW_NAME).read_text()
+    return (
+        importlib.resources.files("biff.data")
+        .joinpath(_WORKFLOW_NAME)
+        .read_text(encoding="utf-8")
+    )
 
 
 def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
@@ -35,10 +39,10 @@ def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
     target = workflows_dir / _WORKFLOW_NAME
     template = _template_content()
 
-    if target.exists() and target.read_text() == template:
+    if target.exists() and target.read_text(encoding="utf-8") == template:
         return False  # Already up to date
 
-    target.write_text(template)
+    target.write_text(template, encoding="utf-8")
     return True
 
 
@@ -72,4 +76,4 @@ def check_ci_workflow(repo_root: Path | None = None) -> bool:
     if not target.exists():
         return False
 
-    return target.read_text() == _template_content()
+    return target.read_text(encoding="utf-8") == _template_content()
