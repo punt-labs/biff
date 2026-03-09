@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from biff.markers import (
+    check_bead_in_progress,
     clear_plan_marker,
     clear_wall_marker,
-    has_bead_in_progress,
     has_plan_marker,
     hint_dir,
     read_wall_marker,
@@ -59,30 +60,34 @@ class TestPlanMarker:
             clear_plan_marker("/test/root")  # should not raise
 
 
-class TestHasBeadInProgress:
+class TestCheckBeadInProgress:
     """Bead-active check via bd subprocess."""
 
-    def test_returns_true_when_beads_exist(self) -> None:
+    def test_returns_yes_when_beads_exist(self) -> None:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = '[{"id": "biff-vq5"}]'
-            assert has_bead_in_progress()
+            assert check_bead_in_progress() == "yes"
 
-    def test_returns_false_on_empty_list(self) -> None:
+    def test_returns_no_on_empty_list(self) -> None:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "[]"
-            assert not has_bead_in_progress()
+            assert check_bead_in_progress() == "no"
 
-    def test_returns_false_on_nonzero_exit(self) -> None:
+    def test_returns_unavailable_on_nonzero_exit(self) -> None:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = ""
-            assert not has_bead_in_progress()
+            assert check_bead_in_progress() == "unavailable"
 
-    def test_returns_false_when_bd_not_found(self) -> None:
+    def test_returns_unavailable_when_bd_not_found(self) -> None:
         with patch("subprocess.run", side_effect=FileNotFoundError):
-            assert not has_bead_in_progress()
+            assert check_bead_in_progress() == "unavailable"
+
+    def test_returns_unavailable_on_timeout(self) -> None:
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("bd", 5)):
+            assert check_bead_in_progress() == "unavailable"
 
 
 class TestWallMarker:

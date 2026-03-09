@@ -122,13 +122,19 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
     The Z spec proves no path reaches file editing without both
     conditions met (161K states, 789K transitions verified).
     """
-    from biff.markers import has_bead_in_progress, has_plan_marker  # noqa: PLC0415
+    from biff.markers import check_bead_in_progress, has_plan_marker  # noqa: PLC0415
 
     worktree = _get_worktree_root()
     plan_set = has_plan_marker(worktree)
-    bead_active = has_bead_in_progress()
+    bead_status = check_bead_in_progress()
 
-    if not plan_set and not bead_active:
+    if not plan_set and bead_status != "yes":
+        if bead_status == "unavailable":
+            return _pre_tool_use_deny(
+                "Set your plan before editing files. "
+                "Run: /plan <what you're working on>. "
+                "Bead status could not be checked (bd unavailable)."
+            )
         return _pre_tool_use_deny(
             "Set your plan and claim a bead before editing files. "
             "Run: /plan <what you're working on>, "
@@ -138,7 +144,10 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
         return _pre_tool_use_deny(
             "Set your plan before editing files. Run: /plan <what you're working on>"
         )
-    if not bead_active:
+    if bead_status == "unavailable":
+        # Plan is set but bd is unavailable — allow gracefully.
+        return None
+    if bead_status == "no":
         return _pre_tool_use_deny(
             "Claim a bead before editing files. "
             "Run: bd update <bead-id> --status=in_progress"

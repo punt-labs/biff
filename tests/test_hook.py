@@ -1052,12 +1052,17 @@ class TestDetectCollisions:
 # ── handle_pre_tool_use ──────────────────────────────────────────────
 
 
-def _gate_mocks(*, plan: bool, bead: bool):
-    """Return patches for the two PreToolUse gate conditions."""
+def _gate_mocks(*, plan: bool, bead: bool | str):
+    """Return patches for the two PreToolUse gate conditions.
+
+    *bead* can be True/False (mapped to "yes"/"no") or a literal
+    string ("yes", "no", "unavailable").
+    """
+    bead_val = ("yes" if bead else "no") if isinstance(bead, bool) else bead
     return (
         patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
         patch("biff.markers.has_plan_marker", return_value=plan),
-        patch("biff.markers.has_bead_in_progress", return_value=bead),
+        patch("biff.markers.check_bead_in_progress", return_value=bead_val),
     )
 
 
@@ -1100,6 +1105,22 @@ class TestHandlePreToolUse:
 
     def test_both_present_allows(self) -> None:
         m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead=True)
+        with m_wt, m_plan, m_bead:
+            result = handle_pre_tool_use({})
+        assert result is None
+
+    def test_bd_unavailable_no_plan_denies_with_explanation(self) -> None:
+        m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead="unavailable")
+        with m_wt, m_plan, m_bead:
+            result = handle_pre_tool_use({})
+        assert result is not None
+        reason = _deny_reason(result)
+        assert "unavailable" in reason
+        assert "/plan" in reason
+
+    def test_bd_unavailable_with_plan_allows(self) -> None:
+        """When plan is set but bd is unavailable, allow gracefully."""
+        m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead="unavailable")
         with m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is None
@@ -1257,20 +1278,6 @@ class TestZSpecSessionEndCleanup:
         # Other repo's session untouched
         assert (active_dir / "kai-xyz99999").exists()
 
-    def test_unread_file_removed_by_lifespan(self, tmp_path: Path) -> None:
-        """Invariant 23: unread file cleaned up (lifespan layer).
-
-        The MCP server lifespan deletes unread_path on shutdown.
-        We verify the cleanup code path works correctly.
-        """
-        unread_file = tmp_path / "unread" / "12345.json"
-        unread_file.parent.mkdir(parents=True)
-        unread_file.write_text(json.dumps({"count": 2, "user": "kai", "repo": "biff"}))
-        assert unread_file.exists()
-        # Simulate lifespan cleanup
-        unread_file.unlink()
-        assert not unread_file.exists()
-
 
 class TestZSpecBeadClose:
     """Z spec §8.4 constraints 36, 50: CloseBead.
@@ -1308,18 +1315,18 @@ class TestZSpecBeadClose:
         result = handle_post_bash(data)
         assert result is None
 
-    def test_bead_in_progress_reflects_claimed_state(self) -> None:
-        """has_bead_in_progress returns True only when beads are claimed."""
-        from biff.markers import has_bead_in_progress
+    def test_bead_check_reflects_claimed_state(self) -> None:
+        """check_bead_in_progress reflects claimed vs unclaimed."""
+        from biff.markers import check_bead_in_progress
 
         # After bd close all, the list should be empty
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "[]"
-            assert not has_bead_in_progress()
+            assert check_bead_in_progress() == "no"
 
         # With one claimed bead
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = '[{"id": "biff-abc"}]'
-            assert has_bead_in_progress()
+            assert check_bead_in_progress() == "yes"

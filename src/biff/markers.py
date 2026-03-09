@@ -16,7 +16,7 @@ import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 
 def hint_dir(worktree_root: str) -> Path:
@@ -46,11 +46,12 @@ def has_plan_marker(worktree_root: str) -> bool:
     return (hint_dir(worktree_root) / "plan-active").is_file()
 
 
-def has_bead_in_progress() -> bool:
+def check_bead_in_progress() -> Literal["yes", "no", "unavailable"]:
     """Check whether any bead is in_progress via ``bd list``.
 
-    Returns ``False`` on any error (bd not installed, no .beads/, etc.)
-    so the gate defaults to deny-and-explain rather than silent allow.
+    Returns ``"yes"`` if at least one bead is claimed, ``"no"`` if
+    the list is empty, or ``"unavailable"`` if ``bd`` is not installed,
+    times out, or otherwise fails.
     """
     try:
         result = subprocess.run(
@@ -61,11 +62,18 @@ def has_bead_in_progress() -> bool:
             timeout=5,
         )
         if result.returncode != 0:
-            return False
+            return "unavailable"
         parsed: object = cast("object", json.loads(result.stdout))
-        return isinstance(parsed, list) and len(cast("list[object]", parsed)) > 0
-    except (FileNotFoundError, json.JSONDecodeError, TimeoutError, OSError):
-        return False
+        if isinstance(parsed, list) and len(cast("list[object]", parsed)) > 0:
+            return "yes"
+        return "no"
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ):
+        return "unavailable"
 
 
 # ── Wall markers ─────────────────────────────────────────────────────
