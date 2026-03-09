@@ -172,9 +172,11 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
     else:
         return None
 
+    safe_msg = json.dumps(msg, ensure_ascii=False)[1:-1]
     return (
         "This team uses biff for communication. "
-        f"Consider announcing to the team: /wall {msg}"
+        f"Consider announcing to the team: /wall {msg} "
+        f'Also notify the relevant human directly: /write @human "{safe_msg}"'
     )
 
 
@@ -475,7 +477,10 @@ def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
         n = len(collisions)
         parts.append(
             f"\u26a0 {n} other session(s) active in this worktree ({keys}). "
-            "Run /who for details. Consider using a worktree to avoid conflicts."
+            "Run /who to check what others are working on before claiming work. "
+            "Set /plan before beginning to avoid duplicate effort. "
+            "Consider /write @other to negotiate file ownership, "
+            "or use a git worktree for isolation."
         )
 
     return " ".join(parts)

@@ -153,6 +153,7 @@ class TestHandlePostPr:
         assert "Created PR #42" in result
         assert "feat: hook dispatcher" in result
         assert "/wall" in result
+        assert "/write @human" in result
 
     def test_create_pr_plugin_prefix(self) -> None:
         data: dict[str, object] = {
@@ -206,7 +207,8 @@ class TestHandlePostPr:
         result = handle_post_pr(data)
         assert result is not None
         assert "/wall Merged PR #42" in result
-        assert ": " not in result.split("Merged")[1]
+        # No title means the msg is "Merged PR #42" with no ": title" suffix
+        assert "Merged PR #42:" not in result
 
     def test_create_pr_missing_title(self) -> None:
         data: dict[str, object] = {
@@ -952,7 +954,7 @@ class TestDetectCollisions:
             assert _detect_collisions() == []
 
     def test_session_start_includes_advisory(self, tmp_path: Path) -> None:
-        """handle_session_start() includes collision advisory."""
+        """Collision advisory includes coordination guidance."""
         active_dir = tmp_path / ".biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text(f"kai:abc\nmy-repo\n{_FAKE_WORKTREE}\n")
@@ -970,6 +972,8 @@ class TestDetectCollisions:
         assert "\u26a0" in result
         assert "kai:abc" in result
         assert "/who" in result
+        assert "/plan" in result
+        assert "/write @other" in result
         assert "worktree" in result
 
     def test_session_start_no_collision_no_advisory(self, tmp_path: Path) -> None:
