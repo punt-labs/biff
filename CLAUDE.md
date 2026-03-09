@@ -114,6 +114,16 @@ mcp__github__pull_request_read  →  get_review_comments
 
 **Merge via `mcp__github__merge_pull_request`** (not `gh pr merge`). The MCP tool is API-only with no local git side effects, which avoids checkout conflicts in worktrees.
 
+**Post-merge cleanup** — the MCP merge has no local side effects, so the local branch and remote tracking ref remain. After every merge:
+
+```bash
+git checkout main && git pull origin main  # switch to main, pull merged commit
+git branch -D <branch-name>               # delete local feature branch
+git fetch --prune                          # clean stale remote tracking refs
+```
+
+GitHub auto-deletes remote head branches on merge ([github standard](../punt-kit/standards/github.md)), so `fetch --prune` is sufficient for remote cleanup. Run `/clean_gone` to batch-delete all stale local branches if they accumulate.
+
 ### Quarry Knowledge Base
 
 All punt-labs repos are indexed in quarry (local semantic search) as separate collections: biff, quarry, punt-kit, prfaq, langlearn-tts, public-website, claude-code-docs, and more. Use `/find <query>` to quickly look up design decisions, NATS configuration, test patterns, architecture details, and cross-project knowledge without reading entire files. Results are ranked by relevance with page references.
