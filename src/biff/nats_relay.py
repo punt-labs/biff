@@ -90,8 +90,11 @@ async def _safe_close(nc: NatsClient) -> None:
     when the server sends data after the TLS close_notify.  This is harmless
     during intentional teardown — the connection is going away regardless.
     """
-    with suppress(ssl.SSLError):
+    try:
         await nc.close()
+    except ssl.SSLError as exc:
+        if "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" not in str(exc):
+            raise
 
 
 class NatsRelay:
