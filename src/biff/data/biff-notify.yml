@@ -3,6 +3,9 @@ on:
   workflow_run:
     types: [completed]
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     if: >-
