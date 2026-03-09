@@ -83,7 +83,7 @@ _DEFAULT_STREAM_PREFIX = "biff"
 RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
 
 
-async def _safe_close(nc: NatsClient) -> None:
+async def safe_close(nc: NatsClient) -> None:
     """Close a NATS connection, suppressing Python 3.14+ SSL teardown errors.
 
     Python 3.14 raises ``ssl.SSLError: APPLICATION_DATA_AFTER_CLOSE_NOTIFY``
@@ -217,7 +217,7 @@ class NatsRelay:
             await self._provision_wtmp(js)
             await self._cleanup_legacy_streams(js)
         except Exception:
-            await _safe_close(nc)
+            await safe_close(nc)
             raise
 
         self._nc = nc
@@ -360,7 +360,7 @@ class NatsRelay:
         (the session is ending).
         """
         if self._nc is not None and not self._nc.is_closed:
-            await _safe_close(self._nc)
+            await safe_close(self._nc)
         self._nc = None
         self._js = None
         self._kv = None
@@ -368,7 +368,7 @@ class NatsRelay:
     async def close(self) -> None:
         """Close the NATS connection and release resources."""
         if self._nc is not None:
-            await _safe_close(self._nc)
+            await safe_close(self._nc)
             self._nc = None
             self._js = None
             self._kv = None

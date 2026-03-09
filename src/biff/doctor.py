@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-import ssl
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,6 +144,8 @@ async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
     """Attempt a NATS connection with a short timeout."""
     import nats
 
+    from biff.nats_relay import safe_close
+
     kwargs = auth.as_nats_kwargs() if auth else {}
     try:
         nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
@@ -152,12 +153,7 @@ async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
             connect_timeout=3,
             **kwargs,
         )
-        try:
-            await nc.close()
-        except ssl.SSLError as exc:
-            # Python 3.14+ raises during TLS teardown — only suppress that.
-            if "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" not in str(exc):
-                raise
+        await safe_close(nc)
     except Exception:  # noqa: BLE001
         return False
     return True
