@@ -97,13 +97,22 @@ Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 When in doubt, use a branch.
 
-**After creating a PR**, wait for CI to finish before reading review feedback:
+**After creating a PR**, watch CI and review bots in the background — do not stop waiting:
 
 ```bash
-gh pr checks <number> --watch
+gh pr checks <number> --watch  # run in background, blocks until all checks resolve
 ```
 
-Then check for Copilot and Bugbot review comments before merging.
+**Expect 2-6 review cycles before merging.** Copilot and Bugbot often find real issues. Read their feedback using MCP GitHub tools:
+
+```text
+mcp__github__pull_request_read  →  get_reviews
+mcp__github__pull_request_read  →  get_review_comments
+```
+
+**Take every comment seriously.** Do not dismiss feedback as "unrelated to the change" or "pre-existing." If a reviewer (human or bot) flagged it, investigate and fix it. Re-push, re-watch CI, re-read reviews. Repeat until the **last review cycle is uneventful** — zero new comments, all checks green.
+
+**Merge via `mcp__github__merge_pull_request`** (not `gh pr merge`). The MCP tool is API-only with no local git side effects, which avoids checkout conflicts in worktrees.
 
 ### Quarry Knowledge Base
 
@@ -202,14 +211,23 @@ biff doctor                             # Both match
 | `distributed-test-engineer` | Diagnoses distributed system test failures: NATS, asyncio, pytest-asyncio, MCP transport | Hosted NATS test hangs, connection lifecycle bugs |
 | `leak-hunter` | Finds resource leaks: NATS consumers, asyncio tasks, file descriptors | Before any PyPI release, after relay code changes |
 
+### Documentation Discipline
+
+Three documents track different scopes. All are updated in the PR branch, before merge — never retroactively on main. If the diff is missing a required doc update, the PR is not ready.
+
+1. **CHANGELOG** — Every PR that changes user-facing behavior includes an entry under `## [Unreleased]`. Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Categories: Added, Changed, Deprecated, Removed, Fixed, Security.
+
+2. **README** — Update `README.md` when user-facing behavior changes: new flags, commands, defaults, config options, environment variables, or removed functionality.
+
+3. **PR/FAQ** — Update `prfaq.tex` when the change shifts product direction or validates/invalidates a risk assumption. Recompile the PDF.
+
 ### Pre-PR Checklist
 
 Before creating a PR, verify:
 
 - [ ] **Version bumped** in both `pyproject.toml` and `plugin.json` if user-facing behavior changed
 - [ ] **`plugin.json` name is `"biff-dev"`** (not `"biff"` — release scripts handle the swap)
-- [ ] **CHANGELOG entry included in the PR diff** under `## Unreleased` (not retroactively on main)
-- [ ] **README updated** if user-facing behavior changed
+- [ ] **Documentation updated** per [Documentation Discipline](#documentation-discipline) (CHANGELOG, README, PR/FAQ as applicable)
 - [ ] **Quality gates pass**
 - [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m hosted -v`
 
