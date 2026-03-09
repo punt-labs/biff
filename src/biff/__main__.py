@@ -1125,11 +1125,18 @@ def enable(
     write_biff_local(repo_root, enabled=True)
     ensure_gitignore(repo_root)
 
+    from biff.ci_workflow import deploy_ci_workflow
+    from biff.config import ensure_github_actions_member
     from biff.git_hooks import deploy_git_hooks
 
     hooks = deploy_git_hooks(repo_root)
     if hooks:
         print(f"Git hooks: {', '.join(hooks)}")
+
+    if deploy_ci_workflow(repo_root):
+        print("CI workflow: .github/workflows/biff-notify.yml")
+    if ensure_github_actions_member(repo_root):
+        print("Added github-actions to .biff team members")
 
     print("biff enabled. Restart Claude Code for changes to take effect.")
 
@@ -1152,11 +1159,15 @@ def disable(
     write_biff_local(repo_root, enabled=False)
     ensure_gitignore(repo_root)
 
+    from biff.ci_workflow import remove_ci_workflow
     from biff.git_hooks import remove_git_hooks
 
     hooks = remove_git_hooks(repo_root)
     if hooks:
         print(f"Git hooks removed: {', '.join(hooks)}")
+
+    if remove_ci_workflow(repo_root):
+        print("CI workflow removed: biff-notify.yml")
 
     print("biff disabled. Restart Claude Code for changes to take effect.")
 

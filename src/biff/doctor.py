@@ -242,6 +242,37 @@ def _check_git_hooks() -> CheckResult:
     )
 
 
+def _check_ci_workflow() -> CheckResult:
+    """Check biff CI notification workflow is deployed (informational)."""
+    repo_root = find_git_root()
+    if repo_root is None:
+        return CheckResult(
+            "CI workflow",
+            False,
+            "not in a git repo",
+            required=False,
+        )
+    if not is_enabled(repo_root):
+        return CheckResult(
+            "CI workflow",
+            True,
+            "skipped (biff not enabled)",
+            required=False,
+        )
+    from biff.ci_workflow import check_ci_workflow
+
+    if check_ci_workflow(repo_root):
+        return CheckResult(
+            "CI workflow", True, "biff-notify.yml deployed", required=False
+        )
+    return CheckResult(
+        "CI workflow",
+        False,
+        "missing or outdated (run 'biff enable')",
+        required=False,
+    )
+
+
 def _check_statusline() -> CheckResult:
     """Check status line is configured (informational)."""
     if STASH_PATH.exists():
@@ -283,6 +314,7 @@ def check_environment() -> int:
         _check_biff_file(),
         _check_enabled(),
         _check_git_hooks(),
+        _check_ci_workflow(),
         _check_statusline(),
     ]
 
