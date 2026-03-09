@@ -172,10 +172,11 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
     else:
         return None
 
+    safe_msg = json.dumps(msg, ensure_ascii=False)[1:-1]
     return (
         "This team uses biff for communication. "
-        f"Consider announcing to the team: /wall {msg}. "
-        f'Also notify the relevant human directly: /write @human "{msg}"'
+        f"Consider announcing to the team: /wall {msg} "
+        f'Also notify the relevant human directly: /write @human "{safe_msg}"'
     )
 
 

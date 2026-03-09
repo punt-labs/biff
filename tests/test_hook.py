@@ -206,8 +206,8 @@ class TestHandlePostPr:
         }
         result = handle_post_pr(data)
         assert result is not None
-        assert "/wall Merged PR #42." in result
-        # No title means the wall message is just "Merged PR #42" (no ": title")
+        assert "/wall Merged PR #42" in result
+        # No title means the msg is "Merged PR #42" with no ": title" suffix
         assert "Merged PR #42:" not in result
 
     def test_create_pr_missing_title(self) -> None:
