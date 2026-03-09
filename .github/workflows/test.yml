@@ -24,3 +24,10 @@ jobs:
       - run: uv run mypy src/ tests/
       - run: uv run pyright
       - run: uv run pytest
+
+      - name: Notify team on failure
+        if: failure()
+        run: |
+          uv run biff --user github-actions wall \
+            "CI failed on ${GITHUB_REF_NAME} (${GITHUB_EVENT_NAME}): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --duration 2h

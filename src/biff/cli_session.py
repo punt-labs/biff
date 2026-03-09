@@ -71,7 +71,9 @@ async def _heartbeat_loop(
 
 
 @asynccontextmanager
-async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]:
+async def cli_session(
+    *, interactive: bool = False, user_override: str | None = None
+) -> AsyncIterator[CliContext]:
     """Provide a NATS relay + session with proper lifecycle.
 
     On entry: connect, register session (KV), auto-assign ttyN,
@@ -79,7 +81,7 @@ async def cli_session(*, interactive: bool = False) -> AsyncIterator[CliContext]
 
     On exit: write wtmp logout event, delete session (KV), disconnect.
     """
-    resolved = load_config()
+    resolved = load_config(user_override=user_override)
     config = resolved.config
 
     if not config.relay_url:
