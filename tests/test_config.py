@@ -514,6 +514,15 @@ class TestEnsureGithubActionsMember:
         # Must NOT have leading comma: [, "github-actions"]
         assert "[," not in content
 
+    def test_trailing_comma_in_members(self, tmp_path: Path) -> None:
+        biff_file = tmp_path / ".biff"
+        biff_file.write_text('[team]\nmembers = ["kai",]\n')
+        assert ensure_github_actions_member(tmp_path) is True
+        content = biff_file.read_text()
+        assert '"github-actions"' in content
+        # Must NOT have double comma: ["kai",, "github-actions"]
+        assert ",," not in content
+
     def test_preserves_formatting(self, tmp_path: Path) -> None:
         biff_file = tmp_path / ".biff"
         original = '[team]\nmembers = ["kai"]\n\n[relay]\nurl = "nats://localhost"\n'

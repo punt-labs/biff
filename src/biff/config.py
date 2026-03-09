@@ -367,7 +367,7 @@ def ensure_github_actions_member(repo_root: Path) -> bool:
     if match is None:
         return False
 
-    prefix = match.group(1).rstrip()
+    prefix = match.group(1).rstrip().rstrip(",").rstrip()
     quoted = _toml_basic_string(_GITHUB_ACTIONS_USER)
     # Handle empty array: [] → ["github-actions"] (no leading comma)
     separator = "" if prefix.endswith("[") else ", "
