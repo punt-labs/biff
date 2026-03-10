@@ -11,6 +11,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import select
@@ -94,15 +95,29 @@ def _is_lux_enabled() -> bool:
 def _read_hook_input() -> dict[str, object]:
     """Read JSON hook payload from stdin (non-blocking).
 
-    Uses ``select`` with a short timeout to avoid blocking forever
-    when the caller does not close the stdin pipe.  This is critical
-    for SessionStart hooks where Claude Code may not send EOF.
+    Uses ``select`` + ``os.read`` to avoid blocking forever when the
+    caller does not close the stdin pipe.  Never calls
+    ``sys.stdin.read()`` which blocks until EOF.
+
+    Strategy: wait up to 100ms for initial data, then read available
+    bytes in chunks with a 50ms inter-chunk timeout.  Stops as soon
+    as no more data arrives — does not require EOF.
     """
     try:
-        # Wait up to 100ms for stdin data; return empty if nothing arrives.
-        if not select.select([sys.stdin], [], [], 0.1)[0]:
+        fd = sys.stdin.fileno()
+        # Wait up to 100ms for initial data.
+        if not select.select([fd], [], [], 0.1)[0]:
             return {}
-        raw = sys.stdin.read()
+        # Read available data in chunks (50ms inter-chunk timeout).
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:  # EOF
+                break
+            chunks.append(chunk)
+            if not select.select([fd], [], [], 0.05)[0]:
+                break
+        raw = b"".join(chunks).decode()
         if not raw.strip():
             return {}
         data = json.loads(raw)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -15,6 +16,7 @@ from unittest.mock import patch
 from biff.hook import (
     _detect_collisions,
     _expand_branch_plan,
+    _read_hook_input,
     check_plan_hint,
     check_wall_hint,
     handle_post_bash,
@@ -1745,3 +1747,70 @@ class TestIsErrorFlag:
             result = handle_post_bash(data)
         assert result is None
         assert not _hint_path(tmp_path, "bead-active").exists()
+
+
+# ── _read_hook_input (non-blocking stdin) ───────────────────────────
+
+
+class TestReadHookInput:
+    """Tests for _read_hook_input non-blocking stdin reads."""
+
+    def test_empty_stdin_returns_empty(self) -> None:
+        """No data on stdin returns {} without blocking."""
+        r_fd, w_fd = os.pipe()
+        r = os.fdopen(r_fd, "r")
+        # Close write end immediately — EOF with no data.
+        os.close(w_fd)
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        assert result == {}
+
+    def test_valid_json_parsed(self) -> None:
+        """Valid JSON on stdin is parsed and returned."""
+        r_fd, w_fd = os.pipe()
+        os.write(w_fd, b'{"tool_name": "Edit"}\n')
+        os.close(w_fd)
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        assert result == {"tool_name": "Edit"}
+
+    def test_no_eof_does_not_hang(self) -> None:
+        """Stdin with data but no EOF returns data without blocking.
+
+        This is the regression test for the session resume hang:
+        Claude Code pipes data but may not close the pipe.
+        """
+        r_fd, w_fd = os.pipe()
+        os.write(w_fd, b'{"event": "resume"}\n')
+        # Do NOT close w_fd — simulates open pipe without EOF.
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        os.close(w_fd)
+        assert result == {"event": "resume"}
+
+    def test_no_data_no_eof_returns_empty(self) -> None:
+        """Open pipe with no data returns {} without blocking."""
+        r_fd, w_fd = os.pipe()
+        # Pipe open, no data written, no EOF.
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        os.close(w_fd)
+        assert result == {}
+
+    def test_invalid_json_returns_empty(self) -> None:
+        """Invalid JSON on stdin returns {} gracefully."""
+        r_fd, w_fd = os.pipe()
+        os.write(w_fd, b"not json\n")
+        os.close(w_fd)
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        assert result == {}
