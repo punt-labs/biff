@@ -4,6 +4,18 @@
 
 ## [1.3.0] - 2026-03-09
 
+### Fixed
+
+- **Hook enabled-gate bypass** — all 10 shell hooks (pre-tool gate,
+  post-bash, PR announce, session init/end/resume, stop, git post-checkout,
+  git post-commit, git pre-push) now check `.biff.local` with
+  `enabled=true` before dispatching to Python. Previously hooks only
+  checked for `.biff` existence, causing them to fire in repos where biff
+  was installed but not enabled via `biff y`.
+- **POSIX grep portability** — replaced GNU `\s` extension with
+  `[[:space:]]` in all hook enabled-gate patterns. `\s` is not POSIX ERE
+  and was treated as literal `s` on macOS/BSD grep.
+
 ## [1.2.0] - 2026-03-09
 
 ### Added
