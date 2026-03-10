@@ -2383,3 +2383,96 @@ This is a **silent failure** — the hook appears to work (tool is denied) but
 the critical feedback loop (agent reads reason → agent self-corrects) is broken.
 Any project using PreToolUse deny hooks must use `"permissionDecisionReason"`,
 not `"reason"`.  Propagated to `punt-kit/standards/hooks.md` as a common bug.
+
+## DES-027: Non-Blocking Hook Stdin — `os.read` + `select` Loop
+
+**Date:** 2026-03-09
+**Status:** Settled
+**Versions:** v1.3.1–v1.3.2
+
+### Problem
+
+Session resume hung indefinitely at "resuming session" on two machines
+after updating to v1.3.0.  Disabling biff (removing `.biff.local`)
+unblocked resume; re-enabling reproduced the hang.
+
+### Root Cause
+
+`_read_hook_input()` called `sys.stdin.read()`, which blocks until the
+writer closes the pipe (EOF).  Claude Code pipes event JSON to hook
+subprocesses but does **not** always close the pipe promptly for
+`SessionStart` resume/compact events.  The read blocked forever.
+
+Four handlers called `_read_hook_input()` without using the result:
+
+| Handler | Comment |
+|---------|---------|
+| `cc_session_start` | `data` param had `# noqa: ARG001` |
+| `cc_session_resume` | `"consume stdin even if unused"` |
+| `cc_session_end` | `"consume stdin"` |
+| `cc_stop` | `"consume stdin"` |
+
+The "consume stdin" pattern was defensive (prevent buffering), but
+created the exact hang it intended to prevent.
+
+### Decision
+
+1. **Never call `sys.stdin.read()` in hooks.**  Use `os.read(fd, 65536)`
+   which returns available bytes without waiting for EOF.
+2. **Gate every read with `select.select([fd], [], [], timeout)`.**
+   100ms initial timeout, 50ms inter-chunk timeout.  If no data arrives,
+   return `{}` immediately.
+3. **Remove `_read_hook_input()` from handlers that don't use the data.**
+   Four handlers pruned.  `handle_session_start()` signature changed to
+   take no arguments.
+
+### Pattern: Non-Blocking Stdin Read
+
+```python
+import os
+import select
+
+def _read_hook_input() -> dict[str, object]:
+    fd = sys.stdin.fileno()
+    if not select.select([fd], [], [], 0.1)[0]:
+        return {}
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:  # EOF
+            break
+        chunks.append(chunk)
+        if not select.select([fd], [], [], 0.05)[0]:
+            break
+    raw = b"".join(chunks).decode()
+    return json.loads(raw) if raw.strip() else {}
+```
+
+### Alternatives Rejected
+
+- **`sys.stdin.readline()`** — also blocks if no newline arrives.
+- **`fcntl` `O_NONBLOCK`** — changes fd state globally, requires
+  cleanup, complex error handling for `EAGAIN`.
+- **`select` + `sys.stdin.read()`** (first attempt, v1.3.1) — reviewers
+  correctly flagged: `select` returning readable only guarantees one byte
+  won't block; `sys.stdin.read()` still waits for EOF after reading
+  initial data.  This was the half-fix that Copilot and Bugbot caught.
+
+### Cross-Project Impact
+
+Any MCP plugin hook that reads stdin with `sys.stdin.read()` is
+vulnerable to the same hang.  The quarry plugin had the same pattern
+and was independently identified as the actual trigger for the user's
+original report.  Propagated the pattern to quarry.
+
+### Test Coverage
+
+Five tests in `TestReadHookInput`:
+
+| Test | Scenario |
+|------|----------|
+| `test_empty_stdin_returns_empty` | EOF with no data |
+| `test_valid_json_parsed` | Normal operation |
+| `test_no_eof_does_not_hang` | **Regression**: data on pipe, no EOF |
+| `test_no_data_no_eof_returns_empty` | Open pipe, no data, no EOF |
+| `test_invalid_json_returns_empty` | Malformed input |
