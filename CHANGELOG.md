@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-03-09
+
 ### Added
 
 - **Lux beads board refresh** — when lux and beads are both active, biff
