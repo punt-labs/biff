@@ -14,7 +14,9 @@
 - **Bead status marker cache** — `PreToolUse` gate now reads a marker file
   instead of spawning a `bd list` subprocess on every `Edit`/`Write` call.
   Marker is written on `bd update --status=in_progress` and cleared on
-  `bd close`. First call per session falls back to subprocess and caches.
+  `bd close` or any status transition away from `in_progress`. Marker
+  persists across sessions; first check without a marker falls back to
+  subprocess and caches the result.
 - **Lux and beads availability detection** — `_is_lux_enabled()` reads
   `.lux/config.md` frontmatter; `_has_beads()` checks for `.beads/`
   directory. Both are file-based (<1ms).

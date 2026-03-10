@@ -198,6 +198,9 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
 
 _BEAD_CLAIM_RE = re.compile(r"\bbd\s+update.*--status[=\s]in_progress")
 _BEAD_CLOSE_RE = re.compile(r"\bbd\s+close\b")
+_BEAD_STATUS_CHANGE_RE = re.compile(
+    r"\bbd\s+update.*--status[=\s](?!in_progress)\w+",
+)
 _BEAD_MUTATE_RE = re.compile(r"\bbd\s+(create|update|close|dep)\b")
 
 _LUX_BEADS_REFRESH = (
@@ -229,16 +232,21 @@ def handle_post_bash(data: dict[str, object]) -> str | None:
         return None
 
     response = data.get("tool_response", "")
-    is_success = isinstance(response, str) and "\u2713" in response
+    is_error = data.get("is_error", False)
+    is_success = not is_error and isinstance(response, str) and "\u2713" in response
+
+    worktree = _get_worktree_root()
 
     # Bead close — clear marker so next PreToolUse re-checks via subprocess.
     if _BEAD_CLOSE_RE.search(command) and is_success:
-        clear_bead_marker(_get_worktree_root())
+        if worktree:
+            clear_bead_marker(worktree)
         return _lux_beads_nudge()
 
     # Bead claim — write marker for fast PreToolUse gate.
     if _BEAD_CLAIM_RE.search(command) and is_success:
-        write_bead_marker(_get_worktree_root())
+        if worktree:
+            write_bead_marker(worktree)
         nudge = (
             "You just claimed a bead. Set your dotplan so teammates can see "
             "what you are working on: /plan <bead-id>: <short description>. "
@@ -246,6 +254,12 @@ def handle_post_bash(data: dict[str, object]) -> str | None:
         )
         lux = _lux_beads_nudge()
         return f"{nudge} {lux}" if lux else nudge
+
+    # Status transition away from in_progress — clear marker.
+    if _BEAD_STATUS_CHANGE_RE.search(command) and is_success:
+        if worktree:
+            clear_bead_marker(worktree)
+        return _lux_beads_nudge()
 
     # Other bead mutations (create, dep add, generic update).
     if _BEAD_MUTATE_RE.search(command) and is_success:

@@ -1291,31 +1291,27 @@ class TestZSpecBeadClose:
     Bead claim writes the marker for fast-path caching.
     """
 
-    def test_bd_close_not_detected_as_claim(self) -> None:
+    def test_bd_close_not_detected_as_claim(self, tmp_path: Path) -> None:
         """bd close should NOT trigger the bead claim nudge."""
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {"command": "bd close biff-abc"},
             "tool_response": "\u2713 Closed biff-abc",
         }
-        with (
-            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
-            patch("biff.hook._has_beads", return_value=False),
-        ):
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt, patch("biff.hook._has_beads", return_value=False):
             result = handle_post_bash(data)
         assert result is None
 
-    def test_bd_close_multiple_not_detected(self) -> None:
+    def test_bd_close_multiple_not_detected(self, tmp_path: Path) -> None:
         """bd close with multiple IDs should not trigger claim."""
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {"command": "bd close biff-abc biff-def"},
             "tool_response": "\u2713 Closed biff-abc\n\u2713 Closed biff-def",
         }
-        with (
-            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
-            patch("biff.hook._has_beads", return_value=False),
-        ):
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt, patch("biff.hook._has_beads", return_value=False):
             result = handle_post_bash(data)
         assert result is None
 
@@ -1595,3 +1591,157 @@ class TestLuxPrDashboard:
             result = handle_post_pr(data)
         assert result is not None
         assert "/lux:dashboard" not in result
+
+
+class TestIsLuxEnabled:
+    """Unit tests for _is_lux_enabled() YAML frontmatter parsing."""
+
+    def test_lux_enabled(self, tmp_path: Path) -> None:
+        """Standard .lux/config.md with display: "y"."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('---\ndisplay: "y"\n---\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is True
+
+    def test_lux_disabled(self, tmp_path: Path) -> None:
+        """display: "n" means lux is off."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('---\ndisplay: "n"\n---\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_no_config_file(self, tmp_path: Path) -> None:
+        """No .lux/config.md means lux is off."""
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_no_frontmatter(self, tmp_path: Path) -> None:
+        """Config file without --- frontmatter delimiters."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('display: "y"\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_missing_closing_delimiter(self, tmp_path: Path) -> None:
+        """Frontmatter with opening --- but no closing ---."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('---\ndisplay: "y"\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_unquoted_value(self, tmp_path: Path) -> None:
+        """display: y without quotes should still work."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text("---\ndisplay: y\n---\n")
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is True
+
+    def test_lux_single_quoted_value(self, tmp_path: Path) -> None:
+        """display: \'y\' with single quotes."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text("---\ndisplay: 'y'\n---\n")
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is True
+
+    def test_lux_no_git_root(self) -> None:
+        """No git root means lux is off."""
+        with patch("biff.config.find_git_root", return_value=None):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+
+class TestBeadStatusTransition:
+    """Marker is cleared when bd update changes status away from in_progress."""
+
+    def test_status_done_clears_marker(self, tmp_path: Path) -> None:
+        """bd update --status=done clears bead-active marker."""
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=done",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        m_beads, m_lux = _lux_mocks(lux=False)
+        with m_home, m_wt, m_beads, m_lux:
+            handle_post_bash(data)
+        assert not marker.exists()
+
+    def test_status_open_clears_marker(self, tmp_path: Path) -> None:
+        """bd update --status=open clears bead-active marker."""
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=open",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        m_beads, m_lux = _lux_mocks(lux=False)
+        with m_home, m_wt, m_beads, m_lux:
+            handle_post_bash(data)
+        assert not marker.exists()
+
+    def test_status_in_progress_does_not_clear(self, tmp_path: Path) -> None:
+        """bd update --status=in_progress should write, not clear."""
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=in_progress",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            handle_post_bash(data)
+        assert _hint_path(tmp_path, "bead-active").exists()
+
+
+class TestIsErrorFlag:
+    """is_error flag prevents marker writes on failed commands."""
+
+    def test_is_error_prevents_claim(self, tmp_path: Path) -> None:
+        """Bash tool with is_error=True should not write marker."""
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=in_progress",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+            "is_error": True,
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            result = handle_post_bash(data)
+        assert result is None
+        assert not _hint_path(tmp_path, "bead-active").exists()

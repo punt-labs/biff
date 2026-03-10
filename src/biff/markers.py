@@ -65,8 +65,10 @@ def check_bead_in_progress(worktree_root: str = "") -> BeadStatus:
     """Check whether any bead is in_progress.
 
     Fast path: reads the ``bead-active`` marker file (<1ms).
-    Slow path: falls back to ``bd list`` subprocess if no marker exists,
-    then writes the result as a cache for subsequent calls.
+    Slow path: falls back to ``bd list`` subprocess if no marker exists.
+    Only the ``"yes"`` result is cached as a marker; ``"no"`` and
+    ``"unavailable"`` are not cached (marker is written on claim,
+    cleared on close or status transition).
 
     Returns ``"yes"`` if at least one bead is claimed, ``"no"`` if
     the list is empty, or ``"unavailable"`` if ``bd`` is not installed,
