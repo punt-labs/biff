@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-03-09
+
 ### Fixed
 
 - **install.sh missing VERSION pin** — install script now declares
