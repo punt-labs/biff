@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-03-09
+
+### Fixed
+
+- **Session resume hang** — `_read_hook_input()` called `sys.stdin.read()`
+  which blocks until EOF. When Claude Code does not close the stdin pipe
+  for SessionStart resume/compact hooks, this caused an infinite hang at
+  "resuming session." Fixed by adding `select` with a 100ms timeout so
+  the read returns immediately when no data is available, and by removing
+  unnecessary `_read_hook_input()` calls from four handlers that never
+  used the data (`session-start`, `session-resume`, `session-end`, `stop`).
+
 ## [1.3.0] - 2026-03-09
 
 ### Fixed

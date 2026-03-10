@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -15,6 +16,7 @@ from unittest.mock import patch
 from biff.hook import (
     _detect_collisions,
     _expand_branch_plan,
+    _read_hook_input,
     check_plan_hint,
     check_wall_hint,
     handle_post_bash,
@@ -297,17 +299,17 @@ class TestHandleSessionStart:
 
     def test_includes_tty_nudge(self) -> None:
         with patch("biff.hook._get_git_branch", return_value=""):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "/tty" in result
 
     def test_includes_read_nudge(self) -> None:
         with patch("biff.hook._get_git_branch", return_value=""):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "/read" in result
 
     def test_branch_included_in_plan_nudge(self) -> None:
         with patch("biff.hook._get_git_branch", return_value="feature/auth"):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "→ feature/auth" in result
         assert 'source="auto"' in result
 
@@ -319,23 +321,23 @@ class TestHandleSessionStart:
                 return_value="biff-ka4: post-checkout hook",
             ),
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "→ biff-ka4: post-checkout hook" in result
 
     def test_no_branch_still_returns_context(self) -> None:
         with patch("biff.hook._get_git_branch", return_value=""):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "Biff session starting" in result
         assert "/plan" in result
 
     def test_main_branch_included(self) -> None:
         with patch("biff.hook._get_git_branch", return_value="main"):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "→ main" in result
 
     def test_quotes_in_branch_escaped(self) -> None:
         with patch("biff.hook._get_git_branch", return_value='feature/"quotes"'):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert r"\"quotes\"" in result
         assert 'source="auto"' in result
 
@@ -353,7 +355,7 @@ class TestHandleSessionStart:
             patch("biff.hook._get_git_branch", return_value="main"),
         ):
             write_wall_marker(_FAKE_WORKTREE, "deploy freeze", future)
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "Active wall: deploy freeze" in result
 
     def test_no_wall_no_wall_line(self, tmp_path: Path) -> None:
@@ -364,7 +366,7 @@ class TestHandleSessionStart:
             m_wt,
             patch("biff.hook._get_git_branch", return_value="main"),
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "Active wall" not in result
 
 
@@ -1025,7 +1027,7 @@ class TestDetectCollisions:
             m_git,
             m_slug,
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "\u26a0" in result
         assert "kai:abc" in result
         assert "/who" in result
@@ -1045,7 +1047,7 @@ class TestDetectCollisions:
             m_git,
             m_slug,
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "\u26a0" not in result
 
 
@@ -1218,7 +1220,7 @@ class TestZSpecPlanConsistency:
             write_plan_marker(_FAKE_WORKTREE, "stale plan")
             assert has_plan_marker(_FAKE_WORKTREE)
             with patch("biff.hook._get_git_branch", return_value="main"):
-                handle_session_start({})
+                handle_session_start()
             assert not has_plan_marker(_FAKE_WORKTREE)
 
 
@@ -1431,7 +1433,7 @@ class TestBeadMarkerCache:
             m_wt,
             patch("biff.hook._get_git_branch", return_value="main"),
         ):
-            handle_session_start({})
+            handle_session_start()
         assert marker.exists()
 
 
@@ -1745,3 +1747,70 @@ class TestIsErrorFlag:
             result = handle_post_bash(data)
         assert result is None
         assert not _hint_path(tmp_path, "bead-active").exists()
+
+
+# ── _read_hook_input (non-blocking stdin) ───────────────────────────
+
+
+class TestReadHookInput:
+    """Tests for _read_hook_input non-blocking stdin reads."""
+
+    def test_empty_stdin_returns_empty(self) -> None:
+        """No data on stdin returns {} without blocking."""
+        r_fd, w_fd = os.pipe()
+        r = os.fdopen(r_fd, "r")
+        # Close write end immediately — EOF with no data.
+        os.close(w_fd)
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        assert result == {}
+
+    def test_valid_json_parsed(self) -> None:
+        """Valid JSON on stdin is parsed and returned."""
+        r_fd, w_fd = os.pipe()
+        os.write(w_fd, b'{"tool_name": "Edit"}\n')
+        os.close(w_fd)
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        assert result == {"tool_name": "Edit"}
+
+    def test_no_eof_does_not_hang(self) -> None:
+        """Stdin with data but no EOF returns data without blocking.
+
+        This is the regression test for the session resume hang:
+        Claude Code pipes data but may not close the pipe.
+        """
+        r_fd, w_fd = os.pipe()
+        os.write(w_fd, b'{"event": "resume"}\n')
+        # Do NOT close w_fd — simulates open pipe without EOF.
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        os.close(w_fd)
+        assert result == {"event": "resume"}
+
+    def test_no_data_no_eof_returns_empty(self) -> None:
+        """Open pipe with no data returns {} without blocking."""
+        r_fd, w_fd = os.pipe()
+        # Pipe open, no data written, no EOF.
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        os.close(w_fd)
+        assert result == {}
+
+    def test_invalid_json_returns_empty(self) -> None:
+        """Invalid JSON on stdin returns {} gracefully."""
+        r_fd, w_fd = os.pipe()
+        os.write(w_fd, b"not json\n")
+        os.close(w_fd)
+        r = os.fdopen(r_fd, "r")
+        with patch("sys.stdin", r):
+            result = _read_hook_input()
+        r.close()
+        assert result == {}
