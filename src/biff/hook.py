@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import select
 import subprocess
 import sys
 from contextlib import suppress
@@ -91,8 +92,16 @@ def _is_lux_enabled() -> bool:
 
 
 def _read_hook_input() -> dict[str, object]:
-    """Read JSON hook payload from stdin."""
+    """Read JSON hook payload from stdin (non-blocking).
+
+    Uses ``select`` with a short timeout to avoid blocking forever
+    when the caller does not close the stdin pipe.  This is critical
+    for SessionStart hooks where Claude Code may not send EOF.
+    """
     try:
+        # Wait up to 100ms for stdin data; return empty if nothing arrives.
+        if not select.select([sys.stdin], [], [], 0.1)[0]:
+            return {}
         raw = sys.stdin.read()
         if not raw.strip():
             return {}
@@ -100,7 +109,7 @@ def _read_hook_input() -> dict[str, object]:
         if isinstance(data, dict):
             return cast("dict[str, object]", data)
         return {}
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, ValueError):
         return {}
 
 
@@ -614,7 +623,7 @@ def _detect_collisions() -> list[str]:
     return collisions
 
 
-def handle_session_start(data: dict[str, object]) -> str:  # noqa: ARG001
+def handle_session_start() -> str:
     """Build SessionStart(startup) additionalContext.
 
     Always returns context — at minimum, a /tty nudge.
@@ -805,8 +814,7 @@ def cc_session_start() -> None:
     """SessionStart(startup) — auto-tty, plan from branch, check unread."""
     if not _is_biff_enabled():
         return
-    data = _read_hook_input()
-    result = handle_session_start(data)
+    result = handle_session_start()
     _emit(_hook_context("SessionStart", result))
 
 
@@ -815,7 +823,6 @@ def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
     if not _is_biff_enabled():
         return
-    _read_hook_input()  # consume stdin even if unused
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 
@@ -825,7 +832,6 @@ def cc_session_end() -> None:
     """SessionEnd — convert active sessions to sentinels for cleanup."""
     if not _is_biff_enabled():
         return
-    _read_hook_input()  # consume stdin
     handle_session_end()
 
 
@@ -834,7 +840,6 @@ def cc_stop() -> None:
     """Stop — unread message reminder (soft gate, never blocks)."""
     if not _is_biff_enabled():
         return
-    _read_hook_input()  # consume stdin
     result = handle_stop()
     if result is not None:
         _emit(_hook_context("Stop", result))

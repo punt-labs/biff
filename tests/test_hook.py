@@ -297,17 +297,17 @@ class TestHandleSessionStart:
 
     def test_includes_tty_nudge(self) -> None:
         with patch("biff.hook._get_git_branch", return_value=""):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "/tty" in result
 
     def test_includes_read_nudge(self) -> None:
         with patch("biff.hook._get_git_branch", return_value=""):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "/read" in result
 
     def test_branch_included_in_plan_nudge(self) -> None:
         with patch("biff.hook._get_git_branch", return_value="feature/auth"):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "→ feature/auth" in result
         assert 'source="auto"' in result
 
@@ -319,23 +319,23 @@ class TestHandleSessionStart:
                 return_value="biff-ka4: post-checkout hook",
             ),
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "→ biff-ka4: post-checkout hook" in result
 
     def test_no_branch_still_returns_context(self) -> None:
         with patch("biff.hook._get_git_branch", return_value=""):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "Biff session starting" in result
         assert "/plan" in result
 
     def test_main_branch_included(self) -> None:
         with patch("biff.hook._get_git_branch", return_value="main"):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "→ main" in result
 
     def test_quotes_in_branch_escaped(self) -> None:
         with patch("biff.hook._get_git_branch", return_value='feature/"quotes"'):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert r"\"quotes\"" in result
         assert 'source="auto"' in result
 
@@ -353,7 +353,7 @@ class TestHandleSessionStart:
             patch("biff.hook._get_git_branch", return_value="main"),
         ):
             write_wall_marker(_FAKE_WORKTREE, "deploy freeze", future)
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "Active wall: deploy freeze" in result
 
     def test_no_wall_no_wall_line(self, tmp_path: Path) -> None:
@@ -364,7 +364,7 @@ class TestHandleSessionStart:
             m_wt,
             patch("biff.hook._get_git_branch", return_value="main"),
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "Active wall" not in result
 
 
@@ -1025,7 +1025,7 @@ class TestDetectCollisions:
             m_git,
             m_slug,
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "\u26a0" in result
         assert "kai:abc" in result
         assert "/who" in result
@@ -1045,7 +1045,7 @@ class TestDetectCollisions:
             m_git,
             m_slug,
         ):
-            result = handle_session_start({})
+            result = handle_session_start()
         assert "\u26a0" not in result
 
 
@@ -1218,7 +1218,7 @@ class TestZSpecPlanConsistency:
             write_plan_marker(_FAKE_WORKTREE, "stale plan")
             assert has_plan_marker(_FAKE_WORKTREE)
             with patch("biff.hook._get_git_branch", return_value="main"):
-                handle_session_start({})
+                handle_session_start()
             assert not has_plan_marker(_FAKE_WORKTREE)
 
 
@@ -1431,7 +1431,7 @@ class TestBeadMarkerCache:
             m_wt,
             patch("biff.hook._get_git_branch", return_value="main"),
         ):
-            handle_session_start({})
+            handle_session_start()
         assert marker.exists()
 
 
