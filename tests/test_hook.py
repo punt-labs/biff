@@ -1286,47 +1286,462 @@ class TestZSpecBeadClose:
     and sets beadClaimed' = beadClaimed \\ {bead?} (effect 50).
 
     In the implementation, bead close is detected via PostToolUse
-    Bash regex matching. The handle_post_bash handler only fires
-    on bead CLAIM (bd update --status=in_progress), not bead close.
-    Bead close (bd close) doesn't trigger any hook action — it's
-    a passive operation. The Z spec constraint is enforced by the
-    beads CLI itself (bd close fails if bead doesn't exist).
-
-    These tests verify the boundary conditions.
+    Bash regex matching.  On close, the bead-active marker is
+    cleared so the PreToolUse gate re-checks via subprocess.
+    Bead claim writes the marker for fast-path caching.
     """
 
-    def test_bd_close_not_detected_as_claim(self) -> None:
+    def test_bd_close_not_detected_as_claim(self, tmp_path: Path) -> None:
         """bd close should NOT trigger the bead claim nudge."""
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {"command": "bd close biff-abc"},
             "tool_response": "\u2713 Closed biff-abc",
         }
-        result = handle_post_bash(data)
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt, patch("biff.hook._has_beads", return_value=False):
+            result = handle_post_bash(data)
         assert result is None
 
-    def test_bd_close_multiple_not_detected(self) -> None:
+    def test_bd_close_multiple_not_detected(self, tmp_path: Path) -> None:
         """bd close with multiple IDs should not trigger claim."""
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {"command": "bd close biff-abc biff-def"},
             "tool_response": "\u2713 Closed biff-abc\n\u2713 Closed biff-def",
         }
-        result = handle_post_bash(data)
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt, patch("biff.hook._has_beads", return_value=False):
+            result = handle_post_bash(data)
         assert result is None
 
     def test_bead_check_reflects_claimed_state(self) -> None:
-        """check_bead_in_progress reflects claimed vs unclaimed."""
+        """check_bead_in_progress reflects claimed vs unclaimed (slow path)."""
         from biff.markers import check_bead_in_progress
 
-        # After bd close all, the list should be empty
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "[]"
-            assert check_bead_in_progress() == "no"
+        # After bd close all, the list should be empty — no marker, falls through
+        with patch("biff.markers._check_bead_subprocess", return_value="no"):
+            assert check_bead_in_progress("") == "no"
 
-        # With one claimed bead
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = '[{"id": "biff-abc"}]'
-            assert check_bead_in_progress() == "yes"
+        # With one claimed bead — no marker, falls through
+        with patch("biff.markers._check_bead_subprocess", return_value="yes"):
+            assert check_bead_in_progress("") == "yes"
+
+
+class TestBeadMarkerCache:
+    """Bead-active marker file cache for PreToolUse gate performance."""
+
+    def test_claim_writes_marker(self, tmp_path: Path) -> None:
+        """bd update --status=in_progress writes bead-active marker."""
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd update biff-7vp --status=in_progress"},
+            "tool_response": "\u2713 Updated issue: biff-7vp",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert _hint_path(tmp_path, "bead-active").exists()
+        assert _hint_path(tmp_path, "bead-active").read_text() == "yes"
+
+    def test_close_clears_marker(self, tmp_path: Path) -> None:
+        """bd close removes bead-active marker."""
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd close biff-abc"},
+            "tool_response": "\u2713 Closed biff-abc",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            handle_post_bash(data)
+        assert not marker.exists()
+
+    def test_failed_close_does_not_clear_marker(self, tmp_path: Path) -> None:
+        """Failed bd close leaves marker intact."""
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd close biff-abc"},
+            "tool_response": "Error: issue not found",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            handle_post_bash(data)
+        assert marker.exists()
+
+    def test_check_fast_path_reads_marker(self, tmp_path: Path) -> None:
+        """check_bead_in_progress returns 'yes' from marker without subprocess."""
+        from biff.markers import check_bead_in_progress
+
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        m_home = patch("pathlib.Path.home", return_value=tmp_path)
+        with m_home:
+            result = check_bead_in_progress(_FAKE_WORKTREE)
+        assert result == "yes"
+
+    def test_check_slow_path_caches_yes(self, tmp_path: Path) -> None:
+        """check_bead_in_progress writes marker on subprocess 'yes'."""
+        from biff.markers import check_bead_in_progress
+
+        marker = _hint_path(tmp_path, "bead-active")
+        assert not marker.exists()
+
+        m_home = patch("pathlib.Path.home", return_value=tmp_path)
+        with (
+            m_home,
+            patch("biff.markers._check_bead_subprocess", return_value="yes"),
+        ):
+            result = check_bead_in_progress(_FAKE_WORKTREE)
+        assert result == "yes"
+        assert marker.exists()
+
+    def test_check_slow_path_no_does_not_cache(self, tmp_path: Path) -> None:
+        """check_bead_in_progress does NOT write marker on subprocess 'no'."""
+        from biff.markers import check_bead_in_progress
+
+        m_home = patch("pathlib.Path.home", return_value=tmp_path)
+        with (
+            m_home,
+            patch("biff.markers._check_bead_subprocess", return_value="no"),
+        ):
+            result = check_bead_in_progress(_FAKE_WORKTREE)
+        assert result == "no"
+        assert not _hint_path(tmp_path, "bead-active").exists()
+
+    def test_session_start_does_not_clear_bead_marker(self, tmp_path: Path) -> None:
+        """Session start must NOT clear bead marker — beads persist across sessions."""
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with (
+            m_home,
+            m_wt,
+            patch("biff.hook._get_git_branch", return_value="main"),
+        ):
+            handle_session_start({})
+        assert marker.exists()
+
+
+# ── Lux consumer hooks (biff-og4p, biff-g75a) ─────────────────────────
+
+
+def _lux_mocks(*, beads: bool = True, lux: bool = True):
+    """Patch beads + lux detection for consumer hook tests."""
+    return (
+        patch("biff.hook._has_beads", return_value=beads),
+        patch("biff.hook._is_lux_enabled", return_value=lux),
+    )
+
+
+class TestLuxBeadsBoardRefresh:
+    """biff-og4p: refresh lux beads board on bd state changes."""
+
+    def test_bd_create_with_lux_nudges_refresh(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "\u2713 Created issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/lux:beads" in result
+
+    def test_bd_close_with_lux_nudges_refresh(self, tmp_path: Path) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd close biff-abc"},
+            "tool_response": "\u2713 Closed biff-abc",
+        }
+        m_beads, m_lux = _lux_mocks()
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_beads, m_lux, m_home, m_wt:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/lux:beads" in result
+
+    def test_bd_update_status_with_lux_nudges_refresh(self, tmp_path: Path) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd update biff-xyz --status=in_progress"},
+            "tool_response": "\u2713 Updated issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks()
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_beads, m_lux, m_home, m_wt:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/plan" in result  # claim nudge
+        assert "/lux:beads" in result  # lux refresh
+
+    def test_bd_dep_with_lux_nudges_refresh(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd dep add biff-a biff-b"},
+            "tool_response": "\u2713 Dependency added",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/lux:beads" in result
+
+    def test_no_lux_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "\u2713 Created issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks(lux=False)
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+    def test_no_beads_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "\u2713 Created issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks(beads=False)
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+    def test_failed_bd_command_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "Error: failed to create",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+    def test_non_bd_command_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_response": "On branch main",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+
+class TestLuxPrDashboard:
+    """biff-g75a: render PR dashboard in lux on PR creation."""
+
+    def test_create_pr_with_lux_nudges_dashboard(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": {"title": "feat: hooks"},
+            "tool_response": json.dumps({"number": 42}),
+        }
+        with (
+            patch("biff.markers.read_wall_marker", return_value=None),
+            patch("biff.hook._is_lux_enabled", return_value=True),
+        ):
+            result = handle_post_pr(data)
+        assert result is not None
+        assert "/lux:dashboard" in result
+        assert "PR #42" in result
+
+    def test_create_pr_no_lux_no_dashboard(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": {"title": "feat: hooks"},
+            "tool_response": json.dumps({"number": 42}),
+        }
+        with (
+            patch("biff.markers.read_wall_marker", return_value=None),
+            patch("biff.hook._is_lux_enabled", return_value=False),
+        ):
+            result = handle_post_pr(data)
+        assert result is not None
+        assert "/lux:dashboard" not in result
+
+    def test_merge_pr_no_dashboard(self) -> None:
+        """Dashboard is only for PR creation, not merge."""
+        data: dict[str, object] = {
+            "tool_name": "mcp__github__merge_pull_request",
+            "tool_input": {"pullNumber": 42, "commit_title": "feat: hooks"},
+            "tool_response": "{}",
+        }
+        with (
+            patch("biff.markers.read_wall_marker", return_value=None),
+            patch("biff.hook._is_lux_enabled", return_value=True),
+        ):
+            result = handle_post_pr(data)
+        assert result is not None
+        assert "/lux:dashboard" not in result
+
+
+class TestIsLuxEnabled:
+    """Unit tests for _is_lux_enabled() YAML frontmatter parsing."""
+
+    def test_lux_enabled(self, tmp_path: Path) -> None:
+        """Standard .lux/config.md with display: "y"."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('---\ndisplay: "y"\n---\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is True
+
+    def test_lux_disabled(self, tmp_path: Path) -> None:
+        """display: "n" means lux is off."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('---\ndisplay: "n"\n---\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_no_config_file(self, tmp_path: Path) -> None:
+        """No .lux/config.md means lux is off."""
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_no_frontmatter(self, tmp_path: Path) -> None:
+        """Config file without --- frontmatter delimiters."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('display: "y"\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_missing_closing_delimiter(self, tmp_path: Path) -> None:
+        """Frontmatter with opening --- but no closing ---."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text('---\ndisplay: "y"\n')
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_unquoted_value(self, tmp_path: Path) -> None:
+        """display: y without quotes should still work."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text("---\ndisplay: y\n---\n")
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is True
+
+    def test_lux_single_quoted_value(self, tmp_path: Path) -> None:
+        """display: \'y\' with single quotes."""
+        lux_dir = tmp_path / ".lux"
+        lux_dir.mkdir()
+        (lux_dir / "config.md").write_text("---\ndisplay: 'y'\n---\n")
+        with patch("biff.config.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is True
+
+    def test_lux_no_git_root(self) -> None:
+        """No git root means lux is off."""
+        with patch("biff.config.find_git_root", return_value=None):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+
+class TestBeadStatusTransition:
+    """Marker is cleared when bd update changes status away from in_progress."""
+
+    def test_status_done_clears_marker(self, tmp_path: Path) -> None:
+        """bd update --status=done clears bead-active marker."""
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=done",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        m_beads, m_lux = _lux_mocks(lux=False)
+        with m_home, m_wt, m_beads, m_lux:
+            handle_post_bash(data)
+        assert not marker.exists()
+
+    def test_status_open_clears_marker(self, tmp_path: Path) -> None:
+        """bd update --status=open clears bead-active marker."""
+        marker = _hint_path(tmp_path, "bead-active")
+        marker.parent.mkdir(parents=True)
+        marker.write_text("yes")
+
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=open",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        m_beads, m_lux = _lux_mocks(lux=False)
+        with m_home, m_wt, m_beads, m_lux:
+            handle_post_bash(data)
+        assert not marker.exists()
+
+    def test_status_in_progress_does_not_clear(self, tmp_path: Path) -> None:
+        """bd update --status=in_progress should write, not clear."""
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=in_progress",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            handle_post_bash(data)
+        assert _hint_path(tmp_path, "bead-active").exists()
+
+
+class TestIsErrorFlag:
+    """is_error flag prevents marker writes on failed commands."""
+
+    def test_is_error_prevents_claim(self, tmp_path: Path) -> None:
+        """Bash tool with is_error=True should not write marker."""
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "bd update biff-abc --status=in_progress",
+            },
+            "tool_response": "\u2713 Updated issue: biff-abc",
+            "is_error": True,
+        }
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            result = handle_post_bash(data)
+        assert result is None
+        assert not _hint_path(tmp_path, "bead-active").exists()

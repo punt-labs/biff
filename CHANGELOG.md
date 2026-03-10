@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Lux beads board refresh** — when lux and beads are both active, biff
+  nudges Claude to refresh the beads board after `bd create`, `bd update`,
+  `bd close`, and `bd dep` commands. Double-gated: no nudge if either lux
+  or beads is absent.
+- **Lux PR dashboard** — when lux is active and a PR is created, biff
+  nudges Claude to render a PR dashboard showing status, CI checks, and
+  review state via `/lux:dashboard`.
+- **Bead status marker cache** — `PreToolUse` gate now reads a marker file
+  instead of spawning a `bd list` subprocess on every `Edit`/`Write` call.
+  Marker is written on `bd update --status=in_progress` and cleared on
+  `bd close` or any status transition away from `in_progress`. Marker
+  persists across sessions; first check without a marker falls back to
+  subprocess and caches the result.
+- **Lux and beads availability detection** — `_is_lux_enabled()` reads
+  `.lux/config.md` frontmatter; `_has_beads()` checks for `.beads/`
+  directory. Both are file-based (<1ms).
+
 ## [1.0.1] - 2026-03-09
 
 ### Fixed
