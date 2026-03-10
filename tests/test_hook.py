@@ -1070,7 +1070,7 @@ def _deny_reason(result: dict[str, object]) -> str:
     """Extract the deny reason string from a PreToolUse hook response."""
     output = cast("dict[str, object]", result["hookSpecificOutput"])
     assert output["permissionDecision"] == "deny"
-    return str(output["reason"])
+    return str(output["permissionDecisionReason"])
 
 
 class TestHandlePreToolUse:

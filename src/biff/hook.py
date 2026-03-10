@@ -108,7 +108,7 @@ def _pre_tool_use_deny(reason: str) -> dict[str, object]:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "reason": reason,
+            "permissionDecisionReason": reason,
         }
     }
 

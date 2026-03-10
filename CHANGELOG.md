@@ -13,6 +13,10 @@
   `APPLICATION_DATA_AFTER_CLOSE_NOTIFY` raised by Python 3.14's stricter
   SSL implementation during TLS teardown. Affects `biff doctor`, relay
   disconnect, and relay close paths.
+- **PreToolUse hook deny reason invisible to agents** — the hook used
+  `"reason"` in hook output but Claude Code requires
+  `"permissionDecisionReason"`. Agents saw a generic denial with no
+  actionable instructions on how to unblock (set plan + claim bead).
 
 ## [1.0.0] - 2026-03-09
 
