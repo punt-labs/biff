@@ -49,6 +49,47 @@ def _is_biff_enabled() -> bool:
     return repo_root is not None and is_enabled(repo_root)
 
 
+def _has_beads() -> bool:
+    """Check whether beads is available (``.beads/`` exists in git root)."""
+    from biff.config import find_git_root  # noqa: PLC0415
+
+    repo_root = find_git_root()
+    return repo_root is not None and (repo_root / ".beads").is_dir()
+
+
+def _is_lux_enabled() -> bool:
+    """Check whether lux display mode is enabled.
+
+    Reads ``.lux/config.md`` YAML frontmatter for ``display: "y"``.
+    Returns ``False`` if the file is absent, malformed, or display is off.
+    """
+    from biff.config import find_git_root  # noqa: PLC0415
+
+    repo_root = find_git_root()
+    if repo_root is None:
+        return False
+    config = repo_root / ".lux" / "config.md"
+    if not config.is_file():
+        return False
+    try:
+        text = config.read_text()
+        # Parse YAML frontmatter: ---\ndisplay: "y"\n---
+        if not text.startswith("---"):
+            return False
+        end = text.find("---", 3)
+        if end == -1:
+            return False
+        frontmatter = text[3:end]
+        for line in frontmatter.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("display:"):
+                value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+                return value == "y"
+    except OSError:
+        pass
+    return False
+
+
 def _read_hook_input() -> dict[str, object]:
     """Read JSON hook payload from stdin."""
     try:
@@ -157,14 +198,23 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
 
 _BEAD_CLAIM_RE = re.compile(r"\bbd\s+update.*--status[=\s]in_progress")
 _BEAD_CLOSE_RE = re.compile(r"\bbd\s+close\b")
+_BEAD_MUTATE_RE = re.compile(r"\bbd\s+(create|update|close|dep)\b")
+
+_LUX_BEADS_REFRESH = (
+    "Beads state changed. If lux is showing the beads board, "
+    "refresh it now with /lux:beads."
+)
 
 
 def handle_post_bash(data: dict[str, object]) -> str | None:
-    """Process PostToolUse Bash — detect bead claims and closes.
+    """Process PostToolUse Bash — detect bead claims, closes, and mutations.
 
     Manages the bead-active marker file for the PreToolUse cache:
     - On successful ``bd update --status=in_progress``: write marker.
     - On successful ``bd close``: clear marker (forces re-check on next gate).
+
+    When lux is enabled and beads state changes, nudges Claude to
+    refresh the beads board (biff-og4p consumer integration).
 
     Returns an ``additionalContext`` string, or ``None`` to stay silent.
     """
@@ -184,32 +234,44 @@ def handle_post_bash(data: dict[str, object]) -> str | None:
     # Bead close — clear marker so next PreToolUse re-checks via subprocess.
     if _BEAD_CLOSE_RE.search(command) and is_success:
         clear_bead_marker(_get_worktree_root())
-        return None
+        return _lux_beads_nudge()
 
     # Bead claim — write marker for fast PreToolUse gate.
     if _BEAD_CLAIM_RE.search(command) and is_success:
         write_bead_marker(_get_worktree_root())
-        return (
+        nudge = (
             "You just claimed a bead. Set your dotplan so teammates can see "
             "what you are working on: /plan <bead-id>: <short description>. "
             "Example: /plan biff-dm8: Fix status bar line 2 height"
         )
+        lux = _lux_beads_nudge()
+        return f"{nudge} {lux}" if lux else nudge
+
+    # Other bead mutations (create, dep add, generic update).
+    if _BEAD_MUTATE_RE.search(command) and is_success:
+        return _lux_beads_nudge()
 
     return None
 
 
-def handle_post_pr(data: dict[str, object]) -> str | None:
-    """Process PostToolUse GitHub PR — detect create/merge.
+def _lux_beads_nudge() -> str | None:
+    """Return lux beads board refresh nudge if lux + beads are both active."""
+    if _has_beads() and _is_lux_enabled():
+        return _LUX_BEADS_REFRESH
+    return None
 
-    Returns an ``additionalContext`` string, or ``None`` to stay silent.
+
+def _parse_pr_event(
+    data: dict[str, object],
+) -> tuple[str, str, object] | None:
+    """Extract (bare_tool, message, pr_number) from a PR tool call.
+
+    Returns ``None`` if the data doesn't represent a valid PR event.
     """
     tool_name = data.get("tool_name", "")
     if not isinstance(tool_name, str):
         return None
-
-    # Strip plugin prefix to get bare tool name
     bare = tool_name.rsplit("__", maxsplit=1)[-1] if "__" in tool_name else tool_name
-
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         return None
@@ -223,38 +285,54 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
         pr_num = response.get("number")
         if pr_num is None:
             return None
-        msg = f"Created PR #{pr_num}: {title}"
+        return bare, f"Created PR #{pr_num}: {title}", pr_num
 
-    elif bare == "merge_pull_request":
+    if bare == "merge_pull_request":
         pr_num = ti.get("pullNumber") or ti.get("pull_number")
         if not pr_num:
             return None
         title = ti.get("commit_title", "")
         if isinstance(title, str) and title:
-            msg = f"Merged PR #{pr_num}: {title}"
-        else:
-            msg = f"Merged PR #{pr_num}"
+            return bare, f"Merged PR #{pr_num}: {title}", pr_num
+        return bare, f"Merged PR #{pr_num}", pr_num
 
-    else:
+    return None
+
+
+def handle_post_pr(data: dict[str, object]) -> str | None:
+    """Process PostToolUse GitHub PR — detect create/merge.
+
+    Returns an ``additionalContext`` string, or ``None`` to stay silent.
+    """
+    parsed = _parse_pr_event(data)
+    if parsed is None:
         return None
+    bare, msg, pr_num = parsed
 
     safe_msg = json.dumps(msg, ensure_ascii=False)[1:-1]
 
-    # Check if a wall is already active to avoid redundant suggestions (biff-oqn).
+    # Check if a wall is already active to avoid redundant suggestions.
     from biff.markers import read_wall_marker  # noqa: PLC0415
 
     wall_active = read_wall_marker(_get_worktree_root()) is not None
 
+    parts: list[str] = ["This team uses biff for communication."]
     if wall_active:
-        return (
-            "This team uses biff for communication. "
-            f'Notify the relevant human directly: /write @human "{safe_msg}"'
+        parts.append(f'Notify the relevant human directly: /write @human "{safe_msg}"')
+    else:
+        parts.append(f"Consider announcing to the team: /wall {msg}")
+        parts.append(
+            f'Also notify the relevant human directly: /write @human "{safe_msg}"'
         )
-    return (
-        "This team uses biff for communication. "
-        f"Consider announcing to the team: /wall {msg} "
-        f'Also notify the relevant human directly: /write @human "{safe_msg}"'
-    )
+
+    # Lux PR dashboard (biff-g75a consumer integration).
+    if _is_lux_enabled() and bare == "create_pull_request":
+        parts.append(
+            "Lux is active — render a PR dashboard with /lux:dashboard "
+            f"showing PR #{pr_num} status, CI checks, and review state."
+        )
+
+    return " ".join(parts)
 
 
 def _get_git_branch() -> str:

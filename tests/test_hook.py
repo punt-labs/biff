@@ -1298,7 +1298,10 @@ class TestZSpecBeadClose:
             "tool_input": {"command": "bd close biff-abc"},
             "tool_response": "\u2713 Closed biff-abc",
         }
-        with patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE):
+        with (
+            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+            patch("biff.hook._has_beads", return_value=False),
+        ):
             result = handle_post_bash(data)
         assert result is None
 
@@ -1309,7 +1312,10 @@ class TestZSpecBeadClose:
             "tool_input": {"command": "bd close biff-abc biff-def"},
             "tool_response": "\u2713 Closed biff-abc\n\u2713 Closed biff-def",
         }
-        with patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE):
+        with (
+            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+            patch("biff.hook._has_beads", return_value=False),
+        ):
             result = handle_post_bash(data)
         assert result is None
 
@@ -1431,3 +1437,161 @@ class TestBeadMarkerCache:
         ):
             handle_session_start({})
         assert marker.exists()
+
+
+# ── Lux consumer hooks (biff-og4p, biff-g75a) ─────────────────────────
+
+
+def _lux_mocks(*, beads: bool = True, lux: bool = True):
+    """Patch beads + lux detection for consumer hook tests."""
+    return (
+        patch("biff.hook._has_beads", return_value=beads),
+        patch("biff.hook._is_lux_enabled", return_value=lux),
+    )
+
+
+class TestLuxBeadsBoardRefresh:
+    """biff-og4p: refresh lux beads board on bd state changes."""
+
+    def test_bd_create_with_lux_nudges_refresh(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "\u2713 Created issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/lux:beads" in result
+
+    def test_bd_close_with_lux_nudges_refresh(self, tmp_path: Path) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd close biff-abc"},
+            "tool_response": "\u2713 Closed biff-abc",
+        }
+        m_beads, m_lux = _lux_mocks()
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_beads, m_lux, m_home, m_wt:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/lux:beads" in result
+
+    def test_bd_update_status_with_lux_nudges_refresh(self, tmp_path: Path) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd update biff-xyz --status=in_progress"},
+            "tool_response": "\u2713 Updated issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks()
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_beads, m_lux, m_home, m_wt:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/plan" in result  # claim nudge
+        assert "/lux:beads" in result  # lux refresh
+
+    def test_bd_dep_with_lux_nudges_refresh(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd dep add biff-a biff-b"},
+            "tool_response": "\u2713 Dependency added",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is not None
+        assert "/lux:beads" in result
+
+    def test_no_lux_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "\u2713 Created issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks(lux=False)
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+    def test_no_beads_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "\u2713 Created issue: biff-xyz",
+        }
+        m_beads, m_lux = _lux_mocks(beads=False)
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+    def test_failed_bd_command_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd create --title='Fix bug'"},
+            "tool_response": "Error: failed to create",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+    def test_non_bd_command_no_nudge(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_response": "On branch main",
+        }
+        m_beads, m_lux = _lux_mocks()
+        with m_beads, m_lux:
+            result = handle_post_bash(data)
+        assert result is None
+
+
+class TestLuxPrDashboard:
+    """biff-g75a: render PR dashboard in lux on PR creation."""
+
+    def test_create_pr_with_lux_nudges_dashboard(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": {"title": "feat: hooks"},
+            "tool_response": json.dumps({"number": 42}),
+        }
+        with (
+            patch("biff.markers.read_wall_marker", return_value=None),
+            patch("biff.hook._is_lux_enabled", return_value=True),
+        ):
+            result = handle_post_pr(data)
+        assert result is not None
+        assert "/lux:dashboard" in result
+        assert "PR #42" in result
+
+    def test_create_pr_no_lux_no_dashboard(self) -> None:
+        data: dict[str, object] = {
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": {"title": "feat: hooks"},
+            "tool_response": json.dumps({"number": 42}),
+        }
+        with (
+            patch("biff.markers.read_wall_marker", return_value=None),
+            patch("biff.hook._is_lux_enabled", return_value=False),
+        ):
+            result = handle_post_pr(data)
+        assert result is not None
+        assert "/lux:dashboard" not in result
+
+    def test_merge_pr_no_dashboard(self) -> None:
+        """Dashboard is only for PR creation, not merge."""
+        data: dict[str, object] = {
+            "tool_name": "mcp__github__merge_pull_request",
+            "tool_input": {"pullNumber": 42, "commit_title": "feat: hooks"},
+            "tool_response": "{}",
+        }
+        with (
+            patch("biff.markers.read_wall_marker", return_value=None),
+            patch("biff.hook._is_lux_enabled", return_value=True),
+        ):
+            result = handle_post_pr(data)
+        assert result is not None
+        assert "/lux:dashboard" not in result
