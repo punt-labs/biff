@@ -2319,3 +2319,67 @@ messages.
   `workflow_run` trigger achieves the same result with zero servers.
 - **Keep inline steps:** Works but doesn't scale.  Every new workflow in every
   repo needs manual editing — the opposite of `biff enable` doing it for you.
+
+---
+
+## DES-026: PreToolUse Hook Deny Reason — `permissionDecisionReason` Not `reason`
+
+**Date:** 2026-03-09
+**Status:** Settled
+
+### Problem
+
+Agents blocked by the PreToolUse workflow gate (plan + bead required) could not
+see *why* they were denied.  The deny reason contained actionable instructions
+("Set a plan with /plan first", "Claim a bead with bd update") but the model
+only saw a generic denial.
+
+### Root Cause
+
+The hook output used `"reason"` as the JSON field name:
+
+```python
+# WRONG — silently ignored by Claude Code
+{"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "reason": "Set a plan with /plan before editing files."
+}}
+```
+
+Claude Code requires `"permissionDecisionReason"`.  The `"reason"` field is
+silently ignored — no error, no warning, no documentation of the correct field
+name.  The denial still fires (the tool is blocked), but the model receives no
+explanation of *why* or *how to unblock*.
+
+### Fix
+
+Rename the field to `"permissionDecisionReason"`:
+
+```python
+# CORRECT — reason visible to the model
+{"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Set a plan with /plan before editing files."
+}}
+```
+
+### Evidence
+
+Observed in production: an agent was blocked by the gate, saw only "denied"
+with no context, and could not self-correct.  After the fix, agents see the
+full deny reason and can follow the instructions to unblock (set plan, claim
+bead).
+
+### Alternatives Rejected
+
+None — this is a bug fix, not a design choice.  The only correct field name is
+`"permissionDecisionReason"`.
+
+### Impact
+
+This is a **silent failure** — the hook appears to work (tool is denied) but
+the critical feedback loop (agent reads reason → agent self-corrects) is broken.
+Any project using PreToolUse deny hooks must use `"permissionDecisionReason"`,
+not `"reason"`.  Propagated to `punt-kit/standards/hooks.md` as a common bug.
