@@ -46,13 +46,47 @@ def has_plan_marker(worktree_root: str) -> bool:
     return (hint_dir(worktree_root) / "plan-active").is_file()
 
 
-def check_bead_in_progress() -> Literal["yes", "no", "unavailable"]:
-    """Check whether any bead is in_progress via ``bd list``.
+def write_bead_marker(worktree_root: str) -> None:
+    """Write bead-active marker (a bead was claimed)."""
+    d = hint_dir(worktree_root)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "bead-active").write_text("yes")
+
+
+def clear_bead_marker(worktree_root: str) -> None:
+    """Remove bead-active marker (bead closed — force re-check on next gate)."""
+    (hint_dir(worktree_root) / "bead-active").unlink(missing_ok=True)
+
+
+type BeadStatus = Literal["yes", "no", "unavailable"]
+
+
+def check_bead_in_progress(worktree_root: str = "") -> BeadStatus:
+    """Check whether any bead is in_progress.
+
+    Fast path: reads the ``bead-active`` marker file (<1ms).
+    Slow path: falls back to ``bd list`` subprocess if no marker exists,
+    then writes the result as a cache for subsequent calls.
 
     Returns ``"yes"`` if at least one bead is claimed, ``"no"`` if
     the list is empty, or ``"unavailable"`` if ``bd`` is not installed,
     times out, or otherwise fails.
     """
+    # Fast path: marker file exists from a prior bd update/close cycle.
+    marker = hint_dir(worktree_root) / "bead-active" if worktree_root else None
+    if marker is not None and marker.is_file():
+        return "yes"
+
+    # Slow path: subprocess fallback + cache write.
+    status = _check_bead_subprocess()
+    if marker is not None and status == "yes":
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("yes")
+    return status
+
+
+def _check_bead_subprocess() -> BeadStatus:
+    """Check bead status via ``bd list`` subprocess (slow path)."""
     try:
         result = subprocess.run(
             ["bd", "list", "--status=in_progress", "-q", "--json"],  # noqa: S607

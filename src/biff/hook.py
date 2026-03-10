@@ -126,7 +126,7 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
 
     worktree = _get_worktree_root()
     plan_set = has_plan_marker(worktree)
-    bead_status = check_bead_in_progress()
+    bead_status = check_bead_in_progress(worktree)
 
     if not plan_set and bead_status != "yes":
         if bead_status == "unavailable":
@@ -156,13 +156,20 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
 
 
 _BEAD_CLAIM_RE = re.compile(r"\bbd\s+update.*--status[=\s]in_progress")
+_BEAD_CLOSE_RE = re.compile(r"\bbd\s+close\b")
 
 
 def handle_post_bash(data: dict[str, object]) -> str | None:
-    """Process PostToolUse Bash — detect bead claims.
+    """Process PostToolUse Bash — detect bead claims and closes.
+
+    Manages the bead-active marker file for the PreToolUse cache:
+    - On successful ``bd update --status=in_progress``: write marker.
+    - On successful ``bd close``: clear marker (forces re-check on next gate).
 
     Returns an ``additionalContext`` string, or ``None`` to stay silent.
     """
+    from biff.markers import clear_bead_marker, write_bead_marker  # noqa: PLC0415
+
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         return None
@@ -171,18 +178,24 @@ def handle_post_bash(data: dict[str, object]) -> str | None:
     if not isinstance(command, str):
         return None
 
-    if not _BEAD_CLAIM_RE.search(command):
-        return None
-
     response = data.get("tool_response", "")
-    if not isinstance(response, str) or "\u2713" not in response:
+    is_success = isinstance(response, str) and "\u2713" in response
+
+    # Bead close — clear marker so next PreToolUse re-checks via subprocess.
+    if _BEAD_CLOSE_RE.search(command) and is_success:
+        clear_bead_marker(_get_worktree_root())
         return None
 
-    return (
-        "You just claimed a bead. Set your dotplan so teammates can see "
-        "what you are working on: /plan <bead-id>: <short description>. "
-        "Example: /plan biff-dm8: Fix status bar line 2 height"
-    )
+    # Bead claim — write marker for fast PreToolUse gate.
+    if _BEAD_CLAIM_RE.search(command) and is_success:
+        write_bead_marker(_get_worktree_root())
+        return (
+            "You just claimed a bead. Set your dotplan so teammates can see "
+            "what you are working on: /plan <bead-id>: <short description>. "
+            "Example: /plan biff-dm8: Fix status bar line 2 height"
+        )
+
+    return None
 
 
 def handle_post_pr(data: dict[str, object]) -> str | None:
