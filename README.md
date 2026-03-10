@@ -17,7 +17,7 @@ Named after the Berkeley dog whose 1980 mail notification program was part of th
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/4a86d68/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/1d9115c/install.sh | sh
 ```
 
 Restart Claude Code twice. Type `/who` to see your team.
@@ -37,7 +37,7 @@ biff doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/4a86d68/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/1d9115c/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
