@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
+from biff._stdlib import _parse_repo_slug
 from biff.config import (
     GitHubIdentity,
-    _parse_repo_slug,
     compute_data_dir,
     ensure_github_actions_member,
     extract_biff_fields,

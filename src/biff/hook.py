@@ -45,7 +45,7 @@ hook_app.add_typer(_git_app, name="git")
 
 def _is_biff_enabled() -> bool:
     """Check ``.biff`` + ``.biff.local`` gating (lazy import)."""
-    from biff.config import find_git_root, is_enabled  # noqa: PLC0415
+    from biff._stdlib import find_git_root, is_enabled  # noqa: PLC0415
 
     repo_root = find_git_root()
     return repo_root is not None and is_enabled(repo_root)
@@ -53,7 +53,7 @@ def _is_biff_enabled() -> bool:
 
 def _has_beads() -> bool:
     """Check whether beads is available (``.beads/`` exists in git root)."""
-    from biff.config import find_git_root  # noqa: PLC0415
+    from biff._stdlib import find_git_root  # noqa: PLC0415
 
     repo_root = find_git_root()
     return repo_root is not None and (repo_root / ".beads").is_dir()
@@ -65,7 +65,7 @@ def _is_lux_enabled() -> bool:
     Reads ``.lux/config.md`` YAML frontmatter for ``display: "y"``.
     Returns ``False`` if the file is absent, malformed, or display is off.
     """
-    from biff.config import find_git_root  # noqa: PLC0415
+    from biff._stdlib import find_git_root  # noqa: PLC0415
 
     repo_root = find_git_root()
     if repo_root is None:
@@ -400,7 +400,7 @@ def _expand_branch_plan(branch: str) -> str:
     the title.  Otherwise return the branch name as-is, prefixed
     with ``→`` to indicate automatic provenance.
     """
-    from biff.server.tools.plan import expand_bead_id  # noqa: PLC0415
+    from biff._stdlib import expand_bead_id  # noqa: PLC0415
 
     m = _BEAD_BRANCH_RE.search(branch)
     if m:
@@ -593,7 +593,8 @@ def _detect_collisions() -> list[str]:
 
     Returns an empty list when there is no git root or no active dir.
     """
-    from biff.config import (  # noqa: PLC0415
+    from biff._stdlib import (  # noqa: PLC0415
+        active_dir,
         find_git_root,
         get_repo_slug,
         sanitize_repo_name,
@@ -605,13 +606,13 @@ def _detect_collisions() -> list[str]:
     current_repo = sanitize_repo_name(get_repo_slug(repo_root) or repo_root.name)
     current_worktree = _get_worktree_root()
 
-    active_dir = pathlib.Path.home() / ".biff" / "active"
-    if not active_dir.is_dir():
+    adir = active_dir()
+    if not adir.is_dir():
         return []
 
     collisions: list[str] = []
     try:
-        for f in active_dir.iterdir():
+        for f in adir.iterdir():
             if not f.is_file():
                 continue
             try:
@@ -735,15 +736,12 @@ def handle_session_end() -> int:
 
     Returns the number of sessions cleaned up.
     """
-    from pathlib import Path  # noqa: PLC0415
-
-    from biff.config import (  # noqa: PLC0415
+    from biff._stdlib import (  # noqa: PLC0415
+        active_dir,
         find_git_root,
         get_repo_slug,
-        sanitize_repo_name,
-    )
-    from biff.server.app import (  # noqa: PLC0415
         remove_active_session,
+        sanitize_repo_name,
         sentinel_dir,
     )
 
@@ -752,12 +750,12 @@ def handle_session_end() -> int:
         return 0
     current_repo = sanitize_repo_name(get_repo_slug(repo_root) or repo_root.name)
 
-    active_dir = Path.home() / ".biff" / "active"
-    if not active_dir.exists():
+    adir = active_dir()
+    if not adir.exists():
         return 0
 
     count = 0
-    for f in active_dir.iterdir():
+    for f in adir.iterdir():
         if not f.is_file():
             continue
         try:

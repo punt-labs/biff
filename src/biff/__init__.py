@@ -13,15 +13,28 @@ Library API — import core types for programmatic use::
 
 from __future__ import annotations
 
+import importlib
 from importlib.metadata import version
+from typing import TYPE_CHECKING
 
-from biff import commands
-from biff.cli_session import CliContext
-from biff.commands import CommandResult
-from biff.config import load_config
-from biff.models import BiffConfig, Message, UnreadSummary, UserSession, WallPost
-from biff.nats_relay import NatsRelay
-from biff.relay import DormantRelay, LocalRelay, Relay
+if TYPE_CHECKING:
+    from biff import commands as commands
+    from biff.cli_session import CliContext as CliContext
+    from biff.commands import CommandResult as CommandResult
+    from biff.config import load_config as load_config
+    from biff.models import (
+        BiffConfig as BiffConfig,
+        Message as Message,
+        UnreadSummary as UnreadSummary,
+        UserSession as UserSession,
+        WallPost as WallPost,
+    )
+    from biff.nats_relay import NatsRelay as NatsRelay
+    from biff.relay import (
+        DormantRelay as DormantRelay,
+        LocalRelay as LocalRelay,
+        Relay as Relay,
+    )
 
 __version__ = version("punt-biff")
 
@@ -41,3 +54,42 @@ __all__ = [
     "commands",
     "load_config",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Lazy import for public API symbols.
+
+    Avoids loading the full dependency tree (nats, pydantic, fastmcp)
+    when lightweight entry points like ``biff-hook`` only need
+    ``biff._stdlib`` or ``biff.hook``.
+    """
+    # Module re-exports (import the submodule itself).
+    submodules = {"commands"}
+    if name in submodules:
+        mod = importlib.import_module(f"biff.{name}")
+        globals()[name] = mod
+        return mod
+
+    # Attribute re-exports (import from a submodule).
+    attrs: dict[str, tuple[str, str]] = {
+        "CliContext": ("biff.cli_session", "CliContext"),
+        "CommandResult": ("biff.commands", "CommandResult"),
+        "load_config": ("biff.config", "load_config"),
+        "BiffConfig": ("biff.models", "BiffConfig"),
+        "Message": ("biff.models", "Message"),
+        "UnreadSummary": ("biff.models", "UnreadSummary"),
+        "UserSession": ("biff.models", "UserSession"),
+        "WallPost": ("biff.models", "WallPost"),
+        "NatsRelay": ("biff.nats_relay", "NatsRelay"),
+        "DormantRelay": ("biff.relay", "DormantRelay"),
+        "LocalRelay": ("biff.relay", "LocalRelay"),
+        "Relay": ("biff.relay", "Relay"),
+    }
+    if name in attrs:
+        module_path, attr = attrs[name]
+        mod = importlib.import_module(module_path)
+        value = getattr(mod, attr)
+        globals()[name] = value  # cache for subsequent access
+        return value
+    msg = f"module 'biff' has no attribute {name!r}"
+    raise AttributeError(msg)

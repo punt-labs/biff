@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-03-10
+
+### Fixed
+
+- **Hook startup latency** — all hook shell scripts now invoke `biff-hook`
+  (lightweight entry point) instead of `biff hook` (full CLI). The `biff`
+  CLI entry point imports the entire application (nats, pydantic, fastmcp,
+  typer, server, commands) before running any handler code. The new
+  `biff-hook` entry point imports only the hook module and stdlib helpers.
+  Measured cold improvement: 4.7s → 0.4s per SessionStart on M2 MacBook Air.
+
+### Changed
+
+- **Lazy `__init__.py`** — `biff/__init__.py` no longer eagerly imports the
+  full package. Uses PEP 562 `__getattr__` for deferred loading. Library
+  consumers (`from biff import BiffConfig`) are unaffected — imports resolve
+  on first access.
+- **Extracted `biff._stdlib`** — pure-stdlib helpers (`find_git_root`,
+  `get_repo_slug`, `sanitize_repo_name`, `expand_bead_id`, `is_enabled`,
+  session lifecycle helpers) moved from heavy modules (`config`, `server/app`,
+  `server/tools/plan`) to `biff._stdlib`. Hook handlers import from here to
+  avoid pulling in pydantic, nats, and the server dependency tree.
+
 ## [1.3.3] - 2026-03-10
 
 ## [1.3.2] - 2026-03-09
