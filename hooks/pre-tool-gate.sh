@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
 # PreToolUse Edit|Write — thin dispatcher (DES-017).
+# NOTE: No kill-switch here — this is a security boundary (authz gate).
 # Fast gate: skip Python startup in repos without .biff enabled.
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 [[ -f "$REPO_ROOT/.biff" ]] || exit 0

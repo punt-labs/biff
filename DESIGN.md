@@ -2549,7 +2549,10 @@ imports.  `from biff import BiffConfig` still works (resolves on first
 access), but `from biff._hook_entry import main` no longer triggers
 the full package load.
 
-All hook shell scripts updated: `biff hook` → `biff-hook`.
+All Claude Code hook shell scripts (`hooks/*.sh`) updated: `biff hook` →
+`biff-hook`.  Git hooks deployed by `src/biff/git_hooks.py` into
+`.git/hooks/` still use `biff hook` — these invoke the full CLI and are
+not on the latency-critical SessionStart path.
 
 ### Measured Result
 

@@ -594,6 +594,7 @@ def _detect_collisions() -> list[str]:
     Returns an empty list when there is no git root or no active dir.
     """
     from biff._stdlib import (  # noqa: PLC0415
+        active_dir,
         find_git_root,
         get_repo_slug,
         sanitize_repo_name,
@@ -605,13 +606,13 @@ def _detect_collisions() -> list[str]:
     current_repo = sanitize_repo_name(get_repo_slug(repo_root) or repo_root.name)
     current_worktree = _get_worktree_root()
 
-    active_dir = pathlib.Path.home() / ".biff" / "active"
-    if not active_dir.is_dir():
+    adir = active_dir()
+    if not adir.is_dir():
         return []
 
     collisions: list[str] = []
     try:
-        for f in active_dir.iterdir():
+        for f in adir.iterdir():
             if not f.is_file():
                 continue
             try:
@@ -736,6 +737,7 @@ def handle_session_end() -> int:
     Returns the number of sessions cleaned up.
     """
     from biff._stdlib import (  # noqa: PLC0415
+        active_dir,
         find_git_root,
         get_repo_slug,
         remove_active_session,
@@ -748,12 +750,12 @@ def handle_session_end() -> int:
         return 0
     current_repo = sanitize_repo_name(get_repo_slug(repo_root) or repo_root.name)
 
-    active_dir = pathlib.Path.home() / ".biff" / "active"
-    if not active_dir.exists():
+    adir = active_dir()
+    if not adir.exists():
         return 0
 
     count = 0
-    for f in active_dir.iterdir():
+    for f in adir.iterdir():
         if not f.is_file():
             continue
         try:
