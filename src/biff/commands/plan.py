@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from biff._stdlib import expand_bead_id
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import UserSession
-from biff.server.tools.plan import expand_bead_id
 from biff.tty import get_hostname, get_pwd
 
 

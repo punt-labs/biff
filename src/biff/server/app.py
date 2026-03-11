@@ -12,12 +12,12 @@ import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
+from biff._stdlib import active_dir, remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
 
 if TYPE_CHECKING:
@@ -68,11 +68,6 @@ class _SessionCaptureMiddleware(Middleware):
         return result
 
 
-def _active_dir() -> Path:
-    """Active session directory: ``~/.biff/active/``."""
-    return Path.home() / ".biff" / "active"
-
-
 def write_active_session(
     repo_name: str, session_key: str, worktree_root: str = ""
 ) -> None:
@@ -83,21 +78,10 @@ def write_active_session(
     reads these files and converts them to sentinels for the reaper
     to process.  The third line is optional for backwards compatibility.
     """
-    d = _active_dir()
+    d = active_dir()
     d.mkdir(parents=True, exist_ok=True)
     safe = session_key.replace(":", "-")
     (d / safe).write_text(f"{session_key}\n{repo_name}\n{worktree_root}\n")
-
-
-def remove_active_session(session_key: str) -> None:
-    """Remove the active session marker on shutdown."""
-    safe = session_key.replace(":", "-")
-    (_active_dir() / safe).unlink(missing_ok=True)
-
-
-def sentinel_dir(repo_name: str) -> Path:
-    """Sentinel directory for a repo: ``~/.biff/sentinels/{repo_name}/``."""
-    return Path.home() / ".biff" / "sentinels" / repo_name
 
 
 def _write_sentinel(repo_name: str, session_key: str) -> None:

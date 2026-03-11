@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from biff.server.tools.plan import expand_bead_id
+from biff._stdlib import expand_bead_id
 
 
 class TestExpandBeadId:
@@ -16,7 +16,7 @@ class TestExpandBeadId:
     def test_expands_valid_bead_id(self) -> None:
         title = "post-checkout hook: update plan from branch"
         bd_output = json.dumps([{"title": title}])
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = bd_output
             result = expand_bead_id("biff-ka4")
@@ -38,7 +38,7 @@ class TestExpandBeadId:
 
     def test_matches_short_id(self) -> None:
         bd_output = json.dumps([{"title": "Fix bug"}])
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = bd_output
             result = expand_bead_id("biff-x1")
@@ -46,7 +46,7 @@ class TestExpandBeadId:
 
     def test_matches_4char_suffix(self) -> None:
         bd_output = json.dumps([{"title": "Epic task"}])
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = bd_output
             result = expand_bead_id("biff-mx3a")
@@ -60,7 +60,7 @@ class TestExpandBeadId:
 
     def test_different_prefix(self) -> None:
         bd_output = json.dumps([{"title": "Quarry feature"}])
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = bd_output
             result = expand_bead_id("quarry-r9f")
@@ -68,39 +68,39 @@ class TestExpandBeadId:
 
     def test_fallback_when_bd_not_installed(self) -> None:
         with patch(
-            "biff.server.tools.plan.subprocess.run",
+            "biff._stdlib.subprocess.run",
             side_effect=FileNotFoundError,
         ):
             assert expand_bead_id("biff-ka4") == "biff-ka4"
 
     def test_fallback_when_bd_fails(self) -> None:
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = ""
             assert expand_bead_id("biff-ka4") == "biff-ka4"
 
     def test_fallback_when_bd_returns_empty(self) -> None:
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "[]"
             assert expand_bead_id("biff-ka4") == "biff-ka4"
 
     def test_fallback_on_invalid_json(self) -> None:
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "not json"
             assert expand_bead_id("biff-ka4") == "biff-ka4"
 
     def test_fallback_on_timeout(self) -> None:
         with patch(
-            "biff.server.tools.plan.subprocess.run",
+            "biff._stdlib.subprocess.run",
             side_effect=TimeoutError,
         ):
             assert expand_bead_id("biff-ka4") == "biff-ka4"
 
     def test_fallback_on_empty_title(self) -> None:
         bd_output = json.dumps([{"title": ""}])
-        with patch("biff.server.tools.plan.subprocess.run") as mock_run:
+        with patch("biff._stdlib.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = bd_output
             assert expand_bead_id("biff-ka4") == "biff-ka4"

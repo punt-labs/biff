@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
 # Format biff MCP tool output for the UI panel.
 #
 # Two-channel display (see punt-kit/patterns/two-channel-display.md):

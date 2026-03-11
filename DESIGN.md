@@ -2476,3 +2476,108 @@ Five tests in `TestReadHookInput`:
 | `test_no_eof_does_not_hang` | **Regression**: data on pipe, no EOF |
 | `test_no_data_no_eof_returns_empty` | Open pipe, no data, no EOF |
 | `test_invalid_json_returns_empty` | Malformed input |
+
+## DES-028: Hook Import Tax — Lightweight Entry Point
+
+**Date:** 2026-03-10
+**Status:** Settled
+**Version:** v1.3.4
+
+### Problem
+
+Every biff hook shell script invoked `biff hook claude-code <event>`,
+which resolved to the `biff` console\_scripts entry point
+(`biff.__main__:app`).  This imported the entire application before
+dispatching to the hook handler:
+
+```text
+biff (uv wrapper) → __main__.py
+  → biff/__init__.py → commands, cli_session, config, models, nats_relay, relay
+  → typer, nats, pydantic, fastmcp, rich
+  → biff.hook (actual handler — needs only stdlib)
+```
+
+Measured cold cost (installed binary, M2 MacBook Air):
+
+| Path | Time |
+|------|------|
+| `biff hook claude-code session-start` | 3.7s |
+| Shell + 1 Python hook (startup) | 4.7s |
+| Shell + 2 Python hooks (startup + resume) | 5.6s |
+
+With all Punt Labs plugins (biff + quarry + vox + lux) firing
+SessionStart hooks serially, observed wall time was ~15s.
+
+### Root Cause
+
+Three layers of unnecessary imports on the hook path:
+
+1. **`biff/__init__.py`** eagerly imported 8 submodules including
+   `nats_relay`, `cli_session`, and `models` — every `from biff.X`
+   triggered the full package load.
+2. **`__main__.py`** imported the server, commands, and CLI framework
+   before dispatching to the hook subcommand.
+3. **Handler lazy imports** pointed at heavy modules (`biff.config`
+   imports pydantic via `biff.models`; `biff.server.tools.plan`
+   imports the full server tool chain) even though the handler only
+   needed stdlib functions trapped in those modules.
+
+### Solution
+
+Three corresponding fixes:
+
+**1. `biff/_stdlib.py`** — extract stdlib-only functions from heavy
+modules so hook handlers can import them without triggering pydantic,
+nats, or the server dependency tree:
+
+- `find_git_root`, `get_repo_slug`, `sanitize_repo_name`,
+  `is_enabled`, `load_biff_local` (from `config.py`)
+- `expand_bead_id` (from `server/tools/plan.py`)
+- `active_dir`, `remove_active_session`, `sentinel_dir`
+  (from `server/app.py`)
+
+Source modules import from `_stdlib` — no duplication, single source
+of truth.
+
+**2. `biff/_hook_entry.py`** — lightweight entry point registered as
+`biff-hook` console script.  Parses `sys.argv` directly, imports
+`biff.hook` handler functions (which only need typer + stdlib at
+module level), dispatches.  Bypasses `__main__.py` entirely.
+
+**3. Lazy `biff/__init__.py`** — PEP 562 `__getattr__` replaces eager
+imports.  `from biff import BiffConfig` still works (resolves on first
+access), but `from biff._hook_entry import main` no longer triggers
+the full package load.
+
+All hook shell scripts updated: `biff hook` → `biff-hook`.
+
+### Measured Result
+
+Cold start, installed baseline vs new path (M2 MacBook Air, Python 3.13):
+
+| Scenario | Old | New | Ratio |
+|----------|-----|-----|-------|
+| 1 Python hook | 3.7s | 0.29s | 13x |
+| Shell + 1 Python hook | 4.7s | 0.43s | 11x |
+| Shell + 2 Python hooks | 5.6s | 0.56s | 10x |
+
+### Alternatives Rejected
+
+- **Lazy imports in `__main__.py`** — would help but doesn't eliminate
+  the fundamental problem: the `biff` entry point exists to run the
+  full CLI, not lightweight hooks.  A separate entry point is cleaner.
+- **`python -m biff.hook`** — requires knowing which Python to invoke
+  (the one in biff's tool venv).  Console scripts handle this.
+- **Moving `_hook_entry.py` outside the `biff` package** — would avoid
+  the `__init__.py` problem without making it lazy, but creates a
+  non-standard package layout and makes the module harder to find.
+- **Merging 3 SessionStart hooks into 1** — the matchers already
+  ensure only 2 fire per event (shell + one Python).  With the import
+  fix reducing Python cost to ~0.3s, merging saves ~0.3s more — not
+  worth the complexity.
+
+### Invariant
+
+Every function in `biff/_stdlib.py` uses only stdlib imports.  Adding
+a third-party import there defeats the entire purpose.  The module
+docstring states this explicitly.

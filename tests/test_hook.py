@@ -317,7 +317,7 @@ class TestHandleSessionStart:
         with (
             patch("biff.hook._get_git_branch", return_value="jmf/biff-ka4"),
             patch(
-                "biff.server.tools.plan.expand_bead_id",
+                "biff._stdlib.expand_bead_id",
                 return_value="biff-ka4: post-checkout hook",
             ),
         ):
@@ -393,14 +393,14 @@ class TestExpandBranchPlan:
 
     def test_plain_branch(self) -> None:
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             side_effect=_identity,
         ):
             assert _expand_branch_plan("feature/auth") == "→ feature/auth"
 
     def test_bead_id_in_branch(self) -> None:
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             return_value="biff-ka4: post-checkout hook",
         ):
             result = _expand_branch_plan("jmf/biff-ka4")
@@ -408,7 +408,7 @@ class TestExpandBranchPlan:
 
     def test_bead_id_at_start(self) -> None:
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             return_value="biff-ka4: hook",
         ):
             result = _expand_branch_plan("biff-ka4-description")
@@ -416,7 +416,7 @@ class TestExpandBranchPlan:
 
     def test_no_bead_id(self) -> None:
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             side_effect=_identity,
         ):
             assert _expand_branch_plan("main") == "→ main"
@@ -424,7 +424,7 @@ class TestExpandBranchPlan:
     def test_expansion_failure_uses_raw_branch(self) -> None:
         """If expand_bead_id returns the ID unchanged, use the full branch."""
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             side_effect=_identity,
         ):
             result = _expand_branch_plan("jmf/biff-xyz")
@@ -433,7 +433,7 @@ class TestExpandBranchPlan:
     def test_no_false_positive_on_common_branch(self) -> None:
         """Branch names like my-feature must not be truncated to my-feat."""
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             side_effect=_identity,
         ):
             result = _expand_branch_plan("my-feature")
@@ -442,7 +442,7 @@ class TestExpandBranchPlan:
     def test_no_false_positive_fix_tests(self) -> None:
         """fix-tests must not match as a bead ID."""
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             side_effect=_identity,
         ):
             result = _expand_branch_plan("fix-tests")
@@ -450,7 +450,7 @@ class TestExpandBranchPlan:
 
     def test_no_false_positive_add_logging(self) -> None:
         with patch(
-            "biff.server.tools.plan.expand_bead_id",
+            "biff._stdlib.expand_bead_id",
             side_effect=_identity,
         ):
             result = _expand_branch_plan("add-logging")
@@ -474,10 +474,10 @@ class TestHandleSessionEnd:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
-            patch("biff.config.get_repo_slug", return_value=None),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.get_repo_slug", return_value=None),
             patch(
-                "biff.server.app.sentinel_dir",
+                "biff._stdlib.sentinel_dir",
                 return_value=sentinel_dir,
             ),
         ):
@@ -495,8 +495,8 @@ class TestHandleSessionEnd:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
-            patch("biff.config.get_repo_slug", return_value=None),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.get_repo_slug", return_value=None),
         ):
             count = handle_session_end()
 
@@ -508,8 +508,8 @@ class TestHandleSessionEnd:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
-            patch("biff.config.get_repo_slug", return_value=None),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.get_repo_slug", return_value=None),
         ):
             count = handle_session_end()
 
@@ -528,10 +528,10 @@ class TestHandleSessionEnd:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
-            patch("biff.config.get_repo_slug", return_value=None),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.get_repo_slug", return_value=None),
             patch(
-                "biff.server.app.sentinel_dir",
+                "biff._stdlib.sentinel_dir",
                 return_value=sentinel_dir,
             ),
         ):
@@ -544,7 +544,7 @@ class TestHandleSessionEnd:
         assert (active_dir / "kai-bbb").exists()
 
     def test_no_git_root_returns_zero(self, tmp_path: Path) -> None:
-        with patch("biff.config.find_git_root", return_value=None):
+        with patch("biff._stdlib.find_git_root", return_value=None):
             count = handle_session_end()
 
         assert count == 0
@@ -561,13 +561,13 @@ class TestHandleSessionEnd:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
             patch(
-                "biff.config.get_repo_slug",
+                "biff._stdlib.get_repo_slug",
                 return_value="punt-labs/biff",
             ),
             patch(
-                "biff.server.app.sentinel_dir",
+                "biff._stdlib.sentinel_dir",
                 return_value=sentinel_dir,
             ),
         ):
@@ -585,8 +585,8 @@ class TestHandleSessionEnd:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
-            patch("biff.config.get_repo_slug", return_value=None),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.get_repo_slug", return_value=None),
         ):
             count = handle_session_end()
 
@@ -624,7 +624,7 @@ class TestHandlePostCheckout:
         with (
             patch("biff.hook._get_git_branch", return_value="jmf/biff-ka4"),
             patch(
-                "biff.server.tools.plan.expand_bead_id",
+                "biff._stdlib.expand_bead_id",
                 return_value="biff-ka4: post-checkout hook",
             ),
             home_mock,
@@ -919,8 +919,8 @@ def _collision_mocks(
     return (
         patch("pathlib.Path.home", return_value=tmp_path),
         patch("biff.hook._get_worktree_root", return_value=worktree),
-        patch("biff.config.find_git_root", return_value=fake_root),
-        patch("biff.config.get_repo_slug", return_value=repo_slug),
+        patch("biff._stdlib.find_git_root", return_value=fake_root),
+        patch("biff._stdlib.get_repo_slug", return_value=repo_slug),
     )
 
 
@@ -1008,7 +1008,7 @@ class TestDetectCollisions:
         """No git root → empty list."""
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=None),
+            patch("biff._stdlib.find_git_root", return_value=None),
         ):
             assert _detect_collisions() == []
 
@@ -1247,9 +1247,9 @@ class TestZSpecSessionEndCleanup:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
-            patch("biff.config.get_repo_slug", return_value=None),
-            patch("biff.server.app.sentinel_dir", return_value=sentinel_dir),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.get_repo_slug", return_value=None),
+            patch("biff._stdlib.sentinel_dir", return_value=sentinel_dir),
         ):
             count = handle_session_end()
 
@@ -1271,8 +1271,8 @@ class TestZSpecSessionEndCleanup:
 
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.config.find_git_root", return_value=fake_root),
-            patch("biff.config.get_repo_slug", return_value=None),
+            patch("biff._stdlib.find_git_root", return_value=fake_root),
+            patch("biff._stdlib.get_repo_slug", return_value=None),
         ):
             count = handle_session_end()
 
@@ -1603,7 +1603,7 @@ class TestIsLuxEnabled:
         lux_dir = tmp_path / ".lux"
         lux_dir.mkdir()
         (lux_dir / "config.md").write_text('---\ndisplay: "y"\n---\n')
-        with patch("biff.config.find_git_root", return_value=tmp_path):
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is True
@@ -1613,14 +1613,14 @@ class TestIsLuxEnabled:
         lux_dir = tmp_path / ".lux"
         lux_dir.mkdir()
         (lux_dir / "config.md").write_text('---\ndisplay: "n"\n---\n')
-        with patch("biff.config.find_git_root", return_value=tmp_path):
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
     def test_lux_no_config_file(self, tmp_path: Path) -> None:
         """No .lux/config.md means lux is off."""
-        with patch("biff.config.find_git_root", return_value=tmp_path):
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
@@ -1630,7 +1630,7 @@ class TestIsLuxEnabled:
         lux_dir = tmp_path / ".lux"
         lux_dir.mkdir()
         (lux_dir / "config.md").write_text('display: "y"\n')
-        with patch("biff.config.find_git_root", return_value=tmp_path):
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
@@ -1640,7 +1640,7 @@ class TestIsLuxEnabled:
         lux_dir = tmp_path / ".lux"
         lux_dir.mkdir()
         (lux_dir / "config.md").write_text('---\ndisplay: "y"\n')
-        with patch("biff.config.find_git_root", return_value=tmp_path):
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
@@ -1650,7 +1650,7 @@ class TestIsLuxEnabled:
         lux_dir = tmp_path / ".lux"
         lux_dir.mkdir()
         (lux_dir / "config.md").write_text("---\ndisplay: y\n---\n")
-        with patch("biff.config.find_git_root", return_value=tmp_path):
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is True
@@ -1660,14 +1660,14 @@ class TestIsLuxEnabled:
         lux_dir = tmp_path / ".lux"
         lux_dir.mkdir()
         (lux_dir / "config.md").write_text("---\ndisplay: 'y'\n---\n")
-        with patch("biff.config.find_git_root", return_value=tmp_path):
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is True
 
     def test_lux_no_git_root(self) -> None:
         """No git root means lux is off."""
-        with patch("biff.config.find_git_root", return_value=None):
+        with patch("biff._stdlib.find_git_root", return_value=None):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
