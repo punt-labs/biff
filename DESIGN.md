@@ -2630,8 +2630,8 @@ When the TCP connection drops:
 4. `kv.put()` uses the dead connection → `ConnectionClosedError`
 5. No code catches `ConnectionClosedError` — propagates to FastMCP → user error
 
-The slow path (line 159) that would create a new connection is unreachable
-because the fast path (line 154) exits first.
+The slow path that checks `self._nc` and would create a new connection is
+unreachable because the fast-path cache check exits first.
 
 ### Z Spec Divergence
 
