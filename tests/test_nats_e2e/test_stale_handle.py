@@ -8,6 +8,8 @@ in ``_ensure_connected()`` would return these stale handles, causing
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from biff.nats_relay import NatsRelay
@@ -58,3 +60,35 @@ class TestStaleHandleRecovery:
 
         # Cleanup
         await nc_new.close()
+
+    async def test_concurrent_reconnect_shares_single_connection(
+        self, nats_server: str
+    ) -> None:
+        """Multiple concurrent callers after disconnect share one connection."""
+        relay = NatsRelay(
+            url=nats_server,
+            name="test-concurrent",
+            repo_name="_test-concurrent",
+            stream_prefix="biff-conc",
+        )
+
+        # Warm the cache.
+        await relay._ensure_connected()
+        assert relay._nc is not None
+
+        # Kill the connection.
+        await relay._nc.close()
+
+        # Fire 5 concurrent reconnects — all should get the same connection.
+        results = await asyncio.gather(*[relay._ensure_connected() for _ in range(5)])
+
+        # All callers got handles backed by the same single connection.
+        nc = relay._nc
+        assert nc is not None
+        assert not nc.is_closed
+        for js, kv in results:
+            assert js is not None
+            assert kv is not None
+
+        # Cleanup
+        await nc.close()
