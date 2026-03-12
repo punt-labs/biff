@@ -152,7 +152,11 @@ class NatsRelay:
         when none exists or the previous one was closed.
         """
         if self._js is not None and self._kv is not None:
-            return self._js, self._kv
+            if self._nc is not None and not self._nc.is_closed:
+                return self._js, self._kv
+            # Connection died — clear stale handles, reconnect (DES-029).
+            self._js = None
+            self._kv = None
 
         # Reuse existing connection if still open
         nc = self._nc
@@ -160,6 +164,10 @@ class NatsRelay:
 
             async def _on_disconnect() -> None:
                 logger.warning("Disconnected from NATS at %s", self._url)
+                # Proactively invalidate cached handles so the next tool call
+                # reconnects instead of using stale JetStream/KV refs (DES-029).
+                self._js = None
+                self._kv = None
 
             async def _on_reconnect() -> None:
                 logger.info("Reconnected to NATS at %s", self._url)
