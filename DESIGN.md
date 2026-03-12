@@ -2584,3 +2584,107 @@ Cold start, installed baseline vs new path (M2 MacBook Air, Python 3.13):
 Every function in `biff/_stdlib.py` uses only stdlib imports.  Adding
 a third-party import there defeats the entire purpose.  The module
 docstring states this explicitly.
+
+---
+
+## DES-029: Stale Handle Bug — `_ensure_connected()` Fast Path Skips Connection Check
+
+**Date:** 2026-03-11
+**Status:** SETTLED
+**Version:** v1.3.5
+**Bead:** biff-m4k9
+
+### Problem
+
+All MCP tools return `nats: connection closed` for the rest of a session
+after the NATS TCP connection drops.  `biff doctor` confirms the relay
+is reachable — the server-side is fine.  The MCP server process never
+reconnects.
+
+Observed in production: 9 `biff mcp` processes running, 8 had zero
+network file descriptors.  Only the newest process had a live NATS
+connection.  All older processes lost their connections and never
+re-established them.
+
+### Root Cause
+
+`_ensure_connected()` has a two-level cache with a short-circuit bug:
+
+```python
+async def _ensure_connected(self):
+    # Fast path — returns cached handles without checking connection
+    if self._js is not None and self._kv is not None:
+        return self._js, self._kv          # ← BUG: stale handles
+
+    # Slow path — checks connection, reconnects if needed
+    nc = self._nc
+    if nc is None or nc.is_closed:          # ← never reached
+        nc = await nats.connect(...)
+```
+
+When the TCP connection drops:
+
+1. `self._nc.is_closed` becomes `True`
+2. `self._js` and `self._kv` remain non-None (cached from before the drop)
+3. Tool call → `_ensure_connected()` → fast path returns stale handles
+4. `kv.put()` uses the dead connection → `ConnectionClosedError`
+5. No code catches `ConnectionClosedError` — propagates to FastMCP → user error
+
+The slow path that checks `self._nc` and would create a new connection is
+unreachable because the fast-path cache check exits first.
+
+### Z Spec Divergence
+
+The Z spec (`docs/nats-relay.tex`) models `EnsureConnected` with a
+precondition `connState ≠ closed`, implying the connection state is
+always checked.  The implementation's caching optimization violates
+this: the fast path bypasses the connection state check entirely.
+
+### Fix
+
+Two changes:
+
+**1. Connection liveness in fast path** — check `_nc.is_closed` before
+returning cached handles:
+
+```python
+if self._js is not None and self._kv is not None:
+    if self._nc is not None and not self._nc.is_closed:
+        return self._js, self._kv
+    # Connection died — clear stale handles, fall through to reconnect
+    self._js = None
+    self._kv = None
+```
+
+**2. Proactive invalidation via `disconnected_cb`** — clear cached
+handles when the connection drops, so the next tool call reconnects
+even if `is_closed` has a race window:
+
+```python
+async def _on_disconnect() -> None:
+    logger.warning("Disconnected from NATS at %s", self._url)
+    self._js = None
+    self._kv = None
+```
+
+The combination is defense-in-depth: the callback handles the common
+case (nats-py detects disconnect), the fast-path check handles the
+edge case (callback didn't fire or hasn't run yet).
+
+### Alternatives Rejected
+
+- **Catch `ConnectionClosedError` in every tool handler** — too broad,
+  masks real errors.  The reconnect should be transparent at the relay
+  layer, not handled per-tool.
+- **Retry wrapper around relay methods** — adds complexity.  The lazy
+  reconnect via `_ensure_connected()` is the existing pattern; fixing
+  the fast path is simpler than adding a retry layer.
+- **Periodic health check task** — the MCP server already has a poll
+  loop, but adding reconnection logic there couples polling to
+  connection management.  The lazy reconnect is the right abstraction.
+
+### Invariant
+
+`_ensure_connected()` must check transport liveness before returning
+cached application handles.  The fast path is an optimization of the
+slow path, not a bypass of its preconditions.

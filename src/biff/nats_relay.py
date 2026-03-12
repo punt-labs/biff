@@ -136,6 +136,7 @@ class NatsRelay:
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
+        self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
 
     def _auth_kwargs(self) -> dict[str, str]:
@@ -144,6 +145,15 @@ class NatsRelay:
             return {}
         return self._auth.as_nats_kwargs()
 
+    def _cached_handles(
+        self,
+    ) -> tuple[JetStreamContext, KeyValue] | None:
+        """Return cached handles if connection is alive, else None."""
+        js, kv, nc = self._js, self._kv, self._nc
+        if js is not None and kv is not None and nc is not None and not nc.is_closed:
+            return js, kv
+        return None
+
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
         """Lazily connect and provision infrastructure.
 
@@ -151,15 +161,39 @@ class NatsRelay:
         :meth:`reset_infrastructure`).  Only creates a new connection
         when none exists or the previous one was closed.
         """
-        if self._js is not None and self._kv is not None:
-            return self._js, self._kv
+        # Lock-free fast path: return cached handles if connection is alive.
+        cached = self._cached_handles()
+        if cached is not None:
+            return cached
 
-        # Reuse existing connection if still open
+        # Slow path: serialize connection creation to prevent concurrent
+        # callers from each creating a separate NATS connection (DES-029).
+        async with self._connect_lock:
+            # Double-check after acquiring the lock — another caller may
+            # have already reconnected while we waited.
+            cached = self._cached_handles()
+            if cached is not None:
+                return cached
+            # Connection died or never existed — clear stale handles.
+            self._js = None
+            self._kv = None
+            return await self._open_connection()
+
+    async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
+        """Create a new NATS connection and provision infrastructure.
+
+        Must be called while holding ``_connect_lock``.
+        """
         nc = self._nc
         if nc is None or nc.is_closed:
 
             async def _on_disconnect() -> None:
                 logger.warning("Disconnected from NATS at %s", self._url)
+                # Proactively invalidate cached handles so the next
+                # tool call reconnects instead of using stale
+                # JetStream/KV refs (DES-029).
+                self._js = None
+                self._kv = None
 
             async def _on_reconnect() -> None:
                 logger.info("Reconnected to NATS at %s", self._url)
@@ -181,7 +215,8 @@ class NatsRelay:
 
             # KV bucket for sessions — shared across all repos (DES-016).
             # TTL auto-purges truly stale entries.  Never delete-recreate
-            # shared infrastructure; use the existing bucket on config mismatch.
+            # shared infrastructure; use the existing bucket on config
+            # mismatch.
             kv_config = KeyValueConfig(
                 bucket=self._kv_bucket,
                 ttl=_KV_TTL,
@@ -198,8 +233,8 @@ class NatsRelay:
                 )
                 kv = await js.key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
 
-            # Inbox stream — shared WORK_QUEUE with wildcard subjects (DES-016).
-            # Never delete-recreate shared infrastructure.
+            # Inbox stream — shared WORK_QUEUE with wildcard subjects
+            # (DES-016).  Never delete-recreate shared infrastructure.
             stream_config = StreamConfig(
                 name=self._stream_name,
                 subjects=[f"{self._stream_prefix}.*.inbox.>"],
