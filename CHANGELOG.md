@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-## [1.3.4] - 2026-03-11
+### Fixed
+
+- **Stale NATS handle recovery** — `_ensure_connected()` fast path returned cached JetStream/KV handles without checking if the TCP connection was alive. After a connection drop, all MCP tools failed permanently with `ConnectionClosedError`. Fix: fast path checks `_nc.is_closed`, `disconnected_cb` proactively invalidates cached handles, `asyncio.Lock` serializes connection creation (DES-029)
 
 ## [1.3.4] - 2026-03-10
 
