@@ -2671,6 +2671,25 @@ The combination is defense-in-depth: the callback handles the common
 case (nats-py detects disconnect), the fast-path check handles the
 edge case (callback didn't fire or hasn't run yet).
 
+**3. Serialized reconnection via `asyncio.Lock`** — the `disconnected_cb`
+clearing handles makes the slow path (which calls `nats.connect()`)
+reachable by multiple concurrent callers (heartbeat, reaper, kv_watcher,
+tool handlers).  Without serialization, each caller creates its own
+connection; only the last one stored in `self._nc` survives, leaking the
+rest.  A double-check locking pattern prevents this:
+
+```python
+async def _ensure_connected(self):
+    cached = self._cached_handles()  # lock-free fast path
+    if cached is not None:
+        return cached
+    async with self._connect_lock:
+        cached = self._cached_handles()  # re-check after lock
+        if cached is not None:
+            return cached
+        return await self._open_connection()
+```
+
 ### Alternatives Rejected
 
 - **Catch `ConnectionClosedError` in every tool handler** — too broad,
