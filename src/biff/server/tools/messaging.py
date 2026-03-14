@@ -47,7 +47,11 @@ async def _resolve_recipient(
         )
         if session:
             relay_key = build_session_key(session.user, session.tty)
-            if session.repo and session.repo != state.config.repo_name:
+            if (
+                session.repo
+                and session.repo != state.config.repo_name
+                and session.repo in state.config.visible_repos
+            ):
                 target_repo = session.repo
         else:
             relay_key = f"{user}:{tty}"
@@ -78,7 +82,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ``@user:tty`` targets a specific session.
         """
         await update_current_session(state)
-        to_user, display, target_repo = await _resolve_recipient(state, to)
+        try:
+            to_user, display, target_repo = await _resolve_recipient(state, to)
+        except ValueError as exc:
+            return str(exc)
         msg = Message(
             from_user=state.config.user,
             to_user=to_user,

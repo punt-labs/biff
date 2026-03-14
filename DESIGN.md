@@ -2830,7 +2830,7 @@ These repos have a dependency relationship.
 2. `/who` shows sessions across both A and B (with repo as a column).
 3. User 1 sees User 2 is active in Repo B on `tty4`.
 4. `/write @user2:tty4 "Need the new parser API exported"` — works
-   from Repo A because `tty4` is org-unique.
+   from Repo A because biff queries visible repos in parallel.
 5. `/talk @user2:tty4` to clarify the interface details in real time.
 
 No context switching. No leaving the current session. No `@repo` noise.
@@ -2869,9 +2869,9 @@ messaging:
 
 A targeted message (`@user:tty`) is safe cross-repo because:
 
-1. TTY is org-unique — maps to exactly one session in one repo.
-2. Biff looks up the tty in the org-wide session KV, finds the target's
-   repo.
+1. Biff queries each visible repo's KV in parallel to find the tty.
+2. On ambiguity (same tty_name in multiple repos), prefers the
+   sender's own repo.
 3. Publishes to `biff.{target_repo}.inbox.{user}.{tty}` — the target
    repo's subject, not the sender's.
 4. The target's consumer — scoped to their repo — picks it up.
@@ -3107,10 +3107,10 @@ cannot yet support.
 
 All blocking questions resolved. Implementation sequence:
 
-1. Add peer list config to `.biff/config`
-2. Change session KV keys to `{user}.{tty}`, repo as `UserSession` field
-3. Org-unique tty assignment (check across peers)
-4. Cross-repo publish (tty lookup → verify peer → publish to target subject)
-5. `/who` and `/wall` with `@repo` filtering and repo column
-6. Blow away existing NATS state, test end-to-end
+1. Add `[peers]` config to `.biff` with `visible_repos` property
+2. Add `repo` field to `UserSession` (metadata, not key scheme)
+3. Add `get_sessions_for_repos()` — parallel per-repo server-side queries
+4. Cross-repo publish (query visible repos → resolve tty → publish to target subject)
+5. `/who` and `/wall` with repo column and cross-repo visibility
+6. Test end-to-end between peered repos
 7. Future: `/dispatch` or equivalent for launching sessions (flavor 4)

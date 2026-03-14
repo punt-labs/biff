@@ -679,14 +679,9 @@ async def _handle_repl_talk(
         return
 
     # Determine target_repo for cross-repo talk notifications.
-    target_repo: str | None = None
-    if tty_target:
-        resolved = next(
-            (s for s in sessions if s.tty == tty_target or s.tty_name == tty_target),
-            None,
-        )
-        if resolved and resolved.repo and resolved.repo != ctx.config.repo_name:
-            target_repo = resolved.repo
+    _, target_repo = _resolve_from_sessions(
+        all_sessions, user_target, tty_target, ctx.config.repo_name
+    )
 
     # Update plan to show talk activity.
     session = await ctx.relay.get_session(ctx.session_key)

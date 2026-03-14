@@ -70,7 +70,7 @@ async def fetch_all_unread(
     return sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
 
 
-async def _resolve_talk_target(
+def _resolve_talk_target(
     user: str,
     tty: str | None,
     sessions: list[UserSession],
@@ -170,7 +170,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not sessions:
             return f"@{user} is not online."
 
-        relay_key, display_target, target_repo = await _resolve_talk_target(
+        relay_key, display_target, target_repo = _resolve_talk_target(
             user, tty, all_sessions, sender_repo=state.config.repo_name
         )
         set_talk_partner(display_target)
