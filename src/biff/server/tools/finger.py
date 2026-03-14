@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from biff.formatting import format_finger, format_finger_multi
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._session import resolve_session, update_current_session
+from biff.server.tools._session import resolve_tty_name, update_current_session
 from biff.tty import parse_address
 
 if TYPE_CHECKING:
@@ -39,20 +39,20 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await refresh_read_messages(mcp, state)
         bare_user, tty = parse_address(user)
 
+        # Query all visible repos, then filter by user and optionally tty.
+        all_sessions = await state.relay.get_sessions_for_repos(
+            state.config.visible_repos
+        )
+
         if tty:
-            # Targeted: resolve by hex ID or tty_name
-            session = await resolve_session(state.relay, bare_user, tty)
+            session = resolve_tty_name(
+                all_sessions, bare_user, tty, local_repo=state.config.repo_name
+            )
             if session is None:
-                return f"Login: {bare_user}\nNo session on tty {tty}."
-            visible = state.config.visible_repos
-            if session.repo and session.repo not in visible:
                 return f"Login: {bare_user}\nNo session on tty {tty}."
             return format_finger(session)
 
-        # Bare user: show all sessions from visible repos
-        sessions = await state.relay.get_sessions_for_user(bare_user)
-        visible = state.config.visible_repos
-        sessions = [s for s in sessions if s.repo in visible]
+        sessions = [s for s in all_sessions if s.user == bare_user]
         if not sessions:
             return f"Login: {bare_user}\nNever logged in."
         return format_finger_multi(sessions)

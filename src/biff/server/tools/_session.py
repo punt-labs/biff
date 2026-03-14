@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
-from biff.relay import Relay
-from biff.tty import build_session_key
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
@@ -45,32 +44,34 @@ async def get_or_create_session(state: ServerState) -> UserSession:
     return session
 
 
-async def resolve_session(
-    relay: Relay, user: str, tty_or_name: str
+def resolve_tty_name(
+    sessions: Sequence[UserSession],
+    user: str,
+    tty: str,
+    *,
+    local_repo: str = "",
 ) -> UserSession | None:
-    """Resolve a tty identifier to a session.
+    """Resolve a tty identifier to a session from a pre-fetched list.
 
-    Tries the literal hex key first (``{user}:{tty_or_name}``).
-    If that misses, searches the user's sessions for a matching
-    ``tty_name``.  Returns ``None`` if no match.
+    Tries exact hex tty match first, then tty_name match.  When
+    multiple sessions share the same tty_name across repos, prefers
+    sessions in *local_repo* to avoid nondeterministic resolution.
+
+    Returns ``None`` if no match.
     """
-    # Try as literal session key (hex ID).
-    # Catches ValueError from NatsRelay's _validate_tty when
-    # tty_or_name contains NATS-illegal characters (dots, spaces, etc).
-    try:
-        key = build_session_key(user, tty_or_name)
-        session = await relay.get_session(key)
-        if session is not None:
-            return session
-    except ValueError:
-        pass
-
-    # Fall back to tty_name match
-    sessions = await relay.get_sessions_for_user(user)
-    for s in sessions:
-        if s.tty_name == tty_or_name:
-            return s
-    return None
+    # Exact hex tty match.
+    session = next((s for s in sessions if s.user == user and s.tty == tty), None)
+    if session is not None:
+        return session
+    # tty_name match — prefer local repo on ambiguity.
+    candidates = [s for s in sessions if s.user == user and s.tty_name == tty]
+    if not candidates:
+        return None
+    if local_repo:
+        local = [s for s in candidates if s.repo == local_repo]
+        if local:
+            return local[0]
+    return candidates[0]
 
 
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:

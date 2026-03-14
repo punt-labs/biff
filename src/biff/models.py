@@ -157,13 +157,8 @@ class BiffConfig(BaseModel):
 
     @property
     def visible_repos(self) -> frozenset[str]:
-        """Repos visible to this instance: self + peers + empty string.
-
-        The empty string ensures LocalRelay sessions (which have no repo
-        set) pass visibility filters.  NatsRelay sessions always have
-        ``repo`` populated via ``get_or_create_session`` backfill.
-        """
-        return frozenset({self.repo_name, "", *self.peers})
+        """Repos visible to this instance: self + peers."""
+        return frozenset({self.repo_name, *self.peers})
 
 
 class SessionEvent(BaseModel):

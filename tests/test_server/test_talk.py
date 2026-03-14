@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
-from biff.models import BiffConfig, Message, UserSession
+from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay
-from biff.server.state import create_state
 from biff.server.tools.talk import (
     _NO_MESSAGES,
     _reset_talk,
@@ -72,62 +70,35 @@ class TestResolveTalkTarget:
 
     async def test_no_tty_returns_user(self) -> None:
         """Without tty, relay_key and display are both the username."""
-        state = create_state(
-            BiffConfig(user="kai", repo_name="_test"),
-            Path("/tmp/test"),
-            tty="abc123",
-        )
-        relay_key, display, target_repo = await _resolve_talk_target(
-            state.relay, "eric", None
-        )
+        relay_key, display, target_repo = await _resolve_talk_target("eric", None, [])
         assert relay_key == "eric"
         assert display == "eric"
         assert target_repo is None
 
-    async def test_literal_tty_resolves(self, tmp_path: Path) -> None:
+    async def test_literal_tty_resolves(self) -> None:
         """When tty matches a literal session key, uses that key."""
-        state = create_state(
-            BiffConfig(user="kai", repo_name="_test"),
-            tmp_path,
-            tty="abc123",
-        )
-        # Create eric's session with a known tty hex ID
-        await state.relay.update_session(UserSession(user="eric", tty="def456"))
+        sessions = [UserSession(user="eric", tty="def456")]
         relay_key, display, target_repo = await _resolve_talk_target(
-            state.relay, "eric", "def456"
+            "eric", "def456", sessions
         )
         assert relay_key == "eric:def456"
         assert display == "eric:def456"
         assert target_repo is None
 
-    async def test_tty_name_resolves_to_hex(self, tmp_path: Path) -> None:
+    async def test_tty_name_resolves_to_hex(self) -> None:
         """Friendly tty_name resolves to the session's actual hex key."""
-        state = create_state(
-            BiffConfig(user="kai", repo_name="_test"),
-            tmp_path,
-            tty="abc123",
-        )
-        # Create eric's session with a hex tty and a friendly name
-        await state.relay.update_session(
-            UserSession(user="eric", tty="def456", tty_name="laptop")
-        )
+        sessions = [UserSession(user="eric", tty="def456", tty_name="laptop")]
         relay_key, display, target_repo = await _resolve_talk_target(
-            state.relay, "eric", "laptop"
+            "eric", "laptop", sessions
         )
-        # relay_key should be the hex key, display keeps friendly name
         assert relay_key == "eric:def456"
         assert display == "eric:laptop"
         assert target_repo is None
 
-    async def test_unresolved_tty_falls_back(self, tmp_path: Path) -> None:
+    async def test_unresolved_tty_falls_back(self) -> None:
         """Unknown tty falls back to raw value (best-effort delivery)."""
-        state = create_state(
-            BiffConfig(user="kai", repo_name="_test"),
-            tmp_path,
-            tty="abc123",
-        )
         relay_key, display, target_repo = await _resolve_talk_target(
-            state.relay, "eric", "unknown"
+            "eric", "unknown", []
         )
         assert relay_key == "eric:unknown"
         assert display == "eric:unknown"

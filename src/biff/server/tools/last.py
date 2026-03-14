@@ -42,7 +42,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not events:
             return "No session history."
 
-        current_sessions = await state.relay.get_sessions()
+        current_sessions = await state.relay.get_sessions_for_repos(
+            state.config.visible_repos
+        )
         active_keys = {build_session_key(s.user, s.tty) for s in current_sessions}
 
         pairs = pair_events(events)

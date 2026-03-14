@@ -24,7 +24,7 @@ import queue as queue_mod
 import sys
 import threading as threading_mod
 import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
     from nats.aio.client import Client as NatsClient
 
+    from biff.models import UserSession
     from biff.server.state import ServerState
 
 from biff import commands
@@ -311,6 +312,33 @@ def _print_inline_notifications(notes: list[str], prompt: str) -> None:
         print(prompt, end="", flush=True)
 
 
+def _resolve_from_sessions(
+    sessions: Sequence[UserSession],
+    user: str,
+    tty: str | None,
+    sender_repo: str,
+) -> tuple[str, str | None]:
+    """Resolve a target from a pre-fetched session list.
+
+    Returns ``(relay_key, target_repo)``.  Delegates to
+    :func:`resolve_tty_name` for consistent disambiguation.
+    """
+    from biff.server.tools._session import resolve_tty_name
+    from biff.tty import build_session_key
+
+    if not tty:
+        return user, None
+    target_repo: str | None = None
+    resolved = resolve_tty_name(sessions, user, tty, local_repo=sender_repo)
+    if resolved:
+        target = build_session_key(resolved.user, resolved.tty)
+        if resolved.repo and resolved.repo != sender_repo:
+            target_repo = resolved.repo
+    else:
+        target = f"{user}:{tty}"
+    return target, target_repo
+
+
 async def _talk_publish(
     ctx: CliContext,
     target_user: str,
@@ -338,36 +366,6 @@ async def _talk_publish(
     await nc.publish(subject, data)
 
 
-async def _resolve_talk_cli(
-    ctx: CliContext,
-    user_target: str,
-    tty_target: str | None,
-    display: str,
-) -> tuple[str, str | None] | None:
-    """Resolve a talk target to (relay_key, target_repo), or None on deny."""
-    from biff.server.tools._session import resolve_session
-    from biff.tty import build_session_key
-
-    target_repo: str | None = None
-    if tty_target:
-        resolved = await resolve_session(ctx.relay, user_target, tty_target)
-        if resolved:
-            target = build_session_key(resolved.user, resolved.tty)
-            if resolved.repo and resolved.repo != ctx.config.repo_name:
-                if resolved.repo not in ctx.config.visible_repos:
-                    print(
-                        f"Cannot talk to {display} — "
-                        f"repo {resolved.repo!r} is not in your peer list."
-                    )
-                    return None
-                target_repo = resolved.repo
-        else:
-            target = f"{user_target}:{tty_target}"
-    else:
-        target = user_target
-    return target, target_repo
-
-
 def _print_hangup(notes: list[str]) -> None:
     """Clear the stale prompt and print hangup notification lines."""
     print("\r\033[K", end="")
@@ -385,6 +383,8 @@ async def _repl_talk(
     current_prompt: list[str],
     repl_prompt: str,
     talk_notifications: asyncio.Queue[dict[str, str]],
+    *,
+    target_repo: str | None = None,
 ) -> None:
     """Modal talk sub-loop — send lines to target, show incoming messages.
 
@@ -420,11 +420,13 @@ async def _repl_talk(
 
             line = result.strip()
             if line.lower() == "end":
-                await _talk_publish(ctx, target_user, "end")
+                await _talk_publish(ctx, target_user, "end", target_repo=target_repo)
                 break
 
             if line:
-                await _talk_publish(ctx, target_user, "message", line[:512])
+                await _talk_publish(
+                    ctx, target_user, "message", line[:512], target_repo=target_repo
+                )
 
             prompt_gate.set()
     finally:
@@ -670,12 +672,21 @@ async def _handle_repl_talk(
         print("Talk requires a NATS relay.")
         return
 
-    sessions = await ctx.relay.get_sessions_for_user(user_target)
-    visible = ctx.config.visible_repos
-    sessions = [s for s in sessions if s.repo in visible]
+    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
+    sessions = [s for s in all_sessions if s.user == user_target]
     if not sessions:
         print(f"{display} is not online.")
         return
+
+    # Determine target_repo for cross-repo talk notifications.
+    target_repo: str | None = None
+    if tty_target:
+        resolved = next(
+            (s for s in sessions if s.tty == tty_target or s.tty_name == tty_target),
+            None,
+        )
+        if resolved and resolved.repo and resolved.repo != ctx.config.repo_name:
+            target_repo = resolved.repo
 
     # Update plan to show talk activity.
     session = await ctx.relay.get_session(ctx.session_key)
@@ -684,7 +695,7 @@ async def _handle_repl_talk(
         await ctx.relay.update_session(updated)
 
     nc = await ctx.relay.get_nc()
-    target_subject = ctx.relay.talk_notify_subject(user_target)
+    target_subject = ctx.relay.talk_notify_subject(user_target, target_repo=target_repo)
 
     # Two-phase handshake: check if we're responding to an invite
     # or initiating a new conversation.
@@ -714,6 +725,7 @@ async def _handle_repl_talk(
         current_prompt,
         repl_prompt,
         talk_notifications,
+        target_repo=target_repo,
     )
 
 
@@ -1369,6 +1381,8 @@ async def _talk_loop(
     session_key: str,
     user: str,
     target: str,
+    *,
+    target_repo: str | None = None,
 ) -> None:
     """Run the talk conversation loop with notification-driven message display."""
     from biff.models import Message
@@ -1406,7 +1420,9 @@ async def _talk_loop(
             line = result.strip()
             if line:
                 msg = Message(from_user=user, to_user=target, body=line[:512])
-                await relay.deliver(msg, sender_key=session_key)
+                await relay.deliver(
+                    msg, sender_key=session_key, target_repo=target_repo
+                )
     finally:
         stop_flag.set()
         bridge_task.cancel()
@@ -1431,18 +1447,18 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 print("Talk requires a NATS relay.")
                 return
 
-            sessions = await ctx.relay.get_sessions_for_user(user_target)
-            visible = ctx.config.visible_repos
-            sessions = [s for s in sessions if s.repo in visible]
+            all_sessions = await ctx.relay.get_sessions_for_repos(
+                ctx.config.visible_repos
+            )
+            sessions = [s for s in all_sessions if s.user == user_target]
             if not sessions:
                 print(f"@{user_target} is not online.")
                 return
 
-            # Resolve :tty suffix to a relay key (hex ID or tty_name match).
-            result = await _resolve_talk_cli(ctx, user_target, tty_target, display)
-            if result is None:
-                return
-            target, target_repo = result
+            # Resolve :tty suffix via the already-fetched sessions list.
+            target, target_repo = _resolve_from_sessions(
+                all_sessions, user_target, tty_target, ctx.config.repo_name
+            )
 
             # Update plan to show talk activity.
             session = await ctx.relay.get_session(ctx.session_key)
@@ -1463,7 +1479,15 @@ async def _talk_interactive(to: str, opening: str) -> None:
             nc = await ctx.relay.get_nc()
             subject = ctx.relay.talk_notify_subject(ctx.user)
 
-            await _talk_loop(ctx.relay, nc, subject, ctx.session_key, ctx.user, target)
+            await _talk_loop(
+                ctx.relay,
+                nc,
+                subject,
+                ctx.session_key,
+                ctx.user,
+                target,
+                target_repo=target_repo,
+            )
     except KeyboardInterrupt:
         print("\nTalk session ended.")
     except ValueError as exc:

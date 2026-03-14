@@ -115,6 +115,10 @@ class Relay(Protocol):
 
     async def get_sessions(self) -> list[UserSession]: ...
 
+    async def get_sessions_for_repos(
+        self, repos: frozenset[str]
+    ) -> list[UserSession]: ...
+
     async def delete_session(self, session_key: str) -> None: ...
 
     # -- Session history (wtmp) --
@@ -188,6 +192,12 @@ class DormantRelay:
         pass
 
     async def get_sessions(self) -> list[UserSession]:
+        return []
+
+    async def get_sessions_for_repos(
+        self,
+        repos: frozenset[str],  # noqa: ARG002
+    ) -> list[UserSession]:
         return []
 
     async def delete_session(self, session_key: str) -> None:
@@ -405,6 +415,13 @@ class LocalRelay:
         """Get all sessions, reaping removals and filtering expired."""
         self.reap_sentinels()
         return [s for s in self._read_sessions().values() if not self._is_expired(s)]
+
+    async def get_sessions_for_repos(
+        self,
+        repos: frozenset[str],  # noqa: ARG002
+    ) -> list[UserSession]:
+        """LocalRelay is single-repo — returns same as get_sessions()."""
+        return await self.get_sessions()
 
     async def delete_session(self, session_key: str) -> None:
         """Remove a session from storage."""

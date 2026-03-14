@@ -5,7 +5,7 @@ from __future__ import annotations
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import Message
-from biff.server.tools._session import resolve_session
+from biff.server.tools._session import resolve_tty_name
 from biff.tty import build_session_key, parse_address
 
 
@@ -21,20 +21,14 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
         )
     target_repo: str | None = None
     if tty:
-        session = await resolve_session(ctx.relay, bare_user, tty)
+        # Search across visible repos for the target session.
+        all_sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
+        session = resolve_tty_name(
+            all_sessions, bare_user, tty, local_repo=ctx.config.repo_name
+        )
         if session:
             relay_key = build_session_key(session.user, session.tty)
             if session.repo and session.repo != ctx.config.repo_name:
-                if session.repo not in ctx.config.visible_repos:
-                    err = (
-                        f"Cannot message @{bare_user}:{tty} — "
-                        f"repo {session.repo!r} is not in your peer list."
-                    )
-                    return CommandResult(
-                        text=err,
-                        json_data={"status": "error", "to": to, "error": err},
-                        error=True,
-                    )
                 target_repo = session.repo
         else:
             relay_key = f"{bare_user}:{tty}"
