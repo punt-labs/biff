@@ -175,22 +175,22 @@ async def _heartbeat_loop(
             logger.warning("Heartbeat failed", exc_info=True)
 
 
-def _kv_key_to_session_key(kv_key: str, repo_name: str) -> str | None:
-    """Convert a KV key (``{repo}.{user}.{tty}``) to a session key (``user:tty``).
+def _kv_key_to_session_key(kv_key: str, repo_name: str) -> str | None:  # noqa: ARG001
+    """Convert a KV key (``{user}.{tty}``) to a session key (``user:tty``).
 
-    Returns ``None`` if the key format is unexpected, belongs to a
-    different repo, or is a non-session key (wall, encryption keys).
-    Structural filtering per DES-016.
+    Returns ``None`` if the key format is unexpected or is a non-session
+    key (wall, encryption keys).  *repo_name* is accepted for signature
+    compatibility but no longer used for filtering — session KV keys are
+    org-scoped (DES-030).  The caller filters by ``session.repo`` after
+    deserializing the session value.
     """
-    parts = kv_key.split(".", maxsplit=2)
-    if len(parts) != 3:
+    parts = kv_key.split(".", maxsplit=1)
+    if len(parts) != 2:
         return None
-    if parts[0] != repo_name:
+    # Skip reserved KV namespaces (wall keys, encryption keys — DES-030).
+    if parts[0] in RESERVED_KV_NAMESPACES or parts[1] in RESERVED_KV_NAMESPACES:
         return None
-    # Skip reserved KV namespaces (encryption keys — DES-016).
-    if parts[1] in RESERVED_KV_NAMESPACES:
-        return None
-    return f"{parts[1]}:{parts[2]}"
+    return f"{parts[0]}:{parts[1]}"
 
 
 def _build_logout_event(session_key: str, cached: UserSession) -> SessionEvent:
@@ -205,6 +205,7 @@ def _build_logout_event(session_key: str, cached: UserSession) -> SessionEvent:
         pwd=cached.pwd,
         timestamp=cached.last_active,
         plan=cached.plan,
+        repo=cached.repo,
     )
 
 
@@ -390,6 +391,7 @@ async def _append_login_event(state: ServerState, tty_name: str) -> None:
         pwd=state.pwd,
         timestamp=session.last_active,
         plan=session.plan,
+        repo=state.config.repo_name,
     )
     try:
         await state.relay.append_wtmp(login_event)

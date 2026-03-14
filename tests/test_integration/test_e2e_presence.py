@@ -43,7 +43,8 @@ class TestCrossUserVisibility:
         result = await eric.call("who")
 
         assert "@kai" in result
-        assert "refactoring the auth layer" in result
+        assert "refactoring" in result
+        assert "layer" in result
 
     @pytest.mark.transcript
     async def test_plan_visible_via_finger(

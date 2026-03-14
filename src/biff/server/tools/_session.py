@@ -28,11 +28,20 @@ async def get_or_create_session(state: ServerState) -> UserSession:
             hostname=state.hostname,
             pwd=state.pwd,
             display_name=state.config.display_name,
+            repo=state.config.repo_name,
         )
         await state.relay.update_session(session)
-    elif not session.display_name and state.config.display_name:
-        session = session.model_copy(update={"display_name": state.config.display_name})
-        await state.relay.update_session(session)
+    else:
+        # Backfill fields that may be missing from pre-DES-030 sessions
+        # or from sessions created before display_name was resolved.
+        updates: dict[str, object] = {}
+        if not session.display_name and state.config.display_name:
+            updates["display_name"] = state.config.display_name
+        if not session.repo:
+            updates["repo"] = state.config.repo_name
+        if updates:
+            session = session.model_copy(update=updates)
+            await state.relay.update_session(session)
     return session
 
 

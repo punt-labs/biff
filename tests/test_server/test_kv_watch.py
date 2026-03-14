@@ -116,7 +116,7 @@ class TestKvWatchSnapshotSurvival:
         """
         shutdown = asyncio.Event()
         wall_key = f"{_TEST_REPO}.wall"
-        session_key = f"{_TEST_REPO}.kai.tty1"
+        session_key = "kai.tty1"
         session_json = (
             UserSession(
                 user="kai",

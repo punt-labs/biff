@@ -127,7 +127,7 @@ def _resolve_relay_config() -> tuple[str, RelayAuth | None]:
 
     if repo_root is not None:
         raw = load_biff_file(repo_root)
-        _, url, auth = extract_biff_fields(raw)
+        _, url, auth, _ = extract_biff_fields(raw)
         if url:
             relay_url = url
         if auth:

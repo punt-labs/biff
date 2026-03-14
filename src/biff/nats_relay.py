@@ -78,9 +78,11 @@ _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 # Default stream prefix (DES-016).  Tests override via stream_prefix="biff-dev".
 _DEFAULT_STREAM_PREFIX = "biff"
 
-# KV key namespaces reserved for encryption (DES-016, biff-lff).
-# Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
-RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
+# KV key namespaces reserved for non-session data (DES-016, DES-030).
+# Session keys are {user}.{tty}; these first-segment values are not users.
+# "wall" — wall keys are {repo}.wall (2 parts, same shape as sessions).
+# "key" — encryption key reservations.
+RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key", "wall"})
 
 
 async def safe_close(nc: NatsClient) -> None:
@@ -341,22 +343,26 @@ class NatsRelay:
         self._wtmp_available = False
 
     async def purge_data(self) -> None:
-        """Purge this repo's data from shared streams without deleting infrastructure.
+        """Purge this repo's sessions and data from shared infrastructure.
 
-        Subject-filtered purge (DES-016): only removes KV keys and
-        messages belonging to this repo, leaving other repos' data
-        intact.  Keeps the shared bucket and streams themselves.
-
-        Purges the underlying KV stream (``KV_{bucket}``) directly
-        instead of calling ``kv.keys()`` which creates an ephemeral
-        consumer via ``kv.watch()`` — those leak on long-lived
-        connections.
+        Session KV keys are org-scoped (``{user}.{tty}``, DES-030).
+        To purge only this repo's sessions, we fetch all sessions,
+        filter by ``repo == self._repo_name``, and delete individually.
+        Wall keys (``{repo}.wall``) are repo-scoped and deleted by key.
+        Messages and wtmp remain repo-scoped via subject hierarchy.
         """
-        js, _ = await self._ensure_connected()
-        kv_stream = f"KV_{self._kv_bucket}"
-        kv_subject = f"$KV.{self._kv_bucket}.{self._repo_name}.>"
-        with suppress(NotFoundError):
-            await js.purge_stream(kv_stream, subject=kv_subject)  # pyright: ignore[reportUnknownMemberType]
+        js, kv = await self._ensure_connected()
+        # Delete this repo's sessions individually (org-scoped KV keys
+        # cannot be purged by subject filter).
+        sessions = await self.get_sessions()
+        for session in sessions:
+            if session.repo == self._repo_name:
+                key = self._kv_key(build_session_key(session.user, session.tty))
+                with suppress(KeyNotFoundError, BucketNotFoundError):
+                    await kv.delete(key)
+        # Delete this repo's wall key
+        with suppress(KeyNotFoundError, BucketNotFoundError):
+            await kv.delete(self._wall_kv_key)
         with suppress(NotFoundError):
             await js.purge_stream(  # pyright: ignore[reportUnknownMemberType]
                 self._stream_name, subject=f"{self._subject_prefix}.>"
@@ -430,6 +436,14 @@ class NatsRelay:
         return tty
 
     @staticmethod
+    def _validate_repo(repo: str) -> str:
+        """Reject repo names that could escape NATS subject boundaries."""
+        if not repo or any(c in repo for c in (".", "*", ">", " ")):
+            msg = f"Invalid repo name: {repo!r}"
+            raise ValueError(msg)
+        return repo
+
+    @staticmethod
     def _validated_sender_key(sender_key: str, from_user: str) -> str:
         """Return *sender_key* if well-formed and consistent, else ``""``."""
         if not sender_key:
@@ -441,12 +455,16 @@ class NatsRelay:
             return ""
         return sender_key
 
-    def _subject_for_key(self, session_key: str) -> str:
+    def _subject_for_key(
+        self, session_key: str, *, target_repo: str | None = None
+    ) -> str:
         """NATS subject for a session key: ``biff.{repo}.inbox.{user}.{tty}``."""
         user, tty = session_key.split(":", maxsplit=1)
         self._validate_user(user)
         self._validate_tty(tty)
-        return f"{self._subject_prefix}.{user}.{tty}"
+        repo = self._validate_repo(target_repo) if target_repo else self._repo_name
+        prefix = f"{self._stream_prefix}.{repo}.inbox"
+        return f"{prefix}.{user}.{tty}"
 
     def _user_subject(self, user: str) -> str:
         """NATS subject for a user's broadcast inbox: ``biff.{repo}.inbox.{user}``.
@@ -466,11 +484,11 @@ class NatsRelay:
         return f"{self._repo_name}-userinbox-{user}"
 
     def _kv_key(self, session_key: str) -> str:
-        """KV key for a session: ``{repo}.{user}.{tty}`` (DES-016)."""
+        """KV key for a session: ``{user}.{tty}`` (DES-030, org-scoped)."""
         user, tty = session_key.split(":", maxsplit=1)
         self._validate_user(user)
         self._validate_tty(tty)
-        return f"{self._repo_name}.{user}.{tty}"
+        return f"{user}.{tty}"
 
     @staticmethod
     def wall_kv_key(repo_name: str) -> str:
@@ -482,7 +500,7 @@ class NatsRelay:
         """Instance shorthand for :meth:`wall_kv_key`."""
         return self.wall_kv_key(self._repo_name)
 
-    def talk_notify_subject(self, user: str) -> str:
+    def talk_notify_subject(self, user: str, *, target_repo: str | None = None) -> str:
         """NATS core subject for talk notifications to a user.
 
         Published by :meth:`deliver` after every message delivery.
@@ -490,7 +508,8 @@ class NatsRelay:
         (no stream) — messages are dropped if nobody is listening.
         """
         self._validate_user(user)
-        return f"{self._stream_prefix}.{self._repo_name}.talk.notify.{user}"
+        repo = self._validate_repo(target_repo) if target_repo else self._repo_name
+        return f"{self._stream_prefix}.{repo}.talk.notify.{user}"
 
     async def get_nc(self) -> NatsClient:
         """Return the raw NATS client, connecting if necessary.
@@ -506,12 +525,21 @@ class NatsRelay:
 
     # -- Messages --
 
-    async def deliver(self, message: Message, *, sender_key: str = "") -> None:
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
         """Publish a message to the recipient's JetStream subject.
 
         If ``to_user`` contains a ``:`` (targeted), publish to the
         TTY subject.  Otherwise (broadcast), publish to the user
         subject — no session lookup, persists offline.
+
+        When *target_repo* is set, the message is published to that
+        repo's subject hierarchy (cross-repo delivery, DES-030).
 
         After JetStream delivery, publishes a lightweight notification
         on a core NATS subject so any active ``talk_listen`` call wakes
@@ -530,22 +558,31 @@ class NatsRelay:
 
         if ":" in message.to_user:
             # Targeted delivery — TTY subject
-            subject = self._subject_for_key(message.to_user)
+            subject = self._subject_for_key(message.to_user, target_repo=target_repo)
             await js.publish(subject, message.model_dump_json().encode())
         else:
             # Broadcast — single user subject, no session lookup
             self._validate_user(message.to_user)
-            subject = self._user_subject(message.to_user)
+            if target_repo:
+                repo = self._validate_repo(target_repo)
+                prefix = f"{self._stream_prefix}.{repo}.inbox"
+                subject = f"{prefix}.{message.to_user}"
+            else:
+                subject = self._user_subject(message.to_user)
             await js.publish(subject, message.model_dump_json().encode())
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
-        await self._publish_talk_notification(message.to_user, message, sender_key)
+        await self._publish_talk_notification(
+            message.to_user, message, sender_key, target_repo=target_repo
+        )
 
     async def _publish_talk_notification(
         self,
         to_user: str,
         message: Message | None = None,
         sender_key: str = "",
+        *,
+        target_repo: str | None = None,
     ) -> None:
         """Publish a talk notification so ``talk_listen`` wakes up.
 
@@ -561,7 +598,7 @@ class NatsRelay:
             return
         user = to_user.split(":")[0] if ":" in to_user else to_user
         try:
-            subject = self.talk_notify_subject(user)
+            subject = self.talk_notify_subject(user, target_repo=target_repo)
             if message is not None:
                 data: dict[str, str] = {
                     "from": message.from_user,
@@ -764,20 +801,22 @@ class NatsRelay:
         await kv.put(kv_key, updated.model_dump_json().encode())
 
     async def get_sessions(self) -> list[UserSession]:
-        """Return all sessions for this repo (NATS KV TTL handles expiry).
+        """Return all sessions across the org (NATS KV TTL handles expiry).
 
-        Uses ``stream_info`` with a repo-scoped ``subjects_filter`` to
-        discover only this repo's KV keys — other repos' data is never
-        fetched.  Explicit structural filtering (DES-016) skips
-        non-session keys (wall, encryption key reservations) by shape
-        rather than relying on validation errors.
+        Uses ``stream_info`` with a wildcard ``subjects_filter`` to
+        discover all KV keys.  Explicit structural filtering (DES-030)
+        skips non-session keys (wall, encryption key reservations) by
+        checking the first segment against ``RESERVED_KV_NAMESPACES``.
+
+        Session keys are ``{user}.{tty}`` (2-part).  Wall keys are
+        ``{repo}.wall`` (also 2-part but first segment matches a repo
+        name, and "wall" is in RESERVED_KV_NAMESPACES).
         """
         js, kv = await self._ensure_connected()
         kv_stream = f"KV_{self._kv_bucket}"
         kv_prefix = f"$KV.{self._kv_bucket}."
-        repo_filter = f"{kv_prefix}{self._repo_name}.>"
         try:
-            info = await js.stream_info(kv_stream, subjects_filter=repo_filter)
+            info = await js.stream_info(kv_stream, subjects_filter=f"{kv_prefix}>")
         except NotFoundError:
             return []
         if not info.state.subjects:
@@ -786,14 +825,13 @@ class NatsRelay:
         session_keys: list[str] = []
         for subject in info.state.subjects:
             key = subject.removeprefix(kv_prefix)
-            # Structural filter: session keys are {repo}.{user}.{tty}.
-            # Skip wall ({repo}.wall — 2 parts), encryption key
-            # reservations ({repo}.key.{user} — reserved namespace),
-            # and team keys ({repo}.team-key — 2 parts).
-            parts = key.split(".", maxsplit=2)
-            if len(parts) != 3 or parts[0] != self._repo_name:
+            # Structural filter: session keys are {user}.{tty} (2 parts).
+            # Skip keys where either segment is in RESERVED_KV_NAMESPACES
+            # (wall keys like {repo}.wall, encryption keys like key.{user}).
+            parts = key.split(".", maxsplit=1)
+            if len(parts) != 2:
                 continue
-            if parts[1] in RESERVED_KV_NAMESPACES:
+            if parts[0] in RESERVED_KV_NAMESPACES or parts[1] in RESERVED_KV_NAMESPACES:
                 continue
             session_keys.append(key)
 
@@ -936,11 +974,16 @@ class NatsRelay:
         else:
             await kv.put(self._wall_kv_key, wall.model_dump_json().encode())
 
-    async def get_wall(self) -> WallPost | None:
-        """Read the active wall, returning ``None`` if absent or expired."""
+    async def get_wall(self, *, repo: str | None = None) -> WallPost | None:
+        """Read the active wall, returning ``None`` if absent or expired.
+
+        When *repo* is given, reads that repo's wall instead of this
+        instance's own wall (cross-repo wall check, DES-030).
+        """
         _, kv = await self._ensure_connected()
+        key = self.wall_kv_key(repo) if repo else self._wall_kv_key
         try:
-            entry = await kv.get(self._wall_kv_key)
+            entry = await kv.get(key)
             if entry.value is None:
                 return None
             wall = WallPost.model_validate_json(entry.value)
@@ -948,6 +991,16 @@ class NatsRelay:
             return None
         if wall.is_expired:
             with suppress(KeyNotFoundError, BucketNotFoundError):
-                await kv.delete(self._wall_kv_key)
+                await kv.delete(key)
             return None
         return wall
+
+    async def set_wall_for_repo(self, repo: str, wall: WallPost | None) -> None:
+        """Set or clear a wall for a specific repo (cross-repo broadcast)."""
+        _, kv = await self._ensure_connected()
+        key = self.wall_kv_key(repo)
+        if wall is None:
+            with suppress(KeyNotFoundError, BucketNotFoundError):
+                await kv.delete(key)
+        else:
+            await kv.put(key, wall.model_dump_json().encode())

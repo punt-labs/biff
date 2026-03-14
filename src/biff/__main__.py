@@ -312,7 +312,12 @@ def _print_inline_notifications(notes: list[str], prompt: str) -> None:
 
 
 async def _talk_publish(
-    ctx: CliContext, target_user: str, msg_type: str, body: str = ""
+    ctx: CliContext,
+    target_user: str,
+    msg_type: str,
+    body: str = "",
+    *,
+    target_repo: str | None = None,
 ) -> None:
     """Publish a talk notification to the target user."""
     from biff.nats_relay import NatsRelay
@@ -329,7 +334,38 @@ async def _talk_publish(
             "from_key": ctx.session_key,
         }
     ).encode()
-    await nc.publish(ctx.relay.talk_notify_subject(target_user), data)
+    subject = ctx.relay.talk_notify_subject(target_user, target_repo=target_repo)
+    await nc.publish(subject, data)
+
+
+async def _resolve_talk_cli(
+    ctx: CliContext,
+    user_target: str,
+    tty_target: str | None,
+    display: str,
+) -> tuple[str, str | None] | None:
+    """Resolve a talk target to (relay_key, target_repo), or None on deny."""
+    from biff.server.tools._session import resolve_session
+    from biff.tty import build_session_key
+
+    target_repo: str | None = None
+    if tty_target:
+        resolved = await resolve_session(ctx.relay, user_target, tty_target)
+        if resolved:
+            target = build_session_key(resolved.user, resolved.tty)
+            if resolved.repo and resolved.repo != ctx.config.repo_name:
+                if resolved.repo not in ctx.config.visible_repos:
+                    print(
+                        f"Cannot talk to {display} — "
+                        f"repo {resolved.repo!r} is not in your peer list."
+                    )
+                    return None
+                target_repo = resolved.repo
+        else:
+            target = f"{user_target}:{tty_target}"
+    else:
+        target = user_target
+    return target, target_repo
 
 
 def _print_hangup(notes: list[str]) -> None:
@@ -635,6 +671,8 @@ async def _handle_repl_talk(
         return
 
     sessions = await ctx.relay.get_sessions_for_user(user_target)
+    visible = ctx.config.visible_repos
+    sessions = [s for s in sessions if s.repo in visible]
     if not sessions:
         print(f"{display} is not online.")
         return
@@ -1382,8 +1420,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
     """Interactive talk loop using the shared CLI session lifecycle."""
     from biff.models import Message
     from biff.nats_relay import NatsRelay
-    from biff.server.tools._session import resolve_session
-    from biff.tty import build_session_key, parse_address
+    from biff.tty import parse_address
 
     user_target, tty_target = parse_address(to)
     display = f"@{user_target}:{tty_target}" if tty_target else f"@{user_target}"
@@ -1395,19 +1432,17 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 return
 
             sessions = await ctx.relay.get_sessions_for_user(user_target)
+            visible = ctx.config.visible_repos
+            sessions = [s for s in sessions if s.repo in visible]
             if not sessions:
                 print(f"@{user_target} is not online.")
                 return
 
             # Resolve :tty suffix to a relay key (hex ID or tty_name match).
-            if tty_target:
-                resolved = await resolve_session(ctx.relay, user_target, tty_target)
-                if resolved:
-                    target = build_session_key(resolved.user, resolved.tty)
-                else:
-                    target = f"{user_target}:{tty_target}"
-            else:
-                target = user_target
+            result = await _resolve_talk_cli(ctx, user_target, tty_target, display)
+            if result is None:
+                return
+            target, target_repo = result
 
             # Update plan to show talk activity.
             session = await ctx.relay.get_session(ctx.session_key)
@@ -1418,7 +1453,9 @@ async def _talk_interactive(to: str, opening: str) -> None:
             if opening:
                 body = opening[:512]
                 msg = Message(from_user=ctx.user, to_user=target, body=body)
-                await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+                await ctx.relay.deliver(
+                    msg, sender_key=ctx.session_key, target_repo=target_repo
+                )
                 print(f"you> {body}")
 
             print(f"Connected to {display}. Type and press Enter. Ctrl+C to end.\n")

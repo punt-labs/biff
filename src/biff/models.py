@@ -98,6 +98,10 @@ class UserSession(BaseModel):
         default="",
         description="Base64-encoded Curve25519 public key; empty = no encryption",
     )
+    repo: str = Field(
+        default="",
+        description="Repo name where this session is running; empty for LocalRelay",
+    )
 
     @field_validator("last_active", mode="after")
     @classmethod
@@ -149,6 +153,17 @@ class BiffConfig(BaseModel):
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
     team: tuple[str, ...] = ()
+    peers: tuple[str, ...] = ()
+
+    @property
+    def visible_repos(self) -> frozenset[str]:
+        """Repos visible to this instance: self + peers + empty string.
+
+        The empty string ensures LocalRelay sessions (which have no repo
+        set) pass visibility filters.  NatsRelay sessions always have
+        ``repo`` populated via ``get_or_create_session`` backfill.
+        """
+        return frozenset({self.repo_name, "", *self.peers})
 
 
 class SessionEvent(BaseModel):
@@ -175,6 +190,7 @@ class SessionEvent(BaseModel):
     pwd: str = ""
     timestamp: datetime = Field(default_factory=_utc_now)
     plan: str = ""
+    repo: str = ""
 
     @field_validator("timestamp", mode="after")
     @classmethod

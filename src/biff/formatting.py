@@ -103,6 +103,7 @@ def format_remaining(expires_at: datetime) -> str:
 WHO_SPECS: list[ColumnSpec] = [
     ColumnSpec("NAME", min_width=4),
     ColumnSpec("TTY", min_width=3),
+    ColumnSpec("REPO", min_width=4),
     ColumnSpec("IDLE", min_width=4),
     ColumnSpec("S", min_width=1),
     ColumnSpec("HOST", min_width=4),
@@ -117,11 +118,12 @@ def _sanitize_plan(plan: str) -> str:
 
 
 def format_who(sessions: list[UserSession]) -> str:
-    """Build a columnar table matching ``w(1)`` style with host and dir."""
+    """Build a columnar table matching ``w(1)`` style with host, dir, and repo."""
     rows: list[list[str]] = [
         [
             f"@{s.user}",
             s.tty_name or (s.tty[:8] if s.tty else "-"),
+            s.repo or "-",
             format_idle(s.last_active),
             "+" if s.biff_enabled else "-",
             s.hostname or "-",
@@ -202,6 +204,7 @@ def format_finger_multi(sessions: list[UserSession]) -> str:
 LAST_SPECS: list[ColumnSpec] = [
     ColumnSpec("NAME", min_width=4),
     ColumnSpec("TTY", min_width=3),
+    ColumnSpec("REPO", min_width=4),
     ColumnSpec("HOST", min_width=4),
     ColumnSpec("LOGIN", min_width=16),
     ColumnSpec("LOGOUT", min_width=15),
@@ -266,6 +269,7 @@ def format_last(
     for login, logout in pairs:
         name = f"@{login.user}"
         tty = login.tty_name or (login.tty[:8] if login.tty else "-")
+        repo = login.repo or "-"
         host = login.hostname or "-"
         login_str = _format_timestamp(login.timestamp)
         if logout is not None:
@@ -277,7 +281,7 @@ def format_last(
         else:
             logout_str = "gone"
             duration = "-"
-        rows.append([name, tty, host, login_str, logout_str, duration])
+        rows.append([name, tty, repo, host, login_str, logout_str, duration])
 
     if not rows:
         return "No session history."

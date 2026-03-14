@@ -19,10 +19,23 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             json_data={"status": "error", "to": to, "error": str(exc)},
             error=True,
         )
+    target_repo: str | None = None
     if tty:
         session = await resolve_session(ctx.relay, bare_user, tty)
         if session:
             relay_key = build_session_key(session.user, session.tty)
+            if session.repo and session.repo != ctx.config.repo_name:
+                if session.repo not in ctx.config.visible_repos:
+                    err = (
+                        f"Cannot message @{bare_user}:{tty} — "
+                        f"repo {session.repo!r} is not in your peer list."
+                    )
+                    return CommandResult(
+                        text=err,
+                        json_data={"status": "error", "to": to, "error": err},
+                        error=True,
+                    )
+                target_repo = session.repo
         else:
             relay_key = f"{bare_user}:{tty}"
     else:
@@ -35,7 +48,9 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
         body=message[:512],
     )
     try:
-        await ctx.relay.deliver(msg, sender_key=ctx.session_key)
+        await ctx.relay.deliver(
+            msg, sender_key=ctx.session_key, target_repo=target_repo
+        )
     except ValueError as exc:
         return CommandResult(
             text=str(exc),

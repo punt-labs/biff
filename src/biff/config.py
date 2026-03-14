@@ -176,7 +176,11 @@ def _toml_basic_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def build_biff_toml(members: list[str], relay_url: str) -> str:
+def build_biff_toml(
+    members: list[str],
+    relay_url: str,
+    peers: list[str] | None = None,
+) -> str:
     """Build ``.biff`` TOML content from user inputs."""
     lines: list[str] = []
     if members:
@@ -188,16 +192,23 @@ def build_biff_toml(members: list[str], relay_url: str) -> str:
             lines.append("")
         lines.append("[relay]")
         lines.append(f"url = {_toml_basic_string(relay_url)}")
+    if peers:
+        if lines:
+            lines.append("")
+        quoted_peers = ", ".join(_toml_basic_string(p) for p in peers)
+        lines.append("[peers]")
+        lines.append(f"repos = [{quoted_peers}]")
     return "\n".join(lines) + "\n" if lines else ""
 
 
 def extract_biff_fields(
     raw: dict[str, object],
-) -> tuple[tuple[str, ...], str | None, RelayAuth | None]:
-    """Extract team, relay_url, and relay_auth from parsed TOML data."""
+) -> tuple[tuple[str, ...], str | None, RelayAuth | None, tuple[str, ...]]:
+    """Extract team, relay_url, relay_auth, and peers from parsed TOML data."""
     team: tuple[str, ...] = ()
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
+    peers: tuple[str, ...] = ()
 
     team_section: object = raw.get("team")
     if isinstance(team_section, dict):
@@ -241,7 +252,17 @@ def extract_biff_fields(
     if relay_url == DEMO_RELAY_URL and relay_auth is None:
         relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
 
-    return team, relay_url, relay_auth
+    peers_section: object = raw.get("peers")
+    if isinstance(peers_section, dict):
+        section = cast("dict[str, object]", peers_section)
+        repos: object = section.get("repos", [])
+        if isinstance(repos, list):
+            items_p = cast("list[object]", repos)
+            peers = tuple(
+                sanitize_repo_name(r) for r in items_p if isinstance(r, str) and r
+            )
+
+    return team, relay_url, relay_auth, peers
 
 
 _GITHUB_ACTIONS_USER = "github-actions"
@@ -327,9 +348,10 @@ def load_config(
     team: tuple[str, ...] = ()
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
+    peers: tuple[str, ...] = ()
     if repo_root is not None:
         raw = load_biff_file(repo_root)
-        team, relay_url, relay_auth = extract_biff_fields(raw)
+        team, relay_url, relay_auth, peers = extract_biff_fields(raw)
 
     # CLI relay-url override: empty string → local relay, non-empty → use it.
     # Always clear relay_auth on override — the .biff credentials are for the
@@ -375,5 +397,6 @@ def load_config(
         relay_url=relay_url,
         relay_auth=relay_auth,
         team=team,
+        peers=peers,
     )
     return ResolvedConfig(config=config, data_dir=data_dir, repo_root=repo_root)

@@ -15,6 +15,7 @@ from biff.formatting import (
     sanitize_wall_message,
 )
 from biff.models import WallPost
+from biff.server.tools.wall import broadcast_wall_to_repos
 
 
 async def wall(
@@ -22,7 +23,9 @@ async def wall(
 ) -> CommandResult:
     """Post, read, or clear a team broadcast."""
     if clear:
-        await ctx.relay.set_wall(None)
+        await broadcast_wall_to_repos(
+            ctx.relay, ctx.config.visible_repos, wall=None, target_repo=None
+        )
         return CommandResult(text="Wall cleared.", json_data={"status": "cleared"})
 
     message = sanitize_wall_message(message)
@@ -56,7 +59,9 @@ async def wall(
     except ValidationError as exc:
         return CommandResult(text=str(exc), json_data={"error": str(exc)}, error=True)
 
-    await ctx.relay.set_wall(post)
+    await broadcast_wall_to_repos(
+        ctx.relay, ctx.config.visible_repos, wall=post, target_repo=None
+    )
     remaining = format_remaining(post.expires_at)
     return CommandResult(
         text=f"Wall posted ({remaining}): {message}",

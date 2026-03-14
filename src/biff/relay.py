@@ -79,7 +79,13 @@ class Relay(Protocol):
 
     # -- Messages (TTY inbox) --
 
-    async def deliver(self, message: Message, *, sender_key: str = "") -> None: ...
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None: ...
 
     async def fetch(self, session_key: str) -> list[Message]: ...
 
@@ -123,7 +129,7 @@ class Relay(Protocol):
 
     async def set_wall(self, wall: WallPost | None) -> None: ...
 
-    async def get_wall(self) -> WallPost | None: ...
+    async def get_wall(self, *, repo: str | None = None) -> WallPost | None: ...
 
     # -- Lifecycle --
 
@@ -142,7 +148,13 @@ class DormantRelay:
     errors — the server runs but does nothing on the network.
     """
 
-    async def deliver(self, message: Message, *, sender_key: str = "") -> None:
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
         pass
 
     async def fetch(self, session_key: str) -> list[Message]:  # noqa: ARG002 — Protocol impl
@@ -195,7 +207,7 @@ class DormantRelay:
     async def set_wall(self, wall: WallPost | None) -> None:
         pass
 
-    async def get_wall(self) -> WallPost | None:
+    async def get_wall(self, *, repo: str | None = None) -> WallPost | None:  # noqa: ARG002
         return None
 
     async def disconnect(self) -> None:
@@ -259,6 +271,7 @@ class LocalRelay:
         message: Message,
         *,
         sender_key: str = "",  # noqa: ARG002
+        target_repo: str | None = None,  # noqa: ARG002
     ) -> None:
         """Deliver a message to the recipient's inbox.
 
@@ -474,7 +487,7 @@ class LocalRelay:
             self._data_dir.mkdir(parents=True, exist_ok=True)
             atomic_write(path, wall.model_dump_json() + "\n")
 
-    async def get_wall(self) -> WallPost | None:
+    async def get_wall(self, *, repo: str | None = None) -> WallPost | None:  # noqa: ARG002
         """Read the active wall, returning ``None`` if absent or expired."""
         path = self._data_dir / "wall.json"
         if not path.exists():

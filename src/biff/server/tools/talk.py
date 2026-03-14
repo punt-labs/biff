@@ -71,21 +71,37 @@ async def fetch_all_unread(
 
 
 async def _resolve_talk_target(
-    relay: Relay, user: str, tty: str | None
-) -> tuple[str, str]:
-    """Resolve a talk address to ``(relay_key, display_target)``.
+    relay: Relay,
+    user: str,
+    tty: str | None,
+    *,
+    sender_repo: str = "",
+    visible_repos: frozenset[str] = frozenset(),
+) -> tuple[str, str, str | None]:
+    """Resolve a talk address to ``(relay_key, display_target, target_repo)``.
 
     Same resolution as :func:`messaging._resolve_recipient` — tries the
     literal hex key first, then falls back to ``tty_name`` matching.
+    *target_repo* is set for cross-repo delivery (DES-030).
+    Raises ``ValueError`` if the target repo is not in visible_repos.
     """
+    target_repo: str | None = None
     if tty:
         session = await resolve_session(relay, user, tty)
         if session:
             relay_key = build_session_key(session.user, session.tty)
+            if session.repo and sender_repo and session.repo != sender_repo:
+                if session.repo not in visible_repos:
+                    msg = (
+                        f"Cannot talk to @{user}:{tty} — "
+                        f"repo {session.repo!r} is not in your peer list."
+                    )
+                    raise ValueError(msg)
+                target_repo = session.repo
         else:
             relay_key = f"{user}:{tty}"
-        return relay_key, f"{user}:{tty}"
-    return user, user
+        return relay_key, f"{user}:{tty}", target_repo
+    return user, user, target_repo
 
 
 async def _do_talk_listen(
@@ -158,10 +174,21 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         user, tty = parse_address(to)
 
         sessions = await relay.get_sessions_for_user(user)
+        visible = state.config.visible_repos
+        sessions = [s for s in sessions if s.repo in visible]
         if not sessions:
             return f"@{user} is not online."
 
-        relay_key, display_target = await _resolve_talk_target(relay, user, tty)
+        try:
+            relay_key, display_target, target_repo = await _resolve_talk_target(
+                relay,
+                user,
+                tty,
+                sender_repo=state.config.repo_name,
+                visible_repos=state.config.visible_repos,
+            )
+        except ValueError as exc:
+            return str(exc)
         set_talk_partner(display_target)
 
         if message:
@@ -172,7 +199,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             )
             await refresh_read_messages(mcp, state)
             fire_and_forget(
-                relay.deliver(msg, sender_key=state.session_key),
+                relay.deliver(
+                    msg, sender_key=state.session_key, target_repo=target_repo
+                ),
                 logger=logger,
                 description="talk delivery",
             )

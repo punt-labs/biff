@@ -25,19 +25,34 @@ if TYPE_CHECKING:
     from biff.server.state import ServerState
 
 
-async def _resolve_recipient(state: ServerState, to: str) -> tuple[str, str]:
-    """Resolve an address to ``(relay_key, display_name)``."""
+async def _resolve_recipient(
+    state: ServerState, to: str
+) -> tuple[str, str, str | None]:
+    """Resolve an address to ``(relay_key, display_name, target_repo)``.
+
+    *target_repo* is set when the resolved session belongs to a
+    different repo than the sender (cross-repo delivery, DES-030).
+    """
     user, tty = parse_address(to)
+    target_repo: str | None = None
     if tty:
         session = await resolve_session(state.relay, user, tty)
         if session:
             relay_key = build_session_key(session.user, session.tty)
+            if session.repo and session.repo != state.config.repo_name:
+                if session.repo not in state.config.visible_repos:
+                    msg = (
+                        f"Cannot message @{user}:{tty} — "
+                        f"repo {session.repo!r} is not in your peer list."
+                    )
+                    raise ValueError(msg)
+                target_repo = session.repo
         else:
             relay_key = f"{user}:{tty}"
     else:
         relay_key = user
     display = f"@{user}:{tty}" if tty else f"@{user}"
-    return relay_key, display
+    return relay_key, display, target_repo
 
 
 _log = logging.getLogger(__name__)
@@ -61,7 +76,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ``@user:tty`` targets a specific session.
         """
         await update_current_session(state)
-        to_user, display = await _resolve_recipient(state, to)
+        try:
+            to_user, display, target_repo = await _resolve_recipient(state, to)
+        except ValueError as exc:
+            return str(exc)
         msg = Message(
             from_user=state.config.user,
             to_user=to_user,
@@ -69,7 +87,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         )
         await refresh_read_messages(mcp, state)
         fire_and_forget(
-            state.relay.deliver(msg, sender_key=state.session_key),
+            state.relay.deliver(
+                msg, sender_key=state.session_key, target_repo=target_repo
+            ),
             logger=_log,
             description="message delivery",
         )
