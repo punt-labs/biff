@@ -19,7 +19,7 @@ async def last(ctx: CliContext, user: str, count: int) -> CommandResult:
     if not events:
         return CommandResult(text="No session history.", json_data=[])
 
-    current_sessions = await ctx.relay.get_sessions()
+    current_sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
     active_keys = {build_session_key(s.user, s.tty) for s in current_sessions}
     pairs = pair_events(events)
     pairs = pairs[:count]

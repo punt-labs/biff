@@ -78,11 +78,9 @@ _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 # Default stream prefix (DES-016).  Tests override via stream_prefix="biff-dev".
 _DEFAULT_STREAM_PREFIX = "biff"
 
-# KV key namespaces reserved for non-session data (DES-016, DES-030).
-# Session keys are {user}.{tty}; these first-segment values are not users.
-# "wall" — wall keys are {repo}.wall (2 parts, same shape as sessions).
-# "key" — encryption key reservations.
-RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key", "wall"})
+# KV key namespaces reserved for encryption (DES-016, biff-lff).
+# Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
+RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
 
 
 async def safe_close(nc: NatsClient) -> None:
@@ -343,26 +341,22 @@ class NatsRelay:
         self._wtmp_available = False
 
     async def purge_data(self) -> None:
-        """Purge this repo's sessions and data from shared infrastructure.
+        """Purge this repo's data from shared streams without deleting infrastructure.
 
-        Session KV keys are org-scoped (``{user}.{tty}``, DES-030).
-        To purge only this repo's sessions, we fetch all sessions,
-        filter by ``repo == self._repo_name``, and delete individually.
-        Wall keys (``{repo}.wall``) are repo-scoped and deleted by key.
-        Messages and wtmp remain repo-scoped via subject hierarchy.
+        Subject-filtered purge (DES-016): only removes KV keys and
+        messages belonging to this repo, leaving other repos' data
+        intact.  Keeps the shared bucket and streams themselves.
+
+        Purges the underlying KV stream (``KV_{bucket}``) directly
+        instead of calling ``kv.keys()`` which creates an ephemeral
+        consumer via ``kv.watch()`` — those leak on long-lived
+        connections.
         """
-        js, kv = await self._ensure_connected()
-        # Delete this repo's sessions individually (org-scoped KV keys
-        # cannot be purged by subject filter).
-        sessions = await self.get_sessions()
-        for session in sessions:
-            if session.repo == self._repo_name:
-                key = self._kv_key(build_session_key(session.user, session.tty))
-                with suppress(KeyNotFoundError, BucketNotFoundError):
-                    await kv.delete(key)
-        # Delete this repo's wall key
-        with suppress(KeyNotFoundError, BucketNotFoundError):
-            await kv.delete(self._wall_kv_key)
+        js, _ = await self._ensure_connected()
+        kv_stream = f"KV_{self._kv_bucket}"
+        kv_subject = f"$KV.{self._kv_bucket}.{self._repo_name}.>"
+        with suppress(NotFoundError):
+            await js.purge_stream(kv_stream, subject=kv_subject)  # pyright: ignore[reportUnknownMemberType]
         with suppress(NotFoundError):
             await js.purge_stream(  # pyright: ignore[reportUnknownMemberType]
                 self._stream_name, subject=f"{self._subject_prefix}.>"
@@ -484,11 +478,11 @@ class NatsRelay:
         return f"{self._repo_name}-userinbox-{user}"
 
     def _kv_key(self, session_key: str) -> str:
-        """KV key for a session: ``{user}.{tty}`` (DES-030, org-scoped)."""
+        """KV key for a session: ``{repo}.{user}.{tty}`` (DES-016)."""
         user, tty = session_key.split(":", maxsplit=1)
         self._validate_user(user)
         self._validate_tty(tty)
-        return f"{user}.{tty}"
+        return f"{self._repo_name}.{user}.{tty}"
 
     @staticmethod
     def wall_kv_key(repo_name: str) -> str:
@@ -801,42 +795,66 @@ class NatsRelay:
         await kv.put(kv_key, updated.model_dump_json().encode())
 
     async def get_sessions(self) -> list[UserSession]:
-        """Return all sessions across the org (NATS KV TTL handles expiry).
+        """Return all sessions for this repo (NATS KV TTL handles expiry).
 
-        Uses ``stream_info`` with a wildcard ``subjects_filter`` to
-        discover all KV keys.  Explicit structural filtering (DES-030)
-        skips non-session keys (wall, encryption key reservations) by
-        checking the first segment against ``RESERVED_KV_NAMESPACES``.
-
-        Session keys are ``{user}.{tty}`` (2-part).  Wall keys are
-        ``{repo}.wall`` (also 2-part but first segment matches a repo
-        name, and "wall" is in RESERVED_KV_NAMESPACES).
+        Delegates to :meth:`_get_sessions_for_repo` with this relay's
+        own repo name.
         """
+        return await self._get_sessions_for_repo(self._repo_name)
+
+    async def get_sessions_for_repos(self, repos: frozenset[str]) -> list[UserSession]:
+        """Return sessions from multiple repos via parallel per-repo queries.
+
+        Each repo gets its own ``stream_info`` call with a repo-scoped
+        ``subjects_filter`` (``$KV.{bucket}.{repo}.>``), keeping all
+        filtering server-side.  Results are merged and returned as a
+        single list.  Used by cross-repo commands (``/who``, ``/finger``)
+        when peers are configured (DES-030).
+        """
+        if not repos:
+            return []
+        if len(repos) == 1:
+            (repo,) = repos
+            return await self._get_sessions_for_repo(repo)
+        repo_results = await asyncio.gather(
+            *(self._get_sessions_for_repo(repo) for repo in repos)
+        )
+        return [s for batch in repo_results for s in batch]
+
+    async def _get_sessions_for_repo(self, repo: str) -> list[UserSession]:
+        """Return sessions for a single repo (server-side filtered).
+
+        Catches all errors and returns an empty list on failure so that
+        a transient error on one peer repo does not take down the entire
+        ``get_sessions_for_repos`` call.
+        """
+        try:
+            return await self._get_sessions_for_repo_inner(repo)
+        except NotFoundError:
+            return []
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to query sessions for repo %s", repo, exc_info=True)
+            return []
+
+    async def _get_sessions_for_repo_inner(self, repo: str) -> list[UserSession]:
+        """Inner implementation — may raise on NATS errors."""
         js, kv = await self._ensure_connected()
         kv_stream = f"KV_{self._kv_bucket}"
         kv_prefix = f"$KV.{self._kv_bucket}."
-        try:
-            info = await js.stream_info(kv_stream, subjects_filter=f"{kv_prefix}>")
-        except NotFoundError:
-            return []
+        repo_filter = f"{kv_prefix}{repo}.>"
+        info = await js.stream_info(kv_stream, subjects_filter=repo_filter)
         if not info.state.subjects:
             return []
-        # Collect session-shaped keys, filtering out non-session entries.
         session_keys: list[str] = []
         for subject in info.state.subjects:
             key = subject.removeprefix(kv_prefix)
-            # Structural filter: session keys are {user}.{tty} (2 parts).
-            # Skip keys where either segment is in RESERVED_KV_NAMESPACES
-            # (wall keys like {repo}.wall, encryption keys like key.{user}).
-            parts = key.split(".", maxsplit=1)
-            if len(parts) != 2:
+            parts = key.split(".", maxsplit=2)
+            if len(parts) != 3 or parts[0] != repo:
                 continue
-            if parts[0] in RESERVED_KV_NAMESPACES or parts[1] in RESERVED_KV_NAMESPACES:
+            if parts[1] in RESERVED_KV_NAMESPACES:
                 continue
             session_keys.append(key)
 
-        # Fetch all session values concurrently to avoid N serial
-        # round-trips (matters at 243+ concurrent sessions).
         async def _get_session(key: str) -> UserSession | None:
             try:
                 entry = await kv.get(key)

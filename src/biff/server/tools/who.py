@@ -29,22 +29,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description="List all active team members and what they're working on.",
     )
     @auto_enable(state)
-    async def who(repo: str = "") -> str:
-        """List all sessions with idle time.
-
-        When *repo* is given (e.g. ``@punt-labs__vox``), show only
-        sessions from that repo.  Otherwise shows all visible repos.
-        """
+    async def who() -> str:
+        """List all sessions with idle time."""
         await update_current_session(state)
         await refresh_read_messages(mcp, state)
-        sessions = await state.relay.get_sessions()
-        visible = state.config.visible_repos
-        if repo:
-            if repo not in visible:
-                return f"Repo {repo!r} is not in your visible repos."
-            sessions = [s for s in sessions if s.repo == repo]
-        else:
-            sessions = [s for s in sessions if s.repo in visible]
+        sessions = await state.relay.get_sessions_for_repos(state.config.visible_repos)
         if not sessions:
             return "No sessions."
         sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)

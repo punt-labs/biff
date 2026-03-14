@@ -15,7 +15,7 @@ from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
-from biff.server.tools._session import resolve_session, update_current_session
+from biff.server.tools._session import resolve_tty_name, update_current_session
 from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
 
@@ -30,22 +30,28 @@ async def _resolve_recipient(
 ) -> tuple[str, str, str | None]:
     """Resolve an address to ``(relay_key, display_name, target_repo)``.
 
-    *target_repo* is set when the resolved session belongs to a
-    different repo than the sender (cross-repo delivery, DES-030).
+    For targeted addresses (``@user:tty``), searches sessions across all
+    visible repos.  When the resolved session is in a different repo,
+    *target_repo* is set for cross-repo delivery.  Bare ``@user``
+    addresses stay repo-local (``target_repo=None``).
     """
     user, tty = parse_address(to)
     target_repo: str | None = None
     if tty:
-        session = await resolve_session(state.relay, user, tty)
+        # Search across visible repos for the target session.
+        all_sessions = await state.relay.get_sessions_for_repos(
+            state.config.visible_repos
+        )
+        session = resolve_tty_name(
+            all_sessions, user, tty, local_repo=state.config.repo_name
+        )
         if session:
             relay_key = build_session_key(session.user, session.tty)
-            if session.repo and session.repo != state.config.repo_name:
-                if session.repo not in state.config.visible_repos:
-                    msg = (
-                        f"Cannot message @{user}:{tty} — "
-                        f"repo {session.repo!r} is not in your peer list."
-                    )
-                    raise ValueError(msg)
+            if (
+                session.repo
+                and session.repo != state.config.repo_name
+                and session.repo in state.config.visible_repos
+            ):
                 target_repo = session.repo
         else:
             relay_key = f"{user}:{tty}"

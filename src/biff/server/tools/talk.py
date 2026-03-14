@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING
 
 from biff.models import Message
 from biff.nats_relay import NatsRelay
-from biff.relay import Relay
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import (
     TALK_BASE_DESCRIPTION,
@@ -33,13 +32,14 @@ from biff.server.tools._descriptions import (
     refresh_read_messages,
     set_talk_partner,
 )
-from biff.server.tools._session import resolve_session, update_current_session
+from biff.server.tools._session import resolve_tty_name, update_current_session
 from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
+    from biff.models import UserSession
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
@@ -70,33 +70,25 @@ async def fetch_all_unread(
     return sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
 
 
-async def _resolve_talk_target(
-    relay: Relay,
+def _resolve_talk_target(
     user: str,
     tty: str | None,
+    sessions: list[UserSession],
     *,
     sender_repo: str = "",
-    visible_repos: frozenset[str] = frozenset(),
 ) -> tuple[str, str, str | None]:
-    """Resolve a talk address to ``(relay_key, display_target, target_repo)``.
+    """Resolve a talk address to ``(relay_key, display, target_repo)``.
 
-    Same resolution as :func:`messaging._resolve_recipient` — tries the
-    literal hex key first, then falls back to ``tty_name`` matching.
-    *target_repo* is set for cross-repo delivery (DES-030).
-    Raises ``ValueError`` if the target repo is not in visible_repos.
+    Searches the provided *sessions* list (already filtered to visible
+    repos) for the target.  Sets *target_repo* when the target is in a
+    different repo from *sender_repo*.
     """
     target_repo: str | None = None
     if tty:
-        session = await resolve_session(relay, user, tty)
+        session = resolve_tty_name(sessions, user, tty, local_repo=sender_repo)
         if session:
             relay_key = build_session_key(session.user, session.tty)
             if session.repo and sender_repo and session.repo != sender_repo:
-                if session.repo not in visible_repos:
-                    msg = (
-                        f"Cannot talk to @{user}:{tty} — "
-                        f"repo {session.repo!r} is not in your peer list."
-                    )
-                    raise ValueError(msg)
                 target_repo = session.repo
         else:
             relay_key = f"{user}:{tty}"
@@ -173,22 +165,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await update_current_session(state)
         user, tty = parse_address(to)
 
-        sessions = await relay.get_sessions_for_user(user)
-        visible = state.config.visible_repos
-        sessions = [s for s in sessions if s.repo in visible]
+        all_sessions = await relay.get_sessions_for_repos(state.config.visible_repos)
+        sessions = [s for s in all_sessions if s.user == user]
         if not sessions:
             return f"@{user} is not online."
 
-        try:
-            relay_key, display_target, target_repo = await _resolve_talk_target(
-                relay,
-                user,
-                tty,
-                sender_repo=state.config.repo_name,
-                visible_repos=state.config.visible_repos,
-            )
-        except ValueError as exc:
-            return str(exc)
+        relay_key, display_target, target_repo = _resolve_talk_target(
+            user, tty, all_sessions, sender_repo=state.config.repo_name
+        )
         set_talk_partner(display_target)
 
         if message:

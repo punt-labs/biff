@@ -5,7 +5,7 @@ from __future__ import annotations
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.formatting import format_finger, format_finger_multi
-from biff.server.tools._session import resolve_session
+from biff.server.tools._session import resolve_tty_name
 from biff.tty import parse_address
 
 
@@ -19,10 +19,13 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
             json_data={"error": str(exc)},
             error=True,
         )
+    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
+
     if tty:
-        session = await resolve_session(ctx.relay, bare_user, tty)
-        visible = ctx.config.visible_repos
-        if session is None or (session.repo and session.repo not in visible):
+        session = resolve_tty_name(
+            all_sessions, bare_user, tty, local_repo=ctx.config.repo_name
+        )
+        if session is None:
             return CommandResult(
                 text=f"Login: {bare_user}\nNo session on tty {tty}.",
                 json_data={"error": f"No session on tty {tty}."},
@@ -32,9 +35,7 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
             text=format_finger(session),
             json_data=session.model_dump(mode="json"),
         )
-    sessions = await ctx.relay.get_sessions_for_user(bare_user)
-    visible = ctx.config.visible_repos
-    sessions = [s for s in sessions if s.repo in visible]
+    sessions = [s for s in all_sessions if s.user == bare_user]
     if not sessions:
         return CommandResult(
             text=f"Login: {bare_user}\nNever logged in.",

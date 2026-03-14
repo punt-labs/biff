@@ -2707,3 +2707,410 @@ async def _ensure_connected(self):
 `_ensure_connected()` must check transport liveness before returning
 cached application handles.  The fast path is an optimization of the
 slow path, not a bypass of its preconditions.
+
+---
+
+## DES-030: Multi-Agent Coordination — Four Flavors and the Scope Lift
+
+**Date:** 2026-03-13
+**Status:** OPEN (discussion)
+
+### Context
+
+Working across punt-labs projects (biff, vox, lux, quarry, z-spec, punt-kit)
+has surfaced four distinct coordination patterns for human-agent work. Each
+has different requirements. Biff currently supports only the first; the other
+three are blocked by the repo-scoped identity model.
+
+The formal session model (`docs/session-model.tex`) already captures the full
+hierarchy — orgs, machines, clones, sessions, processes — and models
+cross-repo and cross-machine scenarios. The NATS implementation does not: KV
+keys are `{repo}.{user}.{tty}`, subjects are `biff.{repo}.inbox.{user}.{tty}`,
+and `/who` only shows sessions in the current repo. This entry documents the
+use cases that motivate closing that gap.
+
+### The Four Coordination Flavors
+
+#### Flavor 1: Same-repo, multi-process
+
+Multiple Claude Code sessions in one repository, possibly in worktrees on
+different branches. Example: three agents working on biff — one on the relay,
+one on tests, one on docs — coordinated by a human.
+
+**Status:** Partially supported today. `/who` shows co-located sessions.
+`/wall` broadcasts within the repo. Worktree awareness prevents file
+conflicts. The gap is coordination intelligence (don't edit the same files),
+not communication.
+
+#### Flavor 2: Cross-repo coordination
+
+Work that spans repository boundaries. Examples:
+
+- z-spec needs a new interactive element → files a feature request against lux
+- vox gains a new TTS mood → biff's voice-mode hook needs updating
+- A punt-kit standard change cascades to biff, quarry, vox, lux
+- A biff release requires version bumps in the marketplace registry
+  (claude-plugins repo)
+
+**Status:** Not supported. Biff is repo-scoped. An agent in biff cannot see
+who is working in vox, cannot `/write` to a session in quarry, and cannot
+observe that someone in z-spec just created a lux feature request. Cross-repo
+coordination today requires the human to context-switch between terminals and
+relay information manually.
+
+#### Flavor 3: Cross-machine coordination
+
+Distributing work across physical machines. Example: MacBook M1 takes
+bead-x (relay refactor), server M2 takes bead-y (stress test suite). Both
+need to see each other's presence, exchange messages, and avoid conflicting
+pushes.
+
+**Status:** Not supported locally. The NATS relay is already
+machine-agnostic (Synadia Cloud), but identity and presence are repo-scoped.
+A session on M1 in biff and a session on M2 in biff appear in the same
+`/who` output only if they share the same NATS bucket — which they do
+(DES-016), but the identity model treats them as isolated.
+
+This flavor applies equally to same-repo (two machines, same repo) and
+cross-repo (two machines, different repos) scenarios.
+
+#### Flavor 4: Orchestrator (boss Claude)
+
+A supervisory Claude session that allocates work to other Claude sessions.
+The orchestrator:
+
+- Reads available work across repos (beads, issues, backlogs)
+- Knows agent capabilities, current load, and presence state
+- Launches Claude sessions with targeted prompts (same machine via
+  `claude --prompt` or cross-machine via SSH/remote dispatch)
+- Monitors progress, detects stalls, reassigns on failure
+- Operates on the same machine or across machines — the transport is
+  identical
+
+**Status:** Not supported. Requires all of flavors 1-3 plus the ability to
+launch and monitor sessions programmatically. The orchestrator is a
+privileged peer on the same message bus, not a separate system.
+
+### Decision: Org-Scoped Commands with Org-Unique TTYs (biff-8l4k)
+
+The unlock is allowing biff to operate cross-repo within an organization.
+A user who has access to multiple repos can interact in any repo's biff
+scope from any repo. The key design choice that makes this clean:
+
+**TTY names stay per-repo. Cross-repo addressing resolves by querying
+visible repos in parallel.**
+
+A user can have `tty1` in biff and `tty1` in beadle — these are
+different sessions. `@user:tty1` resolves by querying each visible repo's
+KV in parallel and returning the first match. If ambiguous, the user can
+qualify with a repo filter. Org-wide TTY uniqueness was considered but
+rejected: it requires an org-wide KV scan on every session startup, which
+is too slow on hosted NATS and couples session identity to peer config.
+
+#### Command Scoping
+
+| Command | Default scope | Narrowing |
+|---------|--------------|-----------|
+| `/who` | visible repos | `repo="X"` |
+| `/wall` | visible repos | `repo="X"` |
+| `/write @user:tty` | visible repos (parallel query) | n/a |
+| `/talk @user:tty` | visible repos (parallel query) | n/a |
+| `/finger @user` | visible repos (parallel query) | n/a |
+| `/write @user` | current repo only | n/a |
+
+Cross-repo commands query each visible repo's KV in parallel using
+server-side `subjects_filter`. No org-wide scan needed.
+
+#### Example Scenario
+
+Repos A–D belong to organization Foo. User 1 has access to A and B.
+These repos have a dependency relationship.
+
+1. User 1 is working in Repo A and needs a change in Repo B.
+2. `/who` shows sessions across both A and B (with repo as a column).
+3. User 1 sees User 2 is active in Repo B on `tty4`.
+4. `/write @user2:tty4 "Need the new parser API exported"` — works
+   from Repo A because biff queries visible repos in parallel.
+5. `/talk @user2:tty4` to clarify the interface details in real time.
+
+No context switching. No leaving the current session. No `@repo` noise.
+
+#### `/who` Output (Cross-Repo)
+
+```text
+USER     TTY   REPO    BRANCH     PLAN                  IDLE
+kai      tty1  biff    main       DES-030 discussion    0s
+kai      tty3  vox     feat/mood  new TTS mood          5m
+eric     tty4  quarry  main       indexer refactor       2m
+eric     tty5  biff    fix/relay  connection pool        30s
+```
+
+Repo is a column, not part of the address. Filtering: `/who @biff`
+shows only the biff rows.
+
+#### `/wall` Behavior
+
+`/wall "deploying biff v1.4.0"` — broadcasts to all repos the user has
+access to. Appropriate because wall announcements (deploys, freezes,
+outages) typically affect the whole organization.
+
+`/wall @biff "relay going down for maintenance"` — scoped to sessions
+in the biff repo only.
+
+### Decision: Cross-Repo Addressing Requires TTY
+
+Messages use WORK_QUEUE retention with POP semantics — once consumed,
+they are gone. This creates a correctness constraint for cross-repo
+messaging:
+
+**Bare `@user` addressing is repo-local. Cross-repo requires `@user:tty`.**
+
+#### Why
+
+A targeted message (`@user:tty`) is safe cross-repo because:
+
+1. Biff queries each visible repo's KV in parallel to find the tty.
+2. On ambiguity (same tty_name in multiple repos), prefers the
+   sender's own repo.
+3. Publishes to `biff.{target_repo}.inbox.{user}.{tty}` — the target
+   repo's subject, not the sender's.
+4. The target's consumer — scoped to their repo — picks it up.
+5. No other session can consume it because the subject is tty-specific.
+
+A broadcast message (`@user` without tty) cannot work cross-repo because:
+
+1. No tty means no way to determine which repo's subject to publish to.
+2. The target user may have sessions in multiple repos.
+3. Publishing to the sender's repo is wrong if the target is elsewhere.
+4. Publishing to all repos creates duplicate consumption — whichever
+   session reads first destroys the message for other sessions.
+
+#### NATS Subject and KV Design
+
+**KV keys keep `{repo}` — presence is queried per-repo, not org-wide.**
+The peer config declares which repos to query; `get_sessions()` does N
+parallel `subjects_filter` calls (one per visible repo), each server-side
+filtered. No key scheme change needed.
+
+| Concern | Scope | Key/Subject scheme | Repo in key? |
+|---------|-------|--------------------|--------------|
+| **Presence (KV)** | Per-repo, queried in parallel | `{repo}.{user}.{tty}` | Yes (unchanged) |
+| **Message subjects** | Repo-scoped | `biff.{repo}.inbox.{user}.{tty}` | Yes (unchanged) |
+| **Message consumers** | Repo-scoped | Consumer filters on `biff.{repo}.inbox.>` | Yes (unchanged) |
+| **Wall (KV)** | Per-repo | `{repo}.wall` | Yes (unchanged) |
+| **Talk notify** | Repo-scoped | `biff.{repo}.talk.notify.{user}` | Yes (unchanged) |
+
+Cross-repo `/write @user:tty` works by querying session KV across
+visible repos (parallel per-repo queries), finding the target's repo,
+then publishing to the *target's* repo subject. The sender crosses the
+repo boundary at publish time. The consumer never changes.
+
+#### Cross-Repo Write Flow
+
+```text
+User 1 (repo A) → /write @user2:tty4 "need the parser API"
+
+1. Look up tty4 in org-wide session KV → belongs to user2, repo B
+2. Publish to biff.B.inbox.user2.tty4  (repo B's subject)
+3. User 2's consumer in repo B picks it up on /read
+```
+
+The sender's repo is irrelevant to delivery. The target's repo —
+derived from the tty lookup — determines the subject.
+
+#### Addressing Rules
+
+| Address form | Same-repo | Cross-repo | Mechanism |
+|-------------|-----------|------------|-----------|
+| `@user` | Yes | No | Publish to sender's repo subject |
+| `@user:tty` | Yes | Yes | Look up tty → target repo → publish to target's repo subject |
+
+#### `/talk` Cross-Repo
+
+Same rule: `/talk @user:tty` works cross-repo because the talk
+notification subject includes repo, and the tty lookup resolves which
+repo to use. Bare `/talk @user` is repo-local.
+
+### Decision: Per-Repo Peer List
+
+Each repo has a config listing which other repos it collaborates with.
+This list controls visibility and reachability — a session only sees
+sessions in repos on its peer list, and can only send cross-repo
+messages to those repos. The peer list is not necessarily symmetrical:
+repo A may list repo B as a peer without repo B listing repo A.
+
+The peer list lives in per-repo config (`.biff/config` or equivalent).
+It is not derived from NATS credentials or GitHub org membership.
+Explicit configuration means the user controls exactly which repos are
+visible from each working context.
+
+#### Visibility Rules
+
+- `/who` shows sessions in the current repo plus all peer repos.
+- `/who @repo` filters to a specific repo (must be current or a peer).
+- `/write @user:tty` resolves the tty via org-wide session KV, but
+  delivery only succeeds if the target's repo is the current repo or
+  a listed peer.
+- `/wall` broadcasts to the current repo plus all peer repos.
+- `/wall @repo` targets a specific repo (must be current or a peer).
+- Bare `@user` addressing is always current-repo only (no peer
+  expansion).
+
+#### Example Config
+
+```text
+# .biff/config in the biff repo
+peers = vox, lux, quarry, punt-kit
+```
+
+From a biff session, `/who` shows sessions in biff, vox, lux, quarry,
+and punt-kit. `/write @eric:tty4` works if eric's tty4 is in any of
+those repos. A session in z-spec would not be visible unless z-spec is
+added to the peer list.
+
+### Decision: Cross-Repo Is NATS-Only
+
+`LocalRelay` (file-based, `.biff/` directory) is test infrastructure.
+It does not need to support cross-repo. Cross-repo messaging requires
+`NatsRelay`. This keeps the `LocalRelay` simple and avoids introducing
+a `~/.biff/` shared directory for the file-based path.
+
+### Decision: No Migration
+
+KV keys stay as `{repo}.{user}.{tty}` — no key scheme change, no
+migration needed. The only new data is the `repo` field on `UserSession`
+(defaults to empty, backfilled on first tool call) and the `[peers]`
+section in `.biff` config.
+
+### What Must Change
+
+The core change is **multi-repo querying**: commands query multiple repos
+in parallel using the existing `subjects_filter` mechanism. No KV key
+scheme changes. No org-wide scans.
+
+1. **Peer list config** — `[peers]` section in `.biff` listing peer
+   repos. `visible_repos` computed property on `BiffConfig` returns
+   `{self.repo_name, *self.peers}`. Peers are ephemeral — can change
+   mid-session.
+
+2. **`repo` field on `UserSession`** — metadata for display (REPO
+   column in `/who`). Set at session creation, backfilled on pre-upgrade
+   sessions. Not part of the KV key.
+
+3. **`get_sessions_for_repos(repos)`** — new NatsRelay method. Runs N
+   parallel `stream_info` calls with `subjects_filter` scoped to each
+   repo (`$KV.{bucket}.{repo}.>`), then N parallel `kv.get()` batches.
+   Each query is server-side filtered — fast on hosted NATS.
+
+4. **Cross-repo publish** — `_subject_for_key` accepts an optional
+   `target_repo` override. When resolving `@user:tty` for a cross-repo
+   write, query session KV across visible repos, find the target's repo,
+   verify it is in the peer list, and publish to the target's repo
+   subject.
+
+5. **`/who` and `/wall` commands** — gain `repo` parameter for
+   filtering. Default scope widens to `visible_repos`. `/who` shows
+   repo as a column.
+
+6. **Wall broadcast** — `/wall` writes to `{repo}.wall` for each repo
+   in `visible_repos`. `/wall repo="X"` writes to a single repo.
+
+7. **TTY assignment** — stays repo-scoped. A user can have `tty1` in
+   biff and `tty1` in beadle. Cross-repo addressing uses `@user:tty`
+   which resolves by querying visible repos — ambiguity resolved by
+   first match or repo qualification.
+
+### What Does Not Change
+
+- The formal session model (`docs/session-model.tex`) — already correct
+- The addressing syntax — `@user` and `@user:tty` unchanged
+- The NATS relay architecture (shared streams, DES-016) — already supports
+  multi-repo on a single NATS deployment
+- Message subjects — `biff.{repo}.inbox.{user}.{tty}` unchanged
+- Message consumers — still scoped to `biff.{repo}.inbox.>` (unchanged)
+- `LocalRelay` — remains repo-scoped, test-only
+- The BSD command vocabulary — `/who`, `/write`, `/wall`, `/finger` all
+  generalize naturally to wider scope
+- The security model — human-in-the-loop, explicit permissions, audit trail
+
+### Decision: KV Keys Stay Repo-Scoped (Revised)
+
+**Date:** 2026-03-14
+**Status:** DECIDED — supersedes the `{user}.{tty}` key scheme in the
+original biff-8l4k implementation.
+
+The first implementation of cross-repo presence (PR #131) changed KV
+keys from `{repo}.{user}.{tty}` to `{user}.{tty}`, making
+`get_sessions()` do an org-wide wildcard scan. This was deployed and
+tested live between biff and beadle repos on Synadia Cloud. Result:
+**unacceptably slow.** Every `/who`, `/finger`, and `/write` triggered a
+full KV bucket enumeration — N round-trips to the cloud for N sessions
+across all repos, not just visible ones.
+
+**Root cause of the design error:** conflating KV key scheme with
+visibility scope. Org-wide visibility does not require org-wide keys.
+The peer config already declares which repos to query — the KV layer
+should query those repos individually using server-side `subjects_filter`,
+not dump everything and filter client-side.
+
+**What NATS KV offers for this pattern:**
+
+- `subjects_filter` on `stream_info` — server-side key enumeration by
+  prefix. Fast, no client-side waste. This is what we had pre-DES-030.
+- `watchall()` — push-based local materialization. Canonical NATS pattern
+  for maintaining a local cache. Already used by the KV watcher for wtmp.
+- No server-side "get all values" primitive exists. `watchall()` is the
+  intended mechanism, not a workaround.
+- Direct Get Batch (NATS 2.11) exists server-side but nats.py does not
+  expose it yet.
+
+**Corrected design:**
+
+- KV keys: `{repo}.{user}.{tty}` (unchanged from pre-DES-030)
+- `get_sessions_for_repos(repos)`: N parallel `subjects_filter` queries,
+  one per repo. Server-side filtered. CLI stays fast.
+- `repo` field on `UserSession`: display metadata, not structural
+- TTY assignment: repo-scoped (not org-wide)
+- Peer groups: ephemeral config, can change mid-session
+- Write-through cache on NatsRelay: secondary optimization for MCP server
+  path (long-lived process benefits from `watchall()`-backed cache)
+
+**Lesson:** Do not change a data structure's key scheme without
+understanding the performance contract the existing scheme serves. The
+`{repo}` prefix in KV keys was not just organizational — it was the
+server-side query boundary that made reads O(repo-sessions) instead of
+O(all-sessions).
+
+### Open Questions (Flavor 4, Future)
+
+1. **Orchestrator trust:** When a boss Claude launches a worker Claude,
+   what permissions does the worker inherit? Can the boss read the worker's
+   output? Can it terminate the worker? This intersects with biff's
+   existing `mesg y/n` permission model.
+
+2. **Bead distribution:** Should the orchestrator use beads directly
+   (assign beads to sessions) or a separate task queue? NATS JetStream is
+   a natural fit for work distribution, and beads already have assignee
+   fields.
+
+### Relationship to Session Model
+
+The Z specification in `docs/session-model.tex` models the state space:
+what entities exist and what invariants hold. This design entry is the
+use-case complement: what coordination patterns real users need and what
+implementation changes they require. The spec is already ahead of the
+implementation — it models cross-repo scenarios
+(`OpenSession(s6, server, punt-labs, quarry, main, kai)`) that the code
+cannot yet support.
+
+### Next Steps
+
+All blocking questions resolved. Implementation sequence:
+
+1. Add `[peers]` config to `.biff` with `visible_repos` property
+2. Add `repo` field to `UserSession` (metadata, not key scheme)
+3. Add `get_sessions_for_repos()` — parallel per-repo server-side queries
+4. Cross-repo publish (query visible repos → resolve tty → publish to target subject)
+5. `/who` and `/wall` with repo column and cross-repo visibility
+6. Test end-to-end between peered repos
+7. Future: `/dispatch` or equivalent for launching sessions (flavor 4)

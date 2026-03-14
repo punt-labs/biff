@@ -2,10 +2,10 @@
 
 Two NatsRelay instances with different repo_name, configured as peers,
 sharing the same NATS server. Verifies:
-- Org-wide session visibility
+- Cross-repo session visibility via parallel per-repo queries
 - Cross-repo message delivery
 - visible_repos filtering
-- Org-unique TTY name assignment
+- TTY name assignment (repo-scoped)
 - Wall broadcast to multiple repos
 """
 
@@ -185,28 +185,20 @@ class TestCrossRepoMessaging:
         assert "No new messages" in read_result
 
 
-class TestCrossRepoTtyUniqueness:
-    """TTY names are unique across the org, not just per-repo."""
+class TestCrossRepoTtyNames:
+    """TTY names are repo-scoped — duplicates across repos are allowed."""
 
-    async def test_tty_names_unique_across_repos(
+    async def test_tty_names_can_duplicate_across_repos(
         self, kai_biff: RecordingClient, eric_vox: RecordingClient
     ) -> None:
-        """Sessions in different repos get different ttyN names."""
-        # Both register sessions (via plan)
+        """Sessions in different repos can have the same ttyN name."""
         await kai_biff.call("plan", message="biff work")
         await eric_vox.call("plan", message="vox work")
 
-        # Check who output — both should have different tty names
+        # Both sessions should be visible and both can be tty1
         result = await kai_biff.call("who")
-        lines = result.strip().split("\n")
-        # Extract tty names from the output (second column)
-        tty_names: list[str] = []
-        for line in lines[1:]:  # Skip header
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].startswith("@"):
-                tty_names.append(parts[1])
-        # All tty names should be unique
-        assert len(tty_names) == len(set(tty_names))
+        assert "@kai" in result
+        assert "@eric" in result
 
 
 class TestCrossRepoWall:
