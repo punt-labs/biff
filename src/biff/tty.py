@@ -42,6 +42,17 @@ def build_session_key(user: str, tty: str) -> str:
     return f"{user}:{tty}"
 
 
+def is_notification_for_session(data: dict[str, str], session_key: str) -> bool:
+    """Check whether a talk notification should be accepted by this session.
+
+    Targeted notifications (``to_key`` present) are accepted only when
+    the key matches *session_key*.  Broadcast notifications (no
+    ``to_key``) are always accepted.
+    """
+    to_key = data.get("to_key", "")
+    return not to_key or to_key == session_key
+
+
 def next_tty_name(existing_names: list[str]) -> str:
     """Return the next sequential ``ttyN`` not already in use."""
     highest = 0

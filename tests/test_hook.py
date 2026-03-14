@@ -1071,7 +1071,7 @@ def _gate_mocks(*, plan: bool, bead: bool | str):
 def _deny_reason(result: dict[str, object]) -> str:
     """Extract the deny reason string from a PreToolUse hook response."""
     output = cast("dict[str, object]", result["hookSpecificOutput"])
-    assert output["permissionDecision"] == "deny"
+    assert output["permissionDecision"] == "ask"
     return str(output["permissionDecisionReason"])
 
 
@@ -1183,6 +1183,55 @@ class TestHandleStop:
             result = handle_stop()
         assert result is not None
         assert "1 unread message." in result
+
+
+class TestCcStopSchema:
+    """cc_stop emits the Stop hook schema, not hookSpecificOutput (biff-bfth)."""
+
+    def test_emits_decision_block_schema(self, tmp_path: Path) -> None:
+        """Stop output must be {"decision": "block", "reason": ...}."""
+        from typer.testing import CliRunner
+
+        from biff.hook import hook_app
+
+        unread_dir = tmp_path / ".biff" / "unread"
+        unread_dir.mkdir(parents=True)
+        (unread_dir / "12345.json").write_text(
+            json.dumps({"count": 2, "user": "kai", "repo": "biff"})
+        )
+        runner = CliRunner()
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.session_key.find_session_key", return_value=12345),
+            patch("biff.hook._is_biff_enabled", return_value=True),
+        ):
+            result = runner.invoke(hook_app, ["claude-code", "stop"])
+        assert result.exit_code == 0
+        output = json.loads(result.stdout)
+        assert output["decision"] == "block"
+        assert "reason" in output
+        assert "hookSpecificOutput" not in output
+
+    def test_no_output_when_zero_unread(self, tmp_path: Path) -> None:
+        """Stop emits nothing when there are no unread messages."""
+        from typer.testing import CliRunner
+
+        from biff.hook import hook_app
+
+        unread_dir = tmp_path / ".biff" / "unread"
+        unread_dir.mkdir(parents=True)
+        (unread_dir / "12345.json").write_text(
+            json.dumps({"count": 0, "user": "kai", "repo": "biff"})
+        )
+        runner = CliRunner()
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("biff.session_key.find_session_key", return_value=12345),
+            patch("biff.hook._is_biff_enabled", return_value=True),
+        ):
+            result = runner.invoke(hook_app, ["claude-code", "stop"])
+        assert result.exit_code == 0
+        assert result.stdout.strip() == ""
 
 
 # ── Z spec invariant coverage (biff-g9b) ─────────────────────────────

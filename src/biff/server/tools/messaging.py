@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activate import auto_enable
-from biff.server.tools._descriptions import refresh_read_messages
+from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
 from biff.server.tools._session import resolve_tty_name, update_current_session
 from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
@@ -88,6 +88,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return str(exc)
         msg = Message(
             from_user=state.config.user,
+            from_tty=get_tty_name(),
             to_user=to_user,
             body=message[:512],
         )

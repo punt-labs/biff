@@ -20,6 +20,7 @@ from biff._formatting import (
     format_table,
     last_component,
 )
+from biff._stdlib import display_repo_name
 from biff.models import Message, SessionEvent, UserSession, WallPost
 
 __all__ = [
@@ -123,7 +124,7 @@ def format_who(sessions: list[UserSession]) -> str:
         [
             f"@{s.user}",
             s.tty_name or (s.tty[:8] if s.tty else "-"),
-            s.repo or "-",
+            display_repo_name(s.repo) or "-",
             format_idle(s.last_active),
             "+" if s.biff_enabled else "-",
             s.hostname or "-",
@@ -269,7 +270,7 @@ def format_last(
     for login, logout in pairs:
         name = f"@{login.user}"
         tty = login.tty_name or (login.tty[:8] if login.tty else "-")
-        repo = login.repo or "-"
+        repo = display_repo_name(login.repo) or "-"
         host = login.hostname or "-"
         login_str = _format_timestamp(login.timestamp)
         if logout is not None:
@@ -317,6 +318,7 @@ def format_wall(wall: WallPost) -> str:
 
 READ_SPECS: list[ColumnSpec] = [
     ColumnSpec("FROM", min_width=4),
+    ColumnSpec("FROM_TTY", min_width=3),
     ColumnSpec("DATE", min_width=16),
     ColumnSpec("MESSAGE", min_width=10, fixed=False),
 ]
@@ -327,5 +329,5 @@ def format_read(messages: list[Message]) -> str:
     rows: list[list[str]] = []
     for m in messages:
         ts = m.timestamp.strftime("%a %b %d %H:%M")
-        rows.append([m.from_user, ts, m.body])
+        rows.append([m.from_user, m.from_tty or "-", ts, m.body])
     return format_table(READ_SPECS, rows)

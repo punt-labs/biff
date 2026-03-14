@@ -71,6 +71,19 @@ def get_repo_slug(repo_root: Path) -> str | None:
         return None
 
 
+def display_repo_name(name: str) -> str:
+    """Convert a sanitized repo name back to display form.
+
+    Reverses the first ``__`` → ``/`` from :func:`sanitize_repo_name`
+    so ``"punt-labs__biff"`` displays as ``"punt-labs/biff"``.
+    Returns *name* unchanged when no ``__`` is present.
+
+    Note: the round-trip is lossy — a repo name that legitimately
+    contains ``__`` would be misinterpreted as an owner/repo separator.
+    """
+    return name.replace("__", "/", 1) if name else name
+
+
 def sanitize_repo_name(name: str) -> str:
     """Sanitize a repo name or slug for use in NATS resource names.
 

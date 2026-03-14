@@ -29,6 +29,7 @@ from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import (
     TALK_BASE_DESCRIPTION,
     get_talk_partner,
+    get_tty_name,
     refresh_read_messages,
     set_talk_partner,
 )
@@ -178,6 +179,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if message:
             msg = Message(
                 from_user=state.config.user,
+                from_tty=get_tty_name(),
                 to_user=relay_key,
                 body=message[:512],
             )

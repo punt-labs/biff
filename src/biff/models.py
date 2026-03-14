@@ -52,6 +52,7 @@ class Message(BaseModel):
 
     id: uuid.UUID = Field(default_factory=_new_id)
     from_user: str = Field(min_length=1)
+    from_tty: str = Field(default="", description="Sender's human-readable tty name")
     to_user: str = Field(min_length=1)
     body: str = Field(min_length=1, max_length=512)
     timestamp: datetime = Field(default_factory=_utc_now)

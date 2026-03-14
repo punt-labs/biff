@@ -167,12 +167,16 @@ def _parse_tool_response(raw: object) -> dict[str, object]:
 # ── Handlers (pure functions, testable without I/O) ──────────────────
 
 
-def _pre_tool_use_deny(reason: str) -> dict[str, object]:
-    """Build PreToolUse hook output that denies the tool call."""
+def _pre_tool_use_ask(reason: str) -> dict[str, object]:
+    """Build PreToolUse hook output that warns but does not block.
+
+    Uses ``ask`` instead of ``deny`` so agents can proceed after
+    setting their plan rather than halting entirely (biff-nxtb).
+    """
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": "ask",
             "permissionDecisionReason": reason,
         }
     }
@@ -195,25 +199,25 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
 
     if not plan_set and bead_status != "yes":
         if bead_status == "unavailable":
-            return _pre_tool_use_deny(
+            return _pre_tool_use_ask(
                 "Set your plan before editing files. "
                 "Run: /plan <what you're working on>. "
                 "Bead status could not be checked (bd unavailable)."
             )
-        return _pre_tool_use_deny(
+        return _pre_tool_use_ask(
             "Set your plan and claim a bead before editing files. "
             "Run: /plan <what you're working on>, "
             "then: bd update <bead-id> --status=in_progress"
         )
     if not plan_set:
-        return _pre_tool_use_deny(
+        return _pre_tool_use_ask(
             "Set your plan before editing files. Run: /plan <what you're working on>"
         )
     if bead_status == "unavailable":
         # Plan is set but bd is unavailable — allow gracefully.
         return None
     if bead_status == "no":
-        return _pre_tool_use_deny(
+        return _pre_tool_use_ask(
             "Claim a bead before editing files. "
             "Run: bd update <bead-id> --status=in_progress"
         )
@@ -855,7 +859,7 @@ def cc_stop() -> None:
         return
     result = handle_stop()
     if result is not None:
-        _emit(_hook_context("Stop", result))
+        _emit({"decision": "block", "reason": result})
 
 
 @_cc_app.command("pre-compact")
