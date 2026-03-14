@@ -77,9 +77,12 @@ class TestResolveTalkTarget:
             Path("/tmp/test"),
             tty="abc123",
         )
-        relay_key, display = await _resolve_talk_target(state.relay, "eric", None)
+        relay_key, display, target_repo = await _resolve_talk_target(
+            state.relay, "eric", None
+        )
         assert relay_key == "eric"
         assert display == "eric"
+        assert target_repo is None
 
     async def test_literal_tty_resolves(self, tmp_path: Path) -> None:
         """When tty matches a literal session key, uses that key."""
@@ -90,9 +93,12 @@ class TestResolveTalkTarget:
         )
         # Create eric's session with a known tty hex ID
         await state.relay.update_session(UserSession(user="eric", tty="def456"))
-        relay_key, display = await _resolve_talk_target(state.relay, "eric", "def456")
+        relay_key, display, target_repo = await _resolve_talk_target(
+            state.relay, "eric", "def456"
+        )
         assert relay_key == "eric:def456"
         assert display == "eric:def456"
+        assert target_repo is None
 
     async def test_tty_name_resolves_to_hex(self, tmp_path: Path) -> None:
         """Friendly tty_name resolves to the session's actual hex key."""
@@ -105,10 +111,13 @@ class TestResolveTalkTarget:
         await state.relay.update_session(
             UserSession(user="eric", tty="def456", tty_name="laptop")
         )
-        relay_key, display = await _resolve_talk_target(state.relay, "eric", "laptop")
+        relay_key, display, target_repo = await _resolve_talk_target(
+            state.relay, "eric", "laptop"
+        )
         # relay_key should be the hex key, display keeps friendly name
         assert relay_key == "eric:def456"
         assert display == "eric:laptop"
+        assert target_repo is None
 
     async def test_unresolved_tty_falls_back(self, tmp_path: Path) -> None:
         """Unknown tty falls back to raw value (best-effort delivery)."""
@@ -117,9 +126,12 @@ class TestResolveTalkTarget:
             tmp_path,
             tty="abc123",
         )
-        relay_key, display = await _resolve_talk_target(state.relay, "eric", "unknown")
+        relay_key, display, target_repo = await _resolve_talk_target(
+            state.relay, "eric", "unknown"
+        )
         assert relay_key == "eric:unknown"
         assert display == "eric:unknown"
+        assert target_repo is None
 
 
 class TestValidatedSenderKey:

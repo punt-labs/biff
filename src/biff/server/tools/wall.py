@@ -10,6 +10,7 @@ duration-based persistence and explicit clearing.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -23,6 +24,8 @@ from biff.formatting import (
     sanitize_wall_message,
 )
 from biff.models import WallPost
+from biff.nats_relay import NatsRelay
+from biff.relay import Relay
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_wall
 from biff.server.tools._session import update_current_session
@@ -48,23 +51,32 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
     @mcp.tool(name="wall", description=WALL_BASE_DESCRIPTION)
     @auto_enable(state)
-    async def wall(message: str = "", duration: str = "", clear: bool = False) -> str:
+    async def wall(
+        message: str = "", duration: str = "", clear: bool = False, repo: str = ""
+    ) -> str:
         """Post, read, or clear a team broadcast wall.
 
-        Three modes:
+        Four modes:
 
-        - ``wall(message="text")`` — post a wall (default 1h TTL)
-        - ``wall(message="text", duration="2h")`` — post with explicit TTL
-        - ``wall(clear=True)`` — remove the active wall
+        - ``wall(message="text")`` — post to all visible repos (default 1h TTL)
+        - ``wall(message="text", repo="punt-labs__vox")`` — post to one repo
+        - ``wall(clear=True)`` — remove the active wall from all visible repos
         - ``wall()`` — show the current wall
         """
+        # Validate repo against visible_repos (authorization + injection guard)
+        target_repo = _validate_target_repo(repo, state.config.visible_repos)
+        if repo and target_repo is None:
+            return f"Repo {repo!r} is not in your visible repos."
+
         session = await update_current_session(state)
 
         # Clear mode
         if clear:
             await refresh_wall(mcp, state, wall=None)
             fire_and_forget(
-                state.relay.set_wall(None), logger=_log, description="wall clear"
+                _broadcast_wall(state, wall=None, target_repo=target_repo),
+                logger=_log,
+                description="wall clear",
             )
             _update_wall_marker(state, wall=None)
             return "Wall cleared."
@@ -101,12 +113,71 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return str(exc)
         await refresh_wall(mcp, state, wall=post)
         fire_and_forget(
-            state.relay.set_wall(post), logger=_log, description="wall post"
+            _broadcast_wall(state, wall=post, target_repo=target_repo),
+            logger=_log,
+            description="wall post",
         )
         _update_wall_marker(state, wall=post)
 
         remaining = format_remaining(post.expires_at)
         return f"Wall posted ({remaining}): {message}"
+
+
+def _validate_target_repo(repo: str, visible_repos: frozenset[str]) -> str | None:
+    """Validate a repo name against visible_repos.
+
+    Returns the repo name if valid, ``None`` if *repo* is empty (broadcast
+    to all), or ``None`` if the repo is not in visible_repos (caller
+    should check ``repo and result is None`` to distinguish).
+    """
+    if not repo:
+        return None
+    if repo not in visible_repos:
+        return None
+    return repo
+
+
+async def _broadcast_wall(
+    state: ServerState, *, wall: WallPost | None, target_repo: str | None
+) -> None:
+    """Write a wall to one or all visible repos.
+
+    When *target_repo* is set, writes only to that repo.  Otherwise
+    writes to all repos in ``visible_repos`` (DES-030).
+    """
+    await broadcast_wall_to_repos(
+        state.relay, state.config.visible_repos, wall=wall, target_repo=target_repo
+    )
+
+
+async def broadcast_wall_to_repos(
+    relay: Relay,
+    visible_repos: frozenset[str],
+    *,
+    wall: WallPost | None,
+    target_repo: str | None,
+) -> None:
+    """Shared wall broadcast logic for MCP tool and CLI paths.
+
+    Uses ``return_exceptions=True`` so a failure on one repo does not
+    cancel writes to other repos.  Partial failures are logged.
+    """
+    if target_repo is not None:
+        if isinstance(relay, NatsRelay):
+            await relay.set_wall_for_repo(target_repo, wall)
+        else:
+            await relay.set_wall(wall)
+        return
+    # Broadcast to all visible repos
+    if isinstance(relay, NatsRelay):
+        repos = list(visible_repos)
+        tasks = [relay.set_wall_for_repo(r, wall) for r in repos]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for repo, result in zip(repos, results, strict=True):
+            if isinstance(result, BaseException):
+                _log.warning("Wall broadcast failed for repo %s: %s", repo, result)
+    else:
+        await relay.set_wall(wall)
 
 
 def _update_wall_marker(state: ServerState, wall: WallPost | None) -> None:

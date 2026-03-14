@@ -21,7 +21,8 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
         )
     if tty:
         session = await resolve_session(ctx.relay, bare_user, tty)
-        if session is None:
+        visible = ctx.config.visible_repos
+        if session is None or (session.repo and session.repo not in visible):
             return CommandResult(
                 text=f"Login: {bare_user}\nNo session on tty {tty}.",
                 json_data={"error": f"No session on tty {tty}."},
@@ -32,6 +33,8 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
             json_data=session.model_dump(mode="json"),
         )
     sessions = await ctx.relay.get_sessions_for_user(bare_user)
+    visible = ctx.config.visible_repos
+    sessions = [s for s in sessions if not s.repo or s.repo in visible]
     if not sessions:
         return CommandResult(
             text=f"Login: {bare_user}\nNever logged in.",

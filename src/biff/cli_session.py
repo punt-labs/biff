@@ -114,6 +114,7 @@ async def cli_session(
             tty_name=tty_name,
             hostname=get_hostname(),
             pwd=get_pwd(),
+            repo=config.repo_name,
         )
         await relay.update_session(session)
         registered = True
