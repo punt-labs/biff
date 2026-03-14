@@ -1068,8 +1068,8 @@ def _gate_mocks(*, plan: bool, bead: bool | str):
     )
 
 
-def _deny_reason(result: dict[str, object]) -> str:
-    """Extract the deny reason string from a PreToolUse hook response."""
+def _ask_reason(result: dict[str, object]) -> str:
+    """Extract the ask reason string from a PreToolUse hook response."""
     output = cast("dict[str, object]", result["hookSpecificOutput"])
     assert output["permissionDecision"] == "ask"
     return str(output["permissionDecisionReason"])
@@ -1083,7 +1083,7 @@ class TestHandlePreToolUse:
         with m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _deny_reason(result)
+        reason = _ask_reason(result)
         assert "/plan" in reason
         assert "bd update" in reason
 
@@ -1092,7 +1092,7 @@ class TestHandlePreToolUse:
         with m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _deny_reason(result)
+        reason = _ask_reason(result)
         assert "/plan" in reason
         assert "bd update" not in reason
 
@@ -1101,7 +1101,7 @@ class TestHandlePreToolUse:
         with m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _deny_reason(result)
+        reason = _ask_reason(result)
         assert "bd update" in reason
         assert "/plan" not in reason
 
@@ -1116,7 +1116,7 @@ class TestHandlePreToolUse:
         with m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _deny_reason(result)
+        reason = _ask_reason(result)
         assert "unavailable" in reason
         assert "/plan" in reason
 

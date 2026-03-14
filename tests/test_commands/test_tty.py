@@ -37,7 +37,7 @@ class TestTty:
     async def test_name_too_long(self, ctx: CliContext) -> None:
         result = await tty(ctx, "a" * 21)
         assert result.error
-        assert "20 characters" in result.text
+        assert "Invalid tty name" in result.text
 
     async def test_name_collision(self, ctx: CliContext, relay: LocalRelay) -> None:
         # Another session owned by kai with name "dev"

@@ -68,11 +68,11 @@ def _cc_session_end() -> None:
 
 
 def _cc_stop() -> None:
-    from biff.hook import _emit, _hook_context, handle_stop  # noqa: PLC0415
+    from biff.hook import _emit, handle_stop  # noqa: PLC0415
 
     result = handle_stop()
     if result is not None:
-        _emit(_hook_context("Stop", result))
+        _emit({"decision": "block", "reason": result})
 
 
 def _cc_pre_tool_use() -> None:

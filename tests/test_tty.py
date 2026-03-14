@@ -9,6 +9,7 @@ from biff.tty import (
     generate_tty,
     is_notification_for_session,
     parse_address,
+    validate_tty_name,
 )
 
 
@@ -80,3 +81,28 @@ class TestIsNotificationForSession:
     def test_empty_to_key_treated_as_broadcast(self) -> None:
         data = {"from": "kai", "to_key": ""}
         assert is_notification_for_session(data, "eric:tty1")
+
+
+class TestValidateTtyName:
+    """TTY name allowlist prevents terminal escape injection (biff-gvoj)."""
+
+    def test_valid_alphanumeric(self) -> None:
+        assert validate_tty_name("tty1") is None
+
+    def test_valid_with_hyphens_underscores(self) -> None:
+        assert validate_tty_name("my-tty_2") is None
+
+    def test_rejects_ansi_escape(self) -> None:
+        assert validate_tty_name("\033[31mred\033[0m") is not None
+
+    def test_rejects_spaces(self) -> None:
+        assert validate_tty_name("my tty") is not None
+
+    def test_rejects_empty(self) -> None:
+        assert validate_tty_name("") is not None
+
+    def test_rejects_too_long(self) -> None:
+        assert validate_tty_name("a" * 21) is not None
+
+    def test_accepts_max_length(self) -> None:
+        assert validate_tty_name("a" * 20) is None

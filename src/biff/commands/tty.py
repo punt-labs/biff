@@ -5,7 +5,7 @@ from __future__ import annotations
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import UserSession
-from biff.tty import assign_unique_tty_name, get_hostname, get_pwd
+from biff.tty import assign_unique_tty_name, get_hostname, get_pwd, validate_tty_name
 
 
 async def tty(ctx: CliContext, name: str) -> CommandResult:
@@ -17,9 +17,9 @@ async def tty(ctx: CliContext, name: str) -> CommandResult:
 
     sessions = await ctx.relay.get_sessions()
 
-    if len(name) > 20:
-        msg = "Error: name must be 20 characters or fewer."
-        return CommandResult(text=msg, json_data={"error": msg}, error=True)
+    error = validate_tty_name(name)
+    if error:
+        return CommandResult(text=error, json_data={"error": error}, error=True)
 
     for s in sessions:
         if s.user == ctx.user and s.tty != ctx.tty and s.tty_name == name:

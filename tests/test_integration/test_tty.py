@@ -119,7 +119,7 @@ class TestTtyLengthLimit:
         """Names over 20 chars are rejected."""
         result = await kai.call("tty", name="a" * 21)
         assert "Error" in result
-        assert "20" in result
+        assert "Invalid tty name" in result
 
     async def test_accepts_max_length(
         self, kai: RecordingClient, eric: RecordingClient

@@ -20,6 +20,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
+_TTY_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
+
+
+def validate_tty_name(name: str) -> str | None:
+    """Validate a tty name against the safe character allowlist.
+
+    Returns ``None`` on success, or an error message string on failure.
+    TTY names may only contain ASCII alphanumeric characters, hyphens,
+    and underscores (1-20 chars).  This prevents terminal escape
+    injection when tty names are displayed in notifications and
+    ``/read`` output.
+    """
+    if not _TTY_NAME_RE.match(name):
+        return (
+            f"Invalid tty name {name!r}: "
+            "only letters, digits, hyphens, and underscores are allowed."
+        )
+    return None
 
 
 def generate_tty() -> str:
