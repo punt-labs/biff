@@ -91,7 +91,7 @@ async def _resolve_talk_target(
         if session:
             relay_key = build_session_key(session.user, session.tty)
             if session.repo and sender_repo and session.repo != sender_repo:
-                if visible_repos and session.repo not in visible_repos:
+                if session.repo not in visible_repos:
                     msg = (
                         f"Cannot talk to @{user}:{tty} — "
                         f"repo {session.repo!r} is not in your peer list."
@@ -174,6 +174,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         user, tty = parse_address(to)
 
         sessions = await relay.get_sessions_for_user(user)
+        visible = state.config.visible_repos
+        sessions = [s for s in sessions if not s.repo or s.repo in visible]
         if not sessions:
             return f"@{user} is not online."
 

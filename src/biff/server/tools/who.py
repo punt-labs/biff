@@ -40,6 +40,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         sessions = await state.relay.get_sessions()
         visible = state.config.visible_repos
         if repo:
+            if repo not in visible:
+                return f"Repo {repo!r} is not in your visible repos."
             sessions = [s for s in sessions if s.repo == repo]
         else:
             sessions = [s for s in sessions if not s.repo or s.repo in visible]
