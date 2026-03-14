@@ -635,6 +635,8 @@ async def _handle_repl_talk(
         return
 
     sessions = await ctx.relay.get_sessions_for_user(user_target)
+    visible = ctx.config.visible_repos
+    sessions = [s for s in sessions if s.repo in visible]
     if not sessions:
         print(f"{display} is not online.")
         return
@@ -1395,6 +1397,8 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 return
 
             sessions = await ctx.relay.get_sessions_for_user(user_target)
+            visible = ctx.config.visible_repos
+            sessions = [s for s in sessions if s.repo in visible]
             if not sessions:
                 print(f"@{user_target} is not online.")
                 return

@@ -52,7 +52,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         # Bare user: show all sessions from visible repos
         sessions = await state.relay.get_sessions_for_user(bare_user)
         visible = state.config.visible_repos
-        sessions = [s for s in sessions if not s.repo or s.repo in visible]
+        sessions = [s for s in sessions if s.repo in visible]
         if not sessions:
             return f"Login: {bare_user}\nNever logged in."
         return format_finger_multi(sessions)

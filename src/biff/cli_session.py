@@ -132,6 +132,7 @@ async def cli_session(
             hostname=session.hostname,
             pwd=session.pwd,
             timestamp=datetime.now(UTC),
+            repo=config.repo_name,
         )
         try:
             await relay.append_wtmp(login_event)
@@ -172,6 +173,7 @@ async def cli_session(
                 hostname=session.hostname,
                 pwd=session.pwd,
                 timestamp=datetime.now(UTC),
+                repo=config.repo_name,
             )
             try:
                 await relay.append_wtmp(logout_event)

@@ -258,7 +258,9 @@ def extract_biff_fields(
         repos: object = section.get("repos", [])
         if isinstance(repos, list):
             items_p = cast("list[object]", repos)
-            peers = tuple(r for r in items_p if isinstance(r, str))
+            peers = tuple(
+                sanitize_repo_name(r) for r in items_p if isinstance(r, str) and r
+            )
 
     return team, relay_url, relay_auth, peers
 

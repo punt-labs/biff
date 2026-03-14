@@ -44,7 +44,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 return f"Repo {repo!r} is not in your visible repos."
             sessions = [s for s in sessions if s.repo == repo]
         else:
-            sessions = [s for s in sessions if not s.repo or s.repo in visible]
+            sessions = [s for s in sessions if s.repo in visible]
         if not sessions:
             return "No sessions."
         sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)

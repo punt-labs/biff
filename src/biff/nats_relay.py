@@ -436,6 +436,14 @@ class NatsRelay:
         return tty
 
     @staticmethod
+    def _validate_repo(repo: str) -> str:
+        """Reject repo names that could escape NATS subject boundaries."""
+        if not repo or any(c in repo for c in (".", "*", ">", " ")):
+            msg = f"Invalid repo name: {repo!r}"
+            raise ValueError(msg)
+        return repo
+
+    @staticmethod
     def _validated_sender_key(sender_key: str, from_user: str) -> str:
         """Return *sender_key* if well-formed and consistent, else ``""``."""
         if not sender_key:
@@ -454,7 +462,7 @@ class NatsRelay:
         user, tty = session_key.split(":", maxsplit=1)
         self._validate_user(user)
         self._validate_tty(tty)
-        repo = target_repo or self._repo_name
+        repo = self._validate_repo(target_repo) if target_repo else self._repo_name
         prefix = f"{self._stream_prefix}.{repo}.inbox"
         return f"{prefix}.{user}.{tty}"
 
@@ -500,7 +508,7 @@ class NatsRelay:
         (no stream) — messages are dropped if nobody is listening.
         """
         self._validate_user(user)
-        repo = target_repo or self._repo_name
+        repo = self._validate_repo(target_repo) if target_repo else self._repo_name
         return f"{self._stream_prefix}.{repo}.talk.notify.{user}"
 
     async def get_nc(self) -> NatsClient:
@@ -556,7 +564,8 @@ class NatsRelay:
             # Broadcast — single user subject, no session lookup
             self._validate_user(message.to_user)
             if target_repo:
-                prefix = f"{self._stream_prefix}.{target_repo}.inbox"
+                repo = self._validate_repo(target_repo)
+                prefix = f"{self._stream_prefix}.{repo}.inbox"
                 subject = f"{prefix}.{message.to_user}"
             else:
                 subject = self._user_subject(message.to_user)

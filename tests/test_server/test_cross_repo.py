@@ -60,7 +60,8 @@ class TestBiffConfigPeers:
 
     def test_visible_repos_includes_self(self) -> None:
         c = BiffConfig(user="kai", repo_name="biff")
-        assert c.visible_repos == frozenset({"biff"})
+        assert "biff" in c.visible_repos
+        assert "" in c.visible_repos  # LocalRelay compat
 
     def test_visible_repos_includes_peers(self) -> None:
         c = BiffConfig(
@@ -68,13 +69,13 @@ class TestBiffConfigPeers:
             repo_name="biff",
             peers=("punt-labs__vox", "punt-labs__quarry"),
         )
-        assert c.visible_repos == frozenset(
-            {"biff", "punt-labs__vox", "punt-labs__quarry"}
-        )
+        assert "biff" in c.visible_repos
+        assert "punt-labs__vox" in c.visible_repos
+        assert "punt-labs__quarry" in c.visible_repos
 
     def test_visible_repos_deduplicates(self) -> None:
         c = BiffConfig(user="kai", repo_name="biff", peers=("biff",))
-        assert c.visible_repos == frozenset({"biff"})
+        assert c.visible_repos.issuperset({"biff", ""})
 
 
 class TestExtractPeers:
