@@ -170,7 +170,7 @@ async def broadcast_wall_to_repos(
         return
     # Broadcast to all visible repos
     if isinstance(relay, NatsRelay):
-        repos = list(visible_repos)
+        repos = [r for r in visible_repos if r]  # skip empty (LocalRelay compat)
         tasks = [relay.set_wall_for_repo(r, wall) for r in repos]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for repo, result in zip(repos, results, strict=True):
