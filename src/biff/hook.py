@@ -167,17 +167,19 @@ def _parse_tool_response(raw: object) -> dict[str, object]:
 # ── Handlers (pure functions, testable without I/O) ──────────────────
 
 
-def _pre_tool_use_ask(reason: str) -> dict[str, object]:
-    """Build PreToolUse hook output that warns but does not block.
+def _pre_tool_use_suggest(reason: str) -> dict[str, object]:
+    """Build PreToolUse hook output that nudges without prompting.
 
-    Uses ``ask`` instead of ``deny`` so agents can proceed after
-    setting their plan rather than halting entirely (biff-nxtb).
+    Uses ``additionalContext`` instead of ``permissionDecision: ask``
+    so the suggestion reaches the model without triggering a user-facing
+    permission prompt.  ``ask`` was the original choice (biff-nxtb) but
+    it hijacks the permission system and overrides ``acceptEdits`` mode,
+    causing every Edit/Write to prompt the user (punt-kit DES-017).
     """
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
-            "permissionDecisionReason": reason,
+            "additionalContext": reason,
         }
     }
 
@@ -199,25 +201,25 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
 
     if not plan_set and bead_status != "yes":
         if bead_status == "unavailable":
-            return _pre_tool_use_ask(
+            return _pre_tool_use_suggest(
                 "Set your plan before editing files. "
                 "Run: /plan <what you're working on>. "
                 "Bead status could not be checked (bd unavailable)."
             )
-        return _pre_tool_use_ask(
+        return _pre_tool_use_suggest(
             "Set your plan and claim a bead before editing files. "
             "Run: /plan <what you're working on>, "
             "then: bd update <bead-id> --status=in_progress"
         )
     if not plan_set:
-        return _pre_tool_use_ask(
+        return _pre_tool_use_suggest(
             "Set your plan before editing files. Run: /plan <what you're working on>"
         )
     if bead_status == "unavailable":
         # Plan is set but bd is unavailable — allow gracefully.
         return None
     if bead_status == "no":
-        return _pre_tool_use_ask(
+        return _pre_tool_use_suggest(
             "Claim a bead before editing files. "
             "Run: bd update <bead-id> --status=in_progress"
         )

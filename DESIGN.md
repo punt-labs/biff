@@ -3114,3 +3114,81 @@ All blocking questions resolved. Implementation sequence:
 5. `/who` and `/wall` with repo column and cross-repo visibility
 6. Test end-to-end between peered repos
 7. Future: `/dispatch` or equivalent for launching sessions (flavor 4)
+
+---
+
+## DES-031: PreToolUse Gate — `additionalContext` Not `permissionDecision`
+
+**Date:** 2026-03-15
+**Status:** Settled
+**Supersedes:** DES-026 (field name fix remains valid; decision type changed)
+
+### Problem
+
+The PreToolUse Edit/Write gate (plan + bead check) used
+`"permissionDecision": "ask"` to nudge Claude into setting a plan before
+editing files. This caused every Edit and Write call to trigger a user-facing
+permission prompt — identical in appearance to a Claude Code permission prompt —
+even when `acceptEdits` mode was active. The result was 30-40 permission
+approvals per session, making Claude Code unusable for normal development.
+
+The bug was misdiagnosed across 10+ sessions as a Claude Code platform issue
+(punt-kit DES-017 investigation). Root cause was identified via controlled
+testing with a clean repo: disabling biff eliminated the prompts.
+
+### Root Cause
+
+`permissionDecision: "ask"` is part of the **permission system**, not the
+**context system**. It tells Claude Code "ask the user whether to allow this
+tool call" — which produces the same UI as a missing permission rule. The
+`acceptEdits` mode cannot override a hook that explicitly requests `ask`.
+
+The original design intent (biff-nxtb, DES-026) was a soft nudge: "suggest
+setting a plan, but don't block." The implementation used `deny` initially
+(DES-026), then downgraded to `ask` to be less aggressive. Neither achieves
+the design intent — both interact with the permission system rather than the
+context system.
+
+### Fix
+
+Replace `permissionDecision: "ask"` with `additionalContext`:
+
+```python
+# Before (DES-026): hijacks permission system, prompts user
+{"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "Set a plan before editing files."
+}}
+
+# After (DES-031): injects context, no user prompt
+{"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "additionalContext": "Set a plan before editing files."
+}}
+```
+
+`additionalContext` injects the suggestion into Claude's context as a system
+message. Claude sees the nudge and can comply — but the user is never prompted.
+
+### Trade-offs
+
+| Mechanism | User prompt? | Model sees reason? | Blocks tool? |
+|-----------|-------------|-------------------|-------------|
+| `deny` | No (hard block) | Yes (`permissionDecisionReason`) | Yes |
+| `ask` | **Yes** (permission dialog) | Yes (`permissionDecisionReason`) | User decides |
+| `additionalContext` | **No** | Yes | No |
+
+`additionalContext` is the only mechanism that achieves "nudge without blocking
+or prompting." If a hard gate is ever needed (e.g., preventing edits to
+protected files), `deny` is correct. `ask` has no valid use case for
+hook-driven workflow nudges — it should only be used when the user genuinely
+needs to make a per-call security decision.
+
+### Rules
+
+1. Never use `permissionDecision: "ask"` for workflow nudges.
+2. Use `additionalContext` for suggestions that the model should follow but
+   the user should not be interrupted for.
+3. Use `permissionDecision: "deny"` only for hard security gates where the
+   tool must not execute.
