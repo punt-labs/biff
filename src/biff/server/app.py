@@ -516,6 +516,7 @@ async def _lifespan_cleanup(
     tasks: list[asyncio.Task[None]],
     lux_stop: threading.Event,
     lux_thread: threading.Thread | None,
+    lux_session_key: str | None = None,
 ) -> None:
     """Shutdown sequence for the active lifespan.
 
@@ -532,9 +533,10 @@ async def _lifespan_cleanup(
     if state.unread_path is not None:
         with suppress(FileNotFoundError):
             state.unread_path.unlink()
-    session_data_path = BIFF_DATA_DIR / "session-data" / f"{state.session_key}.json"
-    with suppress(FileNotFoundError):
-        session_data_path.unlink()
+    if lux_session_key is not None:
+        sd_path = BIFF_DATA_DIR / "session-data" / f"{lux_session_key}.json"
+        with suppress(FileNotFoundError):
+            sd_path.unlink()
     if state.owns_relay:
         try:
             await state.relay.delete_session(state.session_key)
@@ -620,7 +622,9 @@ async def _active_lifespan(
     await refresh_wall(mcp, state)
 
     # Start lux session dashboard applet (daemon thread, not asyncio).
-    lux_stop, lux_thread = _start_lux_applet(str(find_session_key()))
+    # The lux key is the PID-based session key (same as statusline tee).
+    lux_session_key = str(find_session_key())
+    lux_stop, lux_thread = _start_lux_applet(lux_session_key)
 
     # Reap sentinels FIRST — writes logout events for sessions that
     # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
@@ -645,6 +649,7 @@ async def _active_lifespan(
             [poller, reaper, heartbeat, watcher],
             lux_stop,
             lux_thread,
+            lux_session_key=lux_session_key,
         )
 
 
