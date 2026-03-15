@@ -17,7 +17,6 @@ pytest.importorskip("punt_lux", reason="punt-lux not installed")
 from punt_lux.protocol import ProgressElement, SeparatorElement, TextElement
 
 from biff.integration.lux import (
-    _biff_status_text,
     _context_fraction,
     _cost_text,
     _git_text,
@@ -126,70 +125,92 @@ class TestCostText:
         assert _cost_text({}) == ""
 
 
-class TestBiffStatusText:
-    def test_none(self) -> None:
-        assert _biff_status_text(None) == "not configured"
-
-    def test_enabled_with_unread(self) -> None:
-        result = _biff_status_text(SessionUnread("kai", 3, "tty1"))
-        assert result == "kai:tty1 (3 unread)"
-
-    def test_disabled(self) -> None:
-        unread = SessionUnread("kai", 0, "tty1", biff_enabled=False)
-        result = _biff_status_text(unread)
-        assert result == "kai:tty1 (messaging off)"
-
-    def test_no_tty(self) -> None:
-        result = _biff_status_text(SessionUnread("kai", 0, ""))
-        assert result == "kai (0 unread)"
-
-
 # --- Phase 2: build_status_elements --------------------------------------
 
 
 class TestBuildStatusElements:
-    def test_empty_session_has_biff_status(self) -> None:
+    def test_unconfigured_shows_not_configured(self) -> None:
         elements = build_status_elements({}, None)
         assert len(elements) == 1
         assert isinstance(elements[0], TextElement)
         assert "not configured" in elements[0].content
 
-    def test_full_session(self) -> None:
+    def test_identity_shown(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1")
+        elements = build_status_elements({}, unread)
+        identity = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "identity"
+        )
+        assert identity.content == "kai:tty1"
+
+    def test_identity_no_tty(self) -> None:
+        unread = SessionUnread("kai", 0, "")
+        elements = build_status_elements({}, unread)
+        identity = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "identity"
+        )
+        assert identity.content == "kai"
+
+    def test_message_count_plural(self) -> None:
+        unread = SessionUnread("kai", 3, "tty1")
+        elements = build_status_elements({}, unread)
+        msg = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "msg-status"
+        )
+        assert msg.content == "3 messages"
+
+    def test_message_count_singular(self) -> None:
+        unread = SessionUnread("kai", 1, "tty1")
+        elements = build_status_elements({}, unread)
+        msg = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "msg-status"
+        )
+        assert msg.content == "1 message"
+
+    def test_messaging_off(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1", biff_enabled=False)
+        elements = build_status_elements({}, unread)
+        msg = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "msg-status"
+        )
+        assert msg.content == "messaging off"
+
+    def test_full_session_with_cost(self) -> None:
         session: dict[str, object] = {
-            "workspace": {"project_dir": "/home/kai/biff"},
             "context_window": {"used_percentage": 42},
             "cost": {"total_cost_usd": 1.50},
         }
         unread = SessionUnread("kai", 2, "tty1")
         elements = build_status_elements(session, unread)
 
-        # Check types
         types = [type(e) for e in elements]
-        assert TextElement in types
         assert ProgressElement in types
         assert SeparatorElement in types
 
-        # Verify repo
-        repo_el = next(
-            e for e in elements if isinstance(e, TextElement) and e.id == "repo"
-        )
-        assert "biff" in repo_el.content
-
-        # Verify context
         ctx_el = next(e for e in elements if isinstance(e, ProgressElement))
         assert ctx_el.fraction == 0.42
 
-        # Verify cost
         cost_el = next(
             e for e in elements if isinstance(e, TextElement) and e.id == "cost"
         )
-        assert "$1.50" in cost_el.content
+        assert cost_el.content == "$1.50"
 
-        # Verify biff status
-        biff_el = next(
-            e for e in elements if isinstance(e, TextElement) and e.id == "biff-status"
-        )
-        assert "kai:tty1 (2 unread)" in biff_el.content
+    def test_no_cost_omits_cost_element(self) -> None:
+        session: dict[str, object] = {
+            "context_window": {"used_percentage": 50},
+        }
+        unread = SessionUnread("kai", 0, "tty1")
+        elements = build_status_elements(session, unread)
+        cost_els = [
+            e for e in elements if isinstance(e, TextElement) and e.id == "cost"
+        ]
+        assert len(cost_els) == 0
+
+    def test_no_context_no_cost_no_separator(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1")
+        elements = build_status_elements({}, unread)
+        separators = [e for e in elements if isinstance(e, SeparatorElement)]
+        assert len(separators) == 0
 
     def test_display_items_rendered(self) -> None:
         unread = SessionUnread(
@@ -202,7 +223,6 @@ class TestBuildStatusElements:
             ),
         )
         elements = build_status_elements({}, unread)
-
         display_els = [
             e
             for e in elements
@@ -229,7 +249,6 @@ class TestBuildStatusElements:
 
     def test_all_ids_unique(self) -> None:
         session: dict[str, object] = {
-            "workspace": {"project_dir": "/x/repo"},
             "context_window": {"used_percentage": 50},
             "cost": {"total_cost_usd": 2.0},
         }

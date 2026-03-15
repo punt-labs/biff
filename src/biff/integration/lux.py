@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from biff._stdlib import is_lux_enabled
+from biff._stdlib import BIFF_DATA_DIR, is_lux_enabled
 from biff.unread import SessionUnread, as_str_dict, read_session_unread
 
 if TYPE_CHECKING:
@@ -31,14 +31,15 @@ logger = logging.getLogger(__name__)
 
 # ── Well-known paths ─────────────────────────────────────────────────
 
-SESSION_DATA_DIR = Path.home() / ".biff" / "session-data"
-UNREAD_DIR = Path.home() / ".biff" / "unread"
+SESSION_DATA_DIR = BIFF_DATA_DIR / "session-data"
+UNREAD_DIR = BIFF_DATA_DIR / "unread"
 
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07?|[()][A-B012])")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 SCENE_ID = "biff-session-status"
 FRAME_ID = "biff-session"
+FRAME_TITLE = "Session Status"
 FRAME_SIZE = (360, 280)
 
 
@@ -46,7 +47,7 @@ FRAME_SIZE = (360, 280)
 
 
 def load_session_data(session_key: str) -> dict[str, object]:
-    """Read ``~/.biff/session-data/{key}.json``, return ``{}`` on error."""
+    """Read ``~/.punt-labs/biff/session-data/{key}.json``, return ``{}`` on error."""
     path = SESSION_DATA_DIR / f"{session_key}.json"
     try:
         return as_str_dict(json.loads(path.read_text()))
@@ -101,25 +102,15 @@ def _cost_text(session: dict[str, object]) -> str:
     return ""
 
 
-def _biff_status_text(unread: SessionUnread | None) -> str:
-    """Build biff status string for the dashboard."""
-    if unread is None:
-        return "not configured"
-    name = unread.user or "biff"
-    tty = f":{unread.tty_name}" if unread.tty_name else ""
-    if not unread.biff_enabled:
-        return f"{name}{tty} (messaging off)"
-    return f"{name}{tty} ({unread.count} unread)"
-
-
 def build_status_elements(
     session: dict[str, object],
     unread: SessionUnread | None,
 ) -> list[Element]:
     """Build lux element tree for the session status dashboard.
 
-    Returns a list of typed punt-lux elements (TextElement,
-    ProgressElement, SeparatorElement).
+    The hero section is the biff identity and message state.
+    Context bar and cost are secondary — cost is omitted when
+    unavailable (Max plan users, no API key).
     """
     from punt_lux.protocol import (  # noqa: PLC0415
         ProgressElement,
@@ -129,33 +120,25 @@ def build_status_elements(
 
     elements: list[Element] = []
 
-    # Repo name
-    repo = _git_text(session)
-    if repo:
-        elements.append(TextElement(id="repo", content=f"Repo: {repo}"))
+    # ── Hero: biff identity and messaging ──
+    if unread is None:
+        elements.append(TextElement(id="identity", content="not configured"))
+    else:
+        name = unread.user or "biff"
+        tty = f":{unread.tty_name}" if unread.tty_name else ""
+        elements.append(TextElement(id="identity", content=f"{name}{tty}"))
+        if not unread.biff_enabled:
+            elements.append(TextElement(id="msg-status", content="messaging off"))
+        else:
+            label = "message" if unread.count == 1 else "messages"
+            elements.append(
+                TextElement(
+                    id="msg-status",
+                    content=f"{unread.count} {label}",
+                )
+            )
 
-    # Context window progress
-    frac = _context_fraction(session)
-    if frac is not None:
-        pct = int(frac * 100)
-        elements.append(TextElement(id="ctx-label", content=f"Context: {pct}%"))
-        elements.append(ProgressElement(id="ctx-bar", fraction=frac))
-
-    # Session cost
-    cost = _cost_text(session)
-    if cost:
-        elements.append(TextElement(id="cost", content=f"Cost: {cost}"))
-
-    # Separator before biff status
-    if elements:
-        elements.append(SeparatorElement())
-
-    # Biff status
-    biff = _biff_status_text(unread)
-    elements.append(TextElement(id="biff-status", content=f"Biff: {biff}"))
-
-    # Display items (wall/talk messages) — sanitize user-supplied text
-    if unread and unread.display_items:
+        # Wall/talk display items — sanitize user-supplied text
         for i, item in enumerate(unread.display_items):
             clean = _sanitize(item.text)
             if clean:
@@ -166,6 +149,18 @@ def build_status_elements(
                         content=f"[{prefix}] {clean}",
                     )
                 )
+
+    # ── Secondary: context and cost ──
+    frac = _context_fraction(session)
+    cost = _cost_text(session)
+    if frac is not None or cost:
+        elements.append(SeparatorElement())
+
+    if frac is not None:
+        elements.append(ProgressElement(id="ctx-bar", fraction=frac))
+
+    if cost:
+        elements.append(TextElement(id="cost", content=cost))
 
     return elements
 
@@ -179,11 +174,16 @@ def render_session_status(client: LuxClient, session_key: str) -> None:
     unread_path = UNREAD_DIR / f"{session_key}.json"
     unread = read_session_unread(unread_path)
     elements = build_status_elements(session, unread)
+
+    repo = _git_text(session)
+    title = f"Biff: {repo}" if repo else "Biff"
+
     if elements:
         client.show_async(
             SCENE_ID,
             elements,
             frame_id=FRAME_ID,
+            frame_title=title,
             frame_size=FRAME_SIZE,
         )
 
