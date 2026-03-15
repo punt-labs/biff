@@ -188,7 +188,7 @@ propagation (punt-kit install-all.sh, marketplace catalog, website), and verific
 - [ ] **Quality gates pass** — ruff, mypy, pyright, tier 1-2 tests
 - [ ] **Hosted NATS tests pass locally** if relay code changed
 
-```
+```text
 /punt:auto release [version=X.Y.Z]
 ```
 
