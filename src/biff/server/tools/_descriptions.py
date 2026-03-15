@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
+from biff.tty import is_notification_for_session
 
 
 class _Sentinel:
@@ -391,6 +392,10 @@ async def _manage_talk_subscription(
                 # Reject self-echo: if the notification came from
                 # this session, ignore it (same user, different tty).
                 if from_key and from_key == state.session_key:
+                    return
+
+                # Reject targeted notifications not for this session.
+                if not is_notification_for_session(data, state.session_key):
                     return
 
                 # _talk_partner may be "user:tty" but notification

@@ -38,6 +38,7 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
 
     msg = Message(
         from_user=ctx.user,
+        from_tty=ctx.tty_name,
         to_user=relay_key,
         body=message[:512],
     )

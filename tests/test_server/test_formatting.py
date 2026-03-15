@@ -13,6 +13,8 @@ from biff._formatting import (
     last_component,
     visible_width,
 )
+from biff.formatting import format_read
+from biff.models import Message
 
 
 class TestFormatIdle:
@@ -231,3 +233,20 @@ class TestFormatTable:
         result = format_table(specs, rows)
         for line in result.splitlines():
             assert len(line) <= 80, f"Line exceeds 80 chars: {line!r}"
+
+
+class TestFormatReadFromTty:
+    """format_read shows FROM_TTY column (biff-xk76)."""
+
+    def test_from_tty_in_header(self) -> None:
+        msgs = [Message(from_user="kai", to_user="eric", body="hey", from_tty="tty1")]
+        output = format_read(msgs)
+        assert "FROM_TTY" in output
+        assert "tty1" in output
+
+    def test_empty_from_tty_shows_dash(self) -> None:
+        msgs = [Message(from_user="kai", to_user="eric", body="hey", from_tty="")]
+        output = format_read(msgs)
+        lines = output.strip().split("\n")
+        # Data row should contain "-" for the empty tty
+        assert any("-" in line and "kai" in line for line in lines[1:])

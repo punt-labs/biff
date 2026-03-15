@@ -20,6 +20,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
+_TTY_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
+
+
+def validate_tty_name(name: str) -> str | None:
+    """Validate a tty name against the safe character allowlist.
+
+    Returns ``None`` on success, or an error message string on failure.
+    TTY names may only contain ASCII alphanumeric characters, hyphens,
+    and underscores (1-20 chars).  This prevents terminal escape
+    injection when tty names are displayed in notifications and
+    ``/read`` output.
+    """
+    if not _TTY_NAME_RE.match(name):
+        return (
+            f"Invalid tty name {name!r}: "
+            "only letters, digits, hyphens, and underscores are allowed."
+        )
+    return None
 
 
 def generate_tty() -> str:
@@ -40,6 +58,17 @@ def get_pwd() -> str:
 def build_session_key(user: str, tty: str) -> str:
     """Build a session key from user and tty: ``{user}:{tty}``."""
     return f"{user}:{tty}"
+
+
+def is_notification_for_session(data: dict[str, str], session_key: str) -> bool:
+    """Check whether a talk notification should be accepted by this session.
+
+    Targeted notifications (``to_key`` present) are accepted only when
+    the key matches *session_key*.  Broadcast notifications (no
+    ``to_key``) are always accepted.
+    """
+    to_key = data.get("to_key", "")
+    return not to_key or to_key == session_key
 
 
 def next_tty_name(existing_names: list[str]) -> str:

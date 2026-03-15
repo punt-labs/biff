@@ -56,6 +56,7 @@ from biff.config import (
 from biff.hook import hook_app
 from biff.server.app import create_server
 from biff.server.state import create_state
+from biff.tty import is_notification_for_session
 
 # ---------------------------------------------------------------------------
 # Global flags
@@ -195,6 +196,9 @@ def _drain_talk_notifications(
         # Skip self-echo.
         if data.get("from_key", "") == session_key:
             continue
+        # Skip targeted notifications not for this session.
+        if not is_notification_for_session(data, session_key):
+            continue
         msg_type = data.get("type", "message")
         sender = data.get("from", "?")
         body = data.get("body", "")
@@ -283,6 +287,8 @@ def _drain_talk_messages(
         except asyncio.QueueEmpty:
             break
         if data.get("from_key", "") == session_key:
+            continue
+        if not is_notification_for_session(data, session_key):
             continue
         msg_type = data.get("type", "message")
         if msg_type in ("invite", "accept"):
@@ -752,6 +758,9 @@ async def _setup_nats_subscription(
                         str(k): str(v)  # pyright: ignore[reportUnknownArgumentType]
                         for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
                     }
+                    # Filter targeted notifications not for this session.
+                    if not is_notification_for_session(notification, ctx.session_key):
+                        return
                     await talk_notifications.put(notification)
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -1378,6 +1387,7 @@ async def _talk_loop(
     target: str,
     *,
     target_repo: str | None = None,
+    tty_name: str = "",
 ) -> None:
     """Run the talk conversation loop with notification-driven message display."""
     from biff.models import Message
@@ -1414,7 +1424,12 @@ async def _talk_loop(
                 break  # EOF (None) or unexpected type
             line = result.strip()
             if line:
-                msg = Message(from_user=user, to_user=target, body=line[:512])
+                msg = Message(
+                    from_user=user,
+                    from_tty=tty_name,
+                    to_user=target,
+                    body=line[:512],
+                )
                 await relay.deliver(
                     msg, sender_key=session_key, target_repo=target_repo
                 )
@@ -1463,7 +1478,12 @@ async def _talk_interactive(to: str, opening: str) -> None:
 
             if opening:
                 body = opening[:512]
-                msg = Message(from_user=ctx.user, to_user=target, body=body)
+                msg = Message(
+                    from_user=ctx.user,
+                    from_tty=ctx.tty_name,
+                    to_user=target,
+                    body=body,
+                )
                 await ctx.relay.deliver(
                     msg, sender_key=ctx.session_key, target_repo=target_repo
                 )
@@ -1482,6 +1502,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 ctx.user,
                 target,
                 target_repo=target_repo,
+                tty_name=ctx.tty_name,
             )
     except KeyboardInterrupt:
         print("\nTalk session ended.")

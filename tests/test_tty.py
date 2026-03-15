@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from biff.tty import build_session_key, generate_tty, parse_address
+from biff.tty import (
+    build_session_key,
+    generate_tty,
+    is_notification_for_session,
+    parse_address,
+    validate_tty_name,
+)
 
 
 class TestGenerateTTY:
@@ -55,3 +61,48 @@ class TestParseAddress:
     def test_multiple_colons_keeps_rest_in_tty(self) -> None:
         """Colons after the first are part of the TTY — rejected by relay validation."""
         assert parse_address("kai:tty1:extra") == ("kai", "tty1:extra")
+
+
+class TestIsNotificationForSession:
+    """to_key filtering for targeted vs broadcast notifications (biff-gvoj)."""
+
+    def test_broadcast_accepted(self) -> None:
+        """No to_key means broadcast — accepted by all sessions."""
+        assert is_notification_for_session({"from": "kai"}, "eric:tty1")
+
+    def test_matching_to_key_accepted(self) -> None:
+        data = {"from": "kai", "to_key": "eric:tty1"}
+        assert is_notification_for_session(data, "eric:tty1")
+
+    def test_non_matching_to_key_rejected(self) -> None:
+        data = {"from": "kai", "to_key": "eric:tty2"}
+        assert not is_notification_for_session(data, "eric:tty1")
+
+    def test_empty_to_key_treated_as_broadcast(self) -> None:
+        data = {"from": "kai", "to_key": ""}
+        assert is_notification_for_session(data, "eric:tty1")
+
+
+class TestValidateTtyName:
+    """TTY name allowlist prevents terminal escape injection (biff-gvoj)."""
+
+    def test_valid_alphanumeric(self) -> None:
+        assert validate_tty_name("tty1") is None
+
+    def test_valid_with_hyphens_underscores(self) -> None:
+        assert validate_tty_name("my-tty_2") is None
+
+    def test_rejects_ansi_escape(self) -> None:
+        assert validate_tty_name("\033[31mred\033[0m") is not None
+
+    def test_rejects_spaces(self) -> None:
+        assert validate_tty_name("my tty") is not None
+
+    def test_rejects_empty(self) -> None:
+        assert validate_tty_name("") is not None
+
+    def test_rejects_too_long(self) -> None:
+        assert validate_tty_name("a" * 21) is not None
+
+    def test_accepts_max_length(self) -> None:
+        assert validate_tty_name("a" * 20) is None

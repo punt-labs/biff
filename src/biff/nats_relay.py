@@ -590,6 +590,7 @@ class NatsRelay:
         """
         if self._nc is None or self._nc.is_closed:
             return
+        original_to = to_user
         user = to_user.split(":")[0] if ":" in to_user else to_user
         try:
             subject = self.talk_notify_subject(user, target_repo=target_repo)
@@ -600,6 +601,12 @@ class NatsRelay:
                 }
                 if sender_key:
                     data["from_key"] = sender_key
+                if message.from_tty:
+                    data["from_tty"] = message.from_tty
+                # Only set to_key for tty-targeted messages (user:tty);
+                # omitting it signals broadcast to all user sessions.
+                if ":" in original_to:
+                    data["to_key"] = original_to
                 payload = json.dumps(data).encode()
             else:
                 payload = b"1"

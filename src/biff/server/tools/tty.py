@@ -11,14 +11,12 @@ from typing import TYPE_CHECKING
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages, set_tty_name
 from biff.server.tools._session import update_current_session
-from biff.tty import assign_unique_tty_name
+from biff.tty import assign_unique_tty_name, validate_tty_name
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-
-_MAX_TTY_NAME = 20
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -48,8 +46,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         sessions = await state.relay.get_sessions()
 
-        if len(name) > _MAX_TTY_NAME:
-            return f"Error: name must be {_MAX_TTY_NAME} characters or fewer."
+        error = validate_tty_name(name)
+        if error:
+            return f"Error: {error}"
 
         # Reject duplicate names for the same user
         for s in sessions:

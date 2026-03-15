@@ -20,6 +20,7 @@ Talk is NATS-only.  LocalRelay and DormantRelay return an error message.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,7 @@ from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import (
     TALK_BASE_DESCRIPTION,
     get_talk_partner,
+    get_tty_name,
     refresh_read_messages,
     set_talk_partner,
 )
@@ -113,6 +115,17 @@ async def _do_talk_listen(
     event = asyncio.Event()
 
     async def _on_notify(_msg: object) -> None:
+        # Filter targeted notifications not for this session.
+        data = getattr(_msg, "data", b"")
+        if data and data != b"1":
+            try:
+                raw: object = json.loads(data)
+                if isinstance(raw, dict):
+                    to_key = str(raw.get("to_key", ""))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                    if to_key and to_key != session_key:
+                        return
+            except (json.JSONDecodeError, TypeError):
+                pass
         event.set()
 
     sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
@@ -178,6 +191,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if message:
             msg = Message(
                 from_user=state.config.user,
+                from_tty=get_tty_name(),
                 to_user=relay_key,
                 body=message[:512],
             )

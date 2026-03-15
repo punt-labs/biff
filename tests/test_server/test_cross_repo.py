@@ -12,11 +12,49 @@ from pathlib import Path
 
 import pytest
 
+from biff._stdlib import display_repo_name
 from biff.config import build_biff_toml, extract_biff_fields
 from biff.formatting import LAST_SPECS, WHO_SPECS, format_last, format_who
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.server.state import create_state
 from biff.server.tools._session import get_or_create_session
+
+
+class TestDisplayRepoName:
+    """display_repo_name converts sanitized names back to owner/repo (biff-7e03)."""
+
+    def test_owner_repo(self) -> None:
+        assert display_repo_name("punt-labs__biff") == "punt-labs/biff"
+
+    def test_no_double_underscore(self) -> None:
+        assert display_repo_name("myrepo") == "myrepo"
+
+    def test_empty_string(self) -> None:
+        assert display_repo_name("") == ""
+
+    def test_only_first_double_underscore(self) -> None:
+        assert display_repo_name("a__b__c") == "a/b__c"
+
+
+class TestWhoDisplaysSlash:
+    """format_who shows owner/repo, not owner__repo (biff-7e03)."""
+
+    def test_who_shows_slash_repo(self) -> None:
+        sessions = [
+            UserSession(user="kai", tty="abc123", repo="punt-labs__biff"),
+        ]
+        output = format_who(sessions)
+        assert "punt-labs/biff" in output
+        assert "punt-labs__biff" not in output
+
+    def test_last_shows_slash_repo(self) -> None:
+        login = SessionEvent(
+            session_key="kai:abc", event="login", user="kai", repo="punt-labs__biff"
+        )
+        pairs: list[tuple[SessionEvent, SessionEvent | None]] = [(login, None)]
+        output = format_last(pairs, {"kai:abc"})
+        assert "punt-labs/biff" in output
+        assert "punt-labs__biff" not in output
 
 
 class TestUserSessionRepo:
