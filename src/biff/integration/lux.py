@@ -114,12 +114,14 @@ def _cost_text(session: dict[str, object]) -> str:
 def build_status_elements(
     session: dict[str, object],
     unread: SessionUnread | None,
+    *,
+    active_count: int = 0,
 ) -> list[Element]:
     """Build lux element tree for the session status dashboard.
 
-    The hero section is the biff identity and message state.
-    Context bar and cost are secondary — cost is omitted when
-    unavailable (Max plan users, no API key).
+    Pure function — all data is passed in, no I/O.  The hero section
+    is the biff identity and message state.  Context bar and cost are
+    secondary — cost is omitted when unavailable.
     """
     from punt_lux.protocol import (  # noqa: PLC0415
         ProgressElement,
@@ -147,8 +149,8 @@ def build_status_elements(
                 )
             )
 
-        # Presence count from active session files
-        others = _active_session_count() - 1  # exclude self
+        # Presence count (caller provides total active sessions)
+        others = active_count - 1  # exclude self
         if others > 0:
             label = "other" if others == 1 else "others"
             elements.append(
@@ -190,7 +192,9 @@ def render_session_status(client: LuxClient, session_key: str) -> None:
     session = load_session_data(session_key)
     unread_path = UNREAD_DIR / f"{session_key}.json"
     unread = read_session_unread(unread_path)
-    elements = build_status_elements(session, unread)
+    elements = build_status_elements(
+        session, unread, active_count=_active_session_count()
+    )
 
     repo = _git_text(session)
     title = f"Biff: {repo}" if repo else "Biff"

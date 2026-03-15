@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from fastmcp import FastMCP
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
-from biff._stdlib import active_dir, remove_active_session, sentinel_dir
+from biff._stdlib import BIFF_DATA_DIR, active_dir, remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
 from biff.session_key import find_session_key
 
@@ -532,6 +532,9 @@ async def _lifespan_cleanup(
     if state.unread_path is not None:
         with suppress(FileNotFoundError):
             state.unread_path.unlink()
+    session_data_path = BIFF_DATA_DIR / "session-data" / f"{state.session_key}.json"
+    with suppress(FileNotFoundError):
+        session_data_path.unlink()
     if state.owns_relay:
         try:
             await state.relay.delete_session(state.session_key)
@@ -553,9 +556,11 @@ def _start_lux_applet(
     stop = threading.Event()
     try:
         from biff.integration.lux import start_session_applet  # noqa: PLC0415
-    except ImportError:
+
+        thread = start_session_applet(session_key, stop)
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to start lux applet", exc_info=True)
         return stop, None
-    thread = start_session_applet(session_key, stop)
     return stop, thread
 
 

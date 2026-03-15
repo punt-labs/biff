@@ -177,14 +177,15 @@ def expand_bead_id(message: str) -> str:
 
 # ── Data directory ──────────────────────────────────────────────────
 
-BIFF_DATA_DIR = Path.home() / ".punt-labs" / "biff"
-
-# ── Session lifecycle helpers ────────────────────────────────────────
-
 
 def biff_data_dir() -> Path:
     """Root data directory: ``~/.punt-labs/biff/``."""
     return Path.home() / ".punt-labs" / "biff"
+
+
+BIFF_DATA_DIR = biff_data_dir()
+
+# ── Session lifecycle helpers ────────────────────────────────────────
 
 
 def active_dir() -> Path:

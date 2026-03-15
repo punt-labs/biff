@@ -270,8 +270,7 @@ class TestBuildStatusElements:
 
     def test_presence_shown_when_others_online(self) -> None:
         unread = SessionUnread("kai", 0, "tty1")
-        with patch("biff.integration.lux._active_session_count", return_value=3):
-            elements = build_status_elements({}, unread)
+        elements = build_status_elements({}, unread, active_count=3)
         presence = next(
             e for e in elements if isinstance(e, TextElement) and e.id == "presence"
         )
@@ -279,8 +278,7 @@ class TestBuildStatusElements:
 
     def test_presence_singular(self) -> None:
         unread = SessionUnread("kai", 0, "tty1")
-        with patch("biff.integration.lux._active_session_count", return_value=2):
-            elements = build_status_elements({}, unread)
+        elements = build_status_elements({}, unread, active_count=2)
         presence = next(
             e for e in elements if isinstance(e, TextElement) and e.id == "presence"
         )
@@ -288,8 +286,7 @@ class TestBuildStatusElements:
 
     def test_presence_hidden_when_alone(self) -> None:
         unread = SessionUnread("kai", 0, "tty1")
-        with patch("biff.integration.lux._active_session_count", return_value=1):
-            elements = build_status_elements({}, unread)
+        elements = build_status_elements({}, unread, active_count=1)
         presence_els = [
             e for e in elements if isinstance(e, TextElement) and e.id == "presence"
         ]
