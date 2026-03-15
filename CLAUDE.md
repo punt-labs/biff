@@ -177,46 +177,25 @@ PyPI serves `uv tool install punt-biff`. This ships the Python runtime (MCP serv
 
 #### Release Process
 
-Both channels release from a single workflow. The git tag triggers `.github/workflows/release.yml` which handles build → TestPyPI → test-install → PyPI automatically.
+Both channels release from a single workflow. Run `punt release` from the repo root —
+it handles all 11 phases automatically: preflight, version bump, build, release PR,
+tag, CI wait, GitHub release, PyPI verify, post-release (README SHA bump), cross-repo
+propagation (punt-kit install-all.sh, marketplace catalog, website), and verification.
 
 **Bar:**
 
 - [ ] **Quality gates pass** — ruff, mypy, pyright, tier 1-2 tests
 - [ ] **Hosted NATS tests pass locally** if relay code changed
 
-**Process:**
-
 ```bash
-# 1. Version already bumped in PR (pyproject.toml + plugin.json + uv lock)
-# 2. CHANGELOG updated with release section
-# 3. PR merged to main
-
-# 4. Prepare plugin for release (swap biff-dev → biff, remove dev commands)
-git checkout main && git pull origin main
-scripts/release-plugin.sh
-
-# 5. Tag the release-prep commit and push (triggers release.yml → TestPyPI → PyPI)
-git tag vX.Y.Z
-git push origin vX.Y.Z
-
-# 6. Restore dev state on main (biff → biff-dev, restore dev commands)
-scripts/restore-dev-plugin.sh
-git push origin main
-
-# 7. Create GitHub Release
-gh release create vX.Y.Z --title "vX.Y.Z" --notes "See CHANGELOG.md"
-
-# 8. Update marketplace registry (punt-labs/claude-plugins)
-# The UI discovery reads from this file, NOT from individual repo plugin.json
-# Update version in .claude-plugin/marketplace.json, commit, push
-
-# 9. Verify both channels
-claude plugin update biff@punt-labs     # Plugin → new version
-uv tool install --upgrade punt-biff     # CLI → new version
-biff doctor                             # Both match
+punt release <version>        # Full release
+punt release --dry-run        # Preview without changes
+punt release --resume-from ci # Resume from a specific phase
 ```
 
-**NEVER manually run `twine upload`.** The release workflow handles PyPI publication with TestPyPI verification. Manual upload bypasses that safety net.
+See [release-process.md](https://github.com/punt-labs/punt-kit/blob/main/standards/release-process.md) for
+the full 11-phase specification. PyPI publishing is owned by the
+tag-triggered `release.yml` workflow — never upload manually.
 
 **Specialized agents for release validation:**
 
