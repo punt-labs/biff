@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 SESSION_DATA_DIR = Path.home() / ".biff" / "session-data"
 UNREAD_DIR = Path.home() / ".biff" / "unread"
 
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07?|[()][A-B012])")
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
 SCENE_ID = "biff-session-status"
 FRAME_ID = "biff-session"
 FRAME_SIZE = (360, 280)
@@ -48,6 +52,13 @@ def load_session_data(session_key: str) -> dict[str, object]:
         return as_str_dict(json.loads(path.read_text()))
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
+
+
+def _sanitize(text: str) -> str:
+    """Strip ANSI escapes and control characters from user-supplied text."""
+    text = _ANSI_RE.sub("", text)
+    text = _CTRL_RE.sub("", text)
+    return " ".join(text.split())
 
 
 # ── Element builders (pure functions) ────────────────────────────────
@@ -143,15 +154,16 @@ def build_status_elements(
     biff = _biff_status_text(unread)
     elements.append(TextElement(id="biff-status", content=f"Biff: {biff}"))
 
-    # Display items (wall/talk messages)
+    # Display items (wall/talk messages) — sanitize user-supplied text
     if unread and unread.display_items:
         for i, item in enumerate(unread.display_items):
-            if item.text:
+            clean = _sanitize(item.text)
+            if clean:
                 prefix = "wall" if item.kind == "wall" else "talk"
                 elements.append(
                     TextElement(
                         id=f"display-{i}",
-                        content=f"[{prefix}] {item.text}",
+                        content=f"[{prefix}] {clean}",
                     )
                 )
 

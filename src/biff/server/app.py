@@ -20,6 +20,7 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from biff._stdlib import active_dir, remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
+from biff.session_key import find_session_key
 
 if TYPE_CHECKING:
     from mcp.types import InitializeRequest, InitializeResult
@@ -613,7 +614,7 @@ async def _active_lifespan(
     await refresh_wall(mcp, state)
 
     # Start lux session dashboard applet (daemon thread, not asyncio).
-    lux_stop, lux_thread = _start_lux_applet(state.session_key)
+    lux_stop, lux_thread = _start_lux_applet(str(find_session_key()))
 
     # Reap sentinels FIRST — writes logout events for sessions that
     # received SIGTERM/SIGINT (the signal handler wrote a sentinel).

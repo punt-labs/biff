@@ -12,18 +12,19 @@ from unittest.mock import patch
 
 import pytest
 
-punt_lux = pytest.importorskip("punt_lux", reason="punt-lux not installed")
-from punt_lux.protocol import ProgressElement, SeparatorElement, TextElement  # noqa: E402, I001
+pytest.importorskip("punt_lux", reason="punt-lux not installed")
 
-from biff.integration.lux import (  # noqa: E402
+from punt_lux.protocol import ProgressElement, SeparatorElement, TextElement
+
+from biff.integration.lux import (
     _biff_status_text,
     _context_fraction,
     _cost_text,
     _git_text,
     build_status_elements,
 )
-from biff.statusline import _tee_session_data  # noqa: E402
-from biff.unread import DisplayItemView, SessionUnread  # noqa: E402
+from biff.statusline import _tee_session_data
+from biff.unread import DisplayItemView, SessionUnread
 
 # --- Phase 1: _tee_session_data -------------------------------------------
 
