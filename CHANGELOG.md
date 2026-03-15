@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Lux session status dashboard** — live dashboard showing repo, context window %, cost, and biff messaging status in the lux display surface. Statusline tees raw session JSON to `~/.biff/session-data/` for the applet to read. (DES-032)
+- **Lux session status dashboard** — live dashboard showing repo, context window %, cost, and biff messaging status in the lux display surface. Statusline tees raw session JSON to `~/.punt-labs/biff/session-data/` for the applet to read. (DES-032)
 - **`src/biff/unread.py`** — shared `SessionUnread`, `DisplayItemView`, and reader functions extracted from `statusline.py` for reuse by the lux applet.
 - **`is_lux_enabled()` in `_stdlib.py`** — stdlib-only lux config check, extracted from `hook.py`.
 - **`[lux]` optional dependency** — `punt-lux>=0.14.0` for typed element construction.
@@ -185,7 +185,7 @@
   the ephemeral 5-minute TTL session hack. All CLI modes (REPL, inline, talk)
   share one `cli_session()` context manager. (#biff-vrk)
 - **REPL readline** — line editing (arrow keys, Home/End, Ctrl-A/E), command
-  history persisted to `~/.biff/repl_history`, and tab completion for command
+  history persisted to `~/.punt-labs/biff/repl_history`, and tab completion for command
   names. Detects libedit (macOS) vs GNU readline for correct binding syntax.
   (#biff-x6s)
 - **REPL inline notifications** — real-time NATS-driven message alerts and wall
@@ -590,12 +590,12 @@
   with a `/read` reminder. Branch-inferred plans use `source="auto"` so
   git hooks can later overwrite them. (#biff-6we)
 - **SessionEnd cleanup** — on session end, converts active session markers
-  (`~/.biff/active/`) to sentinel files for the existing reaper. MCP server
+  (`~/.punt-labs/biff/active/`) to sentinel files for the existing reaper. MCP server
   writes active markers on startup; the hook converts them to sentinels before
   potential SIGKILL, ensuring session presence is cleaned up even on abrupt
   termination. (#biff-w5c)
 - **Git post-checkout hook** — on branch switch, writes a plan hint file
-  (`~/.biff/plan-hint`) with the expanded branch name (including bead ID
+  (`~/.punt-labs/biff/plan-hint`) with the expanded branch name (including bead ID
   resolution). The PostToolUse Bash handler picks up the hint and nudges
   Claude to set the plan with `source="auto"`. Switching to main/master
   clears the plan. (#biff-ka4)
@@ -603,7 +603,7 @@
   `✓ <subject>` so teammates see commit progress in `/finger` and `/who`.
   Uses the same plan hint file mechanism as post-checkout. (#biff-crz)
 - **Git pre-push hook** — when pushing to main/master, writes a wall hint
-  file (`~/.biff/wall-hint`). The PostToolUse Bash handler picks up the
+  file (`~/.punt-labs/biff/wall-hint`). The PostToolUse Bash handler picks up the
   hint and suggests `/wall <summary>`. Silent for feature branch pushes.
   (#biff-9e7)
 - **Git hook deployment** — `biff enable` deploys post-checkout, post-commit,
@@ -631,7 +631,7 @@
   (`\b`), preventing common branch names like `my-feature` from being truncated
   to `my-feat` and misidentified as bead IDs.
 - **Hint file session race** — plan and wall hint files are now scoped by git
-  worktree path (`~/.biff/hints/{hash}/`). Multiple sessions in different
+  worktree path (`~/.punt-labs/biff/hints/{hash}/`). Multiple sessions in different
   worktrees no longer race on shared hint files. Sessions in the same worktree
   share hints by design — the coordination contract requires worktree isolation.
 - **Hint content escaping** — branch names and commit subjects containing double

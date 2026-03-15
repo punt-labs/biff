@@ -283,7 +283,7 @@ Three complementary mechanisms work together:
    - **Belt path** (inside a tool handler): `get_context()` returns the FastMCP Context. Call `ctx._queue_tool_list_changed()` to piggyback the notification on the tool response. Also captures `ctx.session` for the suspenders path.
    - **Suspenders path** (background poller): No request context exists. Uses the stored `ServerSession` reference captured from the last tool call. Calls `session.send_tool_list_changed()` directly. Best-effort — failures are logged, never raised.
 
-3. **Status line file** — Background poller writes unread count to `~/.biff/unread/{repo-name}.json`. Claude Code's status line script (a shell command in `~/.claude/settings.json`) reads and displays it. This is the **human-visible** channel.
+3. **Status line file** — Background poller writes unread count to `~/.punt-labs/biff/unread/{repo-name}.json`. Claude Code's status line script (a shell command in `~/.claude/settings.json`) reads and displays it. This is the **human-visible** channel.
 
 ### Background Poller (`poll_inbox`)
 
@@ -499,7 +499,7 @@ The `/biff:biff on|off` command (awkward after rename) was split into `/mesg y` 
 
 ### Design
 
-Each biff MCP server writes its unread state to `~/.biff/unread/{key}.json`, where `key` is the topmost `claude` ancestor PID found by walking the process tree (`find_session_key()` in `src/biff/session_key.py`). The status line script reads the same path using the same function.
+Each biff MCP server writes its unread state to `~/.punt-labs/biff/unread/{key}.json`, where `key` is the topmost `claude` ancestor PID found by walking the process tree (`find_session_key()` in `src/biff/session_key.py`). The status line script reads the same path using the same function.
 
 **Why this works:** Both the MCP server and the statusline command are descendants of the same root Claude Code process. Walking up the process tree to the topmost `claude` ancestor gives both a stable key regardless of intermediate child processes.
 
@@ -567,7 +567,7 @@ Claude Code sends rich session JSON to the status line via stdin (including `ses
 
 ### Prior Design: Per-Repo Files (Superseded)
 
-The original design used `~/.biff/unread/{repo-name}.json` with the status line scanning all files. This had three problems:
+The original design used `~/.punt-labs/biff/unread/{repo-name}.json` with the status line scanning all files. This had three problems:
 
 1. **Multiple sessions stomped each other.** All MCP servers for the same repo wrote to the same file — last writer wins.
 2. **No TTY identity.** The status line couldn't show which session had unread messages.
@@ -1357,7 +1357,7 @@ MCP tools write them; SessionStart and PreToolUse hooks read them.
 | `plan-active` | `/plan` tool | PreToolUse gate (`has_plan_marker`) | Gate Edit/Write on plan-set |
 | `wall-active` | `/wall` tool | SessionStart (`read_wall_marker`) | Inject active wall into startup context |
 
-All files live in `~/.biff/hints/{hash}/` where `{hash}` is `sha256(worktree_root)[:16]`.
+All files live in `~/.punt-labs/biff/hints/{hash}/` where `{hash}` is `sha256(worktree_root)[:16]`.
 Each git worktree gets its own directory to prevent cross-session races.
 
 **Why not query the relay directly?** The relay is async (NATS KV or local JSON behind
@@ -1616,7 +1616,7 @@ There are two independent channels that update the status bar:
 1. **MCP protocol** (`notifications/tools/list_changed` → tool re-read → UI re-render)
    — instant when a tool description actually changes.  This is how wall achieves 0-2s.
 
-2. **Status line file** (`~/.biff/unread/{session}.json` → `biff statusline` command)
+2. **Status line file** (`~/.punt-labs/biff/unread/{session}.json` → `biff statusline` command)
    — polled by Claude Code at its own interval.  This is the only channel talk uses.
 
 Wall uses both channels.  Talk uses only channel 2.  That is the asymmetry.
@@ -2051,7 +2051,7 @@ all bypass Claude Code's status line polling.  A new tier was needed:
 |----------|-------|
 | Transport | Real Claude Code sessions (marketplace plugin, no mocks) |
 | Driver | `tmux send-keys` feeding slash commands |
-| Assertion | `tmux capture-pane` for status bar, `~/.biff/unread/*.json` for delivery |
+| Assertion | `tmux capture-pane` for status bar, `~/.punt-labs/biff/unread/*.json` for delivery |
 | Recording | Asciinema `.cast` file (automatic, kept on failure) |
 
 The script creates two isolated clones of the biff repo, launches Claude Code
@@ -2106,7 +2106,7 @@ delivered the message but the UI didn't render it.
 | Result | Meaning |
 |--------|---------|
 | **PASS** | Needle visible in `tmux capture-pane` (user would see it) |
-| **DELIVERED** | Needle found in `~/.biff/unread/*.json` but not in pane capture |
+| **DELIVERED** | Needle found in `~/.punt-labs/biff/unread/*.json` but not in pane capture |
 | **FAIL** | Needle not found anywhere (NATS delivery or file write broken) |
 
 DELIVERED is the most informative failure — it isolates the bug to the
@@ -2140,7 +2140,7 @@ Session A's status line correctly read the wall item (key 20605).  Session B's
 status line (key 20607) showed `items=[]` — the unread file had not yet been
 written at the time of its last poll.  After that, no more polls occurred.
 
-**Evidence from `~/.biff/unread/` files:**
+**Evidence from `~/.punt-labs/biff/unread/` files:**
 
 ```json
 {
@@ -2973,7 +2973,7 @@ added to the peer list.
 `LocalRelay` (file-based, `.biff/` directory) is test infrastructure.
 It does not need to support cross-repo. Cross-repo messaging requires
 `NatsRelay`. This keeps the `LocalRelay` simple and avoids introducing
-a `~/.biff/` shared directory for the file-based path.
+a `~/.punt-labs/biff/` shared directory for the file-based path.
 
 ### Decision: No Migration
 
@@ -3207,7 +3207,7 @@ session data reach the lux applet?
 
 ### Decision
 
-File-based coupling via `~/.biff/session-data/{session_key}.json`. The
+File-based coupling via `~/.punt-labs/biff/session-data/{session_key}.json`. The
 statusline tees raw stdin JSON to disk before parsing. The lux applet reads
 it on a 5-second interval.
 
@@ -3227,9 +3227,9 @@ it on a 5-second interval.
 ```text
 Claude Code --stdin JSON--> statusline.py
                               |-- renders status bar (existing)
-                              +-- atomic_write -> ~/.biff/session-data/{key}.json
+                              +-- atomic_write -> ~/.punt-labs/biff/session-data/{key}.json
 
-MCP server tools --> _write_unread_file -> ~/.biff/unread/{key}.json
+MCP server tools --> _write_unread_file -> ~/.punt-labs/biff/unread/{key}.json
 
 Lux applet thread (every 5s):
   |-- reads session-data file

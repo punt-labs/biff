@@ -46,7 +46,7 @@ def _hint_mocks(tmp_path: Path):
 
 def _hint_path(tmp_path: Path, name: str) -> Path:
     """Expected hint file path for tests."""
-    return tmp_path / ".biff" / "hints" / _FAKE_HINT_HASH / name
+    return tmp_path / ".punt-labs" / "biff" / "hints" / _FAKE_HINT_HASH / name
 
 
 def _identity(s: str) -> str:
@@ -464,7 +464,7 @@ class TestHandleSessionEnd:
     """SessionEnd handler — active-to-sentinel conversion."""
 
     def test_converts_active_to_sentinel(self, tmp_path: Path) -> None:
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc12345").write_text("kai:abc12345\nmy-repo\n")
 
@@ -488,7 +488,7 @@ class TestHandleSessionEnd:
         assert not (active_dir / "kai-abc12345").exists()
 
     def test_empty_active_dir(self, tmp_path: Path) -> None:
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         fake_root = tmp_path / "my-repo"
         fake_root.mkdir()
@@ -517,7 +517,7 @@ class TestHandleSessionEnd:
 
     def test_scoped_to_current_repo(self, tmp_path: Path) -> None:
         """Only cleans up sessions matching the current repo name."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-aaa").write_text("kai:aaa\nmy-repo\n")
         (active_dir / "kai-bbb").write_text("kai:bbb\nother-repo\n")
@@ -551,7 +551,7 @@ class TestHandleSessionEnd:
 
     def test_matches_sanitized_repo_slug(self, tmp_path: Path) -> None:
         """Active file uses sanitized slug (owner__repo), not directory name."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text("kai:abc\npunt-labs__biff\n")
 
@@ -577,7 +577,7 @@ class TestHandleSessionEnd:
         assert (sentinel_dir / "kai-abc").exists()
 
     def test_malformed_active_file_skipped(self, tmp_path: Path) -> None:
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "bad").write_text("only-one-line\n")
         fake_root = tmp_path / "my-repo"
@@ -872,7 +872,7 @@ class TestWorktreeIsolation:
         hash_a = hashlib.sha256(wt_a.encode()).hexdigest()[:16]
 
         # Write hint in worktree A
-        hp = tmp_path / ".biff" / "hints" / hash_a / "plan-hint"
+        hp = tmp_path / ".punt-labs" / "biff" / "hints" / hash_a / "plan-hint"
         hp.parent.mkdir(parents=True)
         hp.write_text("→ feature/auth\n")
 
@@ -937,7 +937,7 @@ class TestDetectCollisions:
 
     def test_empty_active_dir(self, tmp_path: Path) -> None:
         """Empty active directory → empty list."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         fake_root = tmp_path / "my-repo"
         fake_root.mkdir()
@@ -947,7 +947,7 @@ class TestDetectCollisions:
 
     def test_different_repo_ignored(self, tmp_path: Path) -> None:
         """Active session in a different repo → not a collision."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text(f"kai:abc\nother-repo\n{_FAKE_WORKTREE}\n")
         fake_root = tmp_path / "my-repo"
@@ -958,7 +958,7 @@ class TestDetectCollisions:
 
     def test_different_worktree_ignored(self, tmp_path: Path) -> None:
         """Same repo but different worktree → not a collision."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text("kai:abc\nmy-repo\n/other/worktree\n")
         fake_root = tmp_path / "my-repo"
@@ -969,7 +969,7 @@ class TestDetectCollisions:
 
     def test_same_repo_same_worktree_detected(self, tmp_path: Path) -> None:
         """Same repo AND same worktree → collision."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text(f"kai:abc\nmy-repo\n{_FAKE_WORKTREE}\n")
         fake_root = tmp_path / "my-repo"
@@ -981,7 +981,7 @@ class TestDetectCollisions:
 
     def test_old_format_no_worktree_conservative(self, tmp_path: Path) -> None:
         """Old 2-line format (no worktree) → treated as collision."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text("kai:abc\nmy-repo\n")
         fake_root = tmp_path / "my-repo"
@@ -993,7 +993,7 @@ class TestDetectCollisions:
 
     def test_multiple_collisions(self, tmp_path: Path) -> None:
         """Multiple sessions in same repo+worktree → all returned."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text(f"kai:abc\nmy-repo\n{_FAKE_WORKTREE}\n")
         (active_dir / "eric-def").write_text(f"eric:def\nmy-repo\n{_FAKE_WORKTREE}\n")
@@ -1014,7 +1014,7 @@ class TestDetectCollisions:
 
     def test_session_start_includes_advisory(self, tmp_path: Path) -> None:
         """Collision advisory includes coordination guidance."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc").write_text(f"kai:abc\nmy-repo\n{_FAKE_WORKTREE}\n")
         fake_root = tmp_path / "my-repo"
@@ -1138,7 +1138,7 @@ class TestHandleStop:
     """Stop hook: unread message reminder (soft gate)."""
 
     def test_unread_messages_returns_reminder(self, tmp_path: Path) -> None:
-        unread_dir = tmp_path / ".biff" / "unread"
+        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
         unread_dir.mkdir(parents=True)
         (unread_dir / "12345.json").write_text(
             json.dumps({"count": 3, "user": "kai", "repo": "biff"})
@@ -1153,7 +1153,7 @@ class TestHandleStop:
         assert "/read" in result
 
     def test_zero_unread_returns_none(self, tmp_path: Path) -> None:
-        unread_dir = tmp_path / ".biff" / "unread"
+        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
         unread_dir.mkdir(parents=True)
         (unread_dir / "12345.json").write_text(
             json.dumps({"count": 0, "user": "kai", "repo": "biff"})
@@ -1174,7 +1174,7 @@ class TestHandleStop:
         assert result is None
 
     def test_singular_message(self, tmp_path: Path) -> None:
-        unread_dir = tmp_path / ".biff" / "unread"
+        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
         unread_dir.mkdir(parents=True)
         (unread_dir / "12345.json").write_text(
             json.dumps({"count": 1, "user": "kai", "repo": "biff"})
@@ -1197,7 +1197,7 @@ class TestCcStopSchema:
 
         from biff.hook import hook_app
 
-        unread_dir = tmp_path / ".biff" / "unread"
+        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
         unread_dir.mkdir(parents=True)
         (unread_dir / "12345.json").write_text(
             json.dumps({"count": 2, "user": "kai", "repo": "biff"})
@@ -1221,7 +1221,7 @@ class TestCcStopSchema:
 
         from biff.hook import hook_app
 
-        unread_dir = tmp_path / ".biff" / "unread"
+        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
         unread_dir.mkdir(parents=True)
         (unread_dir / "12345.json").write_text(
             json.dumps({"count": 0, "user": "kai", "repo": "biff"})
@@ -1289,7 +1289,7 @@ class TestZSpecSessionEndCleanup:
 
     def test_session_end_removes_active_marker(self, tmp_path: Path) -> None:
         """Invariant 22-25: active session file is removed at end."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         (active_dir / "kai-abc12345").write_text("kai:abc12345\nmy-repo\n")
 
@@ -1313,7 +1313,7 @@ class TestZSpecSessionEndCleanup:
 
     def test_session_end_does_not_touch_other_repos(self, tmp_path: Path) -> None:
         """Only this repo's sessions are cleaned — invariant scoped per-repo."""
-        active_dir = tmp_path / ".biff" / "active"
+        active_dir = tmp_path / ".punt-labs" / "biff" / "active"
         active_dir.mkdir(parents=True)
         # Session for a different repo
         (active_dir / "kai-xyz99999").write_text("kai:xyz99999\nother-repo\n")

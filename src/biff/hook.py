@@ -402,7 +402,7 @@ def _get_worktree_root() -> str:
 
 
 def _hint_dir() -> pathlib.Path:
-    """Worktree-scoped hint directory: ``~/.biff/hints/{hash}/``.
+    """Worktree-scoped hint directory: ``~/.punt-labs/biff/hints/{hash}/``.
 
     Each git worktree gets its own hint directory so multiple sessions
     in different worktrees don't race on shared hint files.  Sessions
@@ -422,7 +422,7 @@ def _plan_hint_path() -> pathlib.Path:
 def handle_post_checkout(branch_flag: str) -> str | None:
     """Process git post-checkout — write plan hint for branch switches.
 
-    Writes ``~/.biff/plan-hint`` with the expanded branch plan.
+    Writes ``~/.punt-labs/biff/plan-hint`` with the expanded branch plan.
     The PostToolUse Bash handler picks up the hint on the next
     tool call and nudges Claude to set the plan.
 
@@ -446,7 +446,7 @@ def handle_post_checkout(branch_flag: str) -> str | None:
 def check_plan_hint() -> str | None:
     """Check for a plan hint written by a git hook.
 
-    Reads and deletes ``~/.biff/plan-hint``.  Returns an
+    Reads and deletes ``~/.punt-labs/biff/plan-hint``.  Returns an
     ``additionalContext`` string, or ``None`` if no hint exists.
     """
     hint_path = _plan_hint_path()
@@ -490,7 +490,7 @@ def _get_commit_subject() -> str:
 def handle_post_commit() -> str | None:
     """Process git post-commit — write plan hint with commit subject.
 
-    Writes ``~/.biff/plan-hint`` with ``✓ <subject>``.  The PostToolUse
+    Writes ``~/.punt-labs/biff/plan-hint`` with ``✓ <subject>``.  The PostToolUse
     Bash handler picks up the hint and nudges Claude to set the plan.
 
     Returns the plan hint text, or ``None`` if no subject found.
@@ -523,7 +523,7 @@ def _read_pre_push_refs() -> list[str]:
 def handle_pre_push(ref_lines: list[str]) -> str | None:
     """Process git pre-push — suggest /wall for default branch pushes.
 
-    Writes ``~/.biff/wall-hint`` when pushing to main/master.
+    Writes ``~/.punt-labs/biff/wall-hint`` when pushing to main/master.
     The PostToolUse Bash handler picks up the hint.
 
     Returns the wall hint text, or ``None`` for feature branch pushes.
@@ -543,7 +543,7 @@ def handle_pre_push(ref_lines: list[str]) -> str | None:
 def check_wall_hint() -> str | None:
     """Check for a wall hint written by a git hook.
 
-    Reads and deletes ``~/.biff/wall-hint``.  Returns an
+    Reads and deletes ``~/.punt-labs/biff/wall-hint``.  Returns an
     ``additionalContext`` string, or ``None`` if no hint exists.
     """
     hint_path = _wall_hint_path()
@@ -562,7 +562,7 @@ def check_wall_hint() -> str | None:
 def _detect_collisions() -> list[str]:
     """Find other active sessions in the same worktree.
 
-    Reads ``~/.biff/active/`` files and returns session keys whose
+    Reads ``~/.punt-labs/biff/active/`` files and returns session keys whose
     repo_name matches AND whose worktree_root matches (or is absent,
     which conservatively counts as a collision).
 
@@ -681,11 +681,10 @@ def handle_stop() -> str | None:
     Returns an ``additionalContext`` reminder, or ``None`` if no
     unread messages.  This is a soft gate — always exit 0.
     """
+    from biff._stdlib import biff_data_dir  # noqa: PLC0415
     from biff.session_key import find_session_key  # noqa: PLC0415
 
-    unread_path = (
-        pathlib.Path.home() / ".biff" / "unread" / f"{find_session_key()}.json"
-    )
+    unread_path = biff_data_dir() / "unread" / f"{find_session_key()}.json"
     if not unread_path.is_file():
         return None
     try:

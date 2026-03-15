@@ -19,6 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from biff._stdlib import BIFF_DATA_DIR
 from biff.relay import atomic_write
 from biff.session_key import find_session_key
 from biff.unread import (
@@ -33,9 +34,9 @@ logger = logging.getLogger(__name__)
 # Well-known paths ----------------------------------------------------------
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-STASH_PATH = Path.home() / ".biff" / "statusline-original.json"
-UNREAD_DIR = Path.home() / ".biff" / "unread"
-SESSION_DATA_DIR = Path.home() / ".biff" / "session-data"
+STASH_PATH = BIFF_DATA_DIR / "statusline-original.json"
+UNREAD_DIR = BIFF_DATA_DIR / "unread"
+SESSION_DATA_DIR = BIFF_DATA_DIR / "session-data"
 
 # Result types --------------------------------------------------------------
 

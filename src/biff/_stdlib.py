@@ -175,12 +175,21 @@ def expand_bead_id(message: str) -> str:
     return message
 
 
+# ── Data directory ──────────────────────────────────────────────────
+
+BIFF_DATA_DIR = Path.home() / ".punt-labs" / "biff"
+
 # ── Session lifecycle helpers ────────────────────────────────────────
 
 
+def biff_data_dir() -> Path:
+    """Root data directory: ``~/.punt-labs/biff/``."""
+    return Path.home() / ".punt-labs" / "biff"
+
+
 def active_dir() -> Path:
-    """Active session directory: ``~/.biff/active/``."""
-    return Path.home() / ".biff" / "active"
+    """Active session directory: ``~/.punt-labs/biff/active/``."""
+    return biff_data_dir() / "active"
 
 
 def remove_active_session(session_key: str) -> None:
@@ -190,8 +199,8 @@ def remove_active_session(session_key: str) -> None:
 
 
 def sentinel_dir(repo_name: str) -> Path:
-    """Sentinel directory for a repo: ``~/.biff/sentinels/{repo_name}/``."""
-    return Path.home() / ".biff" / "sentinels" / repo_name
+    """Sentinel directory for a repo: ``~/.punt-labs/biff/sentinels/{repo_name}/``."""
+    return biff_data_dir() / "sentinels" / repo_name
 
 
 # ── Lux helpers ─────────────────────────────────────────────────────

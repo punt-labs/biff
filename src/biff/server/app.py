@@ -75,7 +75,7 @@ def write_active_session(
 ) -> None:
     """Mark a session as active so SessionEnd hooks can find it.
 
-    Writes ``~/.biff/active/{safe_key}`` containing the session key,
+    Writes ``~/.punt-labs/biff/active/{safe_key}`` containing the session key,
     repo name, and worktree root (one per line).  The SessionEnd hook
     reads these files and converts them to sentinels for the reaper
     to process.  The third line is optional for backwards compatibility.
@@ -89,7 +89,7 @@ def write_active_session(
 def _write_sentinel(repo_name: str, session_key: str) -> None:
     """Create a sentinel file marking a session for removal.
 
-    Relay-agnostic — writes to ``~/.biff/sentinels/{repo}/`` so that
+    Relay-agnostic — writes to ``~/.punt-labs/biff/sentinels/{repo}/`` so that
     any running server's reaper task can process it.  Safe to call
     from signal handlers (sync I/O only).
     """

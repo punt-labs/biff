@@ -37,7 +37,7 @@ biff install-statusline
 If you had a custom status line before biff, verify it was stashed correctly:
 
 ```bash
-cat ~/.biff/statusline-original.json
+cat ~/.punt-labs/biff/statusline-original.json
 ```
 
 ### Messages not arriving

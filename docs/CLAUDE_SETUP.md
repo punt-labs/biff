@@ -29,9 +29,9 @@ After `biff install`, these files exist:
 |------|---------|
 | `~/.claude/plugins/biff/` | Plugin root (commands, hooks, agents) |
 | `~/.claude/plugins/biff/.claude-plugin/plugin.json` | Plugin manifest |
-| `~/.biff/` | Runtime state directory |
-| `~/.biff/unread/` | Per-session unread status files (for status bar) |
-| `~/.biff/statusline-original.json` | Stashed original status line (if any) |
+| `~/.punt-labs/biff/` | Runtime state directory |
+| `~/.punt-labs/biff/unread/` | Per-session unread status files (for status bar) |
+| `~/.punt-labs/biff/statusline-original.json` | Stashed original status line (if any) |
 
 ## Status Bar
 

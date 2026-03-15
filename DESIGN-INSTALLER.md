@@ -74,7 +74,7 @@ This document describes the architecture of biff's installation system — how t
 │  │                    statusline.py                                   │  │
 │  │                                                                    │  │
 │  │  1. Stash original statusLine value                               │  │
-│  │     ~/.biff/statusline-original.json                               │  │
+│  │     ~/.punt-labs/biff/statusline-original.json                               │  │
 │  │                                                                    │  │
 │  │  2. Replace statusLine in settings.json                           │  │
 │  │     { "type": "command", "command": "biff statusline" }           │  │
@@ -112,7 +112,7 @@ This document describes the architecture of biff's installation system — how t
 │  │                                                                    │  │
 │  │  Status line (if installed):                                      │  │
 │  │    Claude Code calls: biff statusline                             │  │
-│  │    → reads ~/.biff/unread/*.json for per-project counts           │  │
+│  │    → reads ~/.punt-labs/biff/unread/*.json for per-project counts           │  │
 │  │    → runs stashed original command (if any)                       │  │
 │  │    → outputs: "original-output | biff(2) myapp(1)"               │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
@@ -128,8 +128,8 @@ This document describes the architecture of biff's installation system — how t
 | `~/.claude/commands/` | `installer.py` | Top-level user commands (`.md`) |
 | `~/.claude/plugins/installed_plugins.json` | `installer.py` | Plugin registry |
 | `~/.claude/settings.json` | `installer.py` + `statusline.py` | Plugin enable + status line |
-| `~/.biff/statusline-original.json` | `statusline.py` | Stashed original status line |
-| `~/.biff/unread/*.json` | MCP server (runtime) | Per-project unread counts |
+| `~/.punt-labs/biff/statusline-original.json` | `statusline.py` | Stashed original status line |
+| `~/.punt-labs/biff/unread/*.json` | MCP server (runtime) | Per-project unread counts |
 
 ---
 
@@ -262,7 +262,7 @@ This handles editable installs, `uv tool install`, and standard pip installs.
 
 The status line installer uses a stash-and-wrap pattern:
 
-1. **Stash** — Read the current `statusLine` value from `~/.claude/settings.json`, save it to `~/.biff/statusline-original.json`.
+1. **Stash** — Read the current `statusLine` value from `~/.claude/settings.json`, save it to `~/.punt-labs/biff/statusline-original.json`.
 2. **Replace** — Set `statusLine` to `{"type": "command", "command": "biff statusline"}`.
 3. **At runtime** — `biff statusline` reads the stash, runs the original command, appends biff's unread segment: `original-output | biff(2)`.
 
@@ -272,7 +272,7 @@ Uninstall reverses: read the stash, restore the original value, delete the stash
 
 Claude Code's `statusLine` is a single command string, not a composable pipeline. There is no "add to status line" API. Biff must own the entire `statusLine` value and delegate to the original internally.
 
-The stash file (`~/.biff/statusline-original.json`) is the proof that biff is installed. Its presence/absence is the install state, not a flag in settings.
+The stash file (`~/.punt-labs/biff/statusline-original.json`) is the proof that biff is installed. Its presence/absence is the install state, not a flag in settings.
 
 ### Separation from `biff install`
 
@@ -400,7 +400,7 @@ The file is committed to the repo. All team members share it.
 
 - The `.biff` file (repo config, committed to git).
 - The `biff` CLI itself (managed by pip).
-- `~/.biff/unread/` directory (runtime state, harmless).
+- `~/.punt-labs/biff/unread/` directory (runtime state, harmless).
 
 ---
 

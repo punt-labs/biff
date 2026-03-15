@@ -49,7 +49,7 @@ sub = await js.pull_subscribe(
 
 ### File Descriptor Leaks
 
-- Unread JSON files in `~/.biff/unread/` not cleaned up on server shutdown
+- Unread JSON files in `~/.punt-labs/biff/unread/` not cleaned up on server shutdown
 - JSONL inbox files opened but not closed on exception paths
 - Status line scripts that open files without cleanup
 
