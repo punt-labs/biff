@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-15
+
+### Added
+
+- **Cross-repo messaging** — `/write`, `/talk`, `/who`, `/finger`, `/last` now work across repos within an organization. Sessions in peer repos (configured via `peers` in `.biff`) are visible and addressable. (DES-030)
+- **FROM_TTY column in `/read`** — sender's TTY name now appears in message inbox output for session disambiguation.
+- **`display_repo_name()`** — `/who` and `/last` show repos as `owner/repo` instead of the sanitized `owner__repo` NATS form.
+- **`is_notification_for_session()`** — shared helper for targeted notification filtering across all 4 receiver paths.
+- **`validate_tty_name()`** — TTY names restricted to `[A-Za-z0-9_-]{1,20}` allowlist, preventing terminal escape injection.
+- **62 cross-repo tests** — comprehensive test coverage for cross-repo session visibility, message delivery, authorization, and formatting.
+
+### Changed
+
+- **PreToolUse hook** — uses `"ask"` semantics instead of `"deny"`, so agents can proceed after setting their plan rather than halting entirely.
+- **Stop hook schema** — `cc_stop` and `_hook_entry._cc_stop` both emit `{"decision": "block", "reason": ...}` instead of the old `hookSpecificOutput` wrapper.
+
+### Fixed
+
+- **Notification filtering by target TTY** — targeted messages (`@user:tty`) now only notify the intended session, not all sessions of that user.
+- **Parallel per-repo queries** — reverted org-wide KV scan back to parallel per-repo queries to avoid cross-account permission failures.
+- **Wall broadcast** — skips empty repo names instead of failing on NATS subject validation.
+- **CLI talk cross-repo delivery** — interactive talk correctly resolves and delivers to sessions in peer repos.
+
 ## [1.3.6] - 2026-03-13
 
 ## [1.3.5] - 2026-03-12
