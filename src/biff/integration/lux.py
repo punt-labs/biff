@@ -179,6 +179,9 @@ def render_session_status(client: LuxClient, session_key: str) -> None:
 # ── Background loop ──────────────────────────────────────────────────
 
 
+_FAILURE_ESCALATION_THRESHOLD = 3
+
+
 def session_status_loop(
     client: LuxClient,
     session_key: str,
@@ -187,11 +190,21 @@ def session_status_loop(
     interval: float = 5.0,
 ) -> None:
     """Background thread: re-render dashboard every *interval* seconds."""
+    consecutive_failures = 0
     while not stop_event.wait(interval):
         try:
             render_session_status(client, session_key)
+            consecutive_failures = 0
         except Exception:  # noqa: BLE001
-            logger.debug("Lux render failed, retrying next tick", exc_info=True)
+            consecutive_failures += 1
+            if consecutive_failures >= _FAILURE_ESCALATION_THRESHOLD:
+                logger.warning(
+                    "Lux render failed %d times, stale",
+                    consecutive_failures,
+                    exc_info=True,
+                )
+            else:
+                logger.debug("Lux render failed, retrying next tick", exc_info=True)
 
 
 def start_session_applet(

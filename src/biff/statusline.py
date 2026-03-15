@@ -11,6 +11,7 @@ it is stashed and its output replaces the repo/context/cost segments.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -26,6 +27,8 @@ from biff.unread import (
     as_str_dict,
     read_session_unread,
 )
+
+logger = logging.getLogger(__name__)
 
 # Well-known paths ----------------------------------------------------------
 
@@ -162,7 +165,7 @@ def _tee_session_data(
         key = find_session_key()
         atomic_write(session_data_dir / f"{key}.json", raw)
     except (OSError, subprocess.SubprocessError):
-        pass
+        logger.debug("Failed to tee session data", exc_info=True)
 
 
 # Runtime -------------------------------------------------------------------

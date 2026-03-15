@@ -529,6 +529,8 @@ async def _lifespan_cleanup(
     if lux_thread is not None:
         lux_stop.set()
         lux_thread.join(timeout=2.0)
+        if lux_thread.is_alive():
+            logger.warning("Lux applet thread did not stop within 2s timeout")
     if state.unread_path is not None:
         with suppress(FileNotFoundError):
             state.unread_path.unlink()
@@ -549,10 +551,9 @@ def _start_lux_applet(
     stop = threading.Event()
     try:
         from biff.integration.lux import start_session_applet  # noqa: PLC0415
-
-        thread = start_session_applet(session_key, stop)
     except ImportError:
-        thread = None
+        return stop, None
+    thread = start_session_applet(session_key, stop)
     return stop, thread
 
 
