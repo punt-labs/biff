@@ -177,8 +177,9 @@ PyPI serves `uv tool install punt-biff`. This ships the Python runtime (MCP serv
 
 #### Release Process
 
-Both channels release from a single workflow. Run `punt release` from the repo root —
-it handles all 11 phases automatically: preflight, version bump, build, release PR,
+Both channels release from a single workflow. Use `/punt:auto release` (the slash command),
+which runs the `punt release` CLI through the playbook executor with LLM-driven error
+diagnosis. It handles all 11 phases automatically: preflight, version bump, build, release PR,
 tag, CI wait, GitHub release, PyPI verify, post-release (README SHA bump), cross-repo
 propagation (punt-kit install-all.sh, marketplace catalog, website), and verification.
 
@@ -187,10 +188,8 @@ propagation (punt-kit install-all.sh, marketplace catalog, website), and verific
 - [ ] **Quality gates pass** — ruff, mypy, pyright, tier 1-2 tests
 - [ ] **Hosted NATS tests pass locally** if relay code changed
 
-```bash
-punt release <version>        # Full release
-punt release --dry-run        # Preview without changes
-punt release --resume-from ci # Resume from a specific phase
+```text
+/punt:auto release [version=X.Y.Z]
 ```
 
 See [release-process.md](https://github.com/punt-labs/punt-kit/blob/main/standards/release-process.md) for
