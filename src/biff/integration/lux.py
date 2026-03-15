@@ -257,13 +257,14 @@ def start_session_applet(
         logger.debug("punt-lux not installed, skipping lux applet")
         return None
 
+    client = _LuxClient(name="biff")
     try:
-        client = _LuxClient(name="biff")
         client.declare_menu_item({"id": "app-biff-session", "label": "Session Status"})
         client.connect()
         client.start_listener()
-    except (RuntimeError, OSError):
+    except Exception:  # noqa: BLE001
         logger.debug("Failed to connect to lux display", exc_info=True)
+        client.close()
         return None
 
     # Render once immediately, then start the periodic loop

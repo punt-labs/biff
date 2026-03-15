@@ -524,14 +524,11 @@ async def _lifespan_cleanup(
     after Claude Code closes stdio, so the logout publish
     must happen while the NATS connection is still healthy.
     """
+    if lux_thread is not None:
+        lux_stop.set()  # signal stop early so thread exits during cleanup
     if state.owns_relay:
         await _append_logout_event(state)
     await _shutdown_tasks(shutdown, tasks)
-    if lux_thread is not None:
-        lux_stop.set()
-        lux_thread.join(timeout=2.0)
-        if lux_thread.is_alive():
-            logger.warning("Lux applet thread did not stop within 2s timeout")
     if state.unread_path is not None:
         with suppress(FileNotFoundError):
             state.unread_path.unlink()
@@ -543,6 +540,10 @@ async def _lifespan_cleanup(
         await state.relay.close()
     with suppress(OSError):
         remove_active_session(state.session_key)
+    if lux_thread is not None:
+        lux_thread.join(timeout=2.0)
+        if lux_thread.is_alive():
+            logger.warning("Lux applet thread did not stop within 2s timeout")
 
 
 def _start_lux_applet(

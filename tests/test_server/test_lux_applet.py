@@ -37,32 +37,32 @@ class TestTeeSessionData:
                 "cost": {"total_cost_usd": 1.5},
             }
         )
-        with patch("biff.statusline.find_session_key", return_value="kai:tty1"):
+        with patch("biff.statusline.find_session_key", return_value=12345):
             _tee_session_data(raw, session_data_dir=tmp_path)
-        written = (tmp_path / "kai:tty1.json").read_text()
+        written = (tmp_path / "12345.json").read_text()
         assert written == raw
 
     def test_overwrites_existing(self, tmp_path: Path) -> None:
-        path = tmp_path / "kai:tty1.json"
+        path = tmp_path / "12345.json"
         path.write_text("old")
         raw = '{"new": true}'
-        with patch("biff.statusline.find_session_key", return_value="kai:tty1"):
+        with patch("biff.statusline.find_session_key", return_value=12345):
             _tee_session_data(raw, session_data_dir=tmp_path)
         assert path.read_text() == raw
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         deep = tmp_path / "deep" / "nested"
         raw = '{"ok": true}'
-        with patch("biff.statusline.find_session_key", return_value="kai:tty1"):
+        with patch("biff.statusline.find_session_key", return_value=12345):
             _tee_session_data(raw, session_data_dir=deep)
-        assert (deep / "kai:tty1.json").exists()
+        assert (deep / "12345.json").exists()
 
     def test_never_raises_on_write_error(self, tmp_path: Path) -> None:
         """OSError during write is silently swallowed."""
         blocker = tmp_path / "blocker"
         blocker.write_text("I am a file")
         bad_dir = blocker / "subdir"
-        with patch("biff.statusline.find_session_key", return_value="kai:tty1"):
+        with patch("biff.statusline.find_session_key", return_value=12345):
             _tee_session_data('{"data": 1}', session_data_dir=bad_dir)
 
 

@@ -66,7 +66,10 @@ def parse_display_items(val: object) -> list[DisplayItemView]:
 def read_session_unread(path: Path) -> SessionUnread | None:
     """Read a PPID-keyed unread file, returning ``None`` on any error."""
     try:
-        data = as_str_dict(json.loads(path.read_text()))
+        parsed: object = json.loads(path.read_text())
+        data = as_str_dict(parsed)
+        if not data:
+            return None
         items = parse_display_items(data.get("display_items"))
         count_raw = data.get("count", 0)
         count = int(count_raw) if isinstance(count_raw, (int, float)) else 0
