@@ -91,6 +91,15 @@ def _context_fraction(session: dict[str, object]) -> float | None:
     return None
 
 
+def _active_session_count() -> int:
+    """Count active session files in ``~/.punt-labs/biff/active/``."""
+    active = BIFF_DATA_DIR / "active"
+    try:
+        return sum(1 for f in active.iterdir() if f.is_file())
+    except OSError:
+        return 0
+
+
 def _cost_text(session: dict[str, object]) -> str:
     """Extract session cost as ``$X.XX``."""
     cost = as_str_dict(session.get("cost"))
@@ -136,6 +145,14 @@ def build_status_elements(
                     id="msg-status",
                     content=f"{unread.count} {label}",
                 )
+            )
+
+        # Presence count from active session files
+        others = _active_session_count() - 1  # exclude self
+        if others > 0:
+            label = "other" if others == 1 else "others"
+            elements.append(
+                TextElement(id="presence", content=f"{others} {label} online")
             )
 
         # Wall/talk display items — sanitize user-supplied text

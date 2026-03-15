@@ -17,6 +17,7 @@ pytest.importorskip("punt_lux", reason="punt-lux not installed")
 from punt_lux.protocol import ProgressElement, SeparatorElement, TextElement
 
 from biff.integration.lux import (
+    _active_session_count,
     _context_fraction,
     _cost_text,
     _git_text,
@@ -123,6 +124,26 @@ class TestCostText:
 
     def test_missing(self) -> None:
         assert _cost_text({}) == ""
+
+
+class TestActiveSessionCount:
+    def test_counts_files(self, tmp_path: Path) -> None:
+        active = tmp_path / "active"
+        active.mkdir()
+        (active / "kai-tty1").write_text("kai:tty1\nbiff\n")
+        (active / "eric-tty2").write_text("eric:tty2\nbiff\n")
+        with patch("biff.integration.lux.BIFF_DATA_DIR", tmp_path):
+            assert _active_session_count() == 2
+
+    def test_empty_dir(self, tmp_path: Path) -> None:
+        active = tmp_path / "active"
+        active.mkdir()
+        with patch("biff.integration.lux.BIFF_DATA_DIR", tmp_path):
+            assert _active_session_count() == 0
+
+    def test_missing_dir(self, tmp_path: Path) -> None:
+        with patch("biff.integration.lux.BIFF_DATA_DIR", tmp_path):
+            assert _active_session_count() == 0
 
 
 # --- Phase 2: build_status_elements --------------------------------------
@@ -246,6 +267,33 @@ class TestBuildStatusElements:
             if isinstance(e, TextElement) and e.id.startswith("display-")
         ]
         assert len(display_els) == 0
+
+    def test_presence_shown_when_others_online(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1")
+        with patch("biff.integration.lux._active_session_count", return_value=3):
+            elements = build_status_elements({}, unread)
+        presence = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "presence"
+        )
+        assert presence.content == "2 others online"
+
+    def test_presence_singular(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1")
+        with patch("biff.integration.lux._active_session_count", return_value=2):
+            elements = build_status_elements({}, unread)
+        presence = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "presence"
+        )
+        assert presence.content == "1 other online"
+
+    def test_presence_hidden_when_alone(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1")
+        with patch("biff.integration.lux._active_session_count", return_value=1):
+            elements = build_status_elements({}, unread)
+        presence_els = [
+            e for e in elements if isinstance(e, TextElement) and e.id == "presence"
+        ]
+        assert len(presence_els) == 0
 
     def test_all_ids_unique(self) -> None:
         session: dict[str, object] = {
