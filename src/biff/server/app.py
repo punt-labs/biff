@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
@@ -508,6 +509,53 @@ async def _close_orphaned_logins(
         logger.info("Closed %d orphaned login(s)", len(orphaned))
 
 
+async def _lifespan_cleanup(
+    state: ServerState,
+    shutdown: asyncio.Event,
+    tasks: list[asyncio.Task[None]],
+    lux_stop: threading.Event,
+    lux_thread: threading.Thread | None,
+) -> None:
+    """Shutdown sequence for the active lifespan.
+
+    Write logout FIRST — before stopping tasks or closing
+    anything.  The MCP subprocess may be killed at any moment
+    after Claude Code closes stdio, so the logout publish
+    must happen while the NATS connection is still healthy.
+    """
+    if state.owns_relay:
+        await _append_logout_event(state)
+    await _shutdown_tasks(shutdown, tasks)
+    if lux_thread is not None:
+        lux_stop.set()
+        lux_thread.join(timeout=2.0)
+    if state.unread_path is not None:
+        with suppress(FileNotFoundError):
+            state.unread_path.unlink()
+    if state.owns_relay:
+        try:
+            await state.relay.delete_session(state.session_key)
+        except Exception:
+            logger.exception("Failed to delete session %s", state.session_key)
+        await state.relay.close()
+    with suppress(OSError):
+        remove_active_session(state.session_key)
+
+
+def _start_lux_applet(
+    session_key: str,
+) -> tuple[threading.Event, threading.Thread | None]:
+    """Start the lux session dashboard if punt-lux is available."""
+    stop = threading.Event()
+    try:
+        from biff.integration.lux import start_session_applet  # noqa: PLC0415
+
+        thread = start_session_applet(session_key, stop)
+    except ImportError:
+        thread = None
+    return stop, thread
+
+
 @asynccontextmanager
 async def _active_lifespan(
     mcp: FastMCP[ServerState], state: ServerState
@@ -563,6 +611,9 @@ async def _active_lifespan(
     await refresh_read_messages(mcp, state)
     await refresh_wall(mcp, state)
 
+    # Start lux session dashboard applet (daemon thread, not asyncio).
+    lux_stop, lux_thread = _start_lux_applet(state.session_key)
+
     # Reap sentinels FIRST — writes logout events for sessions that
     # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
     # Then re-fetch sessions so orphan detection has clean KV state.
@@ -580,24 +631,13 @@ async def _active_lifespan(
     try:
         yield state
     finally:
-        # Write logout FIRST — before stopping tasks or closing
-        # anything.  The MCP subprocess may be killed at any moment
-        # after Claude Code closes stdio, so the logout publish
-        # must happen while the NATS connection is still healthy.
-        if state.owns_relay:
-            await _append_logout_event(state)
-        await _shutdown_tasks(shutdown, [poller, reaper, heartbeat, watcher])
-        if state.unread_path is not None:
-            with suppress(FileNotFoundError):
-                state.unread_path.unlink()
-        if state.owns_relay:
-            try:
-                await state.relay.delete_session(state.session_key)
-            except Exception:
-                logger.exception("Failed to delete session %s", state.session_key)
-            await state.relay.close()
-        with suppress(OSError):
-            remove_active_session(state.session_key)
+        await _lifespan_cleanup(
+            state,
+            shutdown,
+            [poller, reaper, heartbeat, watcher],
+            lux_stop,
+            lux_thread,
+        )
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:

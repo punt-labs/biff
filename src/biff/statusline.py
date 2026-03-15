@@ -17,16 +17,22 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from biff.relay import atomic_write
 from biff.session_key import find_session_key
+from biff.unread import (
+    DisplayItemView,
+    SessionUnread,
+    as_str_dict,
+    read_session_unread,
+)
 
 # Well-known paths ----------------------------------------------------------
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 STASH_PATH = Path.home() / ".biff" / "statusline-original.json"
 UNREAD_DIR = Path.home() / ".biff" / "unread"
+SESSION_DATA_DIR = Path.home() / ".biff" / "session-data"
 
 # Result types --------------------------------------------------------------
 
@@ -144,6 +150,21 @@ def uninstall(
     return UninstallResult(uninstalled=True, message="Uninstalled.")
 
 
+# Session data tee ----------------------------------------------------------
+
+
+def _tee_session_data(
+    raw: str,
+    session_data_dir: Path = SESSION_DATA_DIR,
+) -> None:
+    """Persist raw session JSON for the lux applet. Never raises."""
+    try:
+        key = find_session_key()
+        atomic_write(session_data_dir / f"{key}.json", raw)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 # Runtime -------------------------------------------------------------------
 
 
@@ -162,6 +183,7 @@ def run_statusline(
     biff messaging segment is always appended.
     """
     stdin_data = sys.stdin.read()
+    _tee_session_data(stdin_data)
     session = _parse_session_data(stdin_data)
 
     original_cmd = _resolve_original_command(stash_path)
@@ -172,7 +194,7 @@ def run_statusline(
     else:
         base_segments = _base_segments(session)
 
-    unread = _read_session_unread(unread_dir / f"{find_session_key()}.json")
+    unread = read_session_unread(unread_dir / f"{find_session_key()}.json")
     biff = _biff_segment(unread)
     display = _display_segment(unread.display_items if unread else ())
 
@@ -188,41 +210,9 @@ def run_statusline(
 def _parse_session_data(stdin_data: str) -> dict[str, object]:
     """Parse the JSON session blob from Claude Code's stdin."""
     try:
-        return _as_str_dict(json.loads(stdin_data))
+        return as_str_dict(json.loads(stdin_data))
     except (json.JSONDecodeError, ValueError):
         return {}
-
-
-def _as_str_dict(val: object) -> dict[str, object]:
-    """Narrow an opaque value to ``dict[str, object]``.
-
-    JSON dicts always have string keys, so this is a safe narrowing
-    after ``json.loads`` / ``dict.get()`` on parsed session data.
-    """
-    if isinstance(val, dict):
-        return cast("dict[str, object]", val)
-    return {}
-
-
-def _parse_display_items(val: object) -> list[DisplayItemView]:
-    """Parse the ``display_items`` array from the unread status file.
-
-    Accepts the raw JSON value and returns a typed list, silently
-    skipping malformed entries.
-    """
-    if not isinstance(val, list):
-        return []
-    result: list[DisplayItemView] = []
-    for raw in cast("list[object]", val):
-        if isinstance(raw, dict):
-            d = cast("dict[str, object]", raw)
-            result.append(
-                DisplayItemView(
-                    kind=str(d.get("kind", "")),
-                    text=str(d.get("text", "")),
-                )
-            )
-    return result
 
 
 # Base segments (repo, context, cost) ---------------------------------------
@@ -250,7 +240,7 @@ def _git_segment(session: dict[str, object]) -> str:
     and ``current_dir`` keys (not a plain string).
     """
     workspace_raw = session.get("workspace")
-    ws = _as_str_dict(workspace_raw)
+    ws = as_str_dict(workspace_raw)
     if ws:
         workspace_dir = ws.get("project_dir") or ws.get("current_dir", "")
     elif isinstance(workspace_raw, str):
@@ -292,12 +282,12 @@ def _context_segment(session: dict[str, object]) -> str:
     Green (default) below 50%, yellow 50-79%, red at 80%+.
     """
     try:
-        cw = _as_str_dict(session.get("context_window"))
+        cw = as_str_dict(session.get("context_window"))
         pct_raw = cw.get("used_percentage")
         if isinstance(pct_raw, (int, float)):
             pct = int(pct_raw)
         else:
-            usage = _as_str_dict(cw.get("current_usage"))
+            usage = as_str_dict(cw.get("current_usage"))
             size = cw.get("context_window_size", 0)
             if not isinstance(size, (int, float)) or size <= 0:
                 return ""
@@ -320,7 +310,7 @@ def _context_segment(session: dict[str, object]) -> str:
 def _cost_segment(session: dict[str, object]) -> str:
     """Format the session cost as ``$X.XX``."""
     try:
-        cost = _as_str_dict(session.get("cost"))
+        cost = as_str_dict(session.get("cost"))
         total = cost.get("total_cost_usd", 0)
         if isinstance(total, (int, float)) and total > 0:
             return f"${total:.2f}"
@@ -377,41 +367,6 @@ def _resolve_original_command(stash_path: Path) -> str | None:
         return cmd if isinstance(cmd, str) else None
     # Defensive: unexpected string form (schema requires object)
     return original
-
-
-@dataclass(frozen=True)
-class DisplayItemView:
-    """A display item as read from the unread status file."""
-
-    kind: str
-    text: str
-
-
-@dataclass(frozen=True)
-class SessionUnread:
-    """Unread state for a single session, parsed from a PPID-keyed file."""
-
-    user: str
-    count: int
-    tty_name: str
-    biff_enabled: bool = True
-    display_items: tuple[DisplayItemView, ...] = ()
-
-
-def _read_session_unread(path: Path) -> SessionUnread | None:
-    """Read a PPID-keyed unread file, returning ``None`` on any error."""
-    try:
-        data = json.loads(path.read_text())
-        items = _parse_display_items(data.get("display_items"))
-        return SessionUnread(
-            user=str(data.get("user", "")),
-            count=int(data.get("count", 0)),
-            tty_name=str(data.get("tty_name", "")),
-            biff_enabled=bool(data.get("biff_enabled", True)),
-            display_items=tuple(items),
-        )
-    except (OSError, json.JSONDecodeError, ValueError, TypeError):
-        return None
 
 
 def _biff_segment(unread: SessionUnread | None) -> str:

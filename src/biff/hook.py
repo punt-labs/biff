@@ -60,36 +60,10 @@ def _has_beads() -> bool:
 
 
 def _is_lux_enabled() -> bool:
-    """Check whether lux display mode is enabled.
+    """Check whether lux display mode is enabled (delegates to _stdlib)."""
+    from biff._stdlib import is_lux_enabled  # noqa: PLC0415
 
-    Reads ``.lux/config.md`` YAML frontmatter for ``display: "y"``.
-    Returns ``False`` if the file is absent, malformed, or display is off.
-    """
-    from biff._stdlib import find_git_root  # noqa: PLC0415
-
-    repo_root = find_git_root()
-    if repo_root is None:
-        return False
-    config = repo_root / ".lux" / "config.md"
-    if not config.is_file():
-        return False
-    try:
-        text = config.read_text()
-        # Parse YAML frontmatter: ---\ndisplay: "y"\n---
-        if not text.startswith("---"):
-            return False
-        end = text.find("---", 3)
-        if end == -1:
-            return False
-        frontmatter = text[3:end]
-        for line in frontmatter.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("display:"):
-                value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-                return value == "y"
-    except OSError:
-        pass
-    return False
+    return is_lux_enabled()
 
 
 def _read_hook_input() -> dict[str, object]:

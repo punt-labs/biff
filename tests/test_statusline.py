@@ -12,11 +12,8 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.statusline import (
     _LINE2_IDLE,
-    DisplayItemView,
     InstallResult,
-    SessionUnread,
     UninstallResult,
-    _as_str_dict,
     _base_segments,
     _biff_segment,
     _context_segment,
@@ -25,7 +22,6 @@ from biff.statusline import (
     _git_segment,
     _int_field,
     _parse_session_data,
-    _read_session_unread,
     _resolve_original_command,
     _run_original,
     install,
@@ -36,6 +32,7 @@ from biff.statusline import (
     write_settings,
     write_stash,
 )
+from biff.unread import DisplayItemView, SessionUnread, as_str_dict, read_session_unread
 
 runner = CliRunner()
 
@@ -210,14 +207,14 @@ class TestParseSessionData:
 
 class TestAsStrDict:
     def test_dict_passes_through(self) -> None:
-        result = _as_str_dict({"a": 1, "b": "two"})
+        result = as_str_dict({"a": 1, "b": "two"})
         assert result == {"a": 1, "b": "two"}
 
     def test_non_dict_returns_empty(self) -> None:
-        assert _as_str_dict("string") == {}
-        assert _as_str_dict(42) == {}
-        assert _as_str_dict(None) == {}
-        assert _as_str_dict([1, 2]) == {}
+        assert as_str_dict("string") == {}
+        assert as_str_dict(42) == {}
+        assert as_str_dict(None) == {}
+        assert as_str_dict([1, 2]) == {}
 
 
 class TestIntField:
@@ -532,7 +529,7 @@ class TestDisplaySegment:
 
 class TestReadSessionUnread:
     def test_missing_file(self, tmp_path: Path) -> None:
-        assert _read_session_unread(tmp_path / "nope.json") is None
+        assert read_session_unread(tmp_path / "nope.json") is None
 
     def test_valid_file(self, tmp_path: Path) -> None:
         path = tmp_path / "12345.json"
@@ -541,7 +538,7 @@ class TestReadSessionUnread:
                 {"user": "kai", "count": 5, "tty_name": "tty1", "preview": "@eric"}
             )
         )
-        result = _read_session_unread(path)
+        result = read_session_unread(path)
         assert result == SessionUnread("kai", 5, "tty1")
 
     def test_zero_count(self, tmp_path: Path) -> None:
@@ -549,19 +546,19 @@ class TestReadSessionUnread:
         path.write_text(
             json.dumps({"user": "kai", "count": 0, "tty_name": "", "preview": ""})
         )
-        result = _read_session_unread(path)
+        result = read_session_unread(path)
         assert result is not None
         assert result.count == 0
 
     def test_invalid_json(self, tmp_path: Path) -> None:
         path = tmp_path / "12345.json"
         path.write_text("not json")
-        assert _read_session_unread(path) is None
+        assert read_session_unread(path) is None
 
     def test_missing_tty_name_defaults(self, tmp_path: Path) -> None:
         path = tmp_path / "12345.json"
         path.write_text(json.dumps({"user": "kai", "count": 2, "preview": ""}))
-        result = _read_session_unread(path)
+        result = read_session_unread(path)
         assert result is not None
         assert result.tty_name == ""
 
@@ -578,7 +575,7 @@ class TestReadSessionUnread:
                 }
             )
         )
-        result = _read_session_unread(path)
+        result = read_session_unread(path)
         assert result is not None
         assert result.biff_enabled is False
 
@@ -587,7 +584,7 @@ class TestReadSessionUnread:
         path.write_text(
             json.dumps({"user": "kai", "count": 2, "tty_name": "tty1", "preview": ""})
         )
-        result = _read_session_unread(path)
+        result = read_session_unread(path)
         assert result is not None
         assert result.biff_enabled is True
 
@@ -606,7 +603,7 @@ class TestReadSessionUnread:
                 }
             )
         )
-        result = _read_session_unread(path)
+        result = read_session_unread(path)
         assert result is not None
         assert len(result.display_items) == 2
         assert result.display_items[0] == DisplayItemView(
@@ -621,7 +618,7 @@ class TestReadSessionUnread:
     def test_missing_display_items_defaults_empty(self, tmp_path: Path) -> None:
         path = tmp_path / "12345.json"
         path.write_text(json.dumps({"user": "kai", "count": 0, "tty_name": "tty1"}))
-        result = _read_session_unread(path)
+        result = read_session_unread(path)
         assert result is not None
         assert result.display_items == ()
 

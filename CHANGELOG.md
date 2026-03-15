@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Lux session status dashboard** — live dashboard showing repo, context window %, cost, and biff messaging status in the lux display surface. Statusline tees raw session JSON to `~/.biff/session-data/` for the applet to read. (DES-032)
+- **`src/biff/unread.py`** — shared `SessionUnread`, `DisplayItemView`, and reader functions extracted from `statusline.py` for reuse by the lux applet.
+- **`is_lux_enabled()` in `_stdlib.py`** — stdlib-only lux config check, extracted from `hook.py`.
+- **`[lux]` optional dependency** — `punt-lux>=0.14.0` for typed element construction.
+
 ## [1.4.1] - 2026-03-15
 
 ## [1.4.0] - 2026-03-15

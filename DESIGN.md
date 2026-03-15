@@ -3192,3 +3192,76 @@ needs to make a per-call security decision.
    the user should not be interrupted for.
 3. Use `permissionDecision: "deny"` only for hard security gates where the
    tool must not execute.
+
+## DES-032: Lux Session Status Dashboard — File-Based Coupling
+
+**Date:** 2026-03-15
+**Status:** Settled
+
+### Problem
+
+The statusline command receives rich session JSON from Claude Code every few
+seconds (workspace, context window, cost) but discards it after formatting two
+lines of text. Meanwhile, Lux provides a visual display surface. How should the
+session data reach the lux applet?
+
+### Decision
+
+File-based coupling via `~/.biff/session-data/{session_key}.json`. The
+statusline tees raw stdin JSON to disk before parsing. The lux applet reads
+it on a 5-second interval.
+
+### Alternatives Considered
+
+1. **Shared memory / IPC between statusline and applet.** Rejected: the
+   statusline is a short-lived subprocess invoked by Claude Code. No long-lived
+   process to share state with.
+2. **MCP server pushes session data to lux.** Rejected: the MCP server never
+   sees the raw session JSON — Claude Code sends it to the statusline command
+   via stdin, not to the MCP server.
+3. **Lux applet calls Claude Code API for session data.** Rejected: no such API
+   exists.
+
+### Architecture
+
+```text
+Claude Code --stdin JSON--> statusline.py
+                              |-- renders status bar (existing)
+                              +-- atomic_write -> ~/.biff/session-data/{key}.json
+
+MCP server tools --> _write_unread_file -> ~/.biff/unread/{key}.json
+
+Lux applet thread (every 5s):
+  |-- reads session-data file
+  |-- reads unread file
+  |-- build_status_elements() -> [Element, ...]
+  +-- client.show_async() -> Lux display
+```
+
+### Key Decisions
+
+1. **Daemon thread, not asyncio task.** The lux applet uses `LuxClient` (sync
+   socket I/O with its own listener thread). Running it in the asyncio event
+   loop would require wrapping every call in `run_in_executor`. A daemon thread
+   is simpler and avoids blocking the event loop.
+2. **Typed elements via punt-lux.** `build_status_elements()` returns
+   `list[Element]` using `TextElement`, `ProgressElement`, `SeparatorElement`
+   from `punt_lux.protocol`. Compile-time validation catches typos in element
+   construction.
+3. **Optional dependency.** `punt-lux` is in `[project.optional-dependencies]`
+   under `[lux]`. Import is guarded by `try/except ImportError`. When absent,
+   the applet silently does not start.
+4. **Extracted shared types.** `SessionUnread`, `DisplayItemView`,
+   `read_session_unread`, and `parse_display_items` moved from `statusline.py`
+   to `src/biff/unread.py` to avoid duplication between the statusline and the
+   lux applet.
+5. **Extracted `is_lux_enabled`.** Moved from `hook.py` to `_stdlib.py` since
+   it uses only stdlib (Path, str ops) and is needed by both hooks and the
+   integration module.
+
+### Rules
+
+1. The statusline must tee raw JSON before parsing — never re-serialize.
+2. The lux applet must tolerate missing or corrupt session-data files.
+3. `build_status_elements` is a pure function (no I/O) for testability.
+4. The daemon thread must be joined with a timeout on shutdown.

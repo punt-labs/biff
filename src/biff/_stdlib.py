@@ -192,3 +192,40 @@ def remove_active_session(session_key: str) -> None:
 def sentinel_dir(repo_name: str) -> Path:
     """Sentinel directory for a repo: ``~/.biff/sentinels/{repo_name}/``."""
     return Path.home() / ".biff" / "sentinels" / repo_name
+
+
+# ── Lux helpers ─────────────────────────────────────────────────────
+
+
+def is_lux_enabled(repo_root: Path | None = None) -> bool:
+    """Check whether lux display mode is enabled.
+
+    Reads ``.lux/config.md`` YAML frontmatter for ``display: "y"``.
+    Returns ``False`` if the file is absent, malformed, or display is off.
+
+    Uses only stdlib — safe for hook entry points and lightweight callers.
+    """
+    if repo_root is None:
+        repo_root = find_git_root()
+    if repo_root is None:
+        return False
+    config = repo_root / ".lux" / "config.md"
+    if not config.is_file():
+        return False
+    try:
+        text = config.read_text()
+        # Parse YAML frontmatter: ---\ndisplay: "y"\n---
+        if not text.startswith("---"):
+            return False
+        end = text.find("---", 3)
+        if end == -1:
+            return False
+        frontmatter = text[3:end]
+        for line in frontmatter.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("display:"):
+                value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+                return value == "y"
+    except OSError:
+        pass
+    return False

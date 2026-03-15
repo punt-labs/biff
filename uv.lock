@@ -892,11 +892,15 @@ dependencies = [
 dev = [
     { name = "claude-agent-sdk" },
     { name = "mypy" },
+    { name = "punt-lux" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
+]
+lux = [
+    { name = "punt-lux" },
 ]
 
 [package.metadata]
@@ -905,6 +909,8 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=3.0.0,<4" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.1" },
     { name = "nats-py", extras = ["nkeys"], specifier = ">=2.13.1,<3" },
+    { name = "punt-lux", marker = "extra == 'dev'", specifier = ">=0.14.0" },
+    { name = "punt-lux", marker = "extra == 'lux'", specifier = ">=0.14.0" },
     { name = "pydantic", specifier = ">=2.0.0,<3" },
     { name = "pydantic-settings", specifier = ">=2.0.0,<3" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400" },
@@ -915,7 +921,22 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.13.0" },
     { name = "typer", specifier = ">=0.15.0,<1" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["lux", "dev"]
+
+[[package]]
+name = "punt-lux"
+version = "0.14.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fastmcp" },
+    { name = "pydantic" },
+    { name = "rich" },
+    { name = "typer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/85/26/6f8ab7b42e2c1942a8cf4bcddbca153e5f36cd9a8ca23c24ae727b1ff9be/punt_lux-0.14.2.tar.gz", hash = "sha256:8d83f4702a913c4a0ad2b7289943b2d61c9133e440b240230a393be9a7be63fa", size = 77388, upload-time = "2026-03-14T21:35:58.959Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/9b/9a6e8a43f751c2dc819fc7ca978266010d45d49bf16076b29ec23a56d2a4/punt_lux-0.14.2-py3-none-any.whl", hash = "sha256:e4731a2cb52d7baa296436a149e2ef5e9a290fa023df40e4a078340e8da0f43a", size = 82597, upload-time = "2026-03-14T21:35:57.42Z" },
+]
 
 [[package]]
 name = "py-key-value-aio"
