@@ -18,15 +18,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
+from biff._stdlib import biff_data_dir
+
 
 def hint_dir(worktree_root: str) -> Path:
-    """Worktree-scoped hint directory: ``~/.biff/hints/{hash}/``."""
+    """Worktree-scoped hint directory: ``~/.punt-labs/biff/hints/{hash}/``."""
     h = (
         hashlib.sha256(worktree_root.encode()).hexdigest()[:16]
         if worktree_root
         else "default"
     )
-    return Path.home() / ".biff" / "hints" / h
+    return biff_data_dir() / "hints" / h
 
 
 def write_plan_marker(worktree_root: str, plan_text: str) -> None:

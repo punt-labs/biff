@@ -780,7 +780,7 @@ async def _repl() -> None:
     wall changes are detected via 2s timeout polling.
 
     Readline provides line editing (arrow keys), command history
-    (up/down, persisted to ``~/.biff/repl_history``), and tab
+    (up/down, persisted to ``~/.punt-labs/biff/repl_history``), and tab
     completion for command names.
     """
     from biff.dispatch import available_commands

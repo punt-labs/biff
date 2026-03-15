@@ -4,7 +4,7 @@ Importing and calling ``setup()`` before the first ``input()`` enables:
 
 - **Line editing**: arrow keys, Home/End, Ctrl-A/E, etc.
 - **Command history**: up/down arrows recall previous commands.
-  Persisted to ``~/.biff/repl_history`` across sessions.
+  Persisted to ``~/.punt-labs/biff/repl_history`` across sessions.
 - **Tab completion**: completes command names from ``available_commands()``.
 """
 
@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import atexit
 import logging
-from pathlib import Path
+
+from biff._stdlib import BIFF_DATA_DIR
 
 logger = logging.getLogger(__name__)
 
-_HISTORY_PATH = Path.home() / ".biff" / "repl_history"
+_HISTORY_PATH = BIFF_DATA_DIR / "repl_history"
 _MAX_HISTORY = 1000
 
 
