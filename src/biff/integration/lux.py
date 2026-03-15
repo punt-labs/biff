@@ -39,7 +39,6 @@ _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 SCENE_ID = "biff-session-status"
 FRAME_ID = "biff-session"
-FRAME_TITLE = "Session Status"
 FRAME_SIZE = (360, 280)
 
 
@@ -87,7 +86,7 @@ def _context_fraction(session: dict[str, object]) -> float | None:
         return None
     pct = cw.get("used_percentage")
     if isinstance(pct, (int, float)):
-        return pct / 100.0
+        return max(0.0, min(1.0, pct / 100.0))
     return None
 
 
