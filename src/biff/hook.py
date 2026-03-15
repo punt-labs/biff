@@ -176,12 +176,7 @@ def _pre_tool_use_suggest(reason: str) -> dict[str, object]:
     it hijacks the permission system and overrides ``acceptEdits`` mode,
     causing every Edit/Write to prompt the user (punt-kit DES-017).
     """
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": reason,
-        }
-    }
+    return _hook_context("PreToolUse", reason)
 
 
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  # noqa: ARG001
