@@ -125,7 +125,7 @@ async def _do_talk_listen(
                     if to_key and to_key != session_key:
                         return
             except (json.JSONDecodeError, TypeError):
-                pass
+                logger.debug("Failed to parse talk notification", exc_info=True)
         event.set()
 
     sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]

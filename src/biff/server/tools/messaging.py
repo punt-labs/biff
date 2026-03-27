@@ -58,6 +58,12 @@ async def _resolve_recipient(
                 msg = f"No active session @{user}:{tty}. Try @{user} to broadcast."
             else:
                 msg = f"User @{user} not found in visible repos."
+            _log.warning(
+                "Write failed: %r (visible_repos=%s, sessions=%d)",
+                msg,
+                sorted(state.visible_repos),
+                len(all_sessions),
+            )
             raise ValueError(msg)
     else:
         relay_key = user

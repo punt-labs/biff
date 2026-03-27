@@ -174,6 +174,9 @@ async def notify_tool_list_changed() -> None:
                 "Failed to send tool list changed notification",
                 exc_info=True,
             )
+            # Session is dead — clear it so the poller stops
+            # hammering a closed stream every tick.
+            _session = None
 
 
 async def _sync_unread_file(
@@ -433,13 +436,13 @@ async def _manage_talk_subscription(
                     # is unreliable (different coroutine context).
                     state.activity.wake()
             except (json.JSONDecodeError, AttributeError, TypeError):
-                pass
+                logger.debug("Failed to process talk notification", exc_info=True)
 
         sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
             subject, cb=_on_talk_msg
         )
     except Exception:  # noqa: BLE001
-        logger.debug("Failed to subscribe to talk notifications")
+        logger.warning("Failed to subscribe to talk notifications", exc_info=True)
         sub = None
 
     return wanted, sub
@@ -482,6 +485,28 @@ async def _active_tick(
         await _sync_unread_file(state, summary=summary)
 
     return last_count, last_wall, last_talk
+
+
+async def _safe_tick(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    last_count: int,
+    last_wall: tuple[str, str],
+    last_talk: str,
+) -> tuple[int, tuple[str, str], str]:
+    """Wrap ``_active_tick`` with error handling.
+
+    A transient NATS error must not kill the poller — log and retry
+    on the next interval.  ``CancelledError`` is re-raised so shutdown
+    propagates correctly.
+    """
+    try:
+        return await _active_tick(mcp, state, last_count, last_wall, last_talk)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.warning("Poller tick failed, will retry", exc_info=True)
+        return last_count, last_wall, last_talk
 
 
 async def poll_inbox(
@@ -545,13 +570,13 @@ async def poll_inbox(
             if tracker.napping:
                 if tracker.seconds_since_nap_poll() < nap_interval:
                     continue
-                last_count, last_wall, last_talk = await _active_tick(
+                last_count, last_wall, last_talk = await _safe_tick(
                     mcp, state, last_count, last_wall, last_talk
                 )
                 tracker.record_nap_poll()
                 continue
 
-            last_count, last_wall, last_talk = await _active_tick(
+            last_count, last_wall, last_talk = await _safe_tick(
                 mcp, state, last_count, last_wall, last_talk
             )
     finally:

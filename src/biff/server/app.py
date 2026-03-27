@@ -7,7 +7,6 @@ tools registered. The returned server is run via ``mcp.run(transport=...)``.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 import signal
 import threading
@@ -622,12 +621,29 @@ async def _active_lifespan(
     # Runs after session registration (which ensures NATS is connected)
     # but before tty assignment (which needs visible_repos).
     if state.config.orgs and isinstance(state.relay, NatsRelay):
+        logger.info("Org discovery: querying orgs=%s", state.config.orgs)
         org_results = await asyncio.gather(
             *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
         )
         org_repos = frozenset[str]().union(*org_results)
+        logger.info(
+            "Org discovery: found %d repos: %s",
+            len(org_repos),
+            sorted(org_repos),
+        )
         if org_repos:
-            state = dataclasses.replace(state, org_repos=org_repos)
+            # Mutate in-place so tool closures (which captured `state`
+            # during registration) see the updated visible_repos.
+            object.__setattr__(state, "org_repos", org_repos)
+        else:
+            logger.warning(
+                "Org discovery returned no repos — cross-repo visibility disabled",
+            )
+
+    logger.info(
+        "Visible repos: %s",
+        sorted(state.visible_repos),
+    )
 
     # Auto-assign a ttyN name so the status bar always has identity.
     # assign_unique_tty_name writes to KV and verifies in one step,
@@ -636,6 +652,7 @@ async def _active_lifespan(
         state.relay, state.session_key, state.visible_repos
     )
     set_tty_name(final_name)
+    logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
     # Write the initial unread file and wall state immediately so the
     # status line has identity from the first render (before the poller ticks).
