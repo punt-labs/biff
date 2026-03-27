@@ -159,7 +159,7 @@ def _tree_section(
     node: dict[str, object] = {"label": preview}
     if len(full_text) > _PREVIEW_LEN:
         node["children"] = [{"label": full_text}]
-    return TreeElement(id=element_id, nodes=[node], flat=True)
+    return TreeElement(id=element_id, nodes=[node])
 
 
 def build_status_elements(
