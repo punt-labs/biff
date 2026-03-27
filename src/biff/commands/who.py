@@ -9,7 +9,7 @@ from biff.formatting import format_who
 
 async def who(ctx: CliContext) -> CommandResult:
     """List active team members and what they're working on."""
-    sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
+    sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     if not sessions:
         return CommandResult(text="No sessions.", json_data=[])
     sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)

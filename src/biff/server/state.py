@@ -32,11 +32,24 @@ class ServerState:
     owns_relay: bool = True
     dormant: bool = False
     repo_root: Path | None = None
+    org_repos: frozenset[str] = field(default_factory=lambda: frozenset[str]())
 
     @property
     def session_key(self) -> str:
         """Composite key ``{user}:{tty}`` for this server instance."""
         return build_session_key(self.config.user, self.tty)
+
+    @property
+    def visible_repos(self) -> frozenset[str]:
+        """All repos visible to this session: self + explicit peers + org-discovered.
+
+        Merges ``config.visible_repos`` (repo_name + explicit peers) with
+        org-discovered repos from ``NatsRelay.discover_repos_for_org()``
+        (DES-034).
+        """
+        if not self.org_repos:
+            return self.config.visible_repos
+        return self.config.visible_repos | self.org_repos
 
 
 def create_state(
@@ -50,6 +63,7 @@ def create_state(
     pwd: str | None = None,
     dormant: bool = False,
     repo_root: Path | None = None,
+    org_repos: frozenset[str] | None = None,
 ) -> ServerState:
     """Create a ``ServerState`` from config and data directory.
 
@@ -88,4 +102,5 @@ def create_state(
         owns_relay=owns_relay,
         dormant=dormant,
         repo_root=repo_root,
+        org_repos=org_repos or frozenset(),
     )

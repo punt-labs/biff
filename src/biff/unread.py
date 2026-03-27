@@ -38,8 +38,10 @@ class SessionUnread:
     user: str
     count: int
     tty_name: str
+    repo: str = ""
     biff_enabled: bool = True
     display_items: tuple[DisplayItemView, ...] = ()
+    plan: str = ""
 
 
 def parse_display_items(val: object) -> list[DisplayItemView]:
@@ -77,8 +79,10 @@ def read_session_unread(path: Path) -> SessionUnread | None:
             user=str(data.get("user", "")),
             count=count,
             tty_name=str(data.get("tty_name", "")),
+            repo=str(data.get("repo", "")),
             biff_enabled=bool(data.get("biff_enabled", True)),
             display_items=tuple(items),
+            plan=str(data.get("plan", "")),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return None

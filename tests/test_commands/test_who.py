@@ -23,7 +23,6 @@ class TestWho:
         )
         result = await who(ctx)
         assert "@kai" in result.text
-        assert "coding" in result.text
         assert not result.error
         data = cast("list[dict[str, object]]", result.json_data)
         assert len(data) == 1

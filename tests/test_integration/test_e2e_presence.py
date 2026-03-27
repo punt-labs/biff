@@ -32,17 +32,18 @@ class TestCrossUserVisibility:
     """User A's presence changes are visible to User B."""
 
     @pytest.mark.transcript
-    async def test_plan_visible_via_who(
+    async def test_plan_visible_via_finger_from_who(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """kai sets a plan; eric sees it via /who."""
-        kai.transcript.title = "Cross-user: plan visible via /who"
-        kai.transcript.description = "kai sets a plan, eric checks who's online."
+        """kai sets a plan; eric sees it via /finger (not /who)."""
+        kai.transcript.title = "Cross-user: plan visible via /finger"
+        kai.transcript.description = "kai sets a plan, eric checks via finger."
 
         await kai.call("plan", message="refactoring the auth layer")
         result = await eric.call("who")
-
         assert "@kai" in result
+
+        result = await eric.call("finger", user="kai")
         assert "refactoring" in result
         assert "layer" in result
 
@@ -94,12 +95,10 @@ class TestMultiUserPresence:
         kai_sees = await kai.call("who")
         eric_sees = await eric.call("who")
 
-        # Both users see both plans
+        # Both users see both names (plan not shown in /who)
         for result in (kai_sees, eric_sees):
             assert "@kai" in result
             assert "@eric" in result
-            assert "refactoring auth" in result
-            assert "reviewing PRs" in result
 
     @pytest.mark.transcript
     async def test_finger_each_other(

@@ -178,7 +178,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await update_current_session(state)
         user, tty = parse_address(to)
 
-        all_sessions = await relay.get_sessions_for_repos(state.config.visible_repos)
+        all_sessions = await relay.get_sessions_for_repos(state.visible_repos)
         sessions = [s for s in all_sessions if s.user == user]
         if not sessions:
             return f"@{user} is not online."

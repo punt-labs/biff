@@ -17,6 +17,10 @@ from biff.integration.vox import (
     vox_binary,
 )
 
+# Opt out of the autouse _silence_vox fixture — these tests
+# manage vox mocking themselves.
+pytestmark = pytest.mark.vox
+
 VOX_PATH = "/usr/local/bin/vox"
 WHICH = "biff.integration.vox.shutil.which"
 EXEC = "asyncio.create_subprocess_exec"

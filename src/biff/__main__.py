@@ -140,19 +140,9 @@ def main(
     _quiet_output = quiet
     _user_override = user
 
-    if verbose:
-        logger = logging.getLogger("biff")
-        logger.setLevel(logging.DEBUG)
-        has_stderr = any(
-            isinstance(h, logging.StreamHandler)
-            and getattr(h, "stream", None) is sys.stderr  # pyright: ignore[reportUnknownArgumentType]
-            for h in logger.handlers
-        )
-        if not has_stderr:
-            handler = logging.StreamHandler(sys.stderr)
-            handler.setLevel(logging.DEBUG)
-            logger.addHandler(handler)
+    from biff.logging_config import configure_logging
 
+    configure_logging(stderr_level="DEBUG" if verbose else "WARNING")
     _suppress_nats_noise()
 
     if ctx.invoked_subcommand is None:
@@ -678,7 +668,7 @@ async def _handle_repl_talk(
         print("Talk requires a NATS relay.")
         return
 
-    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
+    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     sessions = [s for s in all_sessions if s.user == user_target]
     if not sessions:
         print(f"{display} is not online.")
@@ -929,7 +919,7 @@ def finger(
 @app.command("write")
 def write_cmd(
     to: Annotated[str, typer.Argument(help="Recipient, e.g. @kai or @kai:tty1")],
-    message: Annotated[str, typer.Argument(help="Message to send (max 512 chars)")],
+    message: Annotated[str, typer.Argument(help="Message to send (auto-splits)")],
 ) -> None:
     """Send a message to a teammate's inbox."""
     _run(lambda ctx: commands.write(ctx, to, message))
@@ -1457,9 +1447,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 print("Talk requires a NATS relay.")
                 return
 
-            all_sessions = await ctx.relay.get_sessions_for_repos(
-                ctx.config.visible_repos
-            )
+            all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
             sessions = [s for s in all_sessions if s.user == user_target]
             if not sessions:
                 print(f"@{user_target} is not online.")

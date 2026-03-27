@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from contextlib import suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,28 @@ def vibes_from_text(text: str) -> str:
 # Background tasks must be stored to prevent GC from cancelling them.
 _background_tasks: set[asyncio.Task[None]] = set()
 
+# Track spawned processes so we can kill+wait during shutdown.
+_spawned_procs: set[asyncio.subprocess.Process] = set()
+
+
+async def drain_background_tasks() -> None:
+    """Kill spawned vox processes and await their background tasks.
+
+    Called during server shutdown to ensure asyncio's child watcher
+    deregisters all PIDs before the event loop closes.  Without this,
+    SIGCHLD fires ``_do_waitpid`` on a closed loop, producing logging
+    errors on Python 3.13+.
+    """
+    for proc in list(_spawned_procs):
+        with suppress(OSError):
+            proc.kill()
+    # Await remaining tasks — they will complete quickly after kill.
+    tasks = list(_background_tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _background_tasks.clear()
+    _spawned_procs.clear()
+
 
 def speak_fire_and_forget(
     text: str,
@@ -117,9 +140,13 @@ def speak_fire_and_forget(
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            # Don't await proc.wait() — true fire-and-forget.
-            # The process runs independently; OS reaps it.
             logger.debug("vox speak spawned (pid=%s)", proc.pid)
+            _spawned_procs.add(proc)
+            # Must await proc.wait() so asyncio's child watcher deregisters
+            # the PID before the event loop closes.  Without this, SIGCHLD
+            # fires _do_waitpid on a closed loop, causing logging errors.
+            await proc.wait()
+            _spawned_procs.discard(proc)
         except OSError:
             logger.debug("Failed to spawn vox speak", exc_info=True)
 

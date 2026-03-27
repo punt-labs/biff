@@ -236,17 +236,21 @@ class TestFormatTable:
 
 
 class TestFormatReadFromTty:
-    """format_read shows FROM_TTY column (biff-xk76)."""
+    """format_read renders a single FROM column with reply address (biff-q0mf)."""
 
-    def test_from_tty_in_header(self) -> None:
+    def test_from_column_includes_tty(self) -> None:
         msgs = [Message(from_user="kai", to_user="eric", body="hey", from_tty="tty1")]
         output = format_read(msgs)
-        assert "FROM_TTY" in output
-        assert "tty1" in output
+        assert "FROM" in output
+        assert "FROM_TTY" not in output
+        assert "@kai:tty1" in output
 
-    def test_empty_from_tty_shows_dash(self) -> None:
+    def test_from_column_without_tty(self) -> None:
         msgs = [Message(from_user="kai", to_user="eric", body="hey", from_tty="")]
         output = format_read(msgs)
+        assert "@kai" in output
+        # Should not have a colon after @kai (no tty)
         lines = output.strip().split("\n")
-        # Data row should contain "-" for the empty tty
-        assert any("-" in line and "kai" in line for line in lines[1:])
+        data_lines = [line for line in lines[1:] if "@kai" in line]
+        assert data_lines
+        assert "@kai:" not in data_lines[0]

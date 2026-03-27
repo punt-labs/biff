@@ -289,9 +289,15 @@ members = ["kai", "eric", "priya"]
 
 [relay]
 url = "tls://connect.ngs.global"
+
+[peers]
+orgs = ["my-org"]           # auto-discover repos in this GitHub org
+repos = ["my-org/other-repo"]  # explicit peers (always visible)
 ```
 
 Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see [relay configuration](docs/INSTALLING.md#relay-configuration).
+
+The `[peers]` section enables cross-repo commands (`/who`, `/write`, `/finger`). `orgs` auto-discovers repos with active sessions; `repos` lists peers that are always visible. Both are optional.
 
 `biff install` registers the MCP server, installs slash commands, and enables the plugin. `biff enable` activates biff in the current repo and deploys git hooks. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
 

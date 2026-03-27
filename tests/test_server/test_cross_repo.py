@@ -131,24 +131,24 @@ class TestExtractPeers:
     """extract_biff_fields parses [peers] section."""
 
     def test_no_peers_section(self) -> None:
-        _, _, _, peers = extract_biff_fields({})
+        _, _, _, peers, _ = extract_biff_fields({})
         assert peers == ()
 
     def test_peers_with_repos(self) -> None:
         raw: dict[str, object] = {
             "peers": {"repos": ["punt-labs__vox", "punt-labs__quarry"]}
         }
-        _, _, _, peers = extract_biff_fields(raw)
+        _, _, _, peers, _ = extract_biff_fields(raw)
         assert peers == ("punt-labs__vox", "punt-labs__quarry")
 
     def test_peers_empty_list(self) -> None:
         raw: dict[str, object] = {"peers": {"repos": []}}
-        _, _, _, peers = extract_biff_fields(raw)
+        _, _, _, peers, _ = extract_biff_fields(raw)
         assert peers == ()
 
     def test_peers_non_string_filtered(self) -> None:
         raw: dict[str, object] = {"peers": {"repos": ["valid", 42, True]}}
-        _, _, _, peers = extract_biff_fields(raw)
+        _, _, _, peers, _ = extract_biff_fields(raw)
         assert peers == ("valid",)
 
 
@@ -352,3 +352,93 @@ class TestTalkNotifySubjectCrossRepo:
         )
         with pytest.raises(ValueError, match="Invalid repo name"):
             relay.talk_notify_subject("kai", target_repo="bad.repo")
+
+
+# -- Org-based peer discovery (DES-034) --
+
+
+class TestExtractOrgs:
+    """extract_biff_fields parses [peers].orgs."""
+
+    def test_no_orgs(self) -> None:
+        _, _, _, _, orgs = extract_biff_fields({})
+        assert orgs == ()
+
+    def test_orgs_parsed(self) -> None:
+        raw: dict[str, object] = {"peers": {"orgs": ["punt-labs", "acme-corp"]}}
+        _, _, _, _, orgs = extract_biff_fields(raw)
+        assert orgs == ("punt-labs", "acme-corp")
+
+    def test_orgs_empty_list(self) -> None:
+        raw: dict[str, object] = {"peers": {"orgs": []}}
+        _, _, _, _, orgs = extract_biff_fields(raw)
+        assert orgs == ()
+
+    def test_orgs_non_string_filtered(self) -> None:
+        raw: dict[str, object] = {"peers": {"orgs": ["valid", 42]}}
+        _, _, _, _, orgs = extract_biff_fields(raw)
+        assert orgs == ("valid",)
+
+    def test_orgs_coexist_with_repos(self) -> None:
+        raw: dict[str, object] = {
+            "peers": {
+                "repos": ["punt-labs__vox"],
+                "orgs": ["punt-labs"],
+            }
+        }
+        _, _, _, peers, orgs = extract_biff_fields(raw)
+        assert peers == ("punt-labs__vox",)
+        assert orgs == ("punt-labs",)
+
+
+class TestBiffConfigOrgs:
+    """BiffConfig.orgs field and visible_repos interaction."""
+
+    def test_orgs_default_empty(self) -> None:
+        config = BiffConfig(user="kai", repo_name="biff")
+        assert config.orgs == ()
+
+    def test_orgs_stored(self) -> None:
+        config = BiffConfig(user="kai", repo_name="biff", orgs=("punt-labs",))
+        assert config.orgs == ("punt-labs",)
+
+    def test_visible_repos_excludes_orgs(self) -> None:
+        """config.visible_repos does NOT include org repos — those are runtime."""
+        config = BiffConfig(
+            user="kai",
+            repo_name="biff",
+            peers=("vox",),
+            orgs=("punt-labs",),
+        )
+        assert config.visible_repos == frozenset({"biff", "vox"})
+
+
+class TestStateVisibleRepos:
+    """ServerState.visible_repos merges config + org_repos."""
+
+    def test_no_org_repos(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="kai", repo_name="biff", peers=("vox",))
+        state = create_state(config, tmp_path, tty="tty1")
+        assert state.visible_repos == frozenset({"biff", "vox"})
+
+    def test_with_org_repos(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="kai", repo_name="biff", peers=("vox",))
+        state = create_state(
+            config,
+            tmp_path,
+            tty="tty1",
+            org_repos=frozenset({"quarry", "lux"}),
+        )
+        assert state.visible_repos == frozenset({"biff", "vox", "quarry", "lux"})
+
+    def test_org_repos_deduplicate_with_explicit(self, tmp_path: Path) -> None:
+        """Org discovery may find repos already in explicit peers."""
+        config = BiffConfig(user="kai", repo_name="biff", peers=("vox",))
+        state = create_state(
+            config,
+            tmp_path,
+            tty="tty1",
+            org_repos=frozenset({"vox", "quarry"}),
+        )
+        # vox appears in both — frozenset union deduplicates
+        assert state.visible_repos == frozenset({"biff", "vox", "quarry"})

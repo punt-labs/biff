@@ -166,6 +166,7 @@ markers = [
     "hosted: marks tests that require a hosted NATS account (run with -m hosted)",
     "stress: marks scale stress tests against hosted NATS (run with -m stress)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
+    "vox: marks tests that manage vox mocking themselves (opts out of _silence_vox)",
 ]
 
 [tool.coverage.run]

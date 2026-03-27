@@ -24,7 +24,7 @@ async def wall(
     """Post, read, or clear a team broadcast."""
     if clear:
         await broadcast_wall_to_repos(
-            ctx.relay, ctx.config.visible_repos, wall=None, target_repo=None
+            ctx.relay, ctx.visible_repos, wall=None, target_repo=None
         )
         return CommandResult(text="Wall cleared.", json_data={"status": "cleared"})
 
@@ -60,7 +60,7 @@ async def wall(
         return CommandResult(text=str(exc), json_data={"error": str(exc)}, error=True)
 
     await broadcast_wall_to_repos(
-        ctx.relay, ctx.config.visible_repos, wall=post, target_repo=None
+        ctx.relay, ctx.visible_repos, wall=post, target_repo=None
     )
     remaining = format_remaining(post.expires_at)
     return CommandResult(

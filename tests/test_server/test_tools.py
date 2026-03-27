@@ -209,8 +209,6 @@ class TestWhoTool:
         result = await fn()
         assert "@kai" in result
         assert "@eric" in result
-        assert "coding" in result
-        assert "reviewing" in result
 
     async def test_shows_idle_time(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(hours=3)
@@ -263,36 +261,15 @@ class TestWhoTool:
         # Most recently active first
         assert result.index("@alice") < result.index("@zara")
 
-    async def test_preserves_pipe_in_plan(self, state: ServerState) -> None:
-        await state.relay.update_session(
-            UserSession(user="kai", tty=_KAI_TTY, plan="fix | deploy")
-        )
-        fn = await _get_tool_fn(state, "who")
-        result = await fn()
-        assert "fix | deploy" in result
-
-    async def test_sanitizes_newline_in_plan(self, state: ServerState) -> None:
-        await state.relay.update_session(
-            UserSession(user="kai", tty=_KAI_TTY, plan="line1\nline2")
-        )
-        fn = await _get_tool_fn(state, "who")
-        result = await fn()
-        # Each row is one line; newlines in plan text are collapsed to spaces
-        for line in result.splitlines():
-            if "@kai" in line:
-                assert "line1 line2" in line
-                break
-
-    async def test_shows_tty_column(self, state: ServerState) -> None:
+    async def test_name_includes_tty(self, state: ServerState) -> None:
         await state.relay.update_session(
             UserSession(user="kai", tty=_KAI_TTY, plan="coding")
         )
         fn = await _get_tool_fn(state, "who")
         result = await fn()
-        assert "TTY" in result
-        assert _KAI_TTY in result
+        assert f"@kai:{_KAI_TTY}" in result
 
-    async def test_shows_host_and_dir_columns(self, state: ServerState) -> None:
+    async def test_shows_host_column(self, state: ServerState) -> None:
         await state.relay.update_session(
             UserSession(
                 user="kai",
@@ -305,9 +282,7 @@ class TestWhoTool:
         fn = await _get_tool_fn(state, "who")
         result = await fn()
         assert "HOST" in result
-        assert "DIR" in result
         assert "dev-box" in result
-        assert "kai" in result  # DIR shows last path component
 
 
 class TestPlanTool:
@@ -554,14 +529,6 @@ class TestToolInteractions:
         await biff_fn(enabled=False)
         result = await finger_fn(user="kai")
         assert "Messages: off" in result
-
-    async def test_plan_then_who_shows_plan(self, state: ServerState) -> None:
-        plan_fn = await _get_tool_fn(state, "plan")
-        who_fn = await _get_tool_fn(state, "who")
-        await plan_fn(message="working on tests")
-        result = await who_fn()
-        assert "@kai" in result
-        assert "working on tests" in result
 
 
 async def _tool_description(mcp: FastMCP[ServerState], name: str) -> str:

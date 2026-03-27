@@ -5,10 +5,10 @@ unread state, using typed punt-lux element classes for compile-time
 validation.  The background loop connects via ``LuxClient`` and
 pushes updates every 5 seconds.
 
-Follows the integration standard (L0-L3):
-- L0: Sentinel file check via ``is_lux_enabled()``
+Follows the integration standard:
+- L0: Socket connectivity check (try to connect, skip if display absent)
 - L2: Library import of ``punt_lux`` (guarded behind ImportError)
-- Graceful degradation when punt-lux is absent
+- Graceful degradation when punt-lux is absent or display not running
 """
 
 from __future__ import annotations
@@ -20,8 +20,12 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from biff._stdlib import BIFF_DATA_DIR, is_lux_enabled
-from biff.unread import SessionUnread, as_str_dict, read_session_unread
+from biff._stdlib import BIFF_DATA_DIR, display_repo_name
+from biff.unread import (
+    SessionUnread,
+    as_str_dict,
+    read_session_unread,
+)
 
 if TYPE_CHECKING:
     from punt_lux import LuxClient
@@ -37,9 +41,14 @@ UNREAD_DIR = BIFF_DATA_DIR / "unread"
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*\x07?|[()][A-B012])")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-SCENE_ID = "biff-session-status"
 FRAME_ID = "biff-session"
-FRAME_SIZE = (360, 280)
+FRAME_SIZE = (180, 400)
+
+
+def _scene_id(repo: str, tty: str) -> str:
+    """Per-session scene ID within the shared biff frame."""
+    base = f"biff-status-{repo}" if repo else "biff-status"
+    return f"{base}-{tty}" if tty else base
 
 
 # ── Data loading ─────────────────────────────────────────────────────
@@ -90,15 +99,6 @@ def _context_fraction(session: dict[str, object]) -> float | None:
     return None
 
 
-def _active_session_count() -> int:
-    """Count active session files in ``~/.punt-labs/biff/active/``."""
-    active = BIFF_DATA_DIR / "active"
-    try:
-        return sum(1 for f in active.iterdir() if f.is_file())
-    except OSError:
-        return 0
-
-
 def _cost_text(session: dict[str, object]) -> str:
     """Extract session cost as ``$X.XX``."""
     cost = as_str_dict(session.get("cost"))
@@ -110,75 +110,130 @@ def _cost_text(session: dict[str, object]) -> str:
     return ""
 
 
+_PREVIEW_LEN = 20
+
+
+def _truncate(text: str, length: int = _PREVIEW_LEN) -> str:
+    """Truncate *text* to *length* chars with ellipsis when needed."""
+    if len(text) <= length:
+        return text
+    return text[: length - 1] + "\u2026"
+
+
+def _extract_display_messages(
+    unread: SessionUnread,
+) -> tuple[str, str]:
+    """Extract wall and talk message bodies from display items.
+
+    Strips the ``@user (ttyN): `` attribution prefix, returning
+    just the message body for the first wall and first talk item.
+    """
+    wall_msg = ""
+    talk_msg = ""
+    for item in unread.display_items:
+        clean = _sanitize(item.text)
+        # Strip "@user (ttyN): " prefix — body follows the first ": "
+        if ": " in clean:
+            clean = clean.split(": ", maxsplit=1)[1]
+        if item.kind == "wall" and clean and not wall_msg:
+            wall_msg = clean
+        elif item.kind == "talk" and clean and not talk_msg:
+            talk_msg = clean
+    return wall_msg, talk_msg
+
+
+def _tree_section(
+    element_id: str,
+    preview: str,
+    full_text: str,
+) -> Element:
+    """Build a tree node with a truncated preview and full-text child.
+
+    Uses ``TreeElement`` (``imgui.tree_node``) for lightweight visual
+    weight — just an arrow + text, no background fill.  ``flat=True``
+    uses ``NoTreePushOnOpen`` so expanded children render at the same
+    indent level as the parent.
+    """
+    from punt_lux.protocol import TreeElement  # noqa: PLC0415
+
+    node: dict[str, object] = {"label": preview}
+    if len(full_text) > _PREVIEW_LEN:
+        node["children"] = [{"label": full_text}]
+    return TreeElement(id=element_id, nodes=[node])
+
+
 def build_status_elements(
     session: dict[str, object],
     unread: SessionUnread | None,
     *,
-    active_count: int = 0,
+    prefix: str = "",
 ) -> list[Element]:
     """Build lux element tree for the session status dashboard.
 
-    Pure function — all data is passed in, no I/O.  The hero section
-    is the biff identity and message state.  Context bar and cost are
-    secondary — cost is omitted when unavailable.
+    Pure function — all data is passed in, no I/O.  Each session card
+    shows: repo, plan, messages+cost, wall, talk, context bar.
+
+    Wall, talk, and plan use ``TreeElement`` (``imgui.tree_node``) for
+    lightweight visual weight — just an arrow + text, no background
+    fill.  Only shown when content exists.
+
+    *prefix* namespaces element IDs so multiple sessions can coexist
+    in the same frame without ID collisions.
     """
     from punt_lux.protocol import (  # noqa: PLC0415
         ProgressElement,
-        SeparatorElement,
         TextElement,
     )
 
+    def _id(name: str) -> str:
+        return f"{prefix}{name}" if prefix else name
+
     elements: list[Element] = []
 
-    # ── Hero: biff identity and messaging ──
+    # ── Messages + cost (single line) ──
     if unread is None:
-        elements.append(TextElement(id="identity", content="not configured"))
+        elements.append(TextElement(id=_id("msg-status"), content="not configured"))
     else:
-        name = unread.user or "biff"
-        tty = f":{unread.tty_name}" if unread.tty_name else ""
-        elements.append(TextElement(id="identity", content=f"{name}{tty}"))
-        if not unread.biff_enabled:
-            elements.append(TextElement(id="msg-status", content="messaging off"))
-        else:
-            label = "message" if unread.count == 1 else "messages"
+        # ── Repo (identity comes first) ──
+        if unread.repo:
             elements.append(
                 TextElement(
-                    id="msg-status",
-                    content=f"{unread.count} {label}",
+                    id=_id("repo"),
+                    content=display_repo_name(unread.repo),
                 )
             )
 
-        # Presence count (caller provides total active sessions)
-        others = active_count - 1  # exclude self
-        if others > 0:
-            label = "other" if others == 1 else "others"
+        # ── Plan (tree node) ──
+        if unread.plan:
             elements.append(
-                TextElement(id="presence", content=f"{others} {label} online")
+                _tree_section(_id("plan"), _truncate(unread.plan), unread.plan)
             )
 
-        # Wall/talk display items — sanitize user-supplied text
-        for i, item in enumerate(unread.display_items):
-            clean = _sanitize(item.text)
-            if clean:
-                prefix = "wall" if item.kind == "wall" else "talk"
-                elements.append(
-                    TextElement(
-                        id=f"display-{i}",
-                        content=f"[{prefix}] {clean}",
-                    )
-                )
+        # ── Messages + cost ──
+        if not unread.biff_enabled:
+            msg_text = "messaging off"
+        else:
+            label = "message" if unread.count == 1 else "messages"
+            msg_text = f"{unread.count} {label}"
 
-    # ── Secondary: context and cost ──
+        cost = _cost_text(session)
+        if cost:
+            msg_text = f"{msg_text}  {cost}"
+
+        elements.append(TextElement(id=_id("msg-status"), content=msg_text))
+
+        # ── Wall/talk (tree nodes) ──
+        wall_msg, talk_msg = _extract_display_messages(unread)
+
+        if wall_msg:
+            elements.append(_tree_section(_id("wall"), _truncate(wall_msg), wall_msg))
+        if talk_msg:
+            elements.append(_tree_section(_id("talk"), _truncate(talk_msg), talk_msg))
+
+    # ── Context bar (ends the section) ──
     frac = _context_fraction(session)
-    cost = _cost_text(session)
-    if frac is not None or cost:
-        elements.append(SeparatorElement())
-
     if frac is not None:
-        elements.append(ProgressElement(id="ctx-bar", fraction=frac))
-
-    if cost:
-        elements.append(TextElement(id="cost", content=cost))
+        elements.append(ProgressElement(id=_id("ctx-bar"), fraction=frac))
 
     return elements
 
@@ -186,26 +241,45 @@ def build_status_elements(
 # ── Rendering ────────────────────────────────────────────────────────
 
 
-def render_session_status(client: LuxClient, session_key: str) -> None:
-    """Load data, build elements, push to lux via ``show_async``."""
+def _element_ids(elements: list[Element]) -> tuple[str, ...]:
+    """Return the ordered tuple of element IDs (structure fingerprint)."""
+    return tuple(getattr(e, "id", None) or "" for e in elements)
+
+
+def _element_patchable_value(element: Element) -> dict[str, object]:
+    """Extract patchable fields from an element based on its kind."""
+    kind = getattr(element, "kind", "")
+    if kind == "text":
+        return {"content": getattr(element, "content", "")}
+    if kind == "progress":
+        return {"fraction": getattr(element, "fraction", 0.0)}
+    if kind == "tree":
+        return {"nodes": getattr(element, "nodes", [])}
+    return {}
+
+
+def _load_and_build(
+    session_key: str,
+    tty: str,
+) -> tuple[str, str, list[Element]]:
+    """Load session data and build elements. Returns (repo, title, elements).
+
+    *tty* is used to namespace element IDs (e.g. ``"tty1-"``).
+    """
     session = load_session_data(session_key)
     unread_path = UNREAD_DIR / f"{session_key}.json"
     unread = read_session_unread(unread_path)
-    elements = build_status_elements(
-        session, unread, active_count=_active_session_count()
-    )
-
+    id_prefix = f"{tty}-" if tty else ""
+    elements = build_status_elements(session, unread, prefix=id_prefix)
     repo = _git_text(session)
-    title = f"Biff: {repo}" if repo else "Biff"
-
-    if elements:
-        client.show_async(
-            SCENE_ID,
-            elements,
-            frame_id=FRAME_ID,
-            frame_title=title,
-            frame_size=FRAME_SIZE,
-        )
+    # Section header = identity (user:tty), not repo:tty
+    if unread is not None:
+        name = unread.user or "biff"
+        tty_label = f":{unread.tty_name}" if unread.tty_name else ""
+        title = f"{name}{tty_label}"
+    else:
+        title = f"biff:{tty}" if tty else "biff"
+    return repo, title, elements
 
 
 # ── Background loop ──────────────────────────────────────────────────
@@ -217,15 +291,52 @@ _FAILURE_ESCALATION_THRESHOLD = 3
 def session_status_loop(
     client: LuxClient,
     session_key: str,
+    tty: str,
     stop_event: threading.Event,
     *,
     interval: float = 5.0,
+    initial_ids: tuple[str, ...] = (),
+    initial_repo: str = "",
 ) -> None:
-    """Background thread: re-render dashboard every *interval* seconds."""
+    """Background thread: re-render dashboard every *interval* seconds.
+
+    Uses ``update_async`` (patches) when the element structure hasn't
+    changed, preserving the window's z-order and collapsed state.
+    Falls back to ``show_async`` when elements are added or removed.
+    """
+    from punt_lux.protocol import Patch  # noqa: PLC0415
+
+    prev_ids = initial_ids
+    prev_repo = initial_repo
     consecutive_failures = 0
     while not stop_event.wait(interval):
         try:
-            render_session_status(client, session_key)
+            repo, title, elements = _load_and_build(session_key, tty)
+            if not elements or not repo:
+                consecutive_failures = 0
+                continue
+            scene = _scene_id(repo, tty)
+            cur_ids = _element_ids(elements)
+            if cur_ids == prev_ids and repo == prev_repo:
+                patches = [
+                    Patch(id=eid, set=_element_patchable_value(el))
+                    for eid, el in zip(cur_ids, elements, strict=True)
+                    if eid
+                ]
+                if patches:
+                    client.update_async(scene, patches)
+            else:
+                client.show_async(
+                    scene,
+                    elements,
+                    title=title,
+                    frame_id=FRAME_ID,
+                    frame_title="Biff",
+                    frame_size=FRAME_SIZE,
+                    frame_layout="stack",
+                )
+            prev_ids = cur_ids
+            prev_repo = repo
             consecutive_failures = 0
         except Exception:  # noqa: BLE001
             consecutive_failures += 1
@@ -243,17 +354,31 @@ def start_session_applet(
     session_key: str,
     stop_event: threading.Event,
     *,
+    tty: str = "",
     interval: float = 5.0,
 ) -> threading.Thread | None:
-    """Start the background dashboard thread if lux is enabled.
+    """Start the background dashboard thread if lux is running.
 
     Connects a ``LuxClient``, registers the Applications menu item,
     starts the background listener, and launches the render loop.
     Returns ``None`` if lux is not available (graceful degradation).
-    """
-    if not is_lux_enabled():
-        return None
 
+    Availability is checked by attempting to connect to the display
+    socket — no config file read needed.  If the display isn't
+    running, ``connect()`` fails and we return ``None``.
+
+    *tty* (e.g. ``"tty1"``) namespaces element IDs so multiple sessions
+    can coexist in the shared biff frame without ID collisions.
+    """
+    # Check for the lux socket before attempting connection.
+    # The socket path is ~/Library/Application Support/punt-lux/lux.sock
+    # on macOS.  In CI (Linux, no display), the socket won't exist and
+    # we skip without importing punt-lux or creating threads.
+    sock_dir = Path.home() / "Library" / "Application Support" / "punt-lux"
+    sock_path = sock_dir / "lux.sock"
+    if not sock_path.exists():
+        logger.debug("Lux socket not found at %s, skipping applet", sock_path)
+        return None
     try:
         from punt_lux import LuxClient as _LuxClient  # noqa: PLC0415
     except ImportError:
@@ -263,22 +388,78 @@ def start_session_applet(
     client = _LuxClient(name="biff")
     try:
         client.declare_menu_item({"id": "app-biff-session", "label": "Session Status"})
+
+        def _on_menu_click(_msg: object) -> None:
+            """Re-render dashboard on Applications menu click."""
+            logger.info("Menu click: rendering session status for %s", tty)
+            try:
+                repo, title, elements = _load_and_build(session_key, tty)
+                logger.info("Menu click: repo=%s elements=%d", repo, len(elements))
+                if elements and repo:
+                    client.show_async(
+                        _scene_id(repo, tty),
+                        elements,
+                        title=title,
+                        frame_id=FRAME_ID,
+                        frame_title="Biff",
+                        frame_size=FRAME_SIZE,
+                        frame_layout="stack",
+                    )
+                    logger.info("Menu click: show_async sent")
+                else:
+                    logger.warning(
+                        "Menu click: no elements (repo=%s, elements=%d)",
+                        repo,
+                        len(elements),
+                    )
+            except Exception:  # noqa: BLE001
+                logger.warning("Menu click render failed", exc_info=True)
+
+        client.on_event("app-biff-session", "menu", _on_menu_click)
         client.connect()
         client.start_listener()
+        logger.info(
+            "Lux applet started: tty=%s connected=%s",
+            tty,
+            client.is_connected,
+        )
     except Exception:  # noqa: BLE001
-        logger.debug("Failed to connect to lux display", exc_info=True)
+        logger.warning("Failed to connect to lux display", exc_info=True)
         client.close()
         return None
 
-    # Render once immediately, then start the periodic loop
+    # Render once immediately (full scene), then start the periodic loop.
+    # Capture initial element IDs + repo so the loop can start with update_async.
+    initial_ids: tuple[str, ...] = ()
+    initial_repo = ""
     try:
-        render_session_status(client, session_key)
+        repo, title, elements = _load_and_build(session_key, tty)
+        initial_repo = repo
+        if elements and repo:
+            client.show_async(
+                _scene_id(repo, tty),
+                elements,
+                title=title,
+                frame_id=FRAME_ID,
+                frame_title="Biff",
+                frame_size=FRAME_SIZE,
+                frame_layout="stack",
+            )
+            initial_ids = _element_ids(elements)
     except Exception:  # noqa: BLE001
         logger.debug("Initial lux render failed", exc_info=True)
 
     def _loop_then_close() -> None:
         try:
-            session_status_loop(client, session_key, stop_event, interval=interval)
+            session_status_loop(
+                client,
+                session_key,
+                tty,
+                stop_event,
+                interval=interval,
+                initial_ids=initial_ids,
+                initial_repo=initial_repo,
+            )
         finally:
             client.close()
 

@@ -33,7 +33,7 @@ class TestFormatWho:
         result = format_who([session])
         assert "@kai" in result
         assert "tty1" in result
-        assert "working on biff" in result
+        # /who no longer shows plan text — use /finger
 
     def test_empty_sessions(self):
         result = format_who([])
@@ -41,14 +41,23 @@ class TestFormatWho:
         assert "NAME" in result
         assert "@" not in result
 
-    def test_no_plan(self):
-        session = UserSession(
-            user="kai",
-            tty="abcd1234",
-            last_active=datetime.now(UTC),
+    def test_plan_flag_column(self):
+        with_plan = UserSession(
+            user="kai", tty="abcd1234", plan="coding", last_active=datetime.now(UTC)
         )
-        result = format_who([session])
-        assert "(no plan)" in result
+        without_plan = UserSession(
+            user="eric", tty="efgh5678", last_active=datetime.now(UTC)
+        )
+        result = format_who([with_plan, without_plan])
+        assert "P" in result.splitlines()[0]  # header
+        lines = result.splitlines()
+        # kai has a plan → "+"
+        kai_line = next(line for line in lines if "@kai" in line)
+        eric_line = next(line for line in lines if "@eric" in line)
+        # P column is after S column; both have "+" for S (biff_enabled default)
+        # so kai's line has two consecutive "+" (S and P), eric has "+" then "-"
+        assert "+  +" in kai_line  # S=+, P=+
+        assert "+  -" in eric_line  # S=+, P=-
 
 
 class TestFormatFinger:
@@ -160,5 +169,5 @@ class TestFormatRead:
     def test_basic_messages(self):
         m = Message(from_user="kai", to_user="eric", body="hey there")
         result = format_read([m])
-        assert "kai" in result
+        assert "@kai" in result
         assert "hey there" in result

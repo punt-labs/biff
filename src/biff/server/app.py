@@ -7,6 +7,7 @@ tools registered. The returned server is run via ``mcp.run(transport=...)``.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import signal
 import threading
@@ -38,7 +39,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
-from biff.tty import assign_unique_tty_name, build_session_key, verify_tty_name
+from biff.tty import assign_unique_tty_name, build_session_key
 
 logger = logging.getLogger(__name__)
 
@@ -530,6 +531,12 @@ async def _lifespan_cleanup(
     if state.owns_relay:
         await _append_logout_event(state)
     await _shutdown_tasks(shutdown, tasks)
+    # Drain vox background tasks so child process waiters complete
+    # before the event loop closes.  Without this, SIGCHLD fires
+    # _do_waitpid on a closed loop, producing logging errors.
+    from biff.integration.vox import drain_background_tasks  # noqa: PLC0415
+
+    await drain_background_tasks()
     if state.unread_path is not None:
         with suppress(FileNotFoundError):
             state.unread_path.unlink()
@@ -553,13 +560,14 @@ async def _lifespan_cleanup(
 
 def _start_lux_applet(
     session_key: str,
+    tty: str = "",
 ) -> tuple[threading.Event, threading.Thread | None]:
     """Start the lux session dashboard if punt-lux is available."""
     stop = threading.Event()
     try:
         from biff.integration.lux import start_session_applet  # noqa: PLC0415
 
-        thread = start_session_applet(session_key, stop)
+        thread = start_session_applet(session_key, stop, tty=tty)
     except Exception:  # noqa: BLE001
         logger.debug("Failed to start lux applet", exc_info=True)
         return stop, None
@@ -606,15 +614,28 @@ async def _active_lifespan(
             worktree_root=str(state.repo_root) if state.repo_root else "",
         )
 
+    # Register session in KV before TTY assignment so
+    # assign_unique_tty_name can write tty_name to the entry.
+    await update_current_session(state)
+
+    # Org discovery (DES-034): discover repos for configured orgs.
+    # Runs after session registration (which ensures NATS is connected)
+    # but before tty assignment (which needs visible_repos).
+    if state.config.orgs and isinstance(state.relay, NatsRelay):
+        org_results = await asyncio.gather(
+            *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
+        )
+        org_repos = frozenset[str]().union(*org_results)
+        if org_repos:
+            state = dataclasses.replace(state, org_repos=org_repos)
+
     # Auto-assign a ttyN name so the status bar always has identity.
-    auto_name = await assign_unique_tty_name(state.relay, state.session_key)
-    set_tty_name(auto_name)
-    await update_current_session(state, tty_name=auto_name)
-    # Verify no duplicate after write (closes TOCTOU window).
-    final_name = await verify_tty_name(state.relay, state.session_key, auto_name)
-    if final_name != auto_name:
-        set_tty_name(final_name)
-        await update_current_session(state, tty_name=final_name)
+    # assign_unique_tty_name writes to KV and verifies in one step,
+    # retrying on conflicts with first-writer-wins semantics.
+    final_name = await assign_unique_tty_name(
+        state.relay, state.session_key, state.visible_repos
+    )
+    set_tty_name(final_name)
 
     # Write the initial unread file and wall state immediately so the
     # status line has identity from the first render (before the poller ticks).
@@ -624,7 +645,7 @@ async def _active_lifespan(
     # Start lux session dashboard applet (daemon thread, not asyncio).
     # The lux key is the PID-based session key (same as statusline tee).
     lux_session_key = str(find_session_key())
-    lux_stop, lux_thread = _start_lux_applet(lux_session_key)
+    lux_stop, lux_thread = _start_lux_applet(lux_session_key, tty=final_name)
 
     # Reap sentinels FIRST — writes logout events for sessions that
     # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
@@ -632,7 +653,7 @@ async def _active_lifespan(
     await _reap_sentinels(state)
     sessions = await state.relay.get_sessions()
 
-    await _append_login_event(state, auto_name)
+    await _append_login_event(state, final_name)
     await _close_orphaned_logins(state, sessions)
 
     shutdown = asyncio.Event()

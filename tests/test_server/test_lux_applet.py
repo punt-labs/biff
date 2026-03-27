@@ -14,13 +14,13 @@ import pytest
 
 pytest.importorskip("punt_lux", reason="punt-lux not installed")
 
-from punt_lux.protocol import ProgressElement, SeparatorElement, TextElement
+from punt_lux.protocol import ProgressElement, TextElement, TreeElement
 
 from biff.integration.lux import (
-    _active_session_count,
     _context_fraction,
     _cost_text,
     _git_text,
+    _truncate,
     build_status_elements,
 )
 from biff.statusline import _tee_session_data
@@ -126,26 +126,6 @@ class TestCostText:
         assert _cost_text({}) == ""
 
 
-class TestActiveSessionCount:
-    def test_counts_files(self, tmp_path: Path) -> None:
-        active = tmp_path / "active"
-        active.mkdir()
-        (active / "kai-tty1").write_text("kai:tty1\nbiff\n")
-        (active / "eric-tty2").write_text("eric:tty2\nbiff\n")
-        with patch("biff.integration.lux.BIFF_DATA_DIR", tmp_path):
-            assert _active_session_count() == 2
-
-    def test_empty_dir(self, tmp_path: Path) -> None:
-        active = tmp_path / "active"
-        active.mkdir()
-        with patch("biff.integration.lux.BIFF_DATA_DIR", tmp_path):
-            assert _active_session_count() == 0
-
-    def test_missing_dir(self, tmp_path: Path) -> None:
-        with patch("biff.integration.lux.BIFF_DATA_DIR", tmp_path):
-            assert _active_session_count() == 0
-
-
 # --- Phase 2: build_status_elements --------------------------------------
 
 
@@ -156,21 +136,21 @@ class TestBuildStatusElements:
         assert isinstance(elements[0], TextElement)
         assert "not configured" in elements[0].content
 
-    def test_identity_shown(self) -> None:
+    def test_msg_status_shown(self) -> None:
         unread = SessionUnread("kai", 0, "tty1")
         elements = build_status_elements({}, unread)
-        identity = next(
-            e for e in elements if isinstance(e, TextElement) and e.id == "identity"
+        msg = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "msg-status"
         )
-        assert identity.content == "kai:tty1"
+        assert "0 messages" in msg.content
 
-    def test_identity_no_tty(self) -> None:
+    def test_msg_status_no_tty(self) -> None:
         unread = SessionUnread("kai", 0, "")
         elements = build_status_elements({}, unread)
-        identity = next(
-            e for e in elements if isinstance(e, TextElement) and e.id == "identity"
+        msg = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "msg-status"
         )
-        assert identity.content == "kai"
+        assert "0 messages" in msg.content
 
     def test_message_count_plural(self) -> None:
         unread = SessionUnread("kai", 3, "tty1")
@@ -206,34 +186,65 @@ class TestBuildStatusElements:
 
         types = [type(e) for e in elements]
         assert ProgressElement in types
-        assert SeparatorElement in types
 
         ctx_el = next(e for e in elements if isinstance(e, ProgressElement))
         assert ctx_el.fraction == 0.42
 
-        cost_el = next(
-            e for e in elements if isinstance(e, TextElement) and e.id == "cost"
+        # Cost is merged onto the msg-status line
+        msg = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "msg-status"
         )
-        assert cost_el.content == "$1.50"
+        assert "$1.50" in msg.content
+        assert "2 messages" in msg.content
 
-    def test_no_cost_omits_cost_element(self) -> None:
+    def test_no_cost_omits_cost_from_msg(self) -> None:
         session: dict[str, object] = {
             "context_window": {"used_percentage": 50},
         }
         unread = SessionUnread("kai", 0, "tty1")
         elements = build_status_elements(session, unread)
-        cost_els = [
-            e for e in elements if isinstance(e, TextElement) and e.id == "cost"
-        ]
-        assert len(cost_els) == 0
+        msg = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "msg-status"
+        )
+        assert "$" not in msg.content
 
-    def test_no_context_no_cost_no_separator(self) -> None:
+    def test_no_context_no_progress_bar(self) -> None:
         unread = SessionUnread("kai", 0, "tty1")
         elements = build_status_elements({}, unread)
-        separators = [e for e in elements if isinstance(e, SeparatorElement)]
-        assert len(separators) == 0
+        progress = [e for e in elements if isinstance(e, ProgressElement)]
+        assert len(progress) == 0
 
-    def test_display_items_rendered(self) -> None:
+    def test_wall_tree_section(self) -> None:
+        unread = SessionUnread(
+            "kai",
+            0,
+            "tty1",
+            display_items=(
+                DisplayItemView(kind="wall", text="@admin: deploy freeze until 5pm"),
+            ),
+        )
+        elements = build_status_elements({}, unread)
+        wall = next(
+            e for e in elements if isinstance(e, TreeElement) and e.id == "wall"
+        )
+        assert len(wall.nodes) == 1
+        assert "deploy freeze" in wall.nodes[0]["label"]
+
+    def test_talk_tree_section(self) -> None:
+        unread = SessionUnread(
+            "kai",
+            0,
+            "tty1",
+            display_items=(DisplayItemView(kind="talk", text="@eric: check PR"),),
+        )
+        elements = build_status_elements({}, unread)
+        talk = next(
+            e for e in elements if isinstance(e, TreeElement) and e.id == "talk"
+        )
+        assert len(talk.nodes) == 1
+        assert "check PR" in talk.nodes[0]["label"]
+
+    def test_wall_and_talk_both_shown(self) -> None:
         unread = SessionUnread(
             "kai",
             0,
@@ -244,16 +255,34 @@ class TestBuildStatusElements:
             ),
         )
         elements = build_status_elements({}, unread)
-        display_els = [
-            e
-            for e in elements
-            if isinstance(e, TextElement) and e.id.startswith("display-")
-        ]
-        assert len(display_els) == 2
-        assert "[wall]" in display_els[0].content
-        assert "[talk]" in display_els[1].content
+        trees = [e for e in elements if isinstance(e, TreeElement)]
+        ids = {e.id for e in trees}
+        assert "wall" in ids
+        assert "talk" in ids
 
-    def test_empty_display_items_skipped(self) -> None:
+    def test_plan_tree_section(self) -> None:
+        unread = SessionUnread(
+            "kai",
+            0,
+            "tty1",
+            plan="biff-waaf: lux widget UX redesign",
+        )
+        elements = build_status_elements({}, unread)
+        plan_el = next(
+            e for e in elements if isinstance(e, TreeElement) and e.id == "plan"
+        )
+        assert len(plan_el.nodes) == 1
+        assert "biff-waaf" in plan_el.nodes[0]["label"]
+
+    def test_no_plan_no_tree(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1")
+        elements = build_status_elements({}, unread)
+        plan_els = [
+            e for e in elements if isinstance(e, TreeElement) and e.id == "plan"
+        ]
+        assert len(plan_els) == 0
+
+    def test_empty_display_items_no_trees(self) -> None:
         unread = SessionUnread(
             "kai",
             0,
@@ -261,36 +290,60 @@ class TestBuildStatusElements:
             display_items=(DisplayItemView(kind="wall", text=""),),
         )
         elements = build_status_elements({}, unread)
-        display_els = [
-            e
-            for e in elements
-            if isinstance(e, TextElement) and e.id.startswith("display-")
-        ]
-        assert len(display_els) == 0
+        trees = [e for e in elements if isinstance(e, TreeElement)]
+        assert len(trees) == 0
 
-    def test_presence_shown_when_others_online(self) -> None:
-        unread = SessionUnread("kai", 0, "tty1")
-        elements = build_status_elements({}, unread, active_count=3)
-        presence = next(
-            e for e in elements if isinstance(e, TextElement) and e.id == "presence"
+    def test_long_wall_truncated_in_node(self) -> None:
+        long_msg = (
+            "deploy freeze until 5pm — do not push to main under any circumstances"
         )
-        assert presence.content == "2 others online"
-
-    def test_presence_singular(self) -> None:
-        unread = SessionUnread("kai", 0, "tty1")
-        elements = build_status_elements({}, unread, active_count=2)
-        presence = next(
-            e for e in elements if isinstance(e, TextElement) and e.id == "presence"
+        unread = SessionUnread(
+            "kai",
+            0,
+            "tty1",
+            display_items=(DisplayItemView(kind="wall", text=f"@admin: {long_msg}"),),
         )
-        assert presence.content == "1 other online"
+        elements = build_status_elements({}, unread)
+        wall = next(
+            e for e in elements if isinstance(e, TreeElement) and e.id == "wall"
+        )
+        node = wall.nodes[0]
+        # Preview label is truncated
+        assert len(node["label"]) <= 20
+        assert node["label"].endswith("\u2026")
+        # Full text in child node
+        assert node["children"][0]["label"] == long_msg
 
-    def test_presence_hidden_when_alone(self) -> None:
+    def test_short_wall_no_child_node(self) -> None:
+        unread = SessionUnread(
+            "kai",
+            0,
+            "tty1",
+            display_items=(DisplayItemView(kind="wall", text="@admin: short"),),
+        )
+        elements = build_status_elements({}, unread)
+        wall = next(
+            e for e in elements if isinstance(e, TreeElement) and e.id == "wall"
+        )
+        node = wall.nodes[0]
+        assert node["label"] == "short"
+        assert "children" not in node
+
+    def test_repo_shown(self) -> None:
+        unread = SessionUnread("kai", 0, "tty1", repo="punt-labs__biff")
+        elements = build_status_elements({}, unread)
+        repo_el = next(
+            e for e in elements if isinstance(e, TextElement) and e.id == "repo"
+        )
+        assert repo_el.content == "punt-labs/biff"
+
+    def test_repo_hidden_when_empty(self) -> None:
         unread = SessionUnread("kai", 0, "tty1")
-        elements = build_status_elements({}, unread, active_count=1)
-        presence_els = [
-            e for e in elements if isinstance(e, TextElement) and e.id == "presence"
+        elements = build_status_elements({}, unread)
+        repo_els = [
+            e for e in elements if isinstance(e, TextElement) and e.id == "repo"
         ]
-        assert len(presence_els) == 0
+        assert len(repo_els) == 0
 
     def test_all_ids_unique(self) -> None:
         session: dict[str, object] = {
@@ -302,10 +355,29 @@ class TestBuildStatusElements:
             1,
             "tty1",
             display_items=(
-                DisplayItemView(kind="wall", text="msg1"),
-                DisplayItemView(kind="talk", text="msg2"),
+                DisplayItemView(kind="wall", text="@admin: msg1"),
+                DisplayItemView(kind="talk", text="@eric: msg2"),
             ),
+            plan="working on stuff",
         )
         elements = build_status_elements(session, unread)
         ids = [e.id for e in elements if hasattr(e, "id") and e.id is not None]
         assert len(ids) == len(set(ids))
+
+
+class TestTruncate:
+    def test_short_text_unchanged(self) -> None:
+        assert _truncate("hello") == "hello"
+
+    def test_exact_length_unchanged(self) -> None:
+        assert _truncate("a" * 20) == "a" * 20
+
+    def test_long_text_truncated(self) -> None:
+        result = _truncate("a" * 30)
+        assert len(result) == 20
+        assert result.endswith("\u2026")
+
+    def test_custom_length(self) -> None:
+        result = _truncate("hello world", length=8)
+        assert len(result) == 8
+        assert result.endswith("\u2026")

@@ -102,34 +102,37 @@ def format_remaining(expires_at: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 WHO_SPECS: list[ColumnSpec] = [
-    ColumnSpec("NAME", min_width=4),
-    ColumnSpec("TTY", min_width=3),
+    ColumnSpec("NAME", min_width=10),
     ColumnSpec("REPO", min_width=4),
     ColumnSpec("IDLE", min_width=4),
     ColumnSpec("S", min_width=1),
+    ColumnSpec("P", min_width=1),
     ColumnSpec("HOST", min_width=4),
-    ColumnSpec("DIR", min_width=3),
-    ColumnSpec("PLAN", min_width=10, fixed=False),
 ]
 
 
-def _sanitize_plan(plan: str) -> str:
-    """Collapse newlines so plan text stays on one row."""
-    return plan.replace("\n", " ").replace("\r", " ")
+def _format_who_name(s: UserSession) -> str:
+    """Render a session as a copy-pasteable address for ``/write``."""
+    tty = s.tty_name or (s.tty[:8] if s.tty else "")
+    return f"@{s.user}:{tty}" if tty else f"@{s.user}"
 
 
 def format_who(sessions: list[UserSession]) -> str:
-    """Build a columnar table matching ``w(1)`` style with host, dir, and repo."""
+    """Build a columnar table matching BSD ``w(1)`` style.
+
+    The NAME column renders ``@user:tty`` so agents can copy the
+    address directly into ``/write``.  P column shows ``+`` if the
+    session has a plan, ``-`` otherwise.  Use ``/finger @user`` to
+    see the full plan text.
+    """
     rows: list[list[str]] = [
         [
-            f"@{s.user}",
-            s.tty_name or (s.tty[:8] if s.tty else "-"),
+            _format_who_name(s),
             display_repo_name(s.repo) or "-",
             format_idle(s.last_active),
             "+" if s.biff_enabled else "-",
+            "+" if s.plan else "-",
             s.hostname or "-",
-            last_component(s.pwd) if s.pwd else "-",
-            _sanitize_plan(s.plan) if s.plan else "(no plan)",
         ]
         for s in sessions
     ]
@@ -203,8 +206,7 @@ def format_finger_multi(sessions: list[UserSession]) -> str:
 # ---------------------------------------------------------------------------
 
 LAST_SPECS: list[ColumnSpec] = [
-    ColumnSpec("NAME", min_width=4),
-    ColumnSpec("TTY", min_width=3),
+    ColumnSpec("NAME", min_width=10),
     ColumnSpec("REPO", min_width=4),
     ColumnSpec("HOST", min_width=4),
     ColumnSpec("LOGIN", min_width=16),
@@ -268,8 +270,8 @@ def format_last(
     """Build a columnar table matching Unix ``last(1)`` style."""
     rows: list[list[str]] = []
     for login, logout in pairs:
-        name = f"@{login.user}"
-        tty = login.tty_name or (login.tty[:8] if login.tty else "-")
+        tty = login.tty_name or (login.tty[:8] if login.tty else "")
+        name = f"@{login.user}:{tty}" if tty else f"@{login.user}"
         repo = display_repo_name(login.repo) or "-"
         host = login.hostname or "-"
         login_str = _format_timestamp(login.timestamp)
@@ -282,7 +284,7 @@ def format_last(
         else:
             logout_str = "gone"
             duration = "-"
-        rows.append([name, tty, repo, host, login_str, logout_str, duration])
+        rows.append([name, repo, host, login_str, logout_str, duration])
 
     if not rows:
         return "No session history."
@@ -317,17 +319,21 @@ def format_wall(wall: WallPost) -> str:
 # ---------------------------------------------------------------------------
 
 READ_SPECS: list[ColumnSpec] = [
-    ColumnSpec("FROM", min_width=4),
-    ColumnSpec("FROM_TTY", min_width=3),
+    ColumnSpec("FROM", min_width=10),
     ColumnSpec("DATE", min_width=16),
     ColumnSpec("MESSAGE", min_width=10, fixed=False),
 ]
 
 
 def format_read(messages: list[Message]) -> str:
-    """Format messages in BSD ``from(1)`` style."""
+    """Format messages in BSD ``from(1)`` style.
+
+    The FROM column renders a copy-pasteable reply address:
+    ``@user:ttyNN`` when the sender's tty is known, ``@user`` otherwise.
+    """
     rows: list[list[str]] = []
     for m in messages:
         ts = m.timestamp.strftime("%a %b %d %H:%M")
-        rows.append([m.from_user, m.from_tty or "-", ts, m.body])
+        sender = f"@{m.from_user}:{m.from_tty}" if m.from_tty else f"@{m.from_user}"
+        rows.append([sender, ts, m.body])
     return format_table(READ_SPECS, rows)
