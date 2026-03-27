@@ -91,23 +91,24 @@ class TestTtyAutoAssign:
         result = await kai.call("tty")
         assert result == "TTY: tty3"
 
-    async def test_auto_increments(
+    async def test_auto_reuses_lowest(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """Auto-assign picks next number after highest existing."""
+        """Auto-assign picks lowest unused, not max+1."""
+        # kai=tty1, eric=tty2.  Rename kai to tty3 → existing={tty3, tty2}.
         await kai.call("tty", name="tty3")
+        # eric auto-assign → lowest unused is tty1.
         result = await eric.call("tty")
-        assert result == "TTY: tty4"
+        assert result == "TTY: tty1"
 
     async def test_ignores_non_sequential_names(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """Non-ttyN names don't affect auto-numbering."""
         await kai.call("tty", name="agent1")
-        # eric already has tty2 from startup auto-assign; agent1 is
-        # non-sequential, so the next ttyN after tty2 is tty3.
+        # kai=agent1, eric=tty2.  Lowest unused ttyN = tty1.
         result = await eric.call("tty")
-        assert result == "TTY: tty3"
+        assert result == "TTY: tty1"
 
 
 class TestTtyLengthLimit:

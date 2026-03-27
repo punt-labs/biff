@@ -397,6 +397,7 @@ class TestPlanTool:
 
 class TestSendMessageTool:
     async def test_sends_targeted_message(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="hey, PR is ready")
         assert "@eric" in result
@@ -417,6 +418,7 @@ class TestSendMessageTool:
         assert len(unread) == 1
 
     async def test_strips_at_prefix(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"@eric:{_ERIC_TTY}", message="hello")
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
@@ -436,6 +438,7 @@ class TestSendMessageTool:
         assert len(unread) == 1
 
     async def test_multiple_messages(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"eric:{_ERIC_TTY}", message="first")
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
@@ -443,6 +446,19 @@ class TestSendMessageTool:
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 2
+
+    async def test_targeted_nonexistent_returns_error(self, state: ServerState) -> None:
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to="nobody:tty99", message="hello")
+        assert "not found" in result
+
+    async def test_targeted_wrong_tty_suggests_broadcast(
+        self, state: ServerState
+    ) -> None:
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to="eric:fakeTty", message="hello")
+        assert "Try @eric to broadcast" in result
 
 
 class TestCheckMessagesTool:
@@ -452,6 +468,8 @@ class TestCheckMessagesTool:
         assert "No new messages" in result
 
     async def test_shows_unread(self, state: ServerState, tmp_path: Path) -> None:
+        # Register kai so eric can resolve the targeted address.
+        await state.relay.update_session(UserSession(user="kai", tty=_KAI_TTY))
         eric_state = create_state(
             BiffConfig(user="eric", repo_name=_TEST_REPO),
             tmp_path,
@@ -469,6 +487,8 @@ class TestCheckMessagesTool:
         assert "review my PR please" in result
 
     async def test_marks_as_read(self, state: ServerState, tmp_path: Path) -> None:
+        # Register kai so eric can resolve the targeted address.
+        await state.relay.update_session(UserSession(user="kai", tty=_KAI_TTY))
         eric_state = create_state(
             BiffConfig(user="eric", repo_name=_TEST_REPO),
             tmp_path,
@@ -486,6 +506,8 @@ class TestCheckMessagesTool:
         assert "No new messages" in result
 
     async def test_multiple_senders(self, state: ServerState, tmp_path: Path) -> None:
+        # Register kai so senders can resolve the targeted address.
+        await state.relay.update_session(UserSession(user="kai", tty=_KAI_TTY))
         eric_state = create_state(
             BiffConfig(user="eric", repo_name=_TEST_REPO),
             tmp_path,
@@ -614,6 +636,8 @@ class TestDynamicDescriptions:
 
     async def test_send_message_triggers_refresh(self, state: ServerState) -> None:
         mcp = _create_mcp(state)
+        # Register eric so kai can resolve the targeted address.
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         # Another user sends to kai first (targeted)
         await state.relay.deliver(
             Message(

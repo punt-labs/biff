@@ -122,11 +122,17 @@ class TestNextTtyName:
         assert next_tty_name(["tty1", "tty2"]) == "tty3"
 
     def test_ignores_non_sequential(self) -> None:
-        assert next_tty_name(["custom", "tty2"]) == "tty3"
+        assert next_tty_name(["custom", "tty2"]) == "tty1"
 
-    def test_gaps_filled_above(self) -> None:
-        """next_tty_name picks max+1, it does NOT fill gaps."""
-        assert next_tty_name(["tty1", "tty3"]) == "tty4"
+    def test_fills_lowest_gap(self) -> None:
+        """next_tty_name fills the lowest gap, not max+1."""
+        assert next_tty_name(["tty1", "tty3"]) == "tty2"
+
+    def test_reuses_lowest_gap(self) -> None:
+        assert next_tty_name(["tty1", "tty3", "tty5"]) == "tty2"
+
+    def test_reuses_below_existing(self) -> None:
+        assert next_tty_name(["tty2"]) == "tty1"
 
 
 class _RacingRelay:
