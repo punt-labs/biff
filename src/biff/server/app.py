@@ -7,7 +7,6 @@ tools registered. The returned server is run via ``mcp.run(transport=...)``.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 import signal
 import threading
@@ -633,7 +632,9 @@ async def _active_lifespan(
             sorted(org_repos),
         )
         if org_repos:
-            state = dataclasses.replace(state, org_repos=org_repos)
+            # Mutate in-place so tool closures (which captured `state`
+            # during registration) see the updated visible_repos.
+            object.__setattr__(state, "org_repos", org_repos)
         else:
             logger.warning(
                 "Org discovery returned no repos — cross-repo visibility disabled",
