@@ -20,8 +20,9 @@ def chunk_message(text: str) -> list[str]:
     Breaks at word boundaries when possible.  If a single word exceeds
     the limit, it is hard-split at the character boundary.
 
-    Returns a list of 1+ non-empty strings whose concatenation (joined
-    by spaces) reconstructs the original text.
+    Returns a list of 1+ non-empty strings whose concatenation, joined
+    by single spaces, equals ``" ".join(text.split())``.  Consecutive
+    whitespace and newlines are normalized during chunking.
     """
     if len(text) <= MAX_CHUNK_CHARS:
         return [text]

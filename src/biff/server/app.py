@@ -630,8 +630,8 @@ async def _active_lifespan(
             state = dataclasses.replace(state, org_repos=org_repos)
 
     # Auto-assign a ttyN name so the status bar always has identity.
-    # assign_unique_tty_name writes to KV and verifies in one step
-    # (claim-then-verify with deterministic tie-breaking).
+    # assign_unique_tty_name writes to KV and verifies in one step,
+    # retrying on conflicts with first-writer-wins semantics.
     final_name = await assign_unique_tty_name(
         state.relay, state.session_key, state.visible_repos
     )

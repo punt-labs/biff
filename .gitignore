@@ -88,6 +88,7 @@ scripts/demo.md
 scripts/quarry-statusline.sh
 scripts/test-talk-e2e.sh
 .lux/
+Lux.ini
 
 # Local uv overrides (depot find-links, etc.)
 uv.toml
