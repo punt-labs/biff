@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from biff.chunking import chunk_message
 from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activate import auto_enable
@@ -39,9 +40,7 @@ async def _resolve_recipient(
     target_repo: str | None = None
     if tty:
         # Search across visible repos for the target session.
-        all_sessions = await state.relay.get_sessions_for_repos(
-            state.config.visible_repos
-        )
+        all_sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
         session = resolve_tty_name(
             all_sessions, user, tty, local_repo=state.config.repo_name
         )
@@ -50,7 +49,7 @@ async def _resolve_recipient(
             if (
                 session.repo
                 and session.repo != state.config.repo_name
-                and session.repo in state.config.visible_repos
+                and session.repo in state.visible_repos
             ):
                 target_repo = session.repo
         else:
@@ -86,21 +85,29 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             to_user, display, target_repo = await _resolve_recipient(state, to)
         except ValueError as exc:
             return str(exc)
-        msg = Message(
-            from_user=state.config.user,
-            from_tty=get_tty_name(),
-            to_user=to_user,
-            body=message[:512],
-        )
+        chunks = chunk_message(message)
         await refresh_read_messages(mcp, state)
+
+        async def _deliver_chunks() -> None:
+            for chunk in chunks:
+                msg = Message(
+                    from_user=state.config.user,
+                    from_tty=get_tty_name(),
+                    to_user=to_user,
+                    body=chunk,
+                )
+                await state.relay.deliver(
+                    msg, sender_key=state.session_key, target_repo=target_repo
+                )
+
         fire_and_forget(
-            state.relay.deliver(
-                msg, sender_key=state.session_key, target_repo=target_repo
-            ),
+            _deliver_chunks(),
             logger=_log,
             description="message delivery",
         )
-        return f"Message sent to {display}."
+        parts = len(chunks)
+        suffix = f" ({parts} parts)" if parts > 1 else ""
+        return f"Message sent to {display}.{suffix}"
 
     @mcp.tool(
         name="read_messages",

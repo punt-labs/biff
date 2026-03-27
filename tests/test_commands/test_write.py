@@ -13,7 +13,7 @@ class TestWrite:
         result = await write(ctx, "@eric", "Hello!")
         assert not result.error
         assert "Message sent to @eric" in result.text
-        assert result.json_data == {"status": "sent", "to": "@eric"}
+        assert result.json_data == {"status": "sent", "to": "@eric", "parts": 1}
 
         # Verify message was delivered
         msgs = await relay.fetch_user_inbox("eric")
@@ -21,13 +21,31 @@ class TestWrite:
         assert msgs[0].body == "Hello!"
         assert msgs[0].from_user == "kai"
 
-    async def test_message_truncated(self, ctx: CliContext, relay: LocalRelay) -> None:
-        long_msg = "x" * 600
+    async def test_long_message_chunked(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        long_msg = " ".join(["word"] * 200)  # ~1000 chars
         result = await write(ctx, "@eric", long_msg)
         assert not result.error
         msgs = await relay.fetch_user_inbox("eric")
+        assert len(msgs) == 2
+        assert all(len(m.body) <= 512 for m in msgs)
+        reconstructed = " ".join(m.body for m in msgs)
+        assert reconstructed == long_msg
+        assert "(2 parts)" in result.text
+        json_data = result.json_data
+        assert isinstance(json_data, dict)
+        assert json_data["parts"] == 2
+
+    async def test_short_message_no_parts_label(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        result = await write(ctx, "@eric", "short")
+        assert not result.error
+        assert "parts" not in result.text
+        msgs = await relay.fetch_user_inbox("eric")
         assert len(msgs) == 1
-        assert len(msgs[0].body) == 512
+        assert msgs[0].body == "short"
 
     async def test_send_to_tty(self, ctx: CliContext) -> None:
         result = await write(ctx, "@eric:tty1", "targeted msg")

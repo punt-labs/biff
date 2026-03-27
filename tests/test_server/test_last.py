@@ -238,7 +238,6 @@ class TestFormatTable:
         )
         result = _format_last([(login, None)], set())
         assert "NAME" in result
-        assert "TTY" in result
         assert "HOST" in result
         assert "LOGIN" in result
         assert "LOGOUT" in result

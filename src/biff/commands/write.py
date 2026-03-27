@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from biff.chunking import chunk_message
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import Message
@@ -22,7 +23,7 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
     target_repo: str | None = None
     if tty:
         # Search across visible repos for the target session.
-        all_sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
+        all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
         session = resolve_tty_name(
             all_sessions, bare_user, tty, local_repo=ctx.config.repo_name
         )
@@ -36,23 +37,27 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
         relay_key = bare_user
     display = f"@{bare_user}:{tty}" if tty else f"@{bare_user}"
 
-    msg = Message(
-        from_user=ctx.user,
-        from_tty=ctx.tty_name,
-        to_user=relay_key,
-        body=message[:512],
-    )
+    chunks = chunk_message(message)
     try:
-        await ctx.relay.deliver(
-            msg, sender_key=ctx.session_key, target_repo=target_repo
-        )
+        for chunk in chunks:
+            msg = Message(
+                from_user=ctx.user,
+                from_tty=ctx.tty_name,
+                to_user=relay_key,
+                body=chunk,
+            )
+            await ctx.relay.deliver(
+                msg, sender_key=ctx.session_key, target_repo=target_repo
+            )
     except ValueError as exc:
         return CommandResult(
             text=str(exc),
             json_data={"status": "error", "to": to, "error": str(exc)},
             error=True,
         )
+    parts = len(chunks)
+    suffix = f" ({parts} parts)" if parts > 1 else ""
     return CommandResult(
-        text=f"Message sent to {display}.",
-        json_data={"status": "sent", "to": display},
+        text=f"Message sent to {display}.{suffix}",
+        json_data={"status": "sent", "to": display, "parts": parts},
     )

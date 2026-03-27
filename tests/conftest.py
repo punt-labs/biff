@@ -7,11 +7,31 @@ import socket
 import subprocess
 import time
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+@pytest.fixture(autouse=True)
+def _silence_vox(request: pytest.FixtureRequest) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Prevent vox from speaking during tests.
+
+    Patches ``vox_binary`` to return ``None`` so
+    ``speak_fire_and_forget`` is a no-op — no audio output,
+    no subprocess spawned, no system state changed.
+
+    Tests marked ``@pytest.mark.vox`` opt out and manage
+    vox mocking themselves.
+    """
+    node = request.node  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+    if node.get_closest_marker("vox"):  # pyright: ignore[reportUnknownMemberType]
+        yield
+        return
+    with patch("biff.integration.vox.vox_binary", return_value=None):
+        yield
 
 
 def _find_free_port() -> int:
