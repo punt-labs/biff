@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-03-26
+
 ### Added
 
 - **Org-based peer discovery** — `[peers].orgs` config auto-discovers repos from NATS KV subject metadata. Eliminates per-repo peer listing for organizations. 3-10x faster than explicit per-repo queries at 15-repo scale. (DES-034)
