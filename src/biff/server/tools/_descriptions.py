@@ -174,6 +174,9 @@ async def notify_tool_list_changed() -> None:
                 "Failed to send tool list changed notification",
                 exc_info=True,
             )
+            # Session is dead — clear it so the poller stops
+            # hammering a closed stream every tick.
+            _session = None
 
 
 async def _sync_unread_file(
