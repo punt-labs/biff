@@ -47,10 +47,33 @@ class TestWrite:
         assert len(msgs) == 1
         assert msgs[0].body == "short"
 
-    async def test_send_to_tty(self, ctx: CliContext) -> None:
+    async def test_send_to_tty(self, ctx: CliContext, relay: LocalRelay) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
         result = await write(ctx, "@eric:tty1", "targeted msg")
         assert not result.error
         assert "@eric:tty1" in result.text
+
+    async def test_targeted_nonexistent_tty_error(self, ctx: CliContext) -> None:
+        result = await write(ctx, "@eric:tty99", "hello")
+        assert result.error
+        assert "not found" in result.text
+
+    async def test_targeted_wrong_tty_suggests_broadcast(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
+        result = await write(ctx, "@eric:tty99", "hello")
+        assert result.error
+        assert "Try @eric to broadcast" in result.text
+
+    async def test_targeted_unknown_user_error(self, ctx: CliContext) -> None:
+        result = await write(ctx, "@nobody:tty1", "hello")
+        assert result.error
+        assert "not found in visible repos" in result.text
 
     async def test_resolve_session_by_tty_name(
         self, ctx: CliContext, relay: LocalRelay

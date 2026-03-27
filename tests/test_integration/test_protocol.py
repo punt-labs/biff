@@ -203,6 +203,7 @@ class TestWhoProtocol:
 
 class TestSendMessageProtocol:
     async def test_send(self, biff_client: Client[Any], state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         result = await biff_client.call_tool(
             "write",
             {"to": f"eric:{_ERIC_TTY}", "message": "PR is ready"},
@@ -215,6 +216,7 @@ class TestSendMessageProtocol:
     async def test_send_with_at_prefix(
         self, biff_client: Client[Any], state: ServerState
     ) -> None:
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         await biff_client.call_tool(
             "write",
             {"to": f"@eric:{_ERIC_TTY}", "message": "hello"},

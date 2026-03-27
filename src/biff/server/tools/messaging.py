@@ -53,7 +53,12 @@ async def _resolve_recipient(
             ):
                 target_repo = session.repo
         else:
-            relay_key = f"{user}:{tty}"
+            user_exists = any(s.user == user for s in all_sessions)
+            if user_exists:
+                msg = f"No active session @{user}:{tty}. Try @{user} to broadcast."
+            else:
+                msg = f"User @{user} not found in visible repos."
+            raise ValueError(msg)
     else:
         relay_key = user
     display = f"@{user}:{tty}" if tty else f"@{user}"

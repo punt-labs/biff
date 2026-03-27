@@ -32,7 +32,19 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             if session.repo and session.repo != ctx.config.repo_name:
                 target_repo = session.repo
         else:
-            relay_key = f"{bare_user}:{tty}"
+            user_exists = any(s.user == bare_user for s in all_sessions)
+            if user_exists:
+                err = (
+                    f"No active session @{bare_user}:{tty}."
+                    f" Try @{bare_user} to broadcast."
+                )
+            else:
+                err = f"User @{bare_user} not found in visible repos."
+            return CommandResult(
+                text=err,
+                json_data={"status": "error", "to": to, "error": err},
+                error=True,
+            )
     else:
         relay_key = bare_user
     display = f"@{bare_user}:{tty}" if tty else f"@{bare_user}"

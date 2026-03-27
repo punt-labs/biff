@@ -74,13 +74,16 @@ def is_notification_for_session(data: dict[str, str], session_key: str) -> bool:
 
 
 def next_tty_name(existing_names: list[str]) -> str:
-    """Return the next sequential ``ttyN`` not already in use."""
-    highest = 0
+    """Return the lowest ``ttyN`` not already in use."""
+    used: set[int] = set()
     for name in existing_names:
         m = _TTY_SEQ_RE.match(name)
         if m:
-            highest = max(highest, int(m.group(1)))
-    return f"tty{highest + 1}"
+            used.add(int(m.group(1)))
+    n = 1
+    while n in used:
+        n += 1
+    return f"tty{n}"
 
 
 _MAX_TTY_RETRIES = 3
