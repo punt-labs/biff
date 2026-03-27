@@ -370,10 +370,15 @@ def start_session_applet(
     *tty* (e.g. ``"tty1"``) namespaces element IDs so multiple sessions
     can coexist in the shared biff frame without ID collisions.
     """
-    # Skip config file check (is_lux_enabled) — the MCP server's repo_root
-    # may be a parent workspace, making path resolution unreliable.
-    # Instead, try connecting to the display socket directly.  If lux isn't
-    # running, connect() fails and we bail.  Per lux agent recommendation.
+    # Check for the lux socket before attempting connection.
+    # The socket path is ~/Library/Application Support/punt-lux/lux.sock
+    # on macOS.  In CI (Linux, no display), the socket won't exist and
+    # we skip without importing punt-lux or creating threads.
+    sock_dir = Path.home() / "Library" / "Application Support" / "punt-lux"
+    sock_path = sock_dir / "lux.sock"
+    if not sock_path.exists():
+        logger.debug("Lux socket not found at %s, skipping applet", sock_path)
+        return None
     try:
         from punt_lux import LuxClient as _LuxClient  # noqa: PLC0415
     except ImportError:
