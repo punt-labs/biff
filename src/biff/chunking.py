@@ -27,6 +27,8 @@ def chunk_message(text: str) -> list[str]:
         return [text]
 
     words = text.split()
+    if not words:
+        return [text]
     chunks: list[str] = []
     current: list[str] = []
     current_len = 0

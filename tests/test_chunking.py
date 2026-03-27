@@ -59,3 +59,10 @@ class TestChunkMessage:
         text = "x" * MAX_CHUNK_CHARS + " " + "y" * 10
         chunks = chunk_message(text)
         assert all(c for c in chunks)  # No empty strings
+
+    def test_whitespace_only_over_limit(self) -> None:
+        # Whitespace-only text over limit must not return empty list
+        text = " " * (MAX_CHUNK_CHARS + 1)
+        chunks = chunk_message(text)
+        assert len(chunks) == 1
+        assert chunks[0] == text
