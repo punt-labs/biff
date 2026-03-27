@@ -50,6 +50,14 @@ class CliContext:
     user: str
     tty: str
     tty_name: str = ""
+    org_repos: frozenset[str] = frozenset()
+
+    @property
+    def visible_repos(self) -> frozenset[str]:
+        """All repos visible: self + explicit peers + org-discovered (DES-034)."""
+        if not self.org_repos:
+            return self.config.visible_repos
+        return self.config.visible_repos | self.org_repos
 
 
 async def _heartbeat_loop(
@@ -108,6 +116,16 @@ async def cli_session(
         # Register session and auto-assign ttyN name.
         tty_name = await assign_unique_tty_name(relay, session_key)
 
+        # Org discovery (DES-034): discover repos for configured orgs.
+        org_repos = frozenset[str]()
+        if config.orgs:
+            org_results: list[frozenset[str]] = list(
+                await asyncio.gather(
+                    *(relay.discover_repos_for_org(org) for org in config.orgs)
+                )
+            )
+            org_repos = frozenset[str]().union(*org_results)
+
         session = UserSession(
             user=user,
             tty=tty,
@@ -151,6 +169,7 @@ async def cli_session(
             user=user,
             tty=tty,
             tty_name=tty_name,
+            org_repos=org_repos,
         )
 
         yield ctx

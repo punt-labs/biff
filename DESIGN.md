@@ -201,6 +201,30 @@ The LLM sometimes reformatted `additionalContext` output (markdown tables, remov
 
 Attempted 2026-02-16 — putting full data in `updatedMCPToolOutput` and telling the model to emit nothing (matching `/write` pattern). **Rolled back immediately.** This changes the display architecture for data-emitting commands and was attempted without consulting prior design decisions or logging. The summary-in-panel + full-data-via-additionalContext split was deliberate.
 
+### Last Verified: 2026-03-17
+
+All three assumptions re-verified against Claude Code v2.1.76:
+
+1. **Truncation is by design.** `updatedMCPToolOutput` still truncates
+   multi-line content behind Ctrl+O expansion. GitHub issue
+   [#2638](https://github.com/anthropics/claude-code/issues/2638)
+   (Truncated MCP Tool Responses) was closed NOT_PLANNED — Anthropic
+   considers Ctrl+O the intended UX. No new display field exists.
+
+2. **`additionalContext` still works.** v2.1.58 *expanded* the field to
+   PreToolUse hooks. No deprecation signal.
+
+3. **Disk persistence (v2.1.2) does not help.** Large tool outputs are
+   now persisted to disk instead of being truncated in model context.
+   This applies to the *model's* view of tool results, not the UI
+   panel. Biff output is <1KB — well under the 50K persistence
+   threshold. Even if it were larger, the model would need to `Read`
+   the file (another round-trip), not display it directly.
+
+**Latency cost remains bounded.** Only 4 of 13 tools pay the LLM → MCP
+→ LLM round-trip (`/who`, `/finger`, `/read`, `/last`). The other 9
+use single-channel `updatedMCPToolOutput` with no model output.
+
 ---
 
 ## DES-002: Session Key Format
@@ -3265,3 +3289,186 @@ Lux applet thread (every 5s):
 2. The lux applet must tolerate missing or corrupt session-data files.
 3. `build_status_elements` is a pure function (no I/O) for testability.
 4. The daemon thread must be joined with a timeout on shutdown.
+
+---
+
+## DES-033: Lux Applet Multi-Session Architecture
+
+**Date:** 2026-03-16
+**Status:** IN PROGRESS
+
+### Architecture
+
+The biff lux applet follows the lux-975 (GitHub widget) pattern:
+
+1. **Shared frame, per-session scenes.** All biff MCP servers render into a
+   single `frame_id="biff-session"` frame. Each session sends its own scene
+   with a unique `scene_id` = `biff-status-{repo}-{tty}` (e.g.,
+   `biff-status-biff-tty1`, `biff-status-lux-tty7`).
+
+2. **Each MCP minds its own data.** A session reads only its own
+   `session-data/{find_session_key()}.json` and `unread/{key}.json`. No
+   cross-repo reads. Peers are for relay routing, not applet data.
+
+3. **Stacked layout.** Scenes use `frame_layout="stack"` (lux PR #77) so lux
+   renders them as collapsible sections, not tabs. Each section title is
+   `{repo}:{tty}`.
+
+4. **Element ID namespacing.** Element IDs are prefixed with `{tty}-` (e.g.,
+   `tty1-identity`, `tty2-ctx-bar`) so `update_async` patches target the
+   correct elements when multiple sessions coexist.
+
+5. **Steady-state uses `update_async`.** The initial render sends
+   `show_async` (creates the scene). Subsequent 5-second ticks send
+   `update_async` patches when the element structure hasn't changed. This
+   preserves z-order and minimized state (lux PR #76 removed focus-on-update).
+
+### Runtime facts
+
+- Claude Code invokes `biff mcp` (stdio) per session via the plugin.
+- Each `biff mcp` process runs `_active_lifespan` → `_start_lux_applet`.
+- `biff serve` (PID-based daemon) is a separate process; it also runs
+  `_active_lifespan` if present, but is NOT the Claude Code MCP server.
+- All processes share the same installed binary (`~/.local/bin/biff`).
+  There is no distinction between "dev" and "prod" code at runtime — the
+  wheel installed via `uv tool install` is the single source.
+- `find_session_key()` walks to the topmost `claude` ancestor PID. This PID
+  keys both `session-data/{pid}.json` (written by the statusline hook) and
+  the applet's data reads.
+- `is_lux_enabled()` reads `.lux/config.md` from `find_git_root()`. Both
+  biff and lux repos have `display: "y"`.
+
+### Open issue
+
+**Resolved.** Root cause was lux frames being single-owner
+(`display.py:1913`) — the first client to send a scene became the owner and
+subsequent clients were rejected. Fixed in lux PR #81 (shared frame
+ownership, punt-lux 0.15.0). Multi-session stacking confirmed working:
+per-tty scenes render as collapsing headers in the shared frame.
+
+**Remaining cosmetic issue:** Collapsing headers show raw `scene_id`
+(e.g., `biff-status-biff-tty4`) instead of `scene.title` (e.g.,
+`biff:tty4`). This is a lux-side rendering detail — the stack layout
+should use `scene.title` as the header label.
+
+### Rules
+
+1. Scene IDs must be per-session (`{repo}-{tty}`), not per-repo.
+2. Frame layout must be `"stack"`, not tabs.
+3. Element IDs must be namespaced by tty to avoid patch collisions.
+4. Do not render when `repo` is empty (session data not yet written).
+5. `update_async` for steady-state; `show_async` only on structure change.
+
+---
+
+## DES-034: Org-Based Peer Discovery via `stream_info` Subject Enumeration
+
+**Date:** 2026-03-17
+**Status:** Settled
+**Extends:** DES-030 (cross-repo coordination)
+
+### Context
+
+Biff's `.biff` config requires listing peer repos individually:
+
+```toml
+[peers]
+repos = ["punt-labs/beadle", "punt-labs/lux", "punt-labs/vox", ...]  # 14 repos
+```
+
+All 14 are `punt-labs/*`. Adding `orgs = ["punt-labs"]` would auto-discover
+repos from NATS KV subject metadata, eliminating per-repo config maintenance.
+
+DES-030 decided on repo-scoped KV keys (`{repo}.{user}.{tty}`) with N parallel
+per-repo `stream_info` queries. The key question for org discovery: can a single
+`stream_info` with `subjects_filter="$KV.biff-sessions.punt-labs__>"` replace
+the N per-repo calls without degrading `/who`, `/finger`, and `/write` latency?
+
+### Performance Spike Results
+
+Benchmark against Synadia Cloud (hosted NATS), measuring the **full end-to-end
+operations** that `/who` and `/write` perform:
+
+- `/who` path: `stream_info` (discover subjects) then N × `kv.get` (fetch sessions)
+- `/write` path: same as `/who` (resolve target) + `js.publish` (deliver message)
+
+Three approaches tested:
+
+- **A) Current**: N parallel `_get_sessions_for_repo` calls (each = `stream_info` +
+  parallel `kv.get` for that repo's sessions)
+- **B) Org discovery only**: single `stream_info` with org-scoped `subjects_filter`
+- **C) Org combined**: single `stream_info` (discover all repos) then parallel `kv.get`
+  for ALL discovered sessions in one `asyncio.gather`
+
+#### `/who` Results (discover + fetch all session values)
+
+| Scale | A (current) p50 | C (org) p50 | Delta p50 | A p95 | C p95 | Delta p95 |
+|-------|---------|---------|-------|-------|-------|-------|
+| 3 repos, 6 sessions | 61ms | 26ms | -57% | 104ms | 31ms | -70% |
+| 15 repos, 30 sessions | 116ms | 32ms | -73% | 178ms | 183ms | +3% |
+| 15 repos, 45 sessions | 95ms | 24ms | -74% | 174ms | 28ms | -84% |
+
+#### `/write` Results (resolve target + publish)
+
+| Scale | D (current) p50 | E (org) p50 | Delta p50 | D p95 | E p95 | Delta p95 |
+|-------|---------|---------|-------|-------|-------|-------|
+| 3 repos, 6 sessions | 96ms | 24ms | -75% | 343ms | 41ms | -88% |
+| 15 repos, 30 sessions | 146ms | 25ms | -83% | 388ms | 28ms | -93% |
+| 15 repos, 45 sessions | 244ms | 25ms | -90% | 444ms | 39ms | -91% |
+
+**Why the org approach is faster:** The current approach fires 15 parallel
+`stream_info` requests multiplexed on one TCP connection — they queue behind
+each other on the NATS request-reply path. The org approach does 1 `stream_info`
+(1 round trip) then fires 30-45 parallel `kv.get` calls. Replacing 15 index
+scans with 1 broader scan is the core win.
+
+### Decision
+
+Add `[peers].orgs` config field. At session startup, a single `stream_info` with
+org-scoped `subjects_filter` discovers all repos with active sessions under that
+org prefix. Discovered repos are merged with explicit `[peers].repos` into
+`visible_repos`.
+
+### What Does Not Change
+
+- **KV key scheme**: `{repo}.{user}.{tty}` — unchanged (DES-030 settled this)
+- **Per-repo session fetch**: `kv.get()` calls still fetch individual session
+  values — org discovery replaces the *enumeration* step, not the *read* step
+- **DES-030 rejection of wildcard KV *value* reads**: still rejected. This uses
+  subject-only metadata from `stream_info`, not value fetches
+- **Explicit `repos` config**: still supported. `orgs` is additive — the union
+  of explicit repos and org-discovered repos forms `visible_repos`
+
+### Implementation
+
+1. **Config**: `[peers].orgs` in `.biff` (list of org prefixes)
+2. **Model**: `orgs: tuple[str, ...]` on `BiffConfig`
+3. **NatsRelay**: `discover_repos_for_org(org_prefix)` — single `stream_info`,
+   extract repo names from subject metadata, return `frozenset[str]`
+4. **Lifespan**: call `discover_repos_for_org()` at startup for each org, merge
+   with explicit peers, store as `visible_repos` on app state
+5. **Callsites**: replace `state.config.visible_repos` with `state.visible_repos`
+   (property that combines config repos + org-discovered repos)
+
+### Alternatives Rejected
+
+**KV `watchall()` for org-wide presence cache.** Push-based materialization
+would give sub-millisecond reads after warm-up, but adds complexity (watcher
+lifecycle, stale cache on disconnect). The `stream_info` approach is 24-32ms
+at realistic scale — fast enough for interactive commands. `watchall()` remains
+a future optimization if latency requirements tighten.
+
+**Per-session discovery (no caching).** Running org discovery on every `/who`
+call wastes a round trip when the repo set changes rarely. Discover once at
+startup, refresh on-demand or on reconnect.
+
+### Benchmark Script
+
+`.tmp/bench_cross_repo.py` — connects to hosted NATS, creates test sessions,
+times all three approaches at multiple scales. Run with:
+
+```bash
+BIFF_TEST_NATS_URL=tls://connect.ngs.global \
+BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
+uv run python .tmp/bench_cross_repo.py
+```

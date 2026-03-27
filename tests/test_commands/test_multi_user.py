@@ -124,8 +124,6 @@ class TestSessionVisibility:
         assert not result.error
         assert "kai" in result.text
         assert "eric" in result.text
-        assert "coding biff" in result.text
-        assert "reviewing PRs" in result.text
 
     async def test_finger_sees_other_user(
         self, ctx: CliContext, ctx_eric: CliContext

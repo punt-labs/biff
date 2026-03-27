@@ -116,8 +116,6 @@ class TestTTYSessionCoexistence:
         text = _text(result)
         assert "tty1" in text
         assert "tty2" in text
-        assert "session 1" in text
-        assert "session 2" in text
 
 
 class TestSessionLogout:

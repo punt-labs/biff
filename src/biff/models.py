@@ -155,10 +155,16 @@ class BiffConfig(BaseModel):
     relay_auth: RelayAuth | None = None
     team: tuple[str, ...] = ()
     peers: tuple[str, ...] = ()
+    orgs: tuple[str, ...] = ()
 
     @property
     def visible_repos(self) -> frozenset[str]:
-        """Repos visible to this instance: self + peers."""
+        """Repos visible to this instance: self + explicit peers.
+
+        Does NOT include org-discovered repos — those are resolved at
+        runtime via ``NatsRelay.discover_repos_for_org()`` and merged
+        by the caller (app state or CLI session).
+        """
         return frozenset({self.repo_name, *self.peers})
 
 

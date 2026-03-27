@@ -10,39 +10,49 @@ from biff.tty import parse_address
 
 
 async def finger(ctx: CliContext, user: str) -> CommandResult:
-    """Check what a user is working on and their availability."""
-    try:
-        bare_user, tty = parse_address(user)
-    except ValueError as exc:
-        return CommandResult(
-            text=str(exc),
-            json_data={"error": str(exc)},
-            error=True,
-        )
-    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.config.visible_repos)
+    """Check what one or more users are working on.
 
-    if tty:
-        session = resolve_tty_name(
-            all_sessions, bare_user, tty, local_repo=ctx.config.repo_name
-        )
-        if session is None:
-            return CommandResult(
-                text=f"Login: {bare_user}\nNo session on tty {tty}.",
-                json_data={"error": f"No session on tty {tty}."},
-                error=True,
+    Accepts space-separated addresses: ``@user1 @user2 @user3``.
+    """
+    addresses = user.split()
+    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
+
+    blocks: list[str] = []
+    json_parts: list[object] = []
+    has_error = False
+
+    for addr in addresses:
+        try:
+            bare_user, tty = parse_address(addr)
+        except ValueError as exc:
+            blocks.append(str(exc))
+            json_parts.append({"error": str(exc)})
+            has_error = True
+            continue
+
+        if tty:
+            session = resolve_tty_name(
+                all_sessions, bare_user, tty, local_repo=ctx.config.repo_name
             )
-        return CommandResult(
-            text=format_finger(session),
-            json_data=session.model_dump(mode="json"),
-        )
-    sessions = [s for s in all_sessions if s.user == bare_user]
-    if not sessions:
-        return CommandResult(
-            text=f"Login: {bare_user}\nNever logged in.",
-            json_data={"error": f"@{bare_user} never logged in."},
-            error=True,
-        )
+            if session is None:
+                blocks.append(f"Login: {bare_user}\nNo session on tty {tty}.")
+                json_parts.append({"error": f"No session on tty {tty}."})
+                has_error = True
+            else:
+                blocks.append(format_finger(session))
+                json_parts.append(session.model_dump(mode="json"))
+        else:
+            sessions = [s for s in all_sessions if s.user == bare_user]
+            if not sessions:
+                blocks.append(f"Login: {bare_user}\nNever logged in.")
+                json_parts.append({"error": f"@{bare_user} never logged in."})
+                has_error = True
+            else:
+                blocks.append(format_finger_multi(sessions))
+                json_parts.append([s.model_dump(mode="json") for s in sessions])
+
     return CommandResult(
-        text=format_finger_multi(sessions),
-        json_data=[s.model_dump(mode="json") for s in sessions],
+        text="\n\n".join(blocks),
+        json_data=json_parts[0] if len(json_parts) == 1 else json_parts,
+        error=has_error,
     )

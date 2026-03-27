@@ -147,7 +147,8 @@ class TestHandlePostBash:
 class TestHandlePostPr:
     """PR create/merge detection in PostToolUse GitHub handler."""
 
-    def test_create_pr_github_prefix(self) -> None:
+    @patch("biff.markers.read_wall_marker", return_value=None)
+    def test_create_pr_github_prefix(self, _mock: object) -> None:
         data: dict[str, object] = {
             "tool_name": "mcp__github__create_pull_request",
             "tool_input": {"title": "feat: hook dispatcher"},
@@ -203,7 +204,8 @@ class TestHandlePostPr:
         assert result is not None
         assert "Merged PR #42" in result
 
-    def test_merge_pr_no_title(self) -> None:
+    @patch("biff.markers.read_wall_marker", return_value=None)
+    def test_merge_pr_no_title(self, _mock: object) -> None:
         data: dict[str, object] = {
             "tool_name": "mcp__github__merge_pull_request",
             "tool_input": {"pullNumber": 42},

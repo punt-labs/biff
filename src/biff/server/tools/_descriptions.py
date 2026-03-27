@@ -195,6 +195,11 @@ async def _sync_unread_file(
     if summary is None:
         summary = await state.relay.get_unread_summary(state.session_key)
     items = state.display_queue.snapshot()
+    # Fetch plan from the relay session (lives in NATS KV, not display queue).
+    plan = ""
+    session = await state.relay.get_session(state.session_key)
+    if session is not None:
+        plan = session.plan
     _write_unread_file(
         state.unread_path,
         summary,
@@ -203,6 +208,7 @@ async def _sync_unread_file(
         tty_name=_tty_name,
         biff_enabled=_biff_enabled,
         display_items=items,
+        plan=plan,
     )
 
 
@@ -563,12 +569,14 @@ def _write_unread_file(
     tty_name: str,
     biff_enabled: bool,
     display_items: list[DisplayItem] | None = None,
+    plan: str = "",
 ) -> None:
     """Write unread count to a JSON status file.
 
-    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``, and
-    the full ``display_items`` list so the status bar can rotate
-    through all items independently using time-based indexing.
+    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``,
+    ``plan``, and the full ``display_items`` list so the status bar
+    can rotate through all items independently using time-based
+    indexing.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
@@ -584,6 +592,7 @@ def _write_unread_file(
         "tty_name": tty_name,
         "biff_enabled": biff_enabled,
         "display_items": items_list,
+        "plan": plan,
     }
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")

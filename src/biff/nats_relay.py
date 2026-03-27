@@ -828,6 +828,48 @@ class NatsRelay:
         )
         return [s for batch in repo_results for s in batch]
 
+    async def discover_repos_for_org(self, org: str) -> frozenset[str]:
+        """Discover repos with active sessions under an org prefix.
+
+        Uses a single ``stream_info`` with ``subjects_filter`` scoped to
+        the org's KV key prefix (``$KV.{bucket}.{org}__>``).  Returns
+        repo names extracted from subject metadata — no session values
+        are fetched (DES-034).
+
+        Returns an empty frozenset on any error (transient NATS failures
+        must not break startup).
+        """
+        try:
+            return await self._discover_repos_for_org_inner(org)
+        except NotFoundError:
+            return frozenset()
+        except Exception:  # noqa: BLE001
+            logger.warning("Org discovery failed for %s", org, exc_info=True)
+            return frozenset()
+
+    async def _discover_repos_for_org_inner(self, org: str) -> frozenset[str]:
+        """Inner implementation — may raise on NATS errors."""
+        js, _ = await self._ensure_connected()
+        kv_stream = f"KV_{self._kv_bucket}"
+        kv_prefix = f"$KV.{self._kv_bucket}."
+        # org = "punt-labs", repos are keyed as "punt-labs__biff.user.tty"
+        # Filter: $KV.biff-sessions.punt-labs__> matches all repos under this org
+        org_filter = f"{kv_prefix}{org}__>"
+        info = await js.stream_info(kv_stream, subjects_filter=org_filter)
+        if not info.state.subjects:
+            return frozenset()
+        repos: set[str] = set()
+        for subject in info.state.subjects:
+            key = subject.removeprefix(kv_prefix)
+            parts = key.split(".", maxsplit=2)
+            if len(parts) < 2:
+                continue
+            repo = parts[0]
+            if parts[1] in RESERVED_KV_NAMESPACES:
+                continue
+            repos.add(repo)
+        return frozenset(repos)
+
     async def _get_sessions_for_repo(self, repo: str) -> list[UserSession]:
         """Return sessions for a single repo (server-side filtered).
 

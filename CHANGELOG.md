@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Org-based peer discovery** — `[peers].orgs` config auto-discovers repos from NATS KV subject metadata. Eliminates per-repo peer listing for organizations. 3-10x faster than explicit per-repo queries at 15-repo scale. (DES-034)
 - **Lux session status dashboard** — live dashboard showing repo, context window %, cost, and biff messaging status in the lux display surface. Statusline tees raw session JSON to `~/.punt-labs/biff/session-data/` for the applet to read. (DES-032)
 - **`src/biff/unread.py`** — shared `SessionUnread`, `DisplayItemView`, and reader functions extracted from `statusline.py` for reuse by the lux applet.
 - **`is_lux_enabled()` in `_stdlib.py`** — stdlib-only lux config check, extracted from `hook.py`.

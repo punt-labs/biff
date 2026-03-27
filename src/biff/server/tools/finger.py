@@ -30,29 +30,36 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @auto_enable(state)
     async def finger(user: str) -> str:
-        """Query a user's session and presence info.
+        """Query session and presence info for one or more users.
 
-        ``@user`` shows all sessions for that user.
-        ``@user:tty`` shows a specific session.
+        Accepts space-separated addresses: ``@user1 @user2 @user3``.
+        Each address can be ``@user`` (all sessions) or ``@user:tty``
+        (specific session).
         """
         await update_current_session(state)
         await refresh_read_messages(mcp, state)
-        bare_user, tty = parse_address(user)
 
-        # Query all visible repos, then filter by user and optionally tty.
-        all_sessions = await state.relay.get_sessions_for_repos(
-            state.config.visible_repos
-        )
+        addresses = user.split()
+        all_sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
 
-        if tty:
-            session = resolve_tty_name(
-                all_sessions, bare_user, tty, local_repo=state.config.repo_name
-            )
-            if session is None:
-                return f"Login: {bare_user}\nNo session on tty {tty}."
-            return format_finger(session)
-
-        sessions = [s for s in all_sessions if s.user == bare_user]
-        if not sessions:
-            return f"Login: {bare_user}\nNever logged in."
-        return format_finger_multi(sessions)
+        blocks: list[str] = []
+        for addr in addresses:
+            bare_user, tty = parse_address(addr)
+            if tty:
+                session = resolve_tty_name(
+                    all_sessions,
+                    bare_user,
+                    tty,
+                    local_repo=state.config.repo_name,
+                )
+                if session is None:
+                    blocks.append(f"Login: {bare_user}\nNo session on tty {tty}.")
+                else:
+                    blocks.append(format_finger(session))
+            else:
+                sessions = [s for s in all_sessions if s.user == bare_user]
+                if not sessions:
+                    blocks.append(f"Login: {bare_user}\nNever logged in.")
+                else:
+                    blocks.append(format_finger_multi(sessions))
+        return "\n\n".join(blocks)

@@ -49,7 +49,7 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             await ctx.relay.deliver(
                 msg, sender_key=ctx.session_key, target_repo=target_repo
             )
-    except ValueError as exc:
+    except Exception as exc:  # noqa: BLE001
         return CommandResult(
             text=str(exc),
             json_data={"status": "error", "to": to, "error": str(exc)},

@@ -7,6 +7,7 @@ this forms a session key: ``{user}:{tty}``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import secrets
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from biff.models import UserSession
     from biff.relay import Relay
 
 logger = logging.getLogger(__name__)
@@ -87,30 +89,52 @@ _MAX_TTY_RETRIES = 3
 async def assign_unique_tty_name(
     relay: Relay,
     session_key: str,
+    visible_repos: frozenset[str] | None = None,
 ) -> str:
-    """Pick a unique ttyN name via read → compute → verify.
+    """Claim a unique ttyN name via write-yield-verify.
 
-    Reads existing sessions, computes the next sequential name,
-    and checks that no other session (excluding ours) already
-    holds that name.  Retries up to 3 times if a collision is
-    detected.
+    Writes the candidate name to KV, yields to let concurrent writers
+    flush their writes, then re-reads to check for duplicates.  If
+    another session claimed the same name, we unconditionally retry
+    with the next available name (no tie-breaking — first writer wins).
 
-    The caller is responsible for writing the name to KV (via
-    ``update_session``).  For full race protection, the caller
-    should write, then call :func:`verify_tty_name` to confirm
-    no duplicate appeared in the window between compute and write.
+    When *visible_repos* is provided, uniqueness is checked across the
+    entire peer group — not just the local repo.  This prevents TTY
+    collisions when sessions in different repos share a NATS relay
+    (e.g. biff tty1 vs z-spec tty1).
 
-    Returns the computed name.  After max retries, returns the
+    The ``asyncio.sleep(0)`` between write and verify is critical:
+    without it, a coroutine can write+verify+return before a concurrent
+    coroutine has written, making the verify see a clean state despite
+    a collision in flight.
+
+    Returns the final unique name.  After max retries, returns the
     last computed name (cosmetic duplicate, not worth blocking).
     """
+
+    async def _all_sessions() -> list[UserSession]:
+        if visible_repos:
+            return await relay.get_sessions_for_repos(visible_repos)
+        return await relay.get_sessions()
+
     name = "tty1"
     for attempt in range(_MAX_TTY_RETRIES):
-        sessions = await relay.get_sessions()
+        # Compute candidate from current state (across peer group).
+        sessions = await _all_sessions()
         existing = [s.tty_name for s in sessions if s.tty_name]
         name = next_tty_name(existing)
 
-        # Check for a pre-existing duplicate (another session that
-        # already registered this name before we could).
+        # Write immediately — claim the name in KV.
+        session = await relay.get_session(session_key)
+        if session is not None:
+            updated = session.model_copy(update={"tty_name": name})
+            await relay.update_session(updated)
+
+        # Yield so concurrent writers can flush before we verify.
+        await asyncio.sleep(0)
+
+        # Re-read to detect concurrent claims (across peer group).
+        sessions = await _all_sessions()
         duplicates = [
             s
             for s in sessions
@@ -119,6 +143,8 @@ async def assign_unique_tty_name(
         if not duplicates:
             return name
 
+        # Collision — unconditionally retry with next available name.
+        # No tie-breaking: first writer wins, all others yield.
         logger.debug(
             "TTY name %s collision (attempt %d), retrying",
             name,
@@ -151,6 +177,12 @@ async def verify_tty_name(
         ]
         if not duplicates:
             return name
+
+        # Deterministic tie-breaking: lowest session_key wins.
+        # The loser yields and picks the next available name.
+        dup_keys = [build_session_key(s.user, s.tty) for s in duplicates]
+        if session_key < min(dup_keys):
+            return name  # we win the tie
 
         # Collision — pick next name and re-register.
         existing = [s.tty_name for s in sessions if s.tty_name]

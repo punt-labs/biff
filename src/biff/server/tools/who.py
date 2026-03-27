@@ -33,7 +33,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """List all sessions with idle time."""
         await update_current_session(state)
         await refresh_read_messages(mcp, state)
-        sessions = await state.relay.get_sessions_for_repos(state.config.visible_repos)
+        sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
         if not sessions:
             return "No sessions."
         sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)

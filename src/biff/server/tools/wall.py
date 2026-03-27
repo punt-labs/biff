@@ -64,7 +64,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         - ``wall()`` — show the current wall
         """
         # Validate repo against visible_repos (authorization + injection guard)
-        target_repo = _validate_target_repo(repo, state.config.visible_repos)
+        target_repo = _validate_target_repo(repo, state.visible_repos)
         if repo and target_repo is None:
             return f"Repo {repo!r} is not in your visible repos."
 
@@ -146,7 +146,7 @@ async def _broadcast_wall(
     writes to all repos in ``visible_repos`` (DES-030).
     """
     await broadcast_wall_to_repos(
-        state.relay, state.config.visible_repos, wall=wall, target_repo=target_repo
+        state.relay, state.visible_repos, wall=wall, target_repo=target_repo
     )
 
 

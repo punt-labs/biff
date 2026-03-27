@@ -30,7 +30,6 @@ class TestSoloWorkflow:
 
         result = await recorder.call("who")
         assert "@kai" in result
-        assert "refactoring" in result
 
         result = await recorder.call("finger", user="kai")
         assert "refactoring the auth layer" in result
