@@ -6,7 +6,6 @@ Without arguments, auto-assigns the next sequential ``ttyN``.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from biff.server.tools._activate import auto_enable
@@ -22,8 +21,6 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-
-logger = logging.getLogger(__name__)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:

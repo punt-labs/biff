@@ -81,7 +81,9 @@ _DEFAULT_STREAM_PREFIX = "biff"
 
 # KV key namespaces reserved for encryption (DES-016, biff-lff).
 # Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
-RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key", "name"})
+# Name reservations live in a separate ``biff-names`` bucket, so "name"
+# does not belong here — it would silently block a user named "name".
+RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
 
 
 async def safe_close(nc: NatsClient) -> None:
@@ -1015,11 +1017,31 @@ class NatsRelay:
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
     ) -> None:
-        """Refresh a TTY name reservation to prevent TTL expiry."""
+        """Refresh a TTY name reservation to prevent TTL expiry.
+
+        Uses compare-and-set to avoid overwriting a reservation
+        legitimately claimed by another session after TTL lapse.
+        """
         self._validate_user(user)
         names_kv = await self._ensure_names_kv()
         key = f"{user}.{name}"
-        await names_kv.put(key, session_key.encode())
+        try:
+            entry = await names_kv.get(key)
+        except (KeyNotFoundError, BucketNotFoundError):
+            logger.warning("TTY reservation %s gone, cannot refresh", key)
+            return
+        if entry.value is None or entry.value.decode() != session_key:
+            logger.warning(
+                "TTY reservation %s owned by another session, skipping refresh",
+                key,
+            )
+            return
+        try:
+            await names_kv.update(key, session_key.encode(), last=entry.revision)
+        except KeyWrongLastSequenceError:
+            logger.warning(
+                "TTY reservation %s changed concurrently, skipping refresh", key
+            )
 
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
         """Return the session key that holds *name*, or ``None``."""

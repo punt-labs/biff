@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import logging
-
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import UserSession
 from biff.tty import get_hostname, get_pwd, rename_tty, validate_tty_name
-
-logger = logging.getLogger(__name__)
 
 
 async def tty(ctx: CliContext, name: str) -> CommandResult:
@@ -36,6 +32,10 @@ async def tty(ctx: CliContext, name: str) -> CommandResult:
     except RuntimeError:
         msg = "Error: failed to claim TTY name after retries."
         return CommandResult(text=msg, json_data={"error": msg}, error=True)
+
+    # Update the frozen CliContext so subsequent calls (REPL) and
+    # cli_session cleanup see the CURRENT name, not the stale original.
+    object.__setattr__(ctx, "tty_name", claimed)
 
     session = await ctx.relay.get_session(ctx.session_key)
     if session is None:

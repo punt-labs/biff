@@ -586,9 +586,14 @@ class LocalRelay:
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
     ) -> None:
-        """Refresh reservation by rewriting the lockfile content."""
+        """Refresh reservation by rewriting the lockfile content.
+
+        Only overwrites if the current owner matches *session_key*,
+        preventing clobbering a reservation legitimately claimed by
+        another session after TTL lapse.
+        """
         path = self._tty_lock_path(user, name)
-        if path.exists():
+        if path.exists() and path.read_text() == session_key:
             path.write_text(session_key)
 
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:

@@ -3591,13 +3591,20 @@ Called from:
 #### Heartbeat
 
 The reservation key must be refreshed alongside the session heartbeat to
-prevent TTL expiry during long-running sessions. `heartbeat()` adds:
+prevent TTL expiry during long-running sessions. `heartbeat()` uses a
+compare-and-set (CAS) refresh: read the current owner, verify it matches
+our session key, then update at the last revision. This prevents a stale
+session from overwriting a reservation that was legitimately reclaimed by
+another session after TTL lapse.
 
 ```python
-await names_kv.put(f"{user}.{tty_name}", session_key.encode())
+entry = await names_kv.get(key)
+if entry.value.decode() != session_key:
+    return  # another session owns this name now
+await names_kv.update(key, session_key.encode(), last=entry.revision)
 ```
 
-One additional KV write per heartbeat (~every 60s). Negligible overhead.
+One additional KV read+write per heartbeat (~every 60s). Negligible overhead.
 
 #### Relay Protocol Extension
 
@@ -3607,11 +3614,12 @@ class Relay(Protocol):
     async def release_tty_name(self, user: str, name: str) -> None: ...
     async def refresh_tty_reservation(self, user: str, name: str, session_key: str) -> None: ...
     async def list_reserved_names(self, user: str) -> list[str]: ...
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None: ...
 ```
 
 | Relay | Implementation |
 |-------|---------------|
-| `NatsRelay` | NATS KV `create()` / `delete()` / `put()` / `stream_info` |
+| `NatsRelay` | NATS KV `create()` / `delete()` / CAS `update()` / `stream_info` |
 | `LocalRelay` | `open(path, "x")` (`O_CREAT \| O_EXCL`) lockfile at `{data_dir}/ttyname-{user}-{name}.lock` |
 | `DormantRelay` | `reserve` returns `True` unconditionally; others are no-ops |
 

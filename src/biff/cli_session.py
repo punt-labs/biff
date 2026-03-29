@@ -179,6 +179,7 @@ async def cli_session(
     name_reserved = False
     shutdown = asyncio.Event()
     heartbeat_task: asyncio.Task[None] | None = None
+    ctx: CliContext | None = None
 
     try:
         # Register session and auto-assign ttyN name (DES-035).
@@ -240,11 +241,16 @@ async def cli_session(
 
         yield ctx
     finally:
+        # The tty command may have renamed the session (updating the
+        # frozen CliContext via object.__setattr__).  Use ctx.tty_name
+        # when available so cleanup releases the CURRENT name, not the
+        # stale original captured in the local ``tty_name``.
+        final_tty_name = ctx.tty_name if ctx is not None else tty_name
         await _cli_session_cleanup(
             relay,
             user=user,
             tty=tty,
-            tty_name=tty_name,
+            tty_name=final_tty_name,
             session_key=session_key,
             session=session,
             registered=registered,
