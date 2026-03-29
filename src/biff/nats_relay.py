@@ -1021,6 +1021,17 @@ class NatsRelay:
         key = f"{user}.{name}"
         await names_kv.put(key, session_key.encode())
 
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
+        """Return the session key that holds *name*, or ``None``."""
+        self._validate_user(user)
+        names_kv = await self._ensure_names_kv()
+        key = f"{user}.{name}"
+        try:
+            entry = await names_kv.get(key)
+            return entry.value.decode() if entry.value else None
+        except (KeyNotFoundError, BucketNotFoundError):
+            return None
+
     async def list_reserved_names(self, user: str) -> list[str]:
         """List reserved TTY names for a user via stream_info subject filter.
 

@@ -151,9 +151,18 @@ async def rename_tty(
     Claim-then-release ordering ensures the old name is never lost.
     If the claim fails, the old name remains reserved.
     """
-    # No-op when renaming to the same name already held.
-    # TTL refresh is handled by heartbeats, not by this path.
+    # Re-establish reservation — it may have lapsed during extended
+    # disconnection (e.g., laptop sleep exceeding KV TTL).
+    # TTL refresh is handled by heartbeats during normal operation.
     if preferred and preferred == old_name:
+        ok = await relay.reserve_tty_name(user, old_name, session_key)
+        if not ok:
+            # Key exists — verify we still own it before refreshing.
+            owner = await relay.get_tty_reservation_owner(user, old_name)
+            if owner != session_key:
+                msg = f"name {old_name!r} already in use"
+                raise ValueError(msg)
+            await relay.refresh_tty_reservation(user, old_name, session_key)
         return old_name
 
     new_name = await claim_tty_name(relay, user, session_key, preferred=preferred)

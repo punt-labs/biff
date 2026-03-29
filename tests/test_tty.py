@@ -12,6 +12,7 @@ from biff.tty import (
     is_notification_for_session,
     next_tty_name,
     parse_address,
+    rename_tty,
     validate_tty_name,
 )
 
@@ -195,3 +196,35 @@ class TestClaimTtyName:
         await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
         names = await relay.list_reserved_names("kai")
         assert sorted(names) == ["deploy", "tty1"]
+
+
+class TestRenameTty:
+    """Rename-to-same-name re-reserves after TTL lapse (DES-035)."""
+
+    async def test_same_name_re_reserves_after_lapse(self, tmp_path: object) -> None:
+        """rename_tty(preferred=old_name) re-reserves when reservation lapsed."""
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        await claim_tty_name(relay, "kai", "kai:aaa1", preferred="deploy")
+        # Simulate TTL expiry by releasing the reservation.
+        await relay.release_tty_name("kai", "deploy")
+        # rename_tty with same name should re-reserve successfully.
+        name = await rename_tty(relay, "kai", "kai:aaa1", "deploy", preferred="deploy")
+        assert name == "deploy"
+        # Verify reservation exists.
+        names = await relay.list_reserved_names("kai")
+        assert "deploy" in names
+
+    async def test_same_name_raises_when_stolen(self, tmp_path: object) -> None:
+        """rename_tty raises ValueError when another session holds name."""
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        await claim_tty_name(relay, "kai", "kai:aaa1", preferred="deploy")
+        # Simulate TTL expiry then another session grabs the name.
+        await relay.release_tty_name("kai", "deploy")
+        await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
+        # Original session tries to re-reserve — should fail.
+        with pytest.raises(ValueError, match="already in use"):
+            await rename_tty(relay, "kai", "kai:aaa1", "deploy", preferred="deploy")

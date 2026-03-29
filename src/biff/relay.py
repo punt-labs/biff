@@ -147,6 +147,8 @@ class Relay(Protocol):
         self, user: str, name: str, session_key: str
     ) -> None: ...
 
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None: ...
+
     async def list_reserved_names(self, user: str) -> list[str]: ...
 
     # -- Lifecycle --
@@ -249,6 +251,13 @@ class DormantRelay:
         self, user: str, name: str, session_key: str
     ) -> None:
         pass
+
+    async def get_tty_reservation_owner(
+        self,
+        user: str,  # noqa: ARG002
+        name: str,  # noqa: ARG002
+    ) -> str | None:
+        return None
 
     async def list_reserved_names(self, user: str) -> list[str]:  # noqa: ARG002
         return []
@@ -581,6 +590,13 @@ class LocalRelay:
         path = self._tty_lock_path(user, name)
         if path.exists():
             path.write_text(session_key)
+
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
+        """Return the session key that holds *name*, or ``None``."""
+        path = self._tty_lock_path(user, name)
+        if path.exists():
+            return path.read_text()
+        return None
 
     async def list_reserved_names(self, user: str) -> list[str]:
         """List reserved TTY names for a user via glob on lockfiles."""
