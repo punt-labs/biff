@@ -134,12 +134,18 @@ async def _reap_sentinels(state: ServerState) -> None:
                 await state.relay.append_wtmp(_build_logout_event(session_key, session))
                 # Release TTY name reservation before deleting session (DES-035).
                 if session.tty_name:
-                    with suppress(Exception):
+                    try:
                         await state.relay.release_tty_name(
                             session.user, session.tty_name
                         )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to release TTY name %s during sentinel reap",
+                            session.tty_name,
+                            exc_info=True,
+                        )
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to write sentinel logout for %s", session_key)
+            logger.warning("Failed to write sentinel logout for %s", session_key)
         try:
             await state.relay.delete_session(session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
@@ -665,17 +671,9 @@ async def _active_lifespan(
     )
 
     # Auto-assign a ttyN name via atomic reservation (DES-035).
-    try:
-        final_name = await claim_tty_name(
-            state.relay, state.config.user, state.session_key
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning("TTY name reservation failed, using hex tty", exc_info=True)
-        final_name = (
-            state.session_key.split(":", 1)[1][:8]
-            if ":" in state.session_key
-            else "tty1"
-        )
+    # Let claim failures propagate — an unreserved hex fallback would
+    # defeat the DES-035 invariant (every active name must be reserved).
+    final_name = await claim_tty_name(state.relay, state.config.user, state.session_key)
     set_tty_name(final_name)
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 

@@ -6,6 +6,8 @@ reservation, release-then-reuse, concurrent claim, and heartbeat refresh.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from biff.nats_relay import NatsRelay
@@ -46,11 +48,13 @@ class TestConcurrentReservation:
         relay_b = await _make_relay(nats_server, name="relay-b", prefix=prefix)
 
         try:
-            result_a = await relay_a.reserve_tty_name("kai", "tty1", "kai:sess-a")
-            result_b = await relay_b.reserve_tty_name("kai", "tty1", "kai:sess-b")
-
-            assert result_a is True
-            assert result_b is False
+            result_a, result_b = await asyncio.gather(
+                relay_a.reserve_tty_name("kai", "tty1", "kai:sess-a"),
+                relay_b.reserve_tty_name("kai", "tty1", "kai:sess-b"),
+            )
+            # Exactly one should win
+            assert result_a != result_b
+            assert result_a or result_b
         finally:
             await relay_a.delete_infrastructure()
             await relay_a.close()
@@ -105,8 +109,10 @@ class TestClaimNoCollision:
         relay_b = await _make_relay(nats_server, name="relay-b", prefix=prefix)
 
         try:
-            name_a = await claim_tty_name(relay_a, "kai", "kai:sess-a")
-            name_b = await claim_tty_name(relay_b, "kai", "kai:sess-b")
+            name_a, name_b = await asyncio.gather(
+                claim_tty_name(relay_a, "kai", "kai:sess-a"),
+                claim_tty_name(relay_b, "kai", "kai:sess-b"),
+            )
 
             assert name_a != name_b
             assert name_a.startswith("tty")

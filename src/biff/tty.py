@@ -152,6 +152,7 @@ async def rename_tty(
     If the claim fails, the old name remains reserved.
     """
     # No-op when renaming to the same name already held.
+    # TTL refresh is handled by heartbeats, not by this path.
     if preferred and preferred == old_name:
         return old_name
 
