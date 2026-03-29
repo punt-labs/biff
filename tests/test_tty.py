@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from biff.models import UserSession
 from biff.relay import LocalRelay
 from biff.tty import (
-    assign_unique_tty_name,
     build_session_key,
+    claim_tty_name,
     generate_tty,
     is_notification_for_session,
     next_tty_name,
     parse_address,
+    rename_tty,
     validate_tty_name,
 )
 
@@ -135,59 +133,98 @@ class TestNextTtyName:
         assert next_tty_name(["tty2"]) == "tty1"
 
 
-class _RacingRelay:
-    """Relay wrapper that forces read-before-write interleaving.
+class TestClaimTtyName:
+    """Atomic TTY name reservation via relay (DES-035)."""
 
-    Both callers must complete their initial get_sessions() before
-    either can proceed to update_session().  This simulates the
-    worst-case NATS KV race where two sessions read the same state
-    before either writes.
-    """
-
-    def __init__(self, relay: LocalRelay, num_racers: int = 2) -> None:
-        self._relay = relay
-        self._barrier = asyncio.Barrier(num_racers)
-        self._read_count = 0
-
-    async def get_sessions(self) -> list[UserSession]:
-        result = await self._relay.get_sessions()
-        self._read_count += 1
-        # Synchronize after the first read (the "compute candidate" read).
-        # Only barrier on the first read per caller, not the verify read.
-        if self._read_count <= 2:
-            await self._barrier.wait()
-        return result
-
-    async def get_session(self, session_key: str) -> UserSession | None:
-        return await self._relay.get_session(session_key)
-
-    async def update_session(self, session: UserSession) -> None:
-        await self._relay.update_session(session)
-
-
-class TestAssignUniqueTtyNameRace:
-    """Concurrent TTY assignment must produce unique names."""
-
-    async def test_two_sessions_get_different_names(self, tmp_path: object) -> None:
+    async def test_sequential_claims_distinct(self, tmp_path: object) -> None:
+        """Sequential claims return distinct names."""
         from pathlib import Path
 
-        data_dir = Path(str(tmp_path))
-        relay = LocalRelay(data_dir)
+        relay = LocalRelay(Path(str(tmp_path)))
+        name1 = await claim_tty_name(relay, "kai", "kai:aaa1")
+        name2 = await claim_tty_name(relay, "kai", "kai:bbb2")
+        assert name1 == "tty1"
+        assert name2 == "tty2"
+        assert name1 != name2
 
-        # Pre-register two sessions with empty tty_names.
-        session_a = UserSession(user="kai", tty="aaaa1111")
-        session_b = UserSession(user="kai", tty="bbbb2222")
-        await relay.update_session(session_a)
-        await relay.update_session(session_b)
+    async def test_preferred_when_taken_raises(self, tmp_path: object) -> None:
+        """claim_tty_name(preferred='deploy') when taken raises ValueError."""
+        from pathlib import Path
 
-        racing = _RacingRelay(relay)
-        key_a = build_session_key("kai", "aaaa1111")
-        key_b = build_session_key("kai", "bbbb2222")
+        relay = LocalRelay(Path(str(tmp_path)))
+        name = await claim_tty_name(relay, "kai", "kai:aaa1", preferred="deploy")
+        assert name == "deploy"
+        with pytest.raises(ValueError, match="already in use"):
+            await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
 
-        name_a, name_b = await asyncio.gather(
-            assign_unique_tty_name(racing, key_a),  # type: ignore[arg-type]
-            assign_unique_tty_name(racing, key_b),  # type: ignore[arg-type]
-        )
+    async def test_fills_gaps(self, tmp_path: object) -> None:
+        """Reserve tty1, tty3 → next claim gets tty2."""
+        from pathlib import Path
 
-        assert name_a != name_b, f"Both sessions got {name_a!r} — TTY race not resolved"
-        assert {name_a, name_b} == {"tty1", "tty2"}
+        relay = LocalRelay(Path(str(tmp_path)))
+        await claim_tty_name(relay, "kai", "kai:aaa1", preferred="tty1")
+        await claim_tty_name(relay, "kai", "kai:bbb2", preferred="tty3")
+        name = await claim_tty_name(relay, "kai", "kai:ccc3")
+        assert name == "tty2"
+
+    async def test_different_users_same_name(self, tmp_path: object) -> None:
+        """Different users can claim the same name."""
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        name1 = await claim_tty_name(relay, "kai", "kai:aaa1", preferred="deploy")
+        name2 = await claim_tty_name(relay, "eric", "eric:bbb2", preferred="deploy")
+        assert name1 == "deploy"
+        assert name2 == "deploy"
+
+    async def test_release_and_reclaim(self, tmp_path: object) -> None:
+        """After releasing, the same name can be reclaimed."""
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        await claim_tty_name(relay, "kai", "kai:aaa1", preferred="deploy")
+        await relay.release_tty_name("kai", "deploy")
+        name = await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
+        assert name == "deploy"
+
+    async def test_list_reserved_names(self, tmp_path: object) -> None:
+        """list_reserved_names returns all reserved names for a user."""
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        await claim_tty_name(relay, "kai", "kai:aaa1")
+        await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
+        names = await relay.list_reserved_names("kai")
+        assert sorted(names) == ["deploy", "tty1"]
+
+
+class TestRenameTty:
+    """Rename-to-same-name re-reserves after TTL lapse (DES-035)."""
+
+    async def test_same_name_re_reserves_after_lapse(self, tmp_path: object) -> None:
+        """rename_tty(preferred=old_name) re-reserves when reservation lapsed."""
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        await claim_tty_name(relay, "kai", "kai:aaa1", preferred="deploy")
+        # Simulate TTL expiry by releasing the reservation.
+        await relay.release_tty_name("kai", "deploy")
+        # rename_tty with same name should re-reserve successfully.
+        name = await rename_tty(relay, "kai", "kai:aaa1", "deploy", preferred="deploy")
+        assert name == "deploy"
+        # Verify reservation exists.
+        names = await relay.list_reserved_names("kai")
+        assert "deploy" in names
+
+    async def test_same_name_raises_when_stolen(self, tmp_path: object) -> None:
+        """rename_tty raises ValueError when another session holds name."""
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        await claim_tty_name(relay, "kai", "kai:aaa1", preferred="deploy")
+        # Simulate TTL expiry then another session grabs the name.
+        await relay.release_tty_name("kai", "deploy")
+        await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
+        # Original session tries to re-reserve — should fail.
+        with pytest.raises(ValueError, match="already in use"):
+            await rename_tty(relay, "kai", "kai:aaa1", "deploy", preferred="deploy")

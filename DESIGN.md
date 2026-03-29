@@ -3472,3 +3472,255 @@ BIFF_TEST_NATS_URL=tls://connect.ngs.global \
 BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
 uv run python .tmp/bench_cross_repo.py
 ```
+
+---
+
+## DES-035: Atomic TTY Name Reservation via NATS KV `create()`
+
+**Date:** 2026-03-29
+**Status:** SETTLED
+**Topic:** How tty names are assigned and guaranteed unique across all repos
+**Related:** DES-002 (session key format), DES-007a (slug-based namespace),
+DES-008 (long-lived sessions), DES-016 (shared NATS streams),
+DES-030 (multi-agent coordination), DES-034 (org-based discovery)
+
+### The Problem
+
+TTY names (the human-readable `tty1`, `tty2`, etc.) are assigned via an
+optimistic write-yield-verify algorithm in `tty.py`. This is fundamentally
+broken for three independent reasons:
+
+1. **Scope mismatch.** CLI session startup and the `/tty` tool call
+   `assign_unique_tty_name()` without `visible_repos` — they see only
+   their own repo's sessions. Two repos independently assign "tty1" to
+   the same identity. `/who` then shows two rows with the same address
+   (`@claude-puntlabs:tty1`) but different repos. Safety scripts cannot
+   distinguish them.
+
+2. **TOCTOU race.** Even with cross-repo visibility, two processes
+   starting simultaneously can both read "no tty1 exists" before either
+   writes. The `asyncio.sleep(0)` yield only helps coroutines in the
+   *same* event loop — not separate processes on different machines.
+
+3. **Two conflicting collision strategies.** `assign_unique_tty_name()`
+   uses "first writer wins, others retry." `verify_tty_name()` uses
+   "deterministic tie-breaking via lowest session key." Having both
+   means neither is trusted to be sufficient.
+
+### Invariant
+
+**Every `(user, tty_name)` pair is globally unique across all repos sharing
+a NATS relay.** If `@kai:tty2` appears in `/who`, there is exactly one
+session behind that address — regardless of which repo it runs in.
+
+### Design
+
+Replace optimistic write-yield-verify with **atomic reservation via NATS
+KV `create()`**. `create()` is a server-side CAS operation: it succeeds
+only if the key does not already exist (or was previously deleted). No
+client-side coordination, no yield tricks, no dual collision strategies.
+
+#### New KV Bucket: `{stream_prefix}-names`
+
+Name reservations live in a **separate** KV bucket from sessions.
+
+| Property | Value |
+|----------|-------|
+| Bucket name | `{stream_prefix}-names` (e.g., `biff-names`) |
+| Key format | `{user}.{tty_name}` (two tokens, no repo prefix) |
+| Value | session key (`{user}:{hex_tty}`) |
+| TTL | `_KV_TTL` (3 days, same as sessions) |
+| Max bytes | 1 MiB (names are ~30 bytes each) |
+
+**Why a separate bucket, not the sessions bucket:**
+
+- The sessions bucket key format is `{repo}.{user}.{tty_hex}`. Org
+  discovery (`_discover_repos_for_org_inner`) parses the first dot-token
+  as a repo name. A name reservation key `{user}.name.{tty_name}` would
+  create phantom repos in org discovery output.
+- Separate TTL/size controls. Session data is ~500 bytes; name reservations
+  are ~30 bytes.
+- Clean enumeration: `stream_info` with `$KV.{bucket}.{user}.>` returns
+  only name reservations, no session data mixed in.
+
+Cost: one additional NATS stream (KV buckets are backed by streams).
+Current usage is 3 shared streams (DES-016). Synadia Cloud R1 limit is 25.
+
+**Why keys are NOT repo-scoped:** The invariant is that `@kai:tty2` is
+globally unique. Repo-scoping the reservation would allow two repos to
+both reserve `@kai:tty2` — defeating the purpose.
+
+#### Assignment Flow
+
+```text
+claim_tty_name(relay, user, session_key, preferred=None) -> str:
+  1. Enumerate existing names for user:
+     stream_info(subjects_filter="$KV.{names_bucket}.{user}.>")
+     → extract tty_name from each subject
+  2. Compute candidate:
+     if preferred: candidate = preferred
+     else: candidate = lowest ttyN not in existing set
+  3. Try kv.create("{user}.{candidate}", session_key):
+     success → return candidate
+     KeyWrongLastSequenceError → candidate is taken
+  4. On failure: increment N (or error for custom names), goto 3
+  5. After max retries: raise (do not silently return a duplicate)
+```
+
+**Error handling:** `nats-py`'s `kv.create()` raises
+`KeyWrongLastSequenceError` on collision — not a fictional
+`KeyAlreadyExistsError`. After `kv.delete()`, a DEL tombstone remains
+until it ages out, but `create()` detects tombstones and succeeds via
+the update-at-last-revision path. This means `release → re-claim` works
+correctly.
+
+#### Cleanup Flow
+
+```text
+release_tty_name(relay, user, tty_name):
+  kv.delete("{user}.{tty_name}")
+  suppress KeyNotFoundError (idempotent)
+```
+
+Called from:
+
+- Session cleanup (`delete_session` in `cli_session.py` and `app.py` lifespan)
+- SessionEnd hook (`biff hook claude-code session-end`)
+- TTL expiry handles crash cases (no cleanup runs)
+
+#### Heartbeat
+
+The reservation key must be refreshed alongside the session heartbeat to
+prevent TTL expiry during long-running sessions. `heartbeat()` uses a
+compare-and-set (CAS) refresh: read the current owner, verify it matches
+our session key, then update at the last revision. This prevents a stale
+session from overwriting a reservation that was legitimately reclaimed by
+another session after TTL lapse.
+
+```python
+entry = await names_kv.get(key)
+if entry.value.decode() != session_key:
+    return  # another session owns this name now
+await names_kv.update(key, session_key.encode(), last=entry.revision)
+```
+
+One additional KV read+write per heartbeat (~every 60s). Negligible overhead.
+
+#### Relay Protocol Extension
+
+```python
+class Relay(Protocol):
+    async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool: ...
+    async def release_tty_name(self, user: str, name: str) -> None: ...
+    async def refresh_tty_reservation(self, user: str, name: str, session_key: str) -> None: ...
+    async def list_reserved_names(self, user: str) -> list[str]: ...
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None: ...
+```
+
+| Relay | Implementation |
+|-------|---------------|
+| `NatsRelay` | NATS KV `create()` / `delete()` / CAS `update()` / `stream_info` |
+| `LocalRelay` | `open(path, "x")` (`O_CREAT \| O_EXCL`) lockfile at `{data_dir}/ttyname-{user}-{name}.lock` |
+| `DormantRelay` | `reserve` returns `True` unconditionally; others are no-ops |
+
+The `O_CREAT | O_EXCL` lockfile for `LocalRelay` provides the same
+atomicity guarantee on POSIX — `open()` fails if the file exists.
+
+#### What Gets Deleted
+
+| Component | Action |
+|-----------|--------|
+| `assign_unique_tty_name()` | Replaced by `claim_tty_name()` |
+| `verify_tty_name()` | Deleted — no second verification needed |
+| `/tty` tool repo-local duplicate loop (lines 47-60) | Deleted — reservation is sole authority |
+| `visible_repos` parameter on assignment | Gone — reservation keys are global by construction |
+
+#### What Gets Modified
+
+| Component | Change |
+|-----------|--------|
+| `tty.py` | New `claim_tty_name()` using relay protocol methods |
+| `nats_relay.py` | New `biff-names` bucket, 4 new methods, heartbeat extension |
+| `relay.py` | 4 new protocol methods + `LocalRelay` / `DormantRelay` impls |
+| `cli_session.py` | Call `claim_tty_name()`, `release_tty_name()` in cleanup |
+| `server/app.py` | Call `claim_tty_name()`, `release_tty_name()` in lifespan |
+| `server/tools/tty.py` | Call `claim_tty_name(preferred=name)`, remove duplicate loop |
+| `nats_relay.py` `purge_data()` | Skip `biff-names` — names are global, expire via TTL |
+
+### Migration
+
+No migration script. Same stance as DES-007: sessions rebuild on next
+restart. Existing sessions have `tty_name` in their `UserSession` KV
+entry but no corresponding reservation key. On restart, `claim_tty_name()`
+creates the reservation. If two sessions currently share a name (the bug
+this fixes), the first to restart wins; the second gets the next available
+name. This is the correct behavior.
+
+### Alternatives Rejected
+
+**Fix scope only (pass `visible_repos` everywhere).** Closes the scope
+gap (problem 1) but leaves the TOCTOU race (problem 2) and dual collision
+strategies (problem 3). A point fix that doesn't eliminate the class of
+bug — we'd be back here when two machines start simultaneously.
+
+**Distributed lock (advisory lock on a NATS key).** Over-engineered.
+`create()` is a lock in a single atomic operation. Advisory locks require
+acquire/release lifecycle management and are harder to make crash-safe.
+
+**Encode repo in tty name (e.g., `biff-tty1`).** Changes the user-facing
+address format. Addresses become `@kai:biff-tty1` — ugly, leaks
+implementation details, and doesn't actually guarantee uniqueness (two
+repos could still pick the same number independently if using a repo
+prefix instead of a global reservation).
+
+### Test Plan
+
+| Tier | Test | Verifies |
+|------|------|----------|
+| 1 (unit) | `claim_tty_name` with mock relay: sequential claims → distinct names | Basic assignment |
+| 1 (unit) | `claim_tty_name(preferred="deploy")` when "deploy" is taken → error | Custom name collision |
+| 2 (integration) | Two sessions start, both get distinct tty names | In-process concurrency |
+| 3b (NATS E2E) | Two `NatsRelay` instances, concurrent `reserve_tty_name` → one wins, one loses | Cross-process atomicity |
+| 3b (NATS E2E) | `release_tty_name` then `reserve_tty_name` on same name → succeeds | Tombstone handling |
+| 3b (NATS E2E) | `reserve_tty_name` heartbeat refreshes TTL | TTL management |
+| 1 (unit) | `LocalRelay.reserve_tty_name` with concurrent threads → no collision | Filesystem atomicity |
+
+### Build Sequence
+
+#### Phase 1: Infrastructure (relay protocol + bucket provisioning)
+
+Files: `relay.py`, `nats_relay.py`
+
+- Add 4 methods to `Relay` protocol
+- Implement on `DormantRelay`, `LocalRelay`, `NatsRelay`
+- Provision `biff-names` bucket in `_open_connection()`
+- Add `"name"` to `RESERVED_KV_NAMESPACES`
+- Extend `reset_infrastructure()` to purge `biff-names`
+
+#### Phase 2: Core logic (replace assignment algorithm)
+
+Files: `tty.py`
+
+- New `claim_tty_name(relay, user, session_key, preferred=None) -> str`
+- Delete `assign_unique_tty_name()` and `verify_tty_name()`
+- Update `next_tty_name()` (pure function, unchanged — still computes
+  lowest available N from a list of existing names)
+
+#### Phase 3: Call sites (wire new logic into session lifecycle)
+
+Files: `cli_session.py`, `server/app.py`, `server/tools/tty.py`
+
+- Replace `assign_unique_tty_name()` calls with `claim_tty_name()`
+- Remove `verify_tty_name()` call in `cli_session.py`
+- Remove repo-local duplicate loop in `/tty` tool
+- Add `release_tty_name()` to all cleanup paths
+- Add `refresh_tty_reservation()` to heartbeat
+
+#### Phase 4: Tests
+
+Files: `tests/test_tty.py`, `tests/test_integration/`, `tests/test_nats_e2e/`
+
+- Unit tests for `claim_tty_name` with mock relay
+- Integration tests for concurrent sessions
+- NATS E2E tests for cross-process atomicity
+- Update existing tty tests that reference deleted functions

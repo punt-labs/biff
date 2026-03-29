@@ -29,12 +29,11 @@ from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
 from biff.tty import (
-    assign_unique_tty_name,
     build_session_key,
+    claim_tty_name,
     generate_tty,
     get_hostname,
     get_pwd,
-    verify_tty_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +77,74 @@ async def _heartbeat_loop(
             logger.warning("CLI heartbeat failed", exc_info=True)
 
 
+async def _cli_session_cleanup(
+    relay: NatsRelay,
+    *,
+    user: str,
+    tty: str,
+    tty_name: str,
+    session_key: str,
+    session: UserSession | None,
+    registered: bool,
+    name_reserved: bool,
+    shutdown: asyncio.Event,
+    heartbeat_task: asyncio.Task[None] | None,
+    repo_name: str,
+) -> None:
+    """Clean up a CLI session: stop heartbeat, write logout, release name, close."""
+    shutdown.set()
+    if heartbeat_task is not None:
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
+
+    # Release TTY name reservation regardless of session registration state.
+    # claim_tty_name may succeed (writing a reservation) before update_session
+    # fails, so we must track reservation state independently.
+    if name_reserved and tty_name and not registered:
+        try:
+            await relay.release_tty_name(user, tty_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
+
+    if registered and session is not None:
+        logout_event = SessionEvent(
+            session_key=session_key,
+            event="logout",
+            user=user,
+            tty=tty,
+            tty_name=tty_name,
+            hostname=session.hostname,
+            pwd=session.pwd,
+            timestamp=datetime.now(UTC),
+            repo=repo_name,
+        )
+        try:
+            await relay.append_wtmp(logout_event)
+            await relay.flush()
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to write CLI wtmp logout", exc_info=True)
+
+        # Release TTY name reservation (DES-035).
+        if tty_name:
+            try:
+                await relay.release_tty_name(user, tty_name)
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
+
+        try:
+            await relay.delete_session(session_key)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to delete CLI session %s", session_key, exc_info=True
+            )
+
+    try:
+        await relay.close()
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to close CLI relay", exc_info=True)
+
+
 @asynccontextmanager
 async def cli_session(
     *, interactive: bool = False, user_override: str | None = None
@@ -109,12 +176,15 @@ async def cli_session(
     tty_name = ""
     session: UserSession | None = None
     registered = False
+    name_reserved = False
     shutdown = asyncio.Event()
     heartbeat_task: asyncio.Task[None] | None = None
+    ctx: CliContext | None = None
 
     try:
-        # Register session and auto-assign ttyN name.
-        tty_name = await assign_unique_tty_name(relay, session_key)
+        # Register session and auto-assign ttyN name (DES-035).
+        tty_name = await claim_tty_name(relay, user, session_key)
+        name_reserved = True
 
         # Org discovery (DES-034): discover repos for configured orgs.
         org_repos = frozenset[str]()
@@ -136,9 +206,6 @@ async def cli_session(
         )
         await relay.update_session(session)
         registered = True
-
-        # Verify no duplicate after write (closes TOCTOU window).
-        tty_name = await verify_tty_name(relay, session_key, tty_name)
 
         # Write wtmp login event.
         login_event = SessionEvent(
@@ -174,43 +241,21 @@ async def cli_session(
 
         yield ctx
     finally:
-        # Stop heartbeat.
-        shutdown.set()
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await heartbeat_task
-
-        # Write wtmp logout event (only if session was registered).
-        if registered and session is not None:
-            logout_event = SessionEvent(
-                session_key=session_key,
-                event="logout",
-                user=user,
-                tty=tty,
-                tty_name=tty_name,
-                hostname=session.hostname,
-                pwd=session.pwd,
-                timestamp=datetime.now(UTC),
-                repo=config.repo_name,
-            )
-            try:
-                await relay.append_wtmp(logout_event)
-                await relay.flush()
-            except Exception:  # noqa: BLE001
-                logger.warning("Failed to write CLI wtmp logout", exc_info=True)
-
-            # Delete session from KV.
-            try:
-                await relay.delete_session(session_key)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to delete CLI session %s",
-                    session_key,
-                    exc_info=True,
-                )
-
-        try:
-            await relay.close()
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to close CLI relay", exc_info=True)
+        # The tty command may have renamed the session (updating the
+        # frozen CliContext via object.__setattr__).  Use ctx.tty_name
+        # when available so cleanup releases the CURRENT name, not the
+        # stale original captured in the local ``tty_name``.
+        final_tty_name = ctx.tty_name if ctx is not None else tty_name
+        await _cli_session_cleanup(
+            relay,
+            user=user,
+            tty=tty,
+            tty_name=final_tty_name,
+            session_key=session_key,
+            session=session,
+            registered=registered,
+            name_reserved=name_reserved,
+            shutdown=shutdown,
+            heartbeat_task=heartbeat_task,
+            repo_name=config.repo_name,
+        )

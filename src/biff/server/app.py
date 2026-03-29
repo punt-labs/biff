@@ -38,7 +38,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
-from biff.tty import assign_unique_tty_name, build_session_key
+from biff.tty import build_session_key, claim_tty_name
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +128,24 @@ async def _reap_sentinels(state: ServerState) -> None:
         # Write logout event before deleting the session.  The KV entry
         # is still present (3-day TTL), so we can fetch session data for
         # an accurate last-seen timestamp.
+        session: UserSession | None = None
         try:
             session = await state.relay.get_session(session_key)
             if session is not None:
                 await state.relay.append_wtmp(_build_logout_event(session_key, session))
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to write sentinel logout for %s", session_key)
+            logger.warning("Failed to write sentinel logout for %s", session_key)
+        # Release TTY name reservation before deleting session (DES-035).
+        # Separate try block so a wtmp failure doesn't leak the name reservation.
+        if session is not None and session.tty_name:
+            try:
+                await state.relay.release_tty_name(session.user, session.tty_name)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to release TTY name %s during sentinel reap",
+                    session.tty_name,
+                    exc_info=True,
+                )
         try:
             await state.relay.delete_session(session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
@@ -510,6 +522,24 @@ async def _close_orphaned_logins(
         logger.info("Closed %d orphaned login(s)", len(orphaned))
 
 
+async def _release_relay(state: ServerState) -> None:
+    """Release TTY name, delete session, and close the relay."""
+    tty_name = get_tty_name()
+    if tty_name:
+        try:
+            await state.relay.release_tty_name(state.config.user, tty_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
+    try:
+        await state.relay.delete_session(state.session_key)
+    except Exception:
+        logger.exception("Failed to delete session %s", state.session_key)
+    try:
+        await state.relay.close()
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to close relay", exc_info=True)
+
+
 async def _lifespan_cleanup(
     state: ServerState,
     shutdown: asyncio.Event,
@@ -544,11 +574,7 @@ async def _lifespan_cleanup(
         with suppress(FileNotFoundError):
             sd_path.unlink()
     if state.owns_relay:
-        try:
-            await state.relay.delete_session(state.session_key)
-        except Exception:
-            logger.exception("Failed to delete session %s", state.session_key)
-        await state.relay.close()
+        await _release_relay(state)
     with suppress(OSError):
         remove_active_session(state.session_key)
     if lux_thread is not None:
@@ -613,8 +639,7 @@ async def _active_lifespan(
             worktree_root=str(state.repo_root) if state.repo_root else "",
         )
 
-    # Register session in KV before TTY assignment so
-    # assign_unique_tty_name can write tty_name to the entry.
+    # Register session in KV before TTY name claim.
     await update_current_session(state)
 
     # Org discovery (DES-034): discover repos for configured orgs.
@@ -645,12 +670,10 @@ async def _active_lifespan(
         sorted(state.visible_repos),
     )
 
-    # Auto-assign a ttyN name so the status bar always has identity.
-    # assign_unique_tty_name writes to KV and verifies in one step,
-    # retrying on conflicts with first-writer-wins semantics.
-    final_name = await assign_unique_tty_name(
-        state.relay, state.session_key, state.visible_repos
-    )
+    # Auto-assign a ttyN name via atomic reservation (DES-035).
+    # Let claim failures propagate — an unreserved hex fallback would
+    # defeat the DES-035 invariant (every active name must be reserved).
+    final_name = await claim_tty_name(state.relay, state.config.user, state.session_key)
     set_tty_name(final_name)
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 

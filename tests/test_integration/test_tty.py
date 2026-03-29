@@ -80,34 +80,63 @@ class TestTtyNaming:
         assert result == "TTY: my-session"
 
 
+class TestTtyAtomicReservation:
+    """DES-035: atomic TTY name reservation via relay."""
+
+    async def test_two_sessions_get_distinct_names(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """Two sessions start with distinct auto-assigned tty names."""
+        result_kai = await kai.call("who")
+        assert "tty1" in result_kai
+        assert "tty2" in result_kai
+        # Verify both users appear
+        assert "@kai" in result_kai
+        assert "@eric" in result_kai
+
+
 class TestTtyAutoAssign:
     """Auto-assigning sequential ttyN names."""
 
     async def test_auto_assigns_next(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """No args → assigns next ttyN after auto-assigned startup names."""
-        # kai (tty1) and eric (tty2) get auto-assigned on startup.
+        """No args → claims next available ttyN, then releases old name.
+
+        Claim-then-release: kai holds tty1 (per-user namespace).
+        Claim sees {tty1} reserved → picks tty2.
+        Then releases old tty1.
+        """
         result = await kai.call("tty")
-        assert result == "TTY: tty3"
+        assert result == "TTY: tty2"
 
     async def test_auto_reuses_lowest(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """Auto-assign picks lowest unused, not max+1."""
-        # kai=tty1, eric=tty2.  Rename kai to tty3 → existing={tty3, tty2}.
+        """Auto-assign picks lowest unused, not max+1.
+
+        DES-035: names are per-user reservations.  Test within one user
+        to avoid module-global ``_tty_name`` cross-contamination between
+        kai and eric servers sharing the same process.
+        """
+        # kai starts with tty1.  Rename to tty3, then auto-assign.
+        # After renaming: reserved = {tty3}.  Auto → tty1.
         await kai.call("tty", name="tty3")
-        # eric auto-assign → lowest unused is tty1.
-        result = await eric.call("tty")
+        result = await kai.call("tty")
         assert result == "TTY: tty1"
 
     async def test_ignores_non_sequential_names(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """Non-ttyN names don't affect auto-numbering."""
+        """Non-ttyN names don't affect auto-numbering.
+
+        DES-035: names are per-user reservations.  Test within one user
+        to avoid module-global ``_tty_name`` cross-contamination.
+        """
+        # kai starts with tty1.  Rename to agent1, then auto-assign.
+        # reserved = {agent1}.  next_tty_name(["agent1"]) → tty1.
         await kai.call("tty", name="agent1")
-        # kai=agent1, eric=tty2.  Lowest unused ttyN = tty1.
-        result = await eric.call("tty")
+        result = await kai.call("tty")
         assert result == "TTY: tty1"
 
 
@@ -137,10 +166,13 @@ class TestTtyValidation:
     async def test_whitespace_only_auto_assigns(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """Whitespace-only name triggers auto-assign."""
-        # tty1, tty2 auto-assigned on startup; whitespace triggers auto.
+        """Whitespace-only name triggers auto-assign.
+
+        Claim-then-release: kai holds tty1 (per-user namespace).
+        Claim sees {tty1} → picks tty2, then releases tty1.
+        """
         result = await kai.call("tty", name="   ")
-        assert result == "TTY: tty3"
+        assert result == "TTY: tty2"
 
     async def test_rejects_duplicate_name_same_user(
         self, kai: RecordingClient, eric: RecordingClient

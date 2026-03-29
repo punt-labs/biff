@@ -91,6 +91,9 @@ class TestCliSessionLifecycle:
         relay.get_session.return_value = None
         relay.flush = AsyncMock()
         relay.close = AsyncMock()
+        # DES-035: claim_tty_name uses relay reservation methods.
+        relay.list_reserved_names.return_value = []
+        relay.reserve_tty_name.return_value = True
         return relay
 
     @pytest.fixture()
@@ -117,13 +120,14 @@ class TestCliSessionLifecycle:
         ):
             async with cli_session() as ctx:
                 assert ctx.user == "kai"
-                assert ctx.tty_name == "tty2"  # tty1 taken by eric
+                # DES-035: reservation-based, no session scan.
+                assert ctx.tty_name == "tty1"
 
         # Session was registered
         mock_relay.update_session.assert_awaited()
         registered = mock_relay.update_session.call_args_list[0][0][0]
         assert registered.user == "kai"
-        assert registered.tty_name == "tty2"
+        assert registered.tty_name == "tty1"
 
         # Session was deleted on exit
         mock_relay.delete_session.assert_awaited_once()

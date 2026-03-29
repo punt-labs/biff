@@ -135,6 +135,22 @@ class Relay(Protocol):
 
     async def get_wall(self, *, repo: str | None = None) -> WallPost | None: ...
 
+    # -- TTY name reservation (DES-035) --
+
+    async def reserve_tty_name(
+        self, user: str, name: str, session_key: str
+    ) -> bool: ...
+
+    async def release_tty_name(self, user: str, name: str) -> None: ...
+
+    async def refresh_tty_reservation(
+        self, user: str, name: str, session_key: str
+    ) -> None: ...
+
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None: ...
+
+    async def list_reserved_names(self, user: str) -> list[str]: ...
+
     # -- Lifecycle --
 
     async def disconnect(self) -> None:
@@ -219,6 +235,32 @@ class DormantRelay:
 
     async def get_wall(self, *, repo: str | None = None) -> WallPost | None:  # noqa: ARG002
         return None
+
+    async def reserve_tty_name(
+        self,
+        user: str,  # noqa: ARG002
+        name: str,  # noqa: ARG002
+        session_key: str,  # noqa: ARG002
+    ) -> bool:
+        return True
+
+    async def release_tty_name(self, user: str, name: str) -> None:
+        pass
+
+    async def refresh_tty_reservation(
+        self, user: str, name: str, session_key: str
+    ) -> None:
+        pass
+
+    async def get_tty_reservation_owner(
+        self,
+        user: str,  # noqa: ARG002
+        name: str,  # noqa: ARG002
+    ) -> str | None:
+        return None
+
+    async def list_reserved_names(self, user: str) -> list[str]:  # noqa: ARG002
+        return []
 
     async def disconnect(self) -> None:
         pass
@@ -517,6 +559,64 @@ class LocalRelay:
             path.unlink(missing_ok=True)
             return None
         return wall
+
+    # -- TTY name reservation (DES-035) --
+
+    def _tty_lock_path(self, user: str, name: str) -> Path:
+        """Lockfile path for an atomic TTY name reservation."""
+        self._validate_user(user)
+        return self._data_dir / f"ttyname-{user}-{name}.lock"
+
+    async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
+        """Reserve a TTY name atomically via O_CREAT|O_EXCL lockfile."""
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        path = self._tty_lock_path(user, name)
+        try:
+            with path.open("x") as fd:
+                fd.write(session_key)
+            return True
+        except FileExistsError:
+            return False
+
+    async def release_tty_name(self, user: str, name: str) -> None:
+        """Release a TTY name reservation by removing the lockfile."""
+        path = self._tty_lock_path(user, name)
+        path.unlink(missing_ok=True)
+
+    async def refresh_tty_reservation(
+        self, user: str, name: str, session_key: str
+    ) -> None:
+        """Refresh reservation by rewriting the lockfile content.
+
+        Only overwrites if the current owner matches *session_key*,
+        preventing clobbering a reservation legitimately claimed by
+        another session after TTL lapse.
+        """
+        path = self._tty_lock_path(user, name)
+        if path.exists() and path.read_text() == session_key:
+            path.write_text(session_key)
+
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
+        """Return the session key that holds *name*, or ``None``."""
+        path = self._tty_lock_path(user, name)
+        if path.exists():
+            return path.read_text()
+        return None
+
+    async def list_reserved_names(self, user: str) -> list[str]:
+        """List reserved TTY names for a user via glob on lockfiles."""
+        self._validate_user(user)
+        if not self._data_dir.exists():
+            return []
+        prefix = f"ttyname-{user}-"
+        suffix = ".lock"
+        names: list[str] = []
+        for path in self._data_dir.glob(f"{prefix}*{suffix}"):
+            fname = path.name
+            name = fname.removeprefix(prefix).removesuffix(suffix)
+            if name:
+                names.append(name)
+        return names
 
     async def disconnect(self) -> None:
         """No-op — filesystem relay has no connection to release."""

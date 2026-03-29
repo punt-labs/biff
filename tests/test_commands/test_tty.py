@@ -29,8 +29,10 @@ class TestTty:
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
         await relay.update_session(
-            UserSession(user="eric", tty="eee11111", tty_name="tty1")
+            UserSession(user="kai", tty="eee11111", tty_name="tty1")
         )
+        # Reserve the name so claim_tty_name sees it (DES-035).
+        await relay.reserve_tty_name("kai", "tty1", "kai:eee11111")
         result = await tty(ctx, "")
         assert result.text == "TTY: tty2"
 
@@ -40,10 +42,11 @@ class TestTty:
         assert "Invalid tty name" in result.text
 
     async def test_name_collision(self, ctx: CliContext, relay: LocalRelay) -> None:
-        # Another session owned by kai with name "dev"
+        # Another session owned by kai with name "dev" — reserve via relay (DES-035).
         await relay.update_session(
             UserSession(user="kai", tty="other123", tty_name="dev")
         )
+        await relay.reserve_tty_name("kai", "dev", "kai:other123")
         result = await tty(ctx, "dev")
         assert result.error
         assert "already in use" in result.text

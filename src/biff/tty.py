@@ -7,7 +7,6 @@ this forms a session key: ``{user}:{tty}``.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import secrets
@@ -16,7 +15,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from biff.models import UserSession
     from biff.relay import Relay
 
 logger = logging.getLogger(__name__)
@@ -86,117 +84,96 @@ def next_tty_name(existing_names: list[str]) -> str:
     return f"tty{n}"
 
 
-_MAX_TTY_RETRIES = 3
+_MAX_TTY_CLAIM_RETRIES = 5
 
 
-async def assign_unique_tty_name(
+async def claim_tty_name(
     relay: Relay,
+    user: str,
     session_key: str,
-    visible_repos: frozenset[str] | None = None,
+    preferred: str | None = None,
 ) -> str:
-    """Claim a unique ttyN name via write-yield-verify.
+    """Claim a globally unique TTY name via atomic reservation (DES-035).
 
-    Writes the candidate name to KV, yields to let concurrent writers
-    flush their writes, then re-reads to check for duplicates.  If
-    another session claimed the same name, we unconditionally retry
-    with the next available name (no tie-breaking — first writer wins).
+    Uses ``relay.reserve_tty_name()`` which is backed by NATS KV
+    ``create()`` — a server-side CAS operation that succeeds only if
+    the key does not already exist.
 
-    When *visible_repos* is provided, uniqueness is checked across the
-    entire peer group — not just the local repo.  This prevents TTY
-    collisions when sessions in different repos share a NATS relay
-    (e.g. biff tty1 vs z-spec tty1).
+    If *preferred* is given, attempts to reserve that exact name.
+    On collision, raises ``ValueError`` (the caller should show an
+    error to the user).
 
-    The ``asyncio.sleep(0)`` between write and verify is critical:
-    without it, a coroutine can write+verify+return before a concurrent
-    coroutine has written, making the verify see a clean state despite
-    a collision in flight.
+    If *preferred* is ``None``, computes the lowest available ``ttyN``
+    from existing reservations and retries on collision up to
+    ``_MAX_TTY_CLAIM_RETRIES`` times.
 
-    Returns the final unique name.  After max retries, returns the
-    last computed name (cosmetic duplicate, not worth blocking).
+    Returns the reserved name on success.  Raises ``RuntimeError``
+    after exhausting retries (should never happen in practice).
     """
+    if preferred is not None:
+        candidate = preferred
+        ok = await relay.reserve_tty_name(user, candidate, session_key)
+        if ok:
+            return candidate
+        msg = f"name {candidate!r} already in use"
+        raise ValueError(msg)
 
-    async def _all_sessions() -> list[UserSession]:
-        if visible_repos:
-            return await relay.get_sessions_for_repos(visible_repos)
-        return await relay.get_sessions()
-
-    name = "tty1"
-    for attempt in range(_MAX_TTY_RETRIES):
-        # Compute candidate from current state (across peer group).
-        sessions = await _all_sessions()
-        existing = [s.tty_name for s in sessions if s.tty_name]
-        name = next_tty_name(existing)
-
-        # Write immediately — claim the name in KV.
-        session = await relay.get_session(session_key)
-        if session is not None:
-            updated = session.model_copy(update={"tty_name": name})
-            await relay.update_session(updated)
-
-        # Yield so concurrent writers can flush before we verify.
-        await asyncio.sleep(0)
-
-        # Re-read to detect concurrent claims (across peer group).
-        sessions = await _all_sessions()
-        duplicates = [
-            s
-            for s in sessions
-            if s.tty_name == name and build_session_key(s.user, s.tty) != session_key
-        ]
-        if not duplicates:
-            return name
-
-        # Collision — unconditionally retry with next available name.
-        # No tie-breaking: first writer wins, all others yield.
+    # Auto-assign: lowest ttyN not in the reserved set.
+    existing = await relay.list_reserved_names(user)
+    candidate = next_tty_name(existing)
+    for attempt in range(_MAX_TTY_CLAIM_RETRIES):
+        ok = await relay.reserve_tty_name(user, candidate, session_key)
+        if ok:
+            return candidate
+        # Collision — re-enumerate and pick the next candidate.
         logger.debug(
             "TTY name %s collision (attempt %d), retrying",
-            name,
+            candidate,
             attempt + 1,
         )
+        existing = await relay.list_reserved_names(user)
+        candidate = next_tty_name(existing)
 
-    return name
+    msg = f"Failed to claim a TTY name after {_MAX_TTY_CLAIM_RETRIES} retries"
+    raise RuntimeError(msg)
 
 
-async def verify_tty_name(
+async def rename_tty(
     relay: Relay,
+    user: str,
     session_key: str,
-    name: str,
+    old_name: str,
+    preferred: str | None = None,
 ) -> str:
-    """Verify tty name uniqueness after writing to KV.
+    """Claim a new name, then release *old_name* on success.
 
-    Re-reads sessions and checks for duplicates.  If another
-    session grabbed the same name concurrently, picks the next
-    available name and updates our session in KV.
-
-    Call this after ``update_session`` to close the TOCTOU window.
-    Returns the final (possibly updated) name.
+    Claim-then-release ordering ensures the old name is never lost.
+    If the claim fails, the old name remains reserved.
     """
-    for _attempt in range(_MAX_TTY_RETRIES):
-        sessions = await relay.get_sessions()
-        duplicates = [
-            s
-            for s in sessions
-            if s.tty_name == name and build_session_key(s.user, s.tty) != session_key
-        ]
-        if not duplicates:
-            return name
+    # Re-establish reservation — it may have lapsed during extended
+    # disconnection (e.g., laptop sleep exceeding KV TTL).
+    # TTL refresh is handled by heartbeats during normal operation.
+    if preferred and preferred == old_name:
+        ok = await relay.reserve_tty_name(user, old_name, session_key)
+        if not ok:
+            # Key exists — verify we still own it before refreshing.
+            owner = await relay.get_tty_reservation_owner(user, old_name)
+            if owner != session_key:
+                msg = f"name {old_name!r} already in use"
+                raise ValueError(msg)
+            await relay.refresh_tty_reservation(user, old_name, session_key)
+        return old_name
 
-        # Deterministic tie-breaking: lowest session_key wins.
-        # The loser yields and picks the next available name.
-        dup_keys = [build_session_key(s.user, s.tty) for s in duplicates]
-        if session_key < min(dup_keys):
-            return name  # we win the tie
+    new_name = await claim_tty_name(relay, user, session_key, preferred=preferred)
 
-        # Collision — pick next name and re-register.
-        existing = [s.tty_name for s in sessions if s.tty_name]
-        name = next_tty_name(existing)
-        session = await relay.get_session(session_key)
-        if session is not None:
-            updated = session.model_copy(update={"tty_name": name})
-            await relay.update_session(updated)
-        logger.debug("TTY name collision, reassigned to %s", name)
+    # New name claimed — now release old (best-effort).
+    if old_name:
+        try:
+            await relay.release_tty_name(user, old_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to release old TTY name %s", old_name)
 
-    return name
+    return new_name
 
 
 def parse_address(address: str) -> tuple[str, str | None]:

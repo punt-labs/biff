@@ -9,9 +9,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.server.tools._activate import auto_enable
-from biff.server.tools._descriptions import refresh_read_messages, set_tty_name
+from biff.server.tools._descriptions import (
+    get_tty_name,
+    refresh_read_messages,
+    set_tty_name,
+)
 from biff.server.tools._session import update_current_session
-from biff.tty import assign_unique_tty_name, validate_tty_name
+from biff.tty import rename_tty, validate_tty_name
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -41,25 +45,27 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """
         name = name.strip()
 
-        if not name:
-            name = await assign_unique_tty_name(state.relay, state.session_key)
+        if name:
+            error = validate_tty_name(name)
+            if error:
+                return f"Error: {error}"
 
-        sessions = await state.relay.get_sessions()
+        # Claim new name, then release old on success (DES-035).
+        old_name = get_tty_name()
+        try:
+            claimed = await rename_tty(
+                state.relay,
+                state.config.user,
+                state.session_key,
+                old_name,
+                preferred=name or None,
+            )
+        except ValueError:
+            return f"Error: name {name!r} already in use by another session."
+        except RuntimeError:
+            return "Error: failed to claim TTY name after retries."
 
-        error = validate_tty_name(name)
-        if error:
-            return f"Error: {error}"
-
-        # Reject duplicate names for the same user
-        for s in sessions:
-            if (
-                s.user == state.config.user
-                and s.tty != state.tty
-                and s.tty_name == name
-            ):
-                return f"Error: name {name!r} already in use by another session."
-
-        set_tty_name(name)
-        await update_current_session(state, tty_name=name)
+        set_tty_name(claimed)
+        await update_current_session(state, tty_name=claimed)
         await refresh_read_messages(mcp, state)
-        return f"TTY: {name}"
+        return f"TTY: {claimed}"
