@@ -16,7 +16,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.server.tools._session import update_current_session
-from biff.tty import claim_tty_name, validate_tty_name
+from biff.tty import rename_tty, validate_tty_name
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -53,33 +53,20 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             if error:
                 return f"Error: {error}"
 
-        # Release old name reservation before claiming new one (DES-035).
+        # Claim new name, then release old on success (DES-035).
         old_name = get_tty_name()
-        if old_name:
-            try:
-                await state.relay.release_tty_name(state.config.user, old_name)
-            except Exception:  # noqa: BLE001
-                logger.debug("Failed to release old TTY name %s", old_name)
-
         try:
-            if name:
-                claimed = await claim_tty_name(
-                    state.relay, state.config.user, state.session_key, preferred=name
-                )
-            else:
-                claimed = await claim_tty_name(
-                    state.relay, state.config.user, state.session_key
-                )
+            claimed = await rename_tty(
+                state.relay,
+                state.config.user,
+                state.session_key,
+                old_name,
+                preferred=name or None,
+            )
         except ValueError:
-            # Re-reserve old name on failure.
-            if old_name:
-                try:
-                    await state.relay.reserve_tty_name(
-                        state.config.user, old_name, state.session_key
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.debug("Failed to re-reserve old TTY name %s", old_name)
             return f"Error: name {name!r} already in use by another session."
+        except RuntimeError:
+            return "Error: failed to claim TTY name after retries."
 
         set_tty_name(claimed)
         await update_current_session(state, tty_name=claimed)

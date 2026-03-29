@@ -7,7 +7,7 @@ import logging
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.models import UserSession
-from biff.tty import claim_tty_name, get_hostname, get_pwd, validate_tty_name
+from biff.tty import get_hostname, get_pwd, rename_tty, validate_tty_name
 
 logger = logging.getLogger(__name__)
 
@@ -21,30 +21,20 @@ async def tty(ctx: CliContext, name: str) -> CommandResult:
         if error:
             return CommandResult(text=error, json_data={"error": error}, error=True)
 
-    # Release old reservation before claiming new one (DES-035).
-    if ctx.tty_name:
-        try:
-            await ctx.relay.release_tty_name(ctx.user, ctx.tty_name)
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to release old TTY name %s", ctx.tty_name)
-
+    # Claim new name, then release old on success (DES-035).
     try:
-        if name:
-            claimed = await claim_tty_name(
-                ctx.relay, ctx.user, ctx.session_key, preferred=name
-            )
-        else:
-            claimed = await claim_tty_name(ctx.relay, ctx.user, ctx.session_key)
+        claimed = await rename_tty(
+            ctx.relay,
+            ctx.user,
+            ctx.session_key,
+            ctx.tty_name,
+            preferred=name or None,
+        )
     except ValueError:
-        # Re-reserve old name on failure.
-        if ctx.tty_name:
-            try:
-                await ctx.relay.reserve_tty_name(
-                    ctx.user, ctx.tty_name, ctx.session_key
-                )
-            except Exception:  # noqa: BLE001
-                logger.debug("Failed to re-reserve old TTY name %s", ctx.tty_name)
         msg = f"Error: name {name!r} already in use by another session."
+        return CommandResult(text=msg, json_data={"error": msg}, error=True)
+    except RuntimeError:
+        msg = "Error: failed to claim TTY name after retries."
         return CommandResult(text=msg, json_data={"error": msg}, error=True)
 
     session = await ctx.relay.get_session(ctx.session_key)

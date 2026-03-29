@@ -139,6 +139,34 @@ async def claim_tty_name(
     raise RuntimeError(msg)
 
 
+async def rename_tty(
+    relay: Relay,
+    user: str,
+    session_key: str,
+    old_name: str,
+    preferred: str | None = None,
+) -> str:
+    """Claim a new name, then release *old_name* on success.
+
+    Claim-then-release ordering ensures the old name is never lost.
+    If the claim fails, the old name remains reserved.
+    """
+    # No-op when renaming to the same name already held.
+    if preferred and preferred == old_name:
+        return old_name
+
+    new_name = await claim_tty_name(relay, user, session_key, preferred=preferred)
+
+    # New name claimed — now release old (best-effort).
+    if old_name:
+        try:
+            await relay.release_tty_name(user, old_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to release old TTY name %s", old_name)
+
+    return new_name
+
+
 def parse_address(address: str) -> tuple[str, str | None]:
     """Parse a ``@user`` or ``@user:tty`` address string.
 

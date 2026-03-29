@@ -101,12 +101,14 @@ class TestTtyAutoAssign:
     async def test_auto_assigns_next(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """No args → releases old name, then claims lowest available ttyN."""
-        # kai (tty1) and eric (tty2) get auto-assigned on startup.
-        # Auto-assign releases kai's tty1 first, then claims lowest
-        # available from {tty2} → tty1.
+        """No args → claims next available ttyN, then releases old name.
+
+        Claim-then-release: kai holds tty1 (per-user namespace).
+        Claim sees {tty1} reserved → picks tty2.
+        Then releases old tty1.
+        """
         result = await kai.call("tty")
-        assert result == "TTY: tty1"
+        assert result == "TTY: tty2"
 
     async def test_auto_reuses_lowest(
         self, kai: RecordingClient, eric: RecordingClient
@@ -164,11 +166,13 @@ class TestTtyValidation:
     async def test_whitespace_only_auto_assigns(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """Whitespace-only name triggers auto-assign."""
-        # tty1, tty2 auto-assigned on startup; whitespace triggers auto.
-        # Releases kai's tty1 first, then claims lowest from {tty2} → tty1.
+        """Whitespace-only name triggers auto-assign.
+
+        Claim-then-release: kai holds tty1 (per-user namespace).
+        Claim sees {tty1} → picks tty2, then releases tty1.
+        """
         result = await kai.call("tty", name="   ")
-        assert result == "TTY: tty1"
+        assert result == "TTY: tty2"
 
     async def test_rejects_duplicate_name_same_user(
         self, kai: RecordingClient, eric: RecordingClient
