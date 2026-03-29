@@ -3478,7 +3478,7 @@ uv run python .tmp/bench_cross_repo.py
 ## DES-035: Atomic TTY Name Reservation via NATS KV `create()`
 
 **Date:** 2026-03-29
-**Status:** PROPOSED
+**Status:** SETTLED
 **Topic:** How tty names are assigned and guaranteed unique across all repos
 **Related:** DES-002 (session key format), DES-007a (slug-based namespace),
 DES-008 (long-lived sessions), DES-016 (shared NATS streams),

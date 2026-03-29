@@ -86,6 +86,7 @@ async def _cli_session_cleanup(
     session_key: str,
     session: UserSession | None,
     registered: bool,
+    name_reserved: bool,
     shutdown: asyncio.Event,
     heartbeat_task: asyncio.Task[None] | None,
     repo_name: str,
@@ -96,6 +97,15 @@ async def _cli_session_cleanup(
         heartbeat_task.cancel()
         with suppress(asyncio.CancelledError):
             await heartbeat_task
+
+    # Release TTY name reservation regardless of session registration state.
+    # claim_tty_name may succeed (writing a reservation) before update_session
+    # fails, so we must track reservation state independently.
+    if name_reserved and tty_name and not registered:
+        try:
+            await relay.release_tty_name(user, tty_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
 
     if registered and session is not None:
         logout_event = SessionEvent(
@@ -166,12 +176,14 @@ async def cli_session(
     tty_name = ""
     session: UserSession | None = None
     registered = False
+    name_reserved = False
     shutdown = asyncio.Event()
     heartbeat_task: asyncio.Task[None] | None = None
 
     try:
         # Register session and auto-assign ttyN name (DES-035).
         tty_name = await claim_tty_name(relay, user, session_key)
+        name_reserved = True
 
         # Org discovery (DES-034): discover repos for configured orgs.
         org_repos = frozenset[str]()
@@ -236,6 +248,7 @@ async def cli_session(
             session_key=session_key,
             session=session,
             registered=registered,
+            name_reserved=name_reserved,
             shutdown=shutdown,
             heartbeat_task=heartbeat_task,
             repo_name=config.repo_name,

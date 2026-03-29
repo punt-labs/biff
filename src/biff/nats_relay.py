@@ -843,7 +843,7 @@ class NatsRelay:
                     existing.user, existing.tty_name, session_key
                 )
             except Exception:  # noqa: BLE001
-                logger.debug("Failed to refresh TTY name reservation", exc_info=True)
+                logger.warning("Failed to refresh TTY name reservation", exc_info=True)
 
     async def get_sessions(self) -> list[UserSession]:
         """Return all sessions for this repo (NATS KV TTL handles expiry).

@@ -563,9 +563,8 @@ class LocalRelay:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         path = self._tty_lock_path(user, name)
         try:
-            fd = path.open("x")
-            fd.write(session_key)
-            fd.close()
+            with path.open("x") as fd:
+                fd.write(session_key)
             return True
         except FileExistsError:
             return False
