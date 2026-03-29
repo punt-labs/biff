@@ -128,24 +128,24 @@ async def _reap_sentinels(state: ServerState) -> None:
         # Write logout event before deleting the session.  The KV entry
         # is still present (3-day TTL), so we can fetch session data for
         # an accurate last-seen timestamp.
+        session: UserSession | None = None
         try:
             session = await state.relay.get_session(session_key)
             if session is not None:
                 await state.relay.append_wtmp(_build_logout_event(session_key, session))
-                # Release TTY name reservation before deleting session (DES-035).
-                if session.tty_name:
-                    try:
-                        await state.relay.release_tty_name(
-                            session.user, session.tty_name
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "Failed to release TTY name %s during sentinel reap",
-                            session.tty_name,
-                            exc_info=True,
-                        )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to write sentinel logout for %s", session_key)
+        # Release TTY name reservation before deleting session (DES-035).
+        # Separate try block so a wtmp failure doesn't leak the name reservation.
+        if session is not None and session.tty_name:
+            try:
+                await state.relay.release_tty_name(session.user, session.tty_name)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to release TTY name %s during sentinel reap",
+                    session.tty_name,
+                    exc_info=True,
+                )
         try:
             await state.relay.delete_session(session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend

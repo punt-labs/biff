@@ -110,8 +110,6 @@ async def claim_tty_name(
     Returns the reserved name on success.  Raises ``RuntimeError``
     after exhausting retries (should never happen in practice).
     """
-    existing = await relay.list_reserved_names(user)
-
     if preferred is not None:
         candidate = preferred
         ok = await relay.reserve_tty_name(user, candidate, session_key)
@@ -121,6 +119,7 @@ async def claim_tty_name(
         raise ValueError(msg)
 
     # Auto-assign: lowest ttyN not in the reserved set.
+    existing = await relay.list_reserved_names(user)
     candidate = next_tty_name(existing)
     for attempt in range(_MAX_TTY_CLAIM_RETRIES):
         ok = await relay.reserve_tty_name(user, candidate, session_key)

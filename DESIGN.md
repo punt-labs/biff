@@ -3645,8 +3645,7 @@ atomicity guarantee on POSIX — `open()` fails if the file exists.
 | `cli_session.py` | Call `claim_tty_name()`, `release_tty_name()` in cleanup |
 | `server/app.py` | Call `claim_tty_name()`, `release_tty_name()` in lifespan |
 | `server/tools/tty.py` | Call `claim_tty_name(preferred=name)`, remove duplicate loop |
-| `nats_relay.py` `reset_infrastructure()` | Purge `biff-names` bucket |
-| `RESERVED_KV_NAMESPACES` | Add `"name"` as defense-in-depth |
+| `nats_relay.py` `purge_data()` | Skip `biff-names` — names are global, expire via TTL |
 
 ### Migration
 
