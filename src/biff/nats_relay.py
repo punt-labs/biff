@@ -45,6 +45,7 @@ from nats.js.errors import (
     BadRequestError,
     BucketNotFoundError,
     KeyNotFoundError,
+    KeyWrongLastSequenceError,
     NotFoundError,
 )
 from pydantic import ValidationError
@@ -80,7 +81,7 @@ _DEFAULT_STREAM_PREFIX = "biff"
 
 # KV key namespaces reserved for encryption (DES-016, biff-lff).
 # Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
-RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
+RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key", "name"})
 
 
 async def safe_close(nc: NatsClient) -> None:
@@ -133,9 +134,11 @@ class NatsRelay:
         self._stream_prefix = stream_prefix
         self._subject_prefix = f"{stream_prefix}.{repo_name}.inbox"
         self._wtmp_prefix = f"{stream_prefix}.{repo_name}.wtmp"
+        self._names_bucket = f"{stream_prefix}-names"
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
+        self._names_kv: KeyValue | None = None
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
 
@@ -149,8 +152,14 @@ class NatsRelay:
         self,
     ) -> tuple[JetStreamContext, KeyValue] | None:
         """Return cached handles if connection is alive, else None."""
-        js, kv, nc = self._js, self._kv, self._nc
-        if js is not None and kv is not None and nc is not None and not nc.is_closed:
+        js, kv, nc, names_kv = self._js, self._kv, self._nc, self._names_kv
+        if (
+            js is not None
+            and kv is not None
+            and names_kv is not None
+            and nc is not None
+            and not nc.is_closed
+        ):
             return js, kv
         return None
 
@@ -194,6 +203,7 @@ class NatsRelay:
                 # JetStream/KV refs (DES-029).
                 self._js = None
                 self._kv = None
+                self._names_kv = None
 
             async def _on_reconnect() -> None:
                 logger.info("Reconnected to NATS at %s", self._url)
@@ -249,6 +259,24 @@ class NatsRelay:
                     self._stream_name,
                 )
 
+            # KV bucket for TTY name reservations — shared across all repos (DES-035).
+            # Separate from sessions: no repo prefix in keys, 1 MiB max.
+            names_config = KeyValueConfig(
+                bucket=self._names_bucket,
+                ttl=_KV_TTL,
+                max_bytes=1 * 1024 * 1024,  # 1 MiB
+            )
+            try:
+                names_kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
+                    config=names_config,
+                )
+            except BadRequestError:
+                logger.info(
+                    "Shared names KV bucket %s config differs, using as-is",
+                    self._names_bucket,
+                )
+                names_kv = await js.key_value(self._names_bucket)  # pyright: ignore[reportUnknownMemberType]
+
             await self._provision_wtmp(js)
             await self._cleanup_legacy_streams(js)
         except Exception:
@@ -258,6 +286,7 @@ class NatsRelay:
         self._nc = nc
         self._js = js
         self._kv = kv
+        self._names_kv = names_kv
         return js, kv
 
     async def _provision_wtmp(self, js: JetStreamContext) -> None:
@@ -338,6 +367,7 @@ class NatsRelay:
         """
         self._js = None
         self._kv = None
+        self._names_kv = None
         self._wtmp_available = False
 
     async def purge_data(self) -> None:
@@ -357,6 +387,10 @@ class NatsRelay:
         kv_subject = f"$KV.{self._kv_bucket}.{self._repo_name}.>"
         with suppress(NotFoundError):
             await js.purge_stream(kv_stream, subject=kv_subject)  # pyright: ignore[reportUnknownMemberType]
+        # Purge ALL name reservations (not repo-scoped — names are global).
+        names_stream = f"KV_{self._names_bucket}"
+        with suppress(NotFoundError):
+            await js.purge_stream(names_stream)  # pyright: ignore[reportUnknownMemberType]
         with suppress(NotFoundError):
             await js.purge_stream(  # pyright: ignore[reportUnknownMemberType]
                 self._stream_name, subject=f"{self._subject_prefix}.>"
@@ -399,6 +433,7 @@ class NatsRelay:
         self._nc = None
         self._js = None
         self._kv = None
+        self._names_kv = None
 
     async def close(self) -> None:
         """Close the NATS connection and release resources."""
@@ -407,6 +442,7 @@ class NatsRelay:
             self._nc = None
             self._js = None
             self._kv = None
+            self._names_kv = None
 
     @staticmethod
     def _validate_user(user: str) -> str:
@@ -800,6 +836,14 @@ class NatsRelay:
             return
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
         await kv.put(kv_key, updated.model_dump_json().encode())
+        # Refresh TTY name reservation to prevent TTL expiry (DES-035).
+        if existing.tty_name:
+            try:
+                await self.refresh_tty_reservation(
+                    existing.user, existing.tty_name, session_key
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to refresh TTY name reservation", exc_info=True)
 
     async def get_sessions(self) -> list[UserSession]:
         """Return all sessions for this repo (NATS KV TTL handles expiry).
@@ -937,6 +981,70 @@ class NatsRelay:
                 session_key,
                 exc,
             )
+
+    # -- TTY name reservation (DES-035) --
+
+    async def _ensure_names_kv(self) -> KeyValue:
+        """Return the names KV handle, connecting if necessary."""
+        await self._ensure_connected()
+        assert self._names_kv is not None  # noqa: S101 — guaranteed by _open_connection
+        return self._names_kv
+
+    async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
+        """Atomically reserve a TTY name via NATS KV ``create()``.
+
+        Returns ``True`` on success, ``False`` if the name is already taken.
+        """
+        self._validate_user(user)
+        names_kv = await self._ensure_names_kv()
+        key = f"{user}.{name}"
+        try:
+            await names_kv.create(key, session_key.encode())
+            return True
+        except KeyWrongLastSequenceError:
+            return False
+
+    async def release_tty_name(self, user: str, name: str) -> None:
+        """Release a TTY name reservation."""
+        self._validate_user(user)
+        names_kv = await self._ensure_names_kv()
+        key = f"{user}.{name}"
+        with suppress(KeyNotFoundError, BucketNotFoundError):
+            await names_kv.delete(key)
+
+    async def refresh_tty_reservation(
+        self, user: str, name: str, session_key: str
+    ) -> None:
+        """Refresh a TTY name reservation to prevent TTL expiry."""
+        self._validate_user(user)
+        names_kv = await self._ensure_names_kv()
+        key = f"{user}.{name}"
+        await names_kv.put(key, session_key.encode())
+
+    async def list_reserved_names(self, user: str) -> list[str]:
+        """List reserved TTY names for a user via stream_info subject filter.
+
+        Parses the tty_name from the KV subject
+        ``$KV.{names_bucket}.{user}.{tty_name}``.
+        """
+        self._validate_user(user)
+        js, _ = await self._ensure_connected()
+        names_stream = f"KV_{self._names_bucket}"
+        kv_prefix = f"$KV.{self._names_bucket}."
+        user_filter = f"{kv_prefix}{user}.>"
+        try:
+            info = await js.stream_info(names_stream, subjects_filter=user_filter)
+        except NotFoundError:
+            return []
+        if not info.state.subjects:
+            return []
+        names: list[str] = []
+        for subject in info.state.subjects:
+            key = subject.removeprefix(kv_prefix)
+            parts = key.split(".", maxsplit=1)
+            if len(parts) == 2 and parts[0] == user:
+                names.append(parts[1])
+        return names
 
     # -- Session history (wtmp) --
 
