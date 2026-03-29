@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Atomic TTY name reservation** — TTY names (`tty1`, `tty2`, etc.) are now globally unique across all repos sharing a NATS relay. Replaces optimistic write-yield-verify with NATS KV `create()` for atomic reservation. Fixes identity+tty collision that caused wrong repo attribution in `/who` and safety script misidentification. (DES-035)
+
+### Changed
+
+- **`biff-names` KV bucket** — new NATS KV bucket for TTY name reservations, provisioned alongside `biff-sessions`. Requires NATS state reset on first upgrade.
+- **`Relay` protocol** — 5 new methods: `reserve_tty_name`, `release_tty_name`, `refresh_tty_reservation`, `list_reserved_names`, `get_tty_reservation_owner`.
+
+### Removed
+
+- `assign_unique_tty_name()` and `verify_tty_name()` — replaced by `claim_tty_name()` with atomic reservation.
+
 ## [1.5.1] - 2026-03-26
 
 ## [1.5.0] - 2026-03-26
