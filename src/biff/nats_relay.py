@@ -389,10 +389,9 @@ class NatsRelay:
         kv_subject = f"$KV.{self._kv_bucket}.{self._repo_name}.>"
         with suppress(NotFoundError):
             await js.purge_stream(kv_stream, subject=kv_subject)  # pyright: ignore[reportUnknownMemberType]
-        # Purge ALL name reservations (not repo-scoped — names are global).
-        names_stream = f"KV_{self._names_bucket}"
-        with suppress(NotFoundError):
-            await js.purge_stream(names_stream)  # pyright: ignore[reportUnknownMemberType]
+        # Name reservations are intentionally global (not repo-scoped).
+        # purge_data is per-repo, so we must NOT touch the names bucket.
+        # Use delete_infrastructure() or reset_infrastructure() to wipe names.
         with suppress(NotFoundError):
             await js.purge_stream(  # pyright: ignore[reportUnknownMemberType]
                 self._stream_name, subject=f"{self._subject_prefix}.>"
@@ -412,6 +411,7 @@ class NatsRelay:
         await self.purge_data()
         self._js = None
         self._kv = None
+        self._names_kv = None
 
     async def flush(self, *, timeout: int = 2) -> None:
         """Flush pending NATS publishes to the server.
