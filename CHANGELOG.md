@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-03-29
+
 ### Fixed
 
 - **Atomic TTY name reservation** — TTY names (`tty1`, `tty2`, etc.) are now globally unique across all repos sharing a NATS relay. Replaces optimistic write-yield-verify with NATS KV `create()` for atomic reservation. Fixes identity+tty collision that caused wrong repo attribution in `/who` and safety script misidentification. (DES-035)
