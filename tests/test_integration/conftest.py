@@ -78,7 +78,7 @@ def kai_state(shared_data_dir: Path) -> ServerState:
     return create_state(
         BiffConfig(user="kai", repo_name=_TEST_REPO),
         shared_data_dir,
-        tty="tty1",
+        tty="aaa11111",
         hostname="test-host",
         pwd="/test",
     )
@@ -90,7 +90,7 @@ def eric_state(shared_data_dir: Path) -> ServerState:
     return create_state(
         BiffConfig(user="eric", repo_name=_TEST_REPO),
         shared_data_dir,
-        tty="tty2",
+        tty="bbb22222",
         hostname="test-host",
         pwd="/test",
     )

@@ -675,6 +675,7 @@ async def _active_lifespan(
     # defeat the DES-035 invariant (every active name must be reserved).
     final_name = await claim_tty_name(state.relay, state.config.user, state.session_key)
     set_tty_name(final_name)
+    await update_current_session(state, tty_name=final_name)
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
     # Write the initial unread file and wall state immediately so the

@@ -41,21 +41,6 @@ class TestTtyNaming:
         assert "pr-review" in result
 
     @pytest.mark.transcript
-    async def test_unnamed_shows_hex(
-        self, kai: RecordingClient, eric: RecordingClient
-    ) -> None:
-        """Unnamed session shows the raw tty identifier."""
-        kai.transcript.title = "TTY: unnamed session shows hex ID"
-        kai.transcript.description = "kai has no tty name, /who shows hex ID."
-
-        await kai.call("plan", message="working")
-        result = await eric.call("who")
-
-        assert "@kai" in result
-        # Fixture tty is "tty1" — should appear as-is when no tty_name set
-        assert "tty1" in result
-
-    @pytest.mark.transcript
     async def test_rename_session(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
@@ -83,16 +68,16 @@ class TestTtyNaming:
 class TestTtyAtomicReservation:
     """DES-035: atomic TTY name reservation via relay."""
 
-    async def test_two_sessions_get_distinct_names(
-        self, kai: RecordingClient, eric: RecordingClient
+    async def test_tty_tool_reserves_and_writes_to_kv(
+        self, kai: RecordingClient
     ) -> None:
-        """Two sessions start with distinct auto-assigned tty names."""
-        result_kai = await kai.call("who")
-        assert "tty1" in result_kai
-        assert "tty2" in result_kai
-        # Verify both users appear
-        assert "@kai" in result_kai
-        assert "@eric" in result_kai
+        """The /tty tool reserves a name and writes it to the session KV."""
+        result = await kai.call("tty")
+        assert result.startswith("TTY: tty")
+        # Verify /who shows the reserved name (not the raw hex tty).
+        result_who = await kai.call("who")
+        name = result.removeprefix("TTY: ")
+        assert f"@kai:{name}" in result_who
 
 
 class TestTtyAutoAssign:
