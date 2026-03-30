@@ -211,7 +211,13 @@ class NatsRelay:
                 logger.info("Reconnected to NATS at %s", self._url)
 
             async def _on_error(exc: Exception) -> None:
-                logger.error("NATS error: %s", exc)
+                # Python 3.14 raises APPLICATION_DATA_AFTER_CLOSE_NOTIFY
+                # during TLS teardown.  Harmless — suppress.
+                ssl_teardown = isinstance(
+                    exc, ssl.SSLError
+                ) and "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(exc)
+                if not ssl_teardown:
+                    logger.error("NATS error: %s", exc)
 
             nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
                 self._url,
