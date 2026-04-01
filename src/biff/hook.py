@@ -153,6 +153,16 @@ def _pre_tool_use_suggest(reason: str) -> dict[str, object]:
     return _hook_context("PreToolUse", reason)
 
 
+def _has_active_session() -> bool:
+    """True if any biff MCP server session is active."""
+    from biff._stdlib import active_dir  # noqa: PLC0415
+
+    adir = active_dir()
+    if not adir.is_dir():
+        return False
+    return any(f.is_file() for f in adir.iterdir())
+
+
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  # noqa: ARG001
     """Gate Edit/Write on plan-set AND bead-claimed.
 
@@ -162,6 +172,9 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
     The Z spec proves no path reaches file editing without both
     conditions met (161K states, 789K transitions verified).
     """
+    if not _has_active_session():
+        return None
+
     from biff.markers import check_bead_in_progress, has_plan_marker  # noqa: PLC0415
 
     worktree = _get_worktree_root()

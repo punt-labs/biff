@@ -16,6 +16,7 @@ from unittest.mock import patch
 from biff.hook import (
     _detect_collisions,
     _expand_branch_plan,
+    _has_active_session,
     _read_hook_input,
     check_plan_hint,
     check_wall_hint,
@@ -1061,9 +1062,13 @@ def _gate_mocks(*, plan: bool, bead: bool | str):
 
     *bead* can be True/False (mapped to "yes"/"no") or a literal
     string ("yes", "no", "unavailable").
+
+    Also patches ``_has_active_session`` to ``True`` so the gate
+    logic is exercised (liveness check is tested separately).
     """
     bead_val = ("yes" if bead else "no") if isinstance(bead, bool) else bead
     return (
+        patch("biff.hook._has_active_session", return_value=True),
         patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
         patch("biff.markers.has_plan_marker", return_value=plan),
         patch("biff.markers.check_bead_in_progress", return_value=bead_val),
@@ -1080,12 +1085,50 @@ def _suggest_reason(result: dict[str, object]) -> str:
     return str(output["additionalContext"])
 
 
+class TestHasActiveSession:
+    """Liveness check: _has_active_session() and PreToolUse early return."""
+
+    def test_no_active_dir(self, tmp_path: Path) -> None:
+        """Missing active directory returns False."""
+        with patch("biff._stdlib.biff_data_dir", return_value=tmp_path):
+            assert _has_active_session() is False
+
+    def test_empty_active_dir(self, tmp_path: Path) -> None:
+        """Empty active directory returns False."""
+        (tmp_path / "active").mkdir()
+        with patch("biff._stdlib.biff_data_dir", return_value=tmp_path):
+            assert _has_active_session() is False
+
+    def test_active_session_file_returns_true(self, tmp_path: Path) -> None:
+        """Active directory with a session file returns True."""
+        active = tmp_path / "active"
+        active.mkdir()
+        (active / "kai-abc12345").write_text("kai:abc12345\nmy-repo\n")
+        with patch("biff._stdlib.biff_data_dir", return_value=tmp_path):
+            assert _has_active_session() is True
+
+    def test_pre_tool_use_returns_none_without_active_session(self) -> None:
+        """handle_pre_tool_use returns None when no MCP server is running."""
+        with patch("biff.hook._has_active_session", return_value=False):
+            result = handle_pre_tool_use({})
+        assert result is None
+
+    def test_pre_tool_use_still_gates_with_active_session(self) -> None:
+        """handle_pre_tool_use fires warning when server IS running and plan not set."""
+        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
+        with m_active, m_wt, m_plan, m_bead:
+            result = handle_pre_tool_use({})
+        assert result is not None
+        reason = _suggest_reason(result)
+        assert "/plan" in reason
+
+
 class TestHandlePreToolUse:
     """PreToolUse gate: deny Edit/Write without plan + bead."""
 
     def test_both_missing_denies_with_both_instructions(self) -> None:
-        m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
-        with m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
+        with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _suggest_reason(result)
@@ -1093,8 +1136,8 @@ class TestHandlePreToolUse:
         assert "bd update" in reason
 
     def test_plan_missing_denies_with_plan_instruction(self) -> None:
-        m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=True)
-        with m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=True)
+        with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _suggest_reason(result)
@@ -1102,8 +1145,8 @@ class TestHandlePreToolUse:
         assert "bd update" not in reason
 
     def test_bead_missing_denies_with_bead_instruction(self) -> None:
-        m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead=False)
-        with m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead=False)
+        with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _suggest_reason(result)
@@ -1111,14 +1154,14 @@ class TestHandlePreToolUse:
         assert "/plan" not in reason
 
     def test_both_present_allows(self) -> None:
-        m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead=True)
-        with m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead=True)
+        with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is None
 
     def test_bd_unavailable_no_plan_denies_with_explanation(self) -> None:
-        m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead="unavailable")
-        with m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead="unavailable")
+        with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _suggest_reason(result)
@@ -1127,8 +1170,8 @@ class TestHandlePreToolUse:
 
     def test_bd_unavailable_with_plan_allows(self) -> None:
         """When plan is set but bd is unavailable, allow gracefully."""
-        m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead="unavailable")
-        with m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead="unavailable")
+        with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is None
 
