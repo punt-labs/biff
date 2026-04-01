@@ -184,26 +184,31 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
     if not plan_set and bead_status != "yes":
         if bead_status == "unavailable":
             return _pre_tool_use_suggest(
-                "Set your plan before editing files. "
-                "Run: /plan <what you're working on>. "
-                "Bead status could not be checked (bd unavailable)."
+                "Reminder: /plan not set. "
+                "Run /plan <what you're working on>. "
+                "Bead status could not be checked (bd unavailable). "
+                "Address at your next natural pause."
             )
         return _pre_tool_use_suggest(
-            "Set your plan and claim a bead before editing files. "
-            "Run: /plan <what you're working on>, "
-            "then: bd update <bead-id> --status=in_progress"
+            "Reminder: /plan not set and no bead claimed. "
+            "Run /plan <what you're working on> and "
+            "bd update <bead-id> --status=in_progress "
+            "at your next natural pause."
         )
     if not plan_set:
         return _pre_tool_use_suggest(
-            "Set your plan before editing files. Run: /plan <what you're working on>"
+            "Reminder: /plan not set. "
+            "Run /plan <what you're working on> "
+            "at your next natural pause."
         )
     if bead_status == "unavailable":
         # Plan is set but bd is unavailable — allow gracefully.
         return None
     if bead_status == "no":
         return _pre_tool_use_suggest(
-            "Claim a bead before editing files. "
-            "Run: bd update <bead-id> --status=in_progress"
+            "Reminder: no bead claimed. "
+            "Run bd update <bead-id> --status=in_progress "
+            "at your next natural pause."
         )
     return None
 
@@ -687,33 +692,6 @@ def handle_session_resume() -> str:
     return "Biff session resumed. Check /read for unread messages."
 
 
-def handle_stop() -> str | None:
-    """Check for unread messages at session stop.
-
-    Reads the per-session unread file maintained by the MCP server.
-    Returns an ``additionalContext`` reminder, or ``None`` if no
-    unread messages.  This is a soft gate — always exit 0.
-    """
-    from biff._stdlib import biff_data_dir  # noqa: PLC0415
-    from biff.session_key import find_session_key  # noqa: PLC0415
-
-    unread_path = biff_data_dir() / "unread" / f"{find_session_key()}.json"
-    if not unread_path.is_file():
-        return None
-    try:
-        raw: object = cast("object", json.loads(unread_path.read_text()))
-        if not isinstance(raw, dict):
-            return None
-        data = cast("dict[str, object]", raw)
-        count = data.get("count", 0)
-        if not isinstance(count, int) or count <= 0:
-            return None
-        plural = "s" if count != 1 else ""
-        return f"You have {count} unread message{plural}. Run /read before finishing."
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
 def handle_session_end() -> int:
     """Convert active-session markers to sentinels for cleanup.
 
@@ -833,16 +811,6 @@ def cc_session_end() -> None:
     if not _is_biff_enabled():
         return
     handle_session_end()
-
-
-@_cc_app.command("stop")
-def cc_stop() -> None:
-    """Stop — unread message reminder (soft gate, never blocks)."""
-    if not _is_biff_enabled():
-        return
-    result = handle_stop()
-    if result is not None:
-        _emit({"decision": "block", "reason": result})
 
 
 @_cc_app.command("pre-compact")
