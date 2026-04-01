@@ -49,7 +49,7 @@
         ]
       }
     ],
-"PostToolUse": [
+    "PostToolUse": [
       {
         "matcher": "mcp__(plugin_biff(-dev)?_)?tty__.*",
         "hooks": [
