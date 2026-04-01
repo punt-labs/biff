@@ -124,7 +124,10 @@ class TestDispatchCommands:
         assert "fixing the bug" in result.text
 
     @pytest.mark.anyio()
-    async def test_write_and_read(self, ctx: CliContext) -> None:
+    async def test_write_and_read(self, ctx: CliContext, relay: LocalRelay) -> None:
+        await relay.update_session(
+            UserSession(user="kai", tty="abc12345", tty_name="tty1")
+        )
         result = await dispatch('write @kai "hello there"', ctx)
         assert result is not None
         assert "sent" in result.text.lower()

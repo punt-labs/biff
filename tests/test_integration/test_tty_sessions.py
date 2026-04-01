@@ -253,7 +253,7 @@ class TestOfflineDelivery:
         self,
         shared_dir: Path,
     ) -> None:
-        # Eric sends to @kai when kai has no sessions
+        # Eric sends to @kai — kai has NO active session (offline delivery)
         eric_state = create_state(
             BiffConfig(user="eric", repo_name=_TEST_REPO),
             shared_dir,
@@ -263,7 +263,7 @@ class TestOfflineDelivery:
         )
         eric_mcp = create_server(eric_state)
         async with Client(FastMCPTransport(eric_mcp)) as eric:
-            await eric.call_tool("write", {"to": "kai", "message": "offline msg"})
+            await eric.call_tool("write", {"to": "@kai", "message": "offline msg"})
 
         # Kai comes online later and reads the message
         kai_state = create_state(

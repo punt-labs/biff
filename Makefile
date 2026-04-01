@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format build install clean depot fuzz prob prob-session prfaq clean-tex
+.PHONY: help test lint type check format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -49,6 +49,18 @@ prob-session: ## Validate session-model.tex (fuzz + ProB, setsize 1)
 format: ## Auto-format code
 	uv run ruff check --fix .
 	uv run ruff format .
+
+lock-clean: ## Regenerate uv.lock without local overrides (for CI/release)
+	@if [ -f uv.toml ]; then \
+	    trap 'mv uv.toml.bak uv.toml 2>/dev/null' EXIT INT TERM; \
+	    mv uv.toml uv.toml.bak; \
+	    uv lock; status=$$?; \
+	    mv uv.toml.bak uv.toml; \
+	    trap - EXIT INT TERM; \
+	    exit $$status; \
+	else \
+	    uv lock; \
+	fi
 
 build: ## Build wheel and sdist
 	rm -rf dist/
