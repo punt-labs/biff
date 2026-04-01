@@ -692,33 +692,6 @@ def handle_session_resume() -> str:
     return "Biff session resumed. Check /read for unread messages."
 
 
-def handle_stop() -> str | None:
-    """Check for unread messages at session stop.
-
-    Reads the per-session unread file maintained by the MCP server.
-    Returns an ``additionalContext`` reminder, or ``None`` if no
-    unread messages.  This is a soft gate — always exit 0.
-    """
-    from biff._stdlib import biff_data_dir  # noqa: PLC0415
-    from biff.session_key import find_session_key  # noqa: PLC0415
-
-    unread_path = biff_data_dir() / "unread" / f"{find_session_key()}.json"
-    if not unread_path.is_file():
-        return None
-    try:
-        raw: object = cast("object", json.loads(unread_path.read_text()))
-        if not isinstance(raw, dict):
-            return None
-        data = cast("dict[str, object]", raw)
-        count = data.get("count", 0)
-        if not isinstance(count, int) or count <= 0:
-            return None
-        plural = "s" if count != 1 else ""
-        return f"You have {count} unread message{plural}. Consider running /read."
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
 def handle_session_end() -> int:
     """Convert active-session markers to sentinels for cleanup.
 
@@ -838,16 +811,6 @@ def cc_session_end() -> None:
     if not _is_biff_enabled():
         return
     handle_session_end()
-
-
-@_cc_app.command("stop")
-def cc_stop() -> None:
-    """Stop — unread message reminder (soft gate, never blocks)."""
-    if not _is_biff_enabled():
-        return
-    result = handle_stop()
-    if result is not None:
-        _emit(_hook_context("Stop", result))
 
 
 @_cc_app.command("pre-compact")

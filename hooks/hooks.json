@@ -49,17 +49,7 @@
         ]
       }
     ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
+"PostToolUse": [
       {
         "matcher": "mcp__(plugin_biff(-dev)?_)?tty__.*",
         "hooks": [

@@ -67,14 +67,6 @@ def _cc_session_end() -> None:
     handle_session_end()
 
 
-def _cc_stop() -> None:
-    from biff.hook import _emit, handle_stop  # noqa: PLC0415
-
-    result = handle_stop()
-    if result is not None:
-        _emit({"decision": "block", "reason": result})
-
-
 def _cc_pre_tool_use() -> None:
     from biff.hook import _emit, _read_hook_input, handle_pre_tool_use  # noqa: PLC0415
 
@@ -118,7 +110,6 @@ _CC_HANDLERS: dict[str, Callable[[], None]] = {
     "session-start": _cc_session_start,
     "session-resume": _cc_session_resume,
     "session-end": _cc_session_end,
-    "stop": _cc_stop,
     "pre-tool-use": _cc_pre_tool_use,
     "post-bash": _cc_post_bash,
     "post-pr": _cc_post_pr,

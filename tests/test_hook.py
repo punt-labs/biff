@@ -29,7 +29,6 @@ from biff.hook import (
     handle_session_end,
     handle_session_resume,
     handle_session_start,
-    handle_stop,
 )
 
 # Deterministic worktree root for hint file tests.
@@ -1174,114 +1173,6 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is None
-
-
-# ── handle_stop ──────────────────────────────────────────────────────
-
-
-class TestHandleStop:
-    """Stop hook: unread message reminder (soft gate)."""
-
-    def test_unread_messages_returns_reminder(self, tmp_path: Path) -> None:
-        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
-        unread_dir.mkdir(parents=True)
-        (unread_dir / "12345.json").write_text(
-            json.dumps({"count": 3, "user": "kai", "repo": "biff"})
-        )
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.session_key.find_session_key", return_value=12345),
-        ):
-            result = handle_stop()
-        assert result is not None
-        assert "3 unread messages" in result
-        assert "/read" in result
-
-    def test_zero_unread_returns_none(self, tmp_path: Path) -> None:
-        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
-        unread_dir.mkdir(parents=True)
-        (unread_dir / "12345.json").write_text(
-            json.dumps({"count": 0, "user": "kai", "repo": "biff"})
-        )
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.session_key.find_session_key", return_value=12345),
-        ):
-            result = handle_stop()
-        assert result is None
-
-    def test_no_unread_file_returns_none(self, tmp_path: Path) -> None:
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.session_key.find_session_key", return_value=99999),
-        ):
-            result = handle_stop()
-        assert result is None
-
-    def test_singular_message(self, tmp_path: Path) -> None:
-        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
-        unread_dir.mkdir(parents=True)
-        (unread_dir / "12345.json").write_text(
-            json.dumps({"count": 1, "user": "kai", "repo": "biff"})
-        )
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.session_key.find_session_key", return_value=12345),
-        ):
-            result = handle_stop()
-        assert result is not None
-        assert "1 unread message." in result
-
-
-class TestCcStopSchema:
-    """cc_stop emits non-blocking additionalContext (biff-2d5c)."""
-
-    def test_emits_hook_context_schema(self, tmp_path: Path) -> None:
-        """Stop output must use hookSpecificOutput with additionalContext."""
-        from typer.testing import CliRunner
-
-        from biff.hook import hook_app
-
-        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
-        unread_dir.mkdir(parents=True)
-        (unread_dir / "12345.json").write_text(
-            json.dumps({"count": 2, "user": "kai", "repo": "biff"})
-        )
-        runner = CliRunner()
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.session_key.find_session_key", return_value=12345),
-            patch("biff.hook._is_biff_enabled", return_value=True),
-        ):
-            result = runner.invoke(hook_app, ["claude-code", "stop"])
-        assert result.exit_code == 0
-        output = json.loads(result.stdout)
-        assert "hookSpecificOutput" in output
-        hook_output = output["hookSpecificOutput"]
-        assert hook_output["hookEventName"] == "Stop"
-        assert "additionalContext" in hook_output
-        assert "decision" not in output
-
-    def test_no_output_when_zero_unread(self, tmp_path: Path) -> None:
-        """Stop emits nothing when there are no unread messages."""
-        from typer.testing import CliRunner
-
-        from biff.hook import hook_app
-
-        unread_dir = tmp_path / ".punt-labs" / "biff" / "unread"
-        unread_dir.mkdir(parents=True)
-        (unread_dir / "12345.json").write_text(
-            json.dumps({"count": 0, "user": "kai", "repo": "biff"})
-        )
-        runner = CliRunner()
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.session_key.find_session_key", return_value=12345),
-            patch("biff.hook._is_biff_enabled", return_value=True),
-        ):
-            result = runner.invoke(hook_app, ["claude-code", "stop"])
-        assert result.exit_code == 0
-        assert result.stdout.strip() == ""
 
 
 # ── Z spec invariant coverage (biff-g9b) ─────────────────────────────
