@@ -1234,10 +1234,10 @@ class TestHandleStop:
 
 
 class TestCcStopSchema:
-    """cc_stop emits the Stop hook schema, not hookSpecificOutput (biff-bfth)."""
+    """cc_stop emits non-blocking additionalContext (biff-2d5c)."""
 
-    def test_emits_decision_block_schema(self, tmp_path: Path) -> None:
-        """Stop output must be {"decision": "block", "reason": ...}."""
+    def test_emits_hook_context_schema(self, tmp_path: Path) -> None:
+        """Stop output must use hookSpecificOutput with additionalContext."""
         from typer.testing import CliRunner
 
         from biff.hook import hook_app
@@ -1256,9 +1256,11 @@ class TestCcStopSchema:
             result = runner.invoke(hook_app, ["claude-code", "stop"])
         assert result.exit_code == 0
         output = json.loads(result.stdout)
-        assert output["decision"] == "block"
-        assert "reason" in output
-        assert "hookSpecificOutput" not in output
+        assert "hookSpecificOutput" in output
+        hook_output = output["hookSpecificOutput"]
+        assert hook_output["hookEventName"] == "Stop"
+        assert "additionalContext" in hook_output
+        assert "decision" not in output
 
     def test_no_output_when_zero_unread(self, tmp_path: Path) -> None:
         """Stop emits nothing when there are no unread messages."""
