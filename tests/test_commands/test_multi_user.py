@@ -19,13 +19,25 @@ from biff.commands.status import status
 from biff.commands.wall import wall
 from biff.commands.who import who
 from biff.commands.write import write
+from biff.models import UserSession
 from biff.relay import LocalRelay
 
 
 class TestWriteReadRoundTrip:
+    async def _register_both(self, ctx: CliContext, ctx_eric: CliContext) -> None:
+        """Register sessions for both users so bare-user writes resolve."""
+        relay = ctx.relay
+        await relay.update_session(
+            UserSession(user="kai", tty=ctx.tty, tty_name="tty1")
+        )
+        await relay.update_session(
+            UserSession(user="eric", tty=ctx_eric.tty, tty_name="tty2")
+        )
+
     async def test_kai_writes_eric_reads(
         self, ctx: CliContext, ctx_eric: CliContext
     ) -> None:
+        await self._register_both(ctx, ctx_eric)
         result = await write(ctx, "@eric", "Hey eric!")
         assert not result.error
 
@@ -39,6 +51,7 @@ class TestWriteReadRoundTrip:
     async def test_read_marks_messages_consumed(
         self, ctx: CliContext, ctx_eric: CliContext
     ) -> None:
+        await self._register_both(ctx, ctx_eric)
         await write(ctx, "@eric", "first")
         await write(ctx, "@eric", "second")
 
@@ -54,6 +67,7 @@ class TestWriteReadRoundTrip:
     async def test_messages_isolated_per_user(
         self, ctx: CliContext, ctx_eric: CliContext
     ) -> None:
+        await self._register_both(ctx, ctx_eric)
         await write(ctx, "@eric", "for eric only")
 
         # Kai shouldn't see eric's messages
@@ -68,6 +82,7 @@ class TestWriteReadRoundTrip:
     async def test_bidirectional_messaging(
         self, ctx: CliContext, ctx_eric: CliContext
     ) -> None:
+        await self._register_both(ctx, ctx_eric)
         await write(ctx, "@eric", "ping")
         await write(ctx_eric, "@kai", "pong")
 
@@ -134,7 +149,13 @@ class TestSessionVisibility:
         assert not result.error
         assert "deep work" in result.text
 
-    async def test_status_isolated(self, ctx: CliContext, ctx_eric: CliContext) -> None:
+    async def test_status_isolated(
+        self, ctx: CliContext, ctx_eric: CliContext, relay: LocalRelay
+    ) -> None:
+        # Register sessions so bare-user write resolves
+        await relay.update_session(
+            UserSession(user="eric", tty=ctx_eric.tty, tty_name="tty2")
+        )
         # Send messages only to eric
         await write(ctx, "@eric", "hey")
 

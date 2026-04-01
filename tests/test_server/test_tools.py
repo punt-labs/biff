@@ -452,13 +452,27 @@ class TestSendMessageTool:
         result = await fn(to="nobody:tty99", message="hello")
         assert "not found" in result
 
-    async def test_targeted_wrong_tty_suggests_broadcast(
-        self, state: ServerState
-    ) -> None:
+    async def test_targeted_wrong_tty_suggests_who(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric:fakeTty", message="hello")
-        assert "Try @eric to broadcast" in result
+        assert "Run /who to find their current address" in result
+
+    async def test_write_bare_nonexistent_user_returns_error(
+        self, state: ServerState
+    ) -> None:
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to="nobody", message="hello")
+        assert "not found" in result
+
+    async def test_write_bare_existing_user_succeeds(self, state: ServerState) -> None:
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to="eric", message="hello")
+        assert "@eric" in result
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
+        unread = await state.relay.fetch_user_inbox("eric")
+        assert len(unread) == 1
 
 
 class TestCheckMessagesTool:

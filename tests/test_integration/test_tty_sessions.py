@@ -21,7 +21,7 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent
 
-from biff.models import BiffConfig
+from biff.models import BiffConfig, UserSession
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 
@@ -253,7 +253,7 @@ class TestOfflineDelivery:
         self,
         shared_dir: Path,
     ) -> None:
-        # Eric sends to @kai when kai has no sessions
+        # Eric sends to @kai — kai must have a session for address validation
         eric_state = create_state(
             BiffConfig(user="eric", repo_name=_TEST_REPO),
             shared_dir,
@@ -261,6 +261,7 @@ class TestOfflineDelivery:
             hostname="host-b",
             pwd="/project/c",
         )
+        await eric_state.relay.update_session(UserSession(user="kai", tty="tty1"))
         eric_mcp = create_server(eric_state)
         async with Client(FastMCPTransport(eric_mcp)) as eric:
             await eric.call_tool("write", {"to": "kai", "message": "offline msg"})

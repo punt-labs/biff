@@ -127,9 +127,14 @@ class TestMessagingWorkflow:
         assert "eric" in result
         assert "auth module looks good" in result
 
+        # Register eric's session so the write can resolve the recipient
+        await state.relay.update_session(
+            UserSession(user="eric", tty="tty2", plan="reviewing PR #42")
+        )
+
         # Reply (targeted to eric's specific session)
         result = await recorder.call("write", to="eric:tty2", message="thanks!")
-        assert "@eric" in result
+        assert "Message sent" in result
 
         # Inbox is now empty
         result = await recorder.call("read_messages")

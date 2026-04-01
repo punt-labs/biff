@@ -10,6 +10,9 @@ from biff.relay import LocalRelay
 
 class TestWrite:
     async def test_send_to_user(self, ctx: CliContext, relay: LocalRelay) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
         result = await write(ctx, "@eric", "Hello!")
         assert not result.error
         assert "Message sent to @eric" in result.text
@@ -24,6 +27,9 @@ class TestWrite:
     async def test_long_message_chunked(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
         long_msg = " ".join(["word"] * 200)  # ~1000 chars
         result = await write(ctx, "@eric", long_msg)
         assert not result.error
@@ -40,6 +46,9 @@ class TestWrite:
     async def test_short_message_no_parts_label(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
         result = await write(ctx, "@eric", "short")
         assert not result.error
         assert "parts" not in result.text
@@ -68,7 +77,7 @@ class TestWrite:
         )
         result = await write(ctx, "@eric:tty99", "hello")
         assert result.error
-        assert "Try @eric to broadcast" in result.text
+        assert "Run /who to find their current address" in result.text
 
     async def test_targeted_unknown_user_error(self, ctx: CliContext) -> None:
         result = await write(ctx, "@nobody:tty1", "hello")
@@ -89,11 +98,30 @@ class TestWrite:
     async def test_bare_user_without_at(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
         result = await write(ctx, "eric", "no prefix")
         assert not result.error
         msgs = await relay.fetch_user_inbox("eric")
         assert len(msgs) == 1
         assert msgs[0].body == "no prefix"
+
+    async def test_bare_nonexistent_user_returns_error(self, ctx: CliContext) -> None:
+        result = await write(ctx, "@nobody", "hello")
+        assert result.error
+        assert "not found" in result.text
+
+    async def test_bare_existing_user_succeeds(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
+        result = await write(ctx, "@eric", "hello")
+        assert not result.error
+        msgs = await relay.fetch_user_inbox("eric")
+        assert len(msgs) == 1
 
     async def test_invalid_address_empty_tty(self, ctx: CliContext) -> None:
         result = await write(ctx, "@eric:", "hello")
