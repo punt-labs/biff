@@ -37,7 +37,6 @@ tests/transcripts/
 
 # Environment
 .env
-.envrc
 
 # LaTeX (root-level artifacts from prfaq.tex compilation)
 *.aux
