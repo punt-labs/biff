@@ -52,9 +52,11 @@ format: ## Auto-format code
 
 lock-clean: ## Regenerate uv.lock without local overrides (for CI/release)
 	@if [ -f uv.toml ]; then \
+	    trap 'mv uv.toml.bak uv.toml 2>/dev/null' EXIT INT TERM; \
 	    mv uv.toml uv.toml.bak; \
 	    uv lock; status=$$?; \
 	    mv uv.toml.bak uv.toml; \
+	    trap - EXIT INT TERM; \
 	    exit $$status; \
 	else \
 	    uv lock; \

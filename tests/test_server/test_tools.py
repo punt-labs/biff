@@ -474,6 +474,16 @@ class TestSendMessageTool:
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
+    async def test_broadcast_to_offline_user_succeeds(self, state: ServerState) -> None:
+        # @user with @ prefix allows offline delivery — no session needed
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to="@offlineuser", message="offline msg")
+        assert "@offlineuser" in result
+        assert "not found" not in result
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
+        unread = await state.relay.fetch_user_inbox("offlineuser")
+        assert len(unread) == 1
+
 
 class TestCheckMessagesTool:
     async def test_no_messages(self, state: ServerState) -> None:

@@ -107,10 +107,22 @@ class TestWrite:
         assert len(msgs) == 1
         assert msgs[0].body == "no prefix"
 
-    async def test_bare_nonexistent_user_returns_error(self, ctx: CliContext) -> None:
-        result = await write(ctx, "@nobody", "hello")
+    async def test_bare_nonexistent_user_without_at_returns_error(
+        self, ctx: CliContext
+    ) -> None:
+        result = await write(ctx, "nobody", "hello")
         assert result.error
         assert "not found" in result.text
+
+    async def test_broadcast_to_offline_user_succeeds(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        # @user with @ prefix allows offline delivery — no session needed
+        result = await write(ctx, "@offlineuser", "offline msg")
+        assert not result.error
+        msgs = await relay.fetch_user_inbox("offlineuser")
+        assert len(msgs) == 1
+        assert msgs[0].body == "offline msg"
 
     async def test_bare_existing_user_succeeds(
         self, ctx: CliContext, relay: LocalRelay
