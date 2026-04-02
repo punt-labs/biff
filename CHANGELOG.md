@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-04-01
+
 ### Fixed
 
 - **PR announce hook** — removed invalid `/write @human` suggestion (not a valid biff identity). Now suggests `/wall "<message>" 10m` only, with 10-minute TTL for transient team awareness. Skips `/wall` suggestion when a wall is already active.
