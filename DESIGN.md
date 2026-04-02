@@ -1137,7 +1137,7 @@ Biff has three hooks today:
 |------|-------|---------|-------------|
 | `session-start.sh` | SessionStart | Every session | First-run setup: deploy commands, auto-allow MCP tools, install statusline |
 | `suppress-output.sh` | PostToolUse | Biff MCP tools | Display formatting: split panel summary vs. model context |
-| `pr-announce.sh` | PostToolUse | GitHub PR create/merge | Suggest `/wall` announcement |
+| `pr-announce.sh` | PostToolUse | GitHub PR create/merge | Suggest `/wall` announcement (10m TTL) |
 | `bead-claim.sh` | PostToolUse | Bash `bd update` | Suggest `/plan` after claiming work |
 
 The first two are infrastructure (display pipeline, DES-001). The second two are nudges. All four are PostToolUse.
@@ -1169,7 +1169,7 @@ Both layers call `biff hook <event>` — the biff CLI binary is the single dispa
 | **SessionStart** | `resume\|compact` | `hooks/session-resume.sh` | Refresh presence heartbeat, re-announce plan | `additionalContext` if unread messages waiting |
 | **SessionEnd** | `""` (all) | `hooks/session-end.sh` | Clear presence (immediate, don't wait for TTL) | Silent |
 | **PostToolUse** | biff MCP tools | `hooks/suppress-output.sh` | Display formatting (unchanged, DES-001) | `updatedMCPToolOutput` + `additionalContext` |
-| **PostToolUse** | GitHub PR tools | `hooks/pr-announce.sh` | Suggest `/wall` (unchanged) | `additionalContext` |
+| **PostToolUse** | GitHub PR tools | `hooks/pr-announce.sh` | Suggest `/wall` (10m TTL) | `additionalContext` |
 | **PostToolUse** | `Bash` | `hooks/post-bash.sh` | Dispatch: git checkout/switch → suggest `/plan` update; `bd update --status=in_progress` → suggest `/plan` (bead-claim, unchanged) | `additionalContext` |
 | **Stop** | — | `hooks/stop.sh` | Refresh presence heartbeat (proves session is alive to remote observers) | Silent |
 | **PreCompact** | — | `hooks/pre-compact.sh` | Snapshot current plan to `additionalContext` so it survives compaction | `additionalContext` |

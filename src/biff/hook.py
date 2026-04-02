@@ -340,21 +340,16 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
         return None
     bare, msg, pr_num = parsed
 
-    safe_msg = json.dumps(msg, ensure_ascii=False)[1:-1]
-
     # Check if a wall is already active to avoid redundant suggestions.
     from biff.markers import read_wall_marker  # noqa: PLC0415
 
     wall_active = read_wall_marker(_get_worktree_root()) is not None
 
-    parts: list[str] = ["This team uses biff for communication."]
     if wall_active:
-        parts.append(f'Notify the relevant human directly: /write @human "{safe_msg}"')
-    else:
-        parts.append(f"Consider announcing to the team: /wall {msg}")
-        parts.append(
-            f'Also notify the relevant human directly: /write @human "{safe_msg}"'
-        )
+        return None
+
+    parts: list[str] = ["This team uses biff for communication."]
+    parts.append(f'Consider announcing to the team: /wall {msg} duration="10m"')
 
     # Lux PR dashboard (biff-g75a consumer integration).
     if _is_lux_enabled() and bare == "create_pull_request":
@@ -573,7 +568,8 @@ def check_wall_hint() -> str | None:
         return None
     return (
         "You just pushed to the default branch. "
-        "Consider announcing to the team: /wall <summary of what shipped>"
+        "Consider announcing to the team: "
+        '/wall <summary of what shipped> duration="10m"'
     )
 
 

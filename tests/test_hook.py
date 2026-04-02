@@ -159,7 +159,7 @@ class TestHandlePostPr:
         assert "Created PR #42" in result
         assert "feat: hook dispatcher" in result
         assert "/wall" in result
-        assert "/write @human" in result
+        assert 'duration="10m"' in result
 
     def test_create_pr_plugin_prefix(self) -> None:
         data: dict[str, object] = {
@@ -267,7 +267,7 @@ class TestHandlePostPr:
         assert handle_post_pr(data) is None
 
     def test_wall_active_skips_wall_suggestion(self) -> None:
-        """When a wall is already active, only suggest /write."""
+        """When a wall is already active, return None."""
         data: dict[str, object] = {
             "tool_name": "mcp__github__create_pull_request",
             "tool_input": {"title": "feat: hooks"},
@@ -275,12 +275,10 @@ class TestHandlePostPr:
         }
         with patch("biff.markers.read_wall_marker", return_value="deploy freeze"):
             result = handle_post_pr(data)
-        assert result is not None
-        assert "/wall" not in result
-        assert "/write @human" in result
+        assert result is None
 
     def test_no_wall_includes_wall_suggestion(self) -> None:
-        """When no wall is active, suggest both /wall and /write."""
+        """When no wall is active, suggest /wall with 10m TTL."""
         data: dict[str, object] = {
             "tool_name": "mcp__github__create_pull_request",
             "tool_input": {"title": "feat: hooks"},
@@ -290,7 +288,7 @@ class TestHandlePostPr:
             result = handle_post_pr(data)
         assert result is not None
         assert "/wall" in result
-        assert "/write @human" in result
+        assert 'duration="10m"' in result
 
 
 # ── handle_session_start ────────────────────────────────────────────
@@ -839,6 +837,7 @@ class TestCheckWallHint:
 
         assert result is not None
         assert "/wall" in result
+        assert 'duration="10m"' in result
         assert not hp.exists()
 
     def test_no_hint_returns_none(self, tmp_path: Path) -> None:
