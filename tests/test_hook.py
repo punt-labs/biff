@@ -159,7 +159,7 @@ class TestHandlePostPr:
         assert "Created PR #42" in result
         assert "feat: hook dispatcher" in result
         assert "/wall" in result
-        assert 'duration="10m"' in result
+        assert '" 10m' in result
 
     def test_create_pr_plugin_prefix(self) -> None:
         data: dict[str, object] = {
@@ -213,7 +213,7 @@ class TestHandlePostPr:
         }
         result = handle_post_pr(data)
         assert result is not None
-        assert "/wall Merged PR #42" in result
+        assert '/wall "Merged PR #42"' in result
         # No title means the msg is "Merged PR #42" with no ": title" suffix
         assert "Merged PR #42:" not in result
 
@@ -267,15 +267,34 @@ class TestHandlePostPr:
         assert handle_post_pr(data) is None
 
     def test_wall_active_skips_wall_suggestion(self) -> None:
-        """When a wall is already active, return None."""
+        """When a wall is already active, skip /wall but keep Lux if enabled."""
         data: dict[str, object] = {
             "tool_name": "mcp__github__create_pull_request",
             "tool_input": {"title": "feat: hooks"},
             "tool_response": json.dumps({"number": 99}),
         }
-        with patch("biff.markers.read_wall_marker", return_value="deploy freeze"):
+        with (
+            patch("biff.markers.read_wall_marker", return_value="deploy freeze"),
+            patch("biff.hook._is_lux_enabled", return_value=False),
+        ):
             result = handle_post_pr(data)
         assert result is None
+
+    def test_wall_active_with_lux_shows_dashboard(self) -> None:
+        """Wall active + Lux enabled: skip /wall, still show Lux dashboard."""
+        data: dict[str, object] = {
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": {"title": "feat: hooks"},
+            "tool_response": json.dumps({"number": 99}),
+        }
+        with (
+            patch("biff.markers.read_wall_marker", return_value="deploy freeze"),
+            patch("biff.hook._is_lux_enabled", return_value=True),
+        ):
+            result = handle_post_pr(data)
+        assert result is not None
+        assert "/wall" not in result
+        assert "/lux:dashboard" in result
 
     def test_no_wall_includes_wall_suggestion(self) -> None:
         """When no wall is active, suggest /wall with 10m TTL."""
@@ -288,7 +307,7 @@ class TestHandlePostPr:
             result = handle_post_pr(data)
         assert result is not None
         assert "/wall" in result
-        assert 'duration="10m"' in result
+        assert '" 10m' in result
 
 
 # ── handle_session_start ────────────────────────────────────────────
@@ -837,7 +856,7 @@ class TestCheckWallHint:
 
         assert result is not None
         assert "/wall" in result
-        assert 'duration="10m"' in result
+        assert '" 10m' in result
         assert not hp.exists()
 
     def test_no_hint_returns_none(self, tmp_path: Path) -> None:

@@ -340,16 +340,19 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
         return None
     bare, msg, pr_num = parsed
 
+    # Escape message for safe inclusion in a /wall command.
+    escaped_msg = json.dumps(msg, ensure_ascii=False)[1:-1]
+
     # Check if a wall is already active to avoid redundant suggestions.
     from biff.markers import read_wall_marker  # noqa: PLC0415
 
     wall_active = read_wall_marker(_get_worktree_root()) is not None
 
-    if wall_active:
-        return None
+    parts: list[str] = []
 
-    parts: list[str] = ["This team uses biff for communication."]
-    parts.append(f'Consider announcing to the team: /wall {msg} duration="10m"')
+    if not wall_active:
+        parts.append("This team uses biff for communication.")
+        parts.append(f'Consider announcing to the team: /wall "{escaped_msg}" 10m')
 
     # Lux PR dashboard (biff-g75a consumer integration).
     if _is_lux_enabled() and bare == "create_pull_request":
@@ -358,7 +361,7 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
             f"showing PR #{pr_num} status, CI checks, and review state."
         )
 
-    return " ".join(parts)
+    return " ".join(parts) if parts else None
 
 
 def _get_git_branch() -> str:
@@ -569,7 +572,7 @@ def check_wall_hint() -> str | None:
     return (
         "You just pushed to the default branch. "
         "Consider announcing to the team: "
-        '/wall <summary of what shipped> duration="10m"'
+        '/wall "<summary of what shipped>" 10m'
     )
 
 
