@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **read_messages panel count** — PostToolUse hook showed "0 new" instead of the actual message count. The grep pattern in `suppress-output.sh` used `[a-zA-Z0-9]` but `format_read()` outputs `@user:tty` — the `@` prefix wasn't matched. Added `@` to the character class.
+
 ## [1.6.3] - 2026-04-01
 
 ### Fixed

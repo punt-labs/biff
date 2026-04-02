@@ -81,9 +81,9 @@ if [[ "$TOOL_NAME" == "read_messages" ]]; then
   if [[ "$RESULT" == "No new messages." ]]; then
     emit_simple "$RESULT"
   else
-    # Data rows start with 3-space indent + bare username (no @).
+    # Data rows start with 3-space indent + @user:tty address.
     # Header row starts with ▶. Skip it.
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [a-zA-Z0-9]')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [@a-zA-Z0-9]')
     emit "${COUNT} new" "$RESULT"
   fi
   exit 0
