@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import subprocess
 from contextlib import suppress
 from pathlib import Path
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _UNCHECKED = object()
 _vox_binary: str | None | object = _UNCHECKED
+_vox_once_supported: bool | object = _UNCHECKED
 
 
 def has_vox(repo_root: Path | None = None) -> bool:
@@ -38,6 +40,35 @@ def vox_binary() -> str | None:
     if _vox_binary is _UNCHECKED:
         return None  # unreachable, satisfies type checker
     return _vox_binary  # type: ignore[return-value]
+
+
+def _probe_once_support(binary: str) -> bool:
+    """Feature-detect whether ``vox unmute`` accepts ``--once``.
+
+    Cached per session. punt-vox added ``--once <seconds>`` in PR #171;
+    older binaries (including the current PyPI release) reject the flag
+    with ``No such option: --once`` and exit non-zero. Since
+    ``speak_fire_and_forget`` does not inspect returncode, passing the
+    flag unconditionally would turn audio off entirely on old vox. Probe
+    once, cache the answer, and degrade gracefully.
+    """
+    global _vox_once_supported
+    if _vox_once_supported is _UNCHECKED:
+        try:
+            # binary is the absolute path from shutil.which("vox"); argv is
+            # a fixed literal list; no shell involved. Safe by construction.
+            result = subprocess.run(  # noqa: S603
+                [binary, "unmute", "--help"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            _vox_once_supported = "--once" in result.stdout
+        except (OSError, subprocess.SubprocessError):
+            logger.debug("vox unmute --help probe failed", exc_info=True)
+            _vox_once_supported = False
+    return bool(_vox_once_supported)
 
 
 # ── Emoticon-to-vibe mapping ───────────────────────────────────────
@@ -60,6 +91,18 @@ _EMOTICON_VIBES: tuple[tuple[str, str], ...] = (
 )
 
 WALL_DEFAULT_VIBES = "[alert] [serious]"
+
+# Wall broadcasts fan out to N Claude Code sessions in the same repo and
+# each session spawns ``vox unmute`` with identical text. Without dedup,
+# the user hears the same sentence N times. ``vox unmute --once <seconds>``
+# (added in punt-vox PR #171) asks voxd to skip the play if the same text
+# was spoken within the window. 600 s (10 min) is short enough that a
+# deliberately *repeated* wall (same text, re-posted later) plays again,
+# and long enough to absorb the full fan-out plus any stragglers from a
+# session that reconnects mid-broadcast. The default wall TTL is 1 h, so
+# the dedup window is strictly shorter — dedup cannot suppress a later
+# repost even while the original wall is still active.
+WALL_DEDUP_SECONDS = 600
 
 
 def vibes_from_text(text: str) -> str:
@@ -125,7 +168,16 @@ def speak_fire_and_forget(
         return
 
     utterance = f"{text} {vibe_tags}".strip() if vibe_tags else text
-    args = [binary, "unmute", utterance]
+    # --once <seconds> deduplicates fan-out spam at voxd. The only caller
+    # is the wall refresh path in ``_descriptions.py`` (talk/write skip
+    # vox), so the gate is structural — no need to branch on call site.
+    # The flag is only appended when the installed vox binary supports
+    # it: old binaries would reject --once with a non-zero exit and
+    # silently produce no audio, since we don't inspect returncode.
+    args = [binary, "unmute"]
+    if _probe_once_support(binary):
+        args += ["--once", str(WALL_DEDUP_SECONDS)]
+    args.append(utterance)
 
     try:
         loop = asyncio.get_running_loop()
