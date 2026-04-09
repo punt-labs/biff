@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
+.PHONY: help test lint type mdlint check format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -14,7 +14,10 @@ type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
 	uv run pyright
 
-check: lint type test ## Run all quality gates
+mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)
+	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
+
+check: lint type mdlint test ## Run all quality gates
 
 PROBCLI ?= $(HOME)/Applications/ProB/probcli
 PROB_SETSIZE ?= 2

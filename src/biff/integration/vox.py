@@ -61,6 +61,18 @@ _EMOTICON_VIBES: tuple[tuple[str, str], ...] = (
 
 WALL_DEFAULT_VIBES = "[alert] [serious]"
 
+# Wall broadcasts fan out to N Claude Code sessions in the same repo and
+# each session spawns ``vox unmute`` with identical text. Without dedup,
+# the user hears the same sentence N times. ``vox unmute --once <seconds>``
+# (added in punt-vox PR #171) asks voxd to skip the play if the same text
+# was spoken within the window. 600 s (10 min) is short enough that a
+# deliberately *repeated* wall (same text, re-posted later) plays again,
+# and long enough to absorb the full fan-out plus any stragglers from a
+# session that reconnects mid-broadcast. The default wall TTL is 1 h, so
+# the dedup window is strictly shorter — dedup cannot suppress a later
+# repost even while the original wall is still active.
+WALL_DEDUP_SECONDS = 600
+
 
 def vibes_from_text(text: str) -> str:
     """Extract vibe tags from emoticons in *text*.
@@ -125,7 +137,10 @@ def speak_fire_and_forget(
         return
 
     utterance = f"{text} {vibe_tags}".strip() if vibe_tags else text
-    args = [binary, "unmute", utterance]
+    # --once <seconds> deduplicates fan-out spam. The only caller is the
+    # wall refresh path in ``_descriptions.py`` (talk/write skip vox), so
+    # the gate is structural — no need to branch on call site.
+    args = [binary, "unmute", "--once", str(WALL_DEDUP_SECONDS), utterance]
 
     try:
         loop = asyncio.get_running_loop()

@@ -10,6 +10,7 @@ import pytest
 
 from biff.integration.vox import (
     _UNCHECKED,
+    WALL_DEDUP_SECONDS,
     WALL_DEFAULT_VIBES,
     has_vox,
     speak_fire_and_forget,
@@ -92,10 +93,38 @@ class TestSpeakFireAndForget:
             mock_exec.assert_called_once_with(
                 VOX_PATH,
                 "unmute",
+                "--once",
+                str(WALL_DEDUP_SECONDS),
                 "Wall from kai: deploy freeze [alert]",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
+
+    @pytest.mark.asyncio
+    async def test_wall_dedup_flag_passed(self) -> None:
+        """vox-0e9: --once <WALL_DEDUP_SECONDS> deduplicates fan-out spam.
+
+        Wall broadcasts fan out to N sessions; each spawns ``vox unmute``
+        with identical text. Without ``--once``, the user hears the same
+        message N times. Biff unconditionally passes ``--once 600`` because
+        ``speak_fire_and_forget`` has a single caller in the wall refresh
+        path (``_descriptions.py``); talk/write do not go through vox.
+        """
+        mock_proc = AsyncMock()
+        mock_proc.pid = 54321
+
+        with (
+            patch(WHICH, return_value=VOX_PATH),
+            patch(EXEC, return_value=mock_proc) as mock_exec,
+        ):
+            speak_fire_and_forget("deploy freeze")
+            await asyncio.sleep(0)
+
+            args = mock_exec.call_args[0]
+            assert "--once" in args
+            once_idx = args.index("--once")
+            assert args[once_idx + 1] == str(WALL_DEDUP_SECONDS)
+            assert WALL_DEDUP_SECONDS == 600
 
     @pytest.mark.asyncio
     async def test_no_vox_binary_is_noop(self) -> None:

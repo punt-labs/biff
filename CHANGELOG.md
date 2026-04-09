@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wall fan-out duplicate speech (vox-0e9)** — `/wall` broadcasts fanning out to N Claude Code sessions in the same repo caused the user to hear the same sentence N times as each session spawned `vox unmute` independently. `speak_fire_and_forget` now passes `--once 600` to `vox unmute`, asking voxd to deduplicate identical text within a 10-minute window. Requires `punt-vox>=4.1.1` built from the `feat/once-flag-dedup` commit (PR #171). The default wall TTL is 1 h, so the dedup window is strictly shorter — a deliberately re-posted wall still plays.
+
 ## [1.6.4] - 2026-04-01
 
 ### Fixed
