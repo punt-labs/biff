@@ -136,6 +136,15 @@ class TestCheckStatusline:
         assert not result.passed
         assert not result.required
 
+    def test_corrupt_settings(self, tmp_path: Path) -> None:
+        settings = tmp_path / "settings.json"
+        settings.write_text("not valid json{{{")
+        with patch("biff.doctor.SETTINGS_PATH", settings):
+            result = _check_statusline()
+        assert not result.passed
+        assert not result.required
+        assert "could not read" in result.message
+
     def test_configured_non_biff(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
         settings.write_text(

@@ -279,11 +279,19 @@ def _check_statusline() -> CheckResult:
     """Check status line is configured (informational)."""
     from biff.statusline import read_settings
 
-    settings = read_settings(SETTINGS_PATH)
+    try:
+        settings = read_settings(SETTINGS_PATH)
+    except (json.JSONDecodeError, OSError):
+        return CheckResult(
+            "Status line",
+            False,
+            "could not read settings.json",
+            required=False,
+        )
     status_line = settings.get("statusLine")
     if isinstance(status_line, dict):
-        cmd = str(status_line.get("command", ""))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
-        if "biff statusline" in cmd:
+        cmd = status_line.get("command")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        if isinstance(cmd, str) and "biff statusline" in cmd:
             return CheckResult("Status line", True, "configured", required=False)
     return CheckResult(
         "Status line",
