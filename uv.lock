@@ -926,16 +926,17 @@ provides-extras = ["lux", "dev"]
 
 [[package]]
 name = "punt-lux"
-version = "0.15.1"
-source = { registry = "../.depot" }
+version = "0.16.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
     { name = "pydantic" },
     { name = "rich" },
     { name = "typer" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/2d/b0/a3b20b6630f5c4e2cb82f3a703c99bdc5f91f22cebfd11113aafaa96a4c3/punt_lux-0.16.1.tar.gz", hash = "sha256:3919b799d79fbc6b06c7e760123dd283367254ca6c5bfccb5ddf245926b2bd66", size = 84292, upload-time = "2026-04-10T05:55:22.54Z" }
 wheels = [
-    { path = "punt_lux-0.15.1-py3-none-any.whl" },
+    { url = "https://files.pythonhosted.org/packages/2d/76/9140d02fedd730efe9457f8c541dd2bcc6a89d2117c65333ba035ed20765/punt_lux-0.16.1-py3-none-any.whl", hash = "sha256:5df7001b78104eee8630cc92ec2abf76723b71260ce3540cb362407018ede48f", size = 90232, upload-time = "2026-04-10T05:55:21.083Z" },
 ]
 
 [[package]]
