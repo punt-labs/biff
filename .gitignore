@@ -79,6 +79,7 @@ docs/*.synctex.gz
 
 # Dev scratch files
 *.tmp
+hook-feedback.md
 conv.json
 docs/plan-audio-notifications.md
 mcp-message/
