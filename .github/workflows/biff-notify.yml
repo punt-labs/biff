@@ -1,7 +1,6 @@
 name: Biff CI Notifications
 on:
   workflow_run:
-    workflows: [Lint, Tests]
     types: [completed]
 
 permissions:
@@ -24,6 +23,6 @@ jobs:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: >-
-          uvx --from punt-biff biff --user github-actions wall
+          uvx punt-biff --user github-actions wall
           "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
           --duration 2h

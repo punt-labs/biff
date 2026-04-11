@@ -23,7 +23,7 @@ from biff.config import (
     load_biff_file,
 )
 from biff.models import RelayAuth
-from biff.statusline import STASH_PATH
+from biff.statusline import SETTINGS_PATH
 
 PLUGIN_ID = "biff@punt-labs"
 COMMANDS_DIR = Path.home() / ".claude" / "commands"
@@ -277,8 +277,14 @@ def _check_ci_workflow() -> CheckResult:
 
 def _check_statusline() -> CheckResult:
     """Check status line is configured (informational)."""
-    if STASH_PATH.exists():
-        return CheckResult("Status line", True, "configured", required=False)
+    from biff.statusline import read_settings
+
+    settings = read_settings(SETTINGS_PATH)
+    status_line = settings.get("statusLine")
+    if isinstance(status_line, dict):
+        cmd = str(status_line.get("command", ""))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+        if "biff statusline" in cmd:
+            return CheckResult("Status line", True, "configured", required=False)
     return CheckResult(
         "Status line",
         False,
