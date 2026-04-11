@@ -112,15 +112,52 @@ class TestCheckBiffFile:
 
 class TestCheckStatusline:
     def test_configured(self, tmp_path: Path) -> None:
-        stash = tmp_path / "stash.json"
-        stash.write_text("{}")
-        with patch("biff.doctor.STASH_PATH", stash):
+        settings = tmp_path / "settings.json"
+        settings.write_text(
+            json.dumps(
+                {
+                    "statusLine": {
+                        "type": "command",
+                        "command": "/path/to/biff statusline",
+                    }
+                }
+            )
+        )
+        with patch("biff.doctor.SETTINGS_PATH", settings):
             result = _check_statusline()
         assert result.passed
         assert not result.required
 
     def test_not_configured(self, tmp_path: Path) -> None:
-        with patch("biff.doctor.STASH_PATH", tmp_path / "nope"):
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({}))
+        with patch("biff.doctor.SETTINGS_PATH", settings):
+            result = _check_statusline()
+        assert not result.passed
+        assert not result.required
+
+    def test_corrupt_settings(self, tmp_path: Path) -> None:
+        settings = tmp_path / "settings.json"
+        settings.write_text("not valid json{{{")
+        with patch("biff.doctor.SETTINGS_PATH", settings):
+            result = _check_statusline()
+        assert not result.passed
+        assert not result.required
+        assert "could not read" in result.message
+
+    def test_configured_non_biff(self, tmp_path: Path) -> None:
+        settings = tmp_path / "settings.json"
+        settings.write_text(
+            json.dumps(
+                {
+                    "statusLine": {
+                        "type": "command",
+                        "command": "some-other-tool status",
+                    }
+                }
+            )
+        )
+        with patch("biff.doctor.SETTINGS_PATH", settings):
             result = _check_statusline()
         assert not result.passed
         assert not result.required
