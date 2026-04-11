@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.13"
 
 [[package]]
@@ -878,7 +878,7 @@ wheels = [
 
 [[package]]
 name = "punt-biff"
-version = "1.6.5"
+version = "1.6.6"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
@@ -926,7 +926,7 @@ provides-extras = ["lux", "dev"]
 
 [[package]]
 name = "punt-lux"
-version = "0.15.1"
+version = "0.16.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
@@ -934,9 +934,9 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a3/e2/a5f7fd733d2d4a671321dba0f106965bbd4179cf4f8858b48c0ecb4c4971/punt_lux-0.15.1.tar.gz", hash = "sha256:c0724f5e862a30a1e4151e821910dcee9ade2dabcfef82890406c6a582c9a470", size = 78087, upload-time = "2026-03-16T14:11:35.703Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/b0/a3b20b6630f5c4e2cb82f3a703c99bdc5f91f22cebfd11113aafaa96a4c3/punt_lux-0.16.1.tar.gz", hash = "sha256:3919b799d79fbc6b06c7e760123dd283367254ca6c5bfccb5ddf245926b2bd66", size = 84292, upload-time = "2026-04-10T05:55:22.54Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/17/70507b255714d5402d2e5a9d0021ec93be8dcae017317037b3455138c8b7/punt_lux-0.15.1-py3-none-any.whl", hash = "sha256:0d4fe212245a3fe04be94d97781c14041c5649ac22d8ea09c1f3785359319d6f", size = 83226, upload-time = "2026-03-16T14:11:34.427Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/76/9140d02fedd730efe9457f8c541dd2bcc6a89d2117c65333ba035ed20765/punt_lux-0.16.1-py3-none-any.whl", hash = "sha256:5df7001b78104eee8630cc92ec2abf76723b71260ce3540cb362407018ede48f", size = 90232, upload-time = "2026-04-10T05:55:21.083Z" },
 ]
 
 [[package]]
