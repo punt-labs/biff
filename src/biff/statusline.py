@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 STASH_PATH = BIFF_DATA_DIR / "statusline-original.json"
 UNREAD_DIR = BIFF_DATA_DIR / "unread"
-SESSION_DATA_DIR = BIFF_DATA_DIR / "session-data"
 
 # Result types --------------------------------------------------------------
 
@@ -154,21 +153,6 @@ def uninstall(
     return UninstallResult(uninstalled=True, message="Uninstalled.")
 
 
-# Session data tee ----------------------------------------------------------
-
-
-def _tee_session_data(
-    raw: str,
-    session_data_dir: Path = SESSION_DATA_DIR,
-) -> None:
-    """Persist raw session JSON for the lux applet. Never raises."""
-    try:
-        key = find_session_key()
-        atomic_write(session_data_dir / f"{key}.json", raw)
-    except (OSError, subprocess.SubprocessError):
-        logger.debug("Failed to tee session data", exc_info=True)
-
-
 # Runtime -------------------------------------------------------------------
 
 
@@ -187,7 +171,6 @@ def run_statusline(
     biff messaging segment is always appended.
     """
     stdin_data = sys.stdin.read()
-    _tee_session_data(stdin_data)
     session = _parse_session_data(stdin_data)
 
     original_cmd = _resolve_original_command(stash_path)
