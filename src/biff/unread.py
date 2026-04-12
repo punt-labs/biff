@@ -1,7 +1,7 @@
 """Shared unread-state types and readers.
 
-Extracted from ``statusline.py`` so both the status line and the
-lux applet can parse session unread files without duplication.
+Extracted from ``statusline.py`` so multiple consumers can parse
+session unread files without duplication.
 """
 
 from __future__ import annotations

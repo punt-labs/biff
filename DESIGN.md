@@ -3724,3 +3724,115 @@ Files: `tests/test_tty.py`, `tests/test_integration/`, `tests/test_nats_e2e/`
 - Integration tests for concurrent sessions
 - NATS E2E tests for cross-process atomicity
 - Update existing tty tests that reference deleted functions
+
+## DES-036: Two-Layer Message Polling and Auto-Poll on Write
+
+**Date:** 2026-04-12
+**Status:** PROPOSED
+**Topic:** How biff ensures incoming messages are detected and acted upon
+**Related:** DES-004 (description mutation), DES-020 (tools/list_changed),
+DES-021 (NATS callback wakeup), biff-5esx (Channels adoption),
+biff-m1i9 (persistent polling bead)
+**Reference:** beadle DESIGN.md DES-015 (email polling architecture)
+
+### The Problem
+
+`tools/list_changed` is a metadata signal — it tells Claude Code that
+tool descriptions changed, but it does NOT cause the model to act. An
+MCP server can detect events autonomously, but detection alone is
+useless without a mechanism that triggers the model to process them.
+
+Today, biff users must manually run `/loop 5m /biff:read` every session
+to poll for messages. Worse, when an agent sends `/biff:write @someone`,
+there is no automatic mechanism to catch the response. The sender must
+manually set up `/loop Nm /biff:read` after writing — tedious and
+frequently forgotten.
+
+### Design
+
+Two independent layers, adopted from beadle's proven architecture
+(DES-015).
+
+#### Layer 1: Detection (MCP server, autonomous)
+
+The MCP server owns a background loop that detects new messages and
+fires `tools/list_changed`. Biff's `_active_tick` already does this.
+
+Additions:
+
+1. Persist the user's preferred tick interval to `.biff.local`
+   (or a dedicated config path under `~/.punt-labs/biff/`).
+2. On server startup, read the persisted interval and restore the loop.
+3. Expose `set_poll_interval` and `get_poll_status` MCP tools for
+   user control (matching beadle's interface).
+
+#### Layer 2: Processing (Claude Code, durable CronCreate)
+
+A durable CronCreate job fires `/biff:read` as a real prompt on a
+schedule. This is what causes the model to actually read and act on
+messages.
+
+- `/loop 5m /biff:read` with `durable: true` persists to
+  `.claude/scheduled_tasks.json` and survives session restarts.
+- 7-day auto-expiry on recurring jobs is a known platform limitation.
+
+#### Auto-poll on /write
+
+When the `/biff:write` skill executes, it automatically sets up a
+temporary polling loop to catch the response:
+
+1. Check if a `/biff:read` cron already exists (avoid duplicates).
+2. If not, create `/loop 5m /biff:read` with `durable: false` and
+   a 1-hour TTL.
+3. After 1 hour, the cron expires — the sender is no longer actively
+   waiting for a response.
+
+This eliminates the manual step entirely. Send a message, polling
+starts, response arrives, polling expires.
+
+#### Future: Channels replaces both layers
+
+Claude Code Channels (`notifications/claude/channel`) lets the MCP
+server push content directly into Claude's prompt queue:
+
+```text
+notifications/claude/channel {
+  content: "New biff message from @rmh. Check /read."
+}
+```
+
+When Channels ships as stable API:
+
+- Layer 1 fires a channel notification instead of `tools/list_changed`
+- Layer 2 (CronCreate) becomes unnecessary
+- No `/loop`, no polling, no two-layer dance
+- See biff-5esx for adoption plan
+
+### Alternatives Rejected
+
+**CronCreate only (no server-side persistence).** Session-only crons
+die when Claude exits. The user must re-run `/loop` every session.
+Durable crons survive restarts but auto-expire after 7 days. Neither
+is sufficient alone — the server must also restore its own state.
+
+**Server-side polling only (no CronCreate).** The server can detect
+events but cannot cause the model to act. `tools/list_changed` updates
+descriptions; the model sees updated unread counts but has no prompt
+trigger to call `read_messages`. Detection without processing is
+silent.
+
+**SessionStart hook injects `/loop` guidance.** Fragile — depends on
+the model following injected instructions. A durable CronCreate job
+is deterministic: it fires whether or not the model reads the
+guidance.
+
+### Implementation Sequence
+
+1. **Server-side interval persistence**: add `poll_interval` to
+   `.biff.local`, read on startup, expose MCP tools.
+2. **`/biff:write` auto-poll**: skill checks for existing cron,
+   creates temporary 1-hour polling loop if absent.
+3. **Documentation**: update CLAUDE.md to recommend durable `/loop`
+   for persistent polling.
+4. **Channels migration** (biff-5esx): when stable, replace both
+   layers with direct channel notifications.
