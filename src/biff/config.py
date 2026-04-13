@@ -202,7 +202,7 @@ def write_yaml_config(
     config_dir.mkdir(parents=True, exist_ok=True)
     filename = "config.local.yaml" if local else "config.yaml"
     path = config_dir / filename
-    content = yaml.dump(data, default_flow_style=False, sort_keys=False)
+    content = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
     atomic_write(path, content)
     return path
 
@@ -530,12 +530,15 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     if yaml_local:
         fields = extract_biff_fields(yaml_local)
         cf = _ConfigFields(*fields)
-        # Fill in zero-config defaults for fields not in local config
+        # Apply demo relay default only when URL is demo or absent.
+        # _apply_demo_relay_default checks relay_url == DEMO_RELAY_URL
+        # before applying bundled creds — prevents sending demo creds
+        # to a custom relay.
+        relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
         owner = get_repo_owner(repo_root)
         return _ConfigFields(
-            relay_url=cf.relay_url or DEMO_RELAY_URL,
-            relay_auth=cf.relay_auth
-            or RelayAuth(user_credentials=str(demo_creds_path())),
+            relay_url=relay_url,
+            relay_auth=relay_auth,
             orgs=cf.orgs or ((owner,) if owner else ()),
             team=cf.team,
             peers=cf.peers,

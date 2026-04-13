@@ -33,7 +33,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="biff_relay",
         description=(
             "Set the relay URL for biff. "
-            "Writes config and signals live reconnect. "
+            "Writes config; restart Claude Code for the change to take effect. "
             "Use local=true to write to config.local.yaml instead."
         ),
     )
@@ -42,7 +42,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         auth: str = "",
         local: bool = False,  # noqa: FBT001, FBT002
     ) -> str:
-        """Configure the relay URL and trigger reconnect.
+        """Configure the relay URL. Restart required.
 
         Parameters
         ----------
