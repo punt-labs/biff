@@ -89,6 +89,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             existing = load_yaml_config(repo_root)
             existing["relay"] = relay_section
             write_yaml_config(repo_root, existing, local=False)
+            # Always ensure .gitignore exists once .punt-labs/biff/ is
+            # created — protects future config.local.yaml from being
+            # accidentally committed.
+            ensure_gitignore_yaml(repo_root)
             target = "config.yaml"
 
         return (
