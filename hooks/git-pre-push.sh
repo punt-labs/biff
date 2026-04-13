@@ -4,6 +4,7 @@
 # Installed into .git/hooks/pre-push by `biff install`.
 # Fast gate: skip Python startup in repos without .biff enabled.
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-[[ -f "$REPO_ROOT/.biff" ]] || exit 0
-[[ -f "$REPO_ROOT/.biff.local" ]] && grep -qE '^enabled[[:space:]]*=[[:space:]]*true' "$REPO_ROOT/.biff.local" || exit 0
+CONFIG_LOCAL="$REPO_ROOT/.punt-labs/biff/config.local.yaml"
+[[ -f "$CONFIG_LOCAL" ]] || exit 0
+grep -qE '^enabled[[:space:]]*:[[:space:]]*(true|yes|on)[[:space:]]*$' "$CONFIG_LOCAL" || exit 0
 biff-hook git pre-push "$1" 2>/dev/null || true
