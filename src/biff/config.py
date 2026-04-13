@@ -374,8 +374,8 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         cf = _ConfigFields(*fields)
         # Derive orgs from remote when explicit config doesn't set them.
         # Writing config.yaml via biff_relay creates a file with only
-        # [relay] — orgs would be empty without this fallback, silently
-        # disabling org-scoped cross-repo discovery.
+        # a relay: mapping — orgs would be empty without this fallback,
+        # silently disabling org-scoped cross-repo discovery.
         if not cf.orgs:
             owner = get_repo_owner(repo_root)
             cf = _ConfigFields(

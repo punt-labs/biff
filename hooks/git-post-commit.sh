@@ -6,5 +6,5 @@
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 CONFIG_LOCAL="$REPO_ROOT/.punt-labs/biff/config.local.yaml"
 [[ -f "$CONFIG_LOCAL" ]] || exit 0
-grep -qiE '^enabled[[:space:]]*:[[:space:]]*(true|yes|on)[[:space:]]*$' "$CONFIG_LOCAL" || exit 0
+grep -qiE '^[[:space:]]*enabled[[:space:]]*:[[:space:]]*(true|yes|on)[[:space:]]*$' "$CONFIG_LOCAL" || exit 0
 biff-hook git post-commit 2>/dev/null || true
