@@ -162,7 +162,8 @@ async def cli_session(
     if not config.relay_url:
         msg = (
             "CLI commands require a NATS relay. "
-            "Configure relay_url in .punt-labs/biff/config.yaml"
+            "Configure relay.url in .punt-labs/biff/config.yaml "
+            "or .punt-labs/biff/config.local.yaml"
         )
         raise ValueError(msg)
 

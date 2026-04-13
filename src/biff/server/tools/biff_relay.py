@@ -60,6 +60,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             schemes = ", ".join(_VALID_SCHEMES)
             return f"error: invalid relay URL scheme, expected one of {schemes}"
 
+        # Reject auth in shared config — credentials belong in
+        # config.local.yaml (gitignored) to prevent accidental commits.
+        if auth and not local:
+            return (
+                "error: auth credentials must go in config.local.yaml "
+                "(pass local=true). Shared config.yaml is tracked in git."
+            )
+
         # Build a fresh relay section — changing URL invalidates prior
         # auth (different relay likely needs different credentials).
         # User must pass --auth explicitly to set new credentials.
