@@ -317,10 +317,11 @@ _KAI = GitHubIdentity(login="kai", display_name="Kai Chen")
 
 
 class TestLoadConfigZeroConfig:
+    @patch("biff.config.get_repo_owner", return_value="punt-labs")
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_zero_config_derives_org(
-        self, _gh: object, _slug: object, tmp_path: Path
+        self, _gh: object, _slug: object, _owner: object, tmp_path: Path
     ) -> None:
         """No config files -> org derived from remote owner."""
         (tmp_path / ".git").mkdir()
