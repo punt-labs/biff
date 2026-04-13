@@ -354,6 +354,16 @@ class _ConfigFields:
     orgs: tuple[str, ...] = ()
 
 
+def _has_orgs_key(raw: dict[str, object]) -> bool:
+    """Check if peers.orgs is explicitly set in the config dict.
+
+    Distinguishes "key absent" from "key present but empty list" so
+    users can configure ``peers.orgs: []`` to disable org discovery.
+    """
+    peers = raw.get("peers")
+    return isinstance(peers, dict) and "orgs" in peers
+
+
 def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     """Resolve config fields from YAML or zero-config.
 
@@ -372,11 +382,10 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         merged = merge_config(yaml_shared, yaml_local)
         fields = extract_biff_fields(merged)
         cf = _ConfigFields(*fields)
-        # Derive orgs from remote when explicit config doesn't set them.
-        # Writing config.yaml via biff_relay creates a file with only
-        # a relay: mapping — orgs would be empty without this fallback,
-        # silently disabling org-scoped cross-repo discovery.
-        if not cf.orgs:
+        # Derive orgs from remote only when the peers.orgs key is
+        # ABSENT from the merged config. An explicit empty list
+        # (peers.orgs: []) is honored — it means "no org discovery."
+        if not _has_orgs_key(merged):
             owner = get_repo_owner(repo_root)
             cf = _ConfigFields(
                 relay_url=cf.relay_url,
@@ -399,11 +408,16 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         # before applying bundled creds — prevents sending demo creds
         # to a custom relay.
         relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
-        owner = get_repo_owner(repo_root)
+        # Derive owner only when peers.orgs key is absent.
+        if _has_orgs_key(yaml_local):
+            orgs = cf.orgs
+        else:
+            owner = get_repo_owner(repo_root)
+            orgs = (owner,) if owner else ()
         return _ConfigFields(
             relay_url=relay_url,
             relay_auth=relay_auth,
-            orgs=cf.orgs or ((owner,) if owner else ()),
+            orgs=orgs,
             team=cf.team,
             peers=cf.peers,
         )
