@@ -1,8 +1,8 @@
 """Relay configuration tool -- ``biff_relay(url, ...)``.
 
 Sets the relay URL (and optionally auth credentials), writes to
-``.punt-labs/biff/config.yaml`` or ``config.local.yaml``, and
-signals a live reconnect on the running NatsRelay.
+``.punt-labs/biff/config.yaml`` or ``config.local.yaml``.
+Requires a Claude Code restart for the new relay to take effect.
 """
 
 from __future__ import annotations
@@ -63,24 +63,29 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             schemes = ", ".join(_VALID_SCHEMES)
             return f"error: invalid relay URL scheme, expected one of {schemes}"
 
-        # Build relay config
-        relay_data: dict[str, object] = {"url": url}
-        if auth:
-            relay_data["auth"] = {"credentials": auth}
-
         if local:
-            # Read existing local config to preserve other keys
             from biff.config import load_yaml_local  # noqa: PLC0415
 
             existing = load_yaml_local(repo_root)
-            existing["relay"] = relay_data
+            relay_section = existing.get("relay", {})
+            if not isinstance(relay_section, dict):
+                relay_section = {}
+            relay_section["url"] = url
+            if auth:
+                relay_section["auth"] = {"credentials": auth}
+            existing["relay"] = relay_section
             write_yaml_config(repo_root, existing, local=True)
             ensure_gitignore_yaml(repo_root)
             target = "config.local.yaml"
         else:
-            # Read existing shared config to preserve other keys
             existing = load_yaml_config(repo_root)
-            existing["relay"] = relay_data
+            relay_section = existing.get("relay", {})
+            if not isinstance(relay_section, dict):
+                relay_section = {}
+            relay_section["url"] = url
+            if auth:
+                relay_section["auth"] = {"credentials": auth}
+            existing["relay"] = relay_section
             write_yaml_config(repo_root, existing, local=False)
             target = "config.yaml"
 

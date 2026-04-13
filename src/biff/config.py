@@ -208,11 +208,15 @@ def write_yaml_config(
 
 
 def write_yaml_local_enabled(repo_root: Path, *, enabled: bool) -> Path:
-    """Write ``config.local.yaml`` with just the ``enabled`` flag.
+    """Set the ``enabled`` flag in ``config.local.yaml``.
 
-    Creates ``.punt-labs/biff/`` directory if needed.
+    Reads existing local config first to preserve other keys (e.g.
+    relay overrides set via ``biff_relay --local``).  Creates
+    ``.punt-labs/biff/`` directory if needed.
     """
-    return write_yaml_config(repo_root, {"enabled": enabled}, local=True)
+    existing = load_yaml_local(repo_root)
+    existing["enabled"] = enabled
+    return write_yaml_config(repo_root, existing, local=True)
 
 
 def ensure_gitignore_yaml(repo_root: Path) -> None:
@@ -519,7 +523,24 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         fields = extract_biff_fields(raw)
         return _ConfigFields(*fields)
 
-    # Zero-config: derive org from remote, use demo relay
+    # Zero-config: derive org from remote, use demo relay.
+    # Still read config.local.yaml — user may have set relay via
+    # biff_relay --local without a shared config.yaml.
+    yaml_local = load_yaml_local(repo_root)
+    if yaml_local:
+        fields = extract_biff_fields(yaml_local)
+        cf = _ConfigFields(*fields)
+        # Fill in zero-config defaults for fields not in local config
+        owner = get_repo_owner(repo_root)
+        return _ConfigFields(
+            relay_url=cf.relay_url or DEMO_RELAY_URL,
+            relay_auth=cf.relay_auth
+            or RelayAuth(user_credentials=str(demo_creds_path())),
+            orgs=cf.orgs or ((owner,) if owner else ()),
+            team=cf.team,
+            peers=cf.peers,
+        )
+
     owner = get_repo_owner(repo_root)
     orgs = (owner,) if owner else ()
     return _ConfigFields(
