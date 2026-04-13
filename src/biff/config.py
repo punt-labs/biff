@@ -220,7 +220,7 @@ def ensure_gitignore_yaml(repo_root: Path) -> None:
     entry = "config.local.yaml"
     if gitignore.exists():
         content = gitignore.read_text()
-        if entry in content:
+        if any(line.strip() == entry for line in content.splitlines()):
             return
         if not content.endswith("\n"):
             content += "\n"

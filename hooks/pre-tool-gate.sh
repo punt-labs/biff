@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse Edit|Write — thin dispatcher (DES-017).
 # NOTE: No kill-switch here — this is a security boundary (authz gate).
-# Fast gate: skip Python startup in repos without .biff enabled.
+# Fast gate: skip Python startup in repos without .punt-labs/biff/config.local.yaml enabled.
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 CONFIG_LOCAL="$REPO_ROOT/.punt-labs/biff/config.local.yaml"
 [[ -f "$CONFIG_LOCAL" ]] || exit 0

@@ -53,24 +53,26 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """
         repo_root = state.repo_root
         if repo_root is None:
-            return "error: not in a git repository"
+            return "Error: not in a git repository."
 
         # Validate URL scheme
         if not any(url.startswith(scheme) for scheme in _VALID_SCHEMES):
             schemes = ", ".join(_VALID_SCHEMES)
-            return f"error: invalid relay URL scheme, expected one of {schemes}"
+            return f"Error: invalid relay URL scheme, expected one of {schemes}."
 
         # Reject auth in shared config — credentials belong in
         # config.local.yaml (gitignored) to prevent accidental commits.
         if auth and not local:
             return (
-                "error: auth credentials must go in config.local.yaml "
+                "Error: auth credentials must go in config.local.yaml "
                 "(pass local=true). Shared config.yaml is tracked in git."
             )
 
         # Build a fresh relay section — changing URL invalidates prior
-        # auth (different relay likely needs different credentials).
-        # User must pass --auth explicitly to set new credentials.
+        # auth in the SAME file (different relay likely needs different
+        # credentials). Note: when writing to config.yaml, any auth in
+        # config.local.yaml still wins at load time via merge_config.
+        # The user must clear local auth separately if needed.
         relay_section: dict[str, object] = {"url": url}
         if auth:
             relay_section["auth"] = {"credentials": auth}
