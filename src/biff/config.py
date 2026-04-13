@@ -520,6 +520,11 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
             repo_root / ".biff",
         )
         raw = load_biff_file(repo_root)
+        # Merge config.local.yaml on top — user may have set overrides
+        # via biff_relay --local even with a legacy .biff file.
+        yaml_local = load_yaml_local(repo_root)
+        if yaml_local:
+            raw = merge_config(raw, yaml_local)
         fields = extract_biff_fields(raw)
         return _ConfigFields(*fields)
 
