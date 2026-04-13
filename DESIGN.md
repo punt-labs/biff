@@ -3872,10 +3872,15 @@ This follows the ethos precedent (`.punt-labs/ethos/`). No dot-files at
 the repo root. YAML, not TOML — consistent with the ethos ecosystem
 (identities, teams, roles are all YAML).
 
-**2. Two modes, no mixing.** If `config.yaml` exists, its values are
-honored as-is. If absent, everything is derived (demo relay, owner from
-remote). Derived values never merge into explicit config. Explicit
-config is explicit. Zero-config is derived.
+**2. Two modes with targeted fallbacks.** If `config.yaml` exists,
+its values are honored as-is. If absent, everything is derived (demo
+relay, owner from remote). Two intentional fallbacks exist in explicit
+mode: (a) when `config.yaml` omits `relay`, the demo relay + bundled
+creds apply so `/biff y` alone works; (b) when `config.yaml` omits
+`peers.orgs`, the owner is derived from the git remote so writing a
+relay-only config via `/biff:relay` doesn't silently break org
+discovery. Explicit values in `config.yaml` always win; fallbacks fill
+only the gaps.
 
 **3. Owner derivation.** A new `get_repo_owner()` function extracts the
 owner (first path segment) from `get_repo_slug()`. In zero-config mode,

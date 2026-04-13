@@ -117,12 +117,13 @@ def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
 def _load_yaml(path: Path) -> dict[str, object]:
     """Load a YAML file and return a dict, or ``{}`` on error.
 
-    Catches ``OSError`` (permissions, TOCTOU race) and returns ``{}``.
+    Catches ``OSError`` (permissions, TOCTOU race) and
+    ``UnicodeDecodeError`` (invalid text encoding), returning ``{}``.
     Lets ``yaml.YAMLError`` propagate so callers can decide severity.
     """
     try:
         raw: object = yaml.safe_load(path.read_text())
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {}
     if isinstance(raw, dict):
         return cast("dict[str, object]", raw)
@@ -361,8 +362,12 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     1. ``.punt-labs/biff/config.yaml`` -- explicit mode.
     2. Neither -- zero-config with derived defaults.
     """
-    yaml_shared = load_yaml_config(repo_root)
-    if yaml_shared:
+    # Key explicit mode on file existence, not content truthiness.
+    # An empty or comment-only config.yaml should still mean "explicit
+    # mode" — not silently fall through to zero-config derivation.
+    shared_path = yaml_config_dir(repo_root) / "config.yaml"
+    if shared_path.exists():
+        yaml_shared = load_yaml_config(repo_root)
         yaml_local = load_yaml_local(repo_root)
         merged = merge_config(yaml_shared, yaml_local)
         fields = extract_biff_fields(merged)
