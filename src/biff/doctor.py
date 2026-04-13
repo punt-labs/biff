@@ -20,7 +20,9 @@ from biff.config import (
     extract_biff_fields,
     find_git_root,
     is_enabled,
-    load_biff_file,
+    load_yaml_config,
+    load_yaml_local,
+    merge_config,
 )
 from biff.models import RelayAuth
 from biff.statusline import SETTINGS_PATH
@@ -126,12 +128,15 @@ def _resolve_relay_config() -> tuple[str, RelayAuth | None]:
     relay_auth: RelayAuth | None = None
 
     if repo_root is not None:
-        raw = load_biff_file(repo_root)
-        _, url, auth, _, _ = extract_biff_fields(raw)
-        if url:
-            relay_url = url
-        if auth:
-            relay_auth = auth
+        shared = load_yaml_config(repo_root)
+        local = load_yaml_local(repo_root)
+        raw = merge_config(shared, local) if shared or local else {}
+        if raw:
+            _, url, auth, _, _ = extract_biff_fields(raw)
+            if url:
+                relay_url = url
+            if auth:
+                relay_auth = auth
 
     # Auto-load demo credentials for demo relay
     if relay_url == DEMO_RELAY_URL and relay_auth is None:
@@ -174,28 +179,28 @@ def _check_relay() -> CheckResult:
 
 
 def _check_biff_file() -> CheckResult:
-    """Check ``.biff`` file exists (informational)."""
+    """Check config.yaml or zero-config is available (informational)."""
     repo_root = find_git_root()
     if repo_root is None:
         return CheckResult(
-            ".biff file",
+            "Config",
             False,
             "not in a git repo (run 'biff enable' inside a project)",
             required=False,
         )
-    biff_file = repo_root / ".biff"
-    if biff_file.exists():
-        return CheckResult(".biff file", True, str(biff_file), required=False)
+    config_yaml = repo_root / ".punt-labs" / "biff" / "config.yaml"
+    if config_yaml.exists():
+        return CheckResult("Config", True, str(config_yaml), required=False)
     return CheckResult(
-        ".biff file",
-        False,
-        f"not found (run 'biff enable' in {repo_root})",
+        "Config",
+        True,
+        "zero-config (defaults from git remote)",
         required=False,
     )
 
 
 def _check_enabled() -> CheckResult:
-    """Check whether biff is enabled via ``.biff.local`` (informational)."""
+    """Check whether biff is enabled via ``config.local.yaml`` (informational)."""
     repo_root = find_git_root()
     if repo_root is None:
         return CheckResult(
@@ -205,7 +210,7 @@ def _check_enabled() -> CheckResult:
             required=False,
         )
     if is_enabled(repo_root):
-        return CheckResult("Enabled", True, "yes (.biff.local)", required=False)
+        return CheckResult("Enabled", True, "yes (config.local.yaml)", required=False)
     return CheckResult(
         "Enabled",
         False,

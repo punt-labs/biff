@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import tomllib
 from pathlib import Path
 from typing import cast
 
@@ -109,32 +108,66 @@ def sanitize_repo_name(name: str) -> str:
     return sanitized
 
 
+def get_repo_owner(repo_root: Path) -> str | None:
+    """Extract the repo owner from the git remote URL.
+
+    Reuses :func:`get_repo_slug` and :func:`sanitize_repo_name` so
+    no new URL parsing is introduced.  Returns ``None`` when the
+    remote is missing, unparseable, or has nested paths (e.g. GitLab
+    groups).
+
+    Raises :class:`SystemExit` via :func:`sanitize_repo_name` if the
+    owner contains characters that do not produce a NATS-safe name.
+    """
+    slug = get_repo_slug(repo_root)
+    if slug is None:
+        return None
+    owner, _, _ = slug.partition("/")
+    return sanitize_repo_name(owner) if owner else None
+
+
 # ── Config helpers ───────────────────────────────────────────────────
 
 
-def load_biff_local(repo_root: Path) -> dict[str, object]:
-    """Parse ``.biff.local`` TOML at *repo_root*, or return ``{}`` if missing."""
-    path = repo_root / ".biff.local"
+def _parse_yaml_enabled(path: Path) -> bool | None:
+    """Parse ``enabled:`` from a simple YAML file using only stdlib.
+
+    Returns ``True``, ``False``, or ``None`` if the file is missing
+    or the key is absent.  Only handles the trivial case where
+    ``enabled: true`` or ``enabled: false`` appears on its own line.
+    """
     if not path.exists():
-        return {}
+        return None
     try:
-        return tomllib.loads(path.read_text())
-    except tomllib.TOMLDecodeError:
-        return {}
+        for line in path.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("enabled:"):
+                value = stripped.split(":", 1)[1].strip().lower()
+                if value in {"true", "yes", "on"}:
+                    return True
+                if value in {"false", "no", "off"}:
+                    return False
+    except OSError:
+        pass
+    return None
+
+
+def yaml_config_dir(repo_root: Path) -> Path:
+    """Return ``.punt-labs/biff/`` inside *repo_root*."""
+    return repo_root / ".punt-labs" / "biff"
 
 
 def is_enabled(repo_root: Path | None) -> bool:
-    """True only if ``.biff.local`` exists with ``enabled = true``.
+    """True when biff is enabled for the repo.
 
-    Returns ``False`` if: *repo_root* is ``None``, no ``.biff`` file,
-    no ``.biff.local`` file, or ``enabled`` is not ``true``.
+    Checks ``.punt-labs/biff/config.local.yaml`` for ``enabled: true``.
+    Returns ``False`` if *repo_root* is ``None`` or the file is absent.
     """
     if repo_root is None:
         return False
-    if not (repo_root / ".biff").exists():
-        return False
-    local = load_biff_local(repo_root)
-    return local.get("enabled") is True
+    local = yaml_config_dir(repo_root) / "config.local.yaml"
+    result = _parse_yaml_enabled(local)
+    return result is True
 
 
 # ── Bead helpers ─────────────────────────────────────────────────────

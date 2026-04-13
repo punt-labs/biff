@@ -3836,3 +3836,153 @@ guidance.
    for persistent polling.
 4. **Channels migration** (biff-5esx): when stable, replace both
    layers with direct channel notifications.
+
+---
+
+## DES-037: Zero-Config — Config Migration and Owner Derivation
+
+**Date:** 2026-04-12
+**Status:** PROPOSED
+**Topic:** Move config to `.punt-labs/biff/`, YAML format, derive org
+scope from git remote, make explicit config optional
+**Related:** DES-007a (slug-based namespace), DES-012 (config file),
+DES-034 (org discovery), biff-q2q2
+**Spec:** `.tmp/q2q2-design-spec.md`
+
+### Problem
+
+Biff requires a `.biff` TOML file per repo with team roster, relay URL,
+and org list before it can function. With 30 repos in an org, this is
+antithetical friction. The team roster is a social hint that provides
+no access control — NATS subject scoping (DES-007a) and org discovery
+(DES-034) handle the actual visibility. The only user action to enable
+biff should be `/biff y`.
+
+### Design
+
+Four changes eliminate the `.biff` requirement:
+
+**1. Config moves to `.punt-labs/biff/`.** Two YAML files replace the
+root-level `.biff` and `.biff.local`:
+
+- `.punt-labs/biff/config.yaml` — tracked, shared team config.
+- `.punt-labs/biff/config.local.yaml` — gitignored, per-user overrides.
+
+This follows the ethos precedent (`.punt-labs/ethos/`). No dot-files at
+the repo root. YAML, not TOML — consistent with the ethos ecosystem
+(identities, teams, roles are all YAML).
+
+**2. Two modes with targeted fallbacks.** If `config.yaml` exists,
+its values are honored as-is. If absent, everything is derived (demo
+relay, owner from remote). Two intentional fallbacks exist in explicit
+mode: (a) when `config.yaml` omits `relay`, the demo relay + bundled
+creds apply so `/biff y` alone works; (b) when `config.yaml` omits
+`peers.orgs`, the owner is derived from the git remote so writing a
+relay-only config via `/biff:relay` doesn't silently break org
+discovery. Explicit values in `config.yaml` always win; fallbacks fill
+only the gaps.
+
+**3. Owner derivation.** A new `get_repo_owner()` function extracts the
+owner (first path segment) from `get_repo_slug()`. In zero-config mode,
+the owner becomes the default org scope for `discover_repos_for_org()`.
+When no remote exists or the URL doesn't parse to `owner/repo`, the
+owner is `None` and the repo operates in isolation.
+
+**4. All config writes through MCP tools.** Config changes go through
+biff MCP tools — never Claude Code's `Write()` tool directly. `/biff y`
+writes enabled state via MCP tool. New `/biff:relay` command writes
+relay URL (restart required for the change to take effect).
+
+### Config Schema
+
+Shared config (`.punt-labs/biff/config.yaml`):
+
+```yaml
+relay:
+  url: "tls://connect.ngs.global"
+peers:
+  orgs:
+    - "punt-labs"
+```
+
+Per-user overrides (`.punt-labs/biff/config.local.yaml`):
+
+```yaml
+enabled: true
+relay:
+  auth:
+    credentials: "/path/to/private.creds"
+```
+
+Note: `enabled` is a per-user state that lives exclusively in
+`config.local.yaml`. It is not a shared config key — team members
+independently toggle biff for their own machines.
+
+`config.local.yaml` overrides `config.yaml` at the key level. A local
+`relay.url` overrides the shared `relay.url` without clobbering
+`relay.auth` from the shared config.
+
+### Precedence
+
+1. CLI flags (`--relay-url`, `--user`)
+2. `.punt-labs/biff/config.local.yaml` values
+3. `.punt-labs/biff/config.yaml` values
+4. Auto-derived values (owner from remote, demo relay) — zero-config
+   mode only (no `config.yaml`)
+5. Hardcoded defaults (`peers.orgs=[]`)
+
+### Edge Cases
+
+- **No remote:** owner is `None`, no org discovery. Repo-local only.
+- **Fork remote:** `origin` is the user's fork (`user/repo`), so the
+  derived owner is the user's namespace. Cross-org visibility comes
+  from the user's sessions in other repos, not from config.
+- **Non-GitHub remotes:** `_parse_repo_slug` handles any
+  `host:owner/repo` URL. GitLab nested groups (`group/sub/repo`) fail
+  the two-part check and return `None` — correct, no single owner.
+- **Multiple remotes:** only `origin` is read. `upstream` is ignored.
+
+### Trust Assessment
+
+The demo relay creds are bundled in source. With zero-config, anyone
+who reads the repo can connect. This is unchanged — the team roster
+was client-side social convention, not an auth mechanism. Org-scoped
+NATS subject isolation is sufficient for the current use case (small
+team, pre-1.0). Hardening roadmap: per-org NATS accounts, then GitHub
+token verification at connect, then E2E encryption (DES-016).
+
+### Migration
+
+No legacy users exist. The implementation has no `.biff` TOML parsing,
+no migration path, and no fallback. Repos with leftover `.biff` files
+must delete them manually and run `/biff y`.
+
+- **New repos:** `/biff y` writes `config.local.yaml` only. No
+  `config.yaml` needed — zero-config mode.
+- **Detection order:** `config.yaml` (explicit mode with local
+  overrides) > neither (zero-config, derive everything).
+
+### Alternatives Rejected
+
+**Keep `.biff` at repo root.** Contradicts the `.punt-labs/` convention
+established by ethos. Config scattered across root-level dot-files does
+not scale to 30 repos with shared team settings.
+
+**TOML format.** Every other ethos ecosystem file is YAML (identities,
+teams, roles). TOML is an outlier that adds a parsing dependency for
+no benefit.
+
+**Merge derived values into explicit config.** The original spec said
+"when `.biff` exists but has no `[peers] orgs`, the derived owner is
+appended." This violates the principle that explicit config is complete.
+If the file exists, it says what it means.
+
+**Derive owner from GitHub API (`gh api user`).** This gives the
+*user's* namespace, not the *repo's* namespace. A user working in
+`punt-labs/biff` should see `punt-labs` scope, not `jmf-pobox` scope.
+The git remote is the correct source.
+
+**Per-org NATS accounts before shipping zero-config.** Premature.
+The trust boundary is unchanged by this change — the bundled creds
+already share the demo account. Auth hardens the relay for external
+users; it is not a prerequisite for removing client-side config.

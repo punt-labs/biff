@@ -1,19 +1,18 @@
-"""Activation toggle — ``biff(enabled=True|False)``.
+"""Activation toggle -- ``biff(enabled=True|False)``.
 
 Allows users to enable or disable biff for the current repo from within
-a Claude Code session.  Writes ``.biff.local`` (gitignored, per-user)
-and advises a restart for changes to take effect.
+a Claude Code session.  Writes ``.punt-labs/biff/config.local.yaml``
+(gitignored, per-user) and advises a restart for changes to take effect.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff._stdlib import is_enabled
 from biff.config import (
-    ensure_biff_file,
-    ensure_gitignore,
-    is_enabled,
-    write_biff_local,
+    ensure_gitignore_yaml,
+    write_yaml_local_enabled,
 )
 
 if TYPE_CHECKING:
@@ -35,9 +34,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def biff(enabled: bool) -> str:  # noqa: FBT001
         """Toggle biff activation for the current repository.
 
-        Writes ``.biff.local`` with the ``enabled`` flag.  If enabling
-        and no ``.biff`` team config exists, creates a minimal one using
-        identity and relay defaults from the current server config.
+        Writes ``.punt-labs/biff/config.local.yaml`` with the
+        ``enabled`` flag.  No ``config.yaml`` is created -- zero-config
+        mode uses derived defaults.
 
         Returns guidance to restart Claude Code for changes to take effect.
         """
@@ -45,13 +44,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if repo_root is None:
             return "Error: not in a git repository."
 
-        if enabled:
-            ensure_biff_file(
-                repo_root, team=state.config.team, relay_url=state.config.relay_url
-            )
-
-        write_biff_local(repo_root, enabled=enabled)
-        ensure_gitignore(repo_root)
+        write_yaml_local_enabled(repo_root, enabled=enabled)
+        ensure_gitignore_yaml(repo_root)
 
         currently = is_enabled(repo_root)
         verb = "enabled" if currently else "disabled"

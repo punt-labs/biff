@@ -97,17 +97,20 @@ class TestCheckBiffFile:
         assert not result.passed
         assert not result.required
 
-    def test_file_exists(self, tmp_path: Path) -> None:
-        (tmp_path / ".biff").write_text("[team]\nmembers = []\n")
+    def test_config_yaml_exists(self, tmp_path: Path) -> None:
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text("relay:\n  url: tls://example\n")
         with patch("biff.doctor.find_git_root", return_value=tmp_path):
             result = _check_biff_file()
         assert result.passed
 
-    def test_file_missing(self, tmp_path: Path) -> None:
+    def test_zero_config_passes(self, tmp_path: Path) -> None:
+        """No config.yaml still passes -- zero-config is valid."""
         with patch("biff.doctor.find_git_root", return_value=tmp_path):
             result = _check_biff_file()
-        assert not result.passed
-        assert not result.required
+        assert result.passed
+        assert "zero-config" in result.message
 
 
 class TestCheckStatusline:
@@ -170,9 +173,11 @@ class TestResolveRelayConfig:
         assert "ngs.global" in url
         assert auth is not None
 
-    def test_uses_biff_file(self, tmp_path: Path) -> None:
-        (tmp_path / ".biff").write_text(
-            '[relay]\nurl = "nats://custom:4222"\ntoken = "s3cret"\n'
+    def test_uses_yaml_config(self, tmp_path: Path) -> None:
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "relay:\n  url: nats://custom:4222\n  auth:\n    token: s3cret\n"
         )
         with patch("biff.doctor.find_git_root", return_value=tmp_path):
             url, auth = _resolve_relay_config()

@@ -9,15 +9,14 @@ import pytest
 
 from biff._stdlib import _parse_repo_slug
 from biff.config import (
+    DEMO_RELAY_URL,
     GitHubIdentity,
     compute_data_dir,
-    ensure_github_actions_member,
     extract_biff_fields,
     find_git_root,
     get_github_identity,
     get_os_user,
     get_repo_slug,
-    load_biff_file,
     load_config,
     sanitize_repo_name,
 )
@@ -234,37 +233,6 @@ class TestComputeDataDir:
         assert result == Path("/var/spool/biff/myapp")
 
 
-# -- load_biff_file --
-
-
-class TestLoadBiffFile:
-    def test_parses_full_config(self, tmp_path: Path) -> None:
-        (tmp_path / ".biff").write_text(
-            '[team]\nmembers = ["kai", "eric"]\n\n[relay]\nurl = "nats://localhost"\n'
-        )
-        result = load_biff_file(tmp_path)
-        assert result["team"] == {"members": ["kai", "eric"]}
-        assert result["relay"] == {"url": "nats://localhost"}
-
-    def test_returns_empty_when_missing(self, tmp_path: Path) -> None:
-        assert load_biff_file(tmp_path) == {}
-
-    def test_team_only(self, tmp_path: Path) -> None:
-        (tmp_path / ".biff").write_text('[team]\nmembers = ["kai"]\n')
-        result = load_biff_file(tmp_path)
-        assert "team" in result
-        assert "relay" not in result
-
-    def test_empty_file(self, tmp_path: Path) -> None:
-        (tmp_path / ".biff").write_text("")
-        assert load_biff_file(tmp_path) == {}
-
-    def test_malformed_toml_exits(self, tmp_path: Path) -> None:
-        (tmp_path / ".biff").write_text("this is not valid toml [[[")
-        with pytest.raises(SystemExit, match="Failed to parse"):
-            load_biff_file(tmp_path)
-
-
 # -- extract_biff_fields (auth) --
 
 
@@ -338,11 +306,13 @@ _FROM_GIT = GitHubIdentity(login="from-git", display_name="Git User")
 
 class TestLoadConfig:
     def _setup_repo(self, tmp_path: Path) -> Path:
-        """Create a minimal git repo with .biff config."""
+        """Create a minimal git repo with YAML config."""
         (tmp_path / ".git").mkdir()
-        (tmp_path / ".biff").write_text(
-            '[team]\nmembers = ["kai", "eric"]\n\n'
-            '[relay]\nurl = "nats://localhost:4222"\n'
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "team:\n  members:\n    - kai\n    - eric\n"
+            "relay:\n  url: nats://localhost:4222\n"
         )
         return tmp_path
 
@@ -433,11 +403,13 @@ class TestLoadConfig:
             load_config(start=tmp_path)
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_no_biff_file(self, _mock: object, tmp_path: Path) -> None:
+    def test_zero_config_uses_demo_relay(self, _mock: object, tmp_path: Path) -> None:
+        """Zero-config mode: no config.yaml -> demo relay."""
         (tmp_path / ".git").mkdir()
         resolved = load_config(start=tmp_path)
         assert resolved.config.team == ()
-        assert resolved.config.relay_url is None
+        assert resolved.config.relay_url == DEMO_RELAY_URL
+        assert resolved.config.relay_auth is not None
 
     @patch("biff.config.find_git_root", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
@@ -451,8 +423,10 @@ class TestLoadConfig:
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_auth_flows_through(self, _mock: object, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
-        (tmp_path / ".biff").write_text(
-            '[relay]\nurl = "tls://host"\nuser_credentials = "/creds"\n'
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "relay:\n  url: tls://host\n  auth:\n    user_credentials: /creds\n"
         )
         resolved = load_config(start=tmp_path)
         assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")
@@ -461,10 +435,13 @@ class TestLoadConfig:
     def test_relay_url_override_clears_auth(
         self, _mock: object, tmp_path: Path
     ) -> None:
-        """Overriding relay URL must clear .biff auth to prevent credential leak."""
+        """Overriding relay URL must clear config auth to prevent credential leak."""
         (tmp_path / ".git").mkdir()
-        (tmp_path / ".biff").write_text(
-            '[relay]\nurl = "tls://demo.example"\nuser_credentials = "/demo.creds"\n'
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "relay:\n  url: tls://demo.example\n"
+            "  auth:\n    user_credentials: /demo.creds\n"
         )
         resolved = load_config(start=tmp_path, relay_url_override="tls://other.example")
         assert resolved.config.relay_url == "tls://other.example"
@@ -478,56 +455,3 @@ class TestLoadConfig:
         resolved = load_config(start=tmp_path)
         assert resolved.config.user == "kai"
         assert resolved.config.display_name == ""
-
-
-# -- ensure_github_actions_member --
-
-
-class TestEnsureGithubActionsMember:
-    def test_adds_member(self, tmp_path: Path) -> None:
-        biff_file = tmp_path / ".biff"
-        biff_file.write_text('[team]\nmembers = ["kai", "eric"]\n')
-        assert ensure_github_actions_member(tmp_path) is True
-        content = biff_file.read_text()
-        assert '"github-actions"' in content
-        assert '"kai"' in content
-        assert '"eric"' in content
-
-    def test_idempotent(self, tmp_path: Path) -> None:
-        biff_file = tmp_path / ".biff"
-        biff_file.write_text('[team]\nmembers = ["kai", "github-actions"]\n')
-        assert ensure_github_actions_member(tmp_path) is False
-
-    def test_no_biff_file(self, tmp_path: Path) -> None:
-        assert ensure_github_actions_member(tmp_path) is False
-
-    def test_no_team_section(self, tmp_path: Path) -> None:
-        (tmp_path / ".biff").write_text('[relay]\nurl = "nats://localhost"\n')
-        assert ensure_github_actions_member(tmp_path) is False
-
-    def test_empty_members_array(self, tmp_path: Path) -> None:
-        biff_file = tmp_path / ".biff"
-        biff_file.write_text("[team]\nmembers = []\n")
-        assert ensure_github_actions_member(tmp_path) is True
-        content = biff_file.read_text()
-        assert '"github-actions"' in content
-        # Must NOT have leading comma: [, "github-actions"]
-        assert "[," not in content
-
-    def test_trailing_comma_in_members(self, tmp_path: Path) -> None:
-        biff_file = tmp_path / ".biff"
-        biff_file.write_text('[team]\nmembers = ["kai",]\n')
-        assert ensure_github_actions_member(tmp_path) is True
-        content = biff_file.read_text()
-        assert '"github-actions"' in content
-        # Must NOT have double comma: ["kai",, "github-actions"]
-        assert ",," not in content
-
-    def test_preserves_formatting(self, tmp_path: Path) -> None:
-        biff_file = tmp_path / ".biff"
-        original = '[team]\nmembers = ["kai"]\n\n[relay]\nurl = "nats://localhost"\n'
-        biff_file.write_text(original)
-        ensure_github_actions_member(tmp_path)
-        content = biff_file.read_text()
-        assert "[relay]" in content
-        assert "nats://localhost" in content

@@ -7,7 +7,7 @@ SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
 TOOL_PATTERN="mcp__plugin_biff_tty__"
 DEV_TOOL_PATTERN="mcp__plugin_biff-dev_tty__"
-STASH_PATH="$HOME/.biff/statusline-original.json"
+STASH_PATH="$HOME/.punt-labs/biff/statusline-original.json"
 
 ACTIONS=()
 

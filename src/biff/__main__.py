@@ -44,14 +44,14 @@ from biff.cli_session import CliContext, cli_session
 from biff.commands import CommandResult
 from biff.config import (
     DEMO_RELAY_URL,
-    build_biff_toml,
-    ensure_gitignore,
+    ensure_gitignore_yaml,
     find_git_root,
     get_github_identity,
     get_os_user,
     is_enabled,
     load_config,
-    write_biff_local,
+    write_yaml_config,
+    write_yaml_local_enabled,
 )
 from biff.hook import hook_app
 from biff.server.app import create_server
@@ -1126,18 +1126,18 @@ def enable(
 ) -> None:
     """Enable biff in the current git repo.
 
-    If no ``.biff`` team config exists, runs the interactive init flow
-    (identity resolution, team members, relay URL) to create one.
-    Writes ``.biff.local`` with ``enabled = true`` and ensures it is
-    gitignored.  Idempotent — safe to run multiple times.
+    If no ``config.yaml`` exists, runs the interactive init flow
+    (identity resolution, team members, relay URL) to create one
+    under ``.punt-labs/biff/``.  Writes ``config.local.yaml`` with
+    ``enabled: true`` and ensures it is gitignored.  Idempotent.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
-    biff_file = repo_root / ".biff"
-    if not biff_file.exists():
-        # Interactive init flow — create .biff
+    config_yaml = repo_root / ".punt-labs" / "biff" / "config.yaml"
+    if not config_yaml.exists():
+        # Interactive init flow — create config.yaml
         identity = get_github_identity()
         user = (identity.login if identity is not None else None) or get_os_user()
         if user is None:
@@ -1159,18 +1159,22 @@ def enable(
             default=DEMO_RELAY_URL,
         )
 
-        biff_file.write_text(build_biff_toml(members, relay_url))
-        print(f"Created {biff_file}")
+        data: dict[str, object] = {}
+        if members:
+            data["team"] = {"members": members}
+        if relay_url:
+            data["relay"] = {"url": relay_url}
+        path = write_yaml_config(repo_root, data)
+        print(f"Created {path}")
         if members:
             print(f"  Team: {', '.join(members)}")
         if relay_url:
             print(f"  Relay: {relay_url}")
 
-    write_biff_local(repo_root, enabled=True)
-    ensure_gitignore(repo_root)
+    write_yaml_local_enabled(repo_root, enabled=True)
+    ensure_gitignore_yaml(repo_root)
 
     from biff.ci_workflow import deploy_ci_workflow
-    from biff.config import ensure_github_actions_member
     from biff.git_hooks import deploy_git_hooks
 
     hooks = deploy_git_hooks(repo_root)
@@ -1179,8 +1183,6 @@ def enable(
 
     if deploy_ci_workflow(repo_root):
         print("CI workflow: .github/workflows/biff-notify.yml")
-    if ensure_github_actions_member(repo_root):
-        print("Added github-actions to .biff team members")
 
     print("biff enabled. Restart Claude Code for changes to take effect.")
 
@@ -1194,14 +1196,14 @@ def disable(
 ) -> None:
     """Disable biff in the current git repo.
 
-    Writes ``.biff.local`` with ``enabled = false``.  Idempotent.
+    Writes ``config.local.yaml`` with ``enabled: false``.  Idempotent.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
-    write_biff_local(repo_root, enabled=False)
-    ensure_gitignore(repo_root)
+    write_yaml_local_enabled(repo_root, enabled=False)
+    ensure_gitignore_yaml(repo_root)
 
     from biff.ci_workflow import remove_ci_workflow
     from biff.git_hooks import remove_git_hooks

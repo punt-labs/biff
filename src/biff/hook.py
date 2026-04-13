@@ -2,7 +2,7 @@
 
 All hook shell scripts delegate to ``biff hook <layer> <event>``.
 Business logic lives here in versioned Python; shell scripts are
-thin dispatchers with only a fast ``.biff`` file-existence gate.
+thin dispatchers with only a fast ``config.local.yaml`` existence gate.
 
 Layer 1: Claude Code hooks — capture agent lifecycle events.
 Layer 2: Git hooks — capture code lifecycle events.
@@ -44,7 +44,7 @@ hook_app.add_typer(_git_app, name="git")
 
 
 def _is_biff_enabled() -> bool:
-    """Check ``.biff`` + ``.biff.local`` gating (lazy import)."""
+    """Check ``config.local.yaml`` enabled gating (lazy import)."""
     from biff._stdlib import find_git_root, is_enabled  # noqa: PLC0415
 
     repo_root = find_git_root()
