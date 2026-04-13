@@ -60,28 +60,23 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             schemes = ", ".join(_VALID_SCHEMES)
             return f"error: invalid relay URL scheme, expected one of {schemes}"
 
+        # Build a fresh relay section — changing URL invalidates prior
+        # auth (different relay likely needs different credentials).
+        # User must pass --auth explicitly to set new credentials.
+        relay_section: dict[str, object] = {"url": url}
+        if auth:
+            relay_section["auth"] = {"credentials": auth}
+
         if local:
             from biff.config import load_yaml_local  # noqa: PLC0415
 
             existing = load_yaml_local(repo_root)
-            relay_section = existing.get("relay", {})
-            if not isinstance(relay_section, dict):
-                relay_section = {}
-            relay_section["url"] = url
-            if auth:
-                relay_section["auth"] = {"credentials": auth}
             existing["relay"] = relay_section
             write_yaml_config(repo_root, existing, local=True)
             ensure_gitignore_yaml(repo_root)
             target = "config.local.yaml"
         else:
             existing = load_yaml_config(repo_root)
-            relay_section = existing.get("relay", {})
-            if not isinstance(relay_section, dict):
-                relay_section = {}
-            relay_section["url"] = url
-            if auth:
-                relay_section["auth"] = {"credentials": auth}
             existing["relay"] = relay_section
             write_yaml_config(repo_root, existing, local=False)
             target = "config.yaml"

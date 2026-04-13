@@ -9,6 +9,7 @@ import pytest
 
 from biff._stdlib import _parse_repo_slug
 from biff.config import (
+    DEMO_RELAY_URL,
     GitHubIdentity,
     compute_data_dir,
     ensure_github_actions_member,
@@ -438,7 +439,7 @@ class TestLoadConfig:
         (tmp_path / ".git").mkdir()
         resolved = load_config(start=tmp_path)
         assert resolved.config.team == ()
-        assert resolved.config.relay_url == "tls://connect.ngs.global"
+        assert resolved.config.relay_url == DEMO_RELAY_URL
         assert resolved.config.relay_auth is not None
 
     @patch("biff.config.find_git_root", return_value=None)
