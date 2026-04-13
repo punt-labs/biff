@@ -104,6 +104,24 @@ class TestIsEnabledYaml:
         (biff_dir / "config.local.yaml").write_text("  enabled:   true  \n")
         assert is_enabled(tmp_path) is True
 
+    def test_yaml_boolean_capital_true(self, tmp_path: Path) -> None:
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.local.yaml").write_text("enabled: True\n")
+        assert is_enabled(tmp_path) is True
+
+    def test_yaml_boolean_yes(self, tmp_path: Path) -> None:
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.local.yaml").write_text("enabled: yes\n")
+        assert is_enabled(tmp_path) is True
+
+    def test_yaml_boolean_on(self, tmp_path: Path) -> None:
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.local.yaml").write_text("enabled: on\n")
+        assert is_enabled(tmp_path) is True
+
 
 # ── load_yaml_config / load_yaml_local ─────────────────────────────
 
@@ -321,10 +339,9 @@ class TestLoadConfigZeroConfig:
         assert resolved.config.relay_auth.user_credentials == str(demo_creds_path())
 
     @patch("biff.config.get_repo_owner", return_value=None)
-    @patch("biff.config.get_repo_slug", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_zero_config_no_remote_no_orgs(
-        self, _gh: object, _slug: object, _owner: object, tmp_path: Path
+        self, _gh: object, _owner: object, tmp_path: Path
     ) -> None:
         """No remote -> empty orgs, but still demo relay."""
         (tmp_path / ".git").mkdir()

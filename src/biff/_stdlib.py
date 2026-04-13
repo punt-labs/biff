@@ -152,9 +152,9 @@ def _parse_yaml_enabled(path: Path) -> bool | None:
             stripped = line.strip()
             if stripped.startswith("enabled:"):
                 value = stripped.split(":", 1)[1].strip().lower()
-                if value == "true":
+                if value in {"true", "yes", "on"}:
                     return True
-                if value == "false":
+                if value in {"false", "no", "off"}:
                     return False
     except OSError:
         pass

@@ -84,16 +84,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             write_yaml_config(repo_root, existing, local=False)
             target = "config.yaml"
 
-        # Signal live reconnect if the relay supports it
-        from biff.nats_relay import NatsRelay  # noqa: PLC0415
-
-        if isinstance(state.relay, NatsRelay):
-            try:
-                await state.relay.close()
-                logger.info("Closed existing relay connection for reconnect")
-            except Exception:  # noqa: BLE001
-                logger.warning("Failed to close relay for reconnect", exc_info=True)
-
         return (
             f"Relay URL set to {url} in {target}. "
             "Restart Claude Code for the new relay to take effect."

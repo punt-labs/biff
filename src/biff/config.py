@@ -122,8 +122,15 @@ def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
 
 
 def _load_yaml(path: Path) -> dict[str, object]:
-    """Load a YAML file and return a dict, or ``{}`` for non-dict content."""
-    raw: object = yaml.safe_load(path.read_text())
+    """Load a YAML file and return a dict, or ``{}`` on error.
+
+    Catches ``OSError`` (permissions, TOCTOU race) and returns ``{}``.
+    Lets ``yaml.YAMLError`` propagate so callers can decide severity.
+    """
+    try:
+        raw: object = yaml.safe_load(path.read_text())
+    except OSError:
+        return {}
     if isinstance(raw, dict):
         return cast("dict[str, object]", raw)
     return {}
@@ -551,8 +558,10 @@ def load_config(
         raise SystemExit("Not in a git repository. Run biff from inside a repo.")
 
     cf = _resolve_config_fields(repo_root)
-    relay_url: str | None
-    relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
+    relay_url_resolved, relay_auth = _apply_demo_relay_default(
+        cf.relay_url, cf.relay_auth
+    )
+    relay_url: str | None = relay_url_resolved
 
     # CLI relay-url override: empty string -> local relay,
     # non-empty -> use it.  Always clear relay_auth on override.
