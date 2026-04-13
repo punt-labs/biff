@@ -109,6 +109,21 @@ def sanitize_repo_name(name: str) -> str:
     return sanitized
 
 
+def get_repo_owner(repo_root: Path) -> str | None:
+    """Extract the repo owner from the git remote URL.
+
+    Reuses :func:`get_repo_slug` and :func:`sanitize_repo_name` so
+    no new URL parsing is introduced.  Returns ``None`` when the
+    remote is missing, unparseable, or has nested paths (e.g. GitLab
+    groups).
+    """
+    slug = get_repo_slug(repo_root)
+    if slug is None:
+        return None
+    owner, _, _ = slug.partition("/")
+    return sanitize_repo_name(owner) if owner else None
+
+
 # ── Config helpers ───────────────────────────────────────────────────
 
 
@@ -123,14 +138,53 @@ def load_biff_local(repo_root: Path) -> dict[str, object]:
         return {}
 
 
-def is_enabled(repo_root: Path | None) -> bool:
-    """True only if ``.biff.local`` exists with ``enabled = true``.
+def _parse_yaml_enabled(path: Path) -> bool | None:
+    """Parse ``enabled:`` from a simple YAML file using only stdlib.
 
-    Returns ``False`` if: *repo_root* is ``None``, no ``.biff`` file,
-    no ``.biff.local`` file, or ``enabled`` is not ``true``.
+    Returns ``True``, ``False``, or ``None`` if the file is missing
+    or the key is absent.  Only handles the trivial case where
+    ``enabled: true`` or ``enabled: false`` appears on its own line.
+    """
+    if not path.exists():
+        return None
+    try:
+        for line in path.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("enabled:"):
+                value = stripped.split(":", 1)[1].strip().lower()
+                if value == "true":
+                    return True
+                if value == "false":
+                    return False
+    except OSError:
+        pass
+    return None
+
+
+def yaml_config_dir(repo_root: Path) -> Path:
+    """Return ``.punt-labs/biff/`` inside *repo_root*."""
+    return repo_root / ".punt-labs" / "biff"
+
+
+def is_enabled(repo_root: Path | None) -> bool:
+    """True when biff is enabled for the repo.
+
+    Checks in order:
+
+    1. ``.punt-labs/biff/config.local.yaml`` — new location.
+    2. ``.biff`` + ``.biff.local`` — legacy fallback.
+
+    Returns ``False`` if *repo_root* is ``None`` or no config
+    indicates ``enabled = true``.
     """
     if repo_root is None:
         return False
+    # New path: .punt-labs/biff/config.local.yaml
+    new_local = yaml_config_dir(repo_root) / "config.local.yaml"
+    result = _parse_yaml_enabled(new_local)
+    if result is not None:
+        return result
+    # Legacy path: .biff + .biff.local
     if not (repo_root / ".biff").exists():
         return False
     local = load_biff_local(repo_root)

@@ -1,16 +1,8 @@
 """Configuration discovery and loading.
 
-Finds the ``.biff`` TOML file at the git repo root, resolves user
-identity from GitHub (``gh``) or the OS, and computes the shared data
-directory.
-
-Config file format (``.biff``)::
-
-    [team]
-    members = ["kai", "eric", "priya"]
-
-    [relay]
-    url = "nats://localhost:4222"
+Reads YAML config from ``.punt-labs/biff/`` (shared + local override),
+falls back to legacy ``.biff`` TOML, or runs in zero-config mode with
+defaults derived from the git remote.
 
 Data directory layout::
 
@@ -26,20 +18,27 @@ from __future__ import annotations
 
 import getpass
 import importlib.resources
+import logging
 import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+import yaml
+
 from biff._stdlib import (
     find_git_root,
+    get_repo_owner,
     get_repo_slug,
     is_enabled,
     load_biff_local,
     sanitize_repo_name,
+    yaml_config_dir,
 )
 from biff.models import BiffConfig, RelayAuth
+
+logger = logging.getLogger(__name__)
 
 # Re-export stdlib functions so existing callers of biff.config still work.
 __all__ = [
@@ -117,6 +116,117 @@ def get_os_user() -> str | None:
 def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
     """Compute data directory: ``{prefix}/biff/{repo_root.name}/``."""
     return prefix / "biff" / repo_root.name
+
+
+# ── YAML config pipeline ───────────────────────────────────────────
+
+
+def _load_yaml(path: Path) -> dict[str, object]:
+    """Load a YAML file and return a dict, or ``{}`` for non-dict content."""
+    raw: object = yaml.safe_load(path.read_text())
+    if isinstance(raw, dict):
+        return cast("dict[str, object]", raw)
+    return {}
+
+
+def load_yaml_config(repo_root: Path) -> dict[str, object]:
+    """Read ``.punt-labs/biff/config.yaml``, return dict or ``{}``."""
+    path = yaml_config_dir(repo_root) / "config.yaml"
+    if not path.exists():
+        return {}
+    try:
+        return _load_yaml(path)
+    except yaml.YAMLError as exc:
+        raise SystemExit(
+            f"Failed to parse {path}:\n{exc}\n"
+            "Fix or remove this file before starting biff."
+        ) from exc
+
+
+def load_yaml_local(repo_root: Path) -> dict[str, object]:
+    """Read ``.punt-labs/biff/config.local.yaml``, return dict or ``{}``."""
+    path = yaml_config_dir(repo_root) / "config.local.yaml"
+    if not path.exists():
+        return {}
+    try:
+        return _load_yaml(path)
+    except yaml.YAMLError:
+        return {}
+
+
+def _deep_merge(
+    base: dict[str, object], override: dict[str, object]
+) -> dict[str, object]:
+    """Deep merge *override* into *base*, returning a new dict.
+
+    At each level, dict values are merged recursively; all other
+    types are replaced wholesale by the override value.
+    """
+    merged: dict[str, object] = {**base}
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(
+                cast("dict[str, object]", merged[key]),
+                cast("dict[str, object]", value),
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
+def merge_config(
+    shared: dict[str, object], local: dict[str, object]
+) -> dict[str, object]:
+    """Deep merge local overrides on top of shared config."""
+    return _deep_merge(shared, local)
+
+
+def write_yaml_config(
+    repo_root: Path, data: dict[str, object], *, local: bool = False
+) -> Path:
+    """Atomically write YAML config to ``.punt-labs/biff/``.
+
+    When *local* is ``True``, writes ``config.local.yaml``;
+    otherwise writes ``config.yaml``.  Returns the written path.
+    """
+    from biff.relay import atomic_write  # noqa: PLC0415
+
+    config_dir = yaml_config_dir(repo_root)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    filename = "config.local.yaml" if local else "config.yaml"
+    path = config_dir / filename
+    content = yaml.dump(data, default_flow_style=False, sort_keys=False)
+    atomic_write(path, content)
+    return path
+
+
+def write_yaml_local_enabled(repo_root: Path, *, enabled: bool) -> Path:
+    """Write ``config.local.yaml`` with just the ``enabled`` flag.
+
+    Creates ``.punt-labs/biff/`` directory if needed.
+    """
+    return write_yaml_config(repo_root, {"enabled": enabled}, local=True)
+
+
+def ensure_gitignore_yaml(repo_root: Path) -> None:
+    """Add ``config.local.yaml`` to ``.punt-labs/biff/.gitignore``."""
+    config_dir = yaml_config_dir(repo_root)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    gitignore = config_dir / ".gitignore"
+    entry = "config.local.yaml"
+    if gitignore.exists():
+        content = gitignore.read_text()
+        if entry in content:
+            return
+        if not content.endswith("\n"):
+            content += "\n"
+        content += entry + "\n"
+        gitignore.write_text(content)
+    else:
+        gitignore.write_text(entry + "\n")
+
+
+# ── Legacy TOML support (migration path only) ──────────────────────
 
 
 def load_biff_file(repo_root: Path) -> dict[str, object]:
@@ -201,10 +311,13 @@ def build_biff_toml(
     return "\n".join(lines) + "\n" if lines else ""
 
 
+# ── Field extraction (shared by TOML and YAML paths) ───────────────
+
+
 def _extract_peers(
     raw: dict[str, object],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Extract peers and orgs from the ``[peers]`` section."""
+    """Extract peers and orgs from the ``peers`` section."""
     peers: tuple[str, ...] = ()
     orgs: tuple[str, ...] = ()
     peers_section: object = raw.get("peers")
@@ -226,6 +339,71 @@ def _extract_peers(
     return peers, orgs
 
 
+def _extract_relay(
+    raw: dict[str, object],
+) -> tuple[str | None, RelayAuth | None]:
+    """Extract relay URL and auth from the ``relay`` section."""
+    relay_section: object = raw.get("relay")
+    if not isinstance(relay_section, dict):
+        return None, None
+
+    section = cast("dict[str, object]", relay_section)
+    url: object = section.get("url")
+    relay_url = url if isinstance(url, str) else None
+
+    # Auth -- at most one of token, nkeys_seed, user_credentials.
+    # TOML uses flat keys; YAML uses nested ``auth:`` mapping.
+    token = section.get("token")
+    nkeys_seed = section.get("nkeys_seed")
+    creds = section.get("user_credentials")
+    auth_section: object = section.get("auth")
+    if isinstance(auth_section, dict):
+        auth_d = cast("dict[str, object]", auth_section)
+        if token is None:
+            token = auth_d.get("token")
+        if nkeys_seed is None:
+            nkeys_seed = auth_d.get("nkeys_seed")
+        if creds is None:
+            creds = auth_d.get("credentials") or auth_d.get("user_credentials")
+
+    auth_values = {
+        k: v
+        for k, v in [
+            ("token", token),
+            ("nkeys_seed", nkeys_seed),
+            ("user_credentials", creds),
+        ]
+        if isinstance(v, str) and v
+    }
+    if len(auth_values) > 1:
+        names = ", ".join(sorted(auth_values))
+        raise SystemExit(
+            f"Conflicting auth in config [relay]: {names}\n"
+            "Set at most one of 'token', 'nkeys_seed', "
+            "or 'user_credentials'."
+        )
+    relay_auth = RelayAuth(**auth_values) if auth_values else None
+
+    # Default to bundled demo credentials for the demo relay
+    if relay_url == DEMO_RELAY_URL and relay_auth is None:
+        relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
+
+    return relay_url, relay_auth
+
+
+def _extract_team(raw: dict[str, object]) -> tuple[str, ...]:
+    """Extract team members from the ``team`` section."""
+    team_section: object = raw.get("team")
+    if not isinstance(team_section, dict):
+        return ()
+    section = cast("dict[str, object]", team_section)
+    members: object = section.get("members", [])
+    if not isinstance(members, list):
+        return ()
+    items = cast("list[object]", members)
+    return tuple(m for m in items if isinstance(m, str))
+
+
 def extract_biff_fields(
     raw: dict[str, object],
 ) -> tuple[
@@ -236,52 +414,8 @@ def extract_biff_fields(
     tuple[str, ...],
 ]:
     """Extract team, relay_url, relay_auth, peers, and orgs."""
-    team: tuple[str, ...] = ()
-    relay_url: str | None = None
-    relay_auth: RelayAuth | None = None
-
-    team_section: object = raw.get("team")
-    if isinstance(team_section, dict):
-        section = cast("dict[str, object]", team_section)
-        members: object = section.get("members", [])
-        if isinstance(members, list):
-            items = cast("list[object]", members)
-            team = tuple(m for m in items if isinstance(m, str))
-
-    relay_section: object = raw.get("relay")
-    if isinstance(relay_section, dict):
-        section = cast("dict[str, object]", relay_section)
-        url: object = section.get("url")
-        if isinstance(url, str):
-            relay_url = url
-
-        # Auth — at most one of token, nkeys_seed, user_credentials
-        token = section.get("token")
-        nkeys_seed = section.get("nkeys_seed")
-        creds = section.get("user_credentials")
-
-        auth_values = {
-            k: v
-            for k, v in [
-                ("token", token),
-                ("nkeys_seed", nkeys_seed),
-                ("user_credentials", creds),
-            ]
-            if isinstance(v, str) and v
-        }
-        if len(auth_values) > 1:
-            names = ", ".join(sorted(auth_values))
-            raise SystemExit(
-                f"Conflicting auth in .biff [relay]: {names}\n"
-                "Set at most one of 'token', 'nkeys_seed', or 'user_credentials'."
-            )
-        if auth_values:
-            relay_auth = RelayAuth(**auth_values)
-
-    # Default to bundled demo credentials for the demo relay
-    if relay_url == DEMO_RELAY_URL and relay_auth is None:
-        relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
-
+    team = _extract_team(raw)
+    relay_url, relay_auth = _extract_relay(raw)
     peers, orgs = _extract_peers(raw)
     return team, relay_url, relay_auth, peers, orgs
 
@@ -326,7 +460,7 @@ def ensure_github_actions_member(repo_root: Path) -> bool:
 
     prefix = match.group(1).rstrip().rstrip(",").rstrip()
     quoted = _toml_basic_string(_GITHUB_ACTIONS_USER)
-    # Handle empty array: [] → ["github-actions"] (no leading comma)
+    # Handle empty array: [] -> ["github-actions"] (no leading comma)
     separator = "" if prefix.endswith("[") else ", "
     new_content = (
         content[: match.start()]
@@ -341,6 +475,64 @@ def ensure_github_actions_member(repo_root: Path) -> bool:
 RELAY_URL_UNSET = object()
 
 
+@dataclass(frozen=True)
+class _ConfigFields:
+    """Intermediate container for fields resolved from config files."""
+
+    team: tuple[str, ...] = ()
+    relay_url: str | None = None
+    relay_auth: RelayAuth | None = None
+    peers: tuple[str, ...] = ()
+    orgs: tuple[str, ...] = ()
+
+
+def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
+    """Resolve config fields from YAML, legacy TOML, or zero-config.
+
+    Detection order:
+
+    1. ``.punt-labs/biff/config.yaml`` -- explicit mode.
+    2. ``.biff`` -- legacy TOML, triggers migration notice.
+    3. Neither -- zero-config with derived defaults.
+    """
+    yaml_shared = load_yaml_config(repo_root)
+    if yaml_shared:
+        yaml_local = load_yaml_local(repo_root)
+        merged = merge_config(yaml_shared, yaml_local)
+        fields = extract_biff_fields(merged)
+        return _ConfigFields(*fields)
+
+    if (repo_root / ".biff").exists():
+        logger.info(
+            "Legacy .biff detected at %s. "
+            "Run /biff y to migrate to .punt-labs/biff/config.yaml.",
+            repo_root / ".biff",
+        )
+        raw = load_biff_file(repo_root)
+        fields = extract_biff_fields(raw)
+        return _ConfigFields(*fields)
+
+    # Zero-config: derive org from remote, use demo relay
+    owner = get_repo_owner(repo_root)
+    orgs = (owner,) if owner else ()
+    return _ConfigFields(
+        relay_url=DEMO_RELAY_URL,
+        relay_auth=RelayAuth(user_credentials=str(demo_creds_path())),
+        orgs=orgs,
+    )
+
+
+def _apply_demo_relay_default(
+    relay_url: str | None, relay_auth: RelayAuth | None
+) -> tuple[str, RelayAuth | None]:
+    """Ensure demo relay is the fallback when no relay is specified."""
+    if relay_url is None:
+        relay_url = DEMO_RELAY_URL
+    if relay_url == DEMO_RELAY_URL and relay_auth is None:
+        relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
+    return relay_url, relay_auth
+
+
 def load_config(
     *,
     user_override: str | None = None,
@@ -351,33 +543,19 @@ def load_config(
 ) -> ResolvedConfig:
     """Discover and resolve all configuration.
 
-    Resolution order:
-
-    1. CLI overrides (``user_override``, ``data_dir_override``,
-       ``relay_url_override``) take precedence.
-    2. ``.biff`` TOML for team roster and relay URL.
-    3. GitHub username (via ``gh api user``), falling back to OS username.
-    4. Data dir computed from ``{prefix}/biff/{directory-name}/``.
-
-    Raises :class:`SystemExit` if no user identity can be resolved,
-    if ``start`` is not inside a git repository, or if the repo
-    directory name fails :func:`sanitize_repo_name`.
+    Raises :class:`SystemExit` if no user identity can be resolved
+    or if ``start`` is not inside a git repository.
     """
     repo_root = find_git_root(start)
+    if repo_root is None:
+        raise SystemExit("Not in a git repository. Run biff from inside a repo.")
 
-    # Parse .biff file
-    team: tuple[str, ...] = ()
-    relay_url: str | None = None
-    relay_auth: RelayAuth | None = None
-    peers: tuple[str, ...] = ()
-    orgs: tuple[str, ...] = ()
-    if repo_root is not None:
-        raw = load_biff_file(repo_root)
-        team, relay_url, relay_auth, peers, orgs = extract_biff_fields(raw)
+    cf = _resolve_config_fields(repo_root)
+    relay_url: str | None
+    relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
 
-    # CLI relay-url override: empty string → local relay, non-empty → use it.
-    # Always clear relay_auth on override — the .biff credentials are for the
-    # .biff relay URL, not whatever the user is overriding to.
+    # CLI relay-url override: empty string -> local relay,
+    # non-empty -> use it.  Always clear relay_auth on override.
     if relay_url_override is not RELAY_URL_UNSET:
         override = str(relay_url_override) if relay_url_override else ""
         relay_url = override or None
@@ -401,9 +579,6 @@ def load_config(
         )
         raise SystemExit(msg)
 
-    # Resolve data dir and repo name
-    if repo_root is None:
-        raise SystemExit("Not in a git repository. Run biff from inside a repo.")
     repo_slug = get_repo_slug(repo_root)
     repo_name = sanitize_repo_name(repo_slug or repo_root.name)
     data_dir = (
@@ -418,8 +593,8 @@ def load_config(
         repo_name=repo_name,
         relay_url=relay_url,
         relay_auth=relay_auth,
-        team=team,
-        peers=peers,
-        orgs=orgs,
+        team=cf.team,
+        peers=cf.peers,
+        orgs=cf.orgs,
     )
     return ResolvedConfig(config=config, data_dir=data_dir, repo_root=repo_root)

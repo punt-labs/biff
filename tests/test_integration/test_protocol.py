@@ -94,6 +94,7 @@ class TestToolListing:
         names = {t.name for t in tools}
         expected = {
             "biff",
+            "biff_relay",
             "mesg",
             "read_messages",
             "finger",

@@ -1,6 +1,6 @@
-"""Lazy activation — auto-enable biff on first tool use while dormant.
+"""Lazy activation -- auto-enable biff on first tool use while dormant.
 
-When biff starts in dormant mode (no ``.biff.local`` with ``enabled = true``),
+When biff starts in dormant mode (no config with ``enabled = true``),
 calling any tool is treated as intent to use biff.  The :func:`auto_enable`
 decorator wraps a tool so that dormant invocations write the activation
 config to disk and return a restart message instead of running the tool.
@@ -16,9 +16,8 @@ from functools import wraps
 from typing import TYPE_CHECKING, ParamSpec
 
 from biff.config import (
-    ensure_biff_file,
-    ensure_gitignore,
-    write_biff_local,
+    ensure_gitignore_yaml,
+    write_yaml_local_enabled,
 )
 
 if TYPE_CHECKING:
@@ -40,12 +39,8 @@ def lazy_activate(state: ServerState) -> str | None:
     if repo_root is None:
         return "biff: not in a git repository."
 
-    ensure_biff_file(
-        repo_root, team=state.config.team, relay_url=state.config.relay_url
-    )
-
-    write_biff_local(repo_root, enabled=True)
-    ensure_gitignore(repo_root)
+    write_yaml_local_enabled(repo_root, enabled=True)
+    ensure_gitignore_yaml(repo_root)
 
     return "biff enabled. Restart Claude Code to connect."
 
@@ -59,8 +54,8 @@ def auto_enable(
     """Decorator: auto-enable biff when a tool is called while dormant.
 
     Wrap every tool (except ``biff`` toggle) so that dormant invocations
-    write ``.biff.local`` and return a restart prompt instead of running
-    the tool body.
+    write ``config.local.yaml`` and return a restart prompt instead of
+    running the tool body.
 
     Usage inside a ``register()`` function::
 

@@ -433,11 +433,13 @@ class TestLoadConfig:
             load_config(start=tmp_path)
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_no_biff_file(self, _mock: object, tmp_path: Path) -> None:
+    def test_no_biff_file_uses_demo_relay(self, _mock: object, tmp_path: Path) -> None:
+        """Zero-config mode: no .biff and no config.yaml -> demo relay."""
         (tmp_path / ".git").mkdir()
         resolved = load_config(start=tmp_path)
         assert resolved.config.team == ()
-        assert resolved.config.relay_url is None
+        assert resolved.config.relay_url == "tls://connect.ngs.global"
+        assert resolved.config.relay_auth is not None
 
     @patch("biff.config.find_git_root", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
