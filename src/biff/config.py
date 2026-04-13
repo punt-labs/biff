@@ -1,8 +1,7 @@
 """Configuration discovery and loading.
 
-Reads YAML config from ``.punt-labs/biff/`` (shared + local override),
-falls back to legacy ``.biff`` TOML, or runs in zero-config mode with
-defaults derived from the git remote.
+Reads YAML config from ``.punt-labs/biff/`` (shared + local override)
+or runs in zero-config mode with defaults derived from the git remote.
 
 Data directory layout::
 
@@ -20,7 +19,6 @@ import getpass
 import importlib.resources
 import logging
 import subprocess
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -32,7 +30,6 @@ from biff._stdlib import (
     get_repo_owner,
     get_repo_slug,
     is_enabled,
-    load_biff_local,
     sanitize_repo_name,
     yaml_config_dir,
 )
@@ -45,7 +42,6 @@ __all__ = [
     "find_git_root",
     "get_repo_slug",
     "is_enabled",
-    "load_biff_local",
     "sanitize_repo_name",
 ]
 
@@ -237,92 +233,7 @@ def ensure_gitignore_yaml(repo_root: Path) -> None:
         gitignore.write_text(entry + "\n")
 
 
-# ── Legacy TOML support (migration path only) ──────────────────────
-
-
-def load_biff_file(repo_root: Path) -> dict[str, object]:
-    """Parse the ``.biff`` TOML file at *repo_root*, or return ``{}``."""
-    path = repo_root / ".biff"
-    if not path.exists():
-        return {}
-    try:
-        return tomllib.loads(path.read_text())
-    except tomllib.TOMLDecodeError as exc:
-        raise SystemExit(
-            f"Failed to parse {path}:\n{exc}\n"
-            "Fix or remove this file before starting biff."
-        ) from exc
-
-
-def ensure_biff_file(
-    repo_root: Path, *, team: tuple[str, ...], relay_url: str | None
-) -> None:
-    """Create ``.biff`` if it doesn't exist, using provided defaults."""
-    if (repo_root / ".biff").exists():
-        return
-    from biff.relay import atomic_write  # noqa: PLC0415
-
-    url = relay_url or DEMO_RELAY_URL
-    atomic_write(repo_root / ".biff", build_biff_toml(list(team), url))
-
-
-def ensure_gitignore(repo_root: Path) -> None:
-    """Add ``.biff.local`` to the repo's ``.gitignore`` if not already present."""
-    gitignore = repo_root / ".gitignore"
-    if gitignore.exists():
-        content = gitignore.read_text()
-        if ".biff.local" in content:
-            return
-        if not content.endswith("\n"):
-            content += "\n"
-        content += ".biff.local\n"
-        gitignore.write_text(content)
-    else:
-        gitignore.write_text(".biff.local\n")
-
-
-def write_biff_local(repo_root: Path, *, enabled: bool) -> None:
-    """Write ``.biff.local`` with the ``enabled`` flag.
-
-    Uses :func:`~biff.relay.atomic_write` for safe replacement.
-    """
-    from biff.relay import atomic_write  # noqa: PLC0415
-
-    content = f"enabled = {'true' if enabled else 'false'}\n"
-    atomic_write(repo_root / ".biff.local", content)
-
-
-def _toml_basic_string(value: str) -> str:
-    """Escape *value* for use as a TOML basic string."""
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def build_biff_toml(
-    members: list[str],
-    relay_url: str,
-    peers: list[str] | None = None,
-) -> str:
-    """Build ``.biff`` TOML content from user inputs."""
-    lines: list[str] = []
-    if members:
-        quoted = ", ".join(_toml_basic_string(m) for m in members)
-        lines.append("[team]")
-        lines.append(f"members = [{quoted}]")
-    if relay_url:
-        if lines:
-            lines.append("")
-        lines.append("[relay]")
-        lines.append(f"url = {_toml_basic_string(relay_url)}")
-    if peers:
-        if lines:
-            lines.append("")
-        quoted_peers = ", ".join(_toml_basic_string(p) for p in peers)
-        lines.append("[peers]")
-        lines.append(f"repos = [{quoted_peers}]")
-    return "\n".join(lines) + "\n" if lines else ""
-
-
-# ── Field extraction (shared by TOML and YAML paths) ───────────────
+# ── Field extraction ───────────────────────────────────────────────
 
 
 def _extract_peers(
@@ -431,58 +342,6 @@ def extract_biff_fields(
     return team, relay_url, relay_auth, peers, orgs
 
 
-_GITHUB_ACTIONS_USER = "github-actions"
-
-
-def ensure_github_actions_member(repo_root: Path) -> bool:
-    """Add ``github-actions`` to ``.biff`` team members if not present.
-
-    Does a targeted text edit to preserve existing TOML formatting.
-    Returns ``True`` if the file was modified.
-    """
-    biff_file = repo_root / ".biff"
-    if not biff_file.exists():
-        return False
-
-    content = biff_file.read_text()
-    raw = load_biff_file(repo_root)
-    team_section: object = raw.get("team")
-    if not isinstance(team_section, dict):
-        return False
-
-    section = cast("dict[str, object]", team_section)
-    members: object = section.get("members", [])
-    if not isinstance(members, list):
-        return False
-
-    items = cast("list[object]", members)
-    member_list: list[str] = [m for m in items if isinstance(m, str)]
-    if _GITHUB_ACTIONS_USER in member_list:
-        return False
-
-    # Append to existing members array via text replacement.
-    # Find the closing bracket of the members array and insert before it.
-    import re  # noqa: PLC0415
-
-    pattern = re.compile(r"(members\s*=\s*\[.*?)(])", re.DOTALL)
-    match = pattern.search(content)
-    if match is None:
-        return False
-
-    prefix = match.group(1).rstrip().rstrip(",").rstrip()
-    quoted = _toml_basic_string(_GITHUB_ACTIONS_USER)
-    # Handle empty array: [] -> ["github-actions"] (no leading comma)
-    separator = "" if prefix.endswith("[") else ", "
-    new_content = (
-        content[: match.start()]
-        + prefix
-        + f"{separator}{quoted}]"
-        + content[match.end() :]
-    )
-    biff_file.write_text(new_content)
-    return True
-
-
 RELAY_URL_UNSET = object()
 
 
@@ -498,13 +357,12 @@ class _ConfigFields:
 
 
 def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
-    """Resolve config fields from YAML, legacy TOML, or zero-config.
+    """Resolve config fields from YAML or zero-config.
 
     Detection order:
 
     1. ``.punt-labs/biff/config.yaml`` -- explicit mode.
-    2. ``.biff`` -- legacy TOML, triggers migration notice.
-    3. Neither -- zero-config with derived defaults.
+    2. Neither -- zero-config with derived defaults.
     """
     yaml_shared = load_yaml_config(repo_root)
     if yaml_shared:
@@ -526,21 +384,6 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
                 orgs=(owner,) if owner else (),
             )
         return cf
-
-    if (repo_root / ".biff").exists():
-        logger.info(
-            "Legacy .biff detected at %s. "
-            "Run /biff y to migrate to .punt-labs/biff/config.yaml.",
-            repo_root / ".biff",
-        )
-        raw = load_biff_file(repo_root)
-        # Merge config.local.yaml on top — user may have set overrides
-        # via biff_relay --local even with a legacy .biff file.
-        yaml_local = load_yaml_local(repo_root)
-        if yaml_local:
-            raw = merge_config(raw, yaml_local)
-        fields = extract_biff_fields(raw)
-        return _ConfigFields(*fields)
 
     # Zero-config: derive org from remote, use demo relay.
     # Still read config.local.yaml — user may have set relay via
@@ -598,8 +441,6 @@ def load_config(
     - ``start`` is not inside a git repository
     - the repo directory name fails :func:`sanitize_repo_name`
     - ``config.yaml`` is malformed (raised by :func:`load_yaml_config`)
-    - legacy ``.biff`` TOML is malformed (raised by
-      :func:`load_biff_file`)
     - conflicting auth keys in the relay section
     - no user identity can be resolved (``gh`` missing, no OS user,
       and no ``--user`` override)

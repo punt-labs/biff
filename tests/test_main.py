@@ -211,7 +211,7 @@ class TestEnableCommand:
         return_value=_KAI_IDENTITY,
     )
     @patch("biff.__main__.find_git_root")
-    def test_creates_biff_and_local(
+    def test_creates_config_and_local(
         self,
         mock_root: MagicMock,
         _mock_gh: MagicMock,
@@ -222,24 +222,31 @@ class TestEnableCommand:
         # Simulate: members="eric, priya", relay=""
         result = runner.invoke(app, ["enable"], input="eric, priya\n\n")
         assert result.exit_code == 0
-        assert (tmp_path / ".biff").exists()
-        assert (tmp_path / ".biff.local").exists()
-        content = (tmp_path / ".biff").read_text()
-        assert '"eric"' in content
-        assert '"priya"' in content
-        local = (tmp_path / ".biff.local").read_text()
-        assert "enabled = true" in local
+        config_yaml = tmp_path / ".punt-labs" / "biff" / "config.yaml"
+        local_yaml = tmp_path / ".punt-labs" / "biff" / "config.local.yaml"
+        assert config_yaml.exists()
+        assert local_yaml.exists()
+        import yaml
+
+        config = yaml.safe_load(config_yaml.read_text())
+        assert "eric" in config["team"]["members"]
+        assert "priya" in config["team"]["members"]
+        local = yaml.safe_load(local_yaml.read_text())
+        assert local["enabled"] is True
 
     @patch("biff.__main__.find_git_root")
-    def test_existing_biff_skips_init(
+    def test_existing_config_skips_init(
         self, mock_root: MagicMock, tmp_path: Path
     ) -> None:
         mock_root.return_value = tmp_path
-        (tmp_path / ".biff").write_text('[team]\nmembers = ["kai"]\n')
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text("team:\n  members:\n    - kai\n")
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
         assert "enabled" in result.output
-        assert (tmp_path / ".biff.local").exists()
+        local_yaml = biff_dir / "config.local.yaml"
+        assert local_yaml.exists()
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:
@@ -250,18 +257,25 @@ class TestEnableCommand:
     @patch("biff.__main__.find_git_root")
     def test_idempotent(self, mock_root: MagicMock, tmp_path: Path) -> None:
         mock_root.return_value = tmp_path
-        (tmp_path / ".biff").write_text("")
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text("team:\n  members: []\n")
         runner.invoke(app, ["enable"])
         runner.invoke(app, ["enable"])
-        assert (tmp_path / ".biff.local").read_text() == "enabled = true\n"
+        import yaml
+
+        local = yaml.safe_load((biff_dir / "config.local.yaml").read_text())
+        assert local["enabled"] is True
 
     @patch("biff.__main__.find_git_root")
     def test_adds_gitignore_entry(self, mock_root: MagicMock, tmp_path: Path) -> None:
         mock_root.return_value = tmp_path
-        (tmp_path / ".biff").write_text("")
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text("team:\n  members: []\n")
         runner.invoke(app, ["enable"])
-        gitignore = (tmp_path / ".gitignore").read_text()
-        assert ".biff.local" in gitignore
+        gitignore = (biff_dir / ".gitignore").read_text()
+        assert "config.local.yaml" in gitignore
 
 
 class TestDisableCommand:
@@ -271,8 +285,11 @@ class TestDisableCommand:
         result = runner.invoke(app, ["disable"])
         assert result.exit_code == 0
         assert "disabled" in result.output
-        local = (tmp_path / ".biff.local").read_text()
-        assert "enabled = false" in local
+        import yaml
+
+        local_yaml = tmp_path / ".punt-labs" / "biff" / "config.local.yaml"
+        local = yaml.safe_load(local_yaml.read_text())
+        assert local["enabled"] is False
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:
@@ -285,7 +302,11 @@ class TestDisableCommand:
         mock_root.return_value = tmp_path
         runner.invoke(app, ["disable"])
         runner.invoke(app, ["disable"])
-        assert (tmp_path / ".biff.local").read_text() == "enabled = false\n"
+        import yaml
+
+        local_yaml = tmp_path / ".punt-labs" / "biff" / "config.local.yaml"
+        local = yaml.safe_load(local_yaml.read_text())
+        assert local["enabled"] is False
 
 
 class TestNoArgsRepl:

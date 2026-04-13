@@ -75,23 +75,6 @@ class TestIsEnabledYaml:
         (biff_dir / "config.local.yaml").write_text("enabled: false\n")
         assert is_enabled(tmp_path) is False
 
-    def test_new_path_takes_priority_over_legacy(self, tmp_path: Path) -> None:
-        """When both paths exist, new path wins."""
-        # Legacy says enabled
-        (tmp_path / ".biff").write_text("")
-        (tmp_path / ".biff.local").write_text("enabled = true\n")
-        # New path says disabled
-        biff_dir = tmp_path / ".punt-labs" / "biff"
-        biff_dir.mkdir(parents=True)
-        (biff_dir / "config.local.yaml").write_text("enabled: false\n")
-        assert is_enabled(tmp_path) is False
-
-    def test_legacy_fallback_when_no_new_path(self, tmp_path: Path) -> None:
-        """Falls back to .biff + .biff.local when new path absent."""
-        (tmp_path / ".biff").write_text("")
-        (tmp_path / ".biff.local").write_text("enabled = true\n")
-        assert is_enabled(tmp_path) is True
-
     def test_none_repo_root(self) -> None:
         assert is_enabled(None) is False
 
@@ -431,33 +414,3 @@ class TestLoadConfigYaml:
         resolved = load_config(start=tmp_path)
         # Demo relay is always the fallback
         assert resolved.config.relay_url == DEMO_RELAY_URL
-
-
-class TestLoadConfigLegacy:
-    @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_legacy_biff_still_works(
-        self, _gh: object, _slug: object, tmp_path: Path
-    ) -> None:
-        """Legacy .biff TOML is read when no YAML config exists."""
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".biff").write_text(
-            '[team]\nmembers = ["kai"]\n\n[relay]\nurl = "nats://legacy:4222"\n'
-        )
-        resolved = load_config(start=tmp_path)
-        assert resolved.config.team == ("kai",)
-        assert resolved.config.relay_url == "nats://legacy:4222"
-
-    @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_yaml_takes_priority_over_legacy(
-        self, _gh: object, _slug: object, tmp_path: Path
-    ) -> None:
-        """When both .biff and config.yaml exist, YAML wins."""
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".biff").write_text('[relay]\nurl = "nats://legacy"\n')
-        biff_dir = tmp_path / ".punt-labs" / "biff"
-        biff_dir.mkdir(parents=True)
-        (biff_dir / "config.yaml").write_text("relay:\n  url: nats://new\n")
-        resolved = load_config(start=tmp_path)
-        assert resolved.config.relay_url == "nats://new"

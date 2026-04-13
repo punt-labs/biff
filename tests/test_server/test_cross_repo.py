@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from biff._stdlib import display_repo_name
-from biff.config import build_biff_toml, extract_biff_fields
+from biff.config import extract_biff_fields
 from biff.formatting import LAST_SPECS, WHO_SPECS, format_last, format_who
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.server.state import create_state
@@ -150,23 +150,6 @@ class TestExtractPeers:
         raw: dict[str, object] = {"peers": {"repos": ["valid", 42, True]}}
         _, _, _, peers, _ = extract_biff_fields(raw)
         assert peers == ("valid",)
-
-
-class TestBuildBiffToml:
-    """build_biff_toml emits [peers] section."""
-
-    def test_with_peers(self) -> None:
-        toml = build_biff_toml(["kai"], "nats://localhost", ["punt-labs__vox"])
-        assert "[peers]" in toml
-        assert '"punt-labs__vox"' in toml
-
-    def test_without_peers(self) -> None:
-        toml = build_biff_toml(["kai"], "nats://localhost")
-        assert "[peers]" not in toml
-
-    def test_empty_peers_not_emitted(self) -> None:
-        toml = build_biff_toml(["kai"], "nats://localhost", [])
-        assert "[peers]" not in toml
 
 
 class TestWhoRepoColumn:

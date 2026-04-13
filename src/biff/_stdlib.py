@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import tomllib
 from pathlib import Path
 from typing import cast
 
@@ -127,17 +126,6 @@ def get_repo_owner(repo_root: Path) -> str | None:
 # ── Config helpers ───────────────────────────────────────────────────
 
 
-def load_biff_local(repo_root: Path) -> dict[str, object]:
-    """Parse ``.biff.local`` TOML at *repo_root*, or return ``{}`` if missing."""
-    path = repo_root / ".biff.local"
-    if not path.exists():
-        return {}
-    try:
-        return tomllib.loads(path.read_text())
-    except tomllib.TOMLDecodeError:
-        return {}
-
-
 def _parse_yaml_enabled(path: Path) -> bool | None:
     """Parse ``enabled:`` from a simple YAML file using only stdlib.
 
@@ -169,26 +157,14 @@ def yaml_config_dir(repo_root: Path) -> Path:
 def is_enabled(repo_root: Path | None) -> bool:
     """True when biff is enabled for the repo.
 
-    Checks in order:
-
-    1. ``.punt-labs/biff/config.local.yaml`` — new location.
-    2. ``.biff`` + ``.biff.local`` — legacy fallback.
-
-    Returns ``False`` if *repo_root* is ``None`` or no config
-    indicates ``enabled = true``.
+    Checks ``.punt-labs/biff/config.local.yaml`` for ``enabled: true``.
+    Returns ``False`` if *repo_root* is ``None`` or the file is absent.
     """
     if repo_root is None:
         return False
-    # New path: .punt-labs/biff/config.local.yaml
-    new_local = yaml_config_dir(repo_root) / "config.local.yaml"
-    result = _parse_yaml_enabled(new_local)
-    if result is not None:
-        return result
-    # Legacy path: .biff + .biff.local
-    if not (repo_root / ".biff").exists():
-        return False
-    local = load_biff_local(repo_root)
-    return local.get("enabled") is True
+    local = yaml_config_dir(repo_root) / "config.local.yaml"
+    result = _parse_yaml_enabled(local)
+    return result is True
 
 
 # ── Bead helpers ─────────────────────────────────────────────────────
