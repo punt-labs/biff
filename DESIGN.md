@@ -3886,14 +3886,13 @@ owner is `None` and the repo operates in isolation.
 **4. All config writes through MCP tools.** Config changes go through
 biff MCP tools — never Claude Code's `Write()` tool directly. `/biff y`
 writes enabled state via MCP tool. New `/biff:relay` command writes
-relay URL and triggers live reconnect without session restart.
+relay URL (restart required for the change to take effect).
 
 ### Config Schema
 
 Shared config (`.punt-labs/biff/config.yaml`):
 
 ```yaml
-enabled: true
 relay:
   url: "tls://connect.ngs.global"
 peers:
@@ -3904,11 +3903,15 @@ peers:
 Per-user overrides (`.punt-labs/biff/config.local.yaml`):
 
 ```yaml
-enabled: false
+enabled: true
 relay:
   auth:
     credentials: "/path/to/private.creds"
 ```
+
+Note: `enabled` is a per-user state that lives exclusively in
+`config.local.yaml`. It is not a shared config key — team members
+independently toggle biff for their own machines.
 
 `config.local.yaml` overrides `config.yaml` at the key level. A local
 `relay.url` overrides the shared `relay.url` without clobbering
@@ -3945,13 +3948,14 @@ token verification at connect, then E2E encryption (DES-016).
 
 ### Migration
 
-- **Existing `.biff` files:** `biff enable` detects old `.biff`,
-  parses the TOML, writes equivalent YAML to `.punt-labs/biff/config.yaml`
-  and `config.local.yaml`. Old file preserved until user deletes it.
+No legacy users exist. The implementation has no `.biff` TOML parsing,
+no migration path, and no fallback. Repos with leftover `.biff` files
+must delete them manually and run `/biff y`.
+
 - **New repos:** `/biff y` writes `config.local.yaml` only. No
   `config.yaml` needed — zero-config mode.
-- **Detection order:** `config.yaml` (new) > `.biff` (legacy, triggers
-  migration) > neither (zero-config, derive everything).
+- **Detection order:** `config.yaml` (explicit mode with local
+  overrides) > neither (zero-config, derive everything).
 
 ### Alternatives Rejected
 

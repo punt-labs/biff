@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import getpass
 import importlib.resources
-import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,8 +33,6 @@ from biff._stdlib import (
     yaml_config_dir,
 )
 from biff.models import BiffConfig, RelayAuth
-
-logger = logging.getLogger(__name__)
 
 # Re-export stdlib functions so existing callers of biff.config still work.
 __all__ = [

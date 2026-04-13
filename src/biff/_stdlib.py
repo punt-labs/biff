@@ -115,6 +115,9 @@ def get_repo_owner(repo_root: Path) -> str | None:
     no new URL parsing is introduced.  Returns ``None`` when the
     remote is missing, unparseable, or has nested paths (e.g. GitLab
     groups).
+
+    Raises :class:`SystemExit` via :func:`sanitize_repo_name` if the
+    owner contains characters that do not produce a NATS-safe name.
     """
     slug = get_repo_slug(repo_root)
     if slug is None:

@@ -5,7 +5,7 @@
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 CONFIG_LOCAL="$REPO_ROOT/.punt-labs/biff/config.local.yaml"
 [[ -f "$CONFIG_LOCAL" ]] || exit 0
-grep -qE '^enabled[[:space:]]*:[[:space:]]*(true|yes|on)[[:space:]]*$' "$CONFIG_LOCAL" || exit 0
+grep -qiE '^enabled[[:space:]]*:[[:space:]]*(true|yes|on)[[:space:]]*$' "$CONFIG_LOCAL" || exit 0
 # Fast gate: skip if no active biff MCP server session.
 BIFF_ACTIVE="$HOME/.punt-labs/biff/active"
 if [[ -d "$BIFF_ACTIVE" ]]; then
