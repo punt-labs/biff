@@ -7,7 +7,6 @@ Requires a Claude Code restart for the new relay to take effect.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from biff.config import (
@@ -20,8 +19,6 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-
-logger = logging.getLogger(__name__)
 
 _VALID_SCHEMES = ("tls://", "nats://", "ws://", "wss://")
 

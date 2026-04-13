@@ -389,7 +389,7 @@ def _extract_relay(
     if len(auth_values) > 1:
         names = ", ".join(sorted(auth_values))
         raise SystemExit(
-            f"Conflicting auth in config [relay]: {names}\n"
+            f"Conflicting auth in relay section: {names}\n"
             "Set at most one of 'token', 'nkeys_seed', "
             "or 'user_credentials'."
         )
@@ -511,7 +511,21 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         yaml_local = load_yaml_local(repo_root)
         merged = merge_config(yaml_shared, yaml_local)
         fields = extract_biff_fields(merged)
-        return _ConfigFields(*fields)
+        cf = _ConfigFields(*fields)
+        # Derive orgs from remote when explicit config doesn't set them.
+        # Writing config.yaml via biff_relay creates a file with only
+        # [relay] — orgs would be empty without this fallback, silently
+        # disabling org-scoped cross-repo discovery.
+        if not cf.orgs:
+            owner = get_repo_owner(repo_root)
+            cf = _ConfigFields(
+                relay_url=cf.relay_url,
+                relay_auth=cf.relay_auth,
+                team=cf.team,
+                peers=cf.peers,
+                orgs=(owner,) if owner else (),
+            )
+        return cf
 
     if (repo_root / ".biff").exists():
         logger.info(

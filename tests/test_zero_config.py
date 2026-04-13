@@ -383,6 +383,26 @@ class TestLoadConfigYaml:
         resolved = load_config(start=tmp_path)
         assert resolved.config.relay_url == "tls://local-override"
 
+    @patch("biff.config.get_repo_owner", return_value="punt-labs")
+    @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_yaml_config_without_orgs_derives_from_remote(
+        self, _gh: object, _slug: object, _owner: object, tmp_path: Path
+    ) -> None:
+        """config.yaml with only [relay] -> orgs derived from remote.
+
+        Regression test for biff_relay writing config.yaml with just
+        relay section — without this fallback, orgs would be empty
+        and org-scoped discovery silently broken.
+        """
+        (tmp_path / ".git").mkdir()
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text("relay:\n  url: tls://custom\n")
+        resolved = load_config(start=tmp_path)
+        assert resolved.config.orgs == ("punt-labs",)
+        assert resolved.config.relay_url == "tls://custom"
+
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_yaml_with_auth(self, _gh: object, _slug: object, tmp_path: Path) -> None:
