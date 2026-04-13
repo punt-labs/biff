@@ -593,8 +593,16 @@ def load_config(
 ) -> ResolvedConfig:
     """Discover and resolve all configuration.
 
-    Raises :class:`SystemExit` if no user identity can be resolved
-    or if ``start`` is not inside a git repository.
+    Raises :class:`SystemExit` for any of the following:
+
+    - ``start`` is not inside a git repository
+    - the repo directory name fails :func:`sanitize_repo_name`
+    - ``config.yaml`` is malformed (raised by :func:`load_yaml_config`)
+    - legacy ``.biff`` TOML is malformed (raised by
+      :func:`load_biff_file`)
+    - conflicting auth keys in the relay section
+    - no user identity can be resolved (``gh`` missing, no OS user,
+      and no ``--user`` override)
     """
     repo_root = find_git_root(start)
     if repo_root is None:
