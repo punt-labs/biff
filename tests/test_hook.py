@@ -1,7 +1,7 @@
 """Tests for biff hook dispatcher (DES-017).
 
 Unit tests for the pure handler functions.  These test business logic
-without I/O — no stdin/stdout mocking, no git repo, no .biff files.
+without I/O — no stdin/stdout mocking, no git repo, no config files.
 """
 
 from __future__ import annotations
@@ -948,7 +948,7 @@ class TestDetectCollisions:
     """Collision detection for concurrent sessions in the same worktree."""
 
     def test_no_active_dir(self, tmp_path: Path) -> None:
-        """No ~/.biff/active/ directory → empty list."""
+        """No ~/.punt-labs/biff/active/ directory → empty list."""
         fake_root = tmp_path / "my-repo"
         fake_root.mkdir()
         m_home, m_wt, m_git, m_slug = _collision_mocks(tmp_path, repo_root=fake_root)

@@ -200,7 +200,7 @@ def _check_biff_file() -> CheckResult:
 
 
 def _check_enabled() -> CheckResult:
-    """Check whether biff is enabled via ``.biff.local`` (informational)."""
+    """Check whether biff is enabled via ``config.local.yaml`` (informational)."""
     repo_root = find_git_root()
     if repo_root is None:
         return CheckResult(
@@ -210,7 +210,7 @@ def _check_enabled() -> CheckResult:
             required=False,
         )
     if is_enabled(repo_root):
-        return CheckResult("Enabled", True, "yes (.biff.local)", required=False)
+        return CheckResult("Enabled", True, "yes (config.local.yaml)", required=False)
     return CheckResult(
         "Enabled",
         False,

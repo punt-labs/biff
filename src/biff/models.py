@@ -139,11 +139,12 @@ class RelayAuth:
 
 
 class BiffConfig(BaseModel):
-    """Validated configuration from a ``.biff`` file.
+    """Validated biff configuration.
 
-    The ``.biff`` file lives in a repo root and defines the team roster
-    and relay URL. Parsing is handled by ``config.py``; this model
-    holds the validated result.
+    Config comes from ``.punt-labs/biff/config.yaml`` (shared) and
+    ``config.local.yaml`` (local overrides), or from zero-config
+    git-remote derivation.  Parsing is handled by ``config.py``;
+    this model holds the validated result.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)

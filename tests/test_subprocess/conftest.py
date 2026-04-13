@@ -24,7 +24,7 @@ def _make_transport(user: str, data_dir: Path) -> StdioTransport:
 
     Passes ``--relay-url ""`` to force local relay, preventing the
     subprocess from connecting to a remote NATS server configured
-    in the repo's ``.biff`` file.
+    in the repo's ``.punt-labs/biff/config.yaml``.
     """
     return StdioTransport(
         command="uv",
