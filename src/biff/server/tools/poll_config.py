@@ -52,7 +52,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ),
     )
     async def set_poll_interval(interval: str) -> str:
-        """Update the poll interval in-memory and persist to config.local.yaml."""
+        """Persist the poll interval to config.local.yaml. Restart required."""
         parsed = _parse_interval(interval)
         if parsed is not None and parsed < 0:
             return (
@@ -89,7 +89,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if interval <= 0:
             return "Polling: disabled"
         if interval >= 60 and interval % 60 == 0:
-            display = f"{interval / 60:.0f}m"
+            display = f"{interval / 60:g}m"
         else:
-            display = f"{interval:.0f}s"
-        return f"Polling: active, interval={display} ({interval}s)"
+            display = f"{interval:g}s"
+        return f"Polling: active, interval={display} ({interval:g}s)"

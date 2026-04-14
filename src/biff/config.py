@@ -332,7 +332,7 @@ def _extract_poll_interval(raw: dict[str, object]) -> float:
     ``set_poll_interval("n")``).
     """
     value: object = raw.get("poll_interval")
-    if isinstance(value, int | float) and value >= 0:
+    if isinstance(value, (int, float)) and value >= 0:
         return float(value)
     return 2.0
 
