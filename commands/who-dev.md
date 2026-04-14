@@ -1,5 +1,6 @@
 ---
 description: List active team members and what they're working on
+allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__who"]
 ---
 <!-- markdownlint-disable MD041 -->
 

@@ -65,8 +65,41 @@ if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
     fi
   fi
 
+  # Allow prod skill permissions
+  if ! jq -e '.permissions.allow // [] | map(select(contains("Skill(biff:"))) | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+    TMPFILE="$(mktemp)"
+    jq '.permissions.allow = (.permissions.allow // []) + [
+      "Skill(biff:*)",
+      "Skill(who)",
+      "Skill(write)",
+      "Skill(read)",
+      "Skill(plan)",
+      "Skill(wall)",
+      "Skill(finger)",
+      "Skill(talk)",
+      "Skill(last)",
+      "Skill(mesg)",
+      "Skill(tty)",
+      "Skill(biff)"
+    ]' "$SETTINGS" > "$TMPFILE"
+    mv "$TMPFILE" "$SETTINGS"
+    CHANGED=true
+  fi
+
+  # Allow dev skill permissions (only when running as biff-dev)
+  if [[ "$IS_DEV" == "true" ]]; then
+    if ! jq -e '.permissions.allow // [] | map(select(contains("Skill(biff-dev:"))) | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+      TMPFILE="$(mktemp)"
+      jq '.permissions.allow = (.permissions.allow // []) + [
+        "Skill(biff-dev:*)"
+      ]' "$SETTINGS" > "$TMPFILE"
+      mv "$TMPFILE" "$SETTINGS"
+      CHANGED=true
+    fi
+  fi
+
   if [[ "$CHANGED" == "true" ]]; then
-    ACTIONS+=("Auto-allowed biff MCP tools in permissions")
+    ACTIONS+=("Auto-allowed biff MCP tools and skills in permissions")
   fi
 fi
 

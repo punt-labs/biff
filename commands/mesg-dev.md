@@ -1,6 +1,7 @@
 ---
 description: Control message reception
 argument-hint: "y | n"
+allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__mesg"]
 ---
 <!-- markdownlint-disable MD041 -->
 
