@@ -117,8 +117,8 @@ class TestTalkListen:
         await kai.call("write", to="@eric", message="hello from talk")
 
         result = await eric.call("talk_listen", timeout=2)
-        # Chat format: [HH:MM:SS] @user: message
-        assert "] @kai: hello from talk" in result
+        # Chat format: [HH:MM:SS] user: message
+        assert "] kai: hello from talk" in result
 
 
 class TestTalkEnd:

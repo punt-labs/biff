@@ -63,7 +63,7 @@ if [[ "$TOOL_NAME" == "who" ]]; then
   if [[ "$RESULT" == "No sessions." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [a-zA-Z0-9]')
     emit "${COUNT} online" "$RESULT"
   fi
   exit 0
@@ -111,7 +111,7 @@ if [[ "$TOOL_NAME" == "last" ]]; then
   if [[ "$RESULT" == "No session history." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^ *@')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [a-zA-Z0-9]')
     emit "${COUNT} sessions" "$RESULT"
   fi
   exit 0

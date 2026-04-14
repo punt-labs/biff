@@ -123,9 +123,9 @@ def _format_who_name(s: UserSession) -> str:
 def format_who(sessions: list[UserSession]) -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
-    The NAME column renders ``@user:tty`` so agents can copy the
+    The NAME column renders ``user:tty`` so agents can copy the
     address directly into ``/write``.  P column shows ``+`` if the
-    session has a plan, ``-`` otherwise.  Use ``/finger @user`` to
+    session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.
     """
     rows: list[list[str]] = [
@@ -335,7 +335,7 @@ def format_read(messages: list[Message]) -> str:
     """Format messages in BSD ``from(1)`` style.
 
     The FROM column renders a copy-pasteable reply address:
-    ``@user:ttyNN`` when the sender's tty is known, ``@user`` otherwise.
+    ``user:ttyNN`` when the sender's tty is known, ``user`` otherwise.
     """
     rows: list[list[str]] = []
     for m in messages:

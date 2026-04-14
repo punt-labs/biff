@@ -45,23 +45,22 @@ def _panel_summary(output: dict[str, object]) -> str:
 class TestReadMessagesCount:
     """read_messages row counting — the @ prefix bug and fix."""
 
-    def test_at_prefix_rows_counted(self) -> None:
-        """Rows starting with @user:tty are counted correctly."""
-        # Simulate format_read() output: header + 2 data rows with @ prefix
+    def test_data_rows_counted(self) -> None:
+        """Rows starting with user:tty are counted correctly."""
         response = (
             "\u25b6  FROM              DATE              BODY\n"
-            "   @kai:tty01        Mon Mar 31 14:00  hello\n"
-            "   @eric:tty02       Mon Mar 31 14:05  world"
+            "   kai:tty01         Mon Mar 31 14:00  hello\n"
+            "   eric:tty02        Mon Mar 31 14:05  world"
         )
         output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
         summary = _panel_summary(output)
         assert summary == "2 new"
 
-    def test_single_at_row(self) -> None:
+    def test_single_row(self) -> None:
         """Single message row produces '1 new'."""
         response = (
             "\u25b6  FROM              DATE              BODY\n"
-            "   @kai:tty01        Mon Mar 31 14:00  ping"
+            "   kai:tty01         Mon Mar 31 14:00  ping"
         )
         output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
         summary = _panel_summary(output)
@@ -73,11 +72,11 @@ class TestReadMessagesCount:
         summary = _panel_summary(output)
         assert summary == "No new messages."
 
-    def test_at_without_tty(self) -> None:
-        """Rows with @user (no tty) are also counted."""
+    def test_user_without_tty(self) -> None:
+        """Rows with user (no tty) are also counted."""
         response = (
             "\u25b6  FROM              DATE              BODY\n"
-            "   @kai              Mon Mar 31 14:00  hello"
+            "   kai               Mon Mar 31 14:00  hello"
         )
         output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
         summary = _panel_summary(output)
