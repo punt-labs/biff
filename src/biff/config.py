@@ -718,7 +718,7 @@ def load_config(
             roster is not None
             and roster.root is not None
             and roster.primary is not None
-            and roster.root.handle != user
+            and roster.root.handle != roster.primary.handle
         ):
             root_identity = roster.root
 
