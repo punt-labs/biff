@@ -193,7 +193,7 @@ def _drain_talk_notifications(
         if msg_type == "invite" and pending_invites is not None:
             pending_invites.add(sender)
         if msg_type == "invite" and body:
-            lines.append(f"  \033[1;33m📞 @{sender}: {body}\033[0m")
+            lines.append(f"  \033[1;33m📞 {sender}: {body}\033[0m")
         elif body:
             sender_tty = data.get("from_tty", "")
             label = f"{sender}:{sender_tty}" if sender_tty else sender
@@ -542,7 +542,7 @@ def _check_for_accept(
         sender = data.get("from", "?")
         body = data.get("body", "")
         if body:
-            print(f"\r\033[K  \033[1;33m📞 @{sender}: {body}\033[0m")
+            print(f"\r\033[K  \033[1;33m📞 {sender}: {body}\033[0m")
     return found
 
 
@@ -599,7 +599,7 @@ async def _talk_handshake(
         return True
 
     # We're initiating. Send invite and wait for accept.
-    invite_body = f"wants to talk — reply with: talk @{ctx.user}:{ctx.tty_name}"
+    invite_body = f"wants to talk — reply with: talk {ctx.user}:{ctx.tty_name}"
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
 

@@ -445,10 +445,11 @@ class TestLoadConfig:
         with pytest.raises(SystemExit, match="Not in a git repository"):
             load_config(start=tmp_path, data_dir_override=custom)
 
+    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_auth_flows_through(
-        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
+        self, _mock_gh: object, _mock_ethos: object, _mock_team: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
         biff_dir = tmp_path / ".punt-labs" / "biff"
@@ -459,10 +460,11 @@ class TestLoadConfig:
         resolved = load_config(start=tmp_path)
         assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")
 
+    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_url_override_clears_auth(
-        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
+        self, _mock_gh: object, _mock_ethos: object, _mock_team: object, tmp_path: Path
     ) -> None:
         """Overriding relay URL must clear config auth to prevent credential leak."""
         (tmp_path / ".git").mkdir()

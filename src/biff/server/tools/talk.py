@@ -205,7 +205,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             )
 
         return (
-            f"Talk session started with @{display_target}. "
+            f"Talk session started with {display_target}. "
             f"Replies appear on the status bar. Use /write to reply."
         )
 
@@ -245,4 +245,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "No active talk session."
 
         set_talk_partner(None)
-        return f"Talk session with @{partner} ended."
+        return f"Talk session with {partner} ended."

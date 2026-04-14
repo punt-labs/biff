@@ -43,7 +43,7 @@ def _panel_summary(output: dict[str, object]) -> str:
 
 
 class TestReadMessagesCount:
-    """read_messages row counting — the @ prefix bug and fix."""
+    """read_messages row counting — data rows matched by indent pattern."""
 
     def test_data_rows_counted(self) -> None:
         """Rows starting with user:tty are counted correctly."""
