@@ -324,6 +324,19 @@ def _extract_team(raw: dict[str, object]) -> tuple[str, ...]:
     return tuple(m for m in items if isinstance(m, str))
 
 
+def _extract_poll_interval(raw: dict[str, object]) -> float:
+    """Extract ``poll_interval`` from the config dict.
+
+    Accepts top-level ``poll_interval`` key.  Returns the default
+    (2.0s) when absent or invalid.  ``0`` means disabled (set by
+    ``set_poll_interval("n")``).
+    """
+    value: object = raw.get("poll_interval")
+    if isinstance(value, (int, float)) and value >= 0:
+        return float(value)
+    return 2.0
+
+
 def extract_biff_fields(
     raw: dict[str, object],
 ) -> tuple[
@@ -352,6 +365,7 @@ class _ConfigFields:
     relay_auth: RelayAuth | None = None
     peers: tuple[str, ...] = ()
     orgs: tuple[str, ...] = ()
+    poll_interval: float = 2.0
 
 
 def _has_orgs_key(raw: dict[str, object]) -> bool:
@@ -381,7 +395,8 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         yaml_local = load_yaml_local(repo_root)
         merged = merge_config(yaml_shared, yaml_local)
         fields = extract_biff_fields(merged)
-        cf = _ConfigFields(*fields)
+        poll_interval = _extract_poll_interval(merged)
+        cf = _ConfigFields(*fields, poll_interval=poll_interval)
         # Derive orgs from remote only when the peers.orgs key is
         # ABSENT from the merged config. An explicit empty list
         # (peers.orgs: []) is honored — it means "no org discovery."
@@ -393,6 +408,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
                 team=cf.team,
                 peers=cf.peers,
                 orgs=(owner,) if owner else (),
+                poll_interval=cf.poll_interval,
             )
         return cf
 
@@ -402,7 +418,8 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     yaml_local = load_yaml_local(repo_root)
     if yaml_local:
         fields = extract_biff_fields(yaml_local)
-        cf = _ConfigFields(*fields)
+        poll_interval = _extract_poll_interval(yaml_local)
+        cf = _ConfigFields(*fields, poll_interval=poll_interval)
         # Apply demo relay default only when URL is demo or absent.
         # _apply_demo_relay_default checks relay_url == DEMO_RELAY_URL
         # before applying bundled creds — prevents sending demo creds
@@ -420,6 +437,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
             orgs=orgs,
             team=cf.team,
             peers=cf.peers,
+            poll_interval=cf.poll_interval,
         )
 
     owner = get_repo_owner(repo_root)
@@ -513,5 +531,6 @@ def load_config(
         team=cf.team,
         peers=cf.peers,
         orgs=cf.orgs,
+        poll_interval=cf.poll_interval,
     )
     return ResolvedConfig(config=config, data_dir=data_dir, repo_root=repo_root)

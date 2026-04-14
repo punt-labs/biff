@@ -43,14 +43,10 @@ from biff import commands
 from biff.cli_session import CliContext, cli_session
 from biff.commands import CommandResult
 from biff.config import (
-    DEMO_RELAY_URL,
     ensure_gitignore_yaml,
     find_git_root,
-    get_github_identity,
-    get_os_user,
     is_enabled,
     load_config,
-    write_yaml_config,
     write_yaml_local_enabled,
 )
 from biff.hook import hook_app
@@ -1126,50 +1122,14 @@ def enable(
 ) -> None:
     """Enable biff in the current git repo.
 
-    If no ``config.yaml`` exists, runs the interactive init flow
-    (identity resolution, team members, relay URL) to create one
-    under ``.punt-labs/biff/``.  Writes ``config.local.yaml`` with
-    ``enabled: true`` and ensures it is gitignored.  Idempotent.
+    Writes ``config.local.yaml`` with ``enabled: true``, ensures it
+    is gitignored, deploys git hooks and CI workflow.  Matches the
+    MCP ``/biff y`` toggle — no interactive prompts, no
+    ``config.yaml`` creation.  Idempotent.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
-
-    config_yaml = repo_root / ".punt-labs" / "biff" / "config.yaml"
-    if not config_yaml.exists():
-        # Interactive init flow — create config.yaml
-        identity = get_github_identity()
-        user = (identity.login if identity is not None else None) or get_os_user()
-        if user is None:
-            raise SystemExit(
-                "Could not determine username.\n"
-                "Install the gh CLI and authenticate: gh auth login"
-            )
-        print(f"Identity: {user}")
-
-        members_input = typer.prompt(
-            "Team members (comma-separated, or empty)",
-            default="",
-            show_default=False,
-        )
-        members = [m.strip() for m in members_input.split(",") if m.strip()]
-
-        relay_url = typer.prompt(
-            "Relay URL",
-            default=DEMO_RELAY_URL,
-        )
-
-        data: dict[str, object] = {}
-        if members:
-            data["team"] = {"members": members}
-        if relay_url:
-            data["relay"] = {"url": relay_url}
-        path = write_yaml_config(repo_root, data)
-        print(f"Created {path}")
-        if members:
-            print(f"  Team: {', '.join(members)}")
-        if relay_url:
-            print(f"  Relay: {relay_url}")
 
     write_yaml_local_enabled(repo_root, enabled=True)
     ensure_gitignore_yaml(repo_root)

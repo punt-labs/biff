@@ -691,6 +691,23 @@ def handle_session_resume() -> str:
     return "Biff session resumed. Check /read for unread messages."
 
 
+def handle_pre_compact() -> str:
+    """Build PreCompact additionalContext.
+
+    Injects the current plan into additionalContext so the model
+    retains awareness of what it was working on after compaction.
+    """
+    from biff._stdlib import find_git_root  # noqa: PLC0415
+    from biff.markers import read_plan_marker  # noqa: PLC0415
+
+    root = find_git_root()
+    if root is not None:
+        plan_text = read_plan_marker(str(root))
+        if plan_text:
+            return f"Current biff plan: {plan_text}. Check /read for unread messages."
+    return "Biff session resumed after compaction. Check /read for unread messages."
+
+
 def handle_session_end() -> int:
     """Convert active-session markers to sentinels for cleanup.
 
@@ -814,10 +831,11 @@ def cc_session_end() -> None:
 
 @_cc_app.command("pre-compact")
 def cc_pre_compact() -> None:
-    """PreCompact — snapshot plan to additionalContext.
-
-    Stub: full implementation in biff-sgl.
-    """
+    """PreCompact — inject plan into additionalContext before compaction."""
+    if not _is_biff_enabled():
+        return
+    result = handle_pre_compact()
+    _emit(_hook_context("PreCompact", result))
 
 
 # ── Git commands ─────────────────────────────────────────────────────

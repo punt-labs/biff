@@ -106,6 +106,13 @@ def _cc_post_pr() -> None:
         _emit(_post_tool_use_context(result))
 
 
+def _cc_pre_compact() -> None:
+    from biff.hook import _emit, _hook_context, handle_pre_compact  # noqa: PLC0415
+
+    result = handle_pre_compact()
+    _emit(_hook_context("PreCompact", result))
+
+
 _CC_HANDLERS: dict[str, Callable[[], None]] = {
     "session-start": _cc_session_start,
     "session-resume": _cc_session_resume,
@@ -113,7 +120,7 @@ _CC_HANDLERS: dict[str, Callable[[], None]] = {
     "pre-tool-use": _cc_pre_tool_use,
     "post-bash": _cc_post_bash,
     "post-pr": _cc_post_pr,
-    "pre-compact": lambda: None,  # Stub: full implementation in biff-sgl.
+    "pre-compact": _cc_pre_compact,
 }
 
 
@@ -124,11 +131,10 @@ def _dispatch_cc(event: str) -> None:
         sys.exit(f"Unknown claude-code event: {event}")
 
     # Gate: skip if biff not enabled in this repo.
-    if event != "pre-compact":
-        from biff.hook import _is_biff_enabled  # noqa: PLC0415
+    from biff.hook import _is_biff_enabled  # noqa: PLC0415
 
-        if not _is_biff_enabled():
-            return
+    if not _is_biff_enabled():
+        return
 
     handler()
 

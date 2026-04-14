@@ -107,6 +107,8 @@ class TestToolListing:
             "talk_end",
             "tty",
             "last",
+            "set_poll_interval",
+            "get_poll_status",
         }
         assert names == expected
 

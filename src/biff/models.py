@@ -157,6 +157,7 @@ class BiffConfig(BaseModel):
     team: tuple[str, ...] = ()
     peers: tuple[str, ...] = ()
     orgs: tuple[str, ...] = ()
+    poll_interval: float = 2.0
 
     @property
     def visible_repos(self) -> frozenset[str]:

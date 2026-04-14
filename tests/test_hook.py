@@ -24,6 +24,7 @@ from biff.hook import (
     handle_post_checkout,
     handle_post_commit,
     handle_post_pr,
+    handle_pre_compact,
     handle_pre_push,
     handle_pre_tool_use,
     handle_session_end,
@@ -402,6 +403,47 @@ class TestHandleSessionResume:
     def test_mentions_resume(self) -> None:
         result = handle_session_resume()
         assert "resumed" in result
+
+
+# ── handle_pre_compact ─────────────────────────────────────────────
+
+
+class TestHandlePreCompact:
+    """PreCompact handler — plan injection before context compaction."""
+
+    def test_with_plan_marker(self, tmp_path: Path) -> None:
+        """When plan marker exists, plan text is injected."""
+        from biff.markers import write_plan_marker
+
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            write_plan_marker(_FAKE_WORKTREE, "biff-sgl: PreCompact hook")
+        with (
+            patch("biff._stdlib.find_git_root", return_value=Path(_FAKE_WORKTREE)),
+            m_home,
+        ):
+            result = handle_pre_compact()
+        assert "Current biff plan: biff-sgl: PreCompact hook" in result
+        assert "/read" in result
+
+    def test_without_plan_marker(self) -> None:
+        """When no plan marker, returns generic compaction message."""
+        with (
+            patch("biff._stdlib.find_git_root", return_value=Path("/nonexistent")),
+            patch("biff.markers.read_plan_marker", return_value=None),
+        ):
+            result = handle_pre_compact()
+        assert "resumed after compaction" in result
+        assert "/read" in result
+
+    def test_no_git_root(self) -> None:
+        """When not in a git repo, returns generic compaction message."""
+        with (
+            patch("biff._stdlib.find_git_root", return_value=None),
+            patch("biff.markers.read_plan_marker", return_value=None),
+        ):
+            result = handle_pre_compact()
+        assert "resumed after compaction" in result
 
 
 # ── _expand_branch_plan ─────────────────────────────────────────────

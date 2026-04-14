@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from biff.__main__ import app
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
-from biff.config import GitHubIdentity, ResolvedConfig
+from biff.config import ResolvedConfig
 from biff.models import BiffConfig
 
 runner = CliRunner()
@@ -201,38 +201,21 @@ class TestMcpCommand:
         assert call_kwargs["user_override"] is None
 
 
-_KAI_IDENTITY = GitHubIdentity(login="kai", display_name="Kai Chen")
-
-
 class TestEnableCommand:
-    @patch("biff.__main__.get_os_user", return_value=None)
-    @patch(
-        "biff.__main__.get_github_identity",
-        return_value=_KAI_IDENTITY,
-    )
     @patch("biff.__main__.find_git_root")
-    def test_creates_config_and_local(
-        self,
-        mock_root: MagicMock,
-        _mock_gh: MagicMock,
-        _mock_os: MagicMock,
-        tmp_path: Path,
-    ) -> None:
+    def test_writes_local_yaml_only(self, mock_root: MagicMock, tmp_path: Path) -> None:
         mock_root.return_value = tmp_path
-        # Simulate: members="eric, priya", relay=""
-        result = runner.invoke(app, ["enable"], input="eric, priya\n\n")
+        result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
-        config_yaml = tmp_path / ".punt-labs" / "biff" / "config.yaml"
         local_yaml = tmp_path / ".punt-labs" / "biff" / "config.local.yaml"
-        assert config_yaml.exists()
         assert local_yaml.exists()
         import yaml
 
-        config = yaml.safe_load(config_yaml.read_text())
-        assert "eric" in config["team"]["members"]
-        assert "priya" in config["team"]["members"]
         local = yaml.safe_load(local_yaml.read_text())
         assert local["enabled"] is True
+        # No config.yaml created — enable no longer runs interactive init
+        config_yaml = tmp_path / ".punt-labs" / "biff" / "config.yaml"
+        assert not config_yaml.exists()
 
     @patch("biff.__main__.find_git_root")
     def test_existing_config_skips_init(
