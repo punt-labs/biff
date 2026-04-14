@@ -215,17 +215,49 @@ Before creating a PR, verify:
 - [ ] **Quality gates pass**
 - [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m hosted -v`
 
-### Workflow Tiers
+### Workflow: Ethos Missions and Pipelines
 
-Match the workflow to the bead's scope. The deciding factor is **design ambiguity**, not size.
+Use ethos missions for structured delegation. Every non-trivial change goes through a typed mission contract with file-level write-set boundaries, bounded rounds, and an append-only audit trail.
 
-| Tier | Tool | When | Tracking |
-|------|------|------|----------|
-| **T1: Forge** | `/feature-forge` | Epics, cross-cutting work, competing design approaches | Beads with dependencies |
-| **T2: Feature Dev** | `/feature-dev` | Features, multi-file, clear goal but needs exploration | Beads + TodoWrite (internal) |
-| **T3: Direct** | Plan mode or manual | Tasks, bugs, obvious implementation path | Beads |
+**Mission archetypes** — declare `type:` on the contract:
 
-**Escalation only goes up.** If T3 reveals unexpected scope, escalate to T2. If T2 reveals competing design approaches, escalate to T1. Never demote mid-flight.
+| Archetype | Purpose | Budget | Write-set constraints |
+|-----------|---------|--------|-----------------------|
+| `implement` | Code change with specific outcome | 3 rounds | Any path |
+| `design` | Produce a design document | 2 rounds | `*.md`, `docs/**` |
+| `test` | Add or improve tests | 2 rounds | `*_test.*`, `tests/**`, `docs/**` |
+| `review` | Read and report findings | 1 round | `*.md`, `*.yaml`, `.tmp/**` |
+| `report` | Gather info and summarize (read-only) | 1 round | Empty allowed |
+| `task` | Execute a specific instruction | 3 rounds | Any path |
+
+**Pipeline selection** — match the pipeline to the nature of the work, not just its size:
+
+| Pipeline | Stages | Use when |
+|----------|--------|----------|
+| `quick` | implement → review | Small, well-understood change |
+| `standard` | design → implement → test → review → document | Default feature work |
+| `full` | prfaq → spec → design → implement → test → coverage → review → document → retro | Large or cross-cutting work |
+| `product` | prfaq → design → implement → test → review → document | New user-facing feature |
+| `formal` | spec → design → implement → test → coverage → review → document | Protocol or state machine |
+| `docs` | design → review | Documentation-only change |
+| `coe` | investigate → root-cause → fix → test → document | Bug that keeps coming back |
+| `coverage` | measure → test → verify | Targeted test improvement |
+
+**Instantiate a pipeline:**
+
+```bash
+ethos mission pipeline instantiate standard \
+  --leader claude --worker rmh --evaluator djb \
+  --var feature=zero-config --var target=src/biff/config.py
+```
+
+This creates one mission per stage, wired with `depends_on` edges. The worker picks up stage 1, submits a result, the leader reflects and advances.
+
+**Contract field notes:**
+
+- Use `inputs.ticket` (not `inputs.bead` — deprecated alias).
+- `ethos mission lint` suggests a pipeline and flags common contract issues.
+- Escalation only goes up. If `quick` reveals unexpected scope, escalate to `standard`. Never demote mid-flight.
 
 ## Knowledge Propagation Protocol
 
