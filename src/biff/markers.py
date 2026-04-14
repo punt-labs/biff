@@ -48,6 +48,18 @@ def has_plan_marker(worktree_root: str) -> bool:
     return (hint_dir(worktree_root) / "plan-active").is_file()
 
 
+def read_plan_marker(worktree_root: str) -> str | None:
+    """Read the plan-active marker text, or ``None`` if absent."""
+    path = hint_dir(worktree_root) / "plan-active"
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text().strip()
+        return text or None
+    except OSError:
+        return None
+
+
 def write_bead_marker(worktree_root: str) -> None:
     """Write bead-active marker (a bead was claimed)."""
     d = hint_dir(worktree_root)

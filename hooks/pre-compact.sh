@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
+# PreCompact — inject plan into additionalContext before compaction.
+# Fast gate: skip Python startup in repos without .punt-labs/biff/config.local.yaml enabled.
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+CONFIG_LOCAL="$REPO_ROOT/.punt-labs/biff/config.local.yaml"
+[[ -f "$CONFIG_LOCAL" ]] || exit 0
+grep -qiE '^[[:space:]]*enabled[[:space:]]*:[[:space:]]*(true|yes|on)[[:space:]]*$' "$CONFIG_LOCAL" || exit 0
+biff-hook claude-code pre-compact 2>/dev/null || true
