@@ -18,14 +18,12 @@ if TYPE_CHECKING:
 
 _INTERVAL_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(s|m)$")
 
-_VALID_PRESETS = frozenset({"2s", "5s", "10s", "30s", "1m", "2m", "5m", "n"})
-
 
 def _parse_interval(value: str) -> float | None:
     """Parse an interval string to seconds, or ``None`` for disable.
 
-    Accepts: ``"2s"``, ``"5s"``, ``"10s"``, ``"30s"``, ``"1m"``,
-    ``"2m"``, ``"5m"``, ``"n"`` (disable).
+    Accepts any ``{N}s`` or ``{N}m`` format (e.g. ``"2s"``, ``"5m"``,
+    ``"30s"``), or ``"n"`` to disable.
     """
     value = value.strip().lower()
     if value == "n":
@@ -47,7 +45,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="set_poll_interval",
         description=(
             "Set the background polling interval. "
-            "Accepts: 2s, 5s, 10s, 30s, 1m, 2m, 5m, or n (disable)."
+            "Accepts {N}s or {N}m format (e.g. 2s, 30s, 5m), or n (disable). "
+            "Persisted to config. Restart required to take effect."
         ),
     )
     async def set_poll_interval(interval: str) -> str:
@@ -56,7 +55,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if parsed is not None and parsed < 0:
             return (
                 f"Invalid interval: {interval}. "
-                f"Use one of: {', '.join(sorted(_VALID_PRESETS))}."
+                "Use {N}s or {N}m format (e.g. 2s, 5m), or n to disable."
             )
 
         repo_root = state.repo_root
@@ -69,12 +68,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             write_yaml_config(repo_root, existing, local=True)
 
         if parsed is None:
-            # Update in-memory config via model_copy (frozen model).
-            object.__setattr__(state.config, "poll_interval", 0.0)
-            return "Polling disabled."
+            return (
+                "Polling disabled. Restart Claude Code for the change to take effect."
+            )
 
-        object.__setattr__(state.config, "poll_interval", parsed)
-        return f"Poll interval set to {interval} ({parsed}s)."
+        return (
+            f"Poll interval set to {interval} ({parsed}s). "
+            "Restart Claude Code for the change to take effect."
+        )
 
     @mcp.tool(
         name="get_poll_status",

@@ -1,6 +1,6 @@
 ---
 description: Set the background polling interval
-argument-hint: "2s | 5s | 10s | 30s | 1m | 2m | 5m | n"
+argument-hint: "{N}s | {N}m | n"
 allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__set_poll_interval", "mcp__plugin_biff-dev_tty__get_poll_status", "CronCreate", "CronList", "CronDelete"]
 ---
 <!-- markdownlint-disable MD041 -->
@@ -11,7 +11,7 @@ Arguments: $ARGUMENTS
 
 If no argument provided, call `mcp__plugin_biff-dev_tty__get_poll_status` and report the result. Stop.
 
-Otherwise parse the argument as an interval: `2s`, `5s`, `10s`, `30s`, `1m`, `2m`, `5m`, or `n` (disable).
+Otherwise parse the argument as an interval (`{N}s` or `{N}m`, e.g. `2s`, `30s`, `5m`) or `n` (disable). Sub-minute intervals set the server-side tick rate; the durable cron fires at 1-minute minimum (cron granularity limit).
 
 ## Task
 

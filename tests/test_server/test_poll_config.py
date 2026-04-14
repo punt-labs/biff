@@ -39,29 +39,27 @@ class TestSetPollInterval:
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="5s")
         assert "5s" in result
-        assert state.config.poll_interval == 5.0
+        assert "Restart" in result
 
     async def test_set_valid_minutes(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="2m")
         assert "2m" in result
-        assert state.config.poll_interval == 120.0
+        assert "Restart" in result
 
     async def test_disable(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="n")
         assert "disabled" in result.lower()
-        assert state.config.poll_interval == 0.0
+        assert "Restart" in result
 
     async def test_invalid_interval(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="banana")
         assert "Invalid" in result
-        # Unchanged
-        assert state.config.poll_interval == 2.0
 
     async def test_persists_to_local_yaml(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
