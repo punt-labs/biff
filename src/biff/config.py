@@ -328,10 +328,11 @@ def _extract_poll_interval(raw: dict[str, object]) -> float:
     """Extract ``poll_interval`` from the config dict.
 
     Accepts top-level ``poll_interval`` key.  Returns the default
-    (2.0s) when absent or invalid.
+    (2.0s) when absent or invalid.  ``0`` means disabled (set by
+    ``set_poll_interval("n")``).
     """
     value: object = raw.get("poll_interval")
-    if isinstance(value, int | float) and value > 0:
+    if isinstance(value, int | float) and value >= 0:
         return float(value)
     return 2.0
 
