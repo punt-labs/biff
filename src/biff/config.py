@@ -488,6 +488,7 @@ def _enrich_team(cf: _ConfigFields) -> _ConfigFields:
         relay_auth=cf.relay_auth,
         peers=cf.peers,
         orgs=cf.orgs,
+        poll_interval=cf.poll_interval,
     )
 
 
