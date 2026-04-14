@@ -700,14 +700,11 @@ def handle_pre_compact() -> str:
     from biff._stdlib import find_git_root  # noqa: PLC0415
     from biff.markers import read_plan_marker  # noqa: PLC0415
 
-    worktree = ""
     root = find_git_root()
     if root is not None:
-        worktree = str(root)
-
-    plan_text = read_plan_marker(worktree)
-    if plan_text:
-        return f"Current biff plan: {plan_text}. Check /read for unread messages."
+        plan_text = read_plan_marker(str(root))
+        if plan_text:
+            return f"Current biff plan: {plan_text}. Check /read for unread messages."
     return "Biff session resumed after compaction. Check /read for unread messages."
 
 

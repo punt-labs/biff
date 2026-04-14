@@ -32,6 +32,8 @@ def _parse_interval(value: str) -> float | None:
     if m is None:
         return -1.0  # sentinel for invalid
     amount = float(m.group(1))
+    if amount <= 0:
+        return -1.0  # 0s/0m is invalid — use "n" to disable
     unit = m.group(2)
     if unit == "m":
         return amount * 60
@@ -86,5 +88,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         interval = state.config.poll_interval
         if interval <= 0:
             return "Polling: disabled"
-        display = f"{interval / 60:.0f}m" if interval >= 60 else f"{interval:.0f}s"
+        if interval >= 60 and interval % 60 == 0:
+            display = f"{interval / 60:.0f}m"
+        else:
+            display = f"{interval:.0f}s"
         return f"Polling: active, interval={display} ({interval}s)"
