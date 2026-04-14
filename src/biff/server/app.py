@@ -35,7 +35,7 @@ from biff.server.tools._descriptions import (
     refresh_wall,
     set_tty_name,
 )
-from biff.server.tools._session import update_current_session
+from biff.server.tools._session import update_companion_session, update_current_session
 from biff.tty import build_session_key, claim_tty_name
 
 logger = logging.getLogger(__name__)
@@ -185,6 +185,11 @@ async def _heartbeat_loop(
             await state.relay.heartbeat(state.session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
             logger.warning("Heartbeat failed", exc_info=True)
+        if state.companion_session_key:
+            try:
+                await state.relay.heartbeat(state.companion_session_key)
+            except Exception:  # noqa: BLE001
+                logger.warning("Companion heartbeat failed", exc_info=True)
 
 
 def _kv_key_to_session_key(kv_key: str, repo_name: str) -> str | None:
@@ -345,6 +350,8 @@ async def _handle_kv_delete(
     """
     if session_key == state.session_key:
         return  # Our own shutdown writes logout explicitly
+    if session_key == state.companion_session_key:
+        return  # Companion shutdown writes logout explicitly
     cached = cache.pop(session_key, None)
     if cached is None:
         logger.debug(
@@ -439,6 +446,55 @@ async def _append_logout_event(state: ServerState) -> None:
         logger.warning("Failed to append wtmp logout event", exc_info=True)
 
 
+async def _append_companion_login_event(state: ServerState) -> None:
+    """Append a login event to wtmp for the companion session."""
+    companion = state.companion
+    if companion is None:
+        return
+    session = await state.relay.get_session(companion.session_key)
+    if session is None:
+        return
+    login_event = SessionEvent(
+        session_key=companion.session_key,
+        event="login",
+        user=companion.user,
+        tty=companion.tty,
+        tty_name=companion.tty_name,
+        hostname=state.hostname,
+        pwd=state.pwd,
+        timestamp=session.last_active,
+        plan=session.plan,
+        repo=state.config.repo_name,
+    )
+    try:
+        await state.relay.append_wtmp(login_event)
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to append companion wtmp login event", exc_info=True)
+
+
+async def _append_companion_logout_event(state: ServerState) -> None:
+    """Append a logout event to wtmp for the companion session."""
+    companion = state.companion
+    if companion is None:
+        return
+    logout_event = SessionEvent(
+        session_key=companion.session_key,
+        event="logout",
+        user=companion.user,
+        tty=companion.tty,
+        tty_name=companion.tty_name,
+        hostname=state.hostname,
+        pwd=state.pwd,
+        timestamp=datetime.now(UTC),
+    )
+    try:
+        await state.relay.append_wtmp(logout_event)
+        if isinstance(state.relay, NatsRelay):
+            await state.relay.flush()
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to append companion wtmp logout event", exc_info=True)
+
+
 def _find_orphaned_logins(
     events: list[SessionEvent],
     active_keys: set[str],
@@ -489,6 +545,8 @@ async def _close_orphaned_logins(
     stale_threshold = 120.0  # 2x heartbeat interval (60s)
     last_seen: dict[str, datetime] = {}
     active_keys: set[str] = {state.session_key}
+    if state.companion_session_key:
+        active_keys.add(state.companion_session_key)
     for session in active_sessions:
         key = build_session_key(session.user, session.tty)
         last_seen[key] = session.last_active
@@ -532,6 +590,27 @@ async def _release_relay(state: ServerState) -> None:
         await state.relay.delete_session(state.session_key)
     except Exception:
         logger.exception("Failed to delete session %s", state.session_key)
+    # Release companion session (DES-039).
+    if state.companion:
+        if state.companion.tty_name:
+            try:
+                await state.relay.release_tty_name(
+                    state.companion.user, state.companion.tty_name
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to release companion TTY name %s",
+                    state.companion.tty_name,
+                    exc_info=True,
+                )
+        try:
+            await state.relay.delete_session(state.companion.session_key)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to delete companion session %s",
+                state.companion.session_key,
+                exc_info=True,
+            )
     try:
         await state.relay.close()
     except Exception:  # noqa: BLE001
@@ -552,6 +631,7 @@ async def _lifespan_cleanup(
     """
     if state.owns_relay:
         await _append_logout_event(state)
+        await _append_companion_logout_event(state)
     await _shutdown_tasks(shutdown, tasks)
     # Drain vox background tasks so child process waiters complete
     # before the event loop closes.  Without this, SIGCHLD fires
@@ -566,6 +646,41 @@ async def _lifespan_cleanup(
         await _release_relay(state)
     with suppress(OSError):
         remove_active_session(state.session_key)
+    if state.companion:
+        with suppress(OSError):
+            remove_active_session(state.companion.session_key)
+
+
+async def _register_companion(state: ServerState) -> None:
+    """Register the companion session: active file, KV entry, TTY name.
+
+    No-op when ``state.companion`` is ``None``.  Extracted from
+    ``_active_lifespan`` for complexity management (DES-039).
+    """
+    if state.companion is None:
+        return
+    # Active session marker.
+    worktree = str(state.repo_root) if state.repo_root else ""
+    with suppress(OSError):
+        write_active_session(
+            state.config.repo_name,
+            state.companion.session_key,
+            worktree_root=worktree,
+        )
+    # KV registration before TTY name claim.
+    await update_companion_session(state)
+    # Claim TTY name.
+    companion_name = await claim_tty_name(
+        state.relay, state.companion.user, state.companion.session_key
+    )
+    # Frozen dataclass — update via object.__setattr__.
+    object.__setattr__(state.companion, "tty_name", companion_name)
+    await update_companion_session(state, tty_name=companion_name)
+    logger.info(
+        "Companion ready: %s (%s)",
+        state.companion.session_key,
+        companion_name,
+    )
 
 
 @asynccontextmanager
@@ -590,12 +705,20 @@ async def _active_lifespan(
         # operation (touch a file), runs first.
         with suppress(OSError):
             _write_sentinel(state.config.repo_name, state.session_key)
+        if state.companion:
+            with suppress(OSError):
+                _write_sentinel(state.config.repo_name, state.companion.session_key)
         # Best-effort sync cleanup for LocalRelay only.
         if isinstance(state.relay, LocalRelay):
             with suppress(OSError):
                 state.relay.write_remove_sentinel(state.session_key)
             with suppress(OSError, ValueError):
                 state.relay.delete_session_sync(state.session_key)
+            if state.companion:
+                with suppress(OSError):
+                    state.relay.write_remove_sentinel(state.companion.session_key)
+                with suppress(OSError, ValueError):
+                    state.relay.delete_session_sync(state.companion.session_key)
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)
@@ -647,6 +770,9 @@ async def _active_lifespan(
     await update_current_session(state, tty_name=final_name)
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
+    # Companion TTY name claim (DES-039).
+    await _register_companion(state)
+
     # Write the initial unread file and wall state immediately so the
     # status line has identity from the first render (before the poller ticks).
     await refresh_read_messages(mcp, state)
@@ -659,6 +785,8 @@ async def _active_lifespan(
     sessions = await state.relay.get_sessions()
 
     await _append_login_event(state, final_name)
+    if state.companion:
+        await _append_companion_login_event(state)
     await _close_orphaned_logins(state, sessions)
 
     shutdown = asyncio.Event()

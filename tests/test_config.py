@@ -12,11 +12,13 @@ from biff._stdlib import _parse_repo_slug
 from biff.config import (
     DEMO_RELAY_URL,
     EthosIdentity,
+    EthosRoster,
     GitHubIdentity,
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
     get_ethos_identity,
+    get_ethos_roster,
     get_ethos_team,
     get_github_identity,
     get_os_user,
@@ -628,3 +630,164 @@ class TestGetEthosTeam:
             )
             result = get_ethos_team()
             assert result == ("adb", "claude", "jmf")
+
+
+# -- get_ethos_roster --
+
+
+_ROSTER_JSON = (
+    '{"root":{"handle":"jfreeman","kind":"human","display_name":"Jim Freeman"},'
+    '"primary":{"handle":"claude","kind":"agent","display_name":"Claude Agento"}}'
+)
+
+_ROSTER_SAME = (
+    '{"root":{"handle":"claude","kind":"agent","display_name":"Claude Agento"},'
+    '"primary":{"handle":"claude","kind":"agent","display_name":"Claude Agento"}}'
+)
+
+
+class TestGetEthosRoster:
+    def test_success(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = _ROSTER_JSON
+            result = get_ethos_roster()
+            assert result is not None
+            assert result.root == EthosIdentity(
+                handle="jfreeman", display_name="Jim Freeman", kind="human"
+            )
+            assert result.primary == EthosIdentity(
+                handle="claude", display_name="Claude Agento", kind="agent"
+            )
+
+    def test_not_installed(self) -> None:
+        with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
+            assert get_ethos_roster() is None
+
+    def test_exit_1(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            assert get_ethos_roster() is None
+
+    def test_timeout(self) -> None:
+        with patch(
+            "biff.config.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="ethos", timeout=2),
+        ):
+            assert get_ethos_roster() is None
+
+    def test_bad_json(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "not json"
+            assert get_ethos_roster() is None
+
+    def test_missing_root(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                '{"primary":{"handle":"claude","kind":"agent",'
+                '"display_name":"Claude Agento"}}'
+            )
+            result = get_ethos_roster()
+            assert result is not None
+            assert result.root is None
+            assert result.primary is not None
+
+    def test_missing_primary(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                '{"root":{"handle":"jfreeman","kind":"human",'
+                '"display_name":"Jim Freeman"}}'
+            )
+            result = get_ethos_roster()
+            assert result is not None
+            assert result.root is not None
+            assert result.primary is None
+
+    def test_empty_handle_in_entry(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                '{"root":{"handle":"","kind":"human","display_name":"X"},'
+                '"primary":{"handle":"claude","kind":"agent",'
+                '"display_name":"Claude"}}'
+            )
+            result = get_ethos_roster()
+            assert result is not None
+            assert result.root is None  # empty handle → None
+
+
+# -- load_config with dual-session roster --
+
+
+_CLAUDE_ETHOS = EthosIdentity(
+    handle="claude", display_name="Claude Agento", kind="agent"
+)
+
+_DUAL_ROSTER = EthosRoster(
+    root=EthosIdentity(handle="jfreeman", display_name="Jim Freeman", kind="human"),
+    primary=_CLAUDE_ETHOS,
+)
+
+_SAME_ROSTER = EthosRoster(root=_CLAUDE_ETHOS, primary=_CLAUDE_ETHOS)
+
+
+class TestLoadConfigDualSession:
+    def _setup_repo(self, tmp_path: Path) -> Path:
+        (tmp_path / ".git").mkdir()
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "team:\n  members:\n    - kai\nrelay:\n  url: nats://localhost:4222\n"
+        )
+        return tmp_path
+
+    @patch("biff.config.get_ethos_roster", return_value=_DUAL_ROSTER)
+    @patch("biff.config.get_ethos_identity", return_value=_CLAUDE_ETHOS)
+    def test_dual_session_sets_root_identity(
+        self, _mock_ethos: object, _mock_roster: object, tmp_path: Path
+    ) -> None:
+        repo = self._setup_repo(tmp_path)
+        resolved = load_config(start=repo)
+        assert resolved.config.user == "claude"
+        assert resolved.root_identity is not None
+        assert resolved.root_identity.handle == "jfreeman"
+        assert resolved.root_identity.kind == "human"
+
+    @patch("biff.config.get_ethos_roster", return_value=_SAME_ROSTER)
+    @patch("biff.config.get_ethos_identity", return_value=_CLAUDE_ETHOS)
+    def test_same_identity_no_root(
+        self, _mock_ethos: object, _mock_roster: object, tmp_path: Path
+    ) -> None:
+        repo = self._setup_repo(tmp_path)
+        resolved = load_config(start=repo)
+        assert resolved.root_identity is None
+
+    @patch("biff.config.get_ethos_roster", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=_CLAUDE_ETHOS)
+    def test_roster_absent_no_root(
+        self, _mock_ethos: object, _mock_roster: object, tmp_path: Path
+    ) -> None:
+        repo = self._setup_repo(tmp_path)
+        resolved = load_config(start=repo)
+        assert resolved.root_identity is None
+
+    @patch("biff.config.get_ethos_roster", return_value=_DUAL_ROSTER)
+    @patch("biff.config.get_ethos_identity", return_value=None)
+    @patch(
+        "biff.config.get_github_identity",
+        return_value=GitHubIdentity(login="kai", display_name="Kai"),
+    )
+    def test_user_override_skips_roster(
+        self,
+        _mock_gh: object,
+        _mock_ethos: object,
+        _mock_roster: object,
+        tmp_path: Path,
+    ) -> None:
+        repo = self._setup_repo(tmp_path)
+        resolved = load_config(start=repo, user_override="custom")
+        assert resolved.root_identity is None

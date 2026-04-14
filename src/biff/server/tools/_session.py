@@ -84,3 +84,30 @@ async def update_current_session(state: ServerState, **updates: object) -> UserS
     updated = session.model_copy(update=updates)
     await state.relay.update_session(updated)
     return updated
+
+
+async def update_companion_session(
+    state: ServerState, **updates: object
+) -> UserSession | None:
+    """Update the companion (root) session with automatic last_active refresh.
+
+    Returns ``None`` when no companion session is configured.
+    """
+    companion = state.companion
+    if companion is None:
+        return None
+    session = await state.relay.get_session(companion.session_key)
+    if session is None:
+        session = UserSession(
+            user=companion.user,
+            tty=companion.tty,
+            hostname=state.hostname,
+            pwd=state.pwd,
+            display_name=companion.display_name,
+            kind=companion.kind,
+            repo=state.config.repo_name,
+        )
+    updates["last_active"] = datetime.now(UTC)
+    updated = session.model_copy(update=updates)
+    await state.relay.update_session(updated)
+    return updated

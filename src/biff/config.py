@@ -59,6 +59,7 @@ class ResolvedConfig:
     config: BiffConfig
     data_dir: Path
     repo_root: Path | None = None
+    root_identity: EthosIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,68 @@ class EthosIdentity:
     handle: str
     display_name: str
     kind: str  # "human", "agent", or ""
+
+
+@dataclass(frozen=True)
+class EthosRoster:
+    """Session roster from ``ethos session roster --json``."""
+
+    root: EthosIdentity | None
+    primary: EthosIdentity | None
+
+
+def _parse_roster_entry(data: dict[str, object]) -> EthosIdentity | None:
+    """Parse a single roster entry (root or primary) into an EthosIdentity."""
+    handle = data.get("handle", "")
+    if not isinstance(handle, str) or not handle:
+        return None
+    name = data.get("display_name", "")
+    display_name = name if isinstance(name, str) and name else handle
+    kind_val = data.get("kind", "")
+    kind = kind_val if isinstance(kind_val, str) else ""
+    return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
+
+
+def get_ethos_roster() -> EthosRoster | None:
+    """Resolve the session roster from ethos CLI.
+
+    Returns ``None`` when ethos is not installed, not configured,
+    returns malformed JSON, or times out.
+    """
+    try:
+        result = subprocess.run(
+            ["ethos", "session", "roster", "--json"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw = cast("dict[str, object]", data)
+    root_raw = raw.get("root")
+    primary_raw = raw.get("primary")
+    root = (
+        _parse_roster_entry(cast("dict[str, object]", root_raw))
+        if isinstance(root_raw, dict)
+        else None
+    )
+    primary = (
+        _parse_roster_entry(cast("dict[str, object]", primary_raw))
+        if isinstance(primary_raw, dict)
+        else None
+    )
+    return EthosRoster(root=root, primary=primary)
 
 
 def get_ethos_identity() -> EthosIdentity | None:
@@ -647,6 +710,18 @@ def load_config(
         else compute_data_dir(repo_root, prefix)
     )
 
+    # Resolve dual-session roster: if root != primary, store root_identity.
+    root_identity: EthosIdentity | None = None
+    if user_override is None:
+        roster = get_ethos_roster()
+        if (
+            roster is not None
+            and roster.root is not None
+            and roster.primary is not None
+            and roster.root.handle != roster.primary.handle
+        ):
+            root_identity = roster.root
+
     config = BiffConfig(
         user=user,
         display_name=display_name,
@@ -659,4 +734,9 @@ def load_config(
         orgs=cf.orgs,
         poll_interval=cf.poll_interval,
     )
-    return ResolvedConfig(config=config, data_dir=data_dir, repo_root=repo_root)
+    return ResolvedConfig(
+        config=config,
+        data_dir=data_dir,
+        repo_root=repo_root,
+        root_identity=root_identity,
+    )
