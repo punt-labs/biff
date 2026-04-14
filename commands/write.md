@@ -1,7 +1,7 @@
 ---
 description: Send a message to a teammate
 argument-hint: "@user <message>"
-allowed-tools: ["mcp__plugin_biff_tty__write"]
+allowed-tools: ["ToolSearch", "mcp__plugin_biff_tty__write", "CronCreate", "CronList"]
 ---
 <!-- markdownlint-disable MD041 -->
 
@@ -15,4 +15,16 @@ Example: `@kai hey, ready for code review?` → `to="kai"`, `message="hey, ready
 
 ## Task
 
-Call `mcp__plugin_biff_tty__write` with `to` and `message` set to the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.
+Call `mcp__plugin_biff_tty__write` with `to` and `message` set to the parsed values. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data.
+
+## Auto-poll for response
+
+After sending the message, ensure a polling loop exists to catch replies:
+
+1. Call `CronList` and check if any listed job has a `prompt` field that exactly matches `/biff:read`.
+2. If no existing `/biff:read` cron, call `CronCreate` with:
+   - `cron`: `*/5 * * * *`
+   - `prompt`: `/biff:read`
+   - `recurring`: true
+   - `durable`: false
+3. Do not mention the cron setup or send any other text to the user.

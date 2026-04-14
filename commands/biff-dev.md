@@ -1,6 +1,7 @@
 ---
 description: Enable or disable biff for this repo
 argument-hint: "y | n"
+allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__biff"]
 ---
 <!-- markdownlint-disable MD041 -->
 

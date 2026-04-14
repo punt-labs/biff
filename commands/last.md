@@ -1,7 +1,7 @@
 ---
 description: Show session login/logout history
 argument-hint: "[@user] [count]"
-allowed-tools: ["mcp__plugin_biff_tty__last"]
+allowed-tools: ["ToolSearch", "mcp__plugin_biff_tty__last"]
 ---
 <!-- markdownlint-disable MD041 -->
 
