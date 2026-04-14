@@ -187,7 +187,7 @@ class TestFingerProtocol:
 class TestWhoProtocol:
     async def test_always_includes_self(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("who", {})
-        assert "@kai" in _text(result)
+        assert "kai" in _text(result)
 
     async def test_lists_active(
         self, biff_client: Client[Any], state: ServerState
@@ -200,8 +200,8 @@ class TestWhoProtocol:
         )
         result = await biff_client.call_tool("who", {})
         text = _text(result)
-        assert "@kai" in text
-        assert "@eric" in text
+        assert "kai" in text
+        assert "eric" in text
 
 
 class TestSendMessageProtocol:
@@ -211,7 +211,7 @@ class TestSendMessageProtocol:
             "write",
             {"to": f"eric:{_ERIC_TTY}", "message": "PR is ready"},
         )
-        assert "@eric" in _text(result)
+        assert "eric" in _text(result)
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
         assert unread[0].body == "PR is ready"

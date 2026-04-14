@@ -65,13 +65,15 @@ class TestWallSenderTty:
         await kai.call("tty", name="main")
         await kai.call("wall", message="deploy freeze")
         result = await kai.call("wall")
-        assert "@kai (main)" in result
+        assert "kai (main)" in result
+        assert "@kai" not in result
 
     async def test_wall_with_auto_assigned_tty(self, kai: RecordingClient) -> None:
         """Wall output includes auto-assigned tty (server always auto-assigns)."""
         await kai.call("wall", message="no explicit tty")
         result = await kai.call("wall")
-        assert "@kai (tty1)" in result
+        assert "kai (tty1)" in result
+        assert "@kai" not in result
 
 
 class TestWallCrossUser:

@@ -243,14 +243,16 @@ class TestFormatReadFromTty:
         output = format_read(msgs)
         assert "FROM" in output
         assert "FROM_TTY" not in output
-        assert "@kai:tty1" in output
+        assert "kai:tty1" in output
+        assert "@kai" not in output
 
     def test_from_column_without_tty(self) -> None:
         msgs = [Message(from_user="kai", to_user="eric", body="hey", from_tty="")]
         output = format_read(msgs)
-        assert "@kai" in output
-        # Should not have a colon after @kai (no tty)
+        assert "kai" in output
+        assert "@kai" not in output
+        # Should not have a colon after kai (no tty)
         lines = output.strip().split("\n")
-        data_lines = [line for line in lines[1:] if "@kai" in line]
+        data_lines = [line for line in lines[1:] if "kai" in line]
         assert data_lines
-        assert "@kai:" not in data_lines[0]
+        assert "kai:" not in data_lines[0]

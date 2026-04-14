@@ -281,7 +281,7 @@ async def refresh_wall(
         queue.remove_by_kind("wall")
     else:
         remaining = format_remaining(current.expires_at)
-        sender = f"@{current.from_user}"
+        sender = current.from_user
         if current.from_tty:
             sender += f" ({current.from_tty})"
         tool.description = (
@@ -415,7 +415,7 @@ async def _manage_talk_subscription(
                     else _talk_partner
                 )
                 if sender and sender == partner_user and body:
-                    display_text = f"@{sender}: {body}"
+                    display_text = f"{sender}: {body}"
                     set_talk_message(display_text)
                     # Add to display queue — coalesce per sender so rapid
                     # messages replace the previous one instead of growing

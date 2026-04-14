@@ -30,22 +30,18 @@ def _format_command(entry: TranscriptEntry) -> str:
     """Format a transcript entry as a terminal-style command."""
     tool = entry.tool
     args = entry.arguments
-    prefix = f"@{entry.user} " if entry.user else ""
+    prefix = f"{entry.user} " if entry.user else ""
 
     # Map tool names to their slash-command syntax
     if tool == "plan" and "message" in args:
         return f'{prefix}> /plan "{args["message"]}"'
     if tool == "finger" and "user" in args:
-        user = args["user"]
-        at_user = user if str(user).startswith("@") else f"@{user}"
-        return f"{prefix}> /finger {at_user}"
+        return f"{prefix}> /finger {args['user']}"
     if tool == "mesg" and "enabled" in args:
         state = "on" if args["enabled"] else "off"
         return f"{prefix}> /mesg {state}"
     if tool == "write" and "to" in args and "message" in args:
-        to = args["to"]
-        at_to = to if str(to).startswith("@") else f"@{to}"
-        return f'{prefix}> /write {at_to} "{args["message"]}"'
+        return f'{prefix}> /write {args["to"]} "{args["message"]}"'
     if tool == "read_messages":
         return f"{prefix}> /read"
     if tool == "who":

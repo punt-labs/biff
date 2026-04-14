@@ -474,16 +474,16 @@ class TestDisplaySegment:
         assert _display_segment((_item("", "wall"),)) == ""
 
     def test_wall_bold_red(self) -> None:
-        result = _display_segment((_item("@eric: release freeze", "wall"),))
+        result = _display_segment((_item("eric: release freeze", "wall"),))
         assert result.startswith("▶")
-        assert "@eric: release freeze" in result
+        assert "eric: release freeze" in result
         assert "\033[1;31m" in result
         assert "\033[0m" in result
 
     def test_talk_bold_yellow(self) -> None:
-        result = _display_segment((_item("@kai: check PR #42", "talk"),))
+        result = _display_segment((_item("kai: check PR #42", "talk"),))
         assert result.startswith("▶")
-        assert "@kai: check PR #42" in result
+        assert "kai: check PR #42" in result
         assert "\033[1;33m" in result
         assert "\033[0m" in result
 
@@ -492,12 +492,12 @@ class TestDisplaySegment:
         assert "\033[1;33m" in result
 
     def test_sanitizes_ansi(self) -> None:
-        result = _display_segment((_item("@kai: \033[31mred\033[0m text", "talk"),))
+        result = _display_segment((_item("kai: \033[31mred\033[0m text", "talk"),))
         assert "\033[31m" not in result
         assert "red text" in result
 
     def test_sanitizes_control_chars(self) -> None:
-        result = _display_segment((_item("@kai: hello\x00world", "talk"),))
+        result = _display_segment((_item("kai: hello\x00world", "talk"),))
         assert "\x00" not in result
         assert "helloworld" in result
 
@@ -597,8 +597,8 @@ class TestReadSessionUnread:
                     "count": 0,
                     "tty_name": "tty1",
                     "display_items": [
-                        {"kind": "talk", "text": "@eric: hello"},
-                        {"kind": "wall", "text": "@admin: freeze"},
+                        {"kind": "talk", "text": "eric: hello"},
+                        {"kind": "wall", "text": "admin: freeze"},
                     ],
                 }
             )
@@ -608,11 +608,11 @@ class TestReadSessionUnread:
         assert len(result.display_items) == 2
         assert result.display_items[0] == DisplayItemView(
             kind="talk",
-            text="@eric: hello",
+            text="eric: hello",
         )
         assert result.display_items[1] == DisplayItemView(
             kind="wall",
-            text="@admin: freeze",
+            text="admin: freeze",
         )
 
     def test_missing_display_items_defaults_empty(self, tmp_path: Path) -> None:
@@ -807,7 +807,7 @@ class TestRunStatusline:
             "kai",
             0,
             "tty1",
-            display_items=[{"kind": "wall", "text": "@eric: release freeze"}],
+            display_items=[{"kind": "wall", "text": "eric: release freeze"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
@@ -816,7 +816,7 @@ class TestRunStatusline:
         assert len(lines) == 2
         assert "kai:tty1(0)" in lines[0]
         assert lines[1].startswith("▶")
-        assert "@eric: release freeze" in lines[1]
+        assert "eric: release freeze" in lines[1]
         assert "\033[1;31m" in lines[1]  # wall = bold red
 
     def test_no_wall_idle_line_2(self, _mock_key: object, tmp_path: Path) -> None:
@@ -839,7 +839,7 @@ class TestRunStatusline:
             "kai",
             0,
             "tty1",
-            display_items=[{"kind": "talk", "text": "@eric: check PR #42"}],
+            display_items=[{"kind": "talk", "text": "eric: check PR #42"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
@@ -848,7 +848,7 @@ class TestRunStatusline:
         assert len(lines) == 2
         assert "kai:tty1(0)" in lines[0]
         assert lines[1].startswith("▶")
-        assert "@eric: check PR #42" in lines[1]
+        assert "eric: check PR #42" in lines[1]
         # Bold yellow, not bold red (that's wall)
         assert "\033[1;33m" in lines[1]
 
@@ -864,14 +864,14 @@ class TestRunStatusline:
             "kai",
             0,
             "tty1",
-            display_items=[{"kind": "wall", "text": "@admin: release freeze"}],
+            display_items=[{"kind": "wall", "text": "admin: release freeze"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
         assert len(lines) == 2
-        assert "@admin: release freeze" in lines[1]
+        assert "admin: release freeze" in lines[1]
         assert "\033[1;31m" in lines[1]  # wall = bold red
 
     def test_empty_original_falls_back_to_native(

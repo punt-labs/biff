@@ -195,7 +195,8 @@ class TestFormatTable:
             timestamp=now,
         )
         result = _format_last([(login, logout)], set())
-        assert "@kai" in result
+        assert "kai" in result
+        assert "@kai" not in result
         assert "tty1" in result
         assert "dev-box" in result
         assert "3:22" in result

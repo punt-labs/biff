@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,10 +11,13 @@ import pytest
 from biff._stdlib import _parse_repo_slug
 from biff.config import (
     DEMO_RELAY_URL,
+    EthosIdentity,
     GitHubIdentity,
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
+    get_ethos_identity,
+    get_ethos_team,
     get_github_identity,
     get_os_user,
     get_repo_slug,
@@ -317,25 +321,30 @@ class TestLoadConfig:
         return tmp_path
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_uses_remote_slug(
-        self, _mock_gh: object, _mock_slug: object, tmp_path: Path
+        self, _mock_gh: object, _mock_ethos: object, _mock_slug: object, tmp_path: Path
     ) -> None:
         self._setup_repo(tmp_path)
         resolved = load_config(start=tmp_path)
         assert resolved.config.repo_name == "punt-labs__biff"
 
     @patch("biff.config.get_repo_slug", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_falls_back_to_dirname(
-        self, _mock_gh: object, _mock_slug: object, tmp_path: Path
+        self, _mock_gh: object, _mock_ethos: object, _mock_slug: object, tmp_path: Path
     ) -> None:
         repo = self._setup_repo(tmp_path)
         resolved = load_config(start=repo)
         assert resolved.config.repo_name == sanitize_repo_name(repo.name)
 
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_full_discovery(self, _mock: object, tmp_path: Path) -> None:
+    def test_full_discovery(
+        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
+    ) -> None:
         repo = self._setup_repo(tmp_path)
         resolved = load_config(start=repo)
         assert resolved.config.user == "kai"
@@ -345,14 +354,20 @@ class TestLoadConfig:
         assert resolved.data_dir == Path("/tmp/biff") / repo.name
         assert resolved.repo_root == repo
 
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_custom_prefix(self, _mock: object, tmp_path: Path) -> None:
+    def test_custom_prefix(
+        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
+    ) -> None:
         repo = self._setup_repo(tmp_path)
         resolved = load_config(start=repo, prefix=Path("/var/spool"))
         assert resolved.data_dir == Path("/var/spool/biff") / repo.name
 
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_data_dir_override(self, _mock: object, tmp_path: Path) -> None:
+    def test_data_dir_override(
+        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
+    ) -> None:
         repo = self._setup_repo(tmp_path)
         custom = tmp_path / "custom"
         resolved = load_config(start=repo, data_dir_override=custom)
@@ -376,8 +391,9 @@ class TestLoadConfig:
 
     @patch("biff.config.get_os_user", return_value="jfreeman")
     @patch("biff.config.get_github_identity", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=None)
     def test_falls_back_to_os_user(
-        self, _mock_git: object, _mock_os: object, tmp_path: Path
+        self, _mock_ethos: object, _mock_git: object, _mock_os: object, tmp_path: Path
     ) -> None:
         self._setup_repo(tmp_path)
         resolved = load_config(start=tmp_path)
@@ -386,8 +402,9 @@ class TestLoadConfig:
 
     @patch("biff.config.get_os_user", return_value=None)
     @patch("biff.config.get_github_identity", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=None)
     def test_exits_when_all_user_sources_fail(
-        self, _mock_git: object, _mock_os: object, tmp_path: Path
+        self, _mock_ethos: object, _mock_git: object, _mock_os: object, tmp_path: Path
     ) -> None:
         self._setup_repo(tmp_path)
         with pytest.raises(SystemExit, match="No user configured"):
@@ -402,8 +419,16 @@ class TestLoadConfig:
         with pytest.raises(SystemExit, match="Not in a git repository"):
             load_config(start=tmp_path)
 
+    @patch("biff.config.get_ethos_team", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_zero_config_uses_demo_relay(self, _mock: object, tmp_path: Path) -> None:
+    def test_zero_config_uses_demo_relay(
+        self,
+        _mock_gh: object,
+        _mock_ethos: object,
+        _mock_team: object,
+        tmp_path: Path,
+    ) -> None:
         """Zero-config mode: no config.yaml -> demo relay."""
         (tmp_path / ".git").mkdir()
         resolved = load_config(start=tmp_path)
@@ -420,8 +445,12 @@ class TestLoadConfig:
         with pytest.raises(SystemExit, match="Not in a git repository"):
             load_config(start=tmp_path, data_dir_override=custom)
 
+    @patch("biff.config.get_ethos_team", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_relay_auth_flows_through(self, _mock: object, tmp_path: Path) -> None:
+    def test_relay_auth_flows_through(
+        self, _mock_gh: object, _mock_ethos: object, _mock_team: object, tmp_path: Path
+    ) -> None:
         (tmp_path / ".git").mkdir()
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
@@ -431,9 +460,11 @@ class TestLoadConfig:
         resolved = load_config(start=tmp_path)
         assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")
 
+    @patch("biff.config.get_ethos_team", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_url_override_clears_auth(
-        self, _mock: object, tmp_path: Path
+        self, _mock_gh: object, _mock_ethos: object, _mock_team: object, tmp_path: Path
     ) -> None:
         """Overriding relay URL must clear config auth to prevent credential leak."""
         (tmp_path / ".git").mkdir()
@@ -447,11 +478,153 @@ class TestLoadConfig:
         assert resolved.config.relay_url == "tls://other.example"
         assert resolved.config.relay_auth is None
 
+    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI_NO_NAME)
     def test_empty_display_name_when_github_has_none(
-        self, _mock: object, tmp_path: Path
+        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
     ) -> None:
         self._setup_repo(tmp_path)
         resolved = load_config(start=tmp_path)
         assert resolved.config.user == "kai"
         assert resolved.config.display_name == ""
+
+    @patch(
+        "biff.config.get_ethos_identity",
+        return_value=EthosIdentity(
+            handle="claude", display_name="Claude Agento", kind="agent"
+        ),
+    )
+    def test_ethos_identity_takes_precedence_over_github(
+        self, _mock_ethos: object, tmp_path: Path
+    ) -> None:
+        self._setup_repo(tmp_path)
+        resolved = load_config(start=tmp_path)
+        assert resolved.config.user == "claude"
+        assert resolved.config.display_name == "Claude Agento"
+        assert resolved.config.kind == "agent"
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.config.get_ethos_identity", return_value=None)
+    def test_ethos_fallback_to_github(
+        self, _mock_ethos: object, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        self._setup_repo(tmp_path)
+        resolved = load_config(start=tmp_path)
+        assert resolved.config.user == "kai"
+        assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=None)
+    @patch("biff.config.get_ethos_identity", return_value=None)
+    def test_ethos_absent_falls_through_to_os(
+        self, _mock_ethos: object, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        self._setup_repo(tmp_path)
+        resolved = load_config(start=tmp_path)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.kind == ""
+
+
+# -- get_ethos_identity --
+
+
+class TestGetEthosIdentity:
+    def test_success(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                '{"handle":"claude","name":"Claude Agento",'
+                '"kind":"agent","github":"claude-puntlabs"}'
+            )
+            result = get_ethos_identity()
+            assert result == EthosIdentity(
+                handle="claude",
+                display_name="Claude Agento",
+                kind="agent",
+            )
+
+    def test_not_installed(self) -> None:
+        with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
+            assert get_ethos_identity() is None
+
+    def test_exit_1(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            assert get_ethos_identity() is None
+
+    def test_timeout(self) -> None:
+        with patch(
+            "biff.config.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="ethos", timeout=2),
+        ):
+            assert get_ethos_identity() is None
+
+    def test_bad_json(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "not json"
+            assert get_ethos_identity() is None
+
+    def test_missing_handle(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = '{"name":"Claude","kind":"agent"}'
+            assert get_ethos_identity() is None
+
+    def test_empty_handle(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                '{"handle":"","name":"Claude","kind":"agent"}'
+            )
+            assert get_ethos_identity() is None
+
+    def test_empty_name_uses_handle(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                '{"handle":"claude","name":"","kind":"agent"}'
+            )
+            result = get_ethos_identity()
+            assert result is not None
+            assert result.display_name == "claude"
+
+
+# -- get_ethos_team --
+
+
+class TestGetEthosTeam:
+    def test_success(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                '[{"name":"eng","members":['
+                '{"identity":"claude","role":"coo"},'
+                '{"identity":"jmf","role":"founder"}'
+                "]}]"
+            )
+            result = get_ethos_team()
+            assert result == ("claude", "jmf")
+
+    def test_empty_array(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            assert get_ethos_team() is None
+
+    def test_not_installed(self) -> None:
+        with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
+            assert get_ethos_team() is None
+
+    def test_multi_team_member_union(self) -> None:
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                "["
+                '{"name":"eng","members":[{"identity":"claude"},{"identity":"jmf"}]},'
+                '{"name":"ops","members":[{"identity":"adb"},{"identity":"jmf"}]}'
+                "]"
+            )
+            result = get_ethos_team()
+            assert result == ("adb", "claude", "jmf")

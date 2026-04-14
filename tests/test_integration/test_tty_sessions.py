@@ -135,11 +135,11 @@ class TestSessionLogout:
                 await kai.call_tool("plan", {"message": "working"})
                 # Eric sees Kai
                 result = _text(await eric.call_tool("who", {}))
-                assert "@kai" in result
+                assert "kai" in result
 
             # Kai's server has exited — lifespan finally block ran
             result = _text(await eric.call_tool("who", {}))
-            assert "@kai" not in result
+            assert "kai" not in result
 
 
 class TestSentinelLogout:
@@ -159,7 +159,7 @@ class TestSentinelLogout:
             Client(FastMCPTransport(kai_mcp)) as kai,
         ):
             await kai.call_tool("plan", {"message": "working"})
-            assert "@kai" in _text(await eric.call_tool("who", {}))
+            assert "kai" in _text(await eric.call_tool("who", {}))
 
             # Simulate signal handler: write sentinel for kai's session
             from biff.relay import LocalRelay
@@ -172,8 +172,8 @@ class TestSentinelLogout:
 
             # Eric's /who should NOT show kai — sentinel was reaped
             result = _text(await eric.call_tool("who", {}))
-            assert "@kai" not in result
-            assert "@eric" in result
+            assert "kai" not in result
+            assert "eric" in result
 
 
 class TestMulticastDelivery:

@@ -24,7 +24,8 @@ class TestTtyNaming:
         await kai.call("tty", name="auth-work")
         result = await eric.call("who")
 
-        assert "@kai" in result
+        assert "kai" in result
+        assert "@kai" not in result
         assert "auth-work" in result
 
     @pytest.mark.transcript
@@ -77,7 +78,7 @@ class TestTtyAtomicReservation:
         # Verify /who shows the reserved name (not the raw hex tty).
         result_who = await kai.call("who")
         name = result.removeprefix("TTY: ")
-        assert f"@kai:{name}" in result_who
+        assert f"kai:{name}" in result_who
 
 
 class TestTtyAutoAssign:

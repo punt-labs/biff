@@ -41,7 +41,7 @@ class TestCrossUserVisibility:
 
         await kai.call("plan", message="refactoring the auth layer")
         result = await eric.call("who")
-        assert "@kai" in result
+        assert "kai" in result
 
         result = await eric.call("finger", user="kai")
         assert "refactoring" in result
@@ -97,8 +97,8 @@ class TestMultiUserPresence:
 
         # Both users see both names (plan not shown in /who)
         for result in (kai_sees, eric_sees):
-            assert "@kai" in result
-            assert "@eric" in result
+            assert "kai" in result
+            assert "eric" in result
 
     @pytest.mark.transcript
     async def test_finger_each_other(
@@ -137,8 +137,8 @@ class TestPresenceLifecycle:
 
         # eric checks who's around
         who_result = await eric.call("who")
-        assert "@kai" in who_result
-        assert "@eric" in who_result
+        assert "kai" in who_result
+        assert "eric" in who_result
 
         # kai goes heads-down
         await kai.call("mesg", enabled=False)
@@ -174,7 +174,7 @@ class TestCrossUserMessaging:
         await eric.call("plan", message="working")
 
         result = await kai.call("write", to="@eric", message="PR #42 is ready")
-        assert "@eric" in result
+        assert "eric" in result
 
         result = await eric.call("read_messages")
         assert "FROM" in result

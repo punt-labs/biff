@@ -15,8 +15,8 @@ class TestWrite:
         )
         result = await write(ctx, "@eric", "Hello!")
         assert not result.error
-        assert "Message sent to @eric" in result.text
-        assert result.json_data == {"status": "sent", "to": "@eric", "parts": 1}
+        assert "Message sent to eric" in result.text
+        assert result.json_data == {"status": "sent", "to": "eric", "parts": 1}
 
         # Verify message was delivered
         msgs = await relay.fetch_user_inbox("eric")
@@ -62,7 +62,7 @@ class TestWrite:
         )
         result = await write(ctx, "@eric:tty1", "targeted msg")
         assert not result.error
-        assert "@eric:tty1" in result.text
+        assert "eric:tty1" in result.text
 
     async def test_targeted_nonexistent_tty_error(self, ctx: CliContext) -> None:
         result = await write(ctx, "@eric:tty99", "hello")
@@ -93,7 +93,7 @@ class TestWrite:
         )
         result = await write(ctx, "@eric:dev", "resolved!")
         assert not result.error
-        assert "@eric:dev" in result.text
+        assert "eric:dev" in result.text
 
     async def test_bare_user_without_at(
         self, ctx: CliContext, relay: LocalRelay
@@ -107,12 +107,15 @@ class TestWrite:
         assert len(msgs) == 1
         assert msgs[0].body == "no prefix"
 
-    async def test_bare_nonexistent_user_without_at_returns_error(
-        self, ctx: CliContext
+    async def test_bare_user_without_at_delivers(
+        self, ctx: CliContext, relay: LocalRelay
     ) -> None:
+        # Bare string without @ now delivers like @user (no validation gate)
         result = await write(ctx, "nobody", "hello")
-        assert result.error
-        assert "not found" in result.text
+        assert not result.error
+        msgs = await relay.fetch_user_inbox("nobody")
+        assert len(msgs) == 1
+        assert msgs[0].body == "hello"
 
     async def test_broadcast_to_offline_user_succeeds(
         self, ctx: CliContext, relay: LocalRelay

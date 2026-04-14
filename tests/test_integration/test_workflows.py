@@ -29,7 +29,7 @@ class TestSoloWorkflow:
         assert "refactoring" in result
 
         result = await recorder.call("who")
-        assert "@kai" in result
+        assert "kai" in result
 
         result = await recorder.call("finger", user="kai")
         assert "refactoring the auth layer" in result
@@ -61,9 +61,9 @@ class TestTeamPresenceWorkflow:
 
         # Check who's online
         result = await recorder.call("who")
-        assert "@kai" in result
-        assert "@eric" in result
-        assert "@priya" in result
+        assert "kai" in result
+        assert "eric" in result
+        assert "priya" in result
 
         # Check on a specific teammate
         result = await recorder.call("finger", user="eric")

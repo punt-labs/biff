@@ -59,7 +59,7 @@ def format_talk_messages(messages: list[Message]) -> str:
     lines: list[str] = []
     for m in messages:
         ts = m.timestamp.strftime("%H:%M:%S")
-        lines.append(f"[{ts}] @{m.from_user}: {m.body}")
+        lines.append(f"[{ts}] {m.from_user}: {m.body}")
     return "\n".join(lines)
 
 
@@ -181,7 +181,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         all_sessions = await relay.get_sessions_for_repos(state.visible_repos)
         sessions = [s for s in all_sessions if s.user == user]
         if not sessions:
-            return f"@{user} is not online."
+            return f"{user} is not online."
 
         relay_key, display_target, target_repo = _resolve_talk_target(
             user, tty, all_sessions, sender_repo=state.config.repo_name
@@ -205,7 +205,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             )
 
         return (
-            f"Talk session started with @{display_target}. "
+            f"Talk session started with {display_target}. "
             f"Replies appear on the status bar. Use /write to reply."
         )
 
@@ -245,4 +245,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "No active talk session."
 
         set_talk_partner(None)
-        return f"Talk session with @{partner} ended."
+        return f"Talk session with {partner} ended."

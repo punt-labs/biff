@@ -27,6 +27,7 @@ async def get_or_create_session(state: ServerState) -> UserSession:
             hostname=state.hostname,
             pwd=state.pwd,
             display_name=state.config.display_name,
+            kind=state.config.kind,
             repo=state.config.repo_name,
         )
         await state.relay.update_session(session)
@@ -36,6 +37,8 @@ async def get_or_create_session(state: ServerState) -> UserSession:
         updates: dict[str, object] = {}
         if not session.display_name and state.config.display_name:
             updates["display_name"] = state.config.display_name
+        if not session.kind and state.config.kind:
+            updates["kind"] = state.config.kind
         if not session.repo:
             updates["repo"] = state.config.repo_name
         if updates:

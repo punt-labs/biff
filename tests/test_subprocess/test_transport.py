@@ -68,7 +68,7 @@ class TestToolCallOverStdio:
     async def test_who_returns_text(self, biff_client: Client[Any]) -> None:
         await biff_client.call_tool("plan", {"message": "online"})
         result = await biff_client.call_tool("who", {})
-        assert "@kai" in _text(result)
+        assert "kai" in _text(result)
 
     async def test_finger_unknown_user(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("finger", {"user": "nobody"})
@@ -84,7 +84,7 @@ class TestToolCallOverStdio:
         result = await biff_client.call_tool(
             "write", {"to": "eric", "message": "hello over stdio"}
         )
-        assert "@eric" in _text(result)
+        assert "eric" in _text(result)
 
     async def test_check_messages_empty(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("read_messages", {})
@@ -104,7 +104,7 @@ class TestCrossProcessState:
         await kai_client.call_tool("plan", {"message": "cross-process test"})
         result = await eric_client.call_tool("who", {})
         text = _text(result)
-        assert "@kai" in text
+        assert "kai" in text
         assert "cross-process test" in text
 
     async def test_both_visible_in_who(
@@ -118,8 +118,8 @@ class TestCrossProcessState:
 
         result = await kai_client.call_tool("who", {})
         text = _text(result)
-        assert "@kai" in text
-        assert "@eric" in text
+        assert "kai" in text
+        assert "eric" in text
 
     async def test_message_across_processes(
         self,

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Ethos identity resolution** — biff resolves identity from `ethos whoami --json` when available (handle, display name, kind). Falls back silently to `gh api user` then OS username. Net startup improvement: ~10ms local binary vs ~200ms GitHub API.
+- **Ethos team resolution** — `ethos team for-repo --json` enriches team roster when no explicit YAML roster exists. Falls back to zero-config org discovery.
+- **Kind tags in presence** — `/who` shows `[A]` in the K column for agents. `/finger` shows `[kind]` in login header. Powered by the `kind` field from ethos identity.
+
+### Changed
+
+- **`@` prefix removed from display output** — `/who`, `/finger`, `/read`, `/last`, `/wall` output no longer prefixes usernames with `@`. The `@` was triggering Claude REPL mention behavior. `/write` input still accepts `@user` for backwards compatibility.
+
 ## [1.6.7] - 2026-04-14
 
 ## [1.6.6] - 2026-04-11

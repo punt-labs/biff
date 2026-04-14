@@ -103,8 +103,8 @@ class TestCrossRepoPresence:
         await eric_vox.call("plan", message="working on vox")
 
         result = await kai_biff.call("who")
-        assert "@kai" in result
-        assert "@eric" in result
+        assert "kai" in result
+        assert "eric" in result
 
     async def test_who_hides_non_peer_sessions(
         self,
@@ -118,9 +118,9 @@ class TestCrossRepoPresence:
         await priya_quarry.call("plan", message="quarry work")
 
         result = await kai_biff.call("who")
-        assert "@kai" in result
-        assert "@eric" in result
-        assert "@priya" not in result
+        assert "kai" in result
+        assert "eric" in result
+        assert "priya" not in result
 
     async def test_finger_cross_repo(
         self, kai_biff: RecordingClient, eric_vox: RecordingClient
@@ -157,7 +157,7 @@ class TestCrossRepoMessaging:
 
         # Get eric's tty_name for targeted delivery
         who_result = await kai_biff.call("who")
-        assert "@eric" in who_result
+        assert "eric" in who_result
 
         # Write to eric's session (targeted by tty)
         result = await kai_biff.call(
@@ -197,8 +197,8 @@ class TestCrossRepoTtyNames:
 
         # Both sessions should be visible and both can be tty1
         result = await kai_biff.call("who")
-        assert "@kai" in result
-        assert "@eric" in result
+        assert "kai" in result
+        assert "eric" in result
 
 
 class TestCrossRepoWall:
