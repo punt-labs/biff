@@ -662,7 +662,9 @@ async def _active_lifespan(
     await _close_orphaned_logins(state, sessions)
 
     shutdown = asyncio.Event()
-    poller = asyncio.create_task(poll_inbox(mcp, state, shutdown=shutdown))
+    poller = asyncio.create_task(
+        poll_inbox(mcp, state, shutdown=shutdown, interval=state.config.poll_interval)
+    )
     reaper = asyncio.create_task(_reap_loop(state, shutdown))
     heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
     watcher = asyncio.create_task(_kv_watcher_loop(state, shutdown))

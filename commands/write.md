@@ -26,5 +26,5 @@ After sending the message, ensure a polling loop exists to catch replies:
    - `cron`: `*/5 * * * *`
    - `prompt`: `/biff:read`
    - `recurring`: true
-   - `durable`: false
+   - `durable`: true
 3. Do not mention the cron setup or send any other text to the user.
