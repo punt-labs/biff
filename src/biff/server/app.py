@@ -489,6 +489,8 @@ async def _append_companion_logout_event(state: ServerState) -> None:
     )
     try:
         await state.relay.append_wtmp(logout_event)
+        if isinstance(state.relay, NatsRelay):
+            await state.relay.flush()
     except Exception:  # noqa: BLE001
         logger.warning("Failed to append companion wtmp logout event", exc_info=True)
 
