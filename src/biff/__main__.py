@@ -51,8 +51,8 @@ from biff.config import (
 )
 from biff.hook import hook_app
 from biff.server.app import create_server
-from biff.server.state import create_state
-from biff.tty import is_notification_for_session
+from biff.server.state import CompanionSession, create_state
+from biff.tty import generate_tty, is_notification_for_session
 
 # ---------------------------------------------------------------------------
 # Global flags
@@ -1020,12 +1020,25 @@ def _create_mcp_server(
         prefix=prefix,
     )
     dormant = not is_enabled(resolved.repo_root)
+
+    # Dual-session: create companion for the human when ethos roster
+    # shows two distinct identities (biff-plqr, DES-039).
+    companion: CompanionSession | None = None
+    if resolved.root_identity is not None:
+        companion = CompanionSession(
+            user=resolved.root_identity.handle,
+            display_name=resolved.root_identity.display_name,
+            kind=resolved.root_identity.kind,
+            tty=generate_tty(),
+        )
+
     state = create_state(
         resolved.config,
         resolved.data_dir,
         unread_path=UNREAD_DIR / f"{find_session_key()}.json",
         dormant=dormant,
         repo_root=resolved.repo_root,
+        companion=companion,
     )
     return create_server(state)
 

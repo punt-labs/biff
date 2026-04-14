@@ -712,6 +712,11 @@ async def _active_lifespan(
                 state.relay.write_remove_sentinel(state.session_key)
             with suppress(OSError, ValueError):
                 state.relay.delete_session_sync(state.session_key)
+            if state.companion:
+                with suppress(OSError):
+                    state.relay.write_remove_sentinel(state.companion.session_key)
+                with suppress(OSError, ValueError):
+                    state.relay.delete_session_sync(state.companion.session_key)
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)
