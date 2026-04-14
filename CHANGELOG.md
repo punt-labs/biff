@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-14
+
 ### Added
 
 - **Ethos identity resolution** — biff resolves identity from `ethos whoami --json` when available (handle, display name, kind). Falls back silently to `gh api user` then OS username. Net startup improvement: ~10ms local binary vs ~200ms GitHub API.
