@@ -39,6 +39,7 @@ class TestFormatWho:
         result = format_who([])
         # Header-only table — no data rows, but no crash
         assert "NAME" in result
+        assert "@" not in result
 
     def test_plan_flag_column(self):
         with_plan = UserSession(

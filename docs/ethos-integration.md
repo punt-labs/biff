@@ -273,27 +273,28 @@ Current:
 
 ```text
 NAME         REPO              IDLE  S  P  HOST
-@claude:tty1 punt-labs/biff    0s    +  +  macbook
-@jmf:tty2    punt-labs/biff    3m    +  +  macbook
+claude:tty1  punt-labs/biff    0s    +  +  macbook
+jmf:tty2     punt-labs/biff    3m    +  +  macbook
 ```
 
 With ethos:
 
 ```text
-NAME              REPO              IDLE  S  P  HOST
-@claude:tty1 [A]  punt-labs/biff    0s    +  +  macbook
-@jmf:tty2         punt-labs/biff    3m    +  +  macbook
+NAME         K    REPO              IDLE  S  P  HOST
+claude:tty1  [A]  punt-labs/biff    0s    +  +  macbook
+jmf:tty2          punt-labs/biff    3m    +  +  macbook
 ```
 
-The `[A]` tag appears after the NAME column when `kind == "agent"`.
+The `[A]` tag appears in the K column when `kind == "agent"`.
 Humans show no tag (they are the default). Unknown kind shows no tag.
 
-Implementation: modify `_format_who_name()` in `formatting.py`:
+Implementation: `_format_who_kind()` in `formatting.py`:
 
 ```python
-def _format_who_name(s: UserSession) -> str:
-    tty = s.tty_name or (s.tty[:8] if s.tty else "")
-    base = f"@{s.user}:{tty}" if tty else f"@{s.user}"
+def _format_who_kind(s: UserSession) -> str:
+    if s.kind == "agent":
+        return "[A]"
+    return ""
     if s.kind == "agent":
         return f"{base} [A]"
     return base
