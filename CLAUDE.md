@@ -91,15 +91,7 @@ Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 ### Push Policy
 
-**All code changes go through a PR** — even small cleanups, script deletions, and one-line fixes. Branch protection requires CI checks and review; bypassing it risks broken main.
-
-**Exceptions (direct push to main allowed):**
-
-- `README.md` edits (but run `npx markdownlint-cli2 README.md` first)
-- `bd sync` commits (beads bookkeeping, auto-generated)
-- Release version bump commits from `/punt:release` (the release workflow is its own gate)
-
-When in doubt, use a branch.
+**All changes go through a PR** — no exceptions. Branch protection requires CI checks and review. Zero direct pushes to main, including README edits, beads sync, and release bumps. Every change gets a PR.
 
 **After creating a PR**, watch CI and review bots without blocking your main shell — do not stop waiting:
 
