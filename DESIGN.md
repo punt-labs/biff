@@ -3986,3 +3986,152 @@ The git remote is the correct source.
 The trust boundary is unchanged by this change — the bundled creds
 already share the demo account. Auth hardens the relay for external
 users; it is not a prerequisite for removing client-side config.
+
+## DES-038: Three-Layer Message Delivery Architecture
+
+**Date:** 2026-04-14
+**Status:** SETTLED
+**Topic:** How incoming biff messages reach the model and get processed
+**Related:** DES-004 (description mutation), DES-020 (tools/list_changed),
+DES-036 (two-layer polling), biff-m1i9, biff-5esx (Channels),
+biff-c3ap (persistence parity with beadle DES-015)
+**Supersedes:** DES-036 (which described two layers; this documents the
+full three-layer architecture as shipped)
+
+### The Problem
+
+An MCP server can detect events autonomously (new messages, presence
+changes). But detection alone does not cause Claude to act.
+`tools/list_changed` is a metadata signal — it tells Claude Code that
+tool descriptions changed. Claude re-fetches descriptions and sees
+"2 unread" but has no prompt trigger to call `read_messages`.
+
+Three separate mechanisms cooperate to close this gap. Each has
+different properties: frequency, persistence, and whether it causes
+model action.
+
+### The Three Layers
+
+```text
+Layer 1: Detection (MCP server, continuous, autonomous)
+  _active_tick polls relay every 2s
+  → mutates read_messages description: "Check messages (2 unread)"
+  → fires tools/list_changed
+  → writes unread.json for status bar
+  Result: tool descriptions are current. Model CAN see the count.
+  Does NOT cause model action.
+
+Layer 2: Session Nudge (hooks, one-shot, per session start/resume)
+  SessionStart hook injects additionalContext:
+    "Check /read for unread messages."
+  Session-resume (after compact) injects same.
+  Result: model sees a direct suggestion to check messages.
+  Fires once per session boundary. Not recurring.
+
+Layer 3: Processing (CronCreate, recurring, session-scoped)
+  /biff:write auto-creates CronCreate:
+    cron: */5 * * * *
+    prompt: /biff:read
+    durable: false
+  Result: model is prompted to call read_messages every 5 minutes.
+  Only mechanism that reliably triggers repeated message processing.
+```
+
+### Layer 1: Detection — MCP Server Background Tick
+
+The `_active_tick` loop in `_descriptions.py` runs inside the MCP
+server process. Every 2 seconds (slowing to 30 seconds after 2
+minutes of inactivity), it:
+
+1. Calls `relay.get_unread_summary()` to check the NATS inbox.
+2. If the count changed, mutates the `read_messages` tool description
+   from `"Check your inbox for new messages."` to
+   `"Check messages (N unread). Marks all as read."`.
+3. Fires `notifications/tools/list_changed` so Claude Code re-reads
+   the tool list.
+4. Writes `unread.json` for the status bar to display.
+
+This layer is fully autonomous — no model cooperation needed. It runs
+inside the server process, not inside Claude Code. It does NOT cause
+the model to call any tool. It only updates metadata that the model
+*might* notice.
+
+The tick interval is currently hardcoded. biff-c3ap tracks making it
+configurable and persistent (matching beadle's `set_poll_interval`
+MCP tool pattern).
+
+### Layer 2: Session Nudge — Hook-Injected Suggestion
+
+Two hook entry points inject "Check /read for unread messages." into
+the model's `additionalContext`:
+
+- **SessionStart(startup)** — `handle_session_start()` in `hook.py`
+  (line 664). Fires once when the session begins.
+- **SessionStart(resume|compact)** — `handle_session_resume()` in
+  `hook.py` (line 691). Fires once after context compaction.
+
+This is a one-shot nudge, not a recurring prompt. The model sees the
+suggestion and typically acts on it. After that, the suggestion is
+consumed — it does not repeat until the next session boundary.
+
+This layer was originally a Stop hook (removed in PR #176 because
+Claude Code doesn't support `additionalContext` on Stop events and
+the blocking format caused agents to consume messages via POP before
+users saw them). The SessionStart/resume path is the surviving form.
+
+### Layer 3: Processing — CronCreate Polling Loop
+
+The `/biff:write` skill (PR #198) auto-creates a CronCreate job after
+sending a message:
+
+1. Checks `CronList` for an existing `/biff:read` cron.
+2. If none exists, creates one: `*/5 * * * *`, `durable: false`.
+3. The cron fires `/biff:read` as a real prompt every 5 minutes.
+4. Session-only — dies when Claude exits.
+
+This is the only mechanism that reliably triggers the model to call
+`read_messages` on a recurring schedule. Without it, messages sent
+to the agent accumulate unread (Layer 1 updates the description but
+the model doesn't act; Layer 2 fires once and is consumed).
+
+Users can also create this layer manually via `/loop 5m /biff:read`.
+
+### Why All Three Layers
+
+| Without Layer 1 | Without Layer 2 | Without Layer 3 |
+|-----------------|-----------------|-----------------|
+| Status bar shows stale count. Tool descriptions don't reflect new messages. Cron still fires but the model has no context about what's waiting. | Agent starts a session with unread messages and never checks them until the cron fires (up to 5 min delay). First-session experience is poor. | Messages accumulate unread. Description says "2 unread" but nothing prompts the model to act. SessionStart nudge fires once and is consumed — after that, silence. |
+
+All three layers are needed because each covers a different failure
+mode. Detection keeps metadata current. The nudge handles the cold
+start. The cron handles steady-state processing.
+
+### Persistence Gap (biff-c3ap)
+
+As shipped, Layers 1 and 3 are session-scoped:
+
+- Layer 1 tick interval is hardcoded (not configurable, not persisted).
+- Layer 3 CronCreate is `durable: false` (dies with session).
+
+Beadle's DES-015 demonstrates the persistent variant: poll interval
+saved to `email.json`, durable CronCreate persisted to
+`scheduled_tasks.json`. Both survive session restarts. biff-c3ap
+tracks bringing biff to parity.
+
+### Future — Channels (replaces Layer 3)
+
+Claude Code Channels (`notifications/claude/channel`) lets the MCP
+server push content directly into Claude's prompt queue:
+
+```text
+notifications/claude/channel {
+  content: "New biff message from @rmh. Check /read."
+}
+```
+
+When Channels ships as stable API:
+
+- Layer 1 fires a channel notification instead of `tools/list_changed`.
+- Layer 3 (CronCreate) becomes unnecessary — the push IS the prompt.
+- Layer 2 (session nudge) remains for cold-start orientation.
+- See biff-5esx for adoption plan.
