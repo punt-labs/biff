@@ -21,9 +21,9 @@ Call `mcp__plugin_biff-dev_tty__write` with `to` and `message` set to the parsed
 
 After sending the message, ensure a polling loop exists to catch replies:
 
-1. Call `CronList` to check if any job with `/biff:read` in its prompt already exists.
-2. If no existing `/biff:read` cron, call `CronCreate` with:
+1. Call `CronList` and check if any listed job has a `prompt` field that exactly matches `/biff-dev:read`.
+2. If no existing `/biff-dev:read` cron, call `CronCreate` with:
    - `cron`: `*/5 * * * *`
-   - `prompt`: `/biff:read`
+   - `prompt`: `/biff-dev:read`
    - `recurring`: true
 3. Do not mention the cron setup to the user.

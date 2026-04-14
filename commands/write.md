@@ -21,7 +21,7 @@ Call `mcp__plugin_biff_tty__write` with `to` and `message` set to the parsed val
 
 After sending the message, ensure a polling loop exists to catch replies:
 
-1. Call `CronList` to check if any job with `/biff:read` in its prompt already exists.
+1. Call `CronList` and check if any listed job has a `prompt` field that exactly matches `/biff:read`.
 2. If no existing `/biff:read` cron, call `CronCreate` with:
    - `cron`: `*/5 * * * *`
    - `prompt`: `/biff:read`

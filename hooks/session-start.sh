@@ -66,7 +66,7 @@ if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
   fi
 
   # Allow prod skill permissions
-  if ! jq -e '.permissions.allow // [] | map(select(contains("Skill(biff:"))) | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+  if ! jq -e '.permissions.allow // [] | map(select(. == "Skill(biff:*)")) | length > 0' "$SETTINGS" >/dev/null 2>&1; then
     TMPFILE="$(mktemp)"
     jq '.permissions.allow = (.permissions.allow // []) + [
       "Skill(biff:*)",
