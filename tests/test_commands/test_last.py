@@ -61,7 +61,7 @@ class TestLastWithEvents:
 
         result = await last(ctx, "", 25)
         assert not result.error
-        assert "@eric" in result.text
+        assert "eric" in result.text
         data = cast("list[dict[str, object]]", result.json_data)
         assert len(data) == 1
         assert data[0]["user"] == "eric"

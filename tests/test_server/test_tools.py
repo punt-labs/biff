@@ -196,7 +196,7 @@ class TestWhoTool:
     async def test_always_includes_self(self, state: ServerState) -> None:
         fn = await _get_tool_fn(state, "who")
         result = await fn()
-        assert "@kai" in result
+        assert "kai" in result
 
     async def test_lists_users(self, state: ServerState) -> None:
         await state.relay.update_session(
@@ -207,8 +207,8 @@ class TestWhoTool:
         )
         fn = await _get_tool_fn(state, "who")
         result = await fn()
-        assert "@kai" in result
-        assert "@eric" in result
+        assert "kai" in result
+        assert "eric" in result
 
     async def test_shows_idle_time(self, state: ServerState) -> None:
         old_time = datetime.now(UTC) - timedelta(hours=3)
@@ -234,8 +234,8 @@ class TestWhoTool:
         )
         fn = await _get_tool_fn(state, "who")
         result = await fn()
-        assert "@old" in result
-        assert "@recent" in result
+        assert "old" in result
+        assert "recent" in result
         assert "2d" in result
 
     async def test_sorted_by_idle_time(self, state: ServerState) -> None:
@@ -259,7 +259,7 @@ class TestWhoTool:
         fn = await _get_tool_fn(state, "who")
         result = await fn()
         # Most recently active first
-        assert result.index("@alice") < result.index("@zara")
+        assert result.index("alice") < result.index("zara")
 
     async def test_name_includes_tty(self, state: ServerState) -> None:
         await state.relay.update_session(
@@ -267,7 +267,7 @@ class TestWhoTool:
         )
         fn = await _get_tool_fn(state, "who")
         result = await fn()
-        assert f"@kai:{_KAI_TTY}" in result
+        assert f"kai:{_KAI_TTY}" in result
 
     async def test_shows_host_column(self, state: ServerState) -> None:
         await state.relay.update_session(
@@ -400,7 +400,7 @@ class TestSendMessageTool:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="hey, PR is ready")
-        assert "@eric" in result
+        assert "eric" in result
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
@@ -412,7 +412,7 @@ class TestSendMessageTool:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
-        assert "@eric" in result
+        assert "eric" in result
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
@@ -432,7 +432,7 @@ class TestSendMessageTool:
         )
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="urgent fix needed")
-        assert "@eric" in result
+        assert "eric" in result
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
@@ -458,18 +458,22 @@ class TestSendMessageTool:
         result = await fn(to="eric:fakeTty", message="hello")
         assert "Run /who to find their current address" in result
 
-    async def test_write_bare_nonexistent_user_returns_error(
+    async def test_write_bare_nonexistent_user_delivers(
         self, state: ServerState
     ) -> None:
+        # Bare user without @ now delivers like @user (no validation gate)
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="nobody", message="hello")
-        assert "not found" in result
+        assert "nobody" in result
+        await asyncio.sleep(0)  # let fire-and-forget delivery complete
+        unread = await state.relay.fetch_user_inbox("nobody")
+        assert len(unread) == 1
 
     async def test_write_bare_existing_user_succeeds(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
-        assert "@eric" in result
+        assert "eric" in result
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
@@ -478,7 +482,7 @@ class TestSendMessageTool:
         # @user with @ prefix allows offline delivery — no session needed
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="@offlineuser", message="offline msg")
-        assert "@offlineuser" in result
+        assert "offlineuser" in result
         assert "not found" not in result
         await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("offlineuser")

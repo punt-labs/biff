@@ -45,7 +45,7 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
             sessions = [s for s in all_sessions if s.user == bare_user]
             if not sessions:
                 blocks.append(f"Login: {bare_user}\nNever logged in.")
-                json_parts.append({"error": f"@{bare_user} never logged in."})
+                json_parts.append({"error": f"{bare_user} never logged in."})
                 has_error = True
             else:
                 blocks.append(format_finger_multi(sessions))

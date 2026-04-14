@@ -35,34 +35,19 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             user_exists = any(s.user == bare_user for s in all_sessions)
             if user_exists:
                 err = (
-                    f"No active session @{bare_user}:{tty}."
+                    f"No active session {bare_user}:{tty}."
                     f" Run /who to find their current address."
                 )
             else:
-                err = f"User @{bare_user} not found in visible repos."
+                err = f"User {bare_user} not found in visible repos."
             return CommandResult(
                 text=err,
                 json_data={"status": "error", "to": to, "error": err},
                 error=True,
             )
     else:
-        # @user is intentional broadcast (allows offline delivery).
-        # Bare string without @ is likely a typo — validate.
-        if not to.startswith("@"):
-            all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
-            user_exists = any(s.user == bare_user for s in all_sessions)
-            if not user_exists:
-                err = (
-                    f"User @{bare_user} not found in visible repos."
-                    " Run /who to see active sessions."
-                )
-                return CommandResult(
-                    text=err,
-                    json_data={"status": "error", "to": to, "error": err},
-                    error=True,
-                )
         relay_key = bare_user
-    display = f"@{bare_user}:{tty}" if tty else f"@{bare_user}"
+    display = f"{bare_user}:{tty}" if tty else bare_user
 
     chunks = chunk_message(message)
     try:

@@ -91,6 +91,10 @@ class UserSession(BaseModel):
     hostname: str = ""
     pwd: str = ""
     display_name: str = ""
+    kind: str = Field(
+        default="",
+        description="Identity kind: human, agent, or empty",
+    )
     plan: str = ""
     plan_source: Literal["manual", "auto"] = "manual"
     last_active: datetime = Field(default_factory=_utc_now)
@@ -151,6 +155,7 @@ class BiffConfig(BaseModel):
 
     user: str = Field(min_length=1)
     display_name: str = ""
+    kind: str = Field(default="", description="Identity kind: human, agent, or empty")
     repo_name: str = Field(min_length=1)
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None

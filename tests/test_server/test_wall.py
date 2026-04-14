@@ -25,7 +25,8 @@ class TestFormatWall:
             expires_at=now + timedelta(hours=1),
         )
         result = _format_wall(wall)
-        assert "@kai (main)" in result
+        assert "kai (main)" in result
+        assert "@kai" not in result
         assert "deploy freeze" in result
 
     def test_omits_tty_when_empty(self) -> None:
@@ -36,8 +37,8 @@ class TestFormatWall:
             expires_at=now + timedelta(hours=1),
         )
         result = _format_wall(wall)
-        assert "from @kai (" in result  # followed by remaining, not tty
-        assert "from @kai (main)" not in result
+        assert "from kai (" in result  # followed by remaining, not tty
+        assert "from kai (main)" not in result
 
     def test_backwards_compat_no_from_tty(self) -> None:
         """Wall posts deserialized from old format (no from_tty) show no parens."""
@@ -50,7 +51,7 @@ class TestFormatWall:
         wall = WallPost.model_validate_json(old_json)
         assert wall.from_tty == ""
         result = _format_wall(wall)
-        assert "from @eric (" in result  # followed by remaining, not tty
+        assert "from eric (" in result  # followed by remaining, not tty
 
 
 class TestWallPostModel:

@@ -43,7 +43,7 @@ class TestTalkInitiation:
 
         result = await kai.call("talk", to="@eric", message="hey, review my PR?")
         assert "Talk session started" in result
-        assert "@eric" in result
+        assert "eric" in result
 
     async def test_talk_with_opening_message_delivers(
         self, kai: RecordingClient, eric: RecordingClient
@@ -77,7 +77,7 @@ class TestTalkListen:
         # eric calls talk_listen — message is already waiting
         result = await eric.call("talk_listen", timeout=2)
         assert "are you there?" in result
-        assert "@kai" in result
+        assert "kai" in result
 
     async def test_listen_timeout_no_messages(
         self, kai: RecordingClient, eric: RecordingClient
@@ -107,7 +107,7 @@ class TestTalkListen:
         # eric should receive quickly (not wait the full 10s)
         result = await asyncio.wait_for(listen_task, timeout=5.0)
         assert "urgent: deploy broken" in result
-        assert "@kai" in result
+        assert "kai" in result
 
     async def test_listen_format_is_chat_style(
         self, kai: RecordingClient, eric: RecordingClient
@@ -247,7 +247,7 @@ class TestTalkTtyNameResolution:
                 "talk", to="@eric:dev-laptop", message="hey laptop session"
             )
             assert "Talk session started" in result
-            assert "@eric:dev-laptop" in result
+            assert "eric:dev-laptop" in result
 
             # eric_a (dev-laptop) should receive the message
             result_a = await eric_a.call("read_messages")

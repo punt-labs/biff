@@ -23,7 +23,7 @@ class TestFormatTalkMessages:
             timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
         )
         result = format_talk_messages([msg])
-        assert result == "[10:30:45] @kai: check PR #42"
+        assert result == "[10:30:45] kai: check PR #42"
 
     def test_multiple_messages(self) -> None:
         msgs = [
@@ -43,8 +43,8 @@ class TestFormatTalkMessages:
         result = format_talk_messages(msgs)
         lines = result.split("\n")
         assert len(lines) == 2
-        assert "@kai: first" in lines[0]
-        assert "@eric: second" in lines[1]
+        assert "kai: first" in lines[0]
+        assert "eric: second" in lines[1]
 
     def test_empty_list(self) -> None:
         assert format_talk_messages([]) == ""

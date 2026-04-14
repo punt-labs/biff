@@ -658,7 +658,7 @@ async def _handle_repl_talk(
         print(f"Error: {exc}")
         return
 
-    display = f"@{user_target}:{tty_target}" if tty_target else f"@{user_target}"
+    display = f"{user_target}:{tty_target}" if tty_target else user_target
 
     if not isinstance(ctx.relay, NatsRelay):
         print("Talk requires a NATS relay.")
@@ -1401,7 +1401,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
     from biff.tty import parse_address
 
     user_target, tty_target = parse_address(to)
-    display = f"@{user_target}:{tty_target}" if tty_target else f"@{user_target}"
+    display = f"{user_target}:{tty_target}" if tty_target else user_target
 
     try:
         async with cli_session(interactive=True, user_override=_user_override) as ctx:
@@ -1412,7 +1412,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
             all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
             sessions = [s for s in all_sessions if s.user == user_target]
             if not sessions:
-                print(f"@{user_target} is not online.")
+                print(f"{user_target} is not online.")
                 return
 
             # Resolve :tty suffix via the already-fetched sessions list.

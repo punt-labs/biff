@@ -114,7 +114,10 @@ WHO_SPECS: list[ColumnSpec] = [
 def _format_who_name(s: UserSession) -> str:
     """Render a session as a copy-pasteable address for ``/write``."""
     tty = s.tty_name or (s.tty[:8] if s.tty else "")
-    return f"@{s.user}:{tty}" if tty else f"@{s.user}"
+    base = f"{s.user}:{tty}" if tty else s.user
+    if s.kind == "agent":
+        return f"{base} [A]"
+    return base
 
 
 def format_who(sessions: list[UserSession]) -> str:
@@ -162,7 +165,10 @@ def _format_finger_idle(dt: datetime) -> str:
 
 def format_user_header(session: UserSession) -> str:
     """Format the user-level header (shown once per user)."""
-    left = f"Login: {session.user}"
+    login_label = session.user
+    if session.kind:
+        login_label = f"{session.user} [{session.kind}]"
+    left = f"Login: {login_label}"
     mesg = "on" if session.biff_enabled else "off"
     if session.display_name:
         right = f"Name: {session.display_name}"
@@ -271,7 +277,7 @@ def format_last(
     rows: list[list[str]] = []
     for login, logout in pairs:
         tty = login.tty_name or (login.tty[:8] if login.tty else "")
-        name = f"@{login.user}:{tty}" if tty else f"@{login.user}"
+        name = f"{login.user}:{tty}" if tty else login.user
         repo = display_repo_name(login.repo) or "-"
         host = login.hostname or "-"
         login_str = _format_timestamp(login.timestamp)
@@ -308,7 +314,7 @@ def sanitize_wall_message(message: str) -> str:
 def format_wall(wall: WallPost) -> str:
     """Format a wall post for display."""
     remaining = format_remaining(wall.expires_at)
-    sender = f"@{wall.from_user}"
+    sender = wall.from_user
     if wall.from_tty:
         sender += f" ({wall.from_tty})"
     return f"\u25b6  WALL from {sender} ({remaining} remaining)\n   {wall.text}"
@@ -334,6 +340,6 @@ def format_read(messages: list[Message]) -> str:
     rows: list[list[str]] = []
     for m in messages:
         ts = m.timestamp.strftime("%a %b %d %H:%M")
-        sender = f"@{m.from_user}:{m.from_tty}" if m.from_tty else f"@{m.from_user}"
+        sender = f"{m.from_user}:{m.from_tty}" if m.from_tty else m.from_user
         rows.append([sender, ts, m.body])
     return format_table(READ_SPECS, rows)

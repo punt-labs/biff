@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import getpass
 import importlib.resources
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +97,102 @@ def get_github_identity() -> GitHubIdentity | None:
         return GitHubIdentity(login=login, display_name=display_name)
     except FileNotFoundError:
         return None
+
+
+@dataclass(frozen=True)
+class EthosIdentity:
+    """Identity resolved from ``ethos whoami --json``."""
+
+    handle: str
+    display_name: str
+    kind: str  # "human", "agent", or ""
+
+
+def get_ethos_identity() -> EthosIdentity | None:
+    """Resolve identity from the ethos CLI.
+
+    Returns ``None`` when ethos is not installed, not configured,
+    returns malformed JSON, or times out.
+    """
+    try:
+        result = subprocess.run(
+            ["ethos", "whoami", "--json"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw = cast("dict[str, object]", data)
+    handle = raw.get("handle", "")
+    if not isinstance(handle, str) or not handle:
+        return None
+    name = raw.get("name", "")
+    display_name = name if isinstance(name, str) and name else handle
+    kind_val = raw.get("kind", "")
+    kind = kind_val if isinstance(kind_val, str) else ""
+    return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
+
+
+def _extract_team_members(teams: list[object]) -> set[str]:
+    """Extract the union of member identities from ethos team JSON."""
+    members: set[str] = set()
+    for team in teams:
+        if not isinstance(team, dict):
+            continue
+        raw_team = cast("dict[str, object]", team)
+        raw_members = raw_team.get("members", [])
+        if not isinstance(raw_members, list):
+            continue
+        for member in cast("list[object]", raw_members):
+            if isinstance(member, dict):
+                identity = cast("dict[str, object]", member).get("identity")
+                if isinstance(identity, str):
+                    members.add(identity)
+    return members
+
+
+def get_ethos_team() -> tuple[str, ...] | None:
+    """Resolve team members from the ethos CLI.
+
+    Returns a sorted tuple of identity handles, or ``None`` on any
+    failure or when the repo is not in any team.
+    """
+    try:
+        result = subprocess.run(
+            ["ethos", "team", "for-repo", "--json"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        teams = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(teams, list) or not teams:
+        return None
+    all_members = _extract_team_members(cast("list[object]", teams))
+    if not all_members:
+        return None
+    return tuple(sorted(all_members))
 
 
 def get_os_user() -> str | None:
@@ -378,6 +475,22 @@ def _has_orgs_key(raw: dict[str, object]) -> bool:
     return isinstance(peers, dict) and "orgs" in peers
 
 
+def _enrich_team(cf: _ConfigFields) -> _ConfigFields:
+    """Enrich team from ethos when no explicit team is configured."""
+    if cf.team:
+        return cf
+    ethos_team = get_ethos_team()
+    if ethos_team is None:
+        return cf
+    return _ConfigFields(
+        team=ethos_team,
+        relay_url=cf.relay_url,
+        relay_auth=cf.relay_auth,
+        peers=cf.peers,
+        orgs=cf.orgs,
+    )
+
+
 def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     """Resolve config fields from YAML or zero-config.
 
@@ -410,7 +523,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
                 orgs=(owner,) if owner else (),
                 poll_interval=cf.poll_interval,
             )
-        return cf
+        return _enrich_team(cf)
 
     # Zero-config: derive org from remote, use demo relay.
     # Still read config.local.yaml — user may have set relay via
@@ -431,21 +544,25 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         else:
             owner = get_repo_owner(repo_root)
             orgs = (owner,) if owner else ()
-        return _ConfigFields(
-            relay_url=relay_url,
-            relay_auth=relay_auth,
-            orgs=orgs,
-            team=cf.team,
-            peers=cf.peers,
-            poll_interval=cf.poll_interval,
+        return _enrich_team(
+            _ConfigFields(
+                relay_url=relay_url,
+                relay_auth=relay_auth,
+                orgs=orgs,
+                team=cf.team,
+                peers=cf.peers,
+                poll_interval=cf.poll_interval,
+            )
         )
 
     owner = get_repo_owner(repo_root)
     orgs = (owner,) if owner else ()
-    return _ConfigFields(
-        relay_url=DEMO_RELAY_URL,
-        relay_auth=RelayAuth(user_credentials=str(demo_creds_path())),
-        orgs=orgs,
+    return _enrich_team(
+        _ConfigFields(
+            relay_url=DEMO_RELAY_URL,
+            relay_auth=RelayAuth(user_credentials=str(demo_creds_path())),
+            orgs=orgs,
+        )
     )
 
 
@@ -496,17 +613,24 @@ def load_config(
         relay_url = override or None
         relay_auth = None
 
-    # Resolve user: CLI override > GitHub identity > OS username
+    # Resolve user: CLI override > ethos > GitHub > OS username
     display_name = ""
+    kind = ""
     if user_override is not None:
         user: str | None = user_override
     else:
-        identity = get_github_identity()
-        if identity is not None:
-            user = identity.login
-            display_name = identity.display_name
+        ethos = get_ethos_identity()
+        if ethos is not None:
+            user = ethos.handle
+            display_name = ethos.display_name
+            kind = ethos.kind
         else:
-            user = get_os_user()
+            identity = get_github_identity()
+            if identity is not None:
+                user = identity.login
+                display_name = identity.display_name
+            else:
+                user = get_os_user()
     if user is None:
         msg = (
             "No user configured. Install the gh CLI and authenticate,"
@@ -525,6 +649,7 @@ def load_config(
     config = BiffConfig(
         user=user,
         display_name=display_name,
+        kind=kind,
         repo_name=repo_name,
         relay_url=relay_url,
         relay_auth=relay_auth,

@@ -167,7 +167,7 @@ class TestLastTool:
         # Allow a moment for the login event to be written
         await asyncio.sleep(0.5)
         result = await kai.call("last")
-        assert "@kai" in result
+        assert "kai" in result
 
     async def test_last_shows_both_users(
         self, kai: RecordingClient, eric: RecordingClient
@@ -175,8 +175,8 @@ class TestLastTool:
         """Both users' login events appear in /last."""
         await asyncio.sleep(0.5)
         result = await kai.call("last")
-        assert "@kai" in result
-        assert "@eric" in result
+        assert "kai" in result
+        assert "eric" in result
 
     async def test_last_user_filter(
         self, kai: RecordingClient, eric: RecordingClient
@@ -184,11 +184,11 @@ class TestLastTool:
         """User filter restricts results to that user."""
         await asyncio.sleep(0.5)
         result = await kai.call("last", user="@kai")
-        assert "@kai" in result
+        assert "kai" in result
         # eric should not appear when filtering for kai
         lines = result.strip().split("\n")
-        data_lines = [ln for ln in lines if ln.strip().startswith("@")]
-        assert all("@kai" in ln for ln in data_lines)
+        data_lines = [ln for ln in lines[1:] if ln.strip()]
+        assert all("kai" in ln for ln in data_lines)
 
     async def test_last_shows_still_logged_in(self, kai: RecordingClient) -> None:
         """Active sessions show 'still logged in'."""

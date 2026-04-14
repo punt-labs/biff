@@ -56,11 +56,11 @@ async def _resolve_recipient(
             user_exists = any(s.user == user for s in all_sessions)
             if user_exists:
                 msg = (
-                    f"No active session @{user}:{tty}."
+                    f"No active session {user}:{tty}."
                     " Run /who to find their current address."
                 )
             else:
-                msg = f"User @{user} not found in visible repos."
+                msg = f"User {user} not found in visible repos."
             _log.warning(
                 "Write failed: %r (visible_repos=%s, sessions=%d)",
                 msg,
@@ -69,25 +69,8 @@ async def _resolve_recipient(
             )
             raise ValueError(msg)
     else:
-        # @user is intentional broadcast (allows offline delivery).
-        # Bare string without @ is likely a typo — validate.
-        if not to.startswith("@"):
-            all_sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
-            user_exists = any(s.user == user for s in all_sessions)
-            if not user_exists:
-                msg = (
-                    f"User @{user} not found in visible repos."
-                    " Run /who to see active sessions."
-                )
-                _log.warning(
-                    "Write failed: %r (visible_repos=%s, sessions=%d)",
-                    msg,
-                    sorted(state.visible_repos),
-                    len(all_sessions),
-                )
-                raise ValueError(msg)
         relay_key = user
-    display = f"@{user}:{tty}" if tty else f"@{user}"
+    display = f"{user}:{tty}" if tty else user
     return relay_key, display, target_repo
 
 

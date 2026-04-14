@@ -22,7 +22,7 @@ class TestWho:
             UserSession(user="kai", tty="abc12345", tty_name="tty1", plan="coding")
         )
         result = await who(ctx)
-        assert "@kai" in result.text
+        assert "kai" in result.text
         assert not result.error
         data = cast("list[dict[str, object]]", result.json_data)
         assert len(data) == 1

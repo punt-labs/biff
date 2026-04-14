@@ -38,7 +38,7 @@ class TestCrossUserVisibility:
         await kai.call("plan", message="refactoring the auth layer")
         result = await eric.call("who")
 
-        assert "@kai" in result
+        assert "kai" in result
         assert "refactoring" in result
         assert "layer" in result
 
@@ -95,8 +95,8 @@ class TestMultiUserPresence:
         eric_sees = await eric.call("who")
 
         for result in (kai_sees, eric_sees):
-            assert "@kai" in result
-            assert "@eric" in result
+            assert "kai" in result
+            assert "eric" in result
             assert "refactoring auth" in result
             assert "reviewing PRs" in result
 
@@ -139,8 +139,8 @@ class TestPresenceLifecycle:
 
         # eric checks who's around
         who_result = await eric.call("who")
-        assert "@kai" in who_result
-        assert "@eric" in who_result
+        assert "kai" in who_result
+        assert "eric" in who_result
 
         # kai goes heads-down
         await kai.call("mesg", enabled=False)
@@ -171,7 +171,7 @@ class TestCrossRelayMessaging:
         )
 
         result = await kai.call("write", to="@eric", message="PR is ready")
-        assert "@eric" in result
+        assert "eric" in result
 
         result = await eric.call("read_messages")
         assert "kai" in result

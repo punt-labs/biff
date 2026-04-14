@@ -52,7 +52,7 @@ class TestNotifyState:
         assert len(lines) == 1
         assert "WALL" in lines[0]
         assert "release freeze" in lines[0]
-        assert "@kai" in lines[0]
+        assert "kai" in lines[0]
 
     def test_wall_no_repeat(self) -> None:
         state = NotifyState()
