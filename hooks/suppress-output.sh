@@ -63,7 +63,7 @@ if [[ "$TOOL_NAME" == "who" ]]; then
   if [[ "$RESULT" == "No sessions." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [a-zA-Z0-9]')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [^ ]')
     emit "${COUNT} online" "$RESULT"
   fi
   exit 0
@@ -72,7 +72,7 @@ fi
 # ── finger ───────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "finger" ]]; then
   USER=$(printf '%s' "$RESULT" | head -1 | sed 's/.*Login: *\([^ ]*\).*/\1/')
-  emit "@${USER}" "$RESULT"
+  emit "${USER}" "$RESULT"
   exit 0
 fi
 
@@ -111,7 +111,7 @@ if [[ "$TOOL_NAME" == "last" ]]; then
   if [[ "$RESULT" == "No session history." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [a-zA-Z0-9]')
+    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [^ ]')
     emit "${COUNT} sessions" "$RESULT"
   fi
   exit 0

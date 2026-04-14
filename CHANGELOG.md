@@ -6,15 +6,11 @@
 
 - **Ethos identity resolution** — biff resolves identity from `ethos whoami --json` when available (handle, display name, kind). Falls back silently to `gh api user` then OS username. Net startup improvement: ~10ms local binary vs ~200ms GitHub API.
 - **Ethos team resolution** — `ethos team for-repo --json` enriches team roster when no explicit YAML roster exists. Falls back to zero-config org discovery.
-- **Kind tags in presence** — `/who` shows `[A]` for agents. `/finger` shows `[kind]` in login header. Powered by the `kind` field from ethos identity.
-- **`/biff:poll` command** — unified command to set server-side poll interval and durable CronCreate. `set_poll_interval` / `get_poll_status` MCP tools.
-- **PreCompact hook** — injects current plan into `additionalContext` after context compaction so the model retains task awareness.
+- **Kind tags in presence** — `/who` shows `[A]` in the K column for agents. `/finger` shows `[kind]` in login header. Powered by the `kind` field from ethos identity.
 
 ### Changed
 
 - **`@` prefix removed from display output** — `/who`, `/finger`, `/read`, `/last`, `/wall` output no longer prefixes usernames with `@`. The `@` was triggering Claude REPL mention behavior. `/write` input still accepts `@user` for backwards compatibility.
-- **`biff enable` CLI simplified** — drops interactive init flow (member prompts, relay URL). Now writes only `config.local.yaml`, matching MCP `/biff y` behavior. Zero-config by default.
-- **`/biff:write` auto-poll uses durable cron** — survives session restarts.
 
 ## [1.6.7] - 2026-04-14
 

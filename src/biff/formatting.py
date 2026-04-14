@@ -103,6 +103,7 @@ def format_remaining(expires_at: datetime) -> str:
 
 WHO_SPECS: list[ColumnSpec] = [
     ColumnSpec("NAME", min_width=10),
+    ColumnSpec("K", min_width=1),
     ColumnSpec("REPO", min_width=4),
     ColumnSpec("IDLE", min_width=4),
     ColumnSpec("S", min_width=1),
@@ -114,10 +115,14 @@ WHO_SPECS: list[ColumnSpec] = [
 def _format_who_name(s: UserSession) -> str:
     """Render a session as a copy-pasteable address for ``/write``."""
     tty = s.tty_name or (s.tty[:8] if s.tty else "")
-    base = f"{s.user}:{tty}" if tty else s.user
+    return f"{s.user}:{tty}" if tty else s.user
+
+
+def _format_who_kind(s: UserSession) -> str:
+    """Render a kind tag for the ``/who`` table. Empty for humans."""
     if s.kind == "agent":
-        return f"{base} [A]"
-    return base
+        return "[A]"
+    return ""
 
 
 def format_who(sessions: list[UserSession]) -> str:
@@ -131,6 +136,7 @@ def format_who(sessions: list[UserSession]) -> str:
     rows: list[list[str]] = [
         [
             _format_who_name(s),
+            _format_who_kind(s),
             display_repo_name(s.repo) or "-",
             format_idle(s.last_active),
             "+" if s.biff_enabled else "-",

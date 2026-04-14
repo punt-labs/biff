@@ -158,7 +158,7 @@ def _extract_team_members(teams: list[object]) -> set[str]:
         for member in cast("list[object]", raw_members):
             if isinstance(member, dict):
                 identity = cast("dict[str, object]", member).get("identity")
-                if isinstance(identity, str):
+                if isinstance(identity, str) and identity.strip():
                     members.add(identity)
     return members
 
