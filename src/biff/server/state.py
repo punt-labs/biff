@@ -18,6 +18,26 @@ from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
 
 
 @dataclass(frozen=True)
+class CompanionSession:
+    """The secondary (root) identity in a dual-session setup.
+
+    Registered for presence and addressability only — does not
+    originate tool calls.  See DES-039 and ``docs/dual-session.md``.
+    """
+
+    user: str
+    display_name: str
+    kind: str
+    tty: str
+    tty_name: str = ""
+
+    @property
+    def session_key(self) -> str:
+        """Composite key ``{user}:{tty}`` for the companion session."""
+        return build_session_key(self.user, self.tty)
+
+
+@dataclass(frozen=True)
 class ServerState:
     """Immutable container for all server-wide shared state."""
 
@@ -33,11 +53,17 @@ class ServerState:
     dormant: bool = False
     repo_root: Path | None = None
     org_repos: frozenset[str] = field(default_factory=lambda: frozenset[str]())
+    companion: CompanionSession | None = None
 
     @property
     def session_key(self) -> str:
         """Composite key ``{user}:{tty}`` for this server instance."""
         return build_session_key(self.config.user, self.tty)
+
+    @property
+    def companion_session_key(self) -> str | None:
+        """Session key for the companion, or ``None``."""
+        return self.companion.session_key if self.companion else None
 
     @property
     def visible_repos(self) -> frozenset[str]:
@@ -64,6 +90,7 @@ def create_state(
     dormant: bool = False,
     repo_root: Path | None = None,
     org_repos: frozenset[str] | None = None,
+    companion: CompanionSession | None = None,
 ) -> ServerState:
     """Create a ``ServerState`` from config and data directory.
 
@@ -103,4 +130,5 @@ def create_state(
         dormant=dormant,
         repo_root=repo_root,
         org_repos=org_repos or frozenset(),
+        companion=companion,
     )

@@ -9,7 +9,7 @@ import pytest
 from biff.models import BiffConfig, RelayAuth
 from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay
-from biff.server.state import create_state
+from biff.server.state import CompanionSession, create_state
 
 _TEST_REPO = "_test-server"
 
@@ -92,6 +92,69 @@ class TestCreateState:
         state = create_state(config, tmp_path)
         with pytest.raises(AttributeError):
             state.config = BiffConfig(user="other", repo_name=_TEST_REPO)  # type: ignore[misc]
+
+
+class TestCompanionSession:
+    def test_session_key(self) -> None:
+        companion = CompanionSession(
+            user="jfreeman",
+            display_name="Jim Freeman",
+            kind="human",
+            tty="a1b2c3d4",
+        )
+        assert companion.session_key == "jfreeman:a1b2c3d4"
+
+    def test_tty_name_default_empty(self) -> None:
+        companion = CompanionSession(
+            user="jfreeman",
+            display_name="Jim Freeman",
+            kind="human",
+            tty="a1b2c3d4",
+        )
+        assert companion.tty_name == ""
+
+    def test_frozen(self) -> None:
+        companion = CompanionSession(
+            user="jfreeman",
+            display_name="Jim Freeman",
+            kind="human",
+            tty="a1b2c3d4",
+        )
+        with pytest.raises(AttributeError):
+            companion.user = "other"  # type: ignore[misc]
+
+
+class TestCreateStateWithCompanion:
+    def test_companion_none_by_default(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="claude", repo_name=_TEST_REPO)
+        state = create_state(config, tmp_path)
+        assert state.companion is None
+        assert state.companion_session_key is None
+
+    def test_companion_stored(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="claude", repo_name=_TEST_REPO)
+        companion = CompanionSession(
+            user="jfreeman",
+            display_name="Jim Freeman",
+            kind="human",
+            tty="e5f6g7h8",
+        )
+        state = create_state(config, tmp_path, companion=companion)
+        assert state.companion is companion
+        assert state.companion_session_key == "jfreeman:e5f6g7h8"
+
+    def test_companion_key_distinct_from_primary(self, tmp_path: Path) -> None:
+        config = BiffConfig(user="claude", repo_name=_TEST_REPO)
+        companion = CompanionSession(
+            user="jfreeman",
+            display_name="Jim Freeman",
+            kind="human",
+            tty="e5f6g7h8",
+        )
+        state = create_state(config, tmp_path, tty="a1b2c3d4", companion=companion)
+        assert state.session_key == "claude:a1b2c3d4"
+        assert state.companion_session_key == "jfreeman:e5f6g7h8"
+        assert state.session_key != state.companion_session_key
 
 
 class TestNatsRelayAuthKwargs:

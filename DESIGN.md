@@ -4135,3 +4135,110 @@ When Channels ships as stable API:
 - Layer 3 (CronCreate) becomes unnecessary — the push IS the prompt.
 - Layer 2 (session nudge) remains for cold-start orientation.
 - See biff-5esx for adoption plan.
+
+---
+
+## DES-039: Dual-Session Registration via Ethos Roster
+
+**Date:** 2026-04-14
+**Status:** PROPOSED
+**Topic:** Registering both human and agent as separate biff sessions
+**Related:** DES-002 (session key format), DES-009 (identity),
+DES-030 (multi-agent coordination), DES-035 (TTY name reservation),
+`docs/ethos-integration.md`, `docs/dual-session.md`
+
+### Context
+
+A Claude Code session has two actors: the human who launched the
+session and the AI agent doing the work. Biff registers one session
+per MCP server process, using whichever identity `ethos whoami`
+resolves. The other actor is invisible: not in `/who`, not
+addressable via `/write`, no separate plan or idle time.
+
+The ethos session roster provides both identities. Biff can use it
+to register a second session from the same MCP server process.
+
+### Design
+
+One MCP server registers two sessions when the ethos roster provides
+two distinct identities (root + primary). The primary identity owns
+all tool calls. The companion identity is registered for presence
+and addressability only.
+
+Key decisions:
+
+1. **Separate TTYs.** Each identity gets its own 8-char hex TTY and
+   its own `ttyN` name reservation. Sharing would violate the DES-002
+   invariant that `{user}:{tty}` is unique and the DES-035 invariant
+   that every active name has a KV reservation.
+
+2. **Companion is presence-only.** The companion does not originate
+   tool calls. This avoids the v1 design doc's open question ("how
+   does the tool handler know which actor called?") — the model is
+   always the caller.
+
+3. **Combined inbox polling.** `_active_tick` checks both inboxes.
+   The `read_messages` tool reads from both and merges
+   chronologically. One `tools/list_changed` notification covers
+   both because there is one MCP tool list.
+
+4. **Dual heartbeat, dual cleanup.** Both sessions get heartbeats,
+   login/logout events, sentinel files, and TTY name releases.
+   The companion must not silently expire while the MCP server is
+   alive.
+
+5. **Roster read once at startup.** Consistent with
+   `get_ethos_identity()`. Mid-session roster changes are not
+   detected. Future work can add roster-watch if needed.
+
+6. **Graceful fallback.** When ethos is absent, the roster call
+   fails, or root and primary are the same identity: single session,
+   zero new code paths executed.
+
+### State Model
+
+`ServerState` gains a `companion: CompanionSession | None` field.
+`CompanionSession` is a frozen dataclass with `user`, `display_name`,
+`kind`, `tty`, and `tty_name`. The primary identity remains in
+`state.config` and `state.tty` (unchanged). Tool handlers continue
+to read `state.config.user` for the "current" identity.
+
+### Addressing
+
+```text
+/write @jfreeman    → companion inbox (human)
+/write @claude      → primary inbox (agent)
+/write @jfreeman:tty3  → targeted to companion session
+```
+
+Both inboxes are read by the same MCP server. The model sees both.
+
+### /who Output
+
+```text
+NAME             K    REPO              IDLE  S  P  HOST
+jfreeman:tty3         punt-labs/biff    0m    +  -  okinos
+claude:tty4      [A]  punt-labs/biff    0s    +  +  okinos
+```
+
+### Rejected Alternatives
+
+**Shared TTY.** Considered registering both identities under the
+same TTY hex. Rejected: violates DES-002 (session key uniqueness)
+and DES-035 (one reservation per session key). Would require
+changing the fundamental session key scheme.
+
+**Two BiffConfigs.** Considered holding two full config objects.
+Rejected: creates ambiguity about which config drives tool handlers.
+The companion needs only identity fields, not relay/team/org config.
+
+**Process tree model.** The v2 design doc proposes a full process
+tree with PIDs, parent-child relationships, and `/ps`. This is the
+right long-term model for subagents and agent teams but is premature
+for the dual-session use case. Companion session is a stepping stone
+that does not preclude the process tree.
+
+### Full Spec
+
+See `docs/dual-session.md` for the complete design including message
+routing, edge cases, implementation sequence, and file change list.

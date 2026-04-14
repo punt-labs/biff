@@ -232,17 +232,24 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     tool = await mcp.get_tool("read_messages")
     if tool is None:
         return
-    summary = await state.relay.get_unread_summary(state.session_key)
+    primary = await state.relay.get_unread_summary(state.session_key)
+    companion_count = 0
+    if state.companion_session_key:
+        companion_summary = await state.relay.get_unread_summary(
+            state.companion_session_key
+        )
+        companion_count = companion_summary.count
+    total = primary.count + companion_count
     old_desc = tool.description
-    if summary.count == 0:
+    if total == 0:
         tool.description = _READ_MESSAGES_BASE
     else:
-        tool.description = (
-            f"Check messages ({summary.count} unread). Marks all as read."
-        )
+        tool.description = f"Check messages ({total} unread). Marks all as read."
     if tool.description != old_desc:
         await notify_tool_list_changed()
-    await _sync_unread_file(state, summary=summary)
+    # Use a synthetic summary with the combined count for the status file.
+    combined = UnreadSummary(count=total)
+    await _sync_unread_file(state, summary=combined)
 
 
 async def refresh_wall(
@@ -459,9 +466,16 @@ async def _active_tick(
 
     Returns updated ``(count, wall_key, talk_message)`` tracking state.
     """
-    summary = await state.relay.get_unread_summary(state.session_key)
-    if summary.count != last_count:
-        last_count = summary.count
+    primary = await state.relay.get_unread_summary(state.session_key)
+    companion_count = 0
+    if state.companion_session_key:
+        companion_summary = await state.relay.get_unread_summary(
+            state.companion_session_key
+        )
+        companion_count = companion_summary.count
+    total = primary.count + companion_count
+    if total != last_count:
+        last_count = total
         await refresh_read_messages(mcp, state)
 
     # Check wall — key on (text, posted_at) so re-posts trigger refresh.
@@ -482,7 +496,7 @@ async def _active_tick(
 
     # Rotate display queue — talk items expire, wall items cycle
     if state.display_queue.advance_if_due():
-        await _sync_unread_file(state, summary=summary)
+        await _sync_unread_file(state, summary=UnreadSummary(count=total))
 
     return last_count, last_wall, last_talk
 

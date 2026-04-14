@@ -77,6 +77,38 @@ async def _resolve_recipient(
 _log = logging.getLogger(__name__)
 
 
+async def _fetch_companion_unread(
+    state: ServerState,
+) -> tuple[list[Message], list[Message]]:
+    """Fetch unread messages from the companion's inboxes.
+
+    Returns ``(tty_unread, user_unread)`` — both empty when no companion.
+    """
+    companion = state.companion
+    if companion is None:
+        return [], []
+    tty = await state.relay.fetch(companion.session_key)
+    user = await state.relay.fetch_user_inbox(companion.user)
+    return tty, user
+
+
+async def _mark_companion_read(
+    state: ServerState,
+    tty_unread: list[Message],
+    user_unread: list[Message],
+) -> None:
+    """Mark companion inbox messages as read."""
+    companion = state.companion
+    if companion is None:
+        return
+    tty_ids = [m.id for m in tty_unread]
+    user_ids = [m.id for m in user_unread]
+    if tty_ids:
+        await state.relay.mark_read(companion.session_key, tty_ids)
+    if user_ids:
+        await state.relay.mark_read_user_inbox(companion.user, user_ids)
+
+
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register messaging tools."""
 
@@ -145,22 +177,30 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         session_key = state.session_key
         user = state.config.user
 
-        # Fetch from both inboxes
+        # Fetch from primary inboxes (per-TTY + per-user broadcast).
         tty_unread = await state.relay.fetch(session_key)
         user_unread = await state.relay.fetch_user_inbox(user)
-        all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
+
+        # Fetch from companion inboxes (DES-039).
+        comp_tty, comp_user = await _fetch_companion_unread(state)
+
+        all_unread = sorted(
+            tty_unread + user_unread + comp_tty + comp_user,
+            key=lambda m: m.timestamp,
+        )
 
         if not all_unread:
             await refresh_read_messages(mcp, state)
             return "No new messages."
 
-        # Mark read independently in each inbox
+        # Mark read independently in each inbox.
         tty_ids = [m.id for m in tty_unread]
         user_ids = [m.id for m in user_unread]
         if tty_ids:
             await state.relay.mark_read(session_key, tty_ids)
         if user_ids:
             await state.relay.mark_read_user_inbox(user, user_ids)
+        await _mark_companion_read(state, comp_tty, comp_user)
 
         await refresh_read_messages(mcp, state)
         return format_read(all_unread)
