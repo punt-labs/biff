@@ -148,7 +148,7 @@ def _parse_roster_participants(
         identity = _parse_roster_entry(entry)
         if identity is None:
             continue
-        if "parent" in entry:
+        if entry.get("parent"):
             primary = identity
         elif root is None:
             root = identity
