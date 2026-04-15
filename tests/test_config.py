@@ -719,6 +719,50 @@ class TestGetEthosRoster:
             assert result is not None
             assert result.root is None  # empty handle → None
 
+    def test_participants_format(self) -> None:
+        """Current ethos roster format: participants array."""
+        roster_json = (
+            '{"session":"abc","participants":['
+            '{"agent_id":"jfreeman","persona":"jfreeman"},'
+            '{"agent_id":"12345","persona":"claude","parent":"jfreeman"}'
+            "]}"
+        )
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = roster_json
+            result = get_ethos_roster()
+            assert result is not None
+            assert result.root is not None
+            assert result.root.handle == "jfreeman"
+            assert result.primary is not None
+            assert result.primary.handle == "claude"
+
+    def test_participants_no_parent_means_root(self) -> None:
+        """Entry without parent is root."""
+        roster_json = '{"participants":[{"agent_id":"kai","persona":"kai"}]}'
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = roster_json
+            result = get_ethos_roster()
+            assert result is not None
+            assert result.root is not None
+            assert result.root.handle == "kai"
+            assert result.primary is None
+
+    def test_participants_single_agent_only(self) -> None:
+        """Only an agent (with parent) and no root."""
+        roster_json = (
+            '{"participants":[{"agent_id":"99","persona":"claude","parent":"unknown"}]}'
+        )
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = roster_json
+            result = get_ethos_roster()
+            assert result is not None
+            assert result.root is None
+            assert result.primary is not None
+            assert result.primary.handle == "claude"
+
 
 # -- load_config with dual-session roster --
 

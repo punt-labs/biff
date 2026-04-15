@@ -118,8 +118,14 @@ class EthosRoster:
 
 
 def _parse_roster_entry(data: dict[str, object]) -> EthosIdentity | None:
-    """Parse a single roster entry (root or primary) into an EthosIdentity."""
-    handle = data.get("handle", "")
+    """Parse a single roster participant into an EthosIdentity.
+
+    Supports two formats:
+    - Legacy: ``{"handle": "...", "display_name": "...", "kind": "..."}``
+    - Current: ``{"agent_id": "...", "persona": "..."}``
+    """
+    # Current format: agent_id + persona
+    handle = data.get("persona", "") or data.get("handle", "")
     if not isinstance(handle, str) or not handle:
         return None
     name = data.get("display_name", "")
@@ -127,6 +133,43 @@ def _parse_roster_entry(data: dict[str, object]) -> EthosIdentity | None:
     kind_val = data.get("kind", "")
     kind = kind_val if isinstance(kind_val, str) else ""
     return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
+
+
+def _parse_roster_participants(
+    participants: list[object],
+) -> EthosRoster:
+    """Parse roster from the ``participants`` array format."""
+    root: EthosIdentity | None = None
+    primary: EthosIdentity | None = None
+    for p in participants:
+        if not isinstance(p, dict):
+            continue
+        entry = cast("dict[str, object]", p)
+        identity = _parse_roster_entry(entry)
+        if identity is None:
+            continue
+        if entry.get("parent"):
+            primary = identity
+        elif root is None:
+            root = identity
+    return EthosRoster(root=root, primary=primary)
+
+
+def _parse_roster_legacy(raw: dict[str, object]) -> EthosRoster:
+    """Parse roster from the legacy ``root`` + ``primary`` format."""
+    root_raw = raw.get("root")
+    primary_raw = raw.get("primary")
+    root = (
+        _parse_roster_entry(cast("dict[str, object]", root_raw))
+        if isinstance(root_raw, dict)
+        else None
+    )
+    primary = (
+        _parse_roster_entry(cast("dict[str, object]", primary_raw))
+        if isinstance(primary_raw, dict)
+        else None
+    )
+    return EthosRoster(root=root, primary=primary)
 
 
 def get_ethos_roster() -> EthosRoster | None:
@@ -156,19 +199,10 @@ def get_ethos_roster() -> EthosRoster | None:
     if not isinstance(data, dict):
         return None
     raw = cast("dict[str, object]", data)
-    root_raw = raw.get("root")
-    primary_raw = raw.get("primary")
-    root = (
-        _parse_roster_entry(cast("dict[str, object]", root_raw))
-        if isinstance(root_raw, dict)
-        else None
-    )
-    primary = (
-        _parse_roster_entry(cast("dict[str, object]", primary_raw))
-        if isinstance(primary_raw, dict)
-        else None
-    )
-    return EthosRoster(root=root, primary=primary)
+    participants = raw.get("participants")
+    if isinstance(participants, list):
+        return _parse_roster_participants(cast("list[object]", participants))
+    return _parse_roster_legacy(raw)
 
 
 def get_ethos_identity() -> EthosIdentity | None:
