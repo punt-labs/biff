@@ -120,6 +120,22 @@ async def register_session(
     """
     session_key = build_session_key(user, tty_hex)
     tty_name = await claim_tty_name(relay, user, session_key, preferred=preferred_name)
+    # Release any stale TTY name reservation left by a prior process that
+    # crashed after writing the KV row but before releasing its name.  The
+    # KV row itself is overwritten unconditionally below; without this
+    # check the old reservation leaks and compounds across crash-restart
+    # cycles.  Self-release is skipped when the stale name matches the
+    # newly claimed one.
+    existing = await relay.get_session(session_key)
+    if existing is not None and existing.tty_name and existing.tty_name != tty_name:
+        try:
+            await relay.release_tty_name(existing.user, existing.tty_name)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            logger.warning(
+                "Failed to release stale TTY name %s for %s",
+                existing.tty_name,
+                session_key,
+            )
     session = UserSession(
         user=user,
         tty=tty_hex,
@@ -714,10 +730,9 @@ async def _register_companion(state: ServerState) -> None:
     """
     if state.companion is None:
         return
-    # Active session marker.
-    worktree = str(state.repo_root) if state.repo_root else ""
-    _write_marker(state.config.repo_name, state.companion.session_key, worktree)
-    # Claim TTY name, then write KV row once with tty_name set.
+    # Claim TTY name and write KV row first.  The active-session marker
+    # is written only after registration succeeds so the invariant
+    # "marker exists iff KV row exists" holds under registration failure.
     _, companion_name = await register_session(
         state.relay,
         state.companion.user,
@@ -728,6 +743,8 @@ async def _register_companion(state: ServerState) -> None:
         pwd=state.pwd,
         repo=state.config.repo_name,
     )
+    worktree = str(state.repo_root) if state.repo_root else ""
+    _write_marker(state.config.repo_name, state.companion.session_key, worktree)
     # Frozen dataclass — update via object.__setattr__.
     object.__setattr__(state.companion, "tty_name", companion_name)
     logger.info(
@@ -777,13 +794,6 @@ async def _active_lifespan(
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)
 
-    # Register this session as active so SessionEnd hooks can find it.
-    _write_marker(
-        state.config.repo_name,
-        state.session_key,
-        str(state.repo_root) if state.repo_root else "",
-    )
-
     # Org discovery (DES-034): discover repos for configured orgs.
     # Runs before registration so the log reflects final visibility,
     # and before tty assignment (which needs visible_repos).
@@ -826,6 +836,14 @@ async def _active_lifespan(
         repo=state.config.repo_name,
     )
     set_tty_name(final_name)
+    # Register this session as active so SessionEnd hooks can find it.
+    # Written after register_session succeeds so the invariant
+    # "marker exists iff KV row exists" holds under registration failure.
+    _write_marker(
+        state.config.repo_name,
+        state.session_key,
+        str(state.repo_root) if state.repo_root else "",
+    )
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
     # Companion TTY name claim (DES-039).

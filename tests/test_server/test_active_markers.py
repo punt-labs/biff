@@ -82,3 +82,45 @@ class TestActiveMarkers:
             companion_marker = active_root / "jfreeman-e5f6g7h8"
             assert primary_marker.exists(), "primary marker missing"
             assert companion_marker.exists(), "companion marker missing"
+
+    async def test_marker_not_written_on_register_failure(
+        self,
+        tmp_path: Path,
+        active_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed register_session must not leave an orphan marker behind.
+
+        Pins the invariant "marker exists iff KV row exists".  If the KV
+        write or TTY claim fails, the marker must also be absent so the
+        SessionEnd hook never sees a session that has no KV row.
+        """
+        config = BiffConfig(
+            user="kai",
+            display_name="Kai",
+            kind="human",
+            repo_name="_test-markers",
+        )
+        state = create_state(
+            config,
+            tmp_path,
+            tty="a1b2c3d4",
+            hostname="test-host",
+            pwd="/test",
+        )
+
+        async def _boom(*_args: object, **_kwargs: object) -> str:
+            msg = "simulated claim failure"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr("biff.server.app.claim_tty_name", _boom)
+
+        mcp = create_server(state)
+        with pytest.raises(RuntimeError, match="simulated claim failure"):
+            async with Client(FastMCPTransport(mcp)):
+                pass
+
+        marker = active_root / "kai-a1b2c3d4"
+        assert not marker.exists(), (
+            "primary marker must not exist when register_session fails"
+        )

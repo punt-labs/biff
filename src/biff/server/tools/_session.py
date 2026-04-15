@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -11,6 +12,8 @@ from biff.server.tools._descriptions import get_tty_name
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
+
+logger = logging.getLogger(__name__)
 
 
 async def get_or_create_session(state: ServerState) -> UserSession:
@@ -109,16 +112,18 @@ async def update_companion_session(
     if session is None:
         # register_session() should have written this row on lifespan
         # startup; reaching here means either a caller invoked us before
-        # registration or the row was deleted out from under us.  Refuse
-        # to write a half-formed row without tty_name — that was the
-        # v1.8.0 biff-dzqc defect.
+        # registration or the row was deleted out from under us (e.g.
+        # companion reaped after a crash, tool call arriving before
+        # restart completes).  Skip the update rather than crash the
+        # caller — writing a half-formed row with empty tty_name was
+        # the v1.8.0 biff-dzqc defect and must still be refused.
         if "tty_name" not in updates or not updates["tty_name"]:
-            msg = (
-                f"update_companion_session on missing row "
-                f"{companion.session_key!r} without tty_name — refusing to "
-                "write a row with empty tty_name"
+            logger.warning(
+                "update_companion_session on missing row %s without "
+                "tty_name — skipping update",
+                companion.session_key,
             )
-            raise RuntimeError(msg)
+            return None
         session = UserSession(
             user=companion.user,
             tty=companion.tty,

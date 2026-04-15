@@ -1,14 +1,19 @@
-"""Regression tests for session registration order (biff-dzqc).
+"""Tier-1 invariant tests for session registration.
 
-Guards the claim-then-write invariant established by
-:func:`biff.server.app.register_session`.  The v1.8.0 defect shipped
-a two-write pattern that left KV rows with empty ``tty_name`` when
-anything failed between the two writes.  These tests exercise the
-lifespan startup path and the companion registration helper against
-``LocalRelay`` to assert the invariant holds.
+These tests exercise :func:`biff.server.app.register_session` and the
+companion registration helper against ``LocalRelay`` and assert the
+post-condition that ``tty_name`` is non-empty on every written row.
 
-See ``.tmp/root-cause-dual-session-companion.md`` §4 for the original
-test surface design.
+They are NOT regression guards for the v1.8.0 two-write defect: the
+defect was a narrow window between a first KV write (empty tty_name)
+and a second KV write (populated tty_name) where a NATS I/O error
+could leave a half-formed row behind.  ``LocalRelay`` writes to an
+in-memory dict and cannot fail between the two calls, so the v1.8.0
+bug could not have failed these tests.
+
+The actual regression guard for the two-write pattern lives at
+``tests/test_nats_e2e/test_dual_session_lifespan.py`` (tier-3b) where
+real NATS I/O can fail between writes.
 """
 
 from __future__ import annotations
@@ -161,3 +166,54 @@ class TestRegisterSessionHelper:
         stored = await relay.get_session("kai:a1b2c3d4")
         assert stored is not None
         assert stored.tty_name == tty_name
+
+    async def test_releases_stale_tty_reservation_on_restart(
+        self, tmp_path: Path
+    ) -> None:
+        """A prior crash leaving an orphan tty_name reservation is cleaned up.
+
+        Seeds a KV row with an outdated ``tty_name`` plus a matching lockfile
+        reservation, then invokes ``register_session`` for the same key.
+        The pre-existing reservation must be released so repeated crash-restart
+        cycles cannot accumulate orphan names.
+        """
+        from datetime import UTC, datetime
+
+        from biff.models import UserSession
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        session_key = "kai:a1b2c3d4"
+        stale_name = "tty7"
+        # Seed the KV row and a real reservation for the stale name.
+        seeded = UserSession(
+            user="kai",
+            tty="a1b2c3d4",
+            tty_name=stale_name,
+            display_name="Kai",
+            kind="human",
+            hostname="old-host",
+            pwd="/old",
+            repo="_test-register",
+            last_active=datetime.now(UTC),
+        )
+        await relay.update_session(seeded)
+        ok = await relay.reserve_tty_name("kai", stale_name, session_key)
+        assert ok, "seeding the stale reservation must succeed"
+
+        _, new_name = await register_session(
+            relay,
+            "kai",
+            "a1b2c3d4",
+            display_name="Kai",
+            kind="human",
+            hostname="test-host",
+            pwd="/test",
+            repo="_test-register",
+        )
+
+        reserved = await relay.list_reserved_names("kai")
+        assert stale_name not in reserved, (
+            f"stale reservation {stale_name} must be released on re-register"
+        )
+        assert new_name in reserved, "newly claimed name must remain reserved"
