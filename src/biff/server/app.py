@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from mcp.types import InitializeRequest, InitializeResult
 
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
-from biff.relay import LocalRelay
+from biff.relay import LocalRelay, Relay
 from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
@@ -35,7 +35,6 @@ from biff.server.tools._descriptions import (
     refresh_wall,
     set_tty_name,
 )
-from biff.server.tools._session import update_companion_session, update_current_session
 from biff.tty import build_session_key, claim_tty_name
 
 logger = logging.getLogger(__name__)
@@ -82,6 +81,58 @@ def write_active_session(
     d.mkdir(parents=True, exist_ok=True)
     safe = session_key.replace(":", "-")
     (d / safe).write_text(f"{session_key}\n{repo_name}\n{worktree_root}\n")
+
+
+def _write_marker(repo_name: str, session_key: str, worktree_root: str) -> None:
+    """Write the active-session marker, logging OSError rather than swallowing it.
+
+    A missing marker breaks SessionEnd hook cleanup — failures must be
+    visible in logs so operators can diagnose them (biff-dzqc).
+    """
+    try:
+        write_active_session(repo_name, session_key, worktree_root=worktree_root)
+    except OSError as exc:
+        logger.warning("Failed to write active marker for %s: %s", session_key, exc)
+
+
+async def register_session(
+    relay: Relay,
+    user: str,
+    tty_hex: str,
+    *,
+    display_name: str,
+    kind: str,
+    hostname: str,
+    pwd: str,
+    repo: str,
+    preferred_name: str | None = None,
+) -> tuple[UserSession, str]:
+    """Claim a TTY name, then write the session row once with tty_name set.
+
+    Single atomic registration: if the TTY claim fails, no KV row is
+    written; if the claim succeeds, the row is written exactly once with
+    ``tty_name`` already populated.  Replaces the previous two-write
+    pattern (write-then-claim-then-write) that left half-initialised
+    rows in KV when anything failed between the two writes.
+
+    Returns ``(session, tty_name)``.  Does not write an active-marker
+    file; the caller owns that.
+    """
+    session_key = build_session_key(user, tty_hex)
+    tty_name = await claim_tty_name(relay, user, session_key, preferred=preferred_name)
+    session = UserSession(
+        user=user,
+        tty=tty_hex,
+        tty_name=tty_name,
+        display_name=display_name,
+        kind=kind,
+        hostname=hostname,
+        pwd=pwd,
+        repo=repo,
+        last_active=datetime.now(UTC),
+    )
+    await relay.update_session(session)
+    return session, tty_name
 
 
 def _write_sentinel(repo_name: str, session_key: str) -> None:
@@ -656,26 +707,29 @@ async def _register_companion(state: ServerState) -> None:
 
     No-op when ``state.companion`` is ``None``.  Extracted from
     ``_active_lifespan`` for complexity management (DES-039).
+
+    Claim-then-write: the TTY name is reserved first, then the KV row is
+    written exactly once with ``tty_name`` already populated.  A claim
+    failure leaves no KV row behind (atomic under failure — DES-039).
     """
     if state.companion is None:
         return
     # Active session marker.
     worktree = str(state.repo_root) if state.repo_root else ""
-    with suppress(OSError):
-        write_active_session(
-            state.config.repo_name,
-            state.companion.session_key,
-            worktree_root=worktree,
-        )
-    # KV registration before TTY name claim.
-    await update_companion_session(state)
-    # Claim TTY name.
-    companion_name = await claim_tty_name(
-        state.relay, state.companion.user, state.companion.session_key
+    _write_marker(state.config.repo_name, state.companion.session_key, worktree)
+    # Claim TTY name, then write KV row once with tty_name set.
+    _, companion_name = await register_session(
+        state.relay,
+        state.companion.user,
+        state.companion.tty,
+        display_name=state.companion.display_name,
+        kind=state.companion.kind,
+        hostname=state.hostname,
+        pwd=state.pwd,
+        repo=state.config.repo_name,
     )
     # Frozen dataclass — update via object.__setattr__.
     object.__setattr__(state.companion, "tty_name", companion_name)
-    await update_companion_session(state, tty_name=companion_name)
     logger.info(
         "Companion ready: %s (%s)",
         state.companion.session_key,
@@ -724,19 +778,15 @@ async def _active_lifespan(
         signal.signal(sig, _signal_handler)
 
     # Register this session as active so SessionEnd hooks can find it.
-    with suppress(OSError):
-        write_active_session(
-            state.config.repo_name,
-            state.session_key,
-            worktree_root=str(state.repo_root) if state.repo_root else "",
-        )
-
-    # Register session in KV before TTY name claim.
-    await update_current_session(state)
+    _write_marker(
+        state.config.repo_name,
+        state.session_key,
+        str(state.repo_root) if state.repo_root else "",
+    )
 
     # Org discovery (DES-034): discover repos for configured orgs.
-    # Runs after session registration (which ensures NATS is connected)
-    # but before tty assignment (which needs visible_repos).
+    # Runs before registration so the log reflects final visibility,
+    # and before tty assignment (which needs visible_repos).
     if state.config.orgs and isinstance(state.relay, NatsRelay):
         logger.info("Org discovery: querying orgs=%s", state.config.orgs)
         org_results = await asyncio.gather(
@@ -762,12 +812,20 @@ async def _active_lifespan(
         sorted(state.visible_repos),
     )
 
-    # Auto-assign a ttyN name via atomic reservation (DES-035).
-    # Let claim failures propagate — an unreserved hex fallback would
-    # defeat the DES-035 invariant (every active name must be reserved).
-    final_name = await claim_tty_name(state.relay, state.config.user, state.session_key)
+    # Claim-then-write (DES-035, biff-dzqc): reserve TTY name first, then
+    # write the KV row exactly once with ``tty_name`` already populated.
+    # An unreserved hex fallback would defeat the DES-035 invariant.
+    _, final_name = await register_session(
+        state.relay,
+        state.config.user,
+        state.tty,
+        display_name=state.config.display_name,
+        kind=state.config.kind,
+        hostname=state.hostname,
+        pwd=state.pwd,
+        repo=state.config.repo_name,
+    )
     set_tty_name(final_name)
-    await update_current_session(state, tty_name=final_name)
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
     # Companion TTY name claim (DES-039).
