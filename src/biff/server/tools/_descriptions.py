@@ -91,6 +91,22 @@ _biff_enabled: bool = True
 _talk_partner: str | None = None
 _talk_message: str = ""
 
+# Track the last wall content spoken via vox to avoid re-speaking on
+# every refresh_wall tick (the description changes due to the countdown
+# timer, but the wall content is the same).
+_spoken_wall_key: tuple[str, str] = ("", "")
+
+
+def _last_spoken_wall_key() -> tuple[str, str]:
+    """Return the last wall content key that was spoken."""
+    return _spoken_wall_key
+
+
+def _set_last_spoken_wall_key(key: tuple[str, str]) -> None:
+    """Update the last-spoken wall content key."""
+    global _spoken_wall_key
+    _spoken_wall_key = key
+
 
 def get_tty_name() -> str:
     """Return the module-level TTY name."""
@@ -311,16 +327,25 @@ async def refresh_wall(
     if tool.description != old_desc:
         await notify_tool_list_changed()
         # Voice new walls via vox (L1 integration — no-op if vox absent).
+        # Only speak when the wall CONTENT changes, not when the countdown
+        # timer updates the description. The description changes every tick
+        # because "expires in {remaining}" decreases, but the wall text is
+        # the same. Track the last-spoken wall key to avoid re-speaking.
         if current is not None:
-            from biff.integration.vox import (  # noqa: PLC0415
-                speak_fire_and_forget,
-                vibes_from_text,
-            )
+            wall_content_key = (current.text, current.posted_at.isoformat())
+            if wall_content_key != _last_spoken_wall_key():
+                _set_last_spoken_wall_key(wall_content_key)
+                from biff.integration.vox import (  # noqa: PLC0415
+                    speak_fire_and_forget,
+                    vibes_from_text,
+                )
 
-            speak_fire_and_forget(
-                f"Wall from {current.from_user}: {current.text}",
-                vibe_tags=vibes_from_text(current.text),
-            )
+                speak_fire_and_forget(
+                    f"Wall from {current.from_user}: {current.text}",
+                    vibe_tags=vibes_from_text(current.text),
+                )
+        else:
+            _set_last_spoken_wall_key(("", ""))
     await _sync_unread_file(state)
 
 
