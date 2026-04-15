@@ -32,10 +32,25 @@ async def get_or_create_session(state: ServerState) -> UserSession:
     """
     session = await state.relay.get_session(state.session_key)
     if session is None:
+        # Lifespan registration writes this row before any tool call.
+        # Reaching the auto-create branch means the row was deleted
+        # underneath us (reaper sentinel, TTL expiry, manual delete).
+        # ``get_tty_name()`` may not be set yet if lifespan startup was
+        # interrupted; fall back to the hex-slice placeholder that
+        # ``_format_who_name`` uses so display stays consistent and the
+        # v1.8.0 biff-dzqc invariant (no empty ``tty_name`` rows) holds.
+        stashed = get_tty_name()
+        if not stashed:
+            logger.warning(
+                "Auto-creating session %s without a reserved tty_name; "
+                "lifespan registration may not have completed",
+                state.session_key,
+            )
+        tty_name = stashed or state.tty[:8]
         session = UserSession(
             user=state.config.user,
             tty=state.tty,
-            tty_name=get_tty_name(),
+            tty_name=tty_name,
             hostname=state.hostname,
             pwd=state.pwd,
             display_name=state.config.display_name,
@@ -92,48 +107,6 @@ def resolve_tty_name(
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:
     """Update this server's session with automatic last_active refresh."""
     session = await get_or_create_session(state)
-    updates["last_active"] = datetime.now(UTC)
-    updated = session.model_copy(update=updates)
-    await state.relay.update_session(updated)
-    return updated
-
-
-async def update_companion_session(
-    state: ServerState, **updates: object
-) -> UserSession | None:
-    """Update the companion (root) session with automatic last_active refresh.
-
-    Returns ``None`` when no companion session is configured.
-    """
-    companion = state.companion
-    if companion is None:
-        return None
-    session = await state.relay.get_session(companion.session_key)
-    if session is None:
-        # register_session() should have written this row on lifespan
-        # startup; reaching here means either a caller invoked us before
-        # registration or the row was deleted out from under us (e.g.
-        # companion reaped after a crash, tool call arriving before
-        # restart completes).  Skip the update rather than crash the
-        # caller — writing a half-formed row with empty tty_name was
-        # the v1.8.0 biff-dzqc defect and must still be refused.
-        if "tty_name" not in updates or not updates["tty_name"]:
-            logger.warning(
-                "update_companion_session on missing row %s without "
-                "tty_name — skipping update",
-                companion.session_key,
-            )
-            return None
-        session = UserSession(
-            user=companion.user,
-            tty=companion.tty,
-            tty_name=str(updates["tty_name"]),
-            hostname=state.hostname,
-            pwd=state.pwd,
-            display_name=companion.display_name,
-            kind=companion.kind,
-            repo=state.config.repo_name,
-        )
     updates["last_active"] = datetime.now(UTC)
     updated = session.model_copy(update=updates)
     await state.relay.update_session(updated)

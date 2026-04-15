@@ -126,16 +126,25 @@ async def register_session(
     # check the old reservation leaks and compounds across crash-restart
     # cycles.  Self-release is skipped when the stale name matches the
     # newly claimed one.
+    #
+    # Ownership check (PR #215 round 3): only release when the reservation
+    # is still owned by *our* session_key.  If another live session has
+    # reclaimed the name since the crashed owner wrote the stale row, we
+    # must not revoke their reservation.  Use the authoritative *user*
+    # parameter (not ``existing.user``) so a corrupted/out-of-sync payload
+    # cannot direct a release against a different user's namespace.
     existing = await relay.get_session(session_key)
     if existing is not None and existing.tty_name and existing.tty_name != tty_name:
-        try:
-            await relay.release_tty_name(existing.user, existing.tty_name)
-        except Exception:  # noqa: BLE001 — best-effort cleanup
-            logger.warning(
-                "Failed to release stale TTY name %s for %s",
-                existing.tty_name,
-                session_key,
-            )
+        owner = await relay.get_tty_reservation_owner(user, existing.tty_name)
+        if owner == session_key:
+            try:
+                await relay.release_tty_name(user, existing.tty_name)
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                logger.warning(
+                    "Failed to release stale TTY name %s for %s",
+                    existing.tty_name,
+                    session_key,
+                )
     session = UserSession(
         user=user,
         tty=tty_hex,

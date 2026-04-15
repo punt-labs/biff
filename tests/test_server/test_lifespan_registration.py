@@ -217,3 +217,54 @@ class TestRegisterSessionHelper:
             f"stale reservation {stale_name} must be released on re-register"
         )
         assert new_name in reserved, "newly claimed name must remain reserved"
+
+    async def test_preserves_reservation_owned_by_foreign_session(
+        self, tmp_path: Path
+    ) -> None:
+        """A stale row whose tty_name has been reclaimed by another session.
+
+        Seeds a KV row for ``kai:a1b2c3d4`` pointing at ``tty7``, then has
+        a DIFFERENT session (``kai:deadbeef``) hold the reservation for
+        ``tty7``.  ``register_session`` for ``kai:a1b2c3d4`` must not
+        release the reservation owned by ``kai:deadbeef`` — the foreign
+        session is live and still needs its name.
+        """
+        from datetime import UTC, datetime
+
+        from biff.models import UserSession
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        foreign_key = "kai:deadbeef"
+        contested_name = "tty7"
+        seeded = UserSession(
+            user="kai",
+            tty="a1b2c3d4",
+            tty_name=contested_name,
+            display_name="Kai",
+            kind="human",
+            hostname="old-host",
+            pwd="/old",
+            repo="_test-register",
+            last_active=datetime.now(UTC),
+        )
+        await relay.update_session(seeded)
+        # Foreign session owns the reservation now.
+        ok = await relay.reserve_tty_name("kai", contested_name, foreign_key)
+        assert ok
+
+        await register_session(
+            relay,
+            "kai",
+            "a1b2c3d4",
+            display_name="Kai",
+            kind="human",
+            hostname="test-host",
+            pwd="/test",
+            repo="_test-register",
+        )
+
+        owner = await relay.get_tty_reservation_owner("kai", contested_name)
+        assert owner == foreign_key, (
+            "foreign-owned reservation must not be revoked by re-register"
+        )
