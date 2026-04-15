@@ -162,7 +162,9 @@ class TestHandlePostPr:
         assert "/wall" in result
         assert '" 10m' in result
 
-    def test_create_pr_plugin_prefix(self) -> None:
+    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.markers.read_wall_marker", return_value=None)
+    def test_create_pr_plugin_prefix(self, _wall: object, _lux: object) -> None:
         data: dict[str, object] = {
             "tool_name": "mcp__plugin_github_github__create_pull_request",
             "tool_input": {"title": "feat: hook dispatcher"},
@@ -172,7 +174,9 @@ class TestHandlePostPr:
         assert result is not None
         assert "Created PR #42" in result
 
-    def test_create_pr_response_as_dict(self) -> None:
+    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.markers.read_wall_marker", return_value=None)
+    def test_create_pr_response_as_dict(self, _wall: object, _lux: object) -> None:
         """tool_response may arrive as dict instead of JSON string."""
         data: dict[str, object] = {
             "tool_name": "mcp__github__create_pull_request",
@@ -183,7 +187,9 @@ class TestHandlePostPr:
         assert result is not None
         assert "Created PR #42" in result
 
-    def test_merge_pr_with_title(self) -> None:
+    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.markers.read_wall_marker", return_value=None)
+    def test_merge_pr_with_title(self, _wall: object, _lux: object) -> None:
         data: dict[str, object] = {
             "tool_name": "mcp__github__merge_pull_request",
             "tool_input": {"pullNumber": 42, "commit_title": "feat: hook dispatcher"},
@@ -194,7 +200,9 @@ class TestHandlePostPr:
         assert "Merged PR #42" in result
         assert "feat: hook dispatcher" in result
 
-    def test_merge_pr_pull_number_field(self) -> None:
+    @patch("biff.hook._is_lux_enabled", return_value=False)
+    @patch("biff.markers.read_wall_marker", return_value=None)
+    def test_merge_pr_pull_number_field(self, _wall: object, _lux: object) -> None:
         """Both pullNumber and pull_number field names are accepted."""
         data: dict[str, object] = {
             "tool_name": "mcp__github__merge_pull_request",
