@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
+from biff.server.tools._descriptions import get_tty_name
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
@@ -16,14 +17,22 @@ async def get_or_create_session(state: ServerState) -> UserSession:
     """Get this server's session, creating one if it doesn't exist.
 
     Uses ``state.session_key`` (``{user}:{tty}``) to look up the
-    session, backfilling display_name, hostname, and pwd from the
-    server state when creating a fresh session.
+    session, backfilling display_name, hostname, pwd, and tty_name
+    from the server state when creating a fresh session.
+
+    The auto-create branch exists for test scaffolding and edge cases
+    where a tool runs before ``register_session`` has completed.  It
+    backfills ``tty_name`` from the session-local stash (set by the
+    lifespan after claim) so a created-on-tool-call row is never
+    written with an empty ``tty_name`` — guarding against the v1.8.0
+    biff-dzqc defect resurfacing from a different code path.
     """
     session = await state.relay.get_session(state.session_key)
     if session is None:
         session = UserSession(
             user=state.config.user,
             tty=state.tty,
+            tty_name=get_tty_name(),
             hostname=state.hostname,
             pwd=state.pwd,
             display_name=state.config.display_name,
@@ -98,9 +107,22 @@ async def update_companion_session(
         return None
     session = await state.relay.get_session(companion.session_key)
     if session is None:
+        # register_session() should have written this row on lifespan
+        # startup; reaching here means either a caller invoked us before
+        # registration or the row was deleted out from under us.  Refuse
+        # to write a half-formed row without tty_name — that was the
+        # v1.8.0 biff-dzqc defect.
+        if "tty_name" not in updates or not updates["tty_name"]:
+            msg = (
+                f"update_companion_session on missing row "
+                f"{companion.session_key!r} without tty_name — refusing to "
+                "write a row with empty tty_name"
+            )
+            raise RuntimeError(msg)
         session = UserSession(
             user=companion.user,
             tty=companion.tty,
+            tty_name=str(updates["tty_name"]),
             hostname=state.hostname,
             pwd=state.pwd,
             display_name=companion.display_name,
