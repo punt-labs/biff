@@ -739,11 +739,7 @@ class TestGetEthosRoster:
 
     def test_participants_no_parent_means_root(self) -> None:
         """Entry without parent is root."""
-        roster_json = (
-            '{"participants":['
-            '{"agent_id":"kai","persona":"kai"}'
-            "]}"
-        )
+        roster_json = '{"participants":[{"agent_id":"kai","persona":"kai"}]}'
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = roster_json
@@ -756,9 +752,7 @@ class TestGetEthosRoster:
     def test_participants_single_agent_only(self) -> None:
         """Only an agent (with parent) and no root."""
         roster_json = (
-            '{"participants":['
-            '{"agent_id":"99","persona":"claude","parent":"unknown"}'
-            "]}"
+            '{"participants":[{"agent_id":"99","persona":"claude","parent":"unknown"}]}'
         )
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
