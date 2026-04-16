@@ -268,3 +268,73 @@ class TestRegisterSessionHelper:
         assert owner == foreign_key, (
             "foreign-owned reservation must not be revoked by re-register"
         )
+
+
+class TestLateCompanionRegistration:
+    """_try_late_companion_registration() recovers from startup race."""
+
+    async def test_registers_companion_when_roster_available(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Companion appears after first heartbeat when ethos was slow."""
+        from unittest.mock import MagicMock
+
+        from biff.config import EthosIdentity, EthosRoster
+        from biff.server.app import _try_late_companion_registration
+
+        config = BiffConfig(
+            user="claude",
+            display_name="Claude Agento",
+            kind="agent",
+            repo_name="_test-late-companion",
+        )
+        state = create_state(
+            config,
+            tmp_path,
+            tty="a1b2c3d4",
+            hostname="test-host",
+            pwd="/test",
+        )
+        assert state.companion is None
+
+        roster = EthosRoster(
+            root=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
+            primary=EthosIdentity(handle="claude", display_name="Claude", kind="agent"),
+        )
+        monkeypatch.setattr(
+            "biff.config.get_ethos_roster", MagicMock(return_value=roster)
+        )
+
+        await _try_late_companion_registration(state)
+
+        # _try_late_companion_registration mutates via object.__setattr__
+        # which mypy can't track — use getattr to bypass narrowing.
+        companion = getattr(state, "companion")  # noqa: B009
+        assert companion is not None
+        session = await state.relay.get_session(companion.session_key)
+        assert session is not None
+        assert session.tty_name, "late companion must have non-empty tty_name"
+        assert session.display_name == "Jim"
+
+    async def test_noop_when_no_roster(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No-op when ethos is not configured."""
+        from unittest.mock import MagicMock
+
+        from biff.server.app import _try_late_companion_registration
+
+        config = BiffConfig(
+            user="claude",
+            display_name="Claude",
+            kind="agent",
+            repo_name="_test-late-companion",
+        )
+        state = create_state(config, tmp_path, tty="a1b2c3d4", hostname="h", pwd="/")
+        monkeypatch.setattr(
+            "biff.config.get_ethos_roster", MagicMock(return_value=None)
+        )
+
+        await _try_late_companion_registration(state)
+
+        assert state.companion is None

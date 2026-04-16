@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-04-15
+
+### Fixed
+
+- **Companion session missing on resumed sessions (biff-2mhb)** — when Claude Code resumes a session (`--resume`), the MCP server starts before the SessionStart hook populates the ethos roster. The companion was never registered. Now the first heartbeat tick re-reads the ethos roster and registers the companion if it was missed at startup.
+- **Hosted NATS test assertions drift (biff-l9cl)** — two `test_hosted_e2e.py` tests asserted plan message text in `/who` output, but `/who` renders plan as a boolean `P` column. Updated assertions to check the `P` indicator and verify plan text via `/finger`.
+- **Doctor NATS check fails on cold DNS cache (biff-dal2)** — `biff doctor` and `biff install` verification produced a scary traceback on first run when DNS resolver cache was cold. Now retries once after 500ms with suppressed nats.py ERROR log on the first attempt.
+
 ## [1.9.1] - 2026-04-15
 
 ## [1.9.0] - 2026-04-15
