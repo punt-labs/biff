@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.9.4] - 2026-04-15
+
+### Fixed
+
+- **Identity race on resumed sessions (biff-v4he)** — on `claude --resume`, the MCP server starts before the SessionStart hook runs `ethos iam`, so `config.user` resolves to the human identity instead of the agent. The late companion registration compared `roster.root.handle` against `config.user` and returned early when they matched (both were the human). Now compares `roster.root.handle` against `roster.primary.handle` to detect two distinct identities, then creates the companion for whichever identity `config.user` does not cover.
+- **Frozen org_repos after startup (biff-v4he)** — `state.org_repos` was computed once at startup and never refreshed. Cross-repo sessions appearing after startup were invisible to `/who`. Now the heartbeat loop (60s interval) re-discovers org repos and updates `state.org_repos` when changes are detected.
+
 ## [1.9.3] - 2026-04-15
 
 ## [1.9.2] - 2026-04-15

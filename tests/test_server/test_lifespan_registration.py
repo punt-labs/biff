@@ -338,3 +338,140 @@ class TestLateCompanionRegistration:
         await _try_late_companion_registration(state)
 
         assert state.companion is None
+
+    async def test_late_companion_when_config_user_matches_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Identity race: config.user resolved to root (human) not primary.
+
+        On ``claude --resume``, the MCP server starts before the SessionStart
+        hook runs ``ethos iam``.  ``ethos whoami`` returns the human identity,
+        so ``config.user`` is ``jfreeman``.  The roster later shows
+        root=jfreeman + primary=claude.  The companion should be created for
+        ``claude`` (the agent identity that config.user missed).
+        """
+        from unittest.mock import MagicMock
+
+        from biff.config import EthosIdentity, EthosRoster
+        from biff.server.app import _try_late_companion_registration
+
+        # config.user resolved to the human — the race condition
+        config = BiffConfig(
+            user="jfreeman",
+            display_name="Jim Freeman",
+            kind="human",
+            repo_name="_test-identity-race",
+        )
+        state = create_state(
+            config,
+            tmp_path,
+            tty="a1b2c3d4",
+            hostname="test-host",
+            pwd="/test",
+        )
+        assert state.companion is None
+
+        roster = EthosRoster(
+            root=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
+            primary=EthosIdentity(
+                handle="claude", display_name="Claude Agento", kind="agent"
+            ),
+        )
+        monkeypatch.setattr(
+            "biff.config.get_ethos_roster", MagicMock(return_value=roster)
+        )
+
+        await _try_late_companion_registration(state)
+
+        companion = getattr(state, "companion")  # noqa: B009
+        assert companion is not None
+        assert companion.user == "claude"
+        session = await state.relay.get_session(companion.session_key)
+        assert session is not None
+        assert session.tty_name, "companion must have non-empty tty_name"
+        assert session.display_name == "Claude Agento"
+
+    async def test_noop_when_single_identity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No companion when roster has root == primary (single identity)."""
+        from unittest.mock import MagicMock
+
+        from biff.config import EthosIdentity, EthosRoster
+        from biff.server.app import _try_late_companion_registration
+
+        config = BiffConfig(
+            user="jfreeman",
+            display_name="Jim",
+            kind="human",
+            repo_name="_test-single-identity",
+        )
+        state = create_state(config, tmp_path, tty="a1b2c3d4", hostname="h", pwd="/")
+
+        roster = EthosRoster(
+            root=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
+            primary=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
+        )
+        monkeypatch.setattr(
+            "biff.config.get_ethos_roster", MagicMock(return_value=roster)
+        )
+
+        await _try_late_companion_registration(state)
+
+        assert state.companion is None
+
+
+class TestOrgReposRefresh:
+    """_refresh_org_repos() updates state.org_repos from relay discovery."""
+
+    async def test_org_repos_refreshed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """New repos discovered after startup appear in state.org_repos."""
+        from unittest.mock import AsyncMock
+
+        from biff.server.app import _refresh_org_repos
+
+        config = BiffConfig(
+            user="kai",
+            display_name="Kai",
+            kind="human",
+            repo_name="_test-org-refresh",
+            orgs=("punt-labs",),
+        )
+        state = create_state(
+            config,
+            tmp_path,
+            tty="a1b2c3d4",
+            hostname="test-host",
+            pwd="/test",
+        )
+        assert state.org_repos == frozenset()
+
+        # LocalRelay lacks discover_repos_for_org — inject it directly.
+        state.relay.discover_repos_for_org = AsyncMock(  # type: ignore[attr-defined]
+            return_value=frozenset({"_test-org-refresh", "_test-new-repo"})
+        )
+        # Make isinstance(state.relay, NatsRelay) pass.
+        monkeypatch.setattr("biff.server.app.NatsRelay", type(state.relay))
+
+        await _refresh_org_repos(state)
+
+        assert "_test-new-repo" in state.org_repos
+        assert "_test-org-refresh" in state.org_repos
+
+    async def test_noop_without_orgs(self, tmp_path: Path) -> None:
+        """No refresh when config.orgs is empty."""
+        from biff.server.app import _refresh_org_repos
+
+        config = BiffConfig(
+            user="kai",
+            display_name="Kai",
+            kind="human",
+            repo_name="_test-no-orgs",
+        )
+        state = create_state(config, tmp_path, tty="a1b2c3d4", hostname="h", pwd="/")
+
+        await _refresh_org_repos(state)
+
+        assert state.org_repos == frozenset()
