@@ -2,28 +2,55 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
+from biff.server.tools._descriptions import get_tty_name
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
+
+logger = logging.getLogger(__name__)
 
 
 async def get_or_create_session(state: ServerState) -> UserSession:
     """Get this server's session, creating one if it doesn't exist.
 
     Uses ``state.session_key`` (``{user}:{tty}``) to look up the
-    session, backfilling display_name, hostname, and pwd from the
-    server state when creating a fresh session.
+    session, backfilling display_name, hostname, pwd, and tty_name
+    from the server state when creating a fresh session.
+
+    The auto-create branch exists for test scaffolding and edge cases
+    where a tool runs before ``register_session`` has completed.  It
+    backfills ``tty_name`` from the session-local stash (set by the
+    lifespan after claim) so a created-on-tool-call row is never
+    written with an empty ``tty_name`` — guarding against the v1.8.0
+    biff-dzqc defect resurfacing from a different code path.
     """
     session = await state.relay.get_session(state.session_key)
     if session is None:
+        # Lifespan registration writes this row before any tool call.
+        # Reaching the auto-create branch means the row was deleted
+        # underneath us (reaper sentinel, TTL expiry, manual delete).
+        # ``get_tty_name()`` may not be set yet if lifespan startup was
+        # interrupted; fall back to the hex-slice placeholder that
+        # ``_format_who_name`` uses so display stays consistent and the
+        # v1.8.0 biff-dzqc invariant (no empty ``tty_name`` rows) holds.
+        stashed = get_tty_name()
+        if not stashed:
+            logger.warning(
+                "Auto-creating session %s without a reserved tty_name; "
+                "lifespan registration may not have completed",
+                state.session_key,
+            )
+        tty_name = stashed or state.tty[:8]
         session = UserSession(
             user=state.config.user,
             tty=state.tty,
+            tty_name=tty_name,
             hostname=state.hostname,
             pwd=state.pwd,
             display_name=state.config.display_name,
@@ -80,33 +107,6 @@ def resolve_tty_name(
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:
     """Update this server's session with automatic last_active refresh."""
     session = await get_or_create_session(state)
-    updates["last_active"] = datetime.now(UTC)
-    updated = session.model_copy(update=updates)
-    await state.relay.update_session(updated)
-    return updated
-
-
-async def update_companion_session(
-    state: ServerState, **updates: object
-) -> UserSession | None:
-    """Update the companion (root) session with automatic last_active refresh.
-
-    Returns ``None`` when no companion session is configured.
-    """
-    companion = state.companion
-    if companion is None:
-        return None
-    session = await state.relay.get_session(companion.session_key)
-    if session is None:
-        session = UserSession(
-            user=companion.user,
-            tty=companion.tty,
-            hostname=state.hostname,
-            pwd=state.pwd,
-            display_name=companion.display_name,
-            kind=companion.kind,
-            repo=state.config.repo_name,
-        )
     updates["last_active"] = datetime.now(UTC)
     updated = session.model_copy(update=updates)
     await state.relay.update_session(updated)

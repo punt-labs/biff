@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-04-15
+
+### Fixed
+
+- **Dual-session registration drops `tty_name` (biff-dzqc)** — v1.8.0 introduced dual-session support via a two-write pattern (write row → claim TTY name → write row again with `tty_name` set). If anything failed between the two writes, the KV row was left with `tty_name=""` and `/who` rendered the raw hex TTY instead of `ttyN`. Observed in production as a companion row with `display_name="Claude Agento"` and no TTY name. The primary and companion registration paths now claim-then-write: the TTY name is reserved first, then the KV row is written exactly once with `tty_name` already populated. Extracted shared `register_session()` helper so both paths use identical logic. A claim failure now leaves no KV row behind (atomic under failure). Active-marker write failures (`~/.punt-labs/biff/active/`) no longer silently swallow `OSError` — they surface at WARNING level so missing markers can be diagnosed.
+
 ## [1.8.1] - 2026-04-14
 
 ## [1.8.0] - 2026-04-14
