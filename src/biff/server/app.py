@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import LocalRelay, Relay
-from biff.server.state import ServerState
+from biff.server.state import CompanionSession, ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
     capture_session,
@@ -35,7 +35,7 @@ from biff.server.tools._descriptions import (
     refresh_wall,
     set_tty_name,
 )
-from biff.tty import build_session_key, claim_tty_name
+from biff.tty import build_session_key, claim_tty_name, generate_tty
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +241,42 @@ async def _reap_loop(
         await _reap_sentinels(state)
 
 
+async def _try_late_companion_registration(state: ServerState) -> None:
+    """Attempt companion registration from ethos roster on first heartbeat.
+
+    Called once when ``state.companion`` is ``None`` at the first heartbeat
+    tick.  If ethos resolves a root identity different from the primary
+    user, creates and registers a companion session.
+    """
+    from biff.config import get_ethos_roster  # noqa: PLC0415
+
+    roster = get_ethos_roster()
+    if roster is None or roster.root is None:
+        return
+    if roster.root.handle == state.config.user:
+        return  # Root is the same as primary — no companion needed
+    companion = CompanionSession(
+        user=roster.root.handle,
+        display_name=roster.root.display_name,
+        kind=roster.root.kind,
+        tty=generate_tty(),
+    )
+    object.__setattr__(state, "companion", companion)
+    try:
+        await _register_companion(state)
+    except Exception:
+        # Rollback — leave state clean so heartbeat doesn't pump a phantom.
+        object.__setattr__(state, "companion", None)
+        raise
+    # wtmp is best-effort — don't rollback a successful registration
+    # if only the login event fails (matches _active_lifespan pattern).
+    try:
+        await _append_companion_login_event(state)
+    except Exception:  # noqa: BLE001
+        logger.warning("Late companion wtmp login failed", exc_info=True)
+    logger.info("Late companion registered: %s", companion.session_key)
+
+
 async def _heartbeat_loop(
     state: ServerState, shutdown: asyncio.Event, *, interval: float = 60.0
 ) -> None:
@@ -250,7 +286,12 @@ async def _heartbeat_loop(
     resets the key's TTL.  When the process sleeps (laptop lid closed) or
     dies (SIGKILL), heartbeats stop and the relay eventually expires the
     session.
+
+    On the first tick, attempts late companion registration if
+    ``state.companion`` was not set during lifespan startup (e.g. ethos
+    was slow to respond).  Runs at most once per session lifetime.
     """
+    _companion_checked = False
     while not shutdown.is_set():
         try:
             await asyncio.wait_for(shutdown.wait(), timeout=interval)
@@ -261,6 +302,14 @@ async def _heartbeat_loop(
             await state.relay.heartbeat(state.session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
             logger.warning("Heartbeat failed", exc_info=True)
+        # Late companion registration — runs once on the first heartbeat
+        # tick when the companion was not available at lifespan startup.
+        if state.companion is None and not _companion_checked:
+            _companion_checked = True
+            try:
+                await _try_late_companion_registration(state)
+            except Exception:  # noqa: BLE001
+                logger.warning("Late companion registration failed", exc_info=True)
         if state.companion_session_key:
             try:
                 await state.relay.heartbeat(state.companion_session_key)

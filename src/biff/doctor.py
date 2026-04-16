@@ -146,22 +146,43 @@ def _resolve_relay_config() -> tuple[str, RelayAuth | None]:
 
 
 async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
-    """Attempt a NATS connection with a short timeout."""
+    """Attempt a NATS connection with a short timeout.
+
+    Retries once after 500ms on failure to handle cold DNS cache
+    (first run after install).  Suppresses nats.py ERROR log on
+    the first attempt so a transient DNS timeout doesn't produce
+    a scary traceback.
+    """
+    import logging
+
     import nats
 
     from biff.nats_relay import safe_close
 
     kwargs = auth.as_nats_kwargs() if auth else {}
-    try:
-        nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
-            url,
-            connect_timeout=3,
-            **kwargs,
-        )
-        await safe_close(nc)
-    except Exception:  # noqa: BLE001
-        return False
-    return True
+    nats_logger = logging.getLogger("nats")
+    saved_level = nats_logger.level
+
+    for attempt in range(2):
+        # Suppress nats.py ERROR on first attempt — transient DNS
+        # timeout produces a traceback that looks like a real failure.
+        if attempt == 0:
+            nats_logger.setLevel(logging.CRITICAL)
+        try:
+            nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
+                url,
+                connect_timeout=3,
+                **kwargs,
+            )
+            await safe_close(nc)
+            return True
+        except Exception:  # noqa: BLE001
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+        finally:
+            if attempt == 0:
+                nats_logger.setLevel(saved_level)
+    return False
 
 
 def _check_relay() -> CheckResult:

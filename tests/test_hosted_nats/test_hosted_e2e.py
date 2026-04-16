@@ -36,7 +36,12 @@ class TestCrossUserVisibility:
         result = await eric.call("who")
 
         assert "kai" in result
-        assert "refactoring the auth layer" in result
+        # /who renders plan as boolean P column (+/-), not inline text.
+        # Verify plan indicator is set, then use /finger for text.
+        kai_line = next(ln for ln in result.splitlines() if "kai" in ln)
+        assert "+" in kai_line
+        finger_result = await eric.call("finger", user="@kai")
+        assert "refactoring the auth layer" in finger_result
 
     @pytest.mark.transcript
     async def test_plan_visible_via_finger(
@@ -93,8 +98,16 @@ class TestMultiUserPresence:
         for result in (kai_sees, eric_sees):
             assert "kai" in result
             assert "eric" in result
-            assert "refactoring auth" in result
-            assert "reviewing PRs" in result
+            # /who renders plan as boolean P column, not text.
+            kai_line = next(ln for ln in result.splitlines() if "kai" in ln)
+            eric_line = next(ln for ln in result.splitlines() if "eric" in ln)
+            assert "+" in kai_line
+            assert "+" in eric_line
+        # Verify plan text via /finger.
+        finger_kai = await eric.call("finger", user="@kai")
+        finger_eric = await kai.call("finger", user="@eric")
+        assert "refactoring auth" in finger_kai
+        assert "reviewing PRs" in finger_eric
 
     @pytest.mark.transcript
     async def test_finger_each_other(
