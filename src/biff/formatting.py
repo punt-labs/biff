@@ -15,6 +15,8 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
+    HEADER_PREFIX,
+    ROW_PREFIX,
     ColumnSpec,
     format_idle,
     format_table,
@@ -33,6 +35,7 @@ __all__ = [
     "format_idle",
     "format_last",
     "format_read",
+    "format_read_dual",
     "format_remaining",
     "format_table",
     "format_tty_block",
@@ -335,6 +338,31 @@ READ_SPECS: list[ColumnSpec] = [
     ColumnSpec("DATE", min_width=16),
     ColumnSpec("MESSAGE", min_width=10, fixed=False),
 ]
+
+
+def format_read_dual(
+    human_user: str,
+    human_msgs: list[Message],
+    agent_user: str,
+    agent_msgs: list[Message],
+) -> str:
+    """Format messages with per-identity section headers."""
+    sections: list[str] = []
+    for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
+        if not msgs:
+            continue
+        rows: list[list[str]] = []
+        for m in msgs:
+            ts = m.timestamp.strftime("%a %b %d %H:%M")
+            sender = f"{m.from_user}:{m.from_tty}" if m.from_tty else m.from_user
+            rows.append([sender, ts, m.body])
+        table = format_table(READ_SPECS, rows)
+        # Indent the table under the section header: replace the
+        # leading HEADER_PREFIX on the column-header line with
+        # ROW_PREFIX so it aligns as a sub-table row.
+        indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
+        sections.append(f"{HEADER_PREFIX}{user}\n{indented_table}")
+    return "\n\n".join(sections)
 
 
 def format_read(messages: list[Message]) -> str:

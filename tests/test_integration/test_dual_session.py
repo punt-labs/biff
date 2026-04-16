@@ -9,6 +9,7 @@ Also verifies the single-session fallback when no companion is present.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,7 @@ def dual_state(shared_data_dir: Path) -> ServerState:
         display_name="Jim Freeman",
         kind="human",
         tty=generate_tty(),
+        tty_name="tty3",
     )
     return create_state(
         config,
@@ -53,6 +55,7 @@ def dual_state(shared_data_dir: Path) -> ServerState:
         hostname="test-host",
         pwd="/test",
         companion=companion,
+        unread_path=shared_data_dir / "unread.json",
     )
 
 
@@ -70,6 +73,7 @@ def single_state(shared_data_dir: Path) -> ServerState:
         tty="bbb22222",
         hostname="test-host",
         pwd="/test",
+        unread_path=shared_data_dir / "unread-single.json",
     )
 
 
@@ -159,3 +163,82 @@ class TestDualSessionMessaging:
 
         result = await dual.call("read_messages")
         assert "lunch?" in result
+
+    async def test_read_dual_sections_per_identity(
+        self,
+        dual: RecordingClient,
+        dual_state: ServerState,
+    ) -> None:
+        """Dual-session /read groups messages by identity."""
+        from biff.models import Message
+
+        companion = dual_state.companion
+        assert companion is not None
+
+        # Message to companion (human) inbox.
+        await dual_state.relay.deliver(
+            Message(from_user="kai", to_user=companion.user, body="hey Jim"),
+            sender_key="kai:fake0001",
+        )
+        # Message to primary (agent) inbox.
+        await dual_state.relay.deliver(
+            Message(from_user="rmh", to_user=dual_state.config.user, body="impl done"),
+            sender_key="rmh:fake0002",
+        )
+
+        result = await dual.call("read_messages")
+        # Both section headers present.
+        assert "\u25b6  jfreeman" in result
+        assert "\u25b6  claude" in result
+        # Human section appears first.
+        assert result.index("\u25b6  jfreeman") < result.index("\u25b6  claude")
+
+    async def test_read_single_session_no_sections(
+        self,
+        single: RecordingClient,
+        single_state: ServerState,
+    ) -> None:
+        """Single-session /read has no section headers."""
+        from biff.models import Message
+
+        await single_state.relay.deliver(
+            Message(
+                from_user="kai", to_user=single_state.config.user, body="hey claude"
+            ),
+            sender_key="kai:fake0003",
+        )
+
+        result = await single.call("read_messages")
+        assert "hey claude" in result
+        assert "\u25b6  claude" not in result
+
+
+class TestDualSessionStatusBar:
+    """Status bar shows human identity in dual-session mode."""
+
+    async def test_unread_file_shows_human_identity(
+        self,
+        dual: RecordingClient,
+        dual_state: ServerState,
+    ) -> None:
+        """The unread JSON file uses companion user/tty_name."""
+        # Trigger a tool call that writes the unread file.
+        await dual.call("read_messages")
+        assert dual_state.unread_path is not None
+        data = json.loads(dual_state.unread_path.read_text())
+        assert data["user"] == "jfreeman"
+        companion = dual_state.companion
+        assert companion is not None
+        assert data["tty_name"] == companion.tty_name
+
+    async def test_single_session_unread_file_shows_primary(
+        self,
+        single: RecordingClient,
+        single_state: ServerState,
+    ) -> None:
+        """Without companion, unread file uses primary identity."""
+        assert single_state.unread_path is not None
+        await single.call("plan", message="solo work")
+        data = json.loads(single_state.unread_path.read_text())
+        assert data["user"] == "claude"
+        assert data["tty_name"] != ""
