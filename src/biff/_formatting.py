@@ -14,7 +14,12 @@ TABLE_WIDTH = 80
 _COL_SEP = "  "
 HEADER_PREFIX = "\u25b6  "
 ROW_PREFIX = "   "
-_PREFIX_LEN = 3  # len(HEADER_PREFIX) == len(ROW_PREFIX)
+_PREFIX_LEN = len(HEADER_PREFIX)
+# Invariant: HEADER_PREFIX and ROW_PREFIX must be the same width
+# for column alignment. Derived from HEADER_PREFIX, not hard-coded.
+if len(HEADER_PREFIX) != len(ROW_PREFIX):  # pragma: no cover
+    msg = f"HEADER_PREFIX ({len(HEADER_PREFIX)}) != ROW_PREFIX ({len(ROW_PREFIX)})"
+    raise ValueError(msg)
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 

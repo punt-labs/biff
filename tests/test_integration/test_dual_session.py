@@ -73,6 +73,7 @@ def single_state(shared_data_dir: Path) -> ServerState:
         tty="bbb22222",
         hostname="test-host",
         pwd="/test",
+        unread_path=shared_data_dir / "unread-single.json",
     )
 
 
@@ -236,7 +237,8 @@ class TestDualSessionStatusBar:
         single_state: ServerState,
     ) -> None:
         """Without companion, unread file uses primary identity."""
-        # Need unread_path on single_state — but it was created without one.
-        # Skip if unread_path is None (single_state doesn't have one).
-        if single_state.unread_path is None:
-            pytest.skip("single_state has no unread_path")
+        assert single_state.unread_path is not None
+        await single.call("plan", message="solo work")
+        data = json.loads(single_state.unread_path.read_text())
+        assert data["user"] == "claude"
+        assert data["tty_name"] != ""
