@@ -245,20 +245,30 @@ async def _try_late_companion_registration(state: ServerState) -> None:
     """Attempt companion registration from ethos roster on first heartbeat.
 
     Called once when ``state.companion`` is ``None`` at the first heartbeat
-    tick.  If ethos resolves a root identity different from the primary
-    user, creates and registers a companion session.
+    tick.  If ethos resolves a roster with two distinct identities (root
+    and primary), creates and registers a companion for whichever identity
+    is NOT already ``state.config.user``.
+
+    Handles the identity race on ``claude --resume``: the MCP server starts
+    before the SessionStart hook runs ``ethos iam``, so ``config.user``
+    resolves to the human (root) instead of the agent (primary).  The
+    primary session is already registered under ``config.user``; the
+    companion covers the OTHER identity.
     """
     from biff.config import get_ethos_roster  # noqa: PLC0415
 
     roster = get_ethos_roster()
-    if roster is None or roster.root is None:
+    if roster is None or roster.root is None or roster.primary is None:
         return
-    if roster.root.handle == state.config.user:
-        return  # Root is the same as primary — no companion needed
+    if roster.root.handle == roster.primary.handle:
+        return  # Single identity — no companion needed
+    # Two distinct identities in roster.  The primary session registered
+    # as state.config.user.  Create companion for the OTHER identity.
+    other = roster.root if roster.root.handle != state.config.user else roster.primary
     companion = CompanionSession(
-        user=roster.root.handle,
-        display_name=roster.root.display_name,
-        kind=roster.root.kind,
+        user=other.handle,
+        display_name=other.display_name,
+        kind=other.kind,
         tty=generate_tty(),
     )
     object.__setattr__(state, "companion", companion)
@@ -275,6 +285,28 @@ async def _try_late_companion_registration(state: ServerState) -> None:
     except Exception:  # noqa: BLE001
         logger.warning("Late companion wtmp login failed", exc_info=True)
     logger.info("Late companion registered: %s", companion.session_key)
+
+
+async def _refresh_org_repos(state: ServerState) -> None:
+    """Re-discover org repos and update state if changed.
+
+    Non-critical — a stale ``org_repos`` is acceptable, so errors
+    are logged at DEBUG and swallowed.
+    """
+    if not state.config.orgs or not isinstance(state.relay, NatsRelay):
+        return
+    try:
+        org_results = await asyncio.gather(
+            *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
+        )
+        new_org_repos = frozenset[str]().union(*org_results)
+        if not new_org_repos:
+            return  # Transient empty result — keep stale data
+        if new_org_repos != state.org_repos:
+            object.__setattr__(state, "org_repos", new_org_repos)
+            logger.info("Org repos refreshed: %s", sorted(new_org_repos))
+    except Exception:  # noqa: BLE001
+        logger.debug("Org discovery refresh failed", exc_info=True)
 
 
 async def _heartbeat_loop(
@@ -315,6 +347,7 @@ async def _heartbeat_loop(
                 await state.relay.heartbeat(state.companion_session_key)
             except Exception:  # noqa: BLE001
                 logger.warning("Companion heartbeat failed", exc_info=True)
+        await _refresh_org_repos(state)
 
 
 def _kv_key_to_session_key(kv_key: str, repo_name: str) -> str | None:
