@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.9.6] - 2026-04-16
+
+### Added
+
+- **Status bar shows human identity in dual-session (biff-uw6i)** -- when a companion session is active, the unread status file writes the human (root) identity and TTY name instead of the agent (primary). The human at the terminal sees their own address in the status bar.
+- **`/read` groups messages by identity (biff-uw6i)** -- in dual-session mode, `read_messages` partitions messages into per-identity sections with `▶` headers. Human section listed first. Single-session output is unchanged.
+
 ## [1.9.5] - 2026-04-15
 
 ## [1.9.4] - 2026-04-15

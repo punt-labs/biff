@@ -219,12 +219,18 @@ async def _sync_unread_file(
     session = await state.relay.get_session(state.session_key)
     if session is not None:
         plan = session.plan
+    if state.companion is not None:
+        status_user = state.companion.user
+        status_tty = state.companion.tty_name
+    else:
+        status_user = state.config.user
+        status_tty = _tty_name
     _write_unread_file(
         state.unread_path,
         summary,
         repo_name=state.config.repo_name,
-        user=state.config.user,
-        tty_name=_tty_name,
+        user=status_user,
+        tty_name=status_tty,
         biff_enabled=_biff_enabled,
         display_items=items,
         plan=plan,

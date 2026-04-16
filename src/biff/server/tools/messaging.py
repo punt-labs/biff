@@ -12,7 +12,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from biff.chunking import chunk_message
-from biff.formatting import format_read
+from biff.formatting import format_read, format_read_dual
 from biff.models import Message
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
@@ -203,4 +203,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await _mark_companion_read(state, comp_tty, comp_user)
 
         await refresh_read_messages(mcp, state)
+
+        if state.companion is not None:
+            human_msgs = sorted(comp_tty + comp_user, key=lambda m: m.timestamp)
+            agent_msgs = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
+            return format_read_dual(
+                state.companion.user,
+                human_msgs,
+                state.config.user,
+                agent_msgs,
+            )
         return format_read(all_unread)

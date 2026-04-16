@@ -12,9 +12,9 @@ from typing import Literal
 
 TABLE_WIDTH = 80
 _COL_SEP = "  "
-_HEADER_PREFIX = "\u25b6  "
-_ROW_PREFIX = "   "
-_PREFIX_LEN = 3  # len(_HEADER_PREFIX) == len(_ROW_PREFIX)
+HEADER_PREFIX = "\u25b6  "
+ROW_PREFIX = "   "
+_PREFIX_LEN = 3  # len(HEADER_PREFIX) == len(ROW_PREFIX)
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -103,7 +103,7 @@ def _render_rows(
     for row in rows:
         if var_idx is None:
             cells = [_fmt_cell(row[i], col_widths[i], specs[i].align) for i in range(n)]
-            output.append(_ROW_PREFIX + _COL_SEP.join(cells))
+            output.append(ROW_PREFIX + _COL_SEP.join(cells))
         else:
             chunks = textwrap.wrap(row[var_idx], col_widths[var_idx]) or [""]
             for chunk_i, chunk in enumerate(chunks):
@@ -116,7 +116,7 @@ def _render_rows(
                         )
                         for i in range(n)
                     ]
-                    output.append(_ROW_PREFIX + _COL_SEP.join(cells))
+                    output.append(ROW_PREFIX + _COL_SEP.join(cells))
                 else:
                     output.append(indent + chunk)
 
@@ -174,7 +174,7 @@ def format_table(specs: list[ColumnSpec], rows: list[list[str]]) -> str:
         _fmt_cell(spec.header, col_widths[i], spec.align)
         for i, spec in enumerate(specs)
     ]
-    header = _HEADER_PREFIX + _COL_SEP.join(header_cells)
+    header = HEADER_PREFIX + _COL_SEP.join(header_cells)
 
     # Step 5: render rows with wrapping on the variable column.
     body = _render_rows(specs, rows, col_widths, var_idx, var_offset)
