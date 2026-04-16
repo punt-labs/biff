@@ -262,8 +262,13 @@ async def _try_late_companion_registration(state: ServerState) -> None:
         tty=generate_tty(),
     )
     object.__setattr__(state, "companion", companion)
-    await _register_companion(state)
-    await _append_companion_login_event(state)
+    try:
+        await _register_companion(state)
+        await _append_companion_login_event(state)
+    except Exception:
+        # Rollback — leave state clean so heartbeat doesn't pump a phantom.
+        object.__setattr__(state, "companion", None)
+        raise
     logger.info("Late companion registered: %s", companion.session_key)
 
 
