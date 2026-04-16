@@ -264,11 +264,16 @@ async def _try_late_companion_registration(state: ServerState) -> None:
     object.__setattr__(state, "companion", companion)
     try:
         await _register_companion(state)
-        await _append_companion_login_event(state)
     except Exception:
         # Rollback — leave state clean so heartbeat doesn't pump a phantom.
         object.__setattr__(state, "companion", None)
         raise
+    # wtmp is best-effort — don't rollback a successful registration
+    # if only the login event fails (matches _active_lifespan pattern).
+    try:
+        await _append_companion_login_event(state)
+    except Exception:  # noqa: BLE001
+        logger.warning("Late companion wtmp login failed", exc_info=True)
     logger.info("Late companion registered: %s", companion.session_key)
 
 
