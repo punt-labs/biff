@@ -300,6 +300,8 @@ async def _refresh_org_repos(state: ServerState) -> None:
             *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
         )
         new_org_repos = frozenset[str]().union(*org_results)
+        if not new_org_repos:
+            return  # Transient empty result — keep stale data
         if new_org_repos != state.org_repos:
             object.__setattr__(state, "org_repos", new_org_repos)
             logger.info("Org repos refreshed: %s", sorted(new_org_repos))
