@@ -88,7 +88,7 @@ class TestServeCommand:
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
     def test_http_default(
         self,
         _mock_config: MagicMock,
@@ -105,7 +105,7 @@ class TestServeCommand:
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
     def test_custom_host_port(
         self,
         _mock_config: MagicMock,
@@ -125,7 +125,7 @@ class TestServeCommand:
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
     def test_passes_user_override(
         self,
         mock_config: MagicMock,
@@ -144,7 +144,7 @@ class TestMcpCommand:
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
     def test_stdio_transport(
         self,
         _mock_config: MagicMock,
@@ -159,7 +159,7 @@ class TestMcpCommand:
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
     def test_passes_data_dir_override(
         self,
         mock_config: MagicMock,
@@ -173,7 +173,7 @@ class TestMcpCommand:
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
     def test_passes_prefix(
         self,
         mock_config: MagicMock,
@@ -187,14 +187,14 @@ class TestMcpCommand:
 
     @patch("biff.__main__.create_server")
     @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_config", return_value=_RESOLVED)
+    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
     def test_no_user_delegates_to_config(
         self,
         mock_config: MagicMock,
         _mock_state: MagicMock,
         mock_server: MagicMock,
     ) -> None:
-        """When --user is omitted, load_config gets user_override=None."""
+        """When --user is omitted, load_mcp_config gets user_override=None."""
         mock_server.return_value = MagicMock()
         runner.invoke(app, ["mcp"])
         call_kwargs = mock_config.call_args.kwargs

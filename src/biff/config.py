@@ -65,7 +65,13 @@ def demo_creds_path() -> Path:
 
 @dataclass(frozen=True)
 class ResolvedConfig:
-    """Fully resolved configuration ready for server startup."""
+    """Fully resolved configuration ready for server startup.
+
+    The ``root_identity`` field is retained for Step 2 of biff-8fg3 so
+    ``_create_mcp_server`` continues to compile; Step 3 removes both the
+    field and its consumer in the same commit. New entry points always
+    leave it ``None`` (companion registration is deferred to heartbeat).
+    """
 
     config: BiffConfig
     data_dir: Path
@@ -214,43 +220,6 @@ def get_ethos_roster() -> EthosRoster | None:
     if isinstance(participants, list):
         return _parse_roster_participants(cast("list[object]", participants))
     return _parse_roster_legacy(raw)
-
-
-def get_ethos_identity() -> EthosIdentity | None:
-    """Resolve identity from the ethos CLI.
-
-    Returns ``None`` when ethos is not installed, not configured,
-    returns malformed JSON, or times out.
-    """
-    try:
-        result = subprocess.run(
-            ["ethos", "whoami", "--json"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2,
-        )
-    except FileNotFoundError:
-        return None
-    except subprocess.TimeoutExpired:
-        return None
-    if result.returncode != 0:
-        return None
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    raw = cast("dict[str, object]", data)
-    handle = raw.get("handle", "")
-    if not isinstance(handle, str) or not handle:
-        return None
-    name = raw.get("name", "")
-    display_name = name if isinstance(name, str) and name else handle
-    kind_val = raw.get("kind", "")
-    kind = kind_val if isinstance(kind_val, str) else ""
-    return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
 
 
 def _read_identity_yaml(path: Path) -> dict[str, object] | None:
@@ -809,24 +778,39 @@ def _apply_demo_relay_default(
     return relay_url, relay_auth
 
 
-def load_config(
+_NO_USER_MSG = (
+    "No user configured. Install the gh CLI and authenticate, or pass --user <handle>"
+)
+
+
+@dataclass(frozen=True)
+class _BaseConfig:
+    """Non-identity portion of a resolved config, shared by both entry points."""
+
+    repo_root: Path
+    repo_name: str
+    data_dir: Path
+    relay_url: str | None
+    relay_auth: RelayAuth | None
+    team: tuple[str, ...]
+    peers: tuple[str, ...]
+    orgs: tuple[str, ...]
+    poll_interval: float
+
+
+def _load_base_config(
     *,
-    user_override: str | None = None,
-    data_dir_override: Path | None = None,
-    relay_url_override: object = RELAY_URL_UNSET,
-    prefix: Path = _DEFAULT_PREFIX,
-    start: Path | None = None,
-) -> ResolvedConfig:
-    """Discover and resolve all configuration.
+    data_dir_override: Path | None,
+    relay_url_override: object,
+    prefix: Path,
+    start: Path | None,
+) -> _BaseConfig:
+    """Resolve everything except identity (repo, relay, team, peers, data dir).
 
-    Raises :class:`SystemExit` for any of the following:
-
-    - ``start`` is not inside a git repository
-    - the repo directory name fails :func:`sanitize_repo_name`
-    - ``config.yaml`` is malformed (raised by :func:`load_yaml_config`)
-    - conflicting auth keys in the relay section
-    - no user identity can be resolved (``gh`` missing, no OS user,
-      and no ``--user`` override)
+    Raises :class:`SystemExit` when *start* is not inside a git
+    repository, the repo directory name fails
+    :func:`sanitize_repo_name`, ``config.yaml`` is malformed, or the
+    relay section contains conflicting auth keys.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
@@ -845,31 +829,6 @@ def load_config(
         relay_url = override or None
         relay_auth = None
 
-    # Resolve user: CLI override > ethos > GitHub > OS username
-    display_name = ""
-    kind = ""
-    if user_override is not None:
-        user: str | None = user_override
-    else:
-        ethos = get_ethos_identity()
-        if ethos is not None:
-            user = ethos.handle
-            display_name = ethos.display_name
-            kind = ethos.kind
-        else:
-            identity = get_github_identity()
-            if identity is not None:
-                user = identity.login
-                display_name = identity.display_name
-            else:
-                user = get_os_user()
-    if user is None:
-        msg = (
-            "No user configured. Install the gh CLI and authenticate,"
-            " or pass --user <handle>"
-        )
-        raise SystemExit(msg)
-
     repo_slug = get_repo_slug(repo_root)
     repo_name = sanitize_repo_name(repo_slug or repo_root.name)
     data_dir = (
@@ -878,23 +837,10 @@ def load_config(
         else compute_data_dir(repo_root, prefix)
     )
 
-    # Resolve dual-session roster: if root != primary, store root_identity.
-    root_identity: EthosIdentity | None = None
-    if user_override is None:
-        roster = get_ethos_roster()
-        if (
-            roster is not None
-            and roster.root is not None
-            and roster.primary is not None
-            and roster.root.handle != roster.primary.handle
-        ):
-            root_identity = roster.root
-
-    config = BiffConfig(
-        user=user,
-        display_name=display_name,
-        kind=kind,
+    return _BaseConfig(
+        repo_root=repo_root,
         repo_name=repo_name,
+        data_dir=data_dir,
         relay_url=relay_url,
         relay_auth=relay_auth,
         team=cf.team,
@@ -902,9 +848,123 @@ def load_config(
         orgs=cf.orgs,
         poll_interval=cf.poll_interval,
     )
+
+
+def _resolve_human_identity(
+    user_override: str | None,
+) -> tuple[str, str, str]:
+    """Return (user, display_name, kind) from the human-identity chain.
+
+    Chain: ``user_override`` -> ``get_github_identity()`` -> ``get_os_user()``.
+    Raises :class:`SystemExit` when no identity source succeeds.
+    """
+    if user_override is not None:
+        return user_override, "", ""
+    identity = get_github_identity()
+    if identity is not None:
+        return identity.login, identity.display_name, ""
+    os_user = get_os_user()
+    if os_user is None:
+        raise SystemExit(_NO_USER_MSG)
+    return os_user, "", ""
+
+
+def _assemble_config(
+    base: _BaseConfig, user: str, display_name: str, kind: str
+) -> ResolvedConfig:
+    """Build a ``ResolvedConfig`` from a base config and resolved identity."""
+    config = BiffConfig(
+        user=user,
+        display_name=display_name,
+        kind=kind,
+        repo_name=base.repo_name,
+        relay_url=base.relay_url,
+        relay_auth=base.relay_auth,
+        team=base.team,
+        peers=base.peers,
+        orgs=base.orgs,
+        poll_interval=base.poll_interval,
+    )
     return ResolvedConfig(
         config=config,
-        data_dir=data_dir,
-        repo_root=repo_root,
-        root_identity=root_identity,
+        data_dir=base.data_dir,
+        repo_root=base.repo_root,
     )
+
+
+def load_mcp_config(
+    *,
+    user_override: str | None = None,
+    data_dir_override: Path | None = None,
+    relay_url_override: object = RELAY_URL_UNSET,
+    prefix: Path = _DEFAULT_PREFIX,
+    start: Path | None = None,
+) -> ResolvedConfig:
+    """Discover and resolve configuration for the MCP server.
+
+    Identity chain:
+    ``user_override`` -> :func:`resolve_agent_identity_from_disk` ->
+    :func:`get_github_identity` -> :func:`get_os_user`.
+
+    The MCP server runs inside the agent's process; its primary
+    identity is the agent. Disk-based resolution avoids the
+    ``ethos whoami`` subprocess race on ``claude --resume`` (spec
+    invariant 9). Companion (human) registration is deferred to the
+    heartbeat loop.
+
+    Raises :class:`SystemExit` for the same conditions as
+    :func:`_load_base_config`, plus when no identity source succeeds.
+    """
+    base = _load_base_config(
+        data_dir_override=data_dir_override,
+        relay_url_override=relay_url_override,
+        prefix=prefix,
+        start=start,
+    )
+
+    if user_override is not None:
+        return _assemble_config(base, user_override, "", "")
+
+    agent = resolve_agent_identity_from_disk(base.repo_root)
+    if agent is not None:
+        return _assemble_config(base, agent.handle, agent.display_name, agent.kind)
+
+    identity = get_github_identity()
+    if identity is not None:
+        return _assemble_config(base, identity.login, identity.display_name, "")
+
+    os_user = get_os_user()
+    if os_user is None:
+        raise SystemExit(_NO_USER_MSG)
+    return _assemble_config(base, os_user, "", "")
+
+
+def load_cli_config(
+    *,
+    user_override: str | None = None,
+    data_dir_override: Path | None = None,
+    relay_url_override: object = RELAY_URL_UNSET,
+    prefix: Path = _DEFAULT_PREFIX,
+    start: Path | None = None,
+) -> ResolvedConfig:
+    """Discover and resolve configuration for the ``biff`` CLI.
+
+    Identity chain:
+    ``user_override`` -> :func:`get_github_identity` -> :func:`get_os_user`.
+
+    The CLI runs in the user's shell -- a human at the terminal. CLI
+    sessions identify as the human, never the agent. This is the
+    pre-spec behavior with the now-deleted ``get_ethos_identity()``
+    step removed (spec § 1.1).
+
+    Raises :class:`SystemExit` for the same conditions as
+    :func:`_load_base_config`, plus when no identity source succeeds.
+    """
+    base = _load_base_config(
+        data_dir_override=data_dir_override,
+        relay_url_override=relay_url_override,
+        prefix=prefix,
+        start=start,
+    )
+    user, display_name, kind = _resolve_human_identity(user_override)
+    return _assemble_config(base, user, display_name, kind)

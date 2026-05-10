@@ -16,7 +16,7 @@ from biff.config import (
     _deep_merge,
     demo_creds_path,
     ensure_gitignore_yaml,
-    load_config,
+    load_cli_config,
     load_yaml_config,
     load_yaml_local,
     merge_config,
@@ -308,7 +308,7 @@ class TestLoadConfigZeroConfig:
     ) -> None:
         """No config files -> org derived from remote owner."""
         (tmp_path / ".git").mkdir()
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.orgs == ("punt-labs",)
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
@@ -317,7 +317,7 @@ class TestLoadConfigZeroConfig:
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_url == DEMO_RELAY_URL
         assert resolved.config.relay_auth is not None
         assert resolved.config.relay_auth.user_credentials == str(demo_creds_path())
@@ -329,7 +329,7 @@ class TestLoadConfigZeroConfig:
     ) -> None:
         """No remote -> empty orgs, but still demo relay."""
         (tmp_path / ".git").mkdir()
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.orgs == ()
         assert resolved.config.relay_url == DEMO_RELAY_URL
 
@@ -347,7 +347,7 @@ class TestLoadConfigYaml:
         (biff_dir / "config.yaml").write_text(
             "relay:\n  url: nats://custom:4222\npeers:\n  orgs:\n    - my-org\n"
         )
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_url == "nats://custom:4222"
         assert resolved.config.orgs == ("my-org",)
 
@@ -363,7 +363,7 @@ class TestLoadConfigYaml:
         (biff_dir / "config.local.yaml").write_text(
             "relay:\n  url: tls://local-override\n"
         )
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_url == "tls://local-override"
 
     @patch("biff.config.get_repo_owner", return_value="punt-labs")
@@ -382,7 +382,7 @@ class TestLoadConfigYaml:
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
         (biff_dir / "config.yaml").write_text("relay:\n  url: tls://custom\n")
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.orgs == ("punt-labs",)
         assert resolved.config.relay_url == "tls://custom"
 
@@ -395,7 +395,7 @@ class TestLoadConfigYaml:
         (biff_dir / "config.yaml").write_text(
             "relay:\n  url: tls://secure\n  auth:\n    credentials: /path/to.creds\n"
         )
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_url == "tls://secure"
         assert resolved.config.relay_auth == RelayAuth(
             user_credentials="/path/to.creds"
@@ -411,6 +411,6 @@ class TestLoadConfigYaml:
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
         (biff_dir / "config.yaml").write_text("peers:\n  orgs:\n    - punt-labs\n")
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         # Demo relay is always the fallback
         assert resolved.config.relay_url == DEMO_RELAY_URL

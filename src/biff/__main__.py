@@ -46,7 +46,7 @@ from biff.config import (
     ensure_gitignore_yaml,
     find_git_root,
     is_enabled,
-    load_config,
+    load_mcp_config,
     write_yaml_local_enabled,
 )
 from biff.hook import hook_app
@@ -1013,7 +1013,7 @@ def _create_mcp_server(
     from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
 
-    resolved = load_config(
+    resolved = load_mcp_config(
         user_override=user,
         data_dir_override=data_dir,
         relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
