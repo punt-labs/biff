@@ -60,7 +60,7 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
 async def kai(nats_server: str, tmp_path: Path) -> AsyncIterator[CliContext]:
     """CLI session for user kai backed by local NATS."""
     resolved = _make_resolved("kai", nats_server, tmp_path)
-    with patch("biff.cli_session.load_config", return_value=resolved):
+    with patch("biff.cli_session.load_cli_config", return_value=resolved):
         async with cli_session() as ctx:
             yield ctx
 
@@ -69,6 +69,6 @@ async def kai(nats_server: str, tmp_path: Path) -> AsyncIterator[CliContext]:
 async def eric(nats_server: str, tmp_path: Path) -> AsyncIterator[CliContext]:
     """CLI session for user eric backed by local NATS."""
     resolved = _make_resolved("eric", nats_server, tmp_path)
-    with patch("biff.cli_session.load_config", return_value=resolved):
+    with patch("biff.cli_session.load_cli_config", return_value=resolved):
         async with cli_session() as ctx:
             yield ctx

@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from biff.config import load_config
+from biff.config import load_cli_config
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
@@ -156,7 +156,7 @@ async def cli_session(
 
     On exit: write wtmp logout event, delete session (KV), disconnect.
     """
-    resolved = load_config(user_override=user_override)
+    resolved = load_cli_config(user_override=user_override)
     config = resolved.config
 
     if not config.relay_url:

@@ -52,9 +52,18 @@ class TestActiveMarkers:
             marker = active_root / "kai-a1b2c3d4"
             assert marker.exists(), "primary active marker missing"
 
-    async def test_marker_for_companion(
+    async def test_companion_marker_written_when_register_companion_runs(
         self, tmp_path: Path, active_root: Path
     ) -> None:
+        """Companion marker is written by _register_companion (heartbeat path).
+
+        Startup no longer registers the companion (biff-8fg3) -- the
+        marker is written when the heartbeat path successfully resolves
+        the roster and calls ``_register_companion``. This test pins
+        that invariant by invoking the helper directly.
+        """
+        from biff.server.app import _register_companion
+
         config = BiffConfig(
             user="claude",
             display_name="Claude Agento",
@@ -78,10 +87,16 @@ class TestActiveMarkers:
         mcp = create_server(state)
 
         async with Client(FastMCPTransport(mcp)):
-            primary_marker = active_root / "claude-a1b2c3d4"
             companion_marker = active_root / "jfreeman-e5f6g7h8"
+            assert not companion_marker.exists(), (
+                "companion marker must not be written at startup"
+            )
+            await _register_companion(state)
+            assert companion_marker.exists(), (
+                "companion marker missing after _register_companion"
+            )
+            primary_marker = active_root / "claude-a1b2c3d4"
             assert primary_marker.exists(), "primary marker missing"
-            assert companion_marker.exists(), "companion marker missing"
 
     async def test_marker_not_written_on_register_failure(
         self,

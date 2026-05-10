@@ -241,34 +241,30 @@ async def _reap_loop(
         await _reap_sentinels(state)
 
 
-async def _try_late_companion_registration(state: ServerState) -> None:
-    """Attempt companion registration from ethos roster on first heartbeat.
+async def _poll_companion_registration(state: ServerState) -> None:
+    """Attempt companion registration from the ethos roster.
 
-    Called once when ``state.companion`` is ``None`` at the first heartbeat
-    tick.  If ethos resolves a roster with two distinct identities (root
-    and primary), creates and registers a companion for whichever identity
-    is NOT already ``state.config.user``.
+    Called on each heartbeat tick while ``state.companion`` is ``None``.
+    The companion is always ``roster.root`` -- the human at the terminal
+    (spec § 3.2). When ``roster.root.handle == state.config.user`` the
+    agent is also the root and there is no human to register; do
+    nothing.
 
-    Handles the identity race on ``claude --resume``: the MCP server starts
-    before the SessionStart hook runs ``ethos iam``, so ``config.user``
-    resolves to the human (root) instead of the agent (primary).  The
-    primary session is already registered under ``config.user``; the
-    companion covers the OTHER identity.
+    ``get_ethos_roster()`` runs via ``asyncio.to_thread`` so the
+    2-second subprocess timeout cannot stall the event loop (spec
+    invariant 11).
     """
     from biff.config import get_ethos_roster  # noqa: PLC0415
 
-    roster = get_ethos_roster()
-    if roster is None or roster.root is None or roster.primary is None:
+    roster = await asyncio.to_thread(get_ethos_roster)
+    if roster is None or roster.root is None:
         return
-    if roster.root.handle == roster.primary.handle:
-        return  # Single identity — no companion needed
-    # Two distinct identities in roster.  The primary session registered
-    # as state.config.user.  Create companion for the OTHER identity.
-    other = roster.root if roster.root.handle != state.config.user else roster.primary
+    if roster.root.handle == state.config.user:
+        return  # Root IS the agent -- no human companion to register
     companion = CompanionSession(
-        user=other.handle,
-        display_name=other.display_name,
-        kind=other.kind,
+        user=roster.root.handle,
+        display_name=roster.root.display_name,
+        kind=roster.root.kind,
         tty=generate_tty(),
     )
     object.__setattr__(state, "companion", companion)
@@ -283,8 +279,8 @@ async def _try_late_companion_registration(state: ServerState) -> None:
     try:
         await _append_companion_login_event(state)
     except Exception:  # noqa: BLE001
-        logger.warning("Late companion wtmp login failed", exc_info=True)
-    logger.info("Late companion registered: %s", companion.session_key)
+        logger.warning("Companion wtmp login failed", exc_info=True)
+    logger.info("Companion registered: %s", companion.session_key)
 
 
 async def _refresh_org_repos(state: ServerState) -> None:
@@ -319,11 +315,12 @@ async def _heartbeat_loop(
     dies (SIGKILL), heartbeats stop and the relay eventually expires the
     session.
 
-    On the first tick, attempts late companion registration if
-    ``state.companion`` was not set during lifespan startup (e.g. ethos
-    was slow to respond).  Runs at most once per session lifetime.
+    On every tick while ``state.companion`` is ``None``, polls the
+    ethos roster for the human identity (spec § 3.2). The poll cost
+    is bounded by one subprocess call per ``interval`` and the
+    subprocess runs on a worker thread so it never blocks the event
+    loop (spec invariant 11).
     """
-    _companion_checked = False
     while not shutdown.is_set():
         try:
             await asyncio.wait_for(shutdown.wait(), timeout=interval)
@@ -334,14 +331,11 @@ async def _heartbeat_loop(
             await state.relay.heartbeat(state.session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
             logger.warning("Heartbeat failed", exc_info=True)
-        # Late companion registration — runs once on the first heartbeat
-        # tick when the companion was not available at lifespan startup.
-        if state.companion is None and not _companion_checked:
-            _companion_checked = True
+        if state.companion is None:
             try:
-                await _try_late_companion_registration(state)
+                await _poll_companion_registration(state)
             except Exception:  # noqa: BLE001
-                logger.warning("Late companion registration failed", exc_info=True)
+                logger.warning("Companion registration poll failed", exc_info=True)
         if state.companion_session_key:
             try:
                 await state.relay.heartbeat(state.companion_session_key)
@@ -937,8 +931,9 @@ async def _active_lifespan(
     )
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
-    # Companion TTY name claim (DES-039).
-    await _register_companion(state)
+    # Companion (human) registration is deferred entirely to the
+    # heartbeat loop. The ethos roster is not yet available at
+    # startup on claude --resume (spec § 3.2, biff-8fg3).
 
     # Write the initial unread file and wall state immediately so the
     # status line has identity from the first render (before the poller ticks).
@@ -952,8 +947,6 @@ async def _active_lifespan(
     sessions = await state.relay.get_sessions()
 
     await _append_login_event(state, final_name)
-    if state.companion:
-        await _append_companion_login_event(state)
     await _close_orphaned_logins(state, sessions)
 
     shutdown = asyncio.Event()

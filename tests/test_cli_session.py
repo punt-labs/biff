@@ -115,7 +115,7 @@ class TestCliSessionLifecycle:
         self, mock_relay: AsyncMock, mock_config: object
     ) -> None:
         with (
-            patch("biff.cli_session.load_config", return_value=mock_config),
+            patch("biff.cli_session.load_cli_config", return_value=mock_config),
             patch("biff.cli_session.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session() as ctx:
@@ -140,7 +140,7 @@ class TestCliSessionLifecycle:
         self, mock_relay: AsyncMock, mock_config: object
     ) -> None:
         with (
-            patch("biff.cli_session.load_config", return_value=mock_config),
+            patch("biff.cli_session.load_cli_config", return_value=mock_config),
             patch("biff.cli_session.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session() as _ctx:
@@ -159,7 +159,7 @@ class TestCliSessionLifecycle:
         self, mock_relay: AsyncMock, mock_config: object
     ) -> None:
         with (
-            patch("biff.cli_session.load_config", return_value=mock_config),
+            patch("biff.cli_session.load_cli_config", return_value=mock_config),
             patch("biff.cli_session.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session(interactive=True) as _ctx:
@@ -178,7 +178,7 @@ class TestCliSessionLifecycle:
         mock_relay.update_session.side_effect = ConnectionError("NATS down")
 
         with (
-            patch("biff.cli_session.load_config", return_value=mock_config),
+            patch("biff.cli_session.load_cli_config", return_value=mock_config),
             patch("biff.cli_session.NatsRelay", return_value=mock_relay),
             pytest.raises(ConnectionError, match="NATS down"),
         ):
@@ -205,7 +205,7 @@ class TestCliSessionLifecycle:
             repo_root=tmp_path,
         )
         with (
-            patch("biff.cli_session.load_config", return_value=no_relay),
+            patch("biff.cli_session.load_cli_config", return_value=no_relay),
             pytest.raises(ValueError, match="NATS relay"),
         ):
             async with cli_session() as _ctx:

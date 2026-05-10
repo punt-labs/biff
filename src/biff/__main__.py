@@ -46,13 +46,13 @@ from biff.config import (
     ensure_gitignore_yaml,
     find_git_root,
     is_enabled,
-    load_config,
+    load_mcp_config,
     write_yaml_local_enabled,
 )
 from biff.hook import hook_app
 from biff.server.app import create_server
-from biff.server.state import CompanionSession, create_state
-from biff.tty import generate_tty, is_notification_for_session
+from biff.server.state import create_state
+from biff.tty import is_notification_for_session
 
 # ---------------------------------------------------------------------------
 # Global flags
@@ -1013,7 +1013,7 @@ def _create_mcp_server(
     from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
 
-    resolved = load_config(
+    resolved = load_mcp_config(
         user_override=user,
         data_dir_override=data_dir,
         relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
@@ -1021,24 +1021,15 @@ def _create_mcp_server(
     )
     dormant = not is_enabled(resolved.repo_root)
 
-    # Dual-session: create companion for the human when ethos roster
-    # shows two distinct identities (biff-plqr, DES-039).
-    companion: CompanionSession | None = None
-    if resolved.root_identity is not None:
-        companion = CompanionSession(
-            user=resolved.root_identity.handle,
-            display_name=resolved.root_identity.display_name,
-            kind=resolved.root_identity.kind,
-            tty=generate_tty(),
-        )
-
+    # Companion (human) registration is deferred to the heartbeat
+    # loop -- the ethos roster is not yet available at startup on
+    # claude --resume (spec § 3.2, biff-8fg3).
     state = create_state(
         resolved.config,
         resolved.data_dir,
         unread_path=UNREAD_DIR / f"{find_session_key()}.json",
         dormant=dormant,
         repo_root=resolved.repo_root,
-        companion=companion,
     )
     return create_server(state)
 

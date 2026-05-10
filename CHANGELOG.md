@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-05-10
+
+### Changed
+
+- **Agent-first identity resolution (biff-8fg3, DES-040).** The MCP server now resolves its primary identity from `.punt-labs/ethos.yaml` and `.punt-labs/ethos/identities/{agent}.yaml` at startup -- no subprocess, no race with the SessionStart hook on `claude --resume`. `load_config` is split into `load_mcp_config` (agent-first chain: disk → GitHub → OS) and `load_cli_config` (human chain: GitHub → OS). The biff CLI now consistently identifies as the human at the terminal. The companion (human) session is registered on the first heartbeat tick where `ethos session roster` becomes available, not at startup. The `get_ethos_roster()` subprocess runs on a worker thread via `asyncio.to_thread` so the heartbeat never stalls the event loop.
+
+### Removed
+
+- **`get_ethos_identity()` and `ResolvedConfig.root_identity`.** Both had no remaining caller after the agent-first split; per the project's no-shims rule they are deleted, not aliased.
+
 ## [1.10.0] - 2026-04-16
 
 ## [1.9.6] - 2026-04-16

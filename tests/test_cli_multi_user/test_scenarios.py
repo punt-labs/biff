@@ -142,7 +142,7 @@ class TestSessionCleanup:
         )
 
         # Eric connects and is visible.
-        with patch("biff.cli_session.load_config", return_value=resolved):
+        with patch("biff.cli_session.load_cli_config", return_value=resolved):
             async with cli_session() as _eric:
                 result = await commands.who(kai)
                 assert "eric" in result.text

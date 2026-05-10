@@ -7,7 +7,7 @@ slash commands for team collaboration.
 Library API — import core types for programmatic use::
 
     from biff import BiffConfig, Message, UserSession, NatsRelay
-    from biff import commands, load_config
+    from biff import commands, load_mcp_config, load_cli_config
     result = await commands.who(ctx)
 """
 
@@ -21,7 +21,10 @@ if TYPE_CHECKING:
     from biff import commands as commands
     from biff.cli_session import CliContext as CliContext
     from biff.commands import CommandResult as CommandResult
-    from biff.config import load_config as load_config
+    from biff.config import (
+        load_cli_config as load_cli_config,
+        load_mcp_config as load_mcp_config,
+    )
     from biff.models import (
         BiffConfig as BiffConfig,
         Message as Message,
@@ -52,7 +55,8 @@ __all__ = [
     "WallPost",
     "__version__",
     "commands",
-    "load_config",
+    "load_cli_config",
+    "load_mcp_config",
 ]
 
 
@@ -74,7 +78,8 @@ def __getattr__(name: str) -> object:
     attrs: dict[str, tuple[str, str]] = {
         "CliContext": ("biff.cli_session", "CliContext"),
         "CommandResult": ("biff.commands", "CommandResult"),
-        "load_config": ("biff.config", "load_config"),
+        "load_cli_config": ("biff.config", "load_cli_config"),
+        "load_mcp_config": ("biff.config", "load_mcp_config"),
         "BiffConfig": ("biff.models", "BiffConfig"),
         "Message": ("biff.models", "Message"),
         "UnreadSummary": ("biff.models", "UnreadSummary"),

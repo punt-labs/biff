@@ -12,18 +12,18 @@ from biff._stdlib import _parse_repo_slug
 from biff.config import (
     DEMO_RELAY_URL,
     EthosIdentity,
-    EthosRoster,
     GitHubIdentity,
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
-    get_ethos_identity,
     get_ethos_roster,
     get_ethos_team,
     get_github_identity,
     get_os_user,
     get_repo_slug,
-    load_config,
+    load_cli_config,
+    load_mcp_config,
+    resolve_agent_identity_from_disk,
     sanitize_repo_name,
 )
 from biff.models import RelayAuth
@@ -302,7 +302,7 @@ class TestExtractRelayAuth:
         assert auth is None
 
 
-# -- load_config --
+# -- load_mcp_config / load_cli_config --
 
 
 _KAI = GitHubIdentity(login="kai", display_name="Kai Chen")
@@ -310,45 +310,55 @@ _KAI_NO_NAME = GitHubIdentity(login="kai", display_name="")
 _FROM_GIT = GitHubIdentity(login="from-git", display_name="Git User")
 
 
-class TestLoadConfig:
-    def _setup_repo(self, tmp_path: Path) -> Path:
-        """Create a minimal git repo with YAML config."""
-        (tmp_path / ".git").mkdir()
-        biff_dir = tmp_path / ".punt-labs" / "biff"
-        biff_dir.mkdir(parents=True)
-        (biff_dir / "config.yaml").write_text(
-            "team:\n  members:\n    - kai\n    - eric\n"
-            "relay:\n  url: nats://localhost:4222\n"
-        )
-        return tmp_path
+def _setup_repo_with_yaml(tmp_path: Path) -> Path:
+    """Create a minimal git repo with biff config.yaml. Returns repo root."""
+    (tmp_path / ".git").mkdir()
+    biff_dir = tmp_path / ".punt-labs" / "biff"
+    biff_dir.mkdir(parents=True)
+    (biff_dir / "config.yaml").write_text(
+        "team:\n  members:\n    - kai\n    - eric\n"
+        "relay:\n  url: nats://localhost:4222\n"
+    )
+    return tmp_path
+
+
+def _write_agent_identity_fixture(repo_root: Path, handle: str = "claude") -> None:
+    """Write ethos.yaml + matching agent identity YAML to *repo_root*."""
+    ethos_dir = repo_root / ".punt-labs"
+    ethos_dir.mkdir(parents=True, exist_ok=True)
+    (ethos_dir / "ethos.yaml").write_text(f"agent: {handle}\n")
+    identities = repo_root / ".punt-labs" / "ethos" / "identities"
+    identities.mkdir(parents=True, exist_ok=True)
+    (identities / f"{handle}.yaml").write_text(
+        f"handle: {handle}\nname: Claude Agento\nkind: agent\n"
+    )
+
+
+class TestLoadCliConfig:
+    """The CLI entry point uses the human-identity chain only."""
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_uses_remote_slug(
-        self, _mock_gh: object, _mock_ethos: object, _mock_slug: object, tmp_path: Path
+        self, _mock_gh: object, _mock_slug: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path)
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.repo_name == "punt-labs__biff"
 
     @patch("biff.config.get_repo_slug", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_falls_back_to_dirname(
-        self, _mock_gh: object, _mock_ethos: object, _mock_slug: object, tmp_path: Path
+        self, _mock_gh: object, _mock_slug: object, tmp_path: Path
     ) -> None:
-        repo = self._setup_repo(tmp_path)
-        resolved = load_config(start=repo)
+        repo = _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=repo)
         assert resolved.config.repo_name == sanitize_repo_name(repo.name)
 
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_full_discovery(
-        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
-    ) -> None:
-        repo = self._setup_repo(tmp_path)
-        resolved = load_config(start=repo)
+    def test_full_discovery(self, _mock_gh: object, tmp_path: Path) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=repo)
         assert resolved.config.user == "kai"
         assert resolved.config.display_name == "Kai Chen"
         assert resolved.config.team == ("kai", "eric")
@@ -356,84 +366,69 @@ class TestLoadConfig:
         assert resolved.data_dir == Path("/tmp/biff") / repo.name
         assert resolved.repo_root == repo
 
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_custom_prefix(
-        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
-    ) -> None:
-        repo = self._setup_repo(tmp_path)
-        resolved = load_config(start=repo, prefix=Path("/var/spool"))
+    def test_custom_prefix(self, _mock_gh: object, tmp_path: Path) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=repo, prefix=Path("/var/spool"))
         assert resolved.data_dir == Path("/var/spool/biff") / repo.name
 
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_data_dir_override(
-        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
-    ) -> None:
-        repo = self._setup_repo(tmp_path)
+    def test_data_dir_override(self, _mock_gh: object, tmp_path: Path) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
         custom = tmp_path / "custom"
-        resolved = load_config(start=repo, data_dir_override=custom)
+        resolved = load_cli_config(start=repo, data_dir_override=custom)
         assert resolved.data_dir == custom
 
     @patch("biff.config.get_github_identity", return_value=_FROM_GIT)
     def test_user_override_takes_precedence(
         self, _mock: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path, user_override="from-cli")
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path, user_override="from-cli")
         assert resolved.config.user == "from-cli"
 
     @patch("biff.config.get_github_identity", return_value=_FROM_GIT)
     def test_user_override_clears_display_name(
         self, _mock: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path, user_override="from-cli")
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path, user_override="from-cli")
         assert resolved.config.display_name == ""
 
     @patch("biff.config.get_os_user", return_value="jfreeman")
     @patch("biff.config.get_github_identity", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=None)
     def test_falls_back_to_os_user(
-        self, _mock_ethos: object, _mock_git: object, _mock_os: object, tmp_path: Path
+        self, _mock_git: object, _mock_os: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path)
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.user == "jfreeman"
         assert resolved.config.display_name == ""
 
     @patch("biff.config.get_os_user", return_value=None)
     @patch("biff.config.get_github_identity", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=None)
     def test_exits_when_all_user_sources_fail(
-        self, _mock_ethos: object, _mock_git: object, _mock_os: object, tmp_path: Path
+        self, _mock_git: object, _mock_os: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
+        _setup_repo_with_yaml(tmp_path)
         with pytest.raises(SystemExit, match="No user configured"):
-            load_config(start=tmp_path)
+            load_cli_config(start=tmp_path)
 
     @patch("biff.config.find_git_root", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_no_repo_exits(
         self, _mock: object, _mock_root: object, tmp_path: Path
     ) -> None:
-        # No .git directory — must error, not silently fall back
         with pytest.raises(SystemExit, match="Not in a git repository"):
-            load_config(start=tmp_path)
+            load_cli_config(start=tmp_path)
 
     @patch("biff.config.get_ethos_team", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_zero_config_uses_demo_relay(
-        self,
-        _mock_gh: object,
-        _mock_ethos: object,
-        _mock_team: object,
-        tmp_path: Path,
+        self, _mock_gh: object, _mock_team: object, tmp_path: Path
     ) -> None:
-        """Zero-config mode: no config.yaml -> demo relay."""
         (tmp_path / ".git").mkdir()
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.team == ()
         assert resolved.config.relay_url == DEMO_RELAY_URL
         assert resolved.config.relay_auth is not None
@@ -445,13 +440,12 @@ class TestLoadConfig:
     ) -> None:
         custom = tmp_path / "data"
         with pytest.raises(SystemExit, match="Not in a git repository"):
-            load_config(start=tmp_path, data_dir_override=custom)
+            load_cli_config(start=tmp_path, data_dir_override=custom)
 
     @patch("biff.config.get_ethos_team", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_auth_flows_through(
-        self, _mock_gh: object, _mock_ethos: object, _mock_team: object, tmp_path: Path
+        self, _mock_gh: object, _mock_team: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
         biff_dir = tmp_path / ".punt-labs" / "biff"
@@ -459,14 +453,13 @@ class TestLoadConfig:
         (biff_dir / "config.yaml").write_text(
             "relay:\n  url: tls://host\n  auth:\n    user_credentials: /creds\n"
         )
-        resolved = load_config(start=tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")
 
     @patch("biff.config.get_ethos_team", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_url_override_clears_auth(
-        self, _mock_gh: object, _mock_ethos: object, _mock_team: object, tmp_path: Path
+        self, _mock_gh: object, _mock_team: object, tmp_path: Path
     ) -> None:
         """Overriding relay URL must clear config auth to prevent credential leak."""
         (tmp_path / ".git").mkdir()
@@ -476,121 +469,107 @@ class TestLoadConfig:
             "relay:\n  url: tls://demo.example\n"
             "  auth:\n    user_credentials: /demo.creds\n"
         )
-        resolved = load_config(start=tmp_path, relay_url_override="tls://other.example")
+        resolved = load_cli_config(
+            start=tmp_path, relay_url_override="tls://other.example"
+        )
         assert resolved.config.relay_url == "tls://other.example"
         assert resolved.config.relay_auth is None
 
-    @patch("biff.config.get_ethos_identity", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI_NO_NAME)
     def test_empty_display_name_when_github_has_none(
-        self, _mock_gh: object, _mock_ethos: object, tmp_path: Path
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path)
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path)
         assert resolved.config.user == "kai"
         assert resolved.config.display_name == ""
 
-    @patch(
-        "biff.config.get_ethos_identity",
-        return_value=EthosIdentity(
-            handle="claude", display_name="Claude Agento", kind="agent"
-        ),
-    )
-    def test_ethos_identity_takes_precedence_over_github(
-        self, _mock_ethos: object, tmp_path: Path
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_ignores_disk_agent_identity(
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path)
+        """The CLI does NOT read .punt-labs/ethos.yaml -- humans identify as themselves.
+
+        Regression for spec § 1.1 (R5): if the CLI silently used the
+        agent identity, a human's ``biff write`` would carry
+        ``FROM=agent``.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_agent_identity_fixture(repo)
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "kai"
+        assert resolved.config.kind == ""
+
+
+class TestLoadMcpConfig:
+    """The MCP entry point uses the agent-first chain (disk -> GitHub -> OS)."""
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_disk_identity_takes_precedence_over_github(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_agent_identity_fixture(repo)
+        resolved = load_mcp_config(start=repo)
         assert resolved.config.user == "claude"
         assert resolved.config.display_name == "Claude Agento"
         assert resolved.config.kind == "agent"
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    @patch("biff.config.get_ethos_identity", return_value=None)
-    def test_ethos_fallback_to_github(
-        self, _mock_ethos: object, _mock_gh: object, tmp_path: Path
+    def test_falls_back_to_github_when_no_disk_identity(
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path)
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_mcp_config(start=tmp_path)
         assert resolved.config.user == "kai"
         assert resolved.config.kind == ""
 
     @patch("biff.config.get_os_user", return_value="jfreeman")
     @patch("biff.config.get_github_identity", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=None)
-    def test_ethos_absent_falls_through_to_os(
-        self, _mock_ethos: object, _mock_gh: object, _mock_os: object, tmp_path: Path
+    def test_falls_back_to_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
     ) -> None:
-        self._setup_repo(tmp_path)
-        resolved = load_config(start=tmp_path)
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_mcp_config(start=tmp_path)
         assert resolved.config.user == "jfreeman"
+        assert resolved.config.display_name == ""
+
+    @patch("biff.config.get_os_user", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=None)
+    def test_exits_when_all_user_sources_fail(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        _setup_repo_with_yaml(tmp_path)
+        with pytest.raises(SystemExit, match="No user configured"):
+            load_mcp_config(start=tmp_path)
+
+    @patch("biff.config.get_github_identity", return_value=_FROM_GIT)
+    def test_user_override_short_circuits_disk(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_agent_identity_fixture(repo)
+        resolved = load_mcp_config(start=repo, user_override="from-cli")
+        assert resolved.config.user == "from-cli"
         assert resolved.config.kind == ""
 
+    @patch("biff.config.find_git_root", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_no_repo_exits(
+        self, _mock: object, _mock_root: object, tmp_path: Path
+    ) -> None:
+        with pytest.raises(SystemExit, match="Not in a git repository"):
+            load_mcp_config(start=tmp_path)
 
-# -- get_ethos_identity --
-
-
-class TestGetEthosIdentity:
-    def test_success(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                '{"handle":"claude","name":"Claude Agento",'
-                '"kind":"agent","github":"claude-puntlabs"}'
-            )
-            result = get_ethos_identity()
-            assert result == EthosIdentity(
-                handle="claude",
-                display_name="Claude Agento",
-                kind="agent",
-            )
-
-    def test_not_installed(self) -> None:
-        with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
-            assert get_ethos_identity() is None
-
-    def test_exit_1(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 1
-            mock_run.return_value.stdout = ""
-            assert get_ethos_identity() is None
-
-    def test_timeout(self) -> None:
-        with patch(
-            "biff.config.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="ethos", timeout=2),
-        ):
-            assert get_ethos_identity() is None
-
-    def test_bad_json(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "not json"
-            assert get_ethos_identity() is None
-
-    def test_missing_handle(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = '{"name":"Claude","kind":"agent"}'
-            assert get_ethos_identity() is None
-
-    def test_empty_handle(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                '{"handle":"","name":"Claude","kind":"agent"}'
-            )
-            assert get_ethos_identity() is None
-
-    def test_empty_name_uses_handle(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                '{"handle":"claude","name":"","kind":"agent"}'
-            )
-            result = get_ethos_identity()
-            assert result is not None
-            assert result.display_name == "claude"
+    @patch("biff.config.get_ethos_team", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_zero_config_uses_demo_relay(
+        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+    ) -> None:
+        (tmp_path / ".git").mkdir()
+        resolved = load_mcp_config(start=tmp_path)
+        assert resolved.config.relay_url == DEMO_RELAY_URL
+        assert resolved.config.relay_auth is not None
 
 
 # -- get_ethos_team --
@@ -764,74 +743,180 @@ class TestGetEthosRoster:
             assert result.primary.handle == "claude"
 
 
-# -- load_config with dual-session roster --
+# -- resolve_agent_identity_from_disk --
 
 
-_CLAUDE_ETHOS = EthosIdentity(
-    handle="claude", display_name="Claude Agento", kind="agent"
-)
-
-_DUAL_ROSTER = EthosRoster(
-    root=EthosIdentity(handle="jfreeman", display_name="Jim Freeman", kind="human"),
-    primary=_CLAUDE_ETHOS,
-)
-
-_SAME_ROSTER = EthosRoster(root=_CLAUDE_ETHOS, primary=_CLAUDE_ETHOS)
+def _write_ethos_yaml(repo_root: Path, body: str) -> Path:
+    """Write ``.punt-labs/ethos.yaml`` under *repo_root* and return its path."""
+    ethos_dir = repo_root / ".punt-labs"
+    ethos_dir.mkdir(parents=True, exist_ok=True)
+    path = ethos_dir / "ethos.yaml"
+    path.write_text(body)
+    return path
 
 
-class TestLoadConfigDualSession:
-    def _setup_repo(self, tmp_path: Path) -> Path:
-        (tmp_path / ".git").mkdir()
-        biff_dir = tmp_path / ".punt-labs" / "biff"
-        biff_dir.mkdir(parents=True)
-        (biff_dir / "config.yaml").write_text(
-            "team:\n  members:\n    - kai\nrelay:\n  url: nats://localhost:4222\n"
+def _write_identity_yaml(repo_root: Path, handle: str, body: str) -> Path:
+    """Write ``.punt-labs/ethos/identities/{handle}.yaml`` and return its path."""
+    identities = repo_root / ".punt-labs" / "ethos" / "identities"
+    identities.mkdir(parents=True, exist_ok=True)
+    path = identities / f"{handle}.yaml"
+    path.write_text(body)
+    return path
+
+
+class TestResolveAgentIdentityFromDisk:
+    def test_happy_path(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(
+            tmp_path,
+            "claude",
+            "handle: claude\nname: Claude Agento\nkind: agent\n",
         )
-        return tmp_path
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result == EthosIdentity(
+            handle="claude", display_name="Claude Agento", kind="agent"
+        )
 
-    @patch("biff.config.get_ethos_roster", return_value=_DUAL_ROSTER)
-    @patch("biff.config.get_ethos_identity", return_value=_CLAUDE_ETHOS)
-    def test_dual_session_sets_root_identity(
-        self, _mock_ethos: object, _mock_roster: object, tmp_path: Path
-    ) -> None:
-        repo = self._setup_repo(tmp_path)
-        resolved = load_config(start=repo)
-        assert resolved.config.user == "claude"
-        assert resolved.root_identity is not None
-        assert resolved.root_identity.handle == "jfreeman"
-        assert resolved.root_identity.kind == "human"
+    def test_legacy_config_yaml_location(self, tmp_path: Path) -> None:
+        """Legacy fallback: ``.punt-labs/ethos/config.yaml`` is read when ``ethos.yaml`` is absent."""  # noqa: E501
+        legacy = tmp_path / ".punt-labs" / "ethos"
+        legacy.mkdir(parents=True)
+        (legacy / "config.yaml").write_text("agent: claude\n")
+        _write_identity_yaml(
+            tmp_path,
+            "claude",
+            "handle: claude\nname: Claude Agento\nkind: agent\n",
+        )
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.handle == "claude"
 
-    @patch("biff.config.get_ethos_roster", return_value=_SAME_ROSTER)
-    @patch("biff.config.get_ethos_identity", return_value=_CLAUDE_ETHOS)
-    def test_same_identity_no_root(
-        self, _mock_ethos: object, _mock_roster: object, tmp_path: Path
-    ) -> None:
-        repo = self._setup_repo(tmp_path)
-        resolved = load_config(start=repo)
-        assert resolved.root_identity is None
+    def test_missing_ethos_yaml(self, tmp_path: Path) -> None:
+        assert resolve_agent_identity_from_disk(tmp_path) is None
 
-    @patch("biff.config.get_ethos_roster", return_value=None)
-    @patch("biff.config.get_ethos_identity", return_value=_CLAUDE_ETHOS)
-    def test_roster_absent_no_root(
-        self, _mock_ethos: object, _mock_roster: object, tmp_path: Path
-    ) -> None:
-        repo = self._setup_repo(tmp_path)
-        resolved = load_config(start=repo)
-        assert resolved.root_identity is None
+    def test_missing_identity_yaml(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
 
-    @patch("biff.config.get_ethos_roster", return_value=_DUAL_ROSTER)
-    @patch("biff.config.get_ethos_identity", return_value=None)
-    @patch(
-        "biff.config.get_github_identity",
-        return_value=GitHubIdentity(login="kai", display_name="Kai"),
+    def test_malformed_ethos_yaml(self, tmp_path: Path) -> None:
+        # Unclosed bracket forces yaml.YAMLError.
+        _write_ethos_yaml(tmp_path, "agent: [unclosed\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_malformed_identity_yaml(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "kind: [agent\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_missing_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "team: engineering\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_empty_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: ''\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_whitespace_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: '   '\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_non_string_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: 42\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_kind_human_rejected(self, tmp_path: Path) -> None:
+        """``kind: human`` must NOT be elevated into the agent slot."""
+        _write_ethos_yaml(tmp_path, "agent: jfreeman\n")
+        _write_identity_yaml(
+            tmp_path,
+            "jfreeman",
+            "handle: jfreeman\nname: Jim Freeman\nkind: human\n",
+        )
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_kind_missing_rejected(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "handle: claude\nname: Claude\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    @pytest.mark.parametrize(
+        "bad_handle",
+        [
+            "../../etc/passwd",
+            "../foo",
+            "foo/bar",
+            ".hidden",
+            "Claude",  # uppercase
+            "claude!",  # special char
+            "a" * 65,  # too long
+            "-leading-hyphen",
+            "_leading-underscore",
+        ],
     )
-    def test_user_override_skips_roster(
-        self,
-        _mock_gh: object,
-        _mock_ethos: object,
-        _mock_roster: object,
-        tmp_path: Path,
+    def test_path_traversal_and_invalid_handles_rejected(
+        self, tmp_path: Path, bad_handle: str
     ) -> None:
-        repo = self._setup_repo(tmp_path)
-        resolved = load_config(start=repo, user_override="custom")
-        assert resolved.root_identity is None
+        """The handle regex blocks every path-traversal payload before any FS read."""
+        _write_ethos_yaml(tmp_path, f"agent: {bad_handle!r}\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_handle_outside_identities_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A handle that passes the regex but resolves outside identities/ is rejected.
+
+        The regex blocks ``/``, ``..``, etc. -- to exercise the
+        ``is_relative_to`` guard we replace ``Path.resolve`` so the
+        resolved identity path falls outside the identities directory.
+        """
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(
+            tmp_path, "claude", "handle: claude\nname: Claude\nkind: agent\n"
+        )
+
+        identities_root = (tmp_path / ".punt-labs" / "ethos" / "identities").resolve()
+        outside = tmp_path / "outside.yaml"
+        outside.write_text("handle: claude\nname: Claude\nkind: agent\n")
+
+        original_resolve = Path.resolve
+
+        def fake_resolve(self: Path, *args: object, **kwargs: object) -> Path:
+            if self.name == "claude.yaml" and self.parent == identities_root:
+                return outside
+            return original_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_handle_falls_back_to_agent_field(self, tmp_path: Path) -> None:
+        """When the identity YAML omits ``handle``, fall back to the agent field."""
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "name: Claude Agento\nkind: agent\n")
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.handle == "claude"
+
+    def test_display_name_falls_back_to_handle(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "handle: claude\nkind: agent\n")
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.display_name == "claude"
+
+    def test_yaml_handle_mismatch_uses_validated_agent(self, tmp_path: Path) -> None:
+        """A malicious identity YAML declaring a different handle must not impersonate.
+
+        The resolved handle must always equal the validated ``agent``
+        string derived from the filename, not the YAML's ``handle``
+        field.  Regression test for PR #243 review finding.
+        """
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(
+            tmp_path,
+            "claude",
+            "handle: evil-impersonator\nname: Claude Agento\nkind: agent\n",
+        )
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.handle == "claude"
+        assert result.handle != "evil-impersonator"
