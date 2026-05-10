@@ -4141,11 +4141,19 @@ When Channels ships as stable API:
 ## DES-039: Dual-Session Registration via Ethos Roster
 
 **Date:** 2026-04-14
-**Status:** PROPOSED
+**Status:** PROPOSED — superseded in part by DES-040 (biff-8fg3)
 **Topic:** Registering both human and agent as separate biff sessions
 **Related:** DES-002 (session key format), DES-009 (identity),
 DES-030 (multi-agent coordination), DES-035 (TTY name reservation),
+DES-040 (agent-first identity),
 `docs/ethos-integration.md`, `docs/dual-session.md`
+
+**Note (biff-8fg3, 2026-05-10):** Decision 5 ("Roster read once at
+startup") is superseded by DES-040. The companion is no longer
+registered during lifespan startup; the heartbeat loop polls the
+roster on each tick and registers the companion when it first
+becomes available. The primary identity is now resolved from
+``.punt-labs/ethos.yaml`` on disk, not from ``ethos whoami``.
 
 ### Context
 
@@ -4242,3 +4250,136 @@ that does not preclude the process tree.
 
 See `docs/dual-session.md` for the complete design including message
 routing, edge cases, implementation sequence, and file change list.
+
+## DES-040: Agent-First Identity Resolution
+
+**Date:** 2026-05-10
+**Status:** SETTLED
+**Topic:** Primary identity from disk; companion deferred to heartbeat
+**Bead:** biff-8fg3
+**Related:** DES-009 (identity — GitHub login), DES-039 (dual-session
+registration), `docs/spec-agent-first-identity.md`,
+`docs/agent-first-identity.md`
+
+### Context
+
+DES-039 resolved both identities at lifespan startup: the primary
+from ``ethos whoami --json`` and the companion from
+``ethos session roster --json``. Both calls depend on the
+SessionStart hook having already run ``ethos iam``. On
+``claude --resume`` the MCP server starts before the hook fires.
+The result was an identity race: ``config.user`` sometimes resolved
+to the human (root) and sometimes to the agent (primary), forcing
+``_try_late_companion_registration`` to encode "whichever identity
+is NOT ``config.user``". Eight releases of patches accreted around
+this race.
+
+The ethos identity registry lives on disk:
+``.punt-labs/ethos.yaml`` names the agent for the repo, and
+``.punt-labs/ethos/identities/{handle}.yaml`` carries the identity
+details. These files are available the instant the process starts.
+The race was created by reading them through a subprocess that
+depended on a hook.
+
+### Decision
+
+1. **Primary identity is resolved from disk.**
+   ``resolve_agent_identity_from_disk(repo_root)`` reads
+   ``.punt-labs/ethos.yaml`` for the ``agent`` field, validates it
+   against ``^[a-z0-9][a-z0-9_-]{0,63}$``, resolves
+   ``.punt-labs/ethos/identities/{agent}.yaml``, and requires
+   ``kind: agent``. No subprocess; no race. Failures fall through
+   to ``gh api user`` then OS username.
+
+2. **The MCP and CLI entry points are split.** ``load_mcp_config``
+   uses the agent-first chain
+   (``user_override`` → disk resolver → GitHub → OS).
+   ``load_cli_config`` uses the human-identity chain
+   (``user_override`` → GitHub → OS). The biff CLI is invoked by a
+   human at the terminal; it must identify as the human, not the
+   agent. The split avoids the "default value silently
+   mis-identifies the other caller" trap. ``get_ethos_identity()``
+   has no caller and is deleted.
+
+3. **Companion is deferred to the heartbeat loop.** ``_active_lifespan``
+   no longer registers the companion or writes its login event;
+   ``_create_mcp_server`` no longer creates a ``CompanionSession``
+   from ``ResolvedConfig``. The ``root_identity`` field is removed.
+   The heartbeat path owns companion registration via
+   ``_poll_companion_registration`` (renamed from
+   ``_try_late_companion_registration``), which runs on every tick
+   while ``state.companion is None``.
+
+4. **The companion is always ``roster.root``.** The "whichever
+   identity is NOT ``config.user``" rule is gone. With agent-first
+   resolution, ``config.user`` is always the agent, so
+   ``roster.root`` is unambiguously the human. When
+   ``roster.root.handle == config.user`` the agent is also the root
+   and there is no human to register.
+
+5. **The heartbeat must not block the event loop.**
+   ``get_ethos_roster()`` runs through ``asyncio.to_thread(...)``.
+   Its 2-second subprocess timeout now applies to a worker thread
+   and never stalls inbox polling or tool dispatch. Spec invariant
+   11 makes this binding.
+
+### Path-traversal guard
+
+The ``agent`` field in ``.punt-labs/ethos.yaml`` is repository
+content. The implementation guards path-traversal in two layers:
+
+- A regex pre-check rejects ``../``, ``\``, leading ``.``, and any
+  character outside ``[a-z0-9_-]`` before any filesystem operation.
+- After ``Path.resolve()``, the result must remain under
+  ``{repo_root}/.punt-labs/ethos/identities/``. This catches any
+  payload that slips past the regex (locale normalization, future
+  grammar changes).
+
+A repo-controlled ``ethos.yaml`` also cannot elevate a human into
+the agent slot: the resolved identity YAML must have
+``kind: agent`` or the disk-resolution path is rejected.
+
+### State Model
+
+```text
+STARTUP --> AGENT_ONLY --> DUAL_SESSION
+                       \-> AGENT_ONLY (permanent)
+```
+
+**STARTUP -> AGENT_ONLY** when the primary session is registered in
+KV. ``config.user`` is the agent identity from disk (or the fallback
+chain). ``state.companion`` is ``None``.
+
+**AGENT_ONLY -> DUAL_SESSION** when a heartbeat tick reads a roster
+whose root is different from ``config.user``. The companion is
+registered (KV row, TTY name claim, active marker, wtmp login).
+``state.companion`` is set. No further polling.
+
+**AGENT_ONLY (permanent)** when ethos is absent, identity files are
+missing, or the roster never provides a second identity. Users see
+the agent in the status bar and ``/who``; the system operates
+indefinitely with no error.
+
+### Rejected Alternatives
+
+**Single ``load_config`` with a ``context`` flag.** A
+``load_config(context="mcp" | "cli")`` API requires every caller
+to pass the flag. Whichever value is chosen as the default
+silently mis-identifies callers in the other context. Two named
+functions make the choice explicit at every call site and are
+visible to grep/IDE navigation.
+
+**Keep ``get_ethos_identity()`` for ad-hoc debugging.** Dead helpers
+violate the project's "no backwards-compatibility shims" rule
+(CLAUDE.md). The function had no caller after the split and was
+deleted.
+
+**Cache the previous roster as a warm start for the companion.** A
+different human could resume the session. Heartbeat polling is
+correct and adds at most 60s of latency to companion registration.
+
+### Full Spec
+
+See ``docs/spec-agent-first-identity.md`` for the formal spec,
+``docs/agent-first-identity.md`` for the change plan, and the
+six commits referenced by biff-8fg3 for the implementation.
