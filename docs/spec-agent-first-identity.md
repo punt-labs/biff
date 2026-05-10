@@ -132,9 +132,12 @@ subprocess call. The algorithm:
    YAML's `kind` field is not the exact string `agent`, the resolution
    fails. This prevents a repo-controlled `.punt-labs/ethos.yaml` from
    coercing biff into registering or sending as a human (or any other
-   kind). Failure here falls through to step 6 -- it does not abort.
+   kind). Failure here falls through to the fallback chain (step 7
+   onward) -- it does not abort. The team check (step 6) is advisory
+   enrichment for a successful disk-identity resolution, not part of
+   the validation path.
 
-6. **Advisory ethos team check.** If `ethos team show --json` (or
+6. **Advisory ethos team check.** If `ethos team for-repo --json` (or
    equivalent local team data) is available, the resolved handle
    SHOULD appear in the active team's member list. A mismatch is
    logged as a warning and the resolution continues -- absence of

@@ -146,9 +146,10 @@ returning `{}`. `yaml.YAMLError` needs a try/except wrapper here (unlike
 `load_yaml_config` which raises `SystemExit` on parse errors, identity
 config errors must not prevent biff from starting -- spec invariant 8).
 
-**Call site:** `load_config()`, line ~720 (current), replacing
+**Call site:** `load_mcp_config()`, line ~720 (current), replacing
 `get_ethos_identity()`. Called BEFORE any subprocess call contributes
-to `config.user`.
+to `config.user`. The CLI path (`load_cli_config()`) does not call
+this function -- see § 3a.
 
 ## 3. Changes to `load_mcp_config` (formerly `load_config`)
 
