@@ -301,8 +301,15 @@ def _build_agent_identity(identity_path: Path, agent: str) -> EthosIdentity | No
     identity = _read_identity_yaml(identity_path)
     if not identity:
         return None
-    handle_raw = identity.get("handle", agent)
-    handle = handle_raw if isinstance(handle_raw, str) and handle_raw else agent
+    yaml_handle = identity.get("handle", "")
+    if isinstance(yaml_handle, str) and yaml_handle and yaml_handle != agent:
+        logger.warning(
+            "Identity %s declares handle %r; using validated agent handle %r",
+            identity_path,
+            yaml_handle,
+            agent,
+        )
+    handle = agent  # Always use the validated filename-derived handle
     name_raw = identity.get("name", handle)
     display_name = name_raw if isinstance(name_raw, str) and name_raw else handle
     kind_raw = identity.get("kind", "")

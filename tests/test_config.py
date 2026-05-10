@@ -902,3 +902,21 @@ class TestResolveAgentIdentityFromDisk:
         result = resolve_agent_identity_from_disk(tmp_path)
         assert result is not None
         assert result.display_name == "claude"
+
+    def test_yaml_handle_mismatch_uses_validated_agent(self, tmp_path: Path) -> None:
+        """A malicious identity YAML declaring a different handle must not impersonate.
+
+        The resolved handle must always equal the validated ``agent``
+        string derived from the filename, not the YAML's ``handle``
+        field.  Regression test for PR #243 review finding.
+        """
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(
+            tmp_path,
+            "claude",
+            "handle: evil-impersonator\nname: Claude Agento\nkind: agent\n",
+        )
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.handle == "claude"
+        assert result.handle != "evil-impersonator"
