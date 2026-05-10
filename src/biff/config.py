@@ -65,18 +65,11 @@ def demo_creds_path() -> Path:
 
 @dataclass(frozen=True)
 class ResolvedConfig:
-    """Fully resolved configuration ready for server startup.
-
-    The ``root_identity`` field is retained for Step 2 of biff-8fg3 so
-    ``_create_mcp_server`` continues to compile; Step 3 removes both the
-    field and its consumer in the same commit. New entry points always
-    leave it ``None`` (companion registration is deferred to heartbeat).
-    """
+    """Fully resolved configuration ready for server startup."""
 
     config: BiffConfig
     data_dir: Path
     repo_root: Path | None = None
-    root_identity: EthosIdentity | None = None
 
 
 @dataclass(frozen=True)

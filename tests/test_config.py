@@ -571,18 +571,6 @@ class TestLoadMcpConfig:
         assert resolved.config.relay_url == DEMO_RELAY_URL
         assert resolved.config.relay_auth is not None
 
-    @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_root_identity_always_none(self, _mock_gh: object, tmp_path: Path) -> None:
-        """The new entry points never populate ``root_identity``.
-
-        Companion (human) registration is deferred entirely to the
-        heartbeat loop (spec § 3.2). Step 3 deletes the field.
-        """
-        repo = _setup_repo_with_yaml(tmp_path)
-        _write_agent_identity_fixture(repo)
-        resolved = load_mcp_config(start=repo)
-        assert resolved.root_identity is None
-
 
 # -- get_ethos_team --
 
