@@ -75,9 +75,22 @@ subprocess call. The algorithm:
    team: engineering
    ```
 
-3. If the `agent` field is present and non-empty, read the
-   corresponding identity file:
+3. **Validate the `agent` handle** before using it to build a path.
+   The handle must match `^[a-z0-9][a-z0-9_-]*$`, length 1--64. Reject
+   any value containing `/`, `\`, `..`, a leading `.`, or characters
+   outside `[a-z0-9_-]`. This is a hard precondition -- the file
+   `.punt-labs/ethos.yaml` is repository content under the control of
+   anyone who can push a commit, so the handle is untrusted input.
+
+4. If the `agent` field is present, non-empty, and passes validation,
+   read the corresponding identity file:
    `{repo_root}/.punt-labs/ethos/identities/{agent}.yaml`
+
+   Before opening the file, call `identity_path.resolve()` and verify
+   the resolved path is a descendant of
+   `(repo_root / ".punt-labs" / "ethos" / "identities").resolve()`.
+   If not, treat as failure. This guards against path-traversal
+   handles that slip past the regex.
 
    Extract `handle`, `name` (mapped to `display_name`), and `kind`.
 
@@ -94,13 +107,28 @@ subprocess call. The algorithm:
    This yields: `user="claude"`, `display_name="Claude Agento"`,
    `kind="agent"`.
 
-4. If step 2 fails (file missing, parse error, `agent` field empty),
-   or step 3 fails (identity file missing or unparseable):
-   fall through to existing chain: `gh api user` > OS username.
-   `display_name` and `kind` are best-effort from whichever source
-   succeeds.
+5. **Require `kind: agent` on the resolved identity.** If the identity
+   YAML's `kind` field is not the exact string `agent`, the resolution
+   fails. This prevents a repo-controlled `.punt-labs/ethos.yaml` from
+   coercing biff into registering or sending as a human (or any other
+   kind). Failure here falls through to step 6 -- it does not abort.
 
-5. The resolved identity is written into `config.user`,
+6. **Advisory ethos team check.** If `ethos team show --json` (or
+   equivalent local team data) is available, the resolved handle
+   SHOULD appear in the active team's member list. A mismatch is
+   logged as a warning and the resolution continues -- absence of
+   ethos must not break biff (invariant 8). Team data is consulted
+   only when readily available from disk; biff MUST NOT block startup
+   on a subprocess call to validate the handle.
+
+7. If step 2 fails (file missing, parse error, `agent` field empty,
+   handle fails validation in step 3), or step 4 fails (identity file
+   missing, unparseable, or outside the identities directory), or
+   step 5 fails (`kind` is not `agent`): fall through to existing
+   chain: `gh api user` > OS username. `display_name` and `kind` are
+   best-effort from whichever source succeeds.
+
+8. The resolved identity is written into `config.user`,
    `config.display_name`, and `config.kind`. These fields never
    change after this point.
 
@@ -116,24 +144,37 @@ The algorithm:
    `state.companion` is `None` and companion resolution has not yet
    succeeded:
 
-2. Call `get_ethos_roster()` (subprocess: `ethos session roster --json`,
-   2s timeout).
+2. Call `get_ethos_roster()` off the event loop via
+   `asyncio.to_thread(get_ethos_roster)`. The heartbeat MUST NOT call
+   `get_ethos_roster()` synchronously -- the underlying
+   `subprocess.run(..., timeout=2)` would block the event loop for up
+   to 2s per tick, stalling inbox polling and tool responsiveness.
 
 3. If the roster returns two distinct identities (root and primary with
    different handles):
 
-   a. The companion is whichever roster identity is NOT `config.user`
-      (the primary).
+   a. **The companion is always `roster.root`**[^roster-root]. Ethos
+      defines the roster root as the no-parent participant in the
+      session graph -- which for biff is always the human at the
+      terminal. The earlier "whichever identity is NOT `config.user`"
+      rule was a workaround from the period when `config.user` could
+      race onto the human identity; with agent-first resolution
+      (section 3.1), `config.user` is always the agent, so the
+      simpler rule suffices and the workaround is removed.
 
-   b. Create a `CompanionSession` with the companion's handle,
+   b. If `roster.root.handle == config.user`, there is no companion to
+      register (the agent is also the root, an unusual configuration).
+      Do nothing; do not retry until the roster changes.
+
+   c. Create a `CompanionSession` with `roster.root`'s handle,
       display_name, and kind.
 
-   c. Register the companion session (claim TTY name, write KV row,
+   d. Register the companion session (claim TTY name, write KV row,
       write active-marker, append wtmp login event).
 
-   d. On success: set `state.companion`. Stop polling.
+   e. On success: set `state.companion`. Stop polling.
 
-   e. On failure: rollback (clear `state.companion`). Retry on the
+   f. On failure: rollback (clear `state.companion`). Retry on the
       next heartbeat tick. No limit on retries -- the cost is one
       subprocess call per heartbeat interval.
 
@@ -143,6 +184,11 @@ The algorithm:
 
 5. After the first successful companion registration, stop polling.
    The companion identity is fixed for the session lifetime.
+
+[^roster-root]: Ethos roster contract: `roster.root` is the
+participant with no parent in the session graph. SessionStart wires
+the human as root and the agent persona as primary via `ethos iam`.
+See `ethos session roster --json` schema.
 
 ### 3.3 Why not read human identity from disk too?
 
@@ -257,6 +303,24 @@ These properties must hold at all times after STARTUP completes:
    are still subprocess calls on the startup path, but they do not
    contribute to `config.user` when ethos identity files are present.)
 
+10. **The primary identity must have `kind: agent`.** A repo-controlled
+    `.punt-labs/ethos.yaml` cannot escalate a human (or any non-agent
+    `kind`) into the agent slot. If the identity YAML's `kind` field
+    is not the exact string `agent`, the disk-resolution path is
+    rejected and the fallback chain (`gh api user` > OS username) is
+    consulted. The `agent` handle is also validated against the
+    grammar `^[a-z0-9][a-z0-9_-]*$` (length 1--64), and the resolved
+    identity path must stay within
+    `{repo_root}/.punt-labs/ethos/identities/` -- this prevents
+    handle-based path traversal.
+
+11. **Heartbeat tick latency is bounded.** A single heartbeat tick
+    MUST NOT block the asyncio event loop for more than 100ms. All
+    subprocess calls inside the heartbeat (notably
+    `get_ethos_roster()`) run via `asyncio.to_thread(...)`. The 2s
+    subprocess timeout applies to the worker thread, not to the
+    event loop.
+
 ## 6. Failure Modes
 
 ### 6.1 Ethos not installed
@@ -338,11 +402,23 @@ prevent biff from starting.
 **Condition:** `.punt-labs/ethos.yaml` says `agent: jfreeman` but
 `jfreeman.yaml` has `kind: human`.
 
-**Behavior:** Accept it. The `kind` field is informational for display
-(the `[A]` tag in `/who`). The identity resolution algorithm does not
-filter by kind -- it trusts the `agent` field in the repo config. If
-the repo config says `agent: jfreeman`, then jfreeman is the primary.
-This is a misconfiguration but not an error.
+**Behavior:** Reject the disk-resolution path (invariant 10). The
+agent slot must be filled by an identity with `kind: agent`; a
+repo-controlled `ethos.yaml` cannot escalate a human into the agent
+slot, even by accident. Resolution falls through to `gh api user` >
+OS username. Log a warning naming the file and the rejected `kind`
+value so the operator can fix it.
+
+### 6.8 `.punt-labs/ethos.yaml` agent handle fails validation
+
+**Condition:** The `agent` field contains characters outside
+`[a-z0-9_-]`, starts with `.`, contains `..` or `/`, or is longer
+than 64 characters.
+
+**Behavior:** Reject (invariant 10). Resolution falls through to
+`gh api user` > OS username. Log a warning naming the offending
+value. This is the path-traversal guard: handles like
+`../../etc/passwd` never reach the filesystem.
 
 ## 7. What This Replaces
 
@@ -357,10 +433,10 @@ SessionStart hook on `claude --resume`.
 
 **New:** Primary identity resolved from `.punt-labs/ethos.yaml` +
 `.punt-labs/ethos/identities/{agent}.yaml`. No subprocess. The
-`get_ethos_identity()` function is removed from the primary identity
-path. It may be retained for backward compatibility in other callers
-(e.g., CLI session) but is no longer on the MCP server startup critical
-path.
+`get_ethos_identity()` function and its tests are deleted -- after
+the new resolver is wired into `load_config()`, no caller remains in
+`src/`. `cli_session.py` reaches the identity through `load_config()`
+and so inherits the new behavior without any of its own changes.
 
 ### 7.2 `_try_late_companion_registration` identity race detection
 
@@ -371,9 +447,12 @@ differs from the roster's primary, and registers a companion for
 
 **New:** `config.user` is always the agent (resolved from disk).
 Companion registration still occurs via heartbeat polling, but the
-logic is simpler: the companion is always the roster's root (human)
-identity. The "which identity is NOT config.user" branch is replaced
-by "companion is roster.root if roster.root.handle != config.user."
+logic is simpler: the companion is always `roster.root` (the human;
+see section 3.2 and the ethos roster contract). The
+"whichever identity is NOT `config.user`" branch is deleted -- it
+existed only to repair the race between `ethos whoami` and
+SessionStart. When `roster.root.handle == config.user`, there is no
+companion to register and the heartbeat returns without state change.
 The conceptual model changes from "detect and correct a race" to
 "wait for data that is not yet available."
 

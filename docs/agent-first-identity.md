@@ -14,10 +14,18 @@
 | `load_config` | **MODIFY** | Replace `get_ethos_identity()` with `resolve_agent_identity_from_disk(repo_root)` in the identity chain. Remove `get_ethos_roster()` call that populates `root_identity`. |
 | `ResolvedConfig` | **MODIFY** | Remove the `root_identity` field. |
 
-`get_ethos_identity()`, `get_ethos_roster()`, and all roster-parsing helpers
-(`_parse_roster_entry`, `_parse_roster_participants`, `_parse_roster_legacy`,
-`EthosRoster`) are **retained** -- they are still called from `app.py`'s
-heartbeat path for companion resolution and from `cli_session.py`.
+`get_ethos_roster()` and all roster-parsing helpers (`_parse_roster_entry`,
+`_parse_roster_participants`, `_parse_roster_legacy`, `EthosRoster`) are
+**retained** -- they are still called from `app.py`'s heartbeat path for
+companion resolution.
+
+`get_ethos_identity()` is **deleted** along with its tests. Before this
+change it was called only by `load_config()`. After step 2 of the change
+order, no caller remains in `src/` -- including `cli_session.py`, which
+does not import the function directly and goes through `load_config()`.
+Keeping a dead helper for "ad-hoc CLI debugging" violates the
+project's "no backwards-compatibility shims" rule (CLAUDE.md). Section
+6 lists this deletion explicitly.
 
 ### `src/biff/__main__.py`
 
@@ -29,7 +37,7 @@ heartbeat path for companion resolution and from `cli_session.py`.
 
 | Function | Action | What changes |
 |---|---|---|
-| `_try_late_companion_registration` | **RENAME** to `_poll_companion_registration` | Remove "late" framing. Remove the identity-race comment. Simplify: companion is always `roster.root` when `roster.root.handle != config.user`. |
+| `_try_late_companion_registration` | **RENAME** to `_poll_companion_registration` | Remove "late" framing. Remove the identity-race comment. Simplify: companion is always `roster.root`. Invoke `get_ethos_roster()` via `asyncio.to_thread` so the subprocess never blocks the event loop (spec invariant 11). |
 | `_heartbeat_loop` | **MODIFY** | Remove the `_companion_checked` one-shot guard. Poll for companion on every tick while `state.companion is None`. Stop polling after first success (existing `state.companion is None` guard suffices). |
 | `_active_lifespan` | **MODIFY** | Remove the startup `await _register_companion(state)` call and the companion login event at startup. The companion is never registered during lifespan startup. |
 
@@ -55,8 +63,9 @@ heartbeat path -- same field, different timing.
 
 | Change | What |
 |---|---|
-| **ADD** tests for `resolve_agent_identity_from_disk` | Happy path, missing ethos.yaml, missing identity YAML, malformed YAML, empty agent field, agent with `kind: human`. |
-| **MODIFY** existing `load_config` tests | Remove assertions on `root_identity`. Update identity resolution mocks. |
+| **ADD** tests for `resolve_agent_identity_from_disk` | Happy path; missing ethos.yaml; missing identity YAML; malformed YAML; empty agent field; **`kind: human` (must return `None`, fall through to fallback chain)**; **path-traversal handles `../../etc/passwd`, `../foo`, `foo/bar` (all rejected by the regex)**; **handle that passes the regex but resolves outside `identities/` (rejected by the `is_relative_to` check)**. |
+| **MODIFY** existing `load_config` tests | Remove assertions on `root_identity`. Replace `get_ethos_identity` mocks with `resolve_agent_identity_from_disk` mocks or on-disk fixture files. |
+| **DELETE** `get_ethos_identity` tests | After step 2, no caller remains. Delete the helper and its tests together. |
 
 ### `tests/test_server/test_lifespan_registration.py`
 
@@ -73,7 +82,8 @@ def resolve_agent_identity_from_disk(repo_root: Path) -> EthosIdentity | None:
     Reads ``{repo_root}/.punt-labs/ethos.yaml`` for the ``agent`` field,
     then ``{repo_root}/.punt-labs/ethos/identities/{agent}.yaml`` for
     identity details. Returns ``None`` on any failure (missing files,
-    parse errors, empty fields) -- never raises.
+    parse errors, empty fields, invalid handle grammar, path-traversal
+    attempt, or ``kind != "agent"``) -- never raises.
     """
 ```
 
@@ -93,12 +103,30 @@ and `kind` from the identity YAML; `None` on any failure.
    `yaml.YAMLError`, log a warning and return `None`.
 5. Extract the `agent` field. If missing, not a string, or empty after
    stripping, return `None`.
-6. Compute `identity_path = repo_root / ".punt-labs" / "ethos" / "identities" / f"{agent}.yaml"`.
-7. If the file does not exist, return `None`.
-8. Call `_load_yaml(identity_path)`. On empty dict, return `None`.
-9. Extract `handle` (fall back to `agent`), `name` (fall back to `handle`),
-   `kind` (fall back to `""`).
-10. Return `EthosIdentity(handle=handle, display_name=name, kind=kind)`.
+6. **Validate the agent handle.** Match against
+   `re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")`. Reject any string
+   containing `/`, `\`, `..`, a leading `.`, or characters outside
+   `[a-z0-9_-]`. On rejection, log a warning naming the offending
+   value and return `None`. `.punt-labs/ethos.yaml` is
+   repository-controlled, so the handle is untrusted -- without this
+   gate, `agent: ../../etc/passwd` (or any other traversal payload)
+   would build a path outside the identities directory.
+7. Compute `identities_root = (repo_root / ".punt-labs" / "ethos" / "identities").resolve()`
+   and `identity_path = (identities_root / f"{agent}.yaml").resolve()`.
+   Verify `identity_path.is_relative_to(identities_root)` (use
+   `pathlib.PurePath.is_relative_to` directly; Python 3.13+).
+   If the check fails, log a warning and return `None`. This is a
+   defense-in-depth guard for any traversal payload that slipped past
+   the regex (e.g., via locale-specific normalization).
+8. If the file does not exist, return `None`.
+9. Call `_load_yaml(identity_path)`. On empty dict, return `None`.
+10. Extract `handle` (fall back to `agent`), `name` (fall back to `handle`),
+    `kind` (fall back to `""`).
+11. **Enforce `kind == "agent"`.** If `kind` is any other value, log a
+    warning and return `None`. A repo-controlled `.punt-labs/ethos.yaml`
+    must not be able to elevate a human (or any non-agent kind) into
+    `config.user`. Spec invariant 10.
+12. Return `EthosIdentity(handle=handle, display_name=name, kind=kind)`.
 
 **Error handling:** Every failure path returns `None`. The function logs
 warnings for malformed YAML (helps operators diagnose config issues) but
@@ -228,10 +256,20 @@ This picks "whichever identity is NOT config.user" because config.user could
 be either the agent or the human (race). New:
 
 ```python
+roster = await asyncio.to_thread(get_ethos_roster)
+if roster is None:
+    return
 if roster.root.handle == state.config.user:
     return  # Root IS the agent -- no human companion to register
 companion_identity = roster.root
 ```
+
+`get_ethos_roster()` is invoked through `asyncio.to_thread` so the
+underlying `subprocess.run(..., timeout=2)` runs on a worker thread
+instead of stalling the event loop for up to 2 seconds per tick. This
+keeps inbox polling and tool dispatch responsive even when ethos is
+slow or absent. Spec invariant 11 ("Heartbeat tick latency is
+bounded") makes this binding.
 
 The companion is always the roster root (the human). If `roster.root.handle
 == state.config.user`, it means the agent is also the root (unusual), so
@@ -275,19 +313,19 @@ per heartbeat interval (60s) -- negligible per spec section 6.3. After
 
 | What | Where | Why |
 |---|---|---|
-| `get_ethos_identity()` usage for primary identity | `load_config()` line ~720 | Replaced by `resolve_agent_identity_from_disk()` |
+| `get_ethos_identity()` function and tests | `config.py`, `tests/test_config.py` | After step 2 of change order, no caller remains in `src/`. `cli_session.py` does not import it. No "ad-hoc CLI debugging" carve-out -- dead helpers violate the no-shims rule. |
 | `get_ethos_roster()` usage for `root_identity` | `load_config()` lines 748-757 | Roster resolution deferred to heartbeat |
 | `ResolvedConfig.root_identity` field | `config.py` line 63 | No longer populated at config time |
 | `CompanionSession` creation in `_create_mcp_server` | `__main__.py` lines 1026-1033 | Companion creation deferred to heartbeat |
 | `await _register_companion(state)` at startup | `app.py` line 941 | Companion registration deferred to heartbeat |
 | Companion login event at startup | `app.py` lines 955-956 | Follows from above |
 | `_companion_checked` one-shot flag | `app.py` `_heartbeat_loop` line 326 | Companion polls every tick until success |
+| "whichever identity is NOT config.user" companion selection | `app.py` `_try_late_companion_registration` line 267 | Workaround from the racy past. With agent-first resolution, `config.user` is always the agent, so companion is unambiguously `roster.root`. |
 
 ### Functions / code NOT deleted (retained)
 
 | What | Why retained |
 |---|---|
-| `get_ethos_identity()` function definition | May be used by CLI or other callers |
 | `get_ethos_roster()` function definition | Called by `_poll_companion_registration` on heartbeat |
 | Roster parsing helpers | Called by `get_ethos_roster()` |
 | `_register_companion()` | Called from `_poll_companion_registration` (heartbeat path) |
@@ -300,9 +338,11 @@ per heartbeat interval (60s) -- negligible per spec section 6.3. After
 The `roster.root.handle != state.config.user` bail-out in `load_config()` is
 deleted (the entire roster block is removed from `load_config`).
 
-The `roster.primary.handle != state.config.user` race detection in
-`_try_late_companion_registration` is replaced with simpler logic: companion
-is always `roster.root` when `roster.root.handle != config.user`.
+The "whichever identity is NOT `config.user`" branch in
+`_try_late_companion_registration` is deleted. The replacement is
+unconditional: `companion = roster.root`. When `roster.root.handle ==
+config.user`, no companion registration happens (an unusual configuration
+where the agent is also the human at the terminal).
 
 ## 7. Migration / Backwards Compatibility
 
@@ -337,7 +377,11 @@ CLI commands (`biff who`, `biff write`, etc.) will identify as the agent.
 This is consistent -- the CLI is invoked from the agent's process.
 
 No changes to `cli_session.py` are needed. The new identity resolution
-happens inside `load_config()` which `cli_session` already calls.
+happens inside `load_config()` which `cli_session.py` already calls.
+`cli_session.py` does not import `get_ethos_identity` directly -- the
+function is reached only through `load_config()`. With that call site
+replaced, `get_ethos_identity` has no callers left and is deleted
+along with its tests (see section 6).
 
 ### Wire protocol
 
@@ -391,15 +435,20 @@ via heartbeat.
 ### Step 5: Refactor heartbeat companion logic
 
 Rename `_try_late_companion_registration` to `_poll_companion_registration`.
-Simplify the companion selection logic (always `roster.root`). Remove the
-`_companion_checked` one-shot guard from `_heartbeat_loop` -- poll every
-tick while `state.companion is None`.
+Simplify the companion selection logic (always `roster.root`). Wrap the
+`get_ethos_roster()` call in `asyncio.to_thread(...)` so the 2s subprocess
+timeout runs on a worker thread instead of stalling the event loop -- this
+is required by spec invariant 11 ("Heartbeat tick latency is bounded").
+Remove the `_companion_checked` one-shot guard from `_heartbeat_loop` --
+poll every tick while `state.companion is None`.
 
 Update docstrings to reflect the new model.
 
 **Verification:** `make check` passes. Full integration test: companion
 is registered on the first heartbeat tick after the roster becomes
-available.
+available. Latency test: a stubbed slow `get_ethos_roster` (sleeping
+500ms) does not delay other heartbeat work -- inbox polling and KV
+heartbeats fire concurrently.
 
 ### Step 6: Update documentation
 
