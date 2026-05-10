@@ -259,6 +259,23 @@ This creates one mission per stage, wired with `depends_on` edges. The worker pi
 - `ethos mission lint` suggests a pipeline and flags common contract issues.
 - Escalation only goes up. If `quick` reveals unexpected scope, escalate to `standard`. Never demote mid-flight.
 
+**Worker pool for biff** — Python with a NATS-backed relay. Each domain has a primary specialist plus alternates for overlapping areas; worker and evaluator must be distinct handles with no shared role.
+
+| Task type | Worker | Evaluator |
+|-----------|--------|-----------|
+| Python implementation (REPL, MCP, hooks) | `rmh` (Hettinger) | `gvr` (van Rossum) — language design |
+| Python language-design / typing / API shape | `gvr` | `rmh` |
+| CLI / shell command surface | `mdm` (McIlroy) | `rop` (Pike) — Plan 9 minimalism |
+| CLI minimalism / man-page text | `rop` | `mdm` |
+| NATS / relay protocol / wire-level | `rmh` (impl) or `bwk` (Go cross-review if relay code is touched) | `djb` (Bernstein) — wire safety |
+| Crypto / auth-token handling | `rmh` | `djb` |
+| Threat model — relay trust, multi-tenant orgs | `claude` (leader) | `bcs` (Schneier) |
+| Infra / CI / release scripts | `adb` (Lovelace) | `kth` (Hightower) |
+| UX of REPL output / table formatting | `rmh` | `edt` (Tufte) — info design |
+| Product / discovery (new biff capability) | `claude` (leader) | `mcg` (Cagan) or `tdt` (Torres) |
+
+`subagent_type` matches the ethos handle. The full org roster is available via `ethos identity list` for cross-domain review.
+
 ## Knowledge Propagation Protocol
 
 After merging a PR that introduces new patterns, design decisions, or hard-won debugging insights, propagate knowledge outward before closing the session:
