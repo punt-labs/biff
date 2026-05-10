@@ -18,6 +18,8 @@ from __future__ import annotations
 import getpass
 import importlib.resources
 import json
+import logging
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,8 +45,17 @@ __all__ = [
     "sanitize_repo_name",
 ]
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_PREFIX = Path("/tmp")  # noqa: S108
 DEMO_RELAY_URL = "tls://connect.ngs.global"
+
+# Agent handle grammar — matches identity YAML filenames. Length 1-64, lowercase
+# letters, digits, underscore, hyphen; first character cannot be a hyphen or
+# underscore. Repo-controlled input, so this is a hard precondition (spec § 3
+# step 3, invariant 10) guarding against path-traversal payloads in the
+# ``agent`` field of ``.punt-labs/ethos.yaml``.
+_AGENT_HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 def demo_creds_path() -> Path:
@@ -240,6 +251,129 @@ def get_ethos_identity() -> EthosIdentity | None:
     kind_val = raw.get("kind", "")
     kind = kind_val if isinstance(kind_val, str) else ""
     return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
+
+
+def _read_identity_yaml(path: Path) -> dict[str, object] | None:
+    """Load identity YAML, swallowing parse errors with a warning.
+
+    Unlike ``load_yaml_config`` (which raises ``SystemExit`` on parse
+    errors), agent identity resolution must never prevent biff from
+    starting -- the fallback chain handles missing or malformed
+    identity files (spec invariant 8).
+    """
+    try:
+        raw: object = yaml.safe_load(path.read_text())
+    except (OSError, UnicodeDecodeError):
+        return None
+    except yaml.YAMLError as exc:
+        logger.warning("Failed to parse identity YAML %s: %s", path, exc)
+        return None
+    if isinstance(raw, dict):
+        return cast("dict[str, object]", raw)
+    return None
+
+
+def _find_ethos_config(repo_root: Path) -> Path | None:
+    """Return the ethos config path, preferring the new location over the legacy one."""
+    primary = repo_root / ".punt-labs" / "ethos.yaml"
+    if primary.exists():
+        return primary
+    legacy = repo_root / ".punt-labs" / "ethos" / "config.yaml"
+    return legacy if legacy.exists() else None
+
+
+def _read_agent_handle(ethos_config: Path) -> str | None:
+    """Read and validate the ``agent`` field from ``ethos.yaml``.
+
+    Returns the validated handle, or ``None`` on missing/invalid input.
+    The handle is gated by ``_AGENT_HANDLE_RE`` because
+    ``.punt-labs/ethos.yaml`` is repository content -- a malicious or
+    mistyped value (``../../etc/passwd``, ``foo/bar``) must never be
+    joined onto a filesystem path.
+    """
+    config = _read_identity_yaml(ethos_config)
+    if not config:
+        return None
+    agent_raw = config.get("agent")
+    if not isinstance(agent_raw, str):
+        return None
+    agent = agent_raw.strip()
+    if not agent:
+        return None
+    if not _AGENT_HANDLE_RE.match(agent):
+        logger.warning(
+            "Rejecting agent handle %r in %s: must match %s",
+            agent,
+            ethos_config,
+            _AGENT_HANDLE_RE.pattern,
+        )
+        return None
+    return agent
+
+
+def _resolve_identity_path(repo_root: Path, handle: str) -> Path | None:
+    """Resolve the identity YAML path, guarding against traversal.
+
+    Defense in depth: even if the regex misses a payload (locale
+    normalization, future grammar changes), the resolved path must
+    stay within ``{repo_root}/.punt-labs/ethos/identities/``.
+    """
+    identities_root = (repo_root / ".punt-labs" / "ethos" / "identities").resolve()
+    identity_path = (identities_root / f"{handle}.yaml").resolve()
+    if not identity_path.is_relative_to(identities_root):
+        logger.warning(
+            "Rejecting identity path %s: outside %s",
+            identity_path,
+            identities_root,
+        )
+        return None
+    return identity_path if identity_path.exists() else None
+
+
+def _build_agent_identity(identity_path: Path, agent: str) -> EthosIdentity | None:
+    """Parse the identity YAML and enforce ``kind == "agent"``.
+
+    A repo-controlled ``ethos.yaml`` cannot escalate a human (or any
+    non-agent kind) into the agent slot (spec invariant 10).
+    """
+    identity = _read_identity_yaml(identity_path)
+    if not identity:
+        return None
+    handle_raw = identity.get("handle", agent)
+    handle = handle_raw if isinstance(handle_raw, str) and handle_raw else agent
+    name_raw = identity.get("name", handle)
+    display_name = name_raw if isinstance(name_raw, str) and name_raw else handle
+    kind_raw = identity.get("kind", "")
+    kind = kind_raw if isinstance(kind_raw, str) else ""
+    if kind != "agent":
+        logger.warning(
+            "Rejecting identity %s: kind=%r (expected 'agent')",
+            identity_path,
+            kind,
+        )
+        return None
+    return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
+
+
+def resolve_agent_identity_from_disk(repo_root: Path) -> EthosIdentity | None:
+    """Resolve agent identity from ethos config files on disk.
+
+    Reads ``{repo_root}/.punt-labs/ethos.yaml`` for the ``agent`` field,
+    then ``{repo_root}/.punt-labs/ethos/identities/{agent}.yaml`` for
+    identity details. Returns ``None`` on any failure (missing files,
+    parse errors, empty fields, invalid handle grammar, path-traversal
+    attempt, or ``kind != "agent"``) -- never raises.
+    """
+    ethos_config = _find_ethos_config(repo_root)
+    if ethos_config is None:
+        return None
+    agent = _read_agent_handle(ethos_config)
+    if agent is None:
+        return None
+    identity_path = _resolve_identity_path(repo_root, agent)
+    if identity_path is None:
+        return None
+    return _build_agent_identity(identity_path, agent)
 
 
 def _extract_team_members(teams: list[object]) -> set[str]:

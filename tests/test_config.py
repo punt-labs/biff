@@ -24,6 +24,7 @@ from biff.config import (
     get_os_user,
     get_repo_slug,
     load_config,
+    resolve_agent_identity_from_disk,
     sanitize_repo_name,
 )
 from biff.models import RelayAuth
@@ -835,3 +836,164 @@ class TestLoadConfigDualSession:
         repo = self._setup_repo(tmp_path)
         resolved = load_config(start=repo, user_override="custom")
         assert resolved.root_identity is None
+
+
+# -- resolve_agent_identity_from_disk --
+
+
+def _write_ethos_yaml(repo_root: Path, body: str) -> Path:
+    """Write ``.punt-labs/ethos.yaml`` under *repo_root* and return its path."""
+    ethos_dir = repo_root / ".punt-labs"
+    ethos_dir.mkdir(parents=True, exist_ok=True)
+    path = ethos_dir / "ethos.yaml"
+    path.write_text(body)
+    return path
+
+
+def _write_identity_yaml(repo_root: Path, handle: str, body: str) -> Path:
+    """Write ``.punt-labs/ethos/identities/{handle}.yaml`` and return its path."""
+    identities = repo_root / ".punt-labs" / "ethos" / "identities"
+    identities.mkdir(parents=True, exist_ok=True)
+    path = identities / f"{handle}.yaml"
+    path.write_text(body)
+    return path
+
+
+class TestResolveAgentIdentityFromDisk:
+    def test_happy_path(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(
+            tmp_path,
+            "claude",
+            "handle: claude\nname: Claude Agento\nkind: agent\n",
+        )
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result == EthosIdentity(
+            handle="claude", display_name="Claude Agento", kind="agent"
+        )
+
+    def test_legacy_config_yaml_location(self, tmp_path: Path) -> None:
+        """Legacy fallback: ``.punt-labs/ethos/config.yaml`` is read when ``ethos.yaml`` is absent."""  # noqa: E501
+        legacy = tmp_path / ".punt-labs" / "ethos"
+        legacy.mkdir(parents=True)
+        (legacy / "config.yaml").write_text("agent: claude\n")
+        _write_identity_yaml(
+            tmp_path,
+            "claude",
+            "handle: claude\nname: Claude Agento\nkind: agent\n",
+        )
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.handle == "claude"
+
+    def test_missing_ethos_yaml(self, tmp_path: Path) -> None:
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_missing_identity_yaml(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_malformed_ethos_yaml(self, tmp_path: Path) -> None:
+        # Unclosed bracket forces yaml.YAMLError.
+        _write_ethos_yaml(tmp_path, "agent: [unclosed\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_malformed_identity_yaml(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "kind: [agent\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_missing_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "team: engineering\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_empty_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: ''\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_whitespace_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: '   '\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_non_string_agent_field(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: 42\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_kind_human_rejected(self, tmp_path: Path) -> None:
+        """``kind: human`` must NOT be elevated into the agent slot."""
+        _write_ethos_yaml(tmp_path, "agent: jfreeman\n")
+        _write_identity_yaml(
+            tmp_path,
+            "jfreeman",
+            "handle: jfreeman\nname: Jim Freeman\nkind: human\n",
+        )
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_kind_missing_rejected(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "handle: claude\nname: Claude\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    @pytest.mark.parametrize(
+        "bad_handle",
+        [
+            "../../etc/passwd",
+            "../foo",
+            "foo/bar",
+            ".hidden",
+            "Claude",  # uppercase
+            "claude!",  # special char
+            "a" * 65,  # too long
+            "-leading-hyphen",
+            "_leading-underscore",
+        ],
+    )
+    def test_path_traversal_and_invalid_handles_rejected(
+        self, tmp_path: Path, bad_handle: str
+    ) -> None:
+        """The handle regex blocks every path-traversal payload before any FS read."""
+        _write_ethos_yaml(tmp_path, f"agent: {bad_handle!r}\n")
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_handle_outside_identities_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A handle that passes the regex but resolves outside identities/ is rejected.
+
+        The regex blocks ``/``, ``..``, etc. -- to exercise the
+        ``is_relative_to`` guard we replace ``Path.resolve`` so the
+        resolved identity path falls outside the identities directory.
+        """
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(
+            tmp_path, "claude", "handle: claude\nname: Claude\nkind: agent\n"
+        )
+
+        identities_root = (tmp_path / ".punt-labs" / "ethos" / "identities").resolve()
+        outside = tmp_path / "outside.yaml"
+        outside.write_text("handle: claude\nname: Claude\nkind: agent\n")
+
+        original_resolve = Path.resolve
+
+        def fake_resolve(self: Path, *args: object, **kwargs: object) -> Path:
+            if self.name == "claude.yaml" and self.parent == identities_root:
+                return outside
+            return original_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+        assert resolve_agent_identity_from_disk(tmp_path) is None
+
+    def test_handle_falls_back_to_agent_field(self, tmp_path: Path) -> None:
+        """When the identity YAML omits ``handle``, fall back to the agent field."""
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "name: Claude Agento\nkind: agent\n")
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.handle == "claude"
+
+    def test_display_name_falls_back_to_handle(self, tmp_path: Path) -> None:
+        _write_ethos_yaml(tmp_path, "agent: claude\n")
+        _write_identity_yaml(tmp_path, "claude", "handle: claude\nkind: agent\n")
+        result = resolve_agent_identity_from_disk(tmp_path)
+        assert result is not None
+        assert result.display_name == "claude"
