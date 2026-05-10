@@ -259,7 +259,7 @@ This creates one mission per stage, wired with `depends_on` edges. The worker pi
 - `ethos mission lint` suggests a pipeline and flags common contract issues.
 - Escalation only goes up. If `quick` reveals unexpected scope, escalate to `standard`. Never demote mid-flight.
 
-**Worker pool for biff** — Python with a NATS-backed relay. Two specialists per domain; worker and evaluator must be distinct handles with no shared role.
+**Worker pool for biff** — Python with a NATS-backed relay. Each domain has a primary specialist plus alternates for overlapping areas; worker and evaluator must be distinct handles with no shared role.
 
 | Task type | Worker | Evaluator |
 |-----------|--------|-----------|
