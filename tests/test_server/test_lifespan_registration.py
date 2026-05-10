@@ -277,23 +277,23 @@ class TestRegisterSessionHelper:
         )
 
 
-class TestLateCompanionRegistration:
-    """_try_late_companion_registration() recovers from startup race."""
+class TestPollCompanionRegistration:
+    """_poll_companion_registration() registers the human on heartbeat ticks."""
 
     async def test_registers_companion_when_roster_available(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Companion appears after first heartbeat when ethos was slow."""
+        """Companion appears after the heartbeat tick reads the roster."""
         from unittest.mock import MagicMock
 
         from biff.config import EthosIdentity, EthosRoster
-        from biff.server.app import _try_late_companion_registration
+        from biff.server.app import _poll_companion_registration
 
         config = BiffConfig(
             user="claude",
             display_name="Claude Agento",
             kind="agent",
-            repo_name="_test-late-companion",
+            repo_name="_test-poll-companion",
         )
         state = create_state(
             config,
@@ -312,15 +312,15 @@ class TestLateCompanionRegistration:
             "biff.config.get_ethos_roster", MagicMock(return_value=roster)
         )
 
-        await _try_late_companion_registration(state)
+        await _poll_companion_registration(state)
 
-        # _try_late_companion_registration mutates via object.__setattr__
+        # _poll_companion_registration mutates via object.__setattr__
         # which mypy can't track — use getattr to bypass narrowing.
         companion = getattr(state, "companion")  # noqa: B009
         assert companion is not None
         session = await state.relay.get_session(companion.session_key)
         assert session is not None
-        assert session.tty_name, "late companion must have non-empty tty_name"
+        assert session.tty_name, "companion must have non-empty tty_name"
         assert session.display_name == "Jim"
 
     async def test_noop_when_no_roster(
@@ -329,57 +329,85 @@ class TestLateCompanionRegistration:
         """No-op when ethos is not configured."""
         from unittest.mock import MagicMock
 
-        from biff.server.app import _try_late_companion_registration
+        from biff.server.app import _poll_companion_registration
 
         config = BiffConfig(
             user="claude",
             display_name="Claude",
             kind="agent",
-            repo_name="_test-late-companion",
+            repo_name="_test-poll-companion",
         )
         state = create_state(config, tmp_path, tty="a1b2c3d4", hostname="h", pwd="/")
         monkeypatch.setattr(
             "biff.config.get_ethos_roster", MagicMock(return_value=None)
         )
 
-        await _try_late_companion_registration(state)
+        await _poll_companion_registration(state)
 
         assert state.companion is None
 
-    async def test_late_companion_when_config_user_matches_root(
+    async def test_noop_when_config_user_is_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Identity race: config.user resolved to root (human) not primary.
+        """No companion when the agent is itself the roster root.
 
-        On ``claude --resume``, the MCP server starts before the SessionStart
-        hook runs ``ethos iam``.  ``ethos whoami`` returns the human identity,
-        so ``config.user`` is ``jfreeman``.  The roster later shows
-        root=jfreeman + primary=claude.  The companion should be created for
-        ``claude`` (the agent identity that config.user missed).
+        Agent-first identity (biff-8fg3) means ``config.user`` is always
+        the agent. When the roster root handle equals ``config.user``,
+        the agent is operating without a human at the terminal -- an
+        unusual configuration, but valid. No companion is registered.
         """
         from unittest.mock import MagicMock
 
         from biff.config import EthosIdentity, EthosRoster
-        from biff.server.app import _try_late_companion_registration
+        from biff.server.app import _poll_companion_registration
 
-        # config.user resolved to the human — the race condition
         config = BiffConfig(
-            user="jfreeman",
-            display_name="Jim Freeman",
-            kind="human",
-            repo_name="_test-identity-race",
+            user="claude",
+            display_name="Claude Agento",
+            kind="agent",
+            repo_name="_test-agent-is-root",
         )
-        state = create_state(
-            config,
-            tmp_path,
-            tty="a1b2c3d4",
-            hostname="test-host",
-            pwd="/test",
-        )
-        assert state.companion is None
+        state = create_state(config, tmp_path, tty="a1b2c3d4", hostname="h", pwd="/")
 
         roster = EthosRoster(
-            root=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
+            root=EthosIdentity(handle="claude", display_name="Claude", kind="agent"),
+            primary=None,
+        )
+        monkeypatch.setattr(
+            "biff.config.get_ethos_roster", MagicMock(return_value=roster)
+        )
+
+        await _poll_companion_registration(state)
+
+        assert state.companion is None
+
+    async def test_companion_is_always_roster_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Companion is always ``roster.root`` (the human at the terminal).
+
+        The previous "whichever identity is NOT config.user" rule was a
+        workaround for the racy past. With agent-first resolution
+        ``config.user`` is always the agent, so ``roster.root`` is
+        unambiguously the human.
+        """
+        from unittest.mock import MagicMock
+
+        from biff.config import EthosIdentity, EthosRoster
+        from biff.server.app import _poll_companion_registration
+
+        config = BiffConfig(
+            user="claude",
+            display_name="Claude Agento",
+            kind="agent",
+            repo_name="_test-roster-root",
+        )
+        state = create_state(config, tmp_path, tty="a1b2c3d4", hostname="h", pwd="/")
+
+        roster = EthosRoster(
+            root=EthosIdentity(
+                handle="jfreeman", display_name="Jim Freeman", kind="human"
+            ),
             primary=EthosIdentity(
                 handle="claude", display_name="Claude Agento", kind="agent"
             ),
@@ -388,44 +416,76 @@ class TestLateCompanionRegistration:
             "biff.config.get_ethos_roster", MagicMock(return_value=roster)
         )
 
-        await _try_late_companion_registration(state)
+        await _poll_companion_registration(state)
 
         companion = getattr(state, "companion")  # noqa: B009
         assert companion is not None
-        assert companion.user == "claude"
-        session = await state.relay.get_session(companion.session_key)
-        assert session is not None
-        assert session.tty_name, "companion must have non-empty tty_name"
-        assert session.display_name == "Claude Agento"
+        assert companion.user == "jfreeman"
+        assert companion.kind == "human"
 
-    async def test_noop_when_single_identity(
+    async def test_get_ethos_roster_runs_on_worker_thread(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No companion when roster has root == primary (single identity)."""
+        """The subprocess call MUST NOT block the event loop (spec invariant 11).
+
+        Pins ``get_ethos_roster`` to a blocking implementation that
+        sleeps via ``time.sleep`` (which a coroutine would freeze on).
+        If ``_poll_companion_registration`` did not use
+        ``asyncio.to_thread``, this test would either hang or run for
+        the full sleep duration. With ``to_thread``, an event-loop
+        watchdog task can fire during the sleep.
+        """
+        import time
         from unittest.mock import MagicMock
 
         from biff.config import EthosIdentity, EthosRoster
-        from biff.server.app import _try_late_companion_registration
+        from biff.server.app import _poll_companion_registration
 
         config = BiffConfig(
-            user="jfreeman",
-            display_name="Jim",
-            kind="human",
-            repo_name="_test-single-identity",
+            user="claude",
+            display_name="Claude",
+            kind="agent",
+            repo_name="_test-thread",
         )
         state = create_state(config, tmp_path, tty="a1b2c3d4", hostname="h", pwd="/")
 
         roster = EthosRoster(
             root=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
-            primary=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
+            primary=None,
         )
+
+        def _blocking_roster() -> EthosRoster:
+            time.sleep(0.1)  # blocks the calling thread, NOT the event loop
+            return roster
+
         monkeypatch.setattr(
-            "biff.config.get_ethos_roster", MagicMock(return_value=roster)
+            "biff.config.get_ethos_roster", MagicMock(side_effect=_blocking_roster)
         )
 
-        await _try_late_companion_registration(state)
+        # Watchdog: a concurrent coroutine that increments a counter
+        # every 10ms. If the event loop is stalled, the count is low.
+        import asyncio
 
-        assert state.companion is None
+        ticks = 0
+
+        async def _watchdog() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        from contextlib import suppress
+
+        watch = asyncio.create_task(_watchdog())
+        try:
+            await _poll_companion_registration(state)
+        finally:
+            watch.cancel()
+            with suppress(asyncio.CancelledError):
+                await watch
+
+        # With to_thread, watchdog fires at least 5 times during the 100ms sleep.
+        assert ticks >= 5, f"event loop stalled (only {ticks} watchdog ticks)"
 
 
 class TestOrgReposRefresh:
