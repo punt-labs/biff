@@ -11,7 +11,9 @@
 | Function | Action | What changes |
 |---|---|---|
 | `resolve_agent_identity_from_disk` | **ADD** | New function. Reads `.punt-labs/ethos.yaml` and the referenced identity YAML. Returns `EthosIdentity` or `None`. |
-| `load_config` | **MODIFY** | Replace `get_ethos_identity()` with `resolve_agent_identity_from_disk(repo_root)` in the identity chain. Remove `get_ethos_roster()` call that populates `root_identity`. |
+| `load_mcp_config` | **ADD** | Renamed entry point for MCP server config (formerly `load_config`). Calls `resolve_agent_identity_from_disk(repo_root)` in the identity chain. Identifies as the agent. |
+| `load_cli_config` | **ADD** | Entry point for `biff` CLI invocations. Skips disk-based agent resolution; uses the human-identity chain (`--user` override -> `get_github_identity()` -> `get_os_user()`). Identifies as the human at the terminal. |
+| `load_config` | **REMOVE** | Replaced by the two functions above. No "default context" -- callers pick the one that matches their context. This avoids the trap where a CLI caller silently inherits MCP-server behavior. |
 | `ResolvedConfig` | **MODIFY** | Remove the `root_identity` field. |
 
 `get_ethos_roster()` and all roster-parsing helpers (`_parse_roster_entry`,
@@ -20,12 +22,21 @@
 companion resolution.
 
 `get_ethos_identity()` is **deleted** along with its tests. Before this
-change it was called only by `load_config()`. After step 2 of the change
-order, no caller remains in `src/` -- including `cli_session.py`, which
-does not import the function directly and goes through `load_config()`.
-Keeping a dead helper for "ad-hoc CLI debugging" violates the
-project's "no backwards-compatibility shims" rule (CLAUDE.md). Section
-6 lists this deletion explicitly.
+change it was called only by `load_config()`. After the split, neither
+`load_mcp_config` nor `load_cli_config` calls it: the MCP entry uses
+the new disk resolver, and the CLI entry uses the human-identity chain
+directly. No caller remains in `src/`. Keeping a dead helper for
+"ad-hoc CLI debugging" violates the project's "no backwards-compatibility
+shims" rule (CLAUDE.md). Section 6 lists this deletion explicitly.
+
+**Why two functions, not one with a `context` flag.** A flag-based API
+(`load_config(context="mcp" | "cli")`) places the burden of picking
+the right context on every caller, and the default value -- whichever
+we pick -- silently mis-identifies callers in the other context. Two
+named functions make the choice explicit at the call site and make
+grep/IDE navigation surface every caller of each path. The shared
+config-loading machinery (relay URL, repo name, team enrichment,
+peers) lives in a private helper that both call.
 
 ### `src/biff/__main__.py`
 
@@ -139,9 +150,13 @@ config errors must not prevent biff from starting -- spec invariant 8).
 `get_ethos_identity()`. Called BEFORE any subprocess call contributes
 to `config.user`.
 
-## 3. Changes to `load_config`
+## 3. Changes to `load_mcp_config` (formerly `load_config`)
 
-**Current chain** (lines 717-731):
+The agent-first algorithm in this section applies to `load_mcp_config`
+**only**. `load_cli_config` (section 3a) skips disk-based agent
+resolution entirely. Spec § 1.1.
+
+**Current chain** (`load_config`, lines 717-731):
 
 ```text
 CLI override -> get_ethos_identity() -> get_github_identity() -> get_os_user()
@@ -149,16 +164,16 @@ CLI override -> get_ethos_identity() -> get_github_identity() -> get_os_user()
 
 Where `get_ethos_identity()` is `subprocess.run(["ethos", "whoami", "--json"])`.
 
-**New chain:**
+**New chain (`load_mcp_config`):**
 
 ```text
-CLI override -> resolve_agent_identity_from_disk(repo_root) -> get_github_identity() -> get_os_user()
+user_override -> resolve_agent_identity_from_disk(repo_root) -> get_github_identity() -> get_os_user()
 ```
 
 Where `resolve_agent_identity_from_disk(repo_root)` reads two YAML files
 from disk. No subprocess call.
 
-**Specific code changes in `load_config`:**
+**Specific code changes in `load_mcp_config`:**
 
 1. Replace the `ethos = get_ethos_identity()` block (lines 720-728) with:
 
@@ -191,6 +206,44 @@ from disk. No subprocess call.
 permits this (invariant 9: "get_ethos_team() and get_github_identity() are
 still subprocess calls on the startup path, but they do not contribute to
 config.user when ethos identity files are present").
+
+## 3a. `load_cli_config`: human identity for the CLI
+
+The `biff` CLI is invoked by a human at the terminal. CLI sessions
+identify as the human, not the agent (spec § 1.1).
+
+**Chain:**
+
+```text
+user_override -> get_github_identity() -> get_os_user()
+```
+
+No call to `resolve_agent_identity_from_disk`. No call to
+`get_ethos_identity` (deleted). The CLI never reads
+`.punt-labs/ethos.yaml` to pick an identity, because the human at the
+terminal is the identity -- their GitHub handle or login name.
+
+**Specific behavior:**
+
+1. If `user_override` is set (e.g., `biff --user alice who`), use it.
+2. Otherwise, call `get_github_identity()`. On success, use the GitHub
+   login as `user` and the GitHub display name as `display_name`.
+3. Otherwise, call `get_os_user()`. Use the OS login as `user` and as
+   `display_name`. `kind` defaults to `""` (unknown).
+4. Construct a `BiffConfig` with `user`, `display_name`, `kind`, and
+   the shared fields (relay URL, repo name, team, peers) loaded via
+   the private helper that backs both entry points.
+
+**Rationale:** The agent's identity is a property of the MCP server's
+process context. The CLI runs in the user's shell -- typically a
+human's interactive terminal -- and inherits the user's identity from
+the environment. Conflating these would route a human's `biff write`
+message with `FROM=agent`, which is the regression R5 flagged.
+
+**Shared loading.** Both `load_mcp_config` and `load_cli_config` call
+a private `_load_base_config(user_override)` that handles the
+non-identity portions: repo discovery, relay URL resolution, peer
+configuration, and team enrichment. The split is at identity only.
 
 ## 4. Changes to `_create_mcp_server` and `_active_lifespan`
 
@@ -371,17 +424,27 @@ Users may notice a brief period (up to 60s) where the status bar shows
 
 ### CLI session (`cli_session.py`)
 
-The CLI session calls `load_config()` which will now use
-`resolve_agent_identity_from_disk()` instead of `get_ethos_identity()`.
-CLI commands (`biff who`, `biff write`, etc.) will identify as the agent.
-This is consistent -- the CLI is invoked from the agent's process.
+`cli_session.py` is invoked by a human at the terminal. CLI commands
+(`biff who`, `biff write`, etc.) MUST identify as the human, not the
+agent. Routing a human's `biff write` with `FROM=agent` would be a
+behavioral regression.
 
-No changes to `cli_session.py` are needed. The new identity resolution
-happens inside `load_config()` which `cli_session.py` already calls.
-`cli_session.py` does not import `get_ethos_identity` directly -- the
-function is reached only through `load_config()`. With that call site
-replaced, `get_ethos_identity` has no callers left and is deleted
-along with its tests (see section 6).
+**Change:** `cli_session.py` currently calls `load_config(user_override=...)`.
+That call site is updated to `load_cli_config(user_override=...)`
+(section 3a). The CLI then uses the human-identity chain
+(`--user` override -> `get_github_identity()` -> `get_os_user()`),
+unchanged from the previous behavior of the implicit chain.
+
+**Why not just keep the old name as the CLI default.** The MCP server
+must call into the new agent-first path. If we leave `load_config`
+pointing at agent-first resolution and rely on the CLI to opt out via
+a flag, the default value will silently mis-identify whichever caller
+forgets the flag. The two-function API in section 3 makes the choice
+explicit at every call site.
+
+`get_ethos_identity` has no callers after the split: `load_mcp_config`
+uses the disk resolver, `load_cli_config` uses the human chain. The
+function and its tests are deleted (see section 6).
 
 ### Wire protocol
 
@@ -401,17 +464,44 @@ continues to use `get_ethos_identity()`.
 
 **Verification:** `make check` passes. New tests pass. No behavioral change.
 
-### Step 2: Wire `resolve_agent_identity_from_disk` into `load_config`
+### Step 2: Split `load_config` into `load_mcp_config` and `load_cli_config`
 
-Replace `get_ethos_identity()` with `resolve_agent_identity_from_disk(repo_root)`
-in the identity resolution chain. Remove the roster block that populates
-`root_identity`. Remove the `root_identity` field from `ResolvedConfig`.
+Extract the shared (non-identity) portion of `load_config` into a
+private `_load_base_config(user_override)` helper. Then introduce two
+public entry points:
 
-Update existing `load_config` tests that mock `get_ethos_identity` to
-instead mock `resolve_agent_identity_from_disk` or provide fixture files.
-Update any test that references `resolved.root_identity`.
+- `load_mcp_config(user_override=None)` -- calls `_load_base_config`
+  and uses the new identity chain
+  `user_override -> resolve_agent_identity_from_disk(repo_root) ->
+  get_github_identity() -> get_os_user()`.
+- `load_cli_config(user_override=None)` -- calls `_load_base_config`
+  and uses the human-identity chain
+  `user_override -> get_github_identity() -> get_os_user()`
+  (the pre-spec behavior, minus the `get_ethos_identity` step).
 
-**Verification:** `make check` passes. Identity resolution uses disk reads.
+Remove the roster block that populated `root_identity`. Remove the
+`root_identity` field from `ResolvedConfig`. Delete `load_config`.
+
+Update every call site:
+
+- `src/biff/__main__.py` (MCP server entry) -> `load_mcp_config(...)`.
+- `src/biff/cli_session.py` -> `load_cli_config(user_override=...)`.
+
+Update existing `load_config` tests:
+
+- Tests that exercised MCP startup -> rename and target `load_mcp_config`.
+  Mock `resolve_agent_identity_from_disk` or provide fixture files for
+  `.punt-labs/ethos.yaml` + identity YAML.
+- Tests that exercised CLI invocation -> rename and target
+  `load_cli_config`. Mock `get_github_identity`/`get_os_user`.
+- Add a regression test: `load_cli_config` with a fixture
+  `.punt-labs/ethos.yaml` + agent identity YAML on disk still returns
+  the human identity (proves the CLI path is not silently going
+  through the disk resolver).
+- Remove assertions on `root_identity`.
+
+**Verification:** `make check` passes. MCP identity resolution uses
+disk reads; CLI identity resolution uses the human chain.
 
 ### Step 3: Remove startup companion creation from `_create_mcp_server`
 

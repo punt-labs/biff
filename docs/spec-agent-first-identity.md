@@ -31,6 +31,27 @@ correction," and no state where `config.user` is reassigned after
 startup. The primary identity is determined once, at process start,
 from files on disk.
 
+### 1.1 Scope: MCP server only
+
+This spec describes **MCP server** identity resolution. The MCP server
+runs inside the agent's process, so its primary identity is the agent.
+
+The `biff` **CLI** (`biff who`, `biff write`, `biff finger`, ...) is
+invoked by a human at the terminal. CLI sessions identify as the
+human, not the agent. Disk-based agent resolution does NOT apply to
+`biff` CLI invocations.
+
+The CLI uses a separate resolution function (`load_cli_config`) that
+preserves the human-identity chain: `--user` override -> `gh api user`
+-> OS username. The MCP server uses `load_mcp_config`, which applies
+the agent-first algorithm in section 3. Both functions share the
+remainder of config loading (relay URL, repo name, team, peers).
+
+The split prevents the behavioral regression where `biff write` from
+a human terminal would send messages with `FROM=agent`. The human at
+the terminal sends as themselves; the agent's MCP server sends as the
+agent.
+
 ## 2. Identity Resolution Sources
 
 | Source | What it provides | Availability | Race risk |
@@ -265,9 +286,13 @@ These properties must hold at all times after STARTUP completes:
    STARTUP from files on disk and never changes. No subprocess call
    contributes to its value.
 
-2. **The primary session key is always the agent.** The KV row at
-   `{repo}.{config.user}.{tty}` is the primary session. Outbound
-   messages, plans, and heartbeats use this key.
+2. **The primary session key is always the agent.** The session key
+   is `{config.user}:{tty}` (session-key form). This is the value
+   referenced by outbound message FROM fields, plan ownership, and
+   `relay.heartbeat()` calls. The corresponding KV row lives at
+   `{repo}.{config.user}.{tty}` (KV-key form, with dot separators);
+   the KV key is derived internally by `NatsRelay` and is not
+   constructed by callers.
 
 3. **Outbound messages show the agent identity.** The FROM field of
    `/write`, `/wall`, and `/talk` is always `config.user`. The
@@ -381,11 +406,20 @@ attempt is independent and the roster data is re-fetched each time.
 subsequent heartbeat call for the companion session fails.
 
 **Behavior:** Existing heartbeat error handling applies. The heartbeat
-loop logs a warning and continues. The companion KV entry may expire if
-heartbeats fail for the full TTL duration (default: 3 days for NATS
-KV). On the next successful heartbeat, the companion KV entry is
-refreshed. The companion is NOT removed from `state.companion` -- it
-remains registered locally even if the KV entry temporarily expires.
+loop logs a warning and continues. The companion is NOT removed from
+`state.companion` -- it remains registered locally even if the KV entry
+temporarily expires.
+
+If heartbeats fail for the full TTL (NATS KV default: 3 days), the
+companion KV row expires and the companion disappears from `/who`
+until the MCP server restarts. Re-registration on KV expiry is **out
+of scope for this redesign** -- the existing heartbeat semantics are
+preserved. Specifically, `NatsRelay.heartbeat()` no-ops when the KV
+key is missing; it does not recreate the row. Practical impact is
+negligible: heartbeat interval is 60s and the KV TTL is 3 days, so
+expiry only matters for processes that sleep more than 3 days without
+restart. A future change can add "re-register on missing KV row" to
+the heartbeat path if real workloads hit this case.
 
 ### 6.6 `.punt-labs/ethos.yaml` is malformed
 
@@ -431,12 +465,14 @@ paths:
 `ethos whoami --json`) to resolve `config.user`. This races the
 SessionStart hook on `claude --resume`.
 
-**New:** Primary identity resolved from `.punt-labs/ethos.yaml` +
-`.punt-labs/ethos/identities/{agent}.yaml`. No subprocess. The
-`get_ethos_identity()` function and its tests are deleted -- after
-the new resolver is wired into `load_config()`, no caller remains in
-`src/`. `cli_session.py` reaches the identity through `load_config()`
-and so inherits the new behavior without any of its own changes.
+**New:** `load_config` is split into `load_mcp_config` (MCP server
+entry) and `load_cli_config` (CLI entry). The MCP entry resolves the
+primary identity from `.punt-labs/ethos.yaml` +
+`.punt-labs/ethos/identities/{agent}.yaml`. No subprocess. The CLI
+entry skips disk resolution and uses the human-identity chain
+(`get_github_identity()` -> `get_os_user()`). The
+`get_ethos_identity()` function and its tests are deleted -- neither
+new entry point calls it.
 
 ### 7.2 `_try_late_companion_registration` identity race detection
 
