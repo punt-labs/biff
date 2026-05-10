@@ -937,8 +937,9 @@ async def _active_lifespan(
     )
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
-    # Companion TTY name claim (DES-039).
-    await _register_companion(state)
+    # Companion (human) registration is deferred entirely to the
+    # heartbeat loop. The ethos roster is not yet available at
+    # startup on claude --resume (spec § 3.2, biff-8fg3).
 
     # Write the initial unread file and wall state immediately so the
     # status line has identity from the first render (before the poller ticks).
@@ -952,8 +953,6 @@ async def _active_lifespan(
     sessions = await state.relay.get_sessions()
 
     await _append_login_event(state, final_name)
-    if state.companion:
-        await _append_companion_login_event(state)
     await _close_orphaned_logins(state, sessions)
 
     shutdown = asyncio.Event()

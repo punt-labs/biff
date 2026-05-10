@@ -83,9 +83,18 @@ class TestLifespanRegistration:
         assert session.tty_name, "primary row must have non-empty tty_name"
         assert session.user == "kai"
 
-    async def test_active_lifespan_registers_companion_with_tty_name(
+    async def test_active_lifespan_does_not_register_companion_at_startup(
         self, primary_state_with_companion: ServerState
     ) -> None:
+        """Companion registration is deferred to the heartbeat loop (biff-8fg3).
+
+        Even when ``state.companion`` is pre-populated (legacy path,
+        retained so fixtures can probe the registration helper), the
+        lifespan must not write a KV row for it. The heartbeat path
+        (``_poll_companion_registration``) owns companion registration
+        and may overwrite ``state.companion`` with the current roster
+        root on its first successful tick.
+        """
         state = primary_state_with_companion
         mcp = create_server(state)
 
@@ -93,9 +102,7 @@ class TestLifespanRegistration:
             assert state.companion_session_key is not None
             session = await state.relay.get_session(state.companion_session_key)
 
-        assert session is not None
-        assert session.tty_name, "companion row must have non-empty tty_name"
-        assert session.display_name == "Jim Freeman"
+        assert session is None, "lifespan must not register the companion at startup"
 
 
 class TestRegisterCompanion:
