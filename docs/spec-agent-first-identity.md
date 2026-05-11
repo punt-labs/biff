@@ -128,6 +128,16 @@ subprocess call. The algorithm:
    This yields: `user="claude"`, `display_name="Claude Agento"`,
    `kind="agent"`.
 
+   **Why `handle`, not `github`:** Ethos is the identity authority
+   across Punt Labs. The `handle` field (`claude`) is the canonical
+   name used by ethos, biff, beadle, and vox. The `github` field
+   (`claude-puntlabs`) is a platform binding -- it maps the identity
+   to a GitHub account but is not the identity itself. Using `handle`
+   keeps biff consistent with how every other tool addresses this
+   agent. Prior versions used `gh api user` (which returned the
+   GitHub username) because ethos identity files were not yet
+   available on the critical startup path.
+
 5. **Require `kind: agent` on the resolved identity.** If the identity
    YAML's `kind` field is not the exact string `agent`, the resolution
    fails. This prevents a repo-controlled `.punt-labs/ethos.yaml` from
