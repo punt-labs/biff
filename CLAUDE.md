@@ -187,7 +187,7 @@ propagation (punt-kit install-all.sh, marketplace catalog, website), and verific
 not release authorization. The COO must confirm with the CEO before
 invoking `/punt:auto release`. When the CHANGELOG names a specific
 target version (e.g., `## [1.11.0]`), pass it explicitly:
-`punt release 1.11.0`.
+`/punt:auto release version=1.11.0`.
 
 **Bar:**
 

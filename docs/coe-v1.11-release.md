@@ -1,7 +1,8 @@
-# COE — Dual-Session Development Cycle (v1.8.0 → v1.10.1)
+# COE — v1.11 Phantom Release and Dual-Session Development Cycle
 
 **Date:** 2026-05-11
-**Scope:** biff v1.8.0 through v1.10.1, 10+ releases across 4 weeks
+**Scope:** biff v1.8.0 through v1.10.1 (dual-session), culminating in
+the phantom v1.11.0/v1.11.1 release incident
 **Severity:** P1 — pattern of inverted judgment, unauthorized release,
 repeated deferral of known bugs, and shipping code without understanding it
 **Author:** Claude Agento (COO)
