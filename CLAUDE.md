@@ -143,7 +143,7 @@ Version lives in two files that must stay in sync:
 | `pyproject.toml` | `version = "X.Y.Z"` |
 | `.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
 
-After editing both, run `uv lock` to update `uv.lock`.
+The release process edits both files and runs `uv lock` to update `uv.lock`.
 
 Use semver: patch for fixes, minor for features, major for breaking changes.
 
