@@ -145,7 +145,15 @@ Version lives in two files that must stay in sync:
 
 After editing both, run `uv lock` to update `uv.lock`.
 
-Use semver: patch for fixes, minor for features, major for breaking changes. Bump on every PR that changes user-facing behavior.
+Use semver: patch for fixes, minor for features, major for breaking changes.
+
+**Version bumps belong to the release process only.** Implementation
+PRs must NOT bump version files. `punt release` reads pyproject.toml
+as `current` and increments it — if an implementation PR pre-bumps
+the version, `punt release` will bump PAST the intended version,
+creating a phantom release (COE: docs/coe-v1.11-release.md).
+The version on main between releases stays at the last released
+version.
 
 **IMPORTANT:** `plugin.json` must always have `"name": "biff-dev"` on main. Release scripts (`scripts/release-plugin.sh`) swap to `"biff"` on the tagged commit only; `scripts/restore-dev-plugin.sh` restores `"biff-dev"` afterward. This prevents namespace collisions when developing with `--plugin-dir` alongside the installed production plugin. Dev commands (`commands/*-dev.md`) route to `mcp__plugin_biff-dev_tty__*`; prod commands route to `mcp__plugin_biff_tty__*`.
 
@@ -174,6 +182,12 @@ which runs the `punt release` CLI through the playbook executor with LLM-driven 
 diagnosis. It handles all 11 phases automatically: preflight, version bump, build, release PR,
 tag, CI wait, GitHub release, PyPI verify, post-release (README SHA bump), cross-repo
 propagation (punt-kit install-all.sh, marketplace catalog, website), and verification.
+
+**Releases require explicit CEO approval.** Pipeline completion is
+not release authorization. The COO must confirm with the CEO before
+invoking `/punt:auto release`. When the CHANGELOG names a specific
+target version (e.g., `## [1.11.0]`), pass it explicitly:
+`punt release 1.11.0`.
 
 **Bar:**
 
@@ -209,7 +223,7 @@ Three documents track different scopes. All are updated in the PR branch, before
 
 Before creating a PR, verify:
 
-- [ ] **Version bumped** in both `pyproject.toml` and `plugin.json` if user-facing behavior changed
+- [ ] **CHANGELOG entry** under `## [Unreleased]` describes the change (do NOT bump version files — `punt release` owns that)
 - [ ] **`plugin.json` name is `"biff-dev"`** (not `"biff"` — release scripts handle the swap)
 - [ ] **Documentation updated** per [Documentation Discipline](#documentation-discipline) (CHANGELOG, README, PR/FAQ as applicable)
 - [ ] **Quality gates pass**
