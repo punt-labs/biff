@@ -358,9 +358,9 @@ def _biff_statusline_setting() -> dict[str, str]:
 def _resolve_original_command(stash_path: Path) -> str | None:
     """Extract the shell command from the stashed ``statusLine`` value.
 
-    Claude Code's schema requires ``{"type": "command", "command": "..."}``,
-    so the stash is always ``None`` (no prior statusLine) or an object with
-    a ``command`` key.
+    The stash is ``None`` (no prior statusLine), a dict with a
+    ``command`` key (current Claude Code schema), or a bare string
+    (legacy format).
 
     Returns ``None`` if the stashed command is biff itself — running
     ``biff statusline`` as the "original" creates an infinite fork loop.
