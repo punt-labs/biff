@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-05-29
+
 ### Fixed
 
 - **Statusline fork bomb after data-dir migration (biff-ayc).** When `BIFF_DATA_DIR` moved from `~/.biff/` to `~/.punt-labs/biff/`, reinstalling the statusline stashed the current `biff statusline` command as the "original" — creating an infinite self-referential loop where each `biff statusline` invocation spawned another. Added a self-reference guard in `install()` (stashes `null` when the current statusLine is already biff) and a defense-in-depth check in `_resolve_original_command()` (refuses to return biff as the original command).
