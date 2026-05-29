@@ -95,6 +95,17 @@ def write_stash(path: Path, value: str | dict[str, object] | None) -> None:
 # Install / Uninstall -------------------------------------------------------
 
 
+def _is_biff_statusline(value: object) -> bool:
+    """True when *value* is a statusLine config that invokes biff."""
+    d = as_str_dict(value)
+    if d:
+        cmd = d.get("command", "")
+        return isinstance(cmd, str) and "biff" in cmd and "statusline" in cmd
+    if isinstance(value, str):
+        return "biff" in value and "statusline" in value
+    return False
+
+
 def install(
     settings_path: Path | None = None,
     stash_path: Path | None = None,
@@ -114,6 +125,13 @@ def install(
 
     settings = read_settings(settings_path)
     original = settings.get("statusLine")
+    if _is_biff_statusline(original):
+        logger.warning(
+            "install: current statusLine is already biff; stashing null "
+            "to prevent self-referential loop (was: %s)",
+            original,
+        )
+        original = None
     write_stash(stash_path, original)  # type: ignore[arg-type]
 
     settings["statusLine"] = _biff_statusline_setting()
@@ -340,19 +358,23 @@ def _biff_statusline_setting() -> dict[str, str]:
 def _resolve_original_command(stash_path: Path) -> str | None:
     """Extract the shell command from the stashed ``statusLine`` value.
 
-    Claude Code's schema requires ``{"type": "command", "command": "..."}``,
-    so the stash is always ``None`` (no prior statusLine) or an object with
-    a ``command`` key.
+    The stash is ``None`` (no prior statusLine), a dict with a
+    ``command`` key (current Claude Code schema), or a bare string
+    (legacy format).
+
+    Returns ``None`` if the stashed command is biff itself — running
+    ``biff statusline`` as the "original" creates an infinite fork loop.
     """
     if not stash_path.exists():
         return None
     original = read_stash(stash_path)
     if original is None:
         return None
+    if _is_biff_statusline(original):
+        return None
     if isinstance(original, dict):
         cmd = original.get("command")
         return cmd if isinstance(cmd, str) else None
-    # Defensive: unexpected string form (schema requires object)
     return original
 
 
