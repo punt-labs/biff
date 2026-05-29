@@ -97,8 +97,9 @@ def write_stash(path: Path, value: str | dict[str, object] | None) -> None:
 
 def _is_biff_statusline(value: object) -> bool:
     """True when *value* is a statusLine config that invokes biff."""
-    if isinstance(value, dict):
-        cmd = value.get("command", "")
+    d = as_str_dict(value)
+    if d:
+        cmd = d.get("command", "")
         return isinstance(cmd, str) and "biff" in cmd and "statusline" in cmd
     if isinstance(value, str):
         return "biff" in value and "statusline" in value
