@@ -21,6 +21,7 @@ from biff.statusline import (
     _display_segment,
     _git_segment,
     _int_field,
+    _is_biff_statusline,
     _parse_session_data,
     _resolve_original_command,
     _run_original,
@@ -649,6 +650,76 @@ class TestResolveOriginalCommand:
         path = tmp_path / "stash.json"
         write_stash(path, {"other": "value"})
         assert _resolve_original_command(path) is None
+
+    def test_self_referential_object_returns_none(self, tmp_path: Path):
+        """Stash containing biff statusline must not recurse."""
+        path = tmp_path / "stash.json"
+        write_stash(path, {"type": "command", "command": "/usr/bin/biff statusline"})
+        assert _resolve_original_command(path) is None
+
+    def test_self_referential_string_returns_none(self, tmp_path: Path):
+        """String-form stash containing biff statusline must not recurse."""
+        path = tmp_path / "stash.json"
+        write_stash(path, "biff statusline")
+        assert _resolve_original_command(path) is None
+
+    def test_non_biff_command_passes(self, tmp_path: Path):
+        path = tmp_path / "stash.json"
+        write_stash(path, {"type": "command", "command": "/usr/bin/mystatus"})
+        assert _resolve_original_command(path) == "/usr/bin/mystatus"
+
+
+# --- Self-Reference Guard ---------------------------------------------------
+
+
+class TestIsBiffStatusline:
+    def test_biff_statusline_dict(self) -> None:
+        assert _is_biff_statusline(
+            {"type": "command", "command": "/Users/x/.local/bin/biff statusline"}
+        )
+
+    def test_bare_biff_statusline(self) -> None:
+        assert _is_biff_statusline({"command": "biff statusline"})
+
+    def test_non_biff_command(self) -> None:
+        assert not _is_biff_statusline({"command": "/usr/bin/mystatus"})
+
+    def test_none(self) -> None:
+        assert not _is_biff_statusline(None)
+
+    def test_string(self) -> None:
+        assert not _is_biff_statusline("biff statusline")
+
+    def test_empty_dict(self) -> None:
+        assert not _is_biff_statusline({})
+
+
+class TestInstallSelfReferenceGuard:
+    def test_stashes_null_when_current_is_biff(self, tmp_path: Path):
+        """Reinstalling when statusLine is already biff must stash null."""
+        settings_path = tmp_path / "settings.json"
+        stash_path = tmp_path / "stash.json"
+        write_settings(
+            settings_path,
+            {
+                "statusLine": {
+                    "type": "command",
+                    "command": "/Users/x/.local/bin/biff statusline",
+                }
+            },
+        )
+        result = install(settings_path, stash_path)
+        assert result.installed
+        assert read_stash(stash_path) is None
+
+    def test_stashes_original_when_not_biff(self, tmp_path: Path):
+        settings_path = tmp_path / "settings.json"
+        stash_path = tmp_path / "stash.json"
+        obj: dict[str, object] = {"type": "command", "command": "/bin/otherstatus"}
+        write_settings(settings_path, {"statusLine": obj})
+        result = install(settings_path, stash_path)
+        assert result.installed
+        assert read_stash(stash_path) == obj
 
 
 # --- Run Original -----------------------------------------------------------
