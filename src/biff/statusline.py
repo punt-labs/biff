@@ -100,6 +100,8 @@ def _is_biff_statusline(value: object) -> bool:
     if isinstance(value, dict):
         cmd = value.get("command", "")
         return isinstance(cmd, str) and "biff" in cmd and "statusline" in cmd
+    if isinstance(value, str):
+        return "biff" in value and "statusline" in value
     return False
 
 
@@ -122,10 +124,12 @@ def install(
 
     settings = read_settings(settings_path)
     original = settings.get("statusLine")
-    # Guard: if the current statusLine already runs biff, stash null
-    # to avoid a self-referential loop where biff statusline spawns
-    # itself as the "original" command (fork bomb).
     if _is_biff_statusline(original):
+        logger.warning(
+            "install: current statusLine is already biff; stashing null "
+            "to prevent self-referential loop (was: %s)",
+            original,
+        )
         original = None
     write_stash(stash_path, original)  # type: ignore[arg-type]
 
@@ -369,13 +373,7 @@ def _resolve_original_command(stash_path: Path) -> str | None:
         return None
     if isinstance(original, dict):
         cmd = original.get("command")
-        if not isinstance(cmd, str):
-            return None
-        if "biff" in cmd and "statusline" in cmd:
-            return None
-        return cmd
-    if isinstance(original, str) and "biff" in original and "statusline" in original:
-        return None
+        return cmd if isinstance(cmd, str) else None
     return original
 
 

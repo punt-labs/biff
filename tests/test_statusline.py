@@ -687,8 +687,11 @@ class TestIsBiffStatusline:
     def test_none(self) -> None:
         assert not _is_biff_statusline(None)
 
-    def test_string(self) -> None:
-        assert not _is_biff_statusline("biff statusline")
+    def test_string_with_biff(self) -> None:
+        assert _is_biff_statusline("biff statusline")
+
+    def test_string_without_biff(self) -> None:
+        assert not _is_biff_statusline("echo hello")
 
     def test_empty_dict(self) -> None:
         assert not _is_biff_statusline({})
