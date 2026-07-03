@@ -57,12 +57,12 @@ lock-clean: ## Regenerate uv.lock without local overrides (for CI/release)
 	@if [ -f uv.toml ]; then \
 	    trap 'mv uv.toml.bak uv.toml 2>/dev/null' EXIT INT TERM; \
 	    mv uv.toml uv.toml.bak; \
-	    uv lock; status=$$?; \
+	    uv lock --upgrade-package punt-lux; status=$$?; \
 	    mv uv.toml.bak uv.toml; \
 	    trap - EXIT INT TERM; \
 	    exit $$status; \
 	else \
-	    uv lock; \
+	    uv lock --upgrade-package punt-lux; \
 	fi
 
 build: ## Build wheel and sdist

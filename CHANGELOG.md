@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`lock-clean` now re-resolves `punt-lux` from PyPI (biff-4uxk).** The Makefile target ran a bare `uv lock`, which reuses cached resolution and does not re-fetch `punt-lux` once the local `uv.toml` override is hidden — so a release could relock against a stale `punt-lux`. Added `--upgrade-package punt-lux` to both `uv lock` calls in the target. Hit during the v1.6.2 release.
+- **`make check` no longer lints quarry transcript captures.** `.punt-labs/quarry/captures/` (machine-generated session transcripts) is now excluded from `markdownlint-cli2` and gitignored, so a local `make check` no longer fails on auto-captured scratch files. CI was unaffected — the directory does not exist on runners.
+
 ### Security
 
 - **Least-privilege `GITHUB_TOKEN` in CI workflows.** Added a top-level `permissions: contents: read` block to `docs.yml`, `test.yml`, `lint.yml`, and `hosted-nats.yml`. These workflows only check out the repo and run linters/tests, so the token no longer defaults to the repository's broad write scope. Clears four CodeQL `actions/missing-workflow-permissions` code-scanning alerts (medium severity).
