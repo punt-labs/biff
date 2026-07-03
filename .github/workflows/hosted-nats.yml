@@ -8,6 +8,9 @@ name: Hosted NATS E2E
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

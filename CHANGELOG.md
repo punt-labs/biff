@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Security
+
+- **Least-privilege `GITHUB_TOKEN` in CI workflows.** Added a top-level `permissions: contents: read` block to `docs.yml`, `test.yml`, `lint.yml`, and `hosted-nats.yml`. These workflows only check out the repo and run linters/tests, so the token no longer defaults to the repository's broad write scope. Clears four CodeQL `actions/missing-workflow-permissions` code-scanning alerts (medium severity).
+
 ## [1.10.2] - 2026-05-29
 
 ### Fixed
