@@ -1,11 +1,12 @@
+% nats-relay-passA-nowedge.tex
+% FROZEN PASS-A ARTIFACT --- DO NOT EDIT except in lockstep with
+% docs/nats-relay.tex.  This is docs/nats-relay.tex with the single
+% WedgeDetected recovery operation removed, modelling the PRE-FIX code
+% (nats-py keepalive default of 240s that never fired in practice).
+% Running `z-spec test` on this file MUST fail with a reachable
+% terminal halfOpen state: that deadlock IS biff-tww, proven from the
+% model.  See DESIGN.md DES-041.
 %
-% nats-relay.tex
-%
-% Z Specification for Biff NATS Relay
-% Formal model of connection lifecycle, KV watcher state machine,
-% and session presence management.
-%
-
 \documentclass[a4paper,10pt,fleqn]{article}
 \usepackage[margin=1in]{geometry}
 \usepackage{fuzz}
@@ -338,30 +339,6 @@ handles are invalidated to satisfy the handle-validity invariant.
 This is the operation that makes $halfOpen$ reachable, and the
 crash-loop of biff-tww is exactly $reqTimeout$ fired repeatedly
 with no way out.
-
-\subsection{Wedge Detected (Recovery)}
-
-\begin{schema}{WedgeDetected}
-  \Delta Connection
-  \where
-  connState = halfOpen \\
-  connState' = reconnecting \\
-  kvProvisioned' = zfalse \\
-  streamsProvisioned' = zfalse \\
-  namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse
-\end{schema}
-
-The recovery transition, and the entire content of the fix.
-Keepalive PINGs (\texttt{ping\_interval=20}, \texttt{max\_outstanding\_pings=3})
-detect that the server has stopped answering within
-$\sim$60\,s and fire nats-py's \texttt{\_on\_disconnect}, which
-invalidates the cached handles and hands the socket to nats-py's
-infinite reconnect loop.  $WedgeDetected$ is the \emph{only}
-operation enabled in $halfOpen$; removing it (the pre-fix code,
-whose \texttt{ping\_interval} default of 240\,s never fired in
-practice) makes $halfOpen$ a terminal state.  That terminal state
-is biff-tww, and probcli surfaces it as a reachable deadlock.
 
 \subsection{Reconnect (nats-py Auto-Reconnect Completes)}
 

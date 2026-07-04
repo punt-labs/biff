@@ -108,3 +108,79 @@ class TestProvisionTimeout:
         assert result_js is js
         assert result_kv is kv
         assert relay._nc is not None
+
+
+class TestHalfOpenWedgeRecovery:
+    """A half-open connection must be detected and recovered, not looped on.
+
+    Regression coverage for biff-tww (DES-041): the NATS socket stays up but
+    the server stops responding, so every JetStream/KV request raises
+    ``nats: timeout``.  nats-py's default keepalive
+    (ping_interval=120s, max_outstanding_pings=2) only declares such a
+    connection dead after ~240s — during which the poller and heartbeat
+    crash-loop with no recovery.  The fix tunes keepalive so detection
+    happens in ~60-80s, firing nats-py's own reconnect + handle invalidation.
+    """
+
+    @staticmethod
+    def _connect_and_provision(
+        relay: NatsRelay, handles: tuple[Any, Any, Any]
+    ) -> AsyncMock:
+        """Patch ``nats.connect`` (fresh client per call) and ``_provision``."""
+        connect = AsyncMock(side_effect=_fresh_nc)
+        relay._provision = AsyncMock(return_value=handles)  # type: ignore[method-assign]
+        return connect
+
+    @pytest.mark.anyio()
+    async def test_connect_uses_bounded_keepalive(self) -> None:
+        """Detection latency must be far below the 240s nats-py default.
+
+        nats-py's ping timer cannot be advanced in a unit test, so the fix
+        is verified at its source: the keepalive parameters passed to
+        ``nats.connect``.  ``ping_interval * max_outstanding_pings`` (~60s)
+        is the base detection budget; the real trip is up to one interval
+        higher (~80s) because nats-py fires when the count *exceeds* the
+        max, which the 90s ceiling accommodates.
+        """
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect_and_provision(
+            relay, (MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+
+        assert connect.await_args is not None
+        kwargs = connect.await_args.kwargs
+        detection = kwargs["ping_interval"] * kwargs["max_outstanding_pings"]
+        assert detection <= 90, f"wedge detection {detection}s exceeds 90s budget"
+        # Never give up mid-outage — a bounded count strands the MCP server.
+        assert kwargs["max_reconnect_attempts"] == -1
+
+    @pytest.mark.anyio()
+    async def test_wedge_detection_invalidates_and_recovers(self) -> None:
+        """Ping detection fires disconnect → handles cleared → next call rebuilds.
+
+        Models the sequence prompt keepalive enables: nats-py declares the
+        half-open connection dead and invokes ``disconnected_cb``, which
+        invalidates cached handles (DES-029); the next relay call then
+        rebuilds them on the reconnected client instead of looping forever.
+        """
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        js, kv, names_kv = MagicMock(), MagicMock(), MagicMock()
+        connect = self._connect_and_provision(relay, (js, kv, names_kv))
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+            assert relay._cached_handles() is not None
+
+            # nats-py's ping loop detects the dead socket and fires the
+            # disconnect callback it was registered with.
+            assert connect.await_args is not None
+            on_disconnect = connect.await_args.kwargs["disconnected_cb"]
+            await on_disconnect()
+            assert relay._cached_handles() is None
+
+            # The next call rebuilds handles rather than reusing the wedge.
+            result_js, result_kv = await relay._ensure_connected()
+
+        assert result_js is js
+        assert result_kv is kv

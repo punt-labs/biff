@@ -1,0 +1,77 @@
+biff-tww proven from the model: the half-open connection wedge
+===============================================================
+
+Artifact         : ProB counterexample trace (Pass A, pre-fix model)
+Spec             : docs/nats-relay-passA-nowedge.tex
+                   (= docs/nats-relay.tex with the single WedgeDetected
+                    recovery operation removed)
+Tool             : probcli (ProB) via `z-spec test`
+Command          : probcli docs/nats-relay-passA-nowedge.tex \
+                     -model_check -p DEFAULT_SETSIZE 2 -p MAX_OPERATIONS 1000
+Result           : *** COUNTER EXAMPLE FOUND *** (deadlock)
+Corresponds to   : biff-tww (runtime NATS wedge), DES-041
+
+What Pass A models
+------------------
+The pre-fix code. nats-py's keepalive defaults (ping_interval=120s,
+max_outstanding_pings=2 -> ~240s) never fired within the crash-loop
+window, so no _on_disconnect callback invalidated the stale cached
+handles and no reconnect was triggered. In the model, this is exactly
+the absence of the WedgeDetected recovery transition. Every other
+transition is identical to the shipped spec.
+
+The counterexample trace
+------------------------
+*** COUNTER EXAMPLE FOUND ***
+
+deadlock
+*** TRACE (length=4):
+ 1: SETUP_CONSTANTS(kvTtlSeconds=259200,maxSessions=1000,
+                    restartDelaySeconds=2,watcherTimeoutSeconds=5)
+ 2: INITIALISATION(connState=disconnected,kvProvisioned=zfalse,
+                   namesProvisioned=zfalse,streamsProvisioned=zfalse,
+                   wtmpAvailable=zfalse)
+ 3: EnsureConnected(connState=connected,kvProvisioned=ztrue,
+                    namesProvisioned=ztrue,streamsProvisioned=ztrue)
+ 4: Request-->reqTimeout
+
+Found "deadlock" error in state id 4
+! *** error occurred ***
+! deadlock
+! Total Errors: 1, Warnings:0
+
+Reading the trace
+-----------------
+  2  The relay starts disconnected with no handles.
+  3  EnsureConnected performs the lazy connect: connState = connected,
+     all handles provisioned.
+  4  Request (a JetStream/KV round-trip -- stream_info in
+     get_unread_summary, kv.get in heartbeat) times out. Its reqTimeout
+     disjunct deterministically sets connState' = halfOpen and clears
+     every handle (kv/streams/names = zfalse) to satisfy the
+     generalised handle-validity invariant.
+
+State id 4 is halfOpen. In Pass A no operation is enabled there:
+EnsureConnected requires {disconnected, connected}; Disconnect requires
+connected; Request requires connected; Close and ResetInfrastructure
+require connState != halfOpen; every session and watcher operation
+requires connState = connected; and WedgeDetected -- the one operation
+that could leave halfOpen -- has been removed. halfOpen is therefore a
+reachable terminal state. That terminal state IS biff-tww: TCP up,
+is_closed false, every request timing out, no recovery.
+
+The fix (Pass B, docs/nats-relay.tex)
+-------------------------------------
+Adding the single WedgeDetected operation (halfOpen -> reconnecting,
+handles invalidated) -- the model of keepalive ping-timeout detection
+firing _on_disconnect -- makes the recovery sequence
+  connected --Request(reqTimeout)--> halfOpen
+            --WedgeDetected-->        reconnecting
+            --Reconnect-->            connected
+always available. `z-spec test docs/nats-relay.tex` then reports:
+  ok: true, 6 states, deadlock-free, all operations covered.
+
+Regenerating this artifact
+--------------------------
+  z-spec test docs/nats-relay-passA-nowedge.tex   # ok:false, deadlock
+  z-spec test docs/nats-relay.tex                 # ok:true, deadlock-free
