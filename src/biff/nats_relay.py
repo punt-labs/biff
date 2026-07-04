@@ -79,6 +79,24 @@ _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller (biff-wr3)
 
+# Keepalive tuning so a half-open connection (socket up, server not
+# responding) is detected in ~60s, not the nats-py default of 240s
+# (biff-tww).  Detection latency is roughly
+# ``_PING_INTERVAL * _MAX_OUTSTANDING_PINGS``.  nats-py defaults are
+# ping_interval=120s / max_outstanding_pings=2 → 240s, during which every
+# JetStream/KV request times out and the poller + heartbeat crash-loop on
+# ``nats: timeout`` with no recovery.  Prompt ping detection fires nats-py's
+# own reconnect, which invalidates cached handles (DES-029) and rebuilds them.
+_PING_INTERVAL = 20  # seconds between client→server PINGs
+_MAX_OUTSTANDING_PINGS = 3  # unanswered PINGs before the conn is declared dead
+# Never give up reconnecting: a bounded attempt count (nats-py default 60)
+# lets a prolonged outage strand the MCP server permanently.  Infinite
+# reconnect keeps the persistent connection (DES-019) alive across any outage;
+# ``_on_reconnect`` + handle invalidation restore service when the server
+# returns.  ``_on_closed`` still fires on explicit close (disconnect/close).
+_MAX_RECONNECT_ATTEMPTS = -1  # infinite
+_RECONNECT_TIME_WAIT = 2  # seconds between reconnect attempts (nats-py default)
+
 # Default stream prefix (DES-016).  Tests override via stream_prefix="biff-dev".
 _DEFAULT_STREAM_PREFIX = "biff"
 
@@ -241,6 +259,10 @@ class NatsRelay:
                 reconnected_cb=_on_reconnect,
                 error_cb=_on_error,
                 closed_cb=_on_closed,
+                ping_interval=_PING_INTERVAL,
+                max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
+                max_reconnect_attempts=_MAX_RECONNECT_ATTEMPTS,
+                reconnect_time_wait=_RECONNECT_TIME_WAIT,
                 **self._auth_kwargs(),
             )
 
