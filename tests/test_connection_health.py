@@ -253,3 +253,41 @@ class TestNoContentLeak:
         assert "sup3rsecret" not in message
         assert "user:" not in message
         assert "host.example:4222" in message
+
+    def test_scheme_less_url_with_credentials_is_never_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # relay_url is free-form config: a scheme is not required, so a
+        # scheme-less "user:pass@host" form is reachable and must not leak.
+        health = _ConnectionHealth("user:sup3rsecret@host.example:4222")
+        caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
+        health.record_connected(5.0, is_new_connection=True)
+
+        (record,) = [r for r in caplog.records if "Connected to NATS" in r.getMessage()]
+        message = record.getMessage()
+        assert "sup3rsecret" not in message
+        assert "user:" not in message
+        assert "host.example:4222" in message
+
+    def test_cluster_url_does_not_crash_and_logs_first_host(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A comma-separated cluster list must not raise on construction
+        # (urlsplit(...).port on the raw list raises ValueError).
+        health = _ConnectionHealth("tls://h1.example:4222,tls://h2.example:5222")
+        caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
+        health.record_connected(5.0, is_new_connection=True)
+
+        (record,) = [r for r in caplog.records if "Connected to NATS" in r.getMessage()]
+        message = record.getMessage()
+        assert "h1.example:4222" in message
+        assert "h2.example" not in message  # first server only
+
+    def test_ipv6_url_brackets_host(self) -> None:
+        assert (
+            _ConnectionHealth._host_of("nats://[2001:db8::1]:4222")
+            == "[2001:db8::1]:4222"
+        )
+
+    def test_unparseable_url_yields_placeholder_not_raw(self) -> None:
+        assert _ConnectionHealth._host_of("://:::") == "<unknown host>"

@@ -150,13 +150,25 @@ class _ConnectionHealth:
 
     @staticmethod
     def _host_of(url: str) -> str:
-        """Return ``host[:port]`` from *url*, dropping scheme, creds, and path.
+        """Return ``host[:port]`` from the first server in *url*, dropping creds.
 
-        A NATS URL may embed ``user:pass@`` — never log it (PII).
+        A NATS URL may embed ``user:pass@`` and may be a comma-separated
+        cluster list.  Never log userinfo (PII); unparseable input yields a
+        placeholder rather than echoing the raw (credentialed) URL.
         """
-        parts = urlsplit(url)
-        host = parts.hostname or url
-        return f"{host}:{parts.port}" if parts.port else host
+        first = url.split(",", 1)[0].strip()
+        if "//" not in first:  # urlsplit needs a // authority to find creds/host
+            first = "//" + first
+        try:
+            parts = urlsplit(first)
+            host, port = parts.hostname, parts.port
+        except ValueError:
+            return "<unknown host>"
+        if host is None:
+            return "<unknown host>"
+        if port and ":" in host:  # bracket IPv6
+            return f"[{host}]:{port}"
+        return f"{host}:{port}" if port else host
 
     @property
     def consecutive_timeouts(self) -> int:
