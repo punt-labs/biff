@@ -6,7 +6,7 @@ from importlib.metadata import version as pkg_version
 
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
-from biff.formatting import format_idle, format_remaining
+from biff.formatting import format_idle, format_remaining, terminal_safe
 
 
 async def status(ctx: CliContext) -> CommandResult:
@@ -40,7 +40,9 @@ async def status(ctx: CliContext) -> CommandResult:
     ]
     if wall_post:
         remaining = format_remaining(wall_post.expires_at)
-        lines.append(f"wall: @{wall_post.from_user}: {wall_post.text} ({remaining})")
+        wall_from = terminal_safe(wall_post.from_user)
+        wall_text = terminal_safe(wall_post.text)
+        lines.append(f"wall: @{wall_from}: {wall_text} ({remaining})")
     else:
         lines.append("wall: (none)")
 

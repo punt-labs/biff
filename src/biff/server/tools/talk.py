@@ -24,6 +24,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from biff.formatting import terminal_safe
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.server.tools._activate import auto_enable
@@ -59,7 +60,7 @@ def format_talk_messages(messages: list[Message]) -> str:
     lines: list[str] = []
     for m in messages:
         ts = m.timestamp.strftime("%H:%M:%S")
-        lines.append(f"[{ts}] {m.from_user}: {m.body}")
+        lines.append(f"[{ts}] {terminal_safe(m.from_user)}: {terminal_safe(m.body)}")
     return "\n".join(lines)
 
 

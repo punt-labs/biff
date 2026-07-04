@@ -8,7 +8,8 @@
 
 ### Security
 
-- **Talk output sanitizes remote terminal-control sequences.** Talk message bodies and sender identifiers arrive from other users over the relay and were printed straight to the terminal. A malicious sender could embed ANSI/OSC escape sequences (cursor moves, prompt spoofing, line clears, OSC 52 clipboard writes). All talk render sites (`_drain_talk_messages`, `_drain_talk_notifications`, `_check_for_accept`) now strip non-printable characters from remote fields before display. Read/wall/status rendering paths are tracked for the same treatment in biff-lbj.
+- **Talk output sanitizes remote terminal-control sequences.** Talk message bodies and sender identifiers arrive from other users over the relay and were printed straight to the terminal. A malicious sender could embed ANSI/OSC escape sequences (cursor moves, prompt spoofing, line clears, OSC 52 clipboard writes). All talk render sites (`_drain_talk_messages`, `_drain_talk_notifications`, `_check_for_accept`) now strip non-printable characters from remote fields before display. Extended to every other render surface in biff-lbj (see below).
+- **Terminal-escape sanitization extended to all render surfaces (biff-lbj).** The same class of injection existed wherever biff renders relay-sourced strings: `read` (message bodies + senders), `wall` (broadcast text + sender), `status` (wall line), `who`/`finger`/`last` (user, tty, plan, hostname, dir), the `talk` MCP tool, the REPL between-command wall banner, and wall content injected into dynamic tool descriptions and the spoken wall notification. A shared `terminal_safe` helper hoisted into `biff.formatting` is applied at every in-process render site — the output boundary — since a malicious client can bypass input-side sanitization. (The status line runs as a separate process and keeps its own equivalent escape-stripping.) Injection tests cover each site.
 
 ## [1.10.4] - 2026-07-04
 

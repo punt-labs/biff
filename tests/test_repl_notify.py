@@ -225,3 +225,19 @@ class TestNotifyState:
         # Second check: nothing changed.
         lines = state.check(3, wall)
         assert lines == []
+
+    def test_wall_escapes_neutralized(self) -> None:
+        """A malicious wall can't inject terminal escapes into the banner (biff-lbj)."""
+        state = NotifyState()
+        wall = WallPost(
+            from_user="ev\x1b[2Kil",
+            text="dep\x1b[2Jloy freeze",
+            posted_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        lines = state.check(0, wall)
+        assert len(lines) == 1
+        # Our own color codes remain; the injected screen-clear/line-erase do not.
+        assert "\x1b[2J" not in lines[0]
+        assert "\x1b[2K" not in lines[0]
+        assert "dep[2Jloy freeze" in lines[0]
