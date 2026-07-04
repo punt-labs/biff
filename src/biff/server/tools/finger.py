@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.formatting import format_finger, format_finger_multi
+from biff.relay import live_sessions
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import resolve_tty_name, update_current_session
@@ -40,7 +41,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await refresh_read_messages(mcp, state)
 
         addresses = user.split()
-        all_sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
+        # Availability check: only live sessions (heartbeat within the
+        # liveness window), not dead ones lingering in the KV (biff-mue).
+        all_sessions = live_sessions(
+            await state.relay.get_sessions_for_repos(state.visible_repos)
+        )
 
         blocks: list[str] = []
         for addr in addresses:

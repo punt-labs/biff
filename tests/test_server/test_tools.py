@@ -211,7 +211,8 @@ class TestWhoTool:
         assert "eric" in result
 
     async def test_shows_idle_time(self, state: ServerState) -> None:
-        old_time = datetime.now(UTC) - timedelta(hours=3)
+        # Within the liveness window so the session is shown; idle rendered.
+        old_time = datetime.now(UTC) - timedelta(seconds=90)
         await state.relay.update_session(
             UserSession(
                 user="eric", tty=_ERIC_TTY, plan="reviewing", last_active=old_time
@@ -219,9 +220,11 @@ class TestWhoTool:
         )
         fn = await _get_tool_fn(state, "who")
         result = await fn()
-        assert "3h" in result
+        assert "eric" in result
+        assert "1m" in result
 
-    async def test_includes_all_sessions(self, state: ServerState) -> None:
+    async def test_hides_dead_sessions(self, state: ServerState) -> None:
+        """Sessions past the liveness window are dropped from /who (biff-mue)."""
         old_time = datetime.now(UTC) - timedelta(days=2)
         recent_time = datetime.now(UTC) - timedelta(seconds=30)
         await state.relay.update_session(
@@ -234,18 +237,19 @@ class TestWhoTool:
         )
         fn = await _get_tool_fn(state, "who")
         result = await fn()
-        assert "old" in result
         assert "recent" in result
-        assert "2d" in result
+        assert "old" not in result
+        assert "2d" not in result
 
     async def test_sorted_by_idle_time(self, state: ServerState) -> None:
         now = datetime.now(UTC)
+        # Both within the liveness window so both are shown.
         await state.relay.update_session(
             UserSession(
                 user="zara",
                 tty="tty0",
                 plan="testing",
-                last_active=now - timedelta(hours=3),
+                last_active=now - timedelta(seconds=90),
             )
         )
         await state.relay.update_session(

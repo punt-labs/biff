@@ -113,6 +113,17 @@ class UserSession(BaseModel):
     def _normalize_last_active(cls, v: datetime) -> datetime:
         return _ensure_utc(v)
 
+    def is_live(self, *, now: datetime, ttl_seconds: float) -> bool:
+        """True if the last heartbeat is recent enough to consider live.
+
+        A running server heartbeats on a fixed interval, refreshing
+        ``last_active``.  A session whose last heartbeat is older than
+        *ttl_seconds* has stopped heartbeating (shut down, killed, or
+        wedged) and is not live, even though its KV entry may not have
+        hit the longer storage TTL yet (biff-mue).
+        """
+        return (now - self.last_active).total_seconds() <= ttl_seconds
+
 
 @dataclass(frozen=True)
 class RelayAuth:

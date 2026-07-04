@@ -247,3 +247,27 @@ class TestUnreadSummary:
         summary = UnreadSummary(count=1)
         with pytest.raises(ValidationError):
             summary.count = 0
+
+
+class TestUserSessionLiveness:
+    """UserSession.is_live — heartbeat-freshness liveness check (biff-mue)."""
+
+    def test_fresh_session_is_live(self) -> None:
+        now = datetime.now(UTC)
+        session = UserSession(user="kai", last_active=now)
+        assert session.is_live(now=now, ttl_seconds=120.0) is True
+
+    def test_within_window_is_live(self) -> None:
+        now = datetime.now(UTC)
+        session = UserSession(user="kai", last_active=now - timedelta(seconds=90))
+        assert session.is_live(now=now, ttl_seconds=120.0) is True
+
+    def test_beyond_window_is_not_live(self) -> None:
+        now = datetime.now(UTC)
+        session = UserSession(user="kai", last_active=now - timedelta(seconds=200))
+        assert session.is_live(now=now, ttl_seconds=120.0) is False
+
+    def test_hours_old_is_not_live(self) -> None:
+        now = datetime.now(UTC)
+        session = UserSession(user="kai", last_active=now - timedelta(hours=5))
+        assert session.is_live(now=now, ttl_seconds=120.0) is False
