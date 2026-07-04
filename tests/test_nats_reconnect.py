@@ -318,3 +318,90 @@ class TestProactiveWedgeDetector:
         nc.close.assert_not_awaited()
         assert relay._nc is nc
         assert relay._js is not None
+
+
+class TestCallbackGenerationGuard:
+    """Stale lifecycle callbacks from a superseded client must not touch state.
+
+    The connection callbacks (``_on_disconnect``/``_on_closed``) null
+    ``self._nc`` and the cached handles.  ``_force_reconnect`` closes the
+    wedged client and the next ``_ensure_connected`` dials a fresh one, so the
+    OLD client's callbacks can still fire asynchronously.  A per-connection
+    generation token makes a stale callback a no-op — it must never clear the
+    handles of the LIVE connection (Bugbot Medium).
+    """
+
+    @staticmethod
+    def _connect() -> AsyncMock:
+        return AsyncMock(side_effect=_fresh_nc)
+
+    @pytest.mark.anyio()
+    async def test_stale_callbacks_do_not_null_live_connection(self) -> None:
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()  # client A, generation 1
+            assert connect.await_args is not None
+            on_disconnect_a = connect.await_args.kwargs["disconnected_cb"]
+            on_closed_a = connect.await_args.kwargs["closed_cb"]
+
+            # Supersede A with a fresh client B (force reconnect + rebuild).
+            await relay._force_reconnect()
+            js_b, kv_b, names_b = MagicMock(), MagicMock(), MagicMock()
+            relay._provision = AsyncMock(return_value=(js_b, kv_b, names_b))  # type: ignore[method-assign]
+            await relay._ensure_connected()  # client B, generation 2
+            client_b = relay._nc
+            assert client_b is not None
+
+            # A's stale callbacks fire late — must be no-ops for B.
+            await on_closed_a()
+            await on_disconnect_a()
+
+        assert relay._nc is client_b
+        assert relay._js is js_b
+        assert relay._kv is kv_b
+        assert relay._names_kv is names_b
+
+    @pytest.mark.anyio()
+    async def test_current_close_callback_still_clears(self) -> None:
+        # The legitimate case must keep working: a close of the CURRENT client
+        # invalidates its _nc and handles.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+            assert relay._cached_handles() is not None
+            assert connect.await_args is not None
+            on_closed = connect.await_args.kwargs["closed_cb"]
+            await on_closed()
+
+        assert relay._nc is None
+        assert relay._js is None
+        assert relay._kv is None
+        assert relay._names_kv is None
+
+    @pytest.mark.anyio()
+    async def test_current_disconnect_callback_still_clears_handles(self) -> None:
+        # A disconnect of the CURRENT client invalidates handles (DES-029) but
+        # keeps _nc so nats-py's reconnect can rebuild on the same client.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+            assert connect.await_args is not None
+            on_disconnect = connect.await_args.kwargs["disconnected_cb"]
+            await on_disconnect()
+
+        assert relay._js is None
+        assert relay._kv is None
+        assert relay._names_kv is None
+        assert relay._nc is not None

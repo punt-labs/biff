@@ -27,7 +27,7 @@ import json
 import logging
 import ssl
 import time
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -393,6 +393,12 @@ class NatsRelay:
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
         self._health = _ConnectionHealth(url)
+        # Monotonic per-dial token.  Each new client dialed in
+        # ``_open_connection`` bumps it; the connection callbacks capture the
+        # value in force at their registration and no-op when it no longer
+        # matches, so a superseded client's late callback cannot mutate state
+        # for the live connection (Bugbot: stale-callback race).
+        self._generation = 0
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
@@ -512,6 +518,66 @@ class NatsRelay:
             self._kv = None
             self._names_kv = None
 
+    def _connection_callbacks(
+        self, generation: int
+    ) -> dict[str, Callable[..., Awaitable[None]]]:
+        """Return the nats-py lifecycle callbacks bound to *generation*.
+
+        A callback mutates connection state only while ``self._generation``
+        still equals *generation*.  When ``_force_reconnect`` closes a wedged
+        client and the next dial stores a fresh one, the old client's callbacks
+        keep firing asynchronously; the generation check makes each a no-op so
+        a superseded client can never null ``self._nc`` or the handles of the
+        live connection (Bugbot: stale-callback race).
+        """
+
+        async def _on_disconnect() -> None:
+            if self._generation != generation:
+                return  # stale callback from a superseded client
+            # Health tracker owns the log line (with connection lifetime).
+            self._health.record_disconnected()
+            # Proactively invalidate cached handles so the next tool call
+            # reconnects instead of using stale JetStream/KV refs (DES-029).
+            self._js = None
+            self._kv = None
+            self._names_kv = None
+
+        async def _on_reconnect() -> None:
+            if self._generation != generation:
+                return  # stale callback from a superseded client
+            # Health tracker owns the log line (with recovery latency).
+            self._health.record_reconnected()
+
+        async def _on_closed() -> None:
+            if self._generation != generation:
+                return  # stale callback from a superseded client
+            # nats-py gave up reconnecting (or the connection closed).  Drop
+            # the client so the next _ensure_connected builds a fresh one
+            # instead of reusing a dead connection (biff-wr3).
+            self._health.record_closed()
+            self._nc = None
+            self._js = None
+            self._kv = None
+            self._names_kv = None
+
+        async def _on_error(exc: Exception) -> None:
+            # Python 3.14 raises APPLICATION_DATA_AFTER_CLOSE_NOTIFY during TLS
+            # teardown.  Harmless — suppress.
+            ssl_teardown = isinstance(exc, ssl.SSLError) and (
+                "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(exc)
+            )
+            if not ssl_teardown:
+                # Log repr: nats-py raises message-less errors during outages
+                # that logged as "" and hid the cause (biff-wr3).
+                logger.error("NATS error: %r", exc)
+
+        return {
+            "disconnected_cb": _on_disconnect,
+            "reconnected_cb": _on_reconnect,
+            "closed_cb": _on_closed,
+            "error_cb": _on_error,
+        }
+
     async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
         """Create a new NATS connection and provision infrastructure.
 
@@ -521,53 +587,19 @@ class NatsRelay:
         is_new_connection = False
         if nc is None or nc.is_closed:
             is_new_connection = True
-
-            async def _on_disconnect() -> None:
-                # Health tracker owns the log line (with connection lifetime).
-                self._health.record_disconnected()
-                # Proactively invalidate cached handles so the next
-                # tool call reconnects instead of using stale
-                # JetStream/KV refs (DES-029).
-                self._js = None
-                self._kv = None
-                self._names_kv = None
-
-            async def _on_reconnect() -> None:
-                # Health tracker owns the log line (with recovery latency).
-                self._health.record_reconnected()
-
-            async def _on_closed() -> None:
-                # nats-py gave up reconnecting (or the connection closed).
-                # Drop the client so the next _ensure_connected builds a
-                # fresh one instead of reusing a dead connection (biff-wr3).
-                self._health.record_closed()
-                self._nc = None
-                self._js = None
-                self._kv = None
-                self._names_kv = None
-
-            async def _on_error(exc: Exception) -> None:
-                # Python 3.14 raises APPLICATION_DATA_AFTER_CLOSE_NOTIFY
-                # during TLS teardown.  Harmless — suppress.
-                ssl_teardown = isinstance(
-                    exc, ssl.SSLError
-                ) and "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(exc)
-                if not ssl_teardown:
-                    # Log repr: nats-py raises message-less errors during
-                    # outages that logged as "" and hid the cause (biff-wr3).
-                    logger.error("NATS error: %r", exc)
-
+            # Capture this dial's generation.  A callback belongs to the
+            # current client only while ``self._generation`` still equals the
+            # value it closed over; a superseded client's late callback finds a
+            # newer generation and no-ops (Bugbot: stale-callback race).
+            self._generation += 1
             nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
                 self._url,
                 name=self._name,
-                disconnected_cb=_on_disconnect,
-                reconnected_cb=_on_reconnect,
-                error_cb=_on_error,
-                closed_cb=_on_closed,
                 ping_interval=_PING_INTERVAL,
                 max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
                 max_reconnect_attempts=_MAX_RECONNECT_ATTEMPTS,
                 reconnect_time_wait=_RECONNECT_TIME_WAIT,
+                **self._connection_callbacks(self._generation),
                 **self._auth_kwargs(),
             )
 
