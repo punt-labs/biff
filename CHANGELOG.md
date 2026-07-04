@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **REPL prompt no longer collides with command output (biff-1xt5).** The REPL printed output without flushing, then opened the prompt gate — letting the stdin thread's `input()` prompt (which flushes immediately) overtake the still-buffered output and land on the same line. Every gate release now routes through a `_release_prompt` helper that flushes stdout first, fixing the original command path plus the sibling talk-mode banners ("Connected to…", "Talk … ended.", "not online", handshake status) that shared the same defect. Regression tests assert the flush precedes the gate release.
 - **`lock-clean` now re-resolves `punt-lux` from PyPI (biff-4uxk).** The Makefile target ran a bare `uv lock`, which reuses cached resolution and does not re-fetch `punt-lux` once the local `uv.toml` override is hidden — so a release could relock against a stale `punt-lux`. Added `--upgrade-package punt-lux` to both `uv lock` calls in the target. Hit during the v1.6.2 release.
 - **`make check` no longer lints quarry transcript captures.** `.punt-labs/quarry/captures/` (machine-generated session transcripts) is now excluded from `markdownlint-cli2` and gitignored, so a local `make check` no longer fails on auto-captured scratch files. CI was unaffected — the directory does not exist on runners.
 

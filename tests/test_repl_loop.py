@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from biff.__main__ import _repl_loop
+from biff.__main__ import _release_prompt, _repl_loop
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.models import BiffConfig
@@ -51,6 +51,50 @@ def _make_aqueue(
     # Safety sentinel — ensures loop always terminates.
     q.put_nowait(None)
     return q
+
+
+class _RecordingStdout:
+    """stdout stand-in that appends "flush" to a shared event log.
+
+    Non-empty writes append "write"; ``flush()`` appends "flush".  Used to
+    prove command output is flushed before the prompt gate is released.
+    """
+
+    def __init__(self, log: list[str]) -> None:
+        self._log = log
+
+    def write(self, s: str) -> int:
+        if s.strip():
+            self._log.append("write")
+        return len(s)
+
+    def flush(self) -> None:
+        self._log.append("flush")
+
+
+class _RecordingGate:
+    """threading.Event wrapper that appends "gate_set" to a shared log.
+
+    Implements only the surface ``_repl_loop`` touches on the prompt gate
+    (``set``/``is_set``) plus the ``clear``/``wait`` an Event would expose.
+    """
+
+    def __init__(self, log: list[str]) -> None:
+        self._event = threading_mod.Event()
+        self._log = log
+
+    def set(self) -> None:
+        self._log.append("gate_set")
+        self._event.set()
+
+    def clear(self) -> None:
+        self._event.clear()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._event.wait(timeout)
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
 
 
 # -----------------------------------------------------------------------
@@ -628,3 +672,98 @@ class TestMultiCommandSequence:
         mock_talk.assert_awaited_once()
         mock_dispatch.assert_awaited_once()
         assert gate.is_set()
+
+
+# -----------------------------------------------------------------------
+# Prompt/output ordering (biff-1xt5)
+# -----------------------------------------------------------------------
+
+
+class TestPromptOutputOrdering:
+    """Regression: command output must be flushed before the prompt gate opens.
+
+    The stdin thread prints the next prompt via ``input()`` (which flushes
+    immediately) as soon as ``prompt_gate.set()`` releases it.  If the
+    command output printed by ``_repl_loop`` is not flushed first, the
+    prompt overtakes the still-buffered output and collides with its first
+    line.  Every gate release routes through ``_release_prompt`` which flushes
+    first; this guards the whole bug class.  See biff-1xt5 and docs/repl.tex
+    prompt-gate synchronization.
+    """
+
+    def test_release_prompt_flushes_before_set(self) -> None:
+        """_release_prompt flushes stdout before opening the gate."""
+        log: list[str] = []
+        gate = _RecordingGate(log)
+        with patch("sys.stdout", _RecordingStdout(log)):
+            _release_prompt(gate)  # type: ignore[arg-type]
+        assert log == ["flush", "gate_set"], f"flush must precede gate release: {log}"
+
+    @pytest.mark.anyio()
+    async def test_output_flushed_before_gate_released(self, tmp_path: object) -> None:
+        """The command output flush must precede prompt_gate.set()."""
+        ctx = _make_ctx(tmp_path)
+        log: list[str] = []
+        gate = _RecordingGate(log)
+        notify = NotifyState()
+        aqueue = _make_aqueue(["who"])
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        with (
+            patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
+            patch("biff.__main__._sync_notify", new_callable=AsyncMock),
+            patch("sys.stdout", _RecordingStdout(log)),
+        ):
+            mock_dispatch.return_value = CommandResult(text="kai:tty1 online")
+            await _repl_loop(
+                ctx,
+                notify,
+                "prompt> ",
+                aqueue,
+                asyncio.Event(),
+                gate,  # type: ignore[arg-type]
+                ["prompt> "],
+                talk_q,
+            )
+
+        # A flush must have happened...
+        assert "flush" in log, f"command output was never flushed: {log}"
+        # ...and it must precede the prompt-gate release for this command.
+        assert log.index("flush") < log.index("gate_set"), (
+            f"prompt gate released before output flush: {log}"
+        )
+        # ...and the flush must follow the output write (order sanity).
+        assert log.index("write") < log.index("flush"), (
+            f"flush recorded before output write: {log}"
+        )
+
+    @pytest.mark.anyio()
+    async def test_no_flush_gap_when_no_output(self, tmp_path: object) -> None:
+        """Empty command output still releases the gate (no spurious flush req)."""
+        ctx = _make_ctx(tmp_path)
+        log: list[str] = []
+        gate = _RecordingGate(log)
+        notify = NotifyState()
+        aqueue = _make_aqueue([""])
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        with (
+            patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
+            patch("biff.__main__._sync_notify", new_callable=AsyncMock),
+            patch("sys.stdout", _RecordingStdout(log)),
+        ):
+            mock_dispatch.return_value = CommandResult(text="")
+            await _repl_loop(
+                ctx,
+                notify,
+                "prompt> ",
+                aqueue,
+                asyncio.Event(),
+                gate,  # type: ignore[arg-type]
+                ["prompt> "],
+                talk_q,
+            )
+
+        # No output → nothing to flush, but the gate must still open.
+        assert "gate_set" in log
+        assert "write" not in log
