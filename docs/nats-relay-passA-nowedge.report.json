@@ -1,0 +1,142 @@
+{
+  "timestamp": "2026-07-04T17:07:49.780763+00:00",
+  "probcli_version": "unknown",
+  "setsize": 2,
+  "ok": false,
+  "states_analysed": 4,
+  "transitions_fired": 27,
+  "checks": [
+    {
+      "name": "init",
+      "status": "passed",
+      "detail": "OK"
+    },
+    {
+      "name": "animate",
+      "status": "passed",
+      "detail": "OK"
+    },
+    {
+      "name": "cbc_assertions",
+      "status": "passed",
+      "detail": "OK"
+    },
+    {
+      "name": "cbc_deadlock",
+      "status": "passed",
+      "detail": "OK"
+    },
+    {
+      "name": "model_check",
+      "status": "failed",
+      "detail": "Writing fuzz AST to /Users/jfreeman/Coding/punt-labs/biff/docs/nats-relay-passA-nowedge.fuzz\n! Message (source: proz):\n! Did not find Init Schema; assuming following schema to define the initialisatio"
+    }
+  ],
+  "operations": [
+    {
+      "name": "EnsureConnected",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "Disconnect",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "Close",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "ResetInfrastructure",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "Request",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "Reconnect",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "UpdateSession",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "DeleteSession",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "SetWall",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "ClearWall",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "StartWatching",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "SnapshotDone",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "ReceiveEntry",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "HandleTimeout",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "HandleError",
+      "times_fired": 0,
+      "covered": false
+    },
+    {
+      "name": "RequestShutdown",
+      "times_fired": 0,
+      "covered": false
+    }
+  ],
+  "counter_example": {
+    "steps": [
+      {
+        "step_number": 1,
+        "operation": "SETUP_CONSTANTS",
+        "state": {}
+      },
+      {
+        "step_number": 2,
+        "operation": "INITIALISATION",
+        "state": {}
+      },
+      {
+        "step_number": 3,
+        "operation": "EnsureConnected",
+        "state": {}
+      },
+      {
+        "step_number": 4,
+        "operation": "Request",
+        "state": {}
+      }
+    ],
+    "violation": "deadlock"
+  }
+}

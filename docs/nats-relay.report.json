@@ -1,0 +1,122 @@
+{
+  "timestamp": "2026-07-04T17:07:46.991220+00:00",
+  "probcli_version": "unknown",
+  "setsize": 2,
+  "ok": true,
+  "states_analysed": 6,
+  "transitions_fired": 31,
+  "checks": [
+    {
+      "name": "init",
+      "status": "passed",
+      "detail": "OK"
+    },
+    {
+      "name": "animate",
+      "status": "passed",
+      "detail": "all ops covered"
+    },
+    {
+      "name": "cbc_assertions",
+      "status": "passed",
+      "detail": "OK"
+    },
+    {
+      "name": "cbc_deadlock",
+      "status": "passed",
+      "detail": "deadlock-free"
+    },
+    {
+      "name": "model_check",
+      "status": "passed",
+      "detail": "6 states, 31 transitions"
+    }
+  ],
+  "operations": [
+    {
+      "name": "EnsureConnected",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "Disconnect",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "Close",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "ResetInfrastructure",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "Request",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "WedgeDetected",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "Reconnect",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "UpdateSession",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "DeleteSession",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "SetWall",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "ClearWall",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "StartWatching",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "SnapshotDone",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "ReceiveEntry",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "HandleTimeout",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "HandleError",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "RequestShutdown",
+      "times_fired": 1,
+      "covered": true
+    }
+  ]
+}

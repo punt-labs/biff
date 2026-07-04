@@ -1,0 +1,651 @@
+% nats-relay-passA-nowedge.tex
+% FROZEN PASS-A ARTIFACT --- DO NOT EDIT except in lockstep with
+% docs/nats-relay.tex.  This is docs/nats-relay.tex with the single
+% WedgeDetected recovery operation removed, modelling the PRE-FIX code
+% (nats-py keepalive default of 240s that never fired in practice).
+% Running `z-spec test` on this file MUST fail with a reachable
+% terminal halfOpen state: that deadlock IS biff-tww, proven from the
+% model.  See DESIGN.md DES-041.
+%
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff NATS Relay: A Z Specification}
+\author{Formal Model of Connection Lifecycle and KV Watcher}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Biff NATS Relay: A Z Specification},
+  pdfauthor={punt-labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+The NATS relay is the networked backend for biff's communication
+system.  It manages a TCP connection to a NATS server, lazily
+provisions infrastructure (KV bucket, JetStream streams), and runs
+a KV watcher that detects session changes and wall broadcasts in
+real-time.
+
+This specification models three interacting state machines:
+
+\begin{enumerate}
+  \item \textbf{Connection lifecycle} --- lazy connect, disconnect,
+    reconnect, and close transitions.
+  \item \textbf{KV watcher} --- the long-lived watcher that observes
+    session and wall changes, survives snapshot-done markers and
+    timeouts, and restarts only on errors.
+  \item \textbf{Session presence} --- KV-backed sessions with TTL
+    expiry, heartbeat refresh, and logout detection.
+\end{enumerate}
+
+The key invariant proven by this model: the KV watcher remains
+alive across snapshot-done markers and idle timeouts.  Only
+explicit shutdown or unrecoverable errors terminate it.  This
+captures the fix for biff-udp.
+
+A second invariant, added to close a recurring class of wedge
+bugs, concerns the connection itself.  A NATS connection can
+enter a \emph{half-open} state: the TCP socket is up
+(\texttt{is\_closed} is false) but every JetStream or KV request
+times out.  If no transition can leave that state, the relay is
+wedged --- every tool call blocks on \texttt{nats: timeout} with
+no recovery (biff-tww).  This specification adds the half-open
+state explicitly and proves a liveness property: the connection
+can never be stuck there.  The proof is by deadlock analysis ---
+in the absence of a wedge-detection transition, probcli finds
+half-open to be a reachable terminal state, and that terminal
+state \emph{is} biff-tww.  With the recovery transition present,
+half-open is deadlock-free.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  [USER, TTY, REPO, KVKEY, KVVALUE, SESSIONKEY]
+\end{zed}
+
+$USER$ identifies a human user.  $TTY$ identifies a terminal
+session (random 8-char hex).  $REPO$ scopes all state to a
+repository.  $KVKEY$ and $KVVALUE$ are opaque KV store keys and
+values.  $SESSIONKEY$ is the composite $\{user\}:\{tty\}$ identifier.
+
+%%----------------------------------------------------------------------
+\section{Free Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  ConnState ::= disconnected | reconnecting | connected | halfOpen | closed
+\end{zed}
+
+The connection has five states.  $disconnected$ is a deliberate,
+reversible release of the TCP connection (the relay's own
+\texttt{disconnect()}); a subsequent call reconnects.
+$reconnecting$ is distinct: nats-py's background reconnect loop is
+in progress after a dropped socket --- \texttt{is\_closed} is
+false, \texttt{is\_connected} is false, and cached handles have
+already been invalidated by \texttt{\_on\_disconnect}.
+$connected$ is an active TCP connection whose JetStream and KV
+handles are provisioned.  $halfOpen$ is the wedge: the socket is
+up (\texttt{is\_closed} false) but every JetStream or KV request
+times out; the cached handles are stale and must not be used.
+$closed$ is permanent shutdown --- no reconnection is possible.
+
+\begin{zed}
+  ReqOutcome ::= reqOk | reqTimeout
+\end{zed}
+
+The outcome of a JetStream or KV request issued on a $connected$
+connection.  $reqOk$ is a normal response.  $reqTimeout$ is a
+\texttt{nats.errors.TimeoutError}: the request was sent but no
+reply arrived within the deadline, which is the observable
+signature of a half-open connection.
+
+\begin{zed}
+  WatcherPhase ::= idle | snapshotting | streaming | stopped
+\end{zed}
+
+The KV watcher progresses through phases: $idle$ (not yet started),
+$snapshotting$ (receiving the initial KV snapshot), $streaming$
+(receiving live updates post-snapshot), and $stopped$ (shutdown
+complete).
+
+\begin{zed}
+  KVOp ::= kvPut | kvDelete | kvPurge
+\end{zed}
+
+Operations observed on KV entries.  $kvPut$ stores or updates a
+value.  $kvDelete$ and $kvPurge$ remove entries (TTL expiry
+produces $kvDelete$).
+
+\begin{zed}
+  WatcherEvent ::=
+  weEntry | weSnapshotDone | weTimeout | weError | weShutdown
+\end{zed}
+
+Events that the KV watcher loop must handle.  $weEntry$ is a KV
+change.  $weSnapshotDone$ is the $None$ marker from
+\texttt{watcher.updates()}.  $weTimeout$ is a
+\texttt{TimeoutError} from idle periods.  $weError$ is an
+unrecoverable NATS error.  $weShutdown$ is the shutdown signal.
+
+%%----------------------------------------------------------------------
+\section{Global Constants}
+%%----------------------------------------------------------------------
+
+\begin{axdef}
+  kvTtlSeconds : \nat \\
+  watcherTimeoutSeconds : \nat \\
+  maxSessions : \nat \\
+  restartDelaySeconds : \nat
+  \where
+  kvTtlSeconds = 259200 \\
+  watcherTimeoutSeconds = 5 \\
+  maxSessions = 1000 \\
+  restartDelaySeconds = 2
+\end{axdef}
+
+$kvTtlSeconds$ is the NATS KV TTL (3 days).
+$watcherTimeoutSeconds$ is the \texttt{updates()} timeout that
+keeps the shutdown check responsive.  $maxSessions$ bounds the
+model for animation.
+
+%%----------------------------------------------------------------------
+\section{Connection State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Connection}
+  connState : ConnState \\
+  kvProvisioned : ZBOOL \\
+  streamsProvisioned : ZBOOL \\
+  namesProvisioned : ZBOOL \\
+  wtmpAvailable : ZBOOL
+  \where
+  connState \neq connected \implies
+  kvProvisioned = zfalse \land
+  streamsProvisioned = zfalse \land
+  namesProvisioned = zfalse \\
+  connState = connected \implies
+  kvProvisioned = ztrue \land
+  streamsProvisioned = ztrue \land
+  namesProvisioned = ztrue
+\end{schema}
+
+This is the generalised handle-validity invariant: valid
+JetStream, sessions-KV, and names-KV handles exist \emph{if and
+only if} the connection is $connected$.  In particular they do
+not exist in $halfOpen$ --- the stale handles cached during the
+wedge are, in the model, no handles at all.  This generalises the
+earlier ``$disconnected$ or $closed \implies$ no handles'' (DES-029)
+to cover $reconnecting$ and $halfOpen$ as well.  It is the
+formal statement that a half-open connection must never be treated
+as usable: the biff-tww crash-loop arose precisely because the code
+kept and re-used handles that this invariant forbids.
+$wtmpAvailable$ degrades independently --- wtmp provisioning
+failure is non-fatal --- and is cleared whenever the handles are.
+
+\begin{schema}{InitConnection}
+  Connection'
+  \where
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Connection Operations}
+%%----------------------------------------------------------------------
+
+\subsection{Ensure Connected (Lazy Connect)}
+
+\begin{schema}{EnsureConnected}
+  \Delta Connection
+  \where
+  connState = disconnected \lor connState = connected \\
+  connState' = connected \\
+  kvProvisioned' = ztrue \\
+  streamsProvisioned' = ztrue \\
+  namesProvisioned' = ztrue \\
+  wtmpAvailable' = wtmpAvailable
+\end{schema}
+
+The relay's lazy connect (\texttt{\_ensure\_connected}).  It is
+enabled only from $disconnected$ (a fresh connect) or $connected$
+(idempotent no-op).  It is \emph{not} enabled from $halfOpen$:
+this is the formal counterpart of the DES-029 bug.  The fast path
+sees \texttt{is\_closed} false and returns the stale cached
+handles without reconnecting, so $EnsureConnected$ makes no
+progress out of the wedge and must not be modelled as if it did.
+Nor is it enabled from $reconnecting$ (nats-py owns that window;
+provisioning would block until reconnect completes, bounded by
+\texttt{\_CONNECT\_PROVISION\_TIMEOUT}, biff-wr3) or from $closed$
+(no reconnection after close).  $wtmpAvailable$ is preserved ---
+it only changes during provisioning.
+
+\subsection{Disconnect (Reversible)}
+
+\begin{schema}{Disconnect}
+  \Delta Connection
+  \where
+  connState = connected \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+The relay's explicit, reversible \texttt{disconnect()}: it acts
+on a healthy $connected$ connection and releases it.  The next
+relay call reconnects via $EnsureConnected$.  It is deliberately
+\emph{not} the escape from $halfOpen$ --- the running server does
+not autonomously call \texttt{disconnect()} while wedged; only
+keepalive-driven wedge detection ($WedgeDetected$) can leave that
+state.
+
+\subsection{Close (Permanent)}
+
+\begin{schema}{Close}
+  \Delta Connection
+  \where
+  connState \neq halfOpen \\
+  connState' = closed \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+Permanent shutdown, reachable from any \emph{definite} transport
+state.  The precondition $connState \neq halfOpen$ records a
+modelling decision that is load-bearing for the liveness proof:
+an orderly close cannot be the escape from the wedge.  In the
+biff-tww crash-loop the server never reaches an orderly
+\texttt{close()} --- it is blocked awaiting a request that will
+never return --- so $halfOpen$ must be escaped by autonomous
+wedge detection, not by $Close$.  From $closed$ the operation is
+an idempotent self-loop, which keeps $closed$ deadlock-free.
+
+\subsection{Reset Infrastructure}
+
+\begin{schema}{ResetInfrastructure}
+  \Delta Connection
+  \where
+  connState \neq halfOpen \\
+  connState' = connState \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+Clears cached handles without changing the transport state
+(\texttt{reset\_infrastructure()}).  By the handle-validity
+invariant, $connState' = connState$ together with cleared handles
+forces $connState \neq connected$; the operation is therefore a
+self-loop at $disconnected$, $reconnecting$, and $closed$, where
+the handles are already absent.  It is excluded from $halfOpen$
+for the same reason as $Close$: clearing a cached handle does not
+lift the wedge (the socket is still up and still unresponsive),
+so it must not be modelled as an escape.
+
+\subsection{Request (JetStream / KV Round-Trip)}
+
+\begin{schema}{Request}
+  \Delta Connection \\
+  result! : ReqOutcome
+  \where
+  connState = connected \\
+  ( result! = reqOk \land
+    connState' = connected \land
+    kvProvisioned' = ztrue \land
+    streamsProvisioned' = ztrue \land
+    namesProvisioned' = ztrue \land
+    wtmpAvailable' = wtmpAvailable ) \\
+  \lor \\
+  ( result! = reqTimeout \land
+    connState' = halfOpen \land
+    kvProvisioned' = zfalse \land
+    streamsProvisioned' = zfalse \land
+    namesProvisioned' = zfalse \land
+    wtmpAvailable' = zfalse )
+\end{schema}
+
+Every JetStream or KV round-trip issued by the relay ---
+\texttt{stream\_info} in \texttt{get\_unread\_summary}, \texttt{kv.get}
+in \texttt{heartbeat}, and the like.  From $connected$ it has two
+outcomes.  $reqOk$ leaves the connection $connected$ with its
+handles intact.  $reqTimeout$ is the half-open signature: the
+request timed out, the connection moves to $halfOpen$, and the
+handles are invalidated to satisfy the handle-validity invariant.
+This is the operation that makes $halfOpen$ reachable, and the
+crash-loop of biff-tww is exactly $reqTimeout$ fired repeatedly
+with no way out.
+
+\subsection{Reconnect (nats-py Auto-Reconnect Completes)}
+
+\begin{schema}{Reconnect}
+  \Delta Connection
+  \where
+  connState = reconnecting \\
+  connState' = connected \\
+  kvProvisioned' = ztrue \\
+  streamsProvisioned' = ztrue \\
+  namesProvisioned' = ztrue \\
+  wtmpAvailable' = wtmpAvailable
+\end{schema}
+
+nats-py's background reconnect succeeds and fires
+\texttt{\_on\_reconnect}; the next relay call re-provisions the
+handles.  This closes the recovery path
+$connected \to halfOpen \to reconnecting \to connected$, so no
+reachable state is stuck in $halfOpen$.
+
+%%----------------------------------------------------------------------
+\section{Session Presence}
+%%----------------------------------------------------------------------
+
+\begin{schema}{SessionStore}
+  sessions : SESSIONKEY \pinj KVVALUE \\
+  wallValue : KVKEY \pfun KVVALUE
+  \where
+  \# sessions \leq maxSessions \\
+  \# wallValue \leq 1
+\end{schema}
+
+Sessions are a partial injection: each session key maps to
+exactly one value (the serialised $UserSession$).  $wallValue$
+is either empty (no wall) or a single mapping (active wall).
+Initially the store is empty: $sessions = \emptyset$ and
+$wallValue = \emptyset$.  There is no separate $InitSessionStore$
+schema: the model-checked state is the $Connection$ machine (see
+\S\ref{sec:modelcheck}), and the session store is exercised by
+the operations below only while $connState = connected$.
+
+\subsection{Update Session (Heartbeat / Login)}
+
+\begin{schema}{UpdateSession}
+  \Delta SessionStore \\
+  \Xi Connection \\
+  key? : SESSIONKEY \\
+  value? : KVVALUE
+  \where
+  connState = connected \\
+  sessions' = sessions \oplus \{ key? \mapsto value? \} \\
+  wallValue' = wallValue \\
+  \# sessions' \leq maxSessions
+\end{schema}
+
+Creates or refreshes a session.  Override ($\oplus$) ensures
+idempotent updates.
+
+\subsection{Delete Session (Logout / TTL Expiry)}
+
+\begin{schema}{DeleteSession}
+  \Delta SessionStore \\
+  \Xi Connection \\
+  key? : SESSIONKEY
+  \where
+  connState = connected \\
+  key? \in \dom sessions \\
+  sessions' = \{ key? \} \ndres sessions \\
+  wallValue' = wallValue
+\end{schema}
+
+Removes a session.  In production, this is triggered by
+explicit delete or KV TTL expiry.
+
+\subsection{Set Wall}
+
+\begin{schema}{SetWall}
+  \Delta SessionStore \\
+  \Xi Connection \\
+  wallKey? : KVKEY \\
+  wallVal? : KVVALUE
+  \where
+  connState = connected \\
+  sessions' = sessions \\
+  wallValue' = \{ wallKey? \mapsto wallVal? \}
+\end{schema}
+
+\subsection{Clear Wall}
+
+\begin{schema}{ClearWall}
+  \Delta SessionStore \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  sessions' = sessions \\
+  wallValue' = \emptyset
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{KV Watcher State Machine}
+%%----------------------------------------------------------------------
+
+This section models the watcher loop from \texttt{\_run\_kv\_watch}
+and its supervisor \texttt{\_kv\_watcher\_loop}.
+
+\begin{schema}{Watcher}
+  phase : WatcherPhase \\
+  shutdownRequested : ZBOOL \\
+  restartCount : \nat
+  \where
+  restartCount \leq 100 \\
+  phase = stopped \implies shutdownRequested = ztrue
+\end{schema}
+
+The watcher tracks its current phase, whether shutdown has been
+requested, and how many times the supervisor has restarted it.
+A stopped watcher implies shutdown was requested.  Initially the
+watcher is $idle$, with $shutdownRequested = zfalse$ and
+$restartCount = 0$.  As with the session store, there is no
+separate $InitWatcher$ schema; the watcher operations are enabled
+only while $connState = connected$, which is consistent with the
+composed invariant $phase \neq idle \implies connState = connected$.
+
+\subsection{Start Watching}
+
+\begin{schema}{StartWatching}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  phase = idle \\
+  shutdownRequested = zfalse \\
+  phase' = snapshotting \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+Transitions from idle to snapshotting when the watcher is
+created.  The first entries from \texttt{watchall()} are the
+snapshot.
+
+\subsection{Snapshot Done}
+
+\begin{schema}{SnapshotDone}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  phase = snapshotting \\
+  shutdownRequested = zfalse \\
+  phase' = streaming \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+The $None$ marker from \texttt{updates()} signals the end of
+the snapshot.  \textbf{The watcher continues into streaming
+phase.}  This is the key property: the old \texttt{async~for}
+pattern terminated here (biff-udp).
+
+\subsection{Receive Entry}
+
+\begin{schema}{ReceiveEntry}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  (phase = snapshotting \lor phase = streaming) \\
+  shutdownRequested = zfalse \\
+  phase' = phase \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+A KV entry is received.  The phase does not change --- entries
+arrive during both snapshotting and streaming.
+
+\subsection{Handle Timeout}
+
+\begin{schema}{HandleTimeout}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  phase = streaming \\
+  shutdownRequested = zfalse \\
+  phase' = streaming \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+A \texttt{TimeoutError} from \texttt{updates(timeout=5.0)} is
+caught and the loop continues.  \textbf{The watcher stays in
+streaming phase.}  Without the catch, this would propagate to
+the supervisor and trigger a restart.
+
+\subsection{Handle Error (Supervisor Restart)}
+
+\begin{schema}{HandleError}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  phase \neq idle \\
+  phase \neq stopped \\
+  shutdownRequested = zfalse \\
+  phase' = snapshotting \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount + 1
+\end{schema}
+
+An unrecoverable error causes the supervisor to restart the
+watcher.  The new watcher begins in snapshotting phase
+(a fresh \texttt{watchall()}).
+
+\subsection{Request Shutdown}
+
+\begin{schema}{RequestShutdown}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  shutdownRequested = zfalse \\
+  shutdownRequested' = ztrue \\
+  phase' = stopped \\
+  restartCount' = restartCount
+\end{schema}
+
+The shutdown event signals the watcher to exit.  The loop
+checks \texttt{shutdown.is\_set()} on every iteration.
+
+%%----------------------------------------------------------------------
+\section{Composed System State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{NatsRelayState}
+  Connection \\
+  SessionStore \\
+  Watcher
+  \where
+  phase \neq idle \implies connState = connected \\
+  phase = streaming \implies kvProvisioned = ztrue
+\end{schema}
+
+The watcher can only be active when the connection is
+established.  Streaming implies KV is provisioned (the watcher
+reads from it).  With the generalised handle-validity invariant,
+$phase = streaming \implies kvProvisioned = ztrue$ also implies
+$phase = streaming \implies connState = connected$: a wedge
+($halfOpen$, where $kvProvisioned = zfalse$) cannot coexist with a
+streaming watcher, which is consistent --- a wedge manifests to
+the watcher as a $weError$ and drives it through $HandleError$.
+
+The composed initial state is: $connState = disconnected$ with no
+handles ($InitConnection$), an empty session store, and an $idle$
+watcher.  $InitConnection$ is the sole initialisation schema so
+that the model checker explores the $Connection$ lifecycle as a
+single, well-posed state machine; the session and watcher
+components are exercised as connection-gated operations rather
+than as independent initial states (see \S\ref{sec:modelcheck}).
+
+%%----------------------------------------------------------------------
+\section{Key Properties and Model Checking}
+\label{sec:modelcheck}
+%%----------------------------------------------------------------------
+
+The specification captures these properties, each of which can be
+verified by model checking with probcli (\texttt{z-spec test}):
+
+\begin{enumerate}
+  \item \textbf{Handle validity}: valid JetStream, sessions-KV, and
+    names-KV handles exist if and only if $connState = connected$.
+    A $halfOpen$, $disconnected$, $reconnecting$, or $closed$
+    connection has no valid handles.  This generalises DES-029 and
+    is the safety half of the biff-tww fix: stale handles cached
+    during a wedge are, in the model, no handles at all.
+
+  \item \textbf{Wedge liveness (biff-tww)}: no reachable state is
+    stuck in $halfOpen$.  From $halfOpen$ the recovery sequence
+    $WedgeDetected \to Reconnect$ (via $reconnecting$) is always
+    enabled, so the connection cannot deadlock in the wedge.  The
+    proof is by deadlock analysis: removing $WedgeDetected$ (the
+    pre-fix code, whose keepalive ping never fired in time) makes
+    $halfOpen$ a reachable terminal state.  probcli surfaces it as
+    a deadlock along the trace
+    $EnsureConnected \to Request(reqTimeout)$, which \emph{is}
+    biff-tww.  With $WedgeDetected$ present the state space is
+    deadlock-free.
+
+  \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
+    $streaming$, never to $idle$ or $stopped$.  The watcher
+    remains alive.
+
+  \item \textbf{Timeout resilience}: $HandleTimeout$ keeps the
+    watcher in $streaming$ phase.  No restart, no phase change.
+
+  \item \textbf{Error restart}: Only $HandleError$ increments
+    $restartCount$.  Snapshot-done and timeout do not.
+
+  \item \textbf{Connection prerequisite}: The watcher cannot be
+    active ($phase \neq idle$) when the connection is not
+    $connected$; every session and watcher operation is enabled
+    only while $connState = connected$.
+
+  \item \textbf{Session uniqueness}: The partial injection
+    ($\pinj$) on sessions guarantees each session key maps to
+    exactly one value.
+\end{enumerate}
+
+\end{document}
