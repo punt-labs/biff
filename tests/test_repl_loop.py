@@ -9,16 +9,18 @@ loop termination.  No NATS, no stdin thread.
 from __future__ import annotations
 
 import asyncio
+import re
 import threading as threading_mod
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from biff.__main__ import _release_prompt, _repl_loop
+from biff.__main__ import _handle_timestamps, _release_prompt, _repl_loop
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
+from biff.repl_display import ReplDisplay
 from biff.repl_notify import NotifyState
 
 
@@ -672,6 +674,127 @@ class TestMultiCommandSequence:
         mock_talk.assert_awaited_once()
         mock_dispatch.assert_awaited_once()
         assert gate.is_set()
+
+
+# -----------------------------------------------------------------------
+# Timestamps toggle (biff-4uq)
+# -----------------------------------------------------------------------
+
+
+class TestTimestampsCommand:
+    """REPL-only ``timestamps on|off`` toggle."""
+
+    def test_handle_timestamps_on(self, capsys: pytest.CaptureFixture[str]) -> None:
+        display = ReplDisplay()
+        _handle_timestamps(["on"], display)
+        assert display.show_timestamps is True
+        assert "Timestamps on." in capsys.readouterr().out
+
+    def test_handle_timestamps_off(self, capsys: pytest.CaptureFixture[str]) -> None:
+        display = ReplDisplay()
+        display.set_timestamps(on=True)
+        _handle_timestamps(["off"], display)
+        assert display.show_timestamps is False
+        assert "Timestamps off." in capsys.readouterr().out
+
+    def test_handle_timestamps_usage_on_bad_arg(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        display = ReplDisplay()
+        _handle_timestamps(["maybe"], display)
+        assert display.show_timestamps is False  # unchanged
+        assert "Usage: timestamps on|off" in capsys.readouterr().out
+
+    def test_handle_timestamps_usage_on_missing_arg(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        display = ReplDisplay()
+        _handle_timestamps([], display)
+        assert "Usage: timestamps on|off" in capsys.readouterr().out
+
+    @pytest.mark.anyio()
+    async def test_loop_routes_timestamps_command(self, tmp_path: object) -> None:
+        """`timestamps on` in the loop toggles the session display."""
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()
+        gate.set()
+        notify = NotifyState()
+        display = ReplDisplay()
+        aqueue = _make_aqueue(["timestamps on"])
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+        with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
+            await _repl_loop(
+                ctx,
+                notify,
+                "prompt> ",
+                aqueue,
+                asyncio.Event(),
+                gate,
+                ["prompt> "],
+                talk_q,
+                display=display,
+            )
+
+        assert display.show_timestamps is True
+        # `timestamps` is a REPL built-in — never routed through dispatch.
+        mock_dispatch.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_toggle_then_talk_message_is_stamped(self, tmp_path: object) -> None:
+        """End-to-end: typing `timestamps on` stamps subsequent talk output.
+
+        Off → the talk renderer emits no stamp; after the loop processes
+        `timestamps on`, the SAME display object makes the renderer prefix
+        incoming messages with ``[HH:MM]``.  This connects the command path
+        (`_repl_loop`) to the render path (`_drain_talk_messages`) on one
+        display, showing the user-observable behavior change (biff-4uq).
+        """
+        from biff.__main__ import _drain_talk_messages
+
+        display = ReplDisplay()
+        session_key = "kai:abc12345"
+        talk_msg = {
+            "type": "message",
+            "from": "eric",
+            "from_tty": "tty2",
+            "body": "on it now",
+            "from_key": "eric:def67890",
+        }
+
+        # Before: a received talk message renders without a stamp.
+        before: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+        before.put_nowait(dict(talk_msg))
+        lines_before, _ = _drain_talk_messages(before, session_key, display)
+        assert re.search(r"\[\d{2}:\d{2}\]", lines_before[0]) is None
+
+        # User types `timestamps on` at the REPL prompt.
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()
+        gate.set()
+        aqueue = _make_aqueue(["timestamps on"])
+        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+        with patch("biff.dispatch.dispatch", new_callable=AsyncMock):
+            await _repl_loop(
+                ctx,
+                NotifyState(),
+                "prompt> ",
+                aqueue,
+                asyncio.Event(),
+                gate,
+                ["prompt> "],
+                talk_q,
+                display=display,
+            )
+
+        # After: the same display makes the renderer stamp the message.
+        after: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+        after.put_nowait(dict(talk_msg))
+        lines_after, _ = _drain_talk_messages(after, session_key, display)
+        assert (
+            re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ on it now", lines_after[0])
+            is not None
+        )
 
 
 # -----------------------------------------------------------------------

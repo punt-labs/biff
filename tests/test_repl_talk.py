@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,9 +24,11 @@ from biff.__main__ import (
     _drain_talk_notifications,
     _has_pending_invite,
     _talk_publish,
+    _terminal_safe,
 )
 from biff.cli_session import CliContext
 from biff.models import BiffConfig
+from biff.repl_display import ReplDisplay
 
 
 def _make_queue(
@@ -107,6 +110,78 @@ class TestDrainTalkMessages:
         assert len(lines) == 1
         assert "ended the conversation" in lines[0]
         assert "eric:tty2" in lines[0]
+
+    def _message_queue(self) -> asyncio.Queue[dict[str, str]]:
+        return _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "hello",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+
+    def test_no_timestamp_without_display(self) -> None:
+        """Default (no display) keeps the historical timestamp-free line."""
+        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY)
+        assert len(lines) == 1
+        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
+        assert "eric:tty2 ▶ hello" in lines[0]
+
+    def test_no_timestamp_when_display_off(self) -> None:
+        """A display with timestamps off renders no stamp."""
+        display = ReplDisplay()
+        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY, display)
+        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
+
+    def test_timestamp_prefix_when_display_on(self) -> None:
+        """A display with timestamps on prefixes the message with [HH:MM]."""
+        display = ReplDisplay()
+        display.set_timestamps(on=True)
+        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY, display)
+        assert len(lines) == 1
+        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hello", lines[0]) is not None
+
+    def test_escape_injection_in_body_is_neutralized(self) -> None:
+        """A remote body cannot inject terminal escapes into our output."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "clear\x1b[2Jme\x1b]0;pwned\x07",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines, _ = _drain_talk_messages(q, MY_KEY)
+        # The dangerous escapes are gone; only our own color codes remain.
+        assert "\x1b[2J" not in lines[0]
+        assert "\x1b]0;" not in lines[0]
+        assert "\x07" not in lines[0]
+        # The printable remainder survives, defanged.
+        assert "clear[2Jme]0;pwned" in lines[0]
+
+    def test_escape_injection_in_sender_is_neutralized(self) -> None:
+        """A remote sender/tty cannot inject terminal escapes either."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "e\x1b[2Jvil",
+                    "from_tty": "tty2",
+                    "body": "hi",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines, _ = _drain_talk_messages(q, MY_KEY)
+        assert "\x1b[2J" not in lines[0]
+        assert "e[2Jvil:tty2 ▶ hi" in lines[0]
 
     def test_message_conversation_style(self) -> None:
         q = _make_queue(
@@ -407,6 +482,59 @@ class TestDrainTalkNotifications:
         assert len(lines) == 1
         assert "eric:tty2" in lines[0]
         assert "hi there" in lines[0]
+
+    def test_banner_stamped_when_display_on(self) -> None:
+        """The idle-prompt message banner honors the timestamps toggle too."""
+        display = ReplDisplay()
+        display.set_timestamps(on=True)
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "hi there",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines = _drain_talk_notifications(q, MY_KEY, None, display)
+        assert len(lines) == 1
+        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hi there", lines[0]) is not None
+
+    def test_banner_escape_injection_is_neutralized(self) -> None:
+        """The idle-prompt banner also strips remote terminal escapes."""
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "hi\x1b[2Jthere",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines = _drain_talk_notifications(q, MY_KEY)
+        assert "\x1b[2J" not in lines[0]
+        assert "hi[2Jthere" in lines[0]
+
+
+class TestTerminalSafe:
+    """`_terminal_safe` strips control/escape chars from remote text."""
+
+    def test_strips_esc_and_bel(self) -> None:
+        assert _terminal_safe("a\x1b[2Jb\x07c") == "a[2Jbc"
+
+    def test_strips_newline_and_cr(self) -> None:
+        # A single-line render must not be splittable by embedded newlines.
+        assert _terminal_safe("line1\nline2\rline3") == "line1line2line3"
+
+    def test_preserves_printable_unicode(self) -> None:
+        assert _terminal_safe("kai:tty2 ▶ 🚀 café") == "kai:tty2 ▶ 🚀 café"
+
+    def test_empty_string(self) -> None:
+        assert _terminal_safe("") == ""
 
 
 # -----------------------------------------------------------------------
