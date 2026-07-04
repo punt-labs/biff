@@ -17,6 +17,8 @@ from biff.testing import RecordingClient
 if TYPE_CHECKING:
     from fastmcp import Client
 
+    from biff.server.state import ServerState
+
 
 async def _check_description(client: Client[Any]) -> str:
     """Get the check_messages tool description from an MCP client."""
@@ -116,6 +118,38 @@ class TestMultiUserPresence:
 
         assert "reviewing kai's PR" in kai_checks
         assert "writing tests" in eric_checks
+
+    async def test_dead_session_hidden_from_presence(
+        self, kai: RecordingClient, eric: RecordingClient, kai_state: ServerState
+    ) -> None:
+        """A session past the liveness window is hidden from /who and /finger.
+
+        Drives the MCP tools (not the CLI command) — the surface agents
+        actually invoke (biff-mue).
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from biff.models import UserSession
+
+        await eric.call("plan", message="working")  # eric heartbeats → live
+        # Inject a dead session straight into the shared store.
+        await kai_state.relay.update_session(
+            UserSession(
+                user="ghost",
+                tty="deadbeef",
+                tty_name="tty9",
+                repo="_test-integration",
+                last_active=datetime.now(UTC) - timedelta(hours=5),
+            )
+        )
+
+        who_result = await kai.call("who")
+        assert "eric" in who_result
+        assert "ghost" not in who_result
+
+        finger_result = await kai.call("finger", user="@ghost")
+        # The dead session is treated as not present.
+        assert "Never logged in" in finger_result
 
 
 class TestPresenceLifecycle:

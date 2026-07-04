@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from mcp.types import InitializeRequest, InitializeResult
 
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
-from biff.relay import LocalRelay, Relay
+from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay, Relay
 from biff.server.state import CompanionSession, ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
@@ -691,10 +691,10 @@ async def _close_orphaned_logins(
         return
 
     # Build a map of session_key → last_active from current KV sessions.
-    # Sessions with a stale last_active (>2 heartbeat intervals old) are
-    # treated as dead — their KV entry just hasn't expired yet.
+    # Sessions whose last heartbeat is outside the liveness window (older
+    # than 2 heartbeat intervals) are treated as dead — their KV entry
+    # just hasn't expired yet.
     now = datetime.now(UTC)
-    stale_threshold = 120.0  # 2x heartbeat interval (60s)
     last_seen: dict[str, datetime] = {}
     active_keys: set[str] = {state.session_key}
     if state.companion_session_key:
@@ -702,8 +702,7 @@ async def _close_orphaned_logins(
     for session in active_sessions:
         key = build_session_key(session.user, session.tty)
         last_seen[key] = session.last_active
-        age = (now - session.last_active).total_seconds()
-        if age < stale_threshold:
+        if session.is_live(now=now, ttl_seconds=PRESENCE_LIVENESS_SECONDS):
             active_keys.add(key)
     orphaned = _find_orphaned_logins(events, active_keys)
 
