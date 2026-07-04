@@ -160,6 +160,20 @@ def main(
 # ---------------------------------------------------------------------------
 
 
+def _release_prompt(prompt_gate: threading_mod.Event) -> None:
+    """Flush stdout, then open the prompt gate (biff-1xt5).
+
+    The stdin thread prints the next prompt via ``input()`` the instant the
+    gate opens, and ``input()`` flushes immediately.  Any buffered stdout must
+    reach the terminal first, or the prompt overtakes it and collides with the
+    last line of command output.  Routing every gate release through this
+    helper keeps the flush and the release inseparable — a print added before a
+    future ``prompt_gate.set()`` cannot reintroduce the race.
+    """
+    sys.stdout.flush()
+    prompt_gate.set()
+
+
 def _drain_talk_notifications(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
@@ -391,7 +405,7 @@ async def _repl_talk(
     current_prompt[0] = talk_prompt
 
     print(f"Connected to {display}. Type 'end' to return to REPL.\n")
-    prompt_gate.set()
+    _release_prompt(prompt_gate)
 
     try:
         while True:
@@ -420,7 +434,7 @@ async def _repl_talk(
                     ctx, target_user, "message", line[:512], target_repo=target_repo
                 )
 
-            prompt_gate.set()
+            _release_prompt(prompt_gate)
     finally:
         current_prompt[0] = repl_prompt
         # Clear the talk plan when exiting talk mode.
@@ -488,14 +502,14 @@ async def _repl_loop(
                 talk_notifications,
                 pending_invites,
             )
-            prompt_gate.set()
+            _release_prompt(prompt_gate)
             continue
 
         try:
             cmd_result = await dispatch(line, ctx)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
-            prompt_gate.set()
+            _release_prompt(prompt_gate)
             continue
 
         if cmd_result is None:
@@ -507,8 +521,8 @@ async def _repl_loop(
         # doesn't notify about changes the user just made.
         await _sync_notify(ctx, notify)
 
-        # Allow the stdin thread to print the next prompt.
-        prompt_gate.set()
+        # Flush output, then let the stdin thread print the next prompt.
+        _release_prompt(prompt_gate)
 
 
 def _has_pending_invite(pending_invites: set[str], from_user: str) -> bool:
@@ -570,7 +584,7 @@ async def _wait_for_talk_accept(
             return False
         if result.strip().lower() in ("end", "exit", "quit"):
             return False
-        prompt_gate.set()
+        _release_prompt(prompt_gate)
 
 
 async def _talk_handshake(
