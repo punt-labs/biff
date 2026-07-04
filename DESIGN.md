@@ -4546,11 +4546,13 @@ machinery sufficient.
 ### Rejected Alternatives
 
 **Proactive wedge detector (N consecutive runtime timeouts → force
-reconnect).** Adds bespoke state to the relay to count timeouts and
-tear down the connection. Keepalive tuning fixes the detection latency
-at its source in nats-py and reuses the DES-029 reconnect path, so the
-extra machinery is unnecessary. Reserved as a fallback only if
-keepalive proved insufficient (it did not).
+reconnect).** Deferred here: keepalive tuning alone restores liveness
+and reuses the DES-029 reconnect path, so the extra machinery was not
+needed *for correctness*. **Superseded by DES-042 (biff-3hp):** the
+operator flagged the ~60-80s keepalive recovery as too slow, so the
+detector was implemented as a complementary *speed* layer (~15s),
+acting on the consecutive-timeout counter the biff-6px diagnostic
+logging already tracks. Keepalive remains the correctness backstop.
 
 **Catch ``TimeoutError`` in the poller/heartbeat and reconnect there.**
 Couples connection management to the polling loops and duplicates the
@@ -4608,3 +4610,82 @@ clear them. If that tuning regresses toward the nats-py defaults, the
 code violates the modeled invariant and biff-tww returns — which is
 exactly what the ``z-spec test`` gate and the keepalive-budget
 regression test now guard against, together.
+
+## DES-042: Proactive Wedge Detector — Force Reconnect for Faster Recovery
+
+**Date:** 2026-07-04
+**Status:** SETTLED
+**Bead:** biff-3hp
+**Spec:** ``docs/nats-relay.tex`` (``ForceReconnect`` transition)
+**Related:** DES-041 (keepalive tuning — the correctness backstop),
+DES-029 (handle invalidation), DES-019 (persistent connection),
+biff-6px (diagnostic logging — the consecutive-timeout counter)
+
+### Problem
+
+DES-041's keepalive tuning restores a wedged half-open connection in
+~60-80s. The operator flagged that as too slow — a user-visible
+outage of talk/presence/wall for over a minute per wedge. Keepalive
+detection is bounded by nats-py's PING cadence
+(``ping_interval * (max_outstanding_pings + 1)`` ≈ 80s) and cannot go
+much lower without flapping healthy connections on transient latency.
+The recovery-vs-detection floor is inherent to the keepalive mechanism.
+
+### Decision
+
+Add a proactive wedge detector that acts on the consecutive-timeout
+counter the biff-6px diagnostic logging already maintains in
+``_ConnectionHealth``. After ``_WEDGE_FORCE_RECONNECT_THRESHOLD`` = 3
+consecutive runtime JS/KV request timeouts on a still-connected socket,
+``_force_reconnect`` tears down the wedged client (``safe_close`` +
+null ``_nc/_js/_kv/_names_kv``); the next ``_ensure_connected`` dials a
+fresh connection. Recovery ≈ ``N * per-request-timeout`` = 3 × 5s ≈
+15s, plus ~1-2s to reconnect — a **4-5x** improvement over keepalive.
+
+**N = 3 rationale.** Three independent failed round-trips (~15s of
+sustained unresponsiveness) cannot be a single slow request (cleared by
+the next success) or a two-tick blip. It mirrors keepalive's own
+three-missed-PING wedge criterion (DES-041). N≥2 is the floor; 3 buys
+false-positive margin while staying far under the ~80s keepalive floor.
+
+**Complementary, not a replacement.** Keepalive (DES-041) remains the
+correctness backstop — if the proactive path somehow does not fire,
+keepalive still recovers. The proactive detector is the *speed* layer.
+Both are independent escapes from ``halfOpen``.
+
+### Model
+
+``docs/nats-relay.tex`` gained a ``ForceReconnect: halfOpen ->
+disconnected`` transition (clears all handles). The proactive recovery
+path is ``connected -> halfOpen -> disconnected -> connected`` (via
+``ForceReconnect`` then the existing ``EnsureConnected`` — a fresh
+dial), distinct from keepalive's ``halfOpen -> reconnecting ->
+connected`` (same client). ``z-spec test``: deadlock-free, 6 states /
+32 transitions, liveness holds with two independent escapes from
+``halfOpen``. N=3 is kept as a prose latency parameter (symmetric with
+how keepalive's PING criterion is abstracted), not modeled as state —
+the liveness property only requires that *some* escape be enabled in
+``halfOpen``.
+
+### Tradeoff
+
+A genuine ~15s network blip that produces three consecutive timeouts
+triggers one reconnect (~2s to the same server). This is deliberately
+favored over stranding presence for 60-80s.
+
+### Model ↔ Code
+
+``ForceReconnect`` (``halfOpen -> disconnected``, handles cleared) ↔
+``nats_relay.py`` ``_force_reconnect`` (``safe_close`` + null handles),
+fired by ``_tracked`` when ``_health.should_force_reconnect(3)``
+latches after 3 consecutive runtime timeouts on a still-connected
+socket; recovery is the next ``_ensure_connected`` dialing a fresh
+client. The latch fires once per wedge episode; success or disconnect
+resets the counter and latch.
+
+### Gate
+
+Connection-lifecycle change: passed ``z-spec check`` (fuzz OK) +
+``z-spec test`` (deadlock-free, the model contains ``ForceReconnect``),
+hosted NATS E2E (33/33), TDD red→green (11 tests), and djb concurrency
+review.
