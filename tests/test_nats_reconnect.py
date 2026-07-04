@@ -298,3 +298,23 @@ class TestProactiveWedgeDetector:
 
         nc.close.assert_not_awaited()
         assert relay._nc is nc
+
+    @pytest.mark.anyio()
+    async def test_defers_when_client_reconnects_under_lock(self) -> None:
+        # Race: the _tracked gate saw is_connected=True and invoked
+        # _force_reconnect, but nats-py's keepalive flips the captured client
+        # to reconnecting (is_connected False, is_closed still False) before it
+        # acquires _connect_lock.  The under-lock guard must defer to nats-py's
+        # reconnect, not tear down a client already reconnecting.
+        relay, nc = _wedged_relay()
+
+        await relay._connect_lock.acquire()
+        task = asyncio.ensure_future(relay._force_reconnect())
+        await asyncio.sleep(0)  # let the task capture `wedged` and block on lock
+        nc.is_connected = False  # keepalive fires while we hold the lock
+        relay._connect_lock.release()
+        await task
+
+        nc.close.assert_not_awaited()
+        assert relay._nc is nc
+        assert relay._js is not None

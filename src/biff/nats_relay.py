@@ -306,8 +306,8 @@ class _ConnectionHealth:
 
         The latch fires the proactive teardown once per wedge episode, not on
         every timeout past the threshold.  It is cleared whenever the counter
-        resets (success, connect, reconnect, disconnect), so a later episode
-        re-arms it.
+        resets (success, connect, reconnect, disconnect, close), so a later
+        episode re-arms it.
         """
         if self._force_reconnect_fired or self._timeout_count < threshold:
             return False
@@ -491,13 +491,16 @@ class NatsRelay:
         lock: the wedged client is captured before the lock and re-checked
         under it, and if it no longer matches ``self._nc`` (a rebuild, close,
         or disconnect replaced or cleared it) this is a no-op — it never tears
-        down a freshly built connection.
+        down a freshly built connection.  The re-check also skips a client that
+        stopped being connected while we waited for the lock: if nats-py's own
+        keepalive flipped it to reconnecting after the ``_tracked`` gate saw it
+        connected, that reconnect owns recovery — do not tear it down.
         """
         wedged = self._nc
         if wedged is None or wedged.is_closed:
             return
         async with self._connect_lock:
-            if self._nc is not wedged or wedged.is_closed:
+            if self._nc is not wedged or wedged.is_closed or not wedged.is_connected:
                 return
             logger.info(
                 "NATS wedge confirmed after %d timed-out requests — forcing reconnect",
