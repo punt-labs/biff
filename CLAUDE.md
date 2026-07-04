@@ -350,6 +350,44 @@ Two design logs exist. Both follow the same rules: consult before changing, do n
 
 Failure to consult the design logs has already caused wasted work and rollbacks. This rule is non-negotiable.
 
+## Formal Methods — When to Use z-spec
+
+biff's protocols and state machines are modeled as Z specifications in `docs/*.tex` (`nats-relay`, `session-model`, `talk`, `notification`, `repl`, `claude-code-biff`), type-checked with `fuzz` and model-checked with ProB via the `z-spec` plugin. Formal specs catch entire *classes* of bugs, not the one input you happened to test. The design logs record *decisions*; the Z specs make the invariants *machine-checkable*. They are complementary — a DES entry that governs a state machine should point at its spec.
+
+**The recurring lesson.** The connection/handle lifecycle was patched at the code level six times (DES-016, DES-019, DES-021, DES-029, biff-wr3, biff-tww) because the model was too coarse — it modeled `connected` as a single healthy state with no `halfOpen`/wedged state, so ProB never got to say "this state is reachable and has no way out." biff-tww is a reachable deadlock the extended model now proves as a counterexample. When a defect class recurs, the model is missing a state — extend the spec, don't just patch the code.
+
+### When to reach for z-spec (required)
+
+- **Connection / session lifecycle changes** — anything touching `nats_relay.py` connect/reconnect/handle-cache, heartbeat, or the KV watcher. These are state machines with liveness properties; model the transition before or with the code.
+- **Protocol / wire-format changes** — talk, notifications, wall, presence delivery.
+- **Any bug that has recurred** — if a defect has been patched more than once, extend the spec, model-check to reproduce the bug as a ProB counterexample, then prove the fix makes the bad state unreachable.
+
+### Workflow
+
+```text
+/z-spec:check   docs/<spec>.tex              # fuzz type-check — must be OK
+/z-spec:test    docs/<spec>.tex              # ProB model-check — invariants hold across the whole state space
+/z-spec:partition docs/<spec>.tex --code python  # TTF: the complete set of behavioral tests you owe
+/z-spec:audit   docs/<spec>.tex --test-dir=tests # which spec constraints have a test; which are GAPs
+/z-spec:contracts docs/<spec>.tex python         # optional runtime invariant assertions
+```
+
+### CI gate
+
+Connection-lifecycle and protocol PRs must pass `/z-spec:check` + `/z-spec:test`, and show **zero GAP** on the audit of the spec they touch, before merge. A code fix to a modeled subsystem must implement the transition the model proves — the model is the authority; the code conforms. If the code cannot satisfy a modeled invariant, that is a finding, not a reason to weaken the invariant.
+
+### Progressive coverage policy
+
+Spec-vs-test gaps are closed **incrementally, driven by the work in front of you** — not in one big-bang pass. When you touch code governed by a spec, incorporate that spec's related constraints and their partition-derived tests in the same change. `session-model.tex` is normative but its coverage is closed progressively as session code is touched — do not exclude it wholesale, and do not try to implement all of it at once.
+
+### Model ⇄ code divergence
+
+When the model and the code disagree, reconcile — do not let them drift silently. Default to **conforming the code to the proven spec** (e.g. `talk.tex` bounds the talk queue at 100 with overflow-drop; the code must impose that bound — the cap also guards against unbounded-growth/DoS). If the spec is wrong, amend it and log the decision in the appropriate design log.
+
+### Agents and isolation
+
+`jms` authors and extends Z specs; `jra` handles B-Method/Event-B and liveness/refinement; the `z-spec` plugin's MCP server (registered as `zspec`) runs check/model-check. **Isolate parallel spec + code agents in git worktrees** (`isolation: "worktree"`) — they share `docs/` and the working tree, and a shared checkout will cross-attach commits.
+
 ## Biff Architecture
 
 Biff is a CLI communication tool for software engineers, named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `wall`, `talk`, `finger`, `write`, and `mesg`. It resurrects the Unix communication vocabulary as MCP-native slash commands. See `prfaq.tex` for the full product vision, command vocabulary, and phasing.
