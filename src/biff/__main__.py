@@ -190,6 +190,19 @@ def _handle_timestamps(args: list[str], repl_display: ReplDisplay) -> None:
     print(f"Timestamps {'on' if on else 'off'}.")
 
 
+def _terminal_safe(text: str) -> str:
+    """Strip non-printable characters from remote-controlled text.
+
+    Talk bodies and sender identifiers arrive from other users over the
+    relay and are printed straight to the terminal inside color escapes.
+    Dropping non-printable characters removes ESC (the ANSI/OSC introducer)
+    and other C0/C1 controls, so a remote sender cannot inject cursor moves,
+    prompt spoofing, line clears, or OSC 52 clipboard writes into our output.
+    Printable Unicode (letters, punctuation, emoji, spaces) is preserved.
+    """
+    return "".join(ch for ch in text if ch.isprintable())
+
+
 def _drain_talk_notifications(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
@@ -221,8 +234,8 @@ def _drain_talk_notifications(
         if not is_notification_for_session(data, session_key):
             continue
         msg_type = data.get("type", "message")
-        sender = data.get("from", "?")
-        body = data.get("body", "")
+        sender = _terminal_safe(data.get("from", "?"))
+        body = _terminal_safe(data.get("body", ""))
         if msg_type == "accept":
             continue  # Silent — handled by _wait_for_talk_accept.
         if msg_type == "invite" and pending_invites is not None:
@@ -230,7 +243,7 @@ def _drain_talk_notifications(
         if msg_type == "invite" and body:
             lines.append(f"  \033[1;33m📞 {sender}: {body}\033[0m")
         elif body:
-            sender_tty = data.get("from_tty", "")
+            sender_tty = _terminal_safe(data.get("from_tty", ""))
             label = f"{sender}:{sender_tty}" if sender_tty else sender
             stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
             lines.append(f"  \033[1;33m{stamp}{label} ▶ {body}\033[0m")
@@ -324,15 +337,15 @@ def _drain_talk_messages(
         if msg_type in ("invite", "accept"):
             continue
         if msg_type == "end":
-            sender = data.get("from", "?")
-            sender_tty = data.get("from_tty", "")
+            sender = _terminal_safe(data.get("from", "?"))
+            sender_tty = _terminal_safe(data.get("from_tty", ""))
             label = f"{sender}:{sender_tty}" if sender_tty else sender
             lines.append(f"\033[2m{label} has ended the conversation.\033[0m")
             ended = True
             continue
-        sender = data.get("from", "?")
-        sender_tty = data.get("from_tty", "")
-        body = data.get("body", "")
+        sender = _terminal_safe(data.get("from", "?"))
+        sender_tty = _terminal_safe(data.get("from_tty", ""))
+        body = _terminal_safe(data.get("body", ""))
         if body:
             label = f"{sender}:{sender_tty}" if sender_tty else sender
             stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
@@ -600,8 +613,8 @@ def _check_for_accept(
             found = True
             continue
         # Display non-accept notifications as banners.
-        sender = data.get("from", "?")
-        body = data.get("body", "")
+        sender = _terminal_safe(data.get("from", "?"))
+        body = _terminal_safe(data.get("body", ""))
         if body:
             print(f"\r\033[K  \033[1;33m📞 {sender}: {body}\033[0m")
     return found

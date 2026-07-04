@@ -204,7 +204,7 @@ Waiting for @eric:tty2 to respond... (type 'end' to cancel)
 Connected to @eric:tty2. Type 'end' to return to REPL.
 
 kai:tty1 ▶ can you look at the auth fix?
-eric:tty2 ▶ [14:32] on it now
+[14:32] eric:tty2 ▶ on it now
 kai:tty1 ▶ end
 Talk with @eric:tty2 ended.
 kai:tty1 ▶ exit

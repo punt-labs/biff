@@ -14,6 +14,7 @@
 
 ### Security
 
+- **Talk output sanitizes remote terminal-control sequences.** Talk message bodies and sender identifiers arrive from other users over the relay and were printed straight to the terminal. A malicious sender could embed ANSI/OSC escape sequences (cursor moves, prompt spoofing, line clears, OSC 52 clipboard writes). All talk render sites (`_drain_talk_messages`, `_drain_talk_notifications`, `_check_for_accept`) now strip non-printable characters from remote fields before display. Read/wall/status rendering paths are tracked for the same treatment in biff-lbj.
 - **Least-privilege `GITHUB_TOKEN` in CI workflows.** Added a top-level `permissions: contents: read` block to `docs.yml`, `test.yml`, `lint.yml`, and `hosted-nats.yml`. These workflows only check out the repo and run linters/tests, so the token no longer defaults to the repository's broad write scope. Clears four CodeQL `actions/missing-workflow-permissions` code-scanning alerts (medium severity).
 
 ## [1.10.2] - 2026-05-29
