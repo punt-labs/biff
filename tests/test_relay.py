@@ -9,12 +9,30 @@ from pathlib import Path
 import pytest
 
 from biff.models import Message, UserSession
-from biff.relay import LocalRelay
+from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay, live_sessions
 
 
 @pytest.fixture
 def relay(tmp_path: Path) -> LocalRelay:
     return LocalRelay(data_dir=tmp_path)
+
+
+class TestLiveSessions:
+    """`live_sessions` drops sessions past the liveness window (biff-mue)."""
+
+    def test_keeps_live_drops_dead(self) -> None:
+        now = datetime.now(UTC)
+        live = UserSession(user="live", tty="a", last_active=now)
+        dead = UserSession(
+            user="dead",
+            tty="b",
+            last_active=now - timedelta(seconds=PRESENCE_LIVENESS_SECONDS + 60),
+        )
+        result = live_sessions([live, dead])
+        assert [s.user for s in result] == ["live"]
+
+    def test_empty(self) -> None:
+        assert live_sessions([]) == []
 
 
 # -- Deliver --

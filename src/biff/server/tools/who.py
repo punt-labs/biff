@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from biff.formatting import format_who
+from biff.relay import live_sessions
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session
@@ -34,7 +35,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await update_current_session(state)
         await refresh_read_messages(mcp, state)
         sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
-        if not sessions:
+        live = live_sessions(sessions)
+        if not live:
             return "No sessions."
-        sorted_sessions = sorted(sessions, key=lambda s: s.last_active, reverse=True)
+        sorted_sessions = sorted(live, key=lambda s: s.last_active, reverse=True)
         return format_who(sorted_sessions)

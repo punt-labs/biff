@@ -79,8 +79,10 @@ class UserSession(BaseModel):
 
     Sessions track who is online, what they're working on (plan),
     where they are (hostname, pwd), and whether they're accepting
-    messages (biff_enabled).  Session liveness is determined by
-    comparing ``last_active`` against a TTL (default 120s).
+    messages (biff_enabled).  Liveness is checked via :meth:`is_live`,
+    which compares ``last_active`` against a caller-supplied window
+    (``PRESENCE_LIVENESS_SECONDS`` for presence surfaces) — the policy
+    lives with the caller, not the model.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
@@ -112,6 +114,17 @@ class UserSession(BaseModel):
     @classmethod
     def _normalize_last_active(cls, v: datetime) -> datetime:
         return _ensure_utc(v)
+
+    def is_live(self, *, now: datetime, ttl_seconds: float) -> bool:
+        """True if the last heartbeat is recent enough to consider live.
+
+        A running server heartbeats on a fixed interval, refreshing
+        ``last_active``.  A session whose last heartbeat is older than
+        *ttl_seconds* has stopped heartbeating (shut down, killed, or
+        wedged) and is not live, even though its KV entry may not have
+        hit the longer storage TTL yet (biff-mue).
+        """
+        return (now - self.last_active).total_seconds() <= ttl_seconds
 
 
 @dataclass(frozen=True)

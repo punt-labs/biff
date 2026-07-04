@@ -5,6 +5,7 @@ from __future__ import annotations
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.formatting import format_finger, format_finger_multi
+from biff.relay import live_sessions
 from biff.server.tools._session import resolve_tty_name
 from biff.tty import parse_address
 
@@ -15,7 +16,12 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
     Accepts space-separated addresses: ``@user1 @user2 @user3``.
     """
     addresses = user.split()
-    all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
+    # Availability check: only consider sessions that are actually live
+    # (heartbeat within the liveness window), not dead ones lingering in
+    # the KV until the storage TTL (biff-mue).
+    all_sessions = live_sessions(
+        await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
+    )
 
     blocks: list[str] = []
     json_parts: list[object] = []

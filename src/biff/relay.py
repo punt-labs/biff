@@ -45,7 +45,25 @@ from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
 
-SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends
+SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends; KV storage retention
+# Presence liveness: a session is "live" only if it heartbeat within this
+# window (2x the 60s heartbeat interval).  Distinct from the 3-day storage
+# TTL — used to hide dead sessions from presence before their KV entry
+# expires (biff-mue).
+PRESENCE_LIVENESS_SECONDS = 120.0
+
+
+def live_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
+    """Return only sessions whose last heartbeat is within the liveness window.
+
+    Drops dead sessions (shut down, killed, or wedged) whose KV entry has not
+    yet hit the longer storage TTL, so every presence surface (``who``,
+    ``finger``) reflects who is actually reachable (biff-mue).
+    """
+    now = datetime.now(UTC)
+    return [
+        s for s in sessions if s.is_live(now=now, ttl_seconds=PRESENCE_LIVENESS_SECONDS)
+    ]
 
 
 def atomic_write(path: Path, content: str) -> None:

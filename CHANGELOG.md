@@ -6,15 +6,27 @@
 
 - **`timestamps on|off` toggle in the REPL (biff-4uq).** A REPL-only display preference that prefixes incoming talk messages with a local `[HH:MM]` stamp. Off by default (matching prior timestamp-free talk output) and not persisted across sessions — it is a display preference, not config. Added to the REPL banner. Scoped to talk display for now; applying the toggle to `read` output is deferred pending a design decision (read timestamps live in the shared formatting layer used by the MCP tool and CLI).
 
+### Security
+
+- **Talk output sanitizes remote terminal-control sequences.** Talk message bodies and sender identifiers arrive from other users over the relay and were printed straight to the terminal. A malicious sender could embed ANSI/OSC escape sequences (cursor moves, prompt spoofing, line clears, OSC 52 clipboard writes). All talk render sites (`_drain_talk_messages`, `_drain_talk_notifications`, `_check_for_accept`) now strip non-printable characters from remote fields before display. Read/wall/status rendering paths are tracked for the same treatment in biff-lbj.
+
+## [1.10.4] - 2026-07-04
+
 ### Fixed
 
+- **`who` and `finger` hide dead sessions instead of showing them for up to 3 days (biff-mue).** A session's KV presence entry survives to the 3-day storage TTL, so a server that shut down, was killed, or wedged lingered in presence as `+` present (e.g. `idle 5h`) until the entry expired — because deregister depends on a signal-handler sentinel that a live peer must reap, which doesn't happen on SIGKILL or last-server shutdown. Presence liveness is now decoupled from storage retention: a shared `live_sessions` filter (new `UserSession.is_live` method + `PRESENCE_LIVENESS_SECONDS`, 2× the 60s heartbeat) is applied to **all** presence surfaces — the `who` and `finger` MCP tools *and* their CLI commands. The orphan-login detector reuses the same constant (previously an inline `120.0`).
+
+## [1.10.3] - 2026-07-03
+
+### Fixed
+
+- **NATS disconnect no longer wedges every MCP server (biff-wr3).** When the relay connection dropped (`nats: unexpected EOF`), `_open_connection` re-provisioned JetStream/KV on the still-open-but-disconnected connection with no timeout, blocking forever while holding `_connect_lock` — so every heartbeat, poller tick, and tool call across all running MCP servers hung and presence froze. Provisioning is now bounded by a timeout (`_CONNECT_PROVISION_TIMEOUT`); on timeout the connection is torn down and handles reset so the next call reconnects fresh. Added a `closed_cb` that drops a permanently-closed client, and NATS errors now log their `repr` (message-less errors previously logged as an empty string, hiding the cause). Regression tests assert a blocked provision times out, releases the lock, and recovers on the next call.
 - **REPL prompt no longer collides with command output (biff-1xt5).** The REPL printed output without flushing, then opened the prompt gate — letting the stdin thread's `input()` prompt (which flushes immediately) overtake the still-buffered output and land on the same line. Every gate release now routes through a `_release_prompt` helper that flushes stdout first, fixing the original command path plus the sibling talk-mode banners ("Connected to…", "Talk … ended.", "not online", handshake status) that shared the same defect. Regression tests assert the flush precedes the gate release.
 - **`lock-clean` now re-resolves `punt-lux` from PyPI (biff-4uxk).** The Makefile target ran a bare `uv lock`, which reuses cached resolution and does not re-fetch `punt-lux` once the local `uv.toml` override is hidden — so a release could relock against a stale `punt-lux`. Added `--upgrade-package punt-lux` to both `uv lock` calls in the target. Hit during the v1.6.2 release.
 - **`make check` no longer lints quarry transcript captures.** `.punt-labs/quarry/captures/` (machine-generated session transcripts) is now excluded from `markdownlint-cli2` and gitignored, so a local `make check` no longer fails on auto-captured scratch files. CI was unaffected — the directory does not exist on runners.
 
 ### Security
 
-- **Talk output sanitizes remote terminal-control sequences.** Talk message bodies and sender identifiers arrive from other users over the relay and were printed straight to the terminal. A malicious sender could embed ANSI/OSC escape sequences (cursor moves, prompt spoofing, line clears, OSC 52 clipboard writes). All talk render sites (`_drain_talk_messages`, `_drain_talk_notifications`, `_check_for_accept`) now strip non-printable characters from remote fields before display. Read/wall/status rendering paths are tracked for the same treatment in biff-lbj.
 - **Least-privilege `GITHUB_TOKEN` in CI workflows.** Added a top-level `permissions: contents: read` block to `docs.yml`, `test.yml`, `lint.yml`, and `hosted-nats.yml`. These workflows only check out the repo and run linters/tests, so the token no longer defaults to the repository's broad write scope. Clears four CodeQL `actions/missing-workflow-permissions` code-scanning alerts (medium severity).
 
 ## [1.10.2] - 2026-05-29

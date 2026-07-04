@@ -74,10 +74,11 @@ docs/*.synctex.gz
 # Scratch/temp directory (TMPDIR set via .envrc)
 .tmp/
 
-# Plugin runtime state (tts, vox, quarry)
+# Plugin runtime state (tts, vox, quarry, lux)
 .tts/
 .punt-labs/vox/
 .punt-labs/quarry/captures/
+.punt-labs/lux.md
 
 # Dev scratch files
 *.tmp
