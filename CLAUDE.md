@@ -386,7 +386,7 @@ When the model and the code disagree, reconcile — do not let them drift silent
 
 ### Agents and isolation
 
-`jms` authors and extends Z specs; `jra` handles B-Method/Event-B and liveness/refinement; the `zspec` MCP runs check/model-check. **Isolate parallel spec + code agents in git worktrees** (`isolation: "worktree"`) — they share `docs/` and the working tree, and a shared checkout will cross-attach commits.
+`jms` authors and extends Z specs; `jra` handles B-Method/Event-B and liveness/refinement; the `z-spec` plugin's MCP server (registered as `zspec`) runs check/model-check. **Isolate parallel spec + code agents in git worktrees** (`isolation: "worktree"`) — they share `docs/` and the working tree, and a shared checkout will cross-attach commits.
 
 ## Biff Architecture
 
