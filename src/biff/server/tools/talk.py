@@ -35,14 +35,13 @@ from biff.server.tools._descriptions import (
     refresh_read_messages,
     set_talk_partner,
 )
-from biff.server.tools._session import resolve_tty_name, update_current_session
+from biff.server.tools._session import resolve_talk_target, update_current_session
 from biff.server.tools._tasks import fire_and_forget
-from biff.tty import build_session_key, parse_address
+from biff.tty import parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from biff.models import UserSession
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
@@ -71,32 +70,6 @@ async def fetch_all_unread(
     tty_unread = await relay.fetch(session_key)
     user_unread = await relay.fetch_user_inbox(user)
     return sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
-
-
-def _resolve_talk_target(
-    user: str,
-    tty: str | None,
-    sessions: list[UserSession],
-    *,
-    sender_repo: str = "",
-) -> tuple[str, str, str | None]:
-    """Resolve a talk address to ``(relay_key, display, target_repo)``.
-
-    Searches the provided *sessions* list (already filtered to visible
-    repos) for the target.  Sets *target_repo* when the target is in a
-    different repo from *sender_repo*.
-    """
-    target_repo: str | None = None
-    if tty:
-        session = resolve_tty_name(sessions, user, tty, local_repo=sender_repo)
-        if session:
-            relay_key = build_session_key(session.user, session.tty)
-            if session.repo and sender_repo and session.repo != sender_repo:
-                target_repo = session.repo
-        else:
-            relay_key = f"{user}:{tty}"
-        return relay_key, f"{user}:{tty}", target_repo
-    return user, user, target_repo
 
 
 async def _do_talk_listen(
@@ -184,9 +157,16 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if not sessions:
             return f"{user} is not online."
 
-        relay_key, display_target, target_repo = _resolve_talk_target(
-            user, tty, all_sessions, sender_repo=state.config.repo_name
-        )
+        try:
+            relay_key, display_target, target_repo = resolve_talk_target(
+                all_sessions,
+                user,
+                tty,
+                sender_key=state.session_key,
+                sender_repo=state.config.repo_name,
+            )
+        except ValueError as exc:
+            return str(exc)
         set_talk_partner(display_target)
 
         if message:

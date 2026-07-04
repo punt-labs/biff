@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
 
 from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay
+from biff.server.tools._session import resolve_talk_target
 from biff.server.tools.talk import (
     _NO_MESSAGES,
     _reset_talk,
-    _resolve_talk_target,
     format_talk_messages,
 )
 
@@ -79,41 +83,110 @@ class TestTalkState:
 
 
 class TestResolveTalkTarget:
-    """_resolve_talk_target resolves friendly tty_name to session key."""
+    """resolve_talk_target maps a session address to a specific session key.
 
-    async def test_no_tty_returns_user(self) -> None:
-        """Without tty, relay_key and display are both the username."""
-        relay_key, display, target_repo = _resolve_talk_target("eric", None, [])
-        assert relay_key == "eric"
-        assert display == "eric"
-        assert target_repo is None
+    Talk is session-scoped (DES-043): the address MUST name a session.
+    """
 
-    async def test_literal_tty_resolves(self) -> None:
+    _SENDER = "kai:sender01"
+
+    def test_bare_user_errors(self) -> None:
+        """A bare @user has no unambiguous session — reject with a hint."""
+        sessions = [UserSession(user="eric", tty="def456")]
+        with pytest.raises(ValueError, match="specific session"):
+            resolve_talk_target(sessions, "eric", None, sender_key=self._SENDER)
+
+    def test_literal_tty_resolves(self) -> None:
         """When tty matches a literal session key, uses that key."""
         sessions = [UserSession(user="eric", tty="def456")]
-        relay_key, display, target_repo = _resolve_talk_target(
-            "eric", "def456", sessions
+        relay_key, display, target_repo = resolve_talk_target(
+            sessions, "eric", "def456", sender_key=self._SENDER
         )
         assert relay_key == "eric:def456"
         assert display == "eric:def456"
         assert target_repo is None
 
-    async def test_tty_name_resolves_to_hex(self) -> None:
+    def test_tty_name_resolves_to_hex(self) -> None:
         """Friendly tty_name resolves to the session's actual hex key."""
         sessions = [UserSession(user="eric", tty="def456", tty_name="laptop")]
-        relay_key, display, target_repo = _resolve_talk_target(
-            "eric", "laptop", sessions
+        relay_key, display, target_repo = resolve_talk_target(
+            sessions, "eric", "laptop", sender_key=self._SENDER
         )
         assert relay_key == "eric:def456"
         assert display == "eric:laptop"
         assert target_repo is None
 
-    async def test_unresolved_tty_falls_back(self) -> None:
+    def test_unresolved_tty_falls_back(self) -> None:
         """Unknown tty falls back to raw value (best-effort delivery)."""
-        relay_key, display, target_repo = _resolve_talk_target("eric", "unknown", [])
+        relay_key, display, target_repo = resolve_talk_target(
+            [], "eric", "unknown", sender_key=self._SENDER
+        )
         assert relay_key == "eric:unknown"
         assert display == "eric:unknown"
         assert target_repo is None
+
+    def test_reaches_only_named_session(self) -> None:
+        """Two sessions for one user — only the named tty is targeted."""
+        sessions = [
+            UserSession(user="eric", tty="aaa111", tty_name="laptop"),
+            UserSession(user="eric", tty="bbb222", tty_name="desktop"),
+        ]
+        relay_key, _, _ = resolve_talk_target(
+            sessions, "eric", "desktop", sender_key=self._SENDER
+        )
+        assert relay_key == "eric:bbb222"
+
+    def test_self_talk_rejected(self) -> None:
+        """Resolving to the sender's own session key is refused."""
+        sessions = [UserSession(user="kai", tty="sender01", tty_name="here")]
+        with pytest.raises(ValueError, match="your own session"):
+            resolve_talk_target(sessions, "kai", "here", sender_key=self._SENDER)
+
+    def test_cross_repo_sets_target_repo(self) -> None:
+        """A session in a different repo yields its repo as target_repo."""
+        sessions = [
+            UserSession(user="eric", tty="ccc333", tty_name="peer", repo="other")
+        ]
+        relay_key, _, target_repo = resolve_talk_target(
+            sessions, "eric", "peer", sender_key=self._SENDER, sender_repo="mine"
+        )
+        assert relay_key == "eric:ccc333"
+        assert target_repo == "other"
+
+
+class TestTalkNotificationToKey:
+    """deliver's talk notification carries to_key for session-scoped targets."""
+
+    def _relay_with_mock_nc(self) -> tuple[NatsRelay, AsyncMock]:
+        relay = NatsRelay(
+            url="nats://localhost", repo_name="myrepo", stream_prefix="biff-test"
+        )
+        nc = AsyncMock()
+        nc.is_closed = False
+        relay._nc = nc
+        return relay, nc
+
+    @staticmethod
+    def _payload(nc: AsyncMock) -> dict[str, str]:
+        nc.publish.assert_awaited_once()
+        payload: dict[str, str] = json.loads(nc.publish.call_args[0][1])
+        return payload
+
+    async def test_targeted_sets_to_key(self) -> None:
+        """A ``user:tty`` target puts to_key in the notification payload."""
+        relay, nc = self._relay_with_mock_nc()
+        msg = Message(
+            from_user="kai", from_tty="tty1", to_user="eric:def456", body="hi"
+        )
+        await relay._publish_talk_notification("eric:def456", msg, "kai:abc123")
+        assert self._payload(nc)["to_key"] == "eric:def456"
+
+    async def test_broadcast_omits_to_key(self) -> None:
+        """A bare ``user`` target (write/wall) has no to_key — broadcast."""
+        relay, nc = self._relay_with_mock_nc()
+        msg = Message(from_user="kai", from_tty="tty1", to_user="eric", body="hi")
+        await relay._publish_talk_notification("eric", msg, "kai:abc123")
+        assert "to_key" not in self._payload(nc)
 
 
 class TestValidatedSenderKey:
