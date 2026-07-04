@@ -253,32 +253,38 @@ class _ConnectionHealth:
             self._wedge_onset_at = None
         self._last_ok = now
 
-    def record_timeout(
-        self, operation: str, *, is_connected: bool, is_closed: bool
-    ) -> None:
+    def record_timeout(self, operation: str, *, is_connected: bool) -> None:
         """Record a runtime JS/KV timeout, logging the onset WARNING once.
 
         The first timeout after a healthy period is the wedge onset — it
-        carries the transport state and staleness so the log is
+        describes the connection state and staleness in prose so the log is
         self-explaining.  Repeats are counted silently to avoid loop-spam.
+
+        The wording tracks the actual state: a still-connected socket that
+        stops answering is half-open; a socket that is mid-reconnect is
+        described as such, so the line never overstates the diagnosis.
         """
         if self._timeout_count == 0:
             self._wedge_onset_at = time.monotonic()
-            stale = self._seconds_since_ok()
+            if is_connected:
+                state = (
+                    "connection appears half-open — socket still open but the "
+                    "server is not responding"
+                )
+            else:
+                state = "connection is not responding — socket is reconnecting"
             logger.warning(
-                "NATS request timed out (%s); connection may be half-open — "
-                "is_connected=%s, is_closed=%s, last OK %s ago",
+                "NATS request timed out (%s); %s, last successful request %s ago",
                 operation,
-                is_connected,
-                is_closed,
-                stale,
+                state,
+                self._seconds_since_ok(),
             )
         self._timeout_count += 1
 
     def _seconds_since_ok(self) -> str:
         """Return a human phrase for staleness since the last good request."""
         if self._last_ok is None:
-            return "unknown"
+            return "an unknown time"
         return f"{time.monotonic() - self._last_ok:.0f}s"
 
 
@@ -390,7 +396,6 @@ class NatsRelay:
             self._health.record_timeout(
                 operation,
                 is_connected=nc is not None and nc.is_connected,
-                is_closed=nc is None or nc.is_closed,
             )
             raise
         self._health.record_success()

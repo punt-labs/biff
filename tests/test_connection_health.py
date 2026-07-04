@@ -58,7 +58,7 @@ def _onset_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and "half-open" in r.getMessage()
+        if r.levelno == logging.WARNING and "NATS request timed out" in r.getMessage()
     ]
 
 
@@ -118,15 +118,31 @@ class TestWedgeOnsetRecovery:
         (onset,) = _onset_records(caplog)
         message = onset.getMessage()
         assert "kv.get" in message
-        assert "is_connected=True" in message
-        assert "is_closed=False" in message
-        assert "last OK" in message
+        assert "half-open" in message
+        assert "the server is not responding" in message
+        assert "last successful request" in message
+        # Pure prose — no field-name=value pairs (logging standard).
+        assert "is_connected=" not in message
+        assert "is_closed=" not in message
+
+    def test_reconnecting_socket_is_not_called_half_open(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
+        health.record_timeout("stream_info", is_connected=False)
+
+        (onset,) = _onset_records(caplog)
+        message = onset.getMessage()
+        assert "half-open" not in message
+        assert "reconnecting" in message
 
     def test_repeated_timeouts_are_counted_not_relogged(self) -> None:
         health = _ConnectionHealth("tls://fake:4222")
         health.record_connected(5.0, is_new_connection=True)
         for _ in range(5):
-            health.record_timeout("stream_info", is_connected=True, is_closed=False)
+            health.record_timeout("stream_info", is_connected=True)
         assert health.consecutive_timeouts == 5
         health.record_success()
         assert health.consecutive_timeouts == 0
