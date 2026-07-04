@@ -4386,14 +4386,22 @@ six commits referenced by biff-8fg3 for the implementation.
 
 ---
 
-## DES-041: Half-Open NATS Connection Liveness — Keepalive Tuning
+## DES-041: Half-Open NATS Connection Wedge — Liveness Proven from the Z Model, Fixed by Keepalive Tuning
 
 **Date:** 2026-07-04
 **Status:** SETTLED
 **Bead:** biff-tww
-**Related:** DES-019 (persistent connection), DES-029 (stale-handle
-invalidation), biff-wr3 (bounded connect-time provisioning),
-``docs/nats-relay.tex``
+**Spec:** ``docs/nats-relay.tex`` (fuzz-clean, ProB deadlock-free)
+**Related:** DES-016 (streams), DES-019 (persistent connection),
+DES-021 (session capture), DES-029 (stale-handle invalidation),
+biff-wr3 (bounded connect-time provisioning)
+
+The connection lifecycle was patched six times at the code level
+(DES-016, DES-019, DES-021, DES-029, biff-wr3, biff-tww) because the
+Z model was too coarse to contain the failing state. This entry
+records both halves of the durable fix: the extended model that now
+*forbids* the wedge, and the keepalive tuning that makes the code
+satisfy it.
 
 ### Problem
 
@@ -4431,7 +4439,66 @@ biff-wr3 bounded *connect-time* provisioning (``_open_connection``
 *runtime* request timeouts on an already-established connection. The
 240s detection latency is the gap.
 
-### Decision
+### What Changed in the Model
+
+The Z model in ``docs/nats-relay.tex`` had only three connection
+states — ``disconnected | connected | closed`` — with no way to
+represent "TCP up, ``is_closed`` false, requests timing out." Because
+the model lacked the state, no invariant could catch it. The model
+was extended:
+
+1. **Two new states.** ``ConnState`` now reads
+   ``disconnected | reconnecting | connected | halfOpen | closed``.
+   ``halfOpen`` is the wedge; ``reconnecting`` is nats-py's background
+   reconnect window (distinct from a deliberate ``disconnect()``).
+2. **Runtime operations the code had but the model omitted.**
+   ``Request`` (a JetStream/KV round-trip) yields ``reqOk`` (stay
+   ``connected``) or ``reqTimeout`` (→ ``halfOpen``, handles cleared);
+   ``WedgeDetected`` (keepalive ping-timeout → teardown →
+   ``reconnecting``); ``Reconnect`` (nats-py auto-reconnect completes).
+3. **Strengthened invariants.** *Handle validity* (generalises
+   DES-029): valid ``js``/``kv``/``names`` handles exist **iff**
+   ``connState = connected`` — stale handles cached during a wedge are,
+   in the model, no handles at all. *Wedge liveness* (biff-tww): no
+   reachable state is stuck in ``halfOpen``; from ``halfOpen`` the
+   recovery ``WedgeDetected → Reconnect`` is always enabled.
+
+jms also found the *old* spec's session/watcher operations were only
+animated, never truly model-checked — ProZ promoted the un-gated
+component operations to always-enabled ``connState`` self-loops that
+masked the ``halfOpen`` deadlock. Making ``InitConnection`` the sole
+initialisation and gating the session/watcher operations on
+``connState = connected`` (faithful — they all call
+``_ensure_connected()`` first) makes ``Connection`` the single
+well-posed model-checked machine.
+
+### biff-tww Is a ProB Counterexample Against the Old Transitions
+
+Removing the single ``WedgeDetected`` operation (modeling the pre-fix
+code, whose ~240s keepalive default never fired within the crash-loop
+window) makes ``halfOpen`` a reachable terminal state. probcli
+surfaces it as a deadlock:
+
+```text
+*** COUNTER EXAMPLE FOUND ***
+deadlock
+*** TRACE (length=4):
+ 1: SETUP_CONSTANTS(...)
+ 2: INITIALISATION(connState=disconnected,...)
+ 3: EnsureConnected(connState=connected,...)
+ 4: Request-->reqTimeout        <- state id 4 = halfOpen, deadlock
+```
+
+That deadlock **is** biff-tww: TCP up, ``is_closed`` false, every
+request timing out, no recovery. With ``WedgeDetected`` present,
+``z-spec test docs/nats-relay.tex`` reports ``ok:true``, 6 states,
+deadlock-free, all operations covered. The frozen pre-fix spec and its
+trace are retained as regression artifacts:
+``docs/nats-relay-passA-nowedge.tex``,
+``docs/nats-relay-passA-nowedge.report.json``, and
+``docs/nats-relay-wedge-counterexample.txt``.
+
+### The Fix — Keepalive Tuning
 
 Tune nats-py keepalive on ``nats.connect`` so a dead connection is
 detected in ~60s instead of ~240s, letting nats-py's own reconnect
@@ -4493,3 +4560,41 @@ mechanism; ``ping_interval * max_outstanding_pings`` is the detection
 budget and must stay well under the ~240s nats-py default that caused
 the wedge. The regression test in ``tests/test_nats_reconnect.py``
 (``TestHalfOpenWedgeRecovery``) locks this budget in.
+
+### Model ↔ Code ↔ History Traceability
+
+| Modeled transition / invariant | ``nats_relay.py`` location | DES / bead |
+|---|---|---|
+| ``InitConnection`` (disconnected, no handles) | ``__init__`` (handles ``None``) | DES-019 |
+| ``EnsureConnected`` (from disconnected/connected; **not** halfOpen) | ``_ensure_connected``, ``_open_connection``, ``_provision``; fast-path ``_cached_handles`` | DES-019, DES-029 |
+| ``Disconnect`` (connected → disconnected) | ``disconnect()`` | DES-019 |
+| ``Close`` (→ closed; not from halfOpen) | ``close()`` | — |
+| ``ResetInfrastructure`` (clear cached handles) | ``reset_infrastructure()`` | DES-016 |
+| ``Request`` reqOk / reqTimeout (connected → connected / halfOpen) | ``get_unread_summary`` (``js.stream_info``), ``heartbeat``/``get_session`` (``kv.get``) | biff-tww |
+| ``WedgeDetected`` (halfOpen → reconnecting) | keepalive ``ping_interval=20``/``max_outstanding_pings=3`` → ``_on_disconnect`` clears handles | biff-tww, biff-wr3, DES-029 |
+| ``Reconnect`` (reconnecting → connected) | ``max_reconnect_attempts=-1`` auto-reconnect → ``_on_reconnect`` | DES-019, biff-wr3 |
+| Handle-validity invariant (handles iff connected) | ``_cached_handles``, ``_on_disconnect``, ``_on_closed`` clear ``_js/_kv/_names_kv`` | DES-029 |
+| Session/watcher ops gated on ``connState = connected`` | every method calls ``_ensure_connected()`` first | DES-016, DES-019 |
+
+### Gate
+
+Connection-lifecycle PRs (anything touching ``_ensure_connected``,
+``_open_connection``, the NATS callbacks, keepalive/reconnect tuning,
+or handle caching) are gated on ``z-spec check docs/nats-relay.tex``
+(fuzz OK) **and** ``z-spec test docs/nats-relay.tex`` (deadlock-free,
+liveness holds). The model is the authority the code must satisfy.
+
+### Why the Model Makes This Fix Durable
+
+The handle-validity invariant is stronger than the DES-029 fast-path
+check alone: it requires that whenever the connection is **not**
+``connected`` — including ``reconnecting`` and ``halfOpen`` —
+``_js``, ``_kv``, and ``_names_kv`` are all cleared. The gap the model
+exposes: in ``halfOpen``, ``nc.is_closed`` is **false**, so
+``_cached_handles`` returns the stale handles and ``_ensure_connected``
+never reconnects. The code satisfies the modeled invariant *only*
+because keepalive ping-timeout fires ``_on_disconnect`` promptly to
+clear them. If that tuning regresses toward the nats-py defaults, the
+code violates the modeled invariant and biff-tww returns — which is
+exactly what the ``z-spec test`` gate and the keepalive-budget
+regression test now guard against, together.
