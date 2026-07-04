@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.10.4] - 2026-07-04
+
 ### Fixed
 
 - **`who` and `finger` hide dead sessions instead of showing them for up to 3 days (biff-mue).** A session's KV presence entry survives to the 3-day storage TTL, so a server that shut down, was killed, or wedged lingered in presence as `+` present (e.g. `idle 5h`) until the entry expired — because deregister depends on a signal-handler sentinel that a live peer must reap, which doesn't happen on SIGKILL or last-server shutdown. Presence liveness is now decoupled from storage retention: a shared `live_sessions` filter (new `UserSession.is_live` method + `PRESENCE_LIVENESS_SECONDS`, 2× the 60s heartbeat) is applied to **all** presence surfaces — the `who` and `finger` MCP tools *and* their CLI commands. The orphan-login detector reuses the same constant (previously an inline `120.0`).
