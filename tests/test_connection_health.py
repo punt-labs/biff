@@ -152,6 +152,58 @@ class TestWedgeOnsetRecovery:
         health.record_success()
         assert health.consecutive_timeouts == 0
 
+    @pytest.mark.anyio()
+    async def test_not_found_response_is_liveness_proof(self) -> None:
+        # A KeyNotFoundError is the server answering "no such key" — the
+        # connection is healthy.  It must record success and clear the wedge,
+        # not bypass tracking and let last_ok/counter go stale.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._nc = _connected_nc()
+        relay._health.record_connected(5.0, is_new_connection=True)
+
+        async def _timeout() -> str:
+            raise TimeoutError
+
+        for _ in range(2):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("kv.get", _timeout())
+        assert relay._health.consecutive_timeouts == 2
+
+        async def _not_found() -> str:
+            raise KeyNotFoundError
+
+        with pytest.raises(KeyNotFoundError):
+            await relay._tracked("kv.get", _not_found())
+
+        assert relay._health.consecutive_timeouts == 0  # wedge cleared
+        assert relay._health._wedge_onset_at is None  # no lingering onset
+
+    @pytest.mark.anyio()
+    async def test_heartbeat_put_timeout_records_wedge(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The heartbeat get succeeds but the put times out on a degraded
+        # connection: the put must be tracked so the wedge is visible, not
+        # silently swallowed while the get emits a false recovery.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._nc = _connected_nc()
+        relay._health.record_connected(5.0, is_new_connection=True)
+
+        entry = MagicMock()
+        entry.value = UserSession(user="kai", tty="abc123").model_dump_json().encode()
+        kv = MagicMock()
+        kv.get = AsyncMock(return_value=entry)
+        kv.put = AsyncMock(side_effect=TimeoutError)
+        js = MagicMock()
+        relay._ensure_connected = AsyncMock(return_value=(js, kv))  # type: ignore[method-assign]
+
+        caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
+        with pytest.raises(TimeoutError):
+            await relay.heartbeat("kai:abc123")
+
+        assert relay._health.consecutive_timeouts == 1
+        assert _onset_records(caplog), "heartbeat put must route through _tracked"
+
 
 class TestForceReconnectLatch:
     """The proactive force-reconnect fires once per wedge episode (biff-3hp).
@@ -204,57 +256,18 @@ class TestForceReconnectLatch:
         assert health.consecutive_timeouts == 0
         assert not health.should_force_reconnect(_WEDGE_FORCE_RECONNECT_THRESHOLD)
 
-    @pytest.mark.anyio()
-    async def test_not_found_response_is_liveness_proof(self) -> None:
-        # A KeyNotFoundError is the server answering "no such key" — the
-        # connection is healthy.  It must record success and clear the wedge,
-        # not bypass tracking and let last_ok/counter go stale.
-        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
-        relay._nc = _connected_nc()
-        relay._health.record_connected(5.0, is_new_connection=True)
-
-        async def _timeout() -> str:
-            raise TimeoutError
-
-        for _ in range(2):
-            with pytest.raises(TimeoutError):
-                await relay._tracked("kv.get", _timeout())
-        assert relay._health.consecutive_timeouts == 2
-
-        async def _not_found() -> str:
-            raise KeyNotFoundError
-
-        with pytest.raises(KeyNotFoundError):
-            await relay._tracked("kv.get", _not_found())
-
-        assert relay._health.consecutive_timeouts == 0  # wedge cleared
-        assert relay._health._wedge_onset_at is None  # no lingering onset
-
-    @pytest.mark.anyio()
-    async def test_heartbeat_put_timeout_records_wedge(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # The heartbeat get succeeds but the put times out on a degraded
-        # connection: the put must be tracked so the wedge is visible, not
-        # silently swallowed while the get emits a false recovery.
-        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
-        relay._nc = _connected_nc()
-        relay._health.record_connected(5.0, is_new_connection=True)
-
-        entry = MagicMock()
-        entry.value = UserSession(user="kai", tty="abc123").model_dump_json().encode()
-        kv = MagicMock()
-        kv.get = AsyncMock(return_value=entry)
-        kv.put = AsyncMock(side_effect=TimeoutError)
-        js = MagicMock()
-        relay._ensure_connected = AsyncMock(return_value=(js, kv))  # type: ignore[method-assign]
-
-        caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
-        with pytest.raises(TimeoutError):
-            await relay.heartbeat("kai:abc123")
-
-        assert relay._health.consecutive_timeouts == 1
-        assert _onset_records(caplog), "heartbeat put must route through _tracked"
+    def test_closed_clears_wedge_counter_and_latch(self) -> None:
+        # Defense-in-depth: record_closed is a lifecycle reset point too — the
+        # latch must not outlive a close, independent of whether _on_closed
+        # nulled the handles.  Symmetric with connect/disconnect/reconnect.
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            health.record_timeout("stream_info", is_connected=True)
+        assert health.should_force_reconnect(_WEDGE_FORCE_RECONNECT_THRESHOLD)
+        health.record_closed()
+        assert health.consecutive_timeouts == 0
+        assert not health.should_force_reconnect(_WEDGE_FORCE_RECONNECT_THRESHOLD)
 
 
 class TestLifecycleContext:

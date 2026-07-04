@@ -266,9 +266,19 @@ class _ConnectionHealth:
         self._force_reconnect_fired = False
 
     def record_closed(self) -> None:
-        """Log a WARNING when the connection closes for good."""
+        """Log a WARNING when the connection closes for good.
+
+        Clears the wedge counter and force-reconnect latch: a close is a
+        lifecycle reset point like connect/disconnect/reconnect, so the latch
+        must not outlive it regardless of handle state (defense-in-depth —
+        the next connect resets too, but the latch's safety should not depend
+        on a different callback nulling the handles).
+        """
         logger.warning("NATS connection closed at %s", self._host)
         self._connected_at = None
+        self._timeout_count = 0
+        self._wedge_onset_at = None
+        self._force_reconnect_fired = False
 
     def record_success(self) -> None:
         """Record a successful runtime JS/KV request.
@@ -473,12 +483,15 @@ class NatsRelay:
         ~60-80s keepalive floor, close the socket and clear the cached handles;
         the next :meth:`_ensure_connected` dials a fresh client.
 
-        Serialised on ``_connect_lock`` so it never races a concurrent rebuild.
-        ``_tracked`` requests never run under that lock, so acquiring it here
-        cannot deadlock.  The wedged client is captured before the lock and
-        re-checked under it: if a concurrent rebuild already replaced or closed
-        it (nats-py's own keepalive may have won the race), this is a no-op —
-        it never tears down a freshly built connection.
+        Serialised on ``_connect_lock`` against concurrent rebuilds
+        (``_ensure_connected`` / ``_open_connection`` hold it).  ``_tracked``
+        requests never run under that lock, so acquiring it here cannot
+        deadlock.  ``close()`` and ``disconnect()`` do *not* take the lock, so
+        races with deliberate teardown are handled by idempotence, not by the
+        lock: the wedged client is captured before the lock and re-checked
+        under it, and if it no longer matches ``self._nc`` (a rebuild, close,
+        or disconnect replaced or cleared it) this is a no-op — it never tears
+        down a freshly built connection.
         """
         wedged = self._nc
         if wedged is None or wedged.is_closed:
