@@ -101,6 +101,20 @@ _MAX_OUTSTANDING_PINGS = 3  # unanswered PINGs before the conn is declared dead
 _MAX_RECONNECT_ATTEMPTS = -1  # infinite
 _RECONNECT_TIME_WAIT = 2  # seconds between reconnect attempts (nats-py default)
 
+# Proactive wedge detection (biff-3hp).  A half-open connection (socket up,
+# server unresponsive) makes every JS/KV request raise ``nats: timeout``.
+# The keepalive path (DES-041) recovers in ~60-80s; the proactive detector
+# beats it by tearing the connection down after this many *consecutive*
+# runtime timeouts on a still-connected socket, so the next
+# ``_ensure_connected`` dials a fresh client.  Each timed-out request blocks
+# for the nats-py JetStream request timeout (5s), so the detection bound is
+# ``_WEDGE_FORCE_RECONNECT_THRESHOLD * 5s`` = ~15s — 4-5x faster than
+# keepalive.  Three consecutive failures (not one) are required: a single slow
+# request is one timeout that a following success clears, and three independent
+# failed round-trips (~15s of sustained unresponsiveness) cannot be a transient
+# blip.  This mirrors the keepalive's own "3 missed PINGs" wedge criterion.
+_WEDGE_FORCE_RECONNECT_THRESHOLD = 3
+
 # Default stream prefix (DES-016).  Tests override via stream_prefix="biff-dev".
 _DEFAULT_STREAM_PREFIX = "biff"
 
@@ -135,9 +149,10 @@ class _ConnectionHealth:
     (DES logging standard: log at the decision point, not every layer).
 
     Timings use ``time.monotonic()`` — immune to wall-clock adjustments.
-    The consecutive-timeout count is exposed via :attr:`consecutive_timeouts`
-    as the foundation a force-reconnect can act on (biff-3hp); this class
-    only observes, it never changes connection state.
+    The consecutive-timeout count is exposed via :attr:`consecutive_timeouts`,
+    and :meth:`should_force_reconnect` latches the once-per-episode decision to
+    force a proactive reconnect (biff-3hp).  This class only *decides*; it never
+    changes connection state — :class:`NatsRelay` owns the teardown.
     """
 
     def __init__(self, url: str) -> None:
@@ -147,6 +162,7 @@ class _ConnectionHealth:
         self._last_ok: float | None = None
         self._timeout_count = 0
         self._wedge_onset_at: float | None = None
+        self._force_reconnect_fired = False
 
     @staticmethod
     def _host_of(url: str) -> str:
@@ -188,6 +204,7 @@ class _ConnectionHealth:
         self._disconnected_at = None
         self._timeout_count = 0
         self._wedge_onset_at = None
+        self._force_reconnect_fired = False
         if is_new_connection:
             logger.info(
                 "Connected to NATS at %s (JS/KV provisioned in %.0fms)",
@@ -208,7 +225,14 @@ class _ConnectionHealth:
 
         Short lifetimes recurring in the log mean the connection keeps
         flapping; a long lifetime before a disconnect is a one-off outage.
+
+        Clears the wedge counter and force-reconnect latch: once nats-py's
+        keepalive has declared the socket down, it owns recovery, so the
+        proactive teardown (biff-3hp) must not also fire.
         """
+        self._timeout_count = 0
+        self._wedge_onset_at = None
+        self._force_reconnect_fired = False
         self._disconnected_at = time.monotonic()
         if self._connected_at is not None:
             uptime = self._disconnected_at - self._connected_at
@@ -239,6 +263,7 @@ class _ConnectionHealth:
         self._last_ok = now
         self._timeout_count = 0
         self._wedge_onset_at = None
+        self._force_reconnect_fired = False
 
     def record_closed(self) -> None:
         """Log a WARNING when the connection closes for good."""
@@ -263,7 +288,21 @@ class _ConnectionHealth:
             )
             self._timeout_count = 0
             self._wedge_onset_at = None
+        self._force_reconnect_fired = False
         self._last_ok = now
+
+    def should_force_reconnect(self, threshold: int) -> bool:
+        """Return ``True`` exactly once when timeouts reach *threshold*.
+
+        The latch fires the proactive teardown once per wedge episode, not on
+        every timeout past the threshold.  It is cleared whenever the counter
+        resets (success, connect, reconnect, disconnect), so a later episode
+        re-arms it.
+        """
+        if self._force_reconnect_fired or self._timeout_count < threshold:
+            return False
+        self._force_reconnect_fired = True
+        return True
 
     def record_timeout(self, operation: str, *, is_connected: bool) -> None:
         """Record a runtime JS/KV timeout, logging the onset WARNING once.
@@ -405,10 +444,15 @@ class NatsRelay:
             result = await awaitable
         except TimeoutError:
             nc = self._nc
-            self._health.record_timeout(
-                operation,
-                is_connected=nc is not None and nc.is_connected,
-            )
+            is_connected = nc is not None and nc.is_connected
+            self._health.record_timeout(operation, is_connected=is_connected)
+            # Proactive wedge recovery (biff-3hp): only on a still-connected
+            # socket — if nats-py's keepalive already declared the connection
+            # down (is_connected False), it owns the reconnect.
+            if is_connected and self._health.should_force_reconnect(
+                _WEDGE_FORCE_RECONNECT_THRESHOLD
+            ):
+                await self._force_reconnect()
             raise
         except (KeyNotFoundError, BucketNotFoundError, NotFoundError):
             # A "not found" is the server answering — proof of liveness.
@@ -419,6 +463,38 @@ class NatsRelay:
             raise
         self._health.record_success()
         return result
+
+    async def _force_reconnect(self) -> None:
+        """Tear down a half-open connection so the next call rebuilds it fresh.
+
+        Fired by :meth:`_tracked` after ``_WEDGE_FORCE_RECONNECT_THRESHOLD``
+        consecutive runtime timeouts on a still-connected socket — the
+        half-open signature (DES-041, biff-3hp).  Rather than wait out the
+        ~60-80s keepalive floor, close the socket and clear the cached handles;
+        the next :meth:`_ensure_connected` dials a fresh client.
+
+        Serialised on ``_connect_lock`` so it never races a concurrent rebuild.
+        ``_tracked`` requests never run under that lock, so acquiring it here
+        cannot deadlock.  The wedged client is captured before the lock and
+        re-checked under it: if a concurrent rebuild already replaced or closed
+        it (nats-py's own keepalive may have won the race), this is a no-op —
+        it never tears down a freshly built connection.
+        """
+        wedged = self._nc
+        if wedged is None or wedged.is_closed:
+            return
+        async with self._connect_lock:
+            if self._nc is not wedged or wedged.is_closed:
+                return
+            logger.info(
+                "NATS wedge confirmed after %d timed-out requests — forcing reconnect",
+                _WEDGE_FORCE_RECONNECT_THRESHOLD,
+            )
+            await safe_close(wedged)
+            self._nc = None
+            self._js = None
+            self._kv = None
+            self._names_kv = None
 
     async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
         """Create a new NATS connection and provision infrastructure.
