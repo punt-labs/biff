@@ -41,7 +41,7 @@ class TestTalkInitiation:
         # eric must be online (set a plan to register session)
         await eric.call("plan", message="available")
 
-        result = await kai.call("talk", to="@eric", message="hey, review my PR?")
+        result = await kai.call("talk", to="@eric:tty2", message="hey, review my PR?")
         assert "Talk session started" in result
         assert "eric" in result
 
@@ -51,7 +51,7 @@ class TestTalkInitiation:
         """Opening message in /talk is delivered to recipient's inbox."""
         await eric.call("plan", message="available")
 
-        await kai.call("talk", to="@eric", message="check PR #42")
+        await kai.call("talk", to="@eric:tty2", message="check PR #42")
         result = await eric.call("read_messages")
         assert "check PR #42" in result
 
@@ -62,6 +62,20 @@ class TestTalkInitiation:
         # eric has NOT registered a session
         result = await kai.call("talk", to="@nobody")
         assert "not online" in result
+
+    async def test_bare_user_needs_session(
+        self, kai: RecordingClient, eric: RecordingClient
+    ) -> None:
+        """A bare @user (no tty) is rejected — talk is session-scoped."""
+        await eric.call("plan", message="available")
+        result = await kai.call("talk", to="@eric")
+        assert "specific session" in result
+
+    async def test_self_talk_rejected(self, kai: RecordingClient) -> None:
+        """Talking to your own session is refused."""
+        await kai.call("plan", message="available")
+        result = await kai.call("talk", to="@kai:tty1")
+        assert "your own session" in result
 
 
 class TestTalkListen:
@@ -129,10 +143,10 @@ class TestTalkEnd:
     ) -> None:
         """talk_end closes an active session."""
         await eric.call("plan", message="available")
-        await kai.call("talk", to="@eric")
+        await kai.call("talk", to="@eric:tty2")
 
         result = await kai.call("talk_end")
-        assert "Talk session with @eric ended" in result
+        assert "Talk session with eric:tty2 ended" in result
 
     async def test_end_no_session(self, kai: RecordingClient) -> None:
         """talk_end with no active session returns error."""
@@ -158,7 +172,9 @@ class TestTalkConversation:
         await eric.call("plan", message="reviewing PRs")
 
         # kai initiates talk with opening message
-        result = await kai.call("talk", to="@eric", message="can you review PR #42?")
+        result = await kai.call(
+            "talk", to="@eric:tty2", message="can you review PR #42?"
+        )
         assert "Talk session started" in result
 
         # eric receives the opening message via talk_listen
@@ -312,16 +328,18 @@ class TestTalkSelfEcho:
 
                 await eric_r.call("plan", message="available")
 
-                # kai talks to eric — this triggers a notification
-                await kai_r.call("talk", to="@eric", message="hello")
+                # kai talks to eric's session — this triggers a notification
+                await kai_r.call("talk", to="@eric:eeee1111", message="hello")
                 await asyncio.sleep(0.3)
 
-                # Notification should carry from_key = kai's session key
+                # Notification carries from_key = kai's session key and
+                # to_key = eric's session key (session-scoped, DES-043).
                 assert len(received) >= 1
                 data = json.loads(received[0])
                 assert data["from"] == "kai"
                 assert data["body"] == "hello"
                 assert data["from_key"] == "kai:kkkk1111"
+                assert data["to_key"] == "eric:eeee1111"
         finally:
             await sub.unsubscribe()  # pyright: ignore[reportUnknownMemberType]
             await nc.close()
