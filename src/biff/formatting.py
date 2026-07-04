@@ -335,7 +335,13 @@ def format_last(
 
 
 def sanitize_wall_message(message: str) -> str:
-    """Strip control chars and collapse whitespace for wall messages."""
+    """Normalize a wall message for posting.
+
+    Strips all non-printable characters via :func:`terminal_safe` (control,
+    ESC/OSC introducers, and other C0/C1 chars) and collapses runs of
+    whitespace to single spaces.  This is input-side hygiene; render sites
+    sanitize again at the output boundary (biff-lbj).
+    """
     return " ".join(terminal_safe(message).split())
 
 

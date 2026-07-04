@@ -434,6 +434,8 @@ async def _manage_talk_subscription(
         subject = state.relay.talk_notify_subject(state.config.user)
 
         async def _on_talk_msg(msg: object) -> None:
+            from biff.formatting import terminal_safe  # noqa: PLC0415
+
             try:
                 data = json.loads(msg.data)  # type: ignore[attr-defined]
                 sender = data.get("from", "")
@@ -457,7 +459,10 @@ async def _manage_talk_subscription(
                     else _talk_partner
                 )
                 if sender and sender == partner_user and body:
-                    display_text = f"{sender}: {body}"
+                    # sender/body are raw NATS content; strip terminal escapes
+                    # before this reaches the tool description + status line
+                    # (biff-lbj).  Keep raw `sender` for routing/source_key.
+                    display_text = f"{terminal_safe(sender)}: {terminal_safe(body)}"
                     set_talk_message(display_text)
                     # Add to display queue — coalesce per sender so rapid
                     # messages replace the previous one instead of growing
