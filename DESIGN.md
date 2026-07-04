@@ -4501,7 +4501,7 @@ trace are retained as regression artifacts:
 ### The Fix — Keepalive Tuning
 
 Tune nats-py keepalive on ``nats.connect`` so a dead connection is
-detected in ~60s instead of ~240s, letting nats-py's own reconnect
+detected in ~60-80s instead of ~240s, letting nats-py's own reconnect
 fire promptly:
 
 | Parameter | Default | biff |
@@ -4511,7 +4511,8 @@ fire promptly:
 | ``max_reconnect_attempts`` | 60 | -1 (infinite) |
 | ``reconnect_time_wait`` | 2s | 2s (explicit) |
 
-- **Detection ≈ 60s** (``20 * 3``): fast enough to restore presence
+- **Detection ≈ 60-80s** (``20 * (3 + 1)`` — nats-py trips when the
+  outstanding-PING count *exceeds* the max): fast enough to restore presence
   within a poller tick or two, slow enough that a single slow PONG on a
   healthy connection does not flap the connection (three consecutive
   missed PINGs are required).
@@ -4524,10 +4525,19 @@ fire promptly:
   reconnects on the same client, ``_on_reconnect`` fires, and the next
   ``_ensure_connected`` rebuilds the handles that ``_on_disconnect``
   cleared. ``_on_closed`` still fires on explicit ``disconnect``/
-  ``close``.
+  ``close``. Two caveats (djb review): (a) if an outage outlasts a poll
+  tick, the biff-wr3 provision timeout in ``_open_connection`` can
+  ``safe_close`` the still-reconnecting client and revert to per-tick
+  ``nats.connect`` — liveness is unaffected (both paths retry and
+  rebuild on server return), so "persistent connection across any
+  outage" holds only until the first slow tick; (b) infinite reconnect
+  means many clients retry every ~2s through a long outage and
+  re-converge at recovery — nats-py's default TLS reconnect jitter
+  spreads the herd over ~2-3s, and a stranded MCP server is the worse
+  failure.
 
 The recovery chain after tuning: half-open wedge → PING loop detects
-dead socket in ~60s → ``disconnected_cb`` clears cached handles
+dead socket in ~60-80s → ``disconnected_cb`` clears cached handles
 (DES-029) → nats-py reconnects the same client → next relay call
 re-provisions JetStream/KV on the live connection. No bespoke wedge
 detector is needed; prompt keepalive makes the existing DES-029
@@ -4555,7 +4565,7 @@ with margin.
 ### Invariant
 
 A half-open connection must be detected and recovered within a bounded
-time (~60s), not looped on indefinitely. Keepalive parameters are the
+time (~60-80s), not looped on indefinitely. Keepalive parameters are the
 mechanism; ``ping_interval * max_outstanding_pings`` is the detection
 budget and must stay well under the ~240s nats-py default that caused
 the wedge. The regression test in ``tests/test_nats_reconnect.py``
