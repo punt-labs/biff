@@ -553,13 +553,18 @@ async def _safe_tick(
     A transient NATS error must not kill the poller — log and retry
     on the next interval.  ``CancelledError`` is re-raised so shutdown
     propagates correctly.
+
+    Logged at DEBUG, not WARNING: the poller ticks every ~2s, so a
+    NATS wedge would spam a warning per tick.  The relay's
+    ``_ConnectionHealth`` is the single source of onset/recovery
+    warnings — it logs the wedge once, not once per tick.
     """
     try:
         return await _active_tick(mcp, state, last_count, last_wall, last_talk)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001
-        logger.warning("Poller tick failed, will retry", exc_info=True)
+        logger.debug("Poller tick failed, will retry", exc_info=True)
         return last_count, last_wall, last_talk
 
 
