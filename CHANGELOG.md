@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`timestamps on|off` toggle in the REPL (biff-4uq).** A REPL-only display preference that prefixes incoming talk messages with a local `[HH:MM]` stamp. Off by default (matching prior timestamp-free talk output) and not persisted across sessions — it is a display preference, not config. Added to the REPL banner. Scoped to talk display for now; applying the toggle to `read` output is deferred pending a design decision (read timestamps live in the shared formatting layer used by the MCP tool and CLI).
+
 ### Fixed
 
 - **REPL prompt no longer collides with command output (biff-1xt5).** The REPL printed output without flushing, then opened the prompt gate — letting the stdin thread's `input()` prompt (which flushes immediately) overtake the still-buffered output and land on the same line. Every gate release now routes through a `_release_prompt` helper that flushes stdout first, fixing the original command path plus the sibling talk-mode banners ("Connected to…", "Talk … ended.", "not online", handshake status) that shared the same defect. Regression tests assert the flush precedes the gate release.

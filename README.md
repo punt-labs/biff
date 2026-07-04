@@ -191,24 +191,28 @@ biff                                       # Launch interactive REPL
 
 ```text
 biff 0.15.1 — kai:tty1
-Commands: finger, last, mesg, plan, read, status, tty, wall, who, write, talk, exit
+Commands: finger, last, mesg, plan, read, status, tty, wall, who, write, talk, timestamps, exit
 
 kai:tty1 ▶ who
 ▶  NAME    TTY   IDLE  S  HOST       DIR              PLAN
    @kai    tty1  0:00  +  m2-mb-air  /code/myapp      debugging auth
    @eric   tty2  1:22  +  m2-mb-air  /code/myapp      reviewing PR #47
+kai:tty1 ▶ timestamps on
+Timestamps on.
 kai:tty1 ▶ talk @eric
 Waiting for @eric:tty2 to respond... (type 'end' to cancel)
 Connected to @eric:tty2. Type 'end' to return to REPL.
 
 kai:tty1 ▶ can you look at the auth fix?
-eric:tty2 ▶ on it now
+eric:tty2 ▶ [14:32] on it now
 kai:tty1 ▶ end
 Talk with @eric:tty2 ended.
 kai:tty1 ▶ exit
 ```
 
 The REPL provides a proper session lifecycle (login/logout events, heartbeat, KV presence), readline (history, tab completion), and real-time notifications (wall broadcasts and message alerts appear while you're idle at the prompt). `biff` with no args is the primary mode; `biff who` is a shortcut for a one-command session.
+
+`timestamps on` / `timestamps off` toggles a local `[HH:MM]` stamp on incoming talk messages. It is a REPL-only display preference (off by default, not persisted across sessions).
 
 ### Product commands
 

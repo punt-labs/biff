@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +27,7 @@ from biff.__main__ import (
 )
 from biff.cli_session import CliContext
 from biff.models import BiffConfig
+from biff.repl_display import ReplDisplay
 
 
 def _make_queue(
@@ -107,6 +109,40 @@ class TestDrainTalkMessages:
         assert len(lines) == 1
         assert "ended the conversation" in lines[0]
         assert "eric:tty2" in lines[0]
+
+    def _message_queue(self) -> asyncio.Queue[dict[str, str]]:
+        return _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "hello",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+
+    def test_no_timestamp_without_display(self) -> None:
+        """Default (no display) keeps the historical timestamp-free line."""
+        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY)
+        assert len(lines) == 1
+        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
+        assert "eric:tty2 ▶ hello" in lines[0]
+
+    def test_no_timestamp_when_display_off(self) -> None:
+        """A display with timestamps off renders no stamp."""
+        display = ReplDisplay()
+        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY, display)
+        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
+
+    def test_timestamp_prefix_when_display_on(self) -> None:
+        """A display with timestamps on prefixes the message with [HH:MM]."""
+        display = ReplDisplay()
+        display.set_timestamps(on=True)
+        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY, display)
+        assert len(lines) == 1
+        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hello", lines[0]) is not None
 
     def test_message_conversation_style(self) -> None:
         q = _make_queue(
@@ -407,6 +443,25 @@ class TestDrainTalkNotifications:
         assert len(lines) == 1
         assert "eric:tty2" in lines[0]
         assert "hi there" in lines[0]
+
+    def test_banner_stamped_when_display_on(self) -> None:
+        """The idle-prompt message banner honors the timestamps toggle too."""
+        display = ReplDisplay()
+        display.set_timestamps(on=True)
+        q = _make_queue(
+            [
+                {
+                    "type": "message",
+                    "from": "eric",
+                    "from_tty": "tty2",
+                    "body": "hi there",
+                    "from_key": OTHER_KEY,
+                },
+            ]
+        )
+        lines = _drain_talk_notifications(q, MY_KEY, None, display)
+        assert len(lines) == 1
+        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hi there", lines[0]) is not None
 
 
 # -----------------------------------------------------------------------

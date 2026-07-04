@@ -26,6 +26,7 @@ import threading as threading_mod
 import warnings
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -50,6 +51,7 @@ from biff.config import (
     write_yaml_local_enabled,
 )
 from biff.hook import hook_app
+from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.tty import is_notification_for_session
@@ -174,16 +176,35 @@ def _release_prompt(prompt_gate: threading_mod.Event) -> None:
     prompt_gate.set()
 
 
+def _handle_timestamps(args: list[str], repl_display: ReplDisplay) -> None:
+    """Handle the REPL-only ``timestamps on|off`` toggle (biff-4uq).
+
+    Prints a usage line on bad input, otherwise updates *repl_display* and
+    confirms the new state.
+    """
+    if len(args) != 1 or args[0].lower() not in ("on", "off"):
+        print("Usage: timestamps on|off")
+        return
+    on = args[0].lower() == "on"
+    repl_display.set_timestamps(on=on)
+    print(f"Timestamps {'on' if on else 'off'}.")
+
+
 def _drain_talk_notifications(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
     pending_invites: set[str] | None = None,
+    # None keeps the historical timestamp-free banner for callers/tests that
+    # predate the display toggle — see ReplDisplay (biff-4uq).
+    display: ReplDisplay | None = None,
 ) -> list[str]:
     """Drain talk notification queue and return banner lines.
 
     When *pending_invites* is provided, invite senders are recorded
     so ``_has_pending_invite`` can check later (after the notification
-    has been displayed and drained from the queue).
+    has been displayed and drained from the queue).  When *display* has
+    timestamps enabled, incoming message banners carry a local ``[HH:MM]``
+    stamp, matching modal talk mode.
     """
     lines: list[str] = []
     if talk_notifications is None:
@@ -211,7 +232,8 @@ def _drain_talk_notifications(
         elif body:
             sender_tty = data.get("from_tty", "")
             label = f"{sender}:{sender_tty}" if sender_tty else sender
-            lines.append(f"  \033[1;33m{label} ▶ {body}\033[0m")
+            stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
+            lines.append(f"  \033[1;33m{stamp}{label} ▶ {body}\033[0m")
     return lines
 
 
@@ -223,6 +245,7 @@ async def _poll_notify(
     pending_invites: set[str] | None = None,
     *,
     inline: bool = False,
+    display: ReplDisplay | None = None,
 ) -> None:
     """Check for notification changes and print if any."""
     from biff.repl_notify import NotifyState
@@ -238,7 +261,9 @@ async def _poll_notify(
         logging.getLogger(__name__).debug("Notify check failed", exc_info=True)
 
     notes.extend(
-        _drain_talk_notifications(talk_notifications, ctx.session_key, pending_invites)
+        _drain_talk_notifications(
+            talk_notifications, ctx.session_key, pending_invites, display
+        )
     )
 
     if notes and inline:
@@ -268,11 +293,16 @@ async def _sync_notify(ctx: CliContext, notify: object) -> None:
 def _drain_talk_messages(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
+    # None keeps the historical timestamp-free rendering for callers (and
+    # tests) that predate the display toggle — see ReplDisplay (biff-4uq).
+    display: ReplDisplay | None = None,
 ) -> tuple[list[str], bool]:
     """Drain talk notifications and format as conversation lines.
 
     Used in talk mode — shows ``user:tty ▶ message`` style, no emoji.
     Skips invites and accepts (protocol messages, not conversation).
+    When *display* has timestamps enabled, each message line is prefixed
+    with a local ``[HH:MM]`` stamp (the local time it is rendered).
 
     Returns ``(lines, ended)`` where *ended* is ``True`` if a
     ``type: "end"`` notification was received (remote hangup).
@@ -305,7 +335,8 @@ def _drain_talk_messages(
         body = data.get("body", "")
         if body:
             label = f"{sender}:{sender_tty}" if sender_tty else sender
-            lines.append(f"\033[36m{label} ▶ {body}\033[0m")
+            stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
+            lines.append(f"\033[36m{stamp}{label} ▶ {body}\033[0m")
     return lines, ended
 
 
@@ -389,6 +420,7 @@ async def _repl_talk(
     current_prompt: list[str],
     repl_prompt: str,
     talk_notifications: asyncio.Queue[dict[str, str]],
+    repl_display: ReplDisplay,
     *,
     target_repo: str | None = None,
 ) -> None:
@@ -412,7 +444,9 @@ async def _repl_talk(
             result = await _wait_for_input_or_notify(aqueue, notify_event)
             if result is _NO_INPUT:
                 notify_event.clear()
-                notes, ended = _drain_talk_messages(talk_notifications, ctx.session_key)
+                notes, ended = _drain_talk_messages(
+                    talk_notifications, ctx.session_key, repl_display
+                )
                 if ended:
                     _print_hangup(notes)
                     break
@@ -459,10 +493,15 @@ async def _repl_loop(
     prompt_gate: threading_mod.Event,
     current_prompt: list[str],
     talk_notifications: asyncio.Queue[dict[str, str]],
+    *,
+    # None → a fresh session-default (timestamps off).  Keeps the many
+    # existing positional callers/tests working without threading state.
+    display: ReplDisplay | None = None,
 ) -> None:
     """Core REPL input loop — dispatches commands and handles notifications."""
     from biff.dispatch import dispatch
 
+    repl_display = display if display is not None else ReplDisplay()
     pending_invites: set[str] = set()
 
     while True:
@@ -477,6 +516,7 @@ async def _repl_loop(
                 talk_notifications,
                 pending_invites,
                 inline=True,
+                display=repl_display,
             )
             continue
 
@@ -501,7 +541,14 @@ async def _repl_loop(
                 prompt,
                 talk_notifications,
                 pending_invites,
+                repl_display,
             )
+            _release_prompt(prompt_gate)
+            continue
+
+        # REPL-only display toggle (not an MCP tool) — biff-4uq.
+        if tokens and tokens[0].lower() == "timestamps":
+            _handle_timestamps(tokens[1:], repl_display)
             _release_prompt(prompt_gate)
             continue
 
@@ -657,6 +704,7 @@ async def _handle_repl_talk(
     repl_prompt: str,
     talk_notifications: asyncio.Queue[dict[str, str]],
     pending_invites: set[str],
+    repl_display: ReplDisplay,
 ) -> None:
     """Parse talk args and enter modal talk mode."""
     from biff.nats_relay import NatsRelay
@@ -726,6 +774,7 @@ async def _handle_repl_talk(
         current_prompt,
         repl_prompt,
         talk_notifications,
+        repl_display,
         target_repo=target_repo,
     )
 
@@ -793,7 +842,7 @@ async def _repl() -> None:
     try:
         async with cli_session(interactive=True, user_override=_user_override) as ctx:
             print(f"biff {pkg_version('punt-biff')} — {ctx.user}:{ctx.tty_name}")
-            print(f"Commands: {', '.join(cmds)}, talk, exit")
+            print(f"Commands: {', '.join(cmds)}, talk, timestamps, exit")
             print()
 
             notify = NotifyState()
@@ -801,6 +850,8 @@ async def _repl() -> None:
             # Mutable prompt container — talk mode swaps the prompt
             # string while reusing the same stdin thread.
             current_prompt = [prompt]
+            # Session-scoped display prefs (timestamps toggle); not persisted.
+            display = ReplDisplay()
 
             # Seed initial state without emitting notifications.
             await _sync_notify(ctx, notify)
@@ -851,6 +902,7 @@ async def _repl() -> None:
                     prompt_gate,
                     current_prompt,
                     talk_notifications,
+                    display=display,
                 )
             finally:
                 stop_flag.set()
