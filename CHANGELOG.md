@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.10.3] - 2026-07-03
+
 ### Fixed
 
 - **NATS disconnect no longer wedges every MCP server (biff-wr3).** When the relay connection dropped (`nats: unexpected EOF`), `_open_connection` re-provisioned JetStream/KV on the still-open-but-disconnected connection with no timeout, blocking forever while holding `_connect_lock` — so every heartbeat, poller tick, and tool call across all running MCP servers hung and presence froze. Provisioning is now bounded by a timeout (`_CONNECT_PROVISION_TIMEOUT`); on timeout the connection is torn down and handles reset so the next call reconnects fresh. Added a `closed_cb` that drops a permanently-closed client, and NATS errors now log their `repr` (message-less errors previously logged as an empty string, hiding the cause). Regression tests assert a blocked provision times out, releases the lock, and recovers on the next call.
