@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from nats.js.errors import KeyNotFoundError
 
-from biff.models import Message
+from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay, _ConnectionHealth
 
 if TYPE_CHECKING:
@@ -146,6 +147,58 @@ class TestWedgeOnsetRecovery:
         assert health.consecutive_timeouts == 5
         health.record_success()
         assert health.consecutive_timeouts == 0
+
+    @pytest.mark.anyio()
+    async def test_not_found_response_is_liveness_proof(self) -> None:
+        # A KeyNotFoundError is the server answering "no such key" — the
+        # connection is healthy.  It must record success and clear the wedge,
+        # not bypass tracking and let last_ok/counter go stale.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._nc = _connected_nc()
+        relay._health.record_connected(5.0, is_new_connection=True)
+
+        async def _timeout() -> str:
+            raise TimeoutError
+
+        for _ in range(2):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("kv.get", _timeout())
+        assert relay._health.consecutive_timeouts == 2
+
+        async def _not_found() -> str:
+            raise KeyNotFoundError
+
+        with pytest.raises(KeyNotFoundError):
+            await relay._tracked("kv.get", _not_found())
+
+        assert relay._health.consecutive_timeouts == 0  # wedge cleared
+        assert relay._health._wedge_onset_at is None  # no lingering onset
+
+    @pytest.mark.anyio()
+    async def test_heartbeat_put_timeout_records_wedge(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The heartbeat get succeeds but the put times out on a degraded
+        # connection: the put must be tracked so the wedge is visible, not
+        # silently swallowed while the get emits a false recovery.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._nc = _connected_nc()
+        relay._health.record_connected(5.0, is_new_connection=True)
+
+        entry = MagicMock()
+        entry.value = UserSession(user="kai", tty="abc123").model_dump_json().encode()
+        kv = MagicMock()
+        kv.get = AsyncMock(return_value=entry)
+        kv.put = AsyncMock(side_effect=TimeoutError)
+        js = MagicMock()
+        relay._ensure_connected = AsyncMock(return_value=(js, kv))  # type: ignore[method-assign]
+
+        caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
+        with pytest.raises(TimeoutError):
+            await relay.heartbeat("kai:abc123")
+
+        assert relay._health.consecutive_timeouts == 1
+        assert _onset_records(caplog), "heartbeat put must route through _tracked"
 
 
 class TestLifecycleContext:
@@ -283,11 +336,24 @@ class TestNoContentLeak:
         assert "h1.example:4222" in message
         assert "h2.example" not in message  # first server only
 
-    def test_ipv6_url_brackets_host(self) -> None:
-        assert (
-            _ConnectionHealth._host_of("nats://[2001:db8::1]:4222")
-            == "[2001:db8::1]:4222"
-        )
-
-    def test_unparseable_url_yields_placeholder_not_raw(self) -> None:
-        assert _ConnectionHealth._host_of("://:::") == "<unknown host>"
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            # scheme-less creds: strip userinfo, keep host:port
+            ("user:sup3rsecret@host.example:4222", "host.example:4222"),
+            # comma-separated cluster: first server only
+            ("tls://h1.example:4222,tls://h2.example:5222", "h1.example:4222"),
+            # IPv6 with port: brackets + port
+            ("nats://[2001:db8::1]:4222", "[2001:db8::1]:4222"),
+            # IPv6 without port: brackets regardless of port (Copilot edge)
+            ("nats://[2001:db8::1]", "[2001:db8::1]"),
+            # explicit :0 port must survive (truthiness would drop it)
+            ("nats://host:0", "host:0"),
+            # ordinary host, no port
+            ("tls://connect.ngs.global", "connect.ngs.global"),
+            # unparseable: placeholder, never the raw (credentialed) url
+            ("://:::", "<unknown host>"),
+        ],
+    )
+    def test_host_of_covers_all_forms(self, url: str, expected: str) -> None:
+        assert _ConnectionHealth._host_of(url) == expected

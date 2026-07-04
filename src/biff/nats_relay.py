@@ -166,9 +166,9 @@ class _ConnectionHealth:
             return "<unknown host>"
         if host is None:
             return "<unknown host>"
-        if port and ":" in host:  # bracket IPv6
-            return f"[{host}]:{port}"
-        return f"{host}:{port}" if port else host
+        if ":" in host:  # IPv6 — bracket regardless of port
+            host = f"[{host}]"
+        return f"{host}:{port}" if port is not None else host
 
     @property
     def consecutive_timeouts(self) -> int:
@@ -409,6 +409,13 @@ class NatsRelay:
                 operation,
                 is_connected=nc is not None and nc.is_connected,
             )
+            raise
+        except (KeyNotFoundError, BucketNotFoundError, NotFoundError):
+            # A "not found" is the server answering — proof of liveness.
+            # Record success so last_ok/wedge counters stay accurate, then
+            # re-raise so callers see identical behavior.  Do NOT treat other
+            # errors (NoRespondersError, connection faults) as success.
+            self._health.record_success()
             raise
         self._health.record_success()
         return result
@@ -1127,7 +1134,9 @@ class NatsRelay:
             logger.warning("Corrupt session for %s, skip heartbeat", session_key)
             return
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
-        await kv.put(kv_key, updated.model_dump_json().encode())
+        await self._tracked(
+            "kv.put", kv.put(kv_key, updated.model_dump_json().encode())
+        )
         # Refresh TTY name reservation to prevent TTL expiry (DES-035).
         if existing.tty_name:
             try:
