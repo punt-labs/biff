@@ -75,6 +75,9 @@ _FETCH_BATCH = 100
 _FETCH_TIMEOUT = 1.0
 _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
+_CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
+# disconnected connection can't hold _connect_lock forever and wedge every
+# relay caller (biff-wr3)
 
 # Default stream prefix (DES-016).  Tests override via stream_prefix="biff-dev".
 _DEFAULT_STREAM_PREFIX = "biff"
@@ -210,6 +213,16 @@ class NatsRelay:
             async def _on_reconnect() -> None:
                 logger.info("Reconnected to NATS at %s", self._url)
 
+            async def _on_closed() -> None:
+                # nats-py gave up reconnecting (or the connection closed).
+                # Drop the client so the next _ensure_connected builds a
+                # fresh one instead of reusing a dead connection (biff-wr3).
+                logger.warning("NATS connection closed at %s", self._url)
+                self._nc = None
+                self._js = None
+                self._kv = None
+                self._names_kv = None
+
             async def _on_error(exc: Exception) -> None:
                 # Python 3.14 raises APPLICATION_DATA_AFTER_CLOSE_NOTIFY
                 # during TLS teardown.  Harmless — suppress.
@@ -217,7 +230,9 @@ class NatsRelay:
                     exc, ssl.SSLError
                 ) and "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(exc)
                 if not ssl_teardown:
-                    logger.error("NATS error: %s", exc)
+                    # Log repr: nats-py raises message-less errors during
+                    # outages that logged as "" and hid the cause (biff-wr3).
+                    logger.error("NATS error: %r", exc)
 
             nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
                 self._url,
@@ -225,70 +240,27 @@ class NatsRelay:
                 disconnected_cb=_on_disconnect,
                 reconnected_cb=_on_reconnect,
                 error_cb=_on_error,
+                closed_cb=_on_closed,
                 **self._auth_kwargs(),
             )
 
         try:
-            js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
-
-            # KV bucket for sessions — shared across all repos (DES-016).
-            # TTL auto-purges truly stale entries.  Never delete-recreate
-            # shared infrastructure; use the existing bucket on config
-            # mismatch.
-            kv_config = KeyValueConfig(
-                bucket=self._kv_bucket,
-                ttl=_KV_TTL,
-                max_bytes=_KV_MAX_BYTES,
+            # Bound provisioning: a disconnected/reconnecting connection
+            # (is_closed is False, is_connected is False) lets JetStream/KV
+            # calls block forever while we hold _connect_lock, wedging every
+            # relay caller (biff-wr3).  Time it out so the lock is always
+            # released and callers get an error instead of hanging.
+            js, kv, names_kv = await asyncio.wait_for(
+                self._provision(nc), timeout=_CONNECT_PROVISION_TIMEOUT
             )
-            try:
-                kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
-                    config=kv_config,
-                )
-            except BadRequestError:
-                logger.info(
-                    "Shared KV bucket %s config differs, using as-is",
-                    self._kv_bucket,
-                )
-                kv = await js.key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
-
-            # Inbox stream — shared WORK_QUEUE with wildcard subjects
-            # (DES-016).  Never delete-recreate shared infrastructure.
-            stream_config = StreamConfig(
-                name=self._stream_name,
-                subjects=[f"{self._stream_prefix}.*.inbox.>"],
-                retention=RetentionPolicy.WORK_QUEUE,
-                max_bytes=_STREAM_MAX_BYTES,
-            )
-            try:
-                await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
-            except BadRequestError:
-                logger.info(
-                    "Shared stream %s config differs, using as-is",
-                    self._stream_name,
-                )
-
-            # KV bucket for TTY name reservations — shared across all repos (DES-035).
-            # Separate from sessions: no repo prefix in keys, 1 MiB max.
-            names_config = KeyValueConfig(
-                bucket=self._names_bucket,
-                ttl=_KV_TTL,
-                max_bytes=1 * 1024 * 1024,  # 1 MiB
-            )
-            try:
-                names_kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
-                    config=names_config,
-                )
-            except BadRequestError:
-                logger.info(
-                    "Shared names KV bucket %s config differs, using as-is",
-                    self._names_bucket,
-                )
-                names_kv = await js.key_value(self._names_bucket)  # pyright: ignore[reportUnknownMemberType]
-
-            await self._provision_wtmp(js)
-            await self._cleanup_legacy_streams(js)
         except Exception:
+            # Tear the connection down so the next call reconnects fresh
+            # instead of reusing a wedged/half-open one.
             await safe_close(nc)
+            self._nc = None
+            self._js = None
+            self._kv = None
+            self._names_kv = None
             raise
 
         self._nc = nc
@@ -296,6 +268,75 @@ class NatsRelay:
         self._kv = kv
         self._names_kv = names_kv
         return js, kv
+
+    async def _provision(
+        self, nc: NatsClient
+    ) -> tuple[JetStreamContext, KeyValue, KeyValue]:
+        """Provision JetStream, the KV buckets, and the inbox stream on *nc*.
+
+        Run under a timeout by :meth:`_open_connection` so a disconnected
+        connection cannot block relay callers indefinitely (biff-wr3).
+        Returns ``(js, sessions_kv, names_kv)``.
+        """
+        js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
+
+        # KV bucket for sessions — shared across all repos (DES-016).
+        # TTL auto-purges truly stale entries.  Never delete-recreate
+        # shared infrastructure; use the existing bucket on config
+        # mismatch.
+        kv_config = KeyValueConfig(
+            bucket=self._kv_bucket,
+            ttl=_KV_TTL,
+            max_bytes=_KV_MAX_BYTES,
+        )
+        try:
+            kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
+                config=kv_config,
+            )
+        except BadRequestError:
+            logger.info(
+                "Shared KV bucket %s config differs, using as-is",
+                self._kv_bucket,
+            )
+            kv = await js.key_value(self._kv_bucket)  # pyright: ignore[reportUnknownMemberType]
+
+        # Inbox stream — shared WORK_QUEUE with wildcard subjects
+        # (DES-016).  Never delete-recreate shared infrastructure.
+        stream_config = StreamConfig(
+            name=self._stream_name,
+            subjects=[f"{self._stream_prefix}.*.inbox.>"],
+            retention=RetentionPolicy.WORK_QUEUE,
+            max_bytes=_STREAM_MAX_BYTES,
+        )
+        try:
+            await js.add_stream(config=stream_config)  # pyright: ignore[reportUnknownMemberType]
+        except BadRequestError:
+            logger.info(
+                "Shared stream %s config differs, using as-is",
+                self._stream_name,
+            )
+
+        # KV bucket for TTY name reservations — shared across all repos (DES-035).
+        # Separate from sessions: no repo prefix in keys, 1 MiB max.
+        names_config = KeyValueConfig(
+            bucket=self._names_bucket,
+            ttl=_KV_TTL,
+            max_bytes=1 * 1024 * 1024,  # 1 MiB
+        )
+        try:
+            names_kv = await js.create_key_value(  # pyright: ignore[reportUnknownMemberType]
+                config=names_config,
+            )
+        except BadRequestError:
+            logger.info(
+                "Shared names KV bucket %s config differs, using as-is",
+                self._names_bucket,
+            )
+            names_kv = await js.key_value(self._names_bucket)  # pyright: ignore[reportUnknownMemberType]
+
+        await self._provision_wtmp(js)
+        await self._cleanup_legacy_streams(js)
+        return js, kv, names_kv
 
     async def _provision_wtmp(self, js: JetStreamContext) -> None:
         """Provision the shared wtmp stream, degrading gracefully on failure.
