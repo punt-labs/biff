@@ -4383,3 +4383,113 @@ correct and adds at most 60s of latency to companion registration.
 See ``docs/spec-agent-first-identity.md`` for the formal spec,
 ``docs/agent-first-identity.md`` for the change plan, and the
 six commits referenced by biff-8fg3 for the implementation.
+
+---
+
+## DES-041: Half-Open NATS Connection Liveness — Keepalive Tuning
+
+**Date:** 2026-07-04
+**Status:** SETTLED
+**Bead:** biff-tww
+**Related:** DES-019 (persistent connection), DES-029 (stale-handle
+invalidation), biff-wr3 (bounded connect-time provisioning),
+``docs/nats-relay.tex``
+
+### Problem
+
+A running MCP server's NATS connection wedges at runtime: the TCP
+socket stays up but the server stops responding (a *half-open*
+connection). Every JetStream and KV request then raises
+``nats.errors.TimeoutError: nats: timeout``, and the two background
+loops that drive presence — the description poller (``_active_tick`` →
+``get_unread_summary`` → ``stream_info``) and the heartbeat
+(``_heartbeat_loop`` → ``heartbeat`` → ``kv.get``) — retry the *same*
+wedged connection forever, logging "Poller tick failed, will retry"
+every tick. Talk, presence, and wall inbound are dead for the affected
+server for the entire window.
+
+Observed in production (1.10.4, 2026-07-04): both loops crash-looping
+on ``nats: timeout`` with no recovery.
+
+### Root Cause
+
+nats-py 2.13.1 defaults ``ping_interval=120s`` and
+``max_outstanding_pings=2``. A half-open connection is only declared
+dead after roughly ``ping_interval * max_outstanding_pings`` ≈ **240s**,
+because that is how long it takes the client's PING loop to accumulate
+enough unanswered PONGs to trigger ``_process_op_err``. Until then,
+``nc.is_closed`` stays ``False`` and ``nc.is_connected`` stays ``True``,
+so the DES-029 machinery never fires:
+
+- ``_cached_handles()`` sees a live-looking connection and returns the
+  stale JetStream/KV handles on the fast path.
+- ``_on_disconnect`` (which invalidates those handles, DES-029) only
+  runs once nats-py declares the connection down — i.e. after ~240s.
+
+biff-wr3 bounded *connect-time* provisioning (``_open_connection``
+``asyncio.wait_for``) and added ``closed_cb``, but it does not cover
+*runtime* request timeouts on an already-established connection. The
+240s detection latency is the gap.
+
+### Decision
+
+Tune nats-py keepalive on ``nats.connect`` so a dead connection is
+detected in ~60s instead of ~240s, letting nats-py's own reconnect
+fire promptly:
+
+| Parameter | Default | biff |
+|-----------|---------|------|
+| ``ping_interval`` | 120s | 20s |
+| ``max_outstanding_pings`` | 2 | 3 |
+| ``max_reconnect_attempts`` | 60 | -1 (infinite) |
+| ``reconnect_time_wait`` | 2s | 2s (explicit) |
+
+- **Detection ≈ 60s** (``20 * 3``): fast enough to restore presence
+  within a poller tick or two, slow enough that a single slow PONG on a
+  healthy connection does not flap the connection (three consecutive
+  missed PINGs are required).
+- **Infinite reconnect**: a bounded attempt count (nats-py default 60 ≈
+  120s of retrying) lets a prolonged outage exhaust reconnects, fire
+  ``closed_cb``, and — while the next ``_ensure_connected`` would
+  eventually rebuild — leave a window where each poll tick issues a
+  fresh synchronous ``nats.connect``. Infinite reconnect keeps the
+  persistent connection (DES-019) alive across any outage; nats-py
+  reconnects on the same client, ``_on_reconnect`` fires, and the next
+  ``_ensure_connected`` rebuilds the handles that ``_on_disconnect``
+  cleared. ``_on_closed`` still fires on explicit ``disconnect``/
+  ``close``.
+
+The recovery chain after tuning: half-open wedge → PING loop detects
+dead socket in ~60s → ``disconnected_cb`` clears cached handles
+(DES-029) → nats-py reconnects the same client → next relay call
+re-provisions JetStream/KV on the live connection. No bespoke wedge
+detector is needed; prompt keepalive makes the existing DES-029
+machinery sufficient.
+
+### Rejected Alternatives
+
+**Proactive wedge detector (N consecutive runtime timeouts → force
+reconnect).** Adds bespoke state to the relay to count timeouts and
+tear down the connection. Keepalive tuning fixes the detection latency
+at its source in nats-py and reuses the DES-029 reconnect path, so the
+extra machinery is unnecessary. Reserved as a fallback only if
+keepalive proved insufficient (it did not).
+
+**Catch ``TimeoutError`` in the poller/heartbeat and reconnect there.**
+Couples connection management to the polling loops and duplicates the
+reconnect logic the relay already owns (rejected for the same reason in
+DES-029). The relay layer is the right place for transport liveness.
+
+**Even shorter ``ping_interval`` (e.g. 10s).** Halves detection to ~30s
+but triples idle PING traffic and raises the risk of flapping a healthy
+connection on transient latency. 20s / 3 pings hits the 40–90s target
+with margin.
+
+### Invariant
+
+A half-open connection must be detected and recovered within a bounded
+time (~60s), not looped on indefinitely. Keepalive parameters are the
+mechanism; ``ping_interval * max_outstanding_pings`` is the detection
+budget and must stay well under the ~240s nats-py default that caused
+the wedge. The regression test in ``tests/test_nats_reconnect.py``
+(``TestHalfOpenWedgeRecovery``) locks this budget in.

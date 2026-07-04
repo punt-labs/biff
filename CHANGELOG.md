@@ -6,6 +6,10 @@
 
 - **`timestamps on|off` toggle in the REPL (biff-4uq).** A REPL-only display preference that prefixes incoming talk messages with a local `[HH:MM]` stamp. Off by default (matching prior timestamp-free talk output) and not persisted across sessions — it is a display preference, not config. Added to the REPL banner. Scoped to talk display for now; applying the toggle to `read` output is deferred pending a design decision (read timestamps live in the shared formatting layer used by the MCP tool and CLI).
 
+### Fixed
+
+- **A half-open NATS connection no longer wedges talk, presence, and wall inbound for ~4 minutes (biff-tww).** When the relay socket stays up but the server stops responding (a half-open connection), every JetStream/KV request raised `nats: timeout`, and the poller and heartbeat loops retried the same wedged connection indefinitely. nats-py's default keepalive (`ping_interval=120s`, `max_outstanding_pings=2`) only declares such a connection dead after ~240s, so recovery was blocked for the entire window. `nats.connect` is now tuned to `ping_interval=20s` / `max_outstanding_pings=3`, detecting a dead connection in ~60s and firing nats-py's own reconnect, which invalidates the cached JetStream/KV handles (DES-029) and rebuilds them on the live connection. `max_reconnect_attempts` is set to `-1` (infinite) so a prolonged outage never permanently strands an MCP server. Regression tests assert the connect keepalive stays within the detection budget and that the disconnect callback triggers handle rebuild instead of an endless retry loop.
+
 ### Security
 
 - **Talk output sanitizes remote terminal-control sequences.** Talk message bodies and sender identifiers arrive from other users over the relay and were printed straight to the terminal. A malicious sender could embed ANSI/OSC escape sequences (cursor moves, prompt spoofing, line clears, OSC 52 clipboard writes). All talk render sites (`_drain_talk_messages`, `_drain_talk_notifications`, `_check_for_accept`) now strip non-printable characters from remote fields before display. Extended to every other render surface in biff-lbj (see below).
