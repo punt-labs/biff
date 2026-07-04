@@ -26,10 +26,12 @@ import asyncio
 import json
 import logging
 import ssl
-from collections.abc import Sequence
+import time
+from collections.abc import Awaitable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import nats
@@ -123,6 +125,181 @@ async def safe_close(nc: NatsClient) -> None:
             raise
 
 
+class _ConnectionHealth:
+    """Single source of connection-health diagnostics for :class:`NatsRelay`.
+
+    Tracks connection lifetime, recovery latency, and the consecutive
+    runtime-timeout count that signals a half-open connection (socket up,
+    server unresponsive).  Every connection-cluster log line is emitted
+    here so onset and recovery are logged once, not once per poller tick
+    (DES logging standard: log at the decision point, not every layer).
+
+    Timings use ``time.monotonic()`` — immune to wall-clock adjustments.
+    The consecutive-timeout count is exposed via :attr:`consecutive_timeouts`
+    as the foundation a force-reconnect can act on (biff-3hp); this class
+    only observes, it never changes connection state.
+    """
+
+    def __init__(self, url: str) -> None:
+        self._host = self._host_of(url)
+        self._connected_at: float | None = None
+        self._disconnected_at: float | None = None
+        self._last_ok: float | None = None
+        self._timeout_count = 0
+        self._wedge_onset_at: float | None = None
+
+    @staticmethod
+    def _host_of(url: str) -> str:
+        """Return ``host[:port]`` from the first server in *url*, dropping creds.
+
+        A NATS URL may embed ``user:pass@`` and may be a comma-separated
+        cluster list.  Never log userinfo (PII); unparseable input yields a
+        placeholder rather than echoing the raw (credentialed) URL.
+        """
+        first = url.split(",", 1)[0].strip()
+        if "//" not in first:  # urlsplit needs a // authority to find creds/host
+            first = "//" + first
+        try:
+            parts = urlsplit(first)
+            host, port = parts.hostname, parts.port
+        except ValueError:
+            return "<unknown host>"
+        if host is None:
+            return "<unknown host>"
+        if ":" in host:  # IPv6 — bracket regardless of port
+            host = f"[{host}]"
+        return f"{host}:{port}" if port is not None else host
+
+    @property
+    def consecutive_timeouts(self) -> int:
+        """Runtime JS/KV timeouts since the last success (biff-3hp foundation)."""
+        return self._timeout_count
+
+    def record_connected(self, provision_ms: float, *, is_new_connection: bool) -> None:
+        """Record a successful connect + provision.
+
+        Logs INFO only for a freshly dialed connection.  A re-provision on
+        an already-reconnected client updates timing state silently — the
+        reconnect INFO from :meth:`record_reconnected` already covered it.
+        """
+        now = time.monotonic()
+        self._connected_at = now
+        self._last_ok = now
+        self._disconnected_at = None
+        self._timeout_count = 0
+        self._wedge_onset_at = None
+        if is_new_connection:
+            logger.info(
+                "Connected to NATS at %s (JS/KV provisioned in %.0fms)",
+                self._host,
+                provision_ms,
+            )
+
+    def record_provision_timeout(self, seconds: float) -> None:
+        """Log a WARNING when JetStream/KV provisioning exceeds its bound."""
+        logger.warning(
+            "NATS provisioning timed out after %.0fs at %s — tearing down connection",
+            seconds,
+            self._host,
+        )
+
+    def record_disconnected(self) -> None:
+        """Log a WARNING with connection lifetime — the frequency signal.
+
+        Short lifetimes recurring in the log mean the connection keeps
+        flapping; a long lifetime before a disconnect is a one-off outage.
+        """
+        self._disconnected_at = time.monotonic()
+        if self._connected_at is not None:
+            uptime = self._disconnected_at - self._connected_at
+            logger.warning(
+                "Disconnected from NATS at %s after %.0fs connected",
+                self._host,
+                uptime,
+            )
+        else:
+            logger.warning("Disconnected from NATS at %s", self._host)
+        self._connected_at = None
+
+    def record_reconnected(self) -> None:
+        """Log an INFO with downtime since disconnect — the recovery latency.
+
+        Resets the wedge counter: the reconnect is itself the recovery
+        signal, so a later first-success must not also log a recovery line.
+        """
+        now = time.monotonic()
+        if self._disconnected_at is not None:
+            downtime = now - self._disconnected_at
+            logger.info(
+                "Reconnected to NATS at %s after %.0fs down", self._host, downtime
+            )
+        else:
+            logger.info("Reconnected to NATS at %s", self._host)
+        self._connected_at = now
+        self._last_ok = now
+        self._timeout_count = 0
+        self._wedge_onset_at = None
+
+    def record_closed(self) -> None:
+        """Log a WARNING when the connection closes for good."""
+        logger.warning("NATS connection closed at %s", self._host)
+        self._connected_at = None
+
+    def record_success(self) -> None:
+        """Record a successful runtime JS/KV request.
+
+        Logs a single recovery INFO when the connection had been timing
+        out (a half-open period that cleared before nats-py's ping loop
+        tripped a full reconnect).
+        """
+        now = time.monotonic()
+        if self._timeout_count > 0:
+            onset = self._wedge_onset_at
+            over = now - onset if onset is not None else 0.0
+            logger.info(
+                "NATS recovered after %d timeouts over %.0fs",
+                self._timeout_count,
+                over,
+            )
+            self._timeout_count = 0
+            self._wedge_onset_at = None
+        self._last_ok = now
+
+    def record_timeout(self, operation: str, *, is_connected: bool) -> None:
+        """Record a runtime JS/KV timeout, logging the onset WARNING once.
+
+        The first timeout after a healthy period is the wedge onset — it
+        describes the connection state and staleness in prose so the log is
+        self-explaining.  Repeats are counted silently to avoid loop-spam.
+
+        The wording tracks the actual state: a still-connected socket that
+        stops answering is half-open; a socket that is mid-reconnect is
+        described as such, so the line never overstates the diagnosis.
+        """
+        if self._timeout_count == 0:
+            self._wedge_onset_at = time.monotonic()
+            if is_connected:
+                state = (
+                    "connection appears half-open — socket still open but the "
+                    "server is not responding"
+                )
+            else:
+                state = "connection is not responding — socket is reconnecting"
+            logger.warning(
+                "NATS request timed out (%s); %s, last successful request %s ago",
+                operation,
+                state,
+                self._seconds_since_ok(),
+            )
+        self._timeout_count += 1
+
+    def _seconds_since_ok(self) -> str:
+        """Return a human phrase for staleness since the last good request."""
+        if self._last_ok is None:
+            return "an unknown time"
+        return f"{time.monotonic() - self._last_ok:.0f}s"
+
+
 class NatsRelay:
     """NATS-backed relay with JetStream messages and KV sessions.
 
@@ -166,6 +343,7 @@ class NatsRelay:
         self._names_kv: KeyValue | None = None
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
+        self._health = _ConnectionHealth(url)
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
@@ -213,16 +391,48 @@ class NatsRelay:
             self._kv = None
             return await self._open_connection()
 
+    async def _tracked[T](self, operation: str, awaitable: Awaitable[T]) -> T:
+        """Await a runtime JS/KV request, feeding connection-health diagnostics.
+
+        On ``nats: timeout`` the wedge onset is recorded once (with transport
+        state) before re-raising, so callers see identical behavior.  On
+        success any active wedge is cleared with a single recovery line.
+        This is the choke point every hot-loop relay method routes its
+        primary request through, so onset/recovery is logged once — never
+        once per poller tick.
+        """
+        try:
+            result = await awaitable
+        except TimeoutError:
+            nc = self._nc
+            self._health.record_timeout(
+                operation,
+                is_connected=nc is not None and nc.is_connected,
+            )
+            raise
+        except (KeyNotFoundError, BucketNotFoundError, NotFoundError):
+            # A "not found" is the server answering — proof of liveness.
+            # Record success so last_ok/wedge counters stay accurate, then
+            # re-raise so callers see identical behavior.  Do NOT treat other
+            # errors (NoRespondersError, connection faults) as success.
+            self._health.record_success()
+            raise
+        self._health.record_success()
+        return result
+
     async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
         """Create a new NATS connection and provision infrastructure.
 
         Must be called while holding ``_connect_lock``.
         """
         nc = self._nc
+        is_new_connection = False
         if nc is None or nc.is_closed:
+            is_new_connection = True
 
             async def _on_disconnect() -> None:
-                logger.warning("Disconnected from NATS at %s", self._url)
+                # Health tracker owns the log line (with connection lifetime).
+                self._health.record_disconnected()
                 # Proactively invalidate cached handles so the next
                 # tool call reconnects instead of using stale
                 # JetStream/KV refs (DES-029).
@@ -231,13 +441,14 @@ class NatsRelay:
                 self._names_kv = None
 
             async def _on_reconnect() -> None:
-                logger.info("Reconnected to NATS at %s", self._url)
+                # Health tracker owns the log line (with recovery latency).
+                self._health.record_reconnected()
 
             async def _on_closed() -> None:
                 # nats-py gave up reconnecting (or the connection closed).
                 # Drop the client so the next _ensure_connected builds a
                 # fresh one instead of reusing a dead connection (biff-wr3).
-                logger.warning("NATS connection closed at %s", self._url)
+                self._health.record_closed()
                 self._nc = None
                 self._js = None
                 self._kv = None
@@ -268,6 +479,7 @@ class NatsRelay:
                 **self._auth_kwargs(),
             )
 
+        provision_start = time.monotonic()
         try:
             # Bound provisioning: a disconnected/reconnecting connection
             # (is_closed is False, is_connected is False) lets JetStream/KV
@@ -277,7 +489,9 @@ class NatsRelay:
             js, kv, names_kv = await asyncio.wait_for(
                 self._provision(nc), timeout=_CONNECT_PROVISION_TIMEOUT
             )
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, TimeoutError):
+                self._health.record_provision_timeout(_CONNECT_PROVISION_TIMEOUT)
             # Tear the connection down so the next call reconnects fresh
             # instead of reusing a wedged/half-open one.
             await safe_close(nc)
@@ -291,6 +505,8 @@ class NatsRelay:
         self._js = js
         self._kv = kv
         self._names_kv = names_kv
+        provision_ms = (time.monotonic() - provision_start) * 1000
+        self._health.record_connected(provision_ms, is_new_connection=is_new_connection)
         return js, kv
 
     async def _provision(
@@ -661,7 +877,9 @@ class NatsRelay:
         if ":" in message.to_user:
             # Targeted delivery — TTY subject
             subject = self._subject_for_key(message.to_user, target_repo=target_repo)
-            await js.publish(subject, message.model_dump_json().encode())
+            await self._tracked(
+                "publish", js.publish(subject, message.model_dump_json().encode())
+            )
         else:
             # Broadcast — single user subject, no session lookup
             self._validate_user(message.to_user)
@@ -671,7 +889,9 @@ class NatsRelay:
                 subject = f"{prefix}.{message.to_user}"
             else:
                 subject = self._user_subject(message.to_user)
-            await js.publish(subject, message.model_dump_json().encode())
+            await self._tracked(
+                "publish", js.publish(subject, message.model_dump_json().encode())
+            )
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
         await self._publish_talk_notification(
@@ -819,7 +1039,10 @@ class NatsRelay:
         js, _ = await self._ensure_connected()
         subject = self._user_subject(user)
         try:
-            info = await js.stream_info(self._stream_name, subjects_filter=subject)
+            info = await self._tracked(
+                "stream_info",
+                js.stream_info(self._stream_name, subjects_filter=subject),
+            )
         except NotFoundError:
             return 0
         if info.state.subjects:
@@ -840,16 +1063,18 @@ class NatsRelay:
         tty_count = 0
         user_count = 0
         try:
-            tty_info = await js.stream_info(
-                self._stream_name, subjects_filter=tty_subject
+            tty_info = await self._tracked(
+                "stream_info",
+                js.stream_info(self._stream_name, subjects_filter=tty_subject),
             )
             if tty_info.state.subjects:
                 tty_count = tty_info.state.subjects.get(tty_subject, 0)
         except NotFoundError:
             pass
         try:
-            user_info = await js.stream_info(
-                self._stream_name, subjects_filter=user_subject
+            user_info = await self._tracked(
+                "stream_info",
+                js.stream_info(self._stream_name, subjects_filter=user_subject),
             )
             if user_info.state.subjects:
                 user_count = user_info.state.subjects.get(user_subject, 0)
@@ -864,14 +1089,16 @@ class NatsRelay:
         key = build_session_key(session.user, session.tty)
         kv_key = self._kv_key(key)
         _, kv = await self._ensure_connected()
-        await kv.put(kv_key, session.model_dump_json().encode())
+        await self._tracked(
+            "kv.put", kv.put(kv_key, session.model_dump_json().encode())
+        )
 
     async def get_session(self, session_key: str) -> UserSession | None:
         """Read a single session from KV by ``{user}:{tty}`` key."""
         kv_key = self._kv_key(session_key)
         _, kv = await self._ensure_connected()
         try:
-            entry = await kv.get(kv_key)
+            entry = await self._tracked("kv.get", kv.get(kv_key))
             if entry.value is None:
                 return None
             return UserSession.model_validate_json(entry.value)
@@ -897,7 +1124,7 @@ class NatsRelay:
         kv_key = self._kv_key(session_key)
         _, kv = await self._ensure_connected()
         try:
-            entry = await kv.get(kv_key)
+            entry = await self._tracked("kv.get", kv.get(kv_key))
             if entry.value is None:
                 return  # No session to heartbeat
             existing = UserSession.model_validate_json(entry.value)
@@ -907,7 +1134,9 @@ class NatsRelay:
             logger.warning("Corrupt session for %s, skip heartbeat", session_key)
             return
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
-        await kv.put(kv_key, updated.model_dump_json().encode())
+        await self._tracked(
+            "kv.put", kv.put(kv_key, updated.model_dump_json().encode())
+        )
         # Refresh TTY name reservation to prevent TTL expiry (DES-035).
         if existing.tty_name:
             try:
@@ -971,7 +1200,10 @@ class NatsRelay:
         # org = "punt-labs", repos are keyed as "punt-labs__biff.user.tty"
         # Filter: $KV.biff-sessions.punt-labs__> matches all repos under this org
         org_filter = f"{kv_prefix}{org}__>"
-        info = await js.stream_info(kv_stream, subjects_filter=org_filter)
+        info = await self._tracked(
+            "stream_info",
+            js.stream_info(kv_stream, subjects_filter=org_filter),
+        )
         if not info.state.subjects:
             return frozenset()
         repos: set[str] = set()
@@ -1007,7 +1239,10 @@ class NatsRelay:
         kv_stream = f"KV_{self._kv_bucket}"
         kv_prefix = f"$KV.{self._kv_bucket}."
         repo_filter = f"{kv_prefix}{repo}.>"
-        info = await js.stream_info(kv_stream, subjects_filter=repo_filter)
+        info = await self._tracked(
+            "stream_info",
+            js.stream_info(kv_stream, subjects_filter=repo_filter),
+        )
         if not info.state.subjects:
             return []
         session_keys: list[str] = []
@@ -1162,7 +1397,9 @@ class NatsRelay:
         if not self._wtmp_available:
             return
         subject = self._wtmp_subject(event.user)
-        await js.publish(subject, event.model_dump_json().encode())
+        await self._tracked(
+            "publish", js.publish(subject, event.model_dump_json().encode())
+        )
 
     async def get_wtmp(
         self, *, user: str | None = None, count: int = 25
@@ -1250,7 +1487,9 @@ class NatsRelay:
             with suppress(KeyNotFoundError, BucketNotFoundError):
                 await kv.delete(self._wall_kv_key)
         else:
-            await kv.put(self._wall_kv_key, wall.model_dump_json().encode())
+            await self._tracked(
+                "kv.put", kv.put(self._wall_kv_key, wall.model_dump_json().encode())
+            )
 
     async def get_wall(self, *, repo: str | None = None) -> WallPost | None:
         """Read the active wall, returning ``None`` if absent or expired.
@@ -1261,7 +1500,7 @@ class NatsRelay:
         _, kv = await self._ensure_connected()
         key = self.wall_kv_key(repo) if repo else self._wall_kv_key
         try:
-            entry = await kv.get(key)
+            entry = await self._tracked("kv.get", kv.get(key))
             if entry.value is None:
                 return None
             wall = WallPost.model_validate_json(entry.value)

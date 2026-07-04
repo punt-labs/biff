@@ -330,7 +330,10 @@ async def _heartbeat_loop(
         try:
             await state.relay.heartbeat(state.session_key)
         except Exception:  # noqa: BLE001 — relay errors vary by backend
-            logger.warning("Heartbeat failed", exc_info=True)
+            # DEBUG, not WARNING: the loop ticks every 60s, so a NATS wedge
+            # would spam a warning per tick.  The relay's _ConnectionHealth
+            # logs the wedge onset/recovery once — it is the single source.
+            logger.debug("Heartbeat failed", exc_info=True)
         if state.companion is None:
             try:
                 await _poll_companion_registration(state)
@@ -340,7 +343,7 @@ async def _heartbeat_loop(
             try:
                 await state.relay.heartbeat(state.companion_session_key)
             except Exception:  # noqa: BLE001
-                logger.warning("Companion heartbeat failed", exc_info=True)
+                logger.debug("Companion heartbeat failed", exc_info=True)
         await _refresh_org_repos(state)
 
 
