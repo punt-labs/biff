@@ -211,8 +211,9 @@ class TestWhoTool:
         assert "eric" in result
 
     async def test_shows_idle_time(self, state: ServerState) -> None:
-        # Within the liveness window so the session is shown; idle rendered.
-        old_time = datetime.now(UTC) - timedelta(seconds=90)
+        # Within the liveness window (60s of headroom to the 120s cutoff) so
+        # the session is shown and idle renders as "1m".
+        old_time = datetime.now(UTC) - timedelta(seconds=60)
         await state.relay.update_session(
             UserSession(
                 user="eric", tty=_ERIC_TTY, plan="reviewing", last_active=old_time
@@ -249,7 +250,7 @@ class TestWhoTool:
                 user="zara",
                 tty="tty0",
                 plan="testing",
-                last_active=now - timedelta(seconds=90),
+                last_active=now - timedelta(seconds=60),
             )
         )
         await state.relay.update_session(

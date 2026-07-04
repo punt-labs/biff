@@ -79,8 +79,10 @@ class UserSession(BaseModel):
 
     Sessions track who is online, what they're working on (plan),
     where they are (hostname, pwd), and whether they're accepting
-    messages (biff_enabled).  Session liveness is determined by
-    comparing ``last_active`` against a TTL (default 120s).
+    messages (biff_enabled).  Liveness is checked via :meth:`is_live`,
+    which compares ``last_active`` against a caller-supplied window
+    (``PRESENCE_LIVENESS_SECONDS`` for presence surfaces) — the policy
+    lives with the caller, not the model.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
