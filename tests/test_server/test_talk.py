@@ -49,6 +49,19 @@ class TestFormatTalkMessages:
     def test_empty_list(self) -> None:
         assert format_talk_messages([]) == ""
 
+    def test_escapes_neutralized(self) -> None:
+        """Remote body/sender can't inject terminal escapes (biff-lbj)."""
+        msg = Message(
+            from_user="ev\x1b[2Kil",
+            to_user="kai",
+            body="hi\x1b[2Jthere",
+            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
+        )
+        result = format_talk_messages([msg])
+        assert "\x1b[2J" not in result
+        assert "\x1b[2K" not in result
+        assert "hi[2Jthere" in result
+
 
 class TestTalkState:
     def test_initial_state_is_none(self) -> None:

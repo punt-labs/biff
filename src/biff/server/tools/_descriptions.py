@@ -296,7 +296,7 @@ async def refresh_wall(
     """
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    from biff.formatting import format_remaining  # noqa: PLC0415
+    from biff.formatting import format_remaining, terminal_safe  # noqa: PLC0415
     from biff.server.tools.wall import WALL_BASE_DESCRIPTION  # noqa: PLC0415
 
     tool = await mcp.get_tool("wall")
@@ -310,11 +310,14 @@ async def refresh_wall(
         queue.remove_by_kind("wall")
     else:
         remaining = format_remaining(current.expires_at)
-        sender = current.from_user
+        # Wall text/sender are remote-controlled; strip terminal escapes
+        # before they reach the tool description and status line (biff-lbj).
+        wall_text = terminal_safe(current.text)
+        sender = terminal_safe(current.from_user)
         if current.from_tty:
-            sender += f" ({current.from_tty})"
+            sender += f" ({terminal_safe(current.from_tty)})"
         tool.description = (
-            f"[WALL] {current.text} — {sender}, "
+            f"[WALL] {wall_text} — {sender}, "
             f"expires in {remaining}. "
             "Use wall(clear=True) to remove."
         )
@@ -325,7 +328,7 @@ async def refresh_wall(
         queue.add(
             DisplayItem(
                 kind="wall",
-                text=f"{sender}: {current.text}",
+                text=f"{sender}: {wall_text}",
                 source_key=f"wall:{current.posted_at.isoformat()}",
                 expires_at=queue.expires_from_now(max(0.0, seconds_remaining)),
             )
@@ -346,9 +349,10 @@ async def refresh_wall(
                     vibes_from_text,
                 )
 
+                spoken = terminal_safe(current.text)
                 speak_fire_and_forget(
-                    f"Wall from {current.from_user}: {current.text}",
-                    vibe_tags=vibes_from_text(current.text),
+                    f"Wall from {terminal_safe(current.from_user)}: {spoken}",
+                    vibe_tags=vibes_from_text(spoken),
                 )
         else:
             _set_last_spoken_wall_key(("", ""))

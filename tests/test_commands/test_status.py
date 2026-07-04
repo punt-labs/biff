@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from biff.cli_session import CliContext
 from biff.commands.status import status
 from biff.commands.wall import wall
-from biff.models import UserSession
+from biff.models import UserSession, WallPost
 from biff.relay import LocalRelay
 
 
@@ -65,3 +67,21 @@ class TestStatus:
         json_data = result.json_data
         assert isinstance(json_data, dict)
         assert json_data["wall"] is not None
+
+    async def test_status_wall_escapes_neutralized(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        """A wall written past input sanitization can't inject escapes (biff-lbj)."""
+        now = datetime.now(UTC)
+        await relay.set_wall(
+            WallPost(
+                from_user="ev\x1b[2Kil",
+                text="dep\x1b[2Jloy freeze",
+                posted_at=now,
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        result = await status(ctx)
+        assert "\x1b[2J" not in result.text
+        assert "\x1b[2K" not in result.text
+        assert "dep[2Jloy freeze" in result.text

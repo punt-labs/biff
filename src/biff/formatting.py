@@ -11,7 +11,6 @@ The primitive layer (``ColumnSpec``, ``format_table``, ``format_idle``,
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
@@ -46,7 +45,24 @@ __all__ = [
     "pair_events",
     "parse_duration",
     "sanitize_wall_message",
+    "terminal_safe",
 ]
+
+
+def terminal_safe(text: str) -> str:
+    """Strip non-printable characters from remote-controlled text (biff-lbj).
+
+    Message bodies, wall text, sender names, plans, hostnames, and dirs all
+    arrive from other users over the relay and are rendered straight to the
+    terminal.  Dropping non-printable characters removes ESC (the ANSI/OSC
+    introducer) and other C0/C1 controls, so a remote sender cannot inject
+    cursor moves, prompt spoofing, line clears, or OSC 52 clipboard writes.
+    Printable Unicode (letters, punctuation, emoji, spaces) is preserved.
+    Applied at every render site — the output boundary — because a malicious
+    client can bypass any input-side sanitization.
+    """
+    return "".join(ch for ch in text if ch.isprintable())
+
 
 # ---------------------------------------------------------------------------
 # Duration parsing (shared by wall CLI + MCP tool)
@@ -117,8 +133,9 @@ WHO_SPECS: list[ColumnSpec] = [
 
 def _format_who_name(s: UserSession) -> str:
     """Render a session as a copy-pasteable address for ``/write``."""
-    tty = s.tty_name or (s.tty[:8] if s.tty else "")
-    return f"{s.user}:{tty}" if tty else s.user
+    tty = terminal_safe(s.tty_name) or (s.tty[:8] if s.tty else "")
+    user = terminal_safe(s.user)
+    return f"{user}:{tty}" if tty else user
 
 
 def _format_who_kind(s: UserSession) -> str:
@@ -144,7 +161,7 @@ def format_who(sessions: list[UserSession]) -> str:
             format_idle(s.last_active),
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
-            s.hostname or "-",
+            terminal_safe(s.hostname) or "-",
         ]
         for s in sessions
     ]
@@ -174,13 +191,14 @@ def _format_finger_idle(dt: datetime) -> str:
 
 def format_user_header(session: UserSession) -> str:
     """Format the user-level header (shown once per user)."""
-    login_label = session.user
+    user = terminal_safe(session.user)
+    login_label = user
     if session.kind:
-        login_label = f"{session.user} [{session.kind}]"
+        login_label = f"{user} [{terminal_safe(session.kind)}]"
     left = f"Login: {login_label}"
     mesg = "on" if session.biff_enabled else "off"
     if session.display_name:
-        right = f"Name: {session.display_name}"
+        right = f"Name: {terminal_safe(session.display_name)}"
         line1 = f"\u25b6  {left:<38s}{right}"
         line2 = f"   Messages: {mesg}"
         return f"{line1}\n{line2}"
@@ -192,14 +210,17 @@ def format_tty_block(session: UserSession) -> str:
     """Format per-TTY details (on-since, host/dir, plan)."""
     idle = _format_finger_idle(session.last_active)
     since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
-    tty_label = session.tty_name or (session.tty[:8] if session.tty else "?")
+    tty_label = terminal_safe(session.tty_name) or (
+        session.tty[:8] if session.tty else "?"
+    )
 
     lines = [f"   On since {since} on {tty_label}, idle {idle}"]
     if session.hostname or session.pwd:
-        host = session.hostname or "?"
-        pwd = session.pwd or "?"
+        host = terminal_safe(session.hostname) or "?"
+        pwd = terminal_safe(session.pwd) or "?"
         lines.append(f"   Host: {host}  Dir: {pwd}")
-    lines.append(f"   Plan:\n    {session.plan}" if session.plan else "   No Plan.")
+    plan = terminal_safe(session.plan)
+    lines.append(f"   Plan:\n    {plan}" if plan else "   No Plan.")
     return "\n".join(lines)
 
 
@@ -285,10 +306,11 @@ def format_last(
     """Build a columnar table matching Unix ``last(1)`` style."""
     rows: list[list[str]] = []
     for login, logout in pairs:
-        tty = login.tty_name or (login.tty[:8] if login.tty else "")
-        name = f"{login.user}:{tty}" if tty else login.user
+        tty = terminal_safe(login.tty_name) or (login.tty[:8] if login.tty else "")
+        user = terminal_safe(login.user)
+        name = f"{user}:{tty}" if tty else user
         repo = display_repo_name(login.repo) or "-"
-        host = login.hostname or "-"
+        host = terminal_safe(login.hostname) or "-"
         login_str = _format_timestamp(login.timestamp)
         if logout is not None:
             logout_str = _format_timestamp(logout.timestamp)
@@ -311,22 +333,20 @@ def format_last(
 # /wall — team broadcast
 # ---------------------------------------------------------------------------
 
-_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
 
 def sanitize_wall_message(message: str) -> str:
     """Strip control chars and collapse whitespace for wall messages."""
-    message = _CTRL_RE.sub("", message)
-    return " ".join(message.split())
+    return " ".join(terminal_safe(message).split())
 
 
 def format_wall(wall: WallPost) -> str:
     """Format a wall post for display."""
     remaining = format_remaining(wall.expires_at)
-    sender = wall.from_user
+    sender = terminal_safe(wall.from_user)
     if wall.from_tty:
-        sender += f" ({wall.from_tty})"
-    return f"\u25b6  WALL from {sender} ({remaining} remaining)\n   {wall.text}"
+        sender += f" ({terminal_safe(wall.from_tty)})"
+    text = terminal_safe(wall.text)
+    return f"\u25b6  WALL from {sender} ({remaining} remaining)\n   {text}"
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +374,9 @@ def format_read_dual(
         rows: list[list[str]] = []
         for m in msgs:
             ts = m.timestamp.strftime("%a %b %d %H:%M")
-            sender = f"{m.from_user}:{m.from_tty}" if m.from_tty else m.from_user
-            rows.append([sender, ts, m.body])
+            fu = terminal_safe(m.from_user)
+            sender = f"{fu}:{terminal_safe(m.from_tty)}" if m.from_tty else fu
+            rows.append([sender, ts, terminal_safe(m.body)])
         table = format_table(READ_SPECS, rows)
         # Indent the table under the section header: replace the
         # leading HEADER_PREFIX on the column-header line with
@@ -374,6 +395,7 @@ def format_read(messages: list[Message]) -> str:
     rows: list[list[str]] = []
     for m in messages:
         ts = m.timestamp.strftime("%a %b %d %H:%M")
-        sender = f"{m.from_user}:{m.from_tty}" if m.from_tty else m.from_user
-        rows.append([sender, ts, m.body])
+        fu = terminal_safe(m.from_user)
+        sender = f"{fu}:{terminal_safe(m.from_tty)}" if m.from_tty else fu
+        rows.append([sender, ts, terminal_safe(m.body)])
     return format_table(READ_SPECS, rows)

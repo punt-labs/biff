@@ -24,7 +24,6 @@ from biff.__main__ import (
     _drain_talk_notifications,
     _has_pending_invite,
     _talk_publish,
-    _terminal_safe,
 )
 from biff.cli_session import CliContext
 from biff.models import BiffConfig
@@ -518,23 +517,6 @@ class TestDrainTalkNotifications:
         lines = _drain_talk_notifications(q, MY_KEY)
         assert "\x1b[2J" not in lines[0]
         assert "hi[2Jthere" in lines[0]
-
-
-class TestTerminalSafe:
-    """`_terminal_safe` strips control/escape chars from remote text."""
-
-    def test_strips_esc_and_bel(self) -> None:
-        assert _terminal_safe("a\x1b[2Jb\x07c") == "a[2Jbc"
-
-    def test_strips_newline_and_cr(self) -> None:
-        # A single-line render must not be splittable by embedded newlines.
-        assert _terminal_safe("line1\nline2\rline3") == "line1line2line3"
-
-    def test_preserves_printable_unicode(self) -> None:
-        assert _terminal_safe("kai:tty2 ▶ 🚀 café") == "kai:tty2 ▶ 🚀 café"
-
-    def test_empty_string(self) -> None:
-        assert _terminal_safe("") == ""
 
 
 # -----------------------------------------------------------------------

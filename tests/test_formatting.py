@@ -6,17 +6,20 @@ These functions are shared by both MCP tools and CLI commands.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from biff.formatting import (
     format_finger,
     format_finger_multi,
+    format_last,
     format_read,
     format_wall,
     format_who,
     pair_events,
     parse_duration,
     sanitize_wall_message,
+    terminal_safe,
 )
 from biff.models import Message, SessionEvent, UserSession, WallPost
 
@@ -232,3 +235,78 @@ class TestFormatRead:
         assert "kai" in result
         assert "@kai" not in result
         assert "hey there" in result
+
+
+class TestTerminalSafe:
+    """`terminal_safe` strips control/escape chars from remote text (biff-lbj)."""
+
+    def test_strips_esc_and_bel(self) -> None:
+        assert terminal_safe("a\x1b[2Jb\x07c") == "a[2Jbc"
+
+    def test_strips_newline_and_cr(self) -> None:
+        # A single-line render must not be splittable by embedded newlines.
+        assert terminal_safe("line1\nline2\rline3") == "line1line2line3"
+
+    def test_preserves_printable_unicode(self) -> None:
+        assert terminal_safe("kai:tty2 ▶ 🚀 café") == "kai:tty2 ▶ 🚀 café"
+
+    def test_empty_string(self) -> None:
+        assert terminal_safe("") == ""
+
+
+class TestRenderSanitization:
+    """Remote terminal escapes are neutralized at every render site (biff-lbj).
+
+    Each render path is fed a relay-sourced field carrying a screen-clear
+    (`\\x1b[2J`) and assert the raw escape never reaches the output.
+    """
+
+    def test_read_body_and_sender(self) -> None:
+        m = Message(from_user="e\x1b[2Kvil", to_user="kai", body="hi\x1b[2Jthere")
+        out = format_read([m])
+        assert "\x1b[2J" not in out
+        assert "\x1b[2K" not in out
+        assert "hi[2Jthere" in out
+
+    def test_wall_text_and_sender(self) -> None:
+        wall = WallPost(
+            from_user="ev\x1b[2Kil",
+            from_tty="tty\x1b[2K9",
+            text="dep\x1b[2Jloy freeze",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        out = format_wall(wall)
+        assert "\x1b[2J" not in out
+        assert "\x1b[2K" not in out
+        assert "dep[2Jloy freeze" in out
+
+    def test_who_name_and_host(self) -> None:
+        s = UserSession(user="ka\x1b[2Ji", tty="abc12345", hostname="ho\x1b[2Kst")
+        out = format_who([s])
+        assert "\x1b[2J" not in out
+        assert "\x1b[2K" not in out
+
+    def test_finger_plan_host_pwd(self) -> None:
+        s = UserSession(
+            user="kai",
+            tty="abc12345",
+            plan="pl\x1b[2Jan",
+            hostname="h\x1b[2Kost",
+            pwd="/co\x1b[2Kde",
+        )
+        out = format_finger(s)
+        assert "\x1b[2J" not in out
+        assert "\x1b[2K" not in out
+        assert "pl[2Jan" in out
+
+    def test_last_user_and_host(self) -> None:
+        login = SessionEvent(
+            session_key="evil:tty9",
+            event="login",
+            user="ev\x1b[2Kil",
+            tty="tty9",
+            hostname="h\x1b[2Kost",
+        )
+        out = format_last([(login, None)], {"evil:tty9"})
+        assert "\x1b[2K" not in out
+        assert re.search(r"ev\[2Kil", out) is not None

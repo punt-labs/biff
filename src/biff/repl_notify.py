@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from biff.formatting import format_remaining
+from biff.formatting import format_remaining, terminal_safe
 from biff.models import WallPost
 
 
@@ -41,8 +41,10 @@ class NotifyState:
         wall_key = _wall_key(wall)
         if wall_key and wall_key != self.last_wall_key:
             remaining = format_remaining(wall.expires_at) if wall else ""
-            from_user = wall.from_user if wall else ""
-            wall_text = wall.text if wall else ""
+            # Wall fields are remote-controlled; strip terminal escapes before
+            # this line is printed to the REPL between commands (biff-lbj).
+            from_user = terminal_safe(wall.from_user) if wall else ""
+            wall_text = terminal_safe(wall.text) if wall else ""
             lines.append(
                 f"  \033[1;31m📢 WALL @{from_user}: {wall_text} ({remaining})\033[0m"
             )
