@@ -81,10 +81,11 @@ _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 
 # Keepalive tuning so a half-open connection (socket up, server not
 # responding) is detected in ~60-80s, not the nats-py default of 240s
-# (biff-tww).  Detection latency is roughly
-# ``_PING_INTERVAL * (_MAX_OUTSTANDING_PINGS + 1)`` -- nats-py trips when
-# the outstanding-PING count *exceeds* the max.  nats-py defaults are
-# ping_interval=120s / max_outstanding_pings=2 → 240s, during which every
+# (biff-tww).  Detection latency is roughly ``_PING_INTERVAL *
+# _MAX_OUTSTANDING_PINGS`` (20*3 = ~60s), and up to one interval higher
+# (~80s) because nats-py trips only when the outstanding-PING count
+# *exceeds* the max.  nats-py defaults are
+# ping_interval=120s / max_outstanding_pings=2 → ~240s, during which every
 # JetStream/KV request times out and the poller + heartbeat crash-loop on
 # ``nats: timeout`` with no recovery.  Prompt ping detection fires nats-py's
 # own reconnect, which invalidates cached handles (DES-029) and rebuilds them.

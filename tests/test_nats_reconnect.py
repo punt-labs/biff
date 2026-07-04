@@ -113,13 +113,13 @@ class TestProvisionTimeout:
 class TestHalfOpenWedgeRecovery:
     """A half-open connection must be detected and recovered, not looped on.
 
-    Regression coverage for biff-tww (DES-030): the NATS socket stays up but
+    Regression coverage for biff-tww (DES-041): the NATS socket stays up but
     the server stops responding, so every JetStream/KV request raises
     ``nats: timeout``.  nats-py's default keepalive
     (ping_interval=120s, max_outstanding_pings=2) only declares such a
     connection dead after ~240s — during which the poller and heartbeat
     crash-loop with no recovery.  The fix tunes keepalive so detection
-    happens in ~60s, firing nats-py's own reconnect + handle invalidation.
+    happens in ~60-80s, firing nats-py's own reconnect + handle invalidation.
     """
 
     @staticmethod
@@ -137,8 +137,10 @@ class TestHalfOpenWedgeRecovery:
 
         nats-py's ping timer cannot be advanced in a unit test, so the fix
         is verified at its source: the keepalive parameters passed to
-        ``nats.connect``.  ``ping_interval * max_outstanding_pings`` bounds
-        how long a half-open connection can wedge before reconnect fires.
+        ``nats.connect``.  ``ping_interval * max_outstanding_pings`` (~60s)
+        is the base detection budget; the real trip is up to one interval
+        higher (~80s) because nats-py fires when the count *exceeds* the
+        max, which the 90s ceiling accommodates.
         """
         relay = NatsRelay(url="tls://fake:4222", repo_name="test")
         connect = self._connect_and_provision(
