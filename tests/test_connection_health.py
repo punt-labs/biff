@@ -25,7 +25,11 @@ import pytest
 from nats.js.errors import KeyNotFoundError
 
 from biff.models import Message, UserSession
-from biff.nats_relay import NatsRelay, _ConnectionHealth
+from biff.nats_relay import (
+    _WEDGE_FORCE_RECONNECT_THRESHOLD,
+    NatsRelay,
+    _ConnectionHealth,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -199,6 +203,71 @@ class TestWedgeOnsetRecovery:
 
         assert relay._health.consecutive_timeouts == 1
         assert _onset_records(caplog), "heartbeat put must route through _tracked"
+
+
+class TestForceReconnectLatch:
+    """The proactive force-reconnect fires once per wedge episode (biff-3hp).
+
+    ``_ConnectionHealth`` owns the consecutive-timeout counter and the
+    once-per-episode latch; ``NatsRelay._tracked`` acts on the decision.
+    """
+
+    def test_below_threshold_does_not_arm(self) -> None:
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        threshold = _WEDGE_FORCE_RECONNECT_THRESHOLD
+        for _ in range(threshold - 1):
+            health.record_timeout("stream_info", is_connected=True)
+            assert not health.should_force_reconnect(threshold)
+
+    def test_fires_exactly_once_at_threshold(self) -> None:
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        threshold = _WEDGE_FORCE_RECONNECT_THRESHOLD
+        for _ in range(threshold):
+            health.record_timeout("stream_info", is_connected=True)
+        assert health.should_force_reconnect(threshold)
+        # Latched — further timeouts past the threshold do not re-arm it.
+        health.record_timeout("stream_info", is_connected=True)
+        assert not health.should_force_reconnect(threshold)
+
+    def test_success_clears_latch_for_next_episode(self) -> None:
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        threshold = _WEDGE_FORCE_RECONNECT_THRESHOLD
+        for _ in range(threshold):
+            health.record_timeout("stream_info", is_connected=True)
+        assert health.should_force_reconnect(threshold)
+        health.record_success()
+        assert health.consecutive_timeouts == 0
+        # A fresh wedge episode re-arms and fires again.
+        for _ in range(threshold):
+            health.record_timeout("stream_info", is_connected=True)
+        assert health.should_force_reconnect(threshold)
+
+    def test_disconnect_clears_wedge_counter_and_latch(self) -> None:
+        # When keepalive's _on_disconnect fires, the counter resets so the
+        # proactive path won't also fire (nats-py already owns recovery).
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            health.record_timeout("stream_info", is_connected=True)
+        health.record_disconnected()
+        assert health.consecutive_timeouts == 0
+        assert not health.should_force_reconnect(_WEDGE_FORCE_RECONNECT_THRESHOLD)
+
+    def test_closed_clears_wedge_counter_and_latch(self) -> None:
+        # Defense-in-depth: record_closed is a lifecycle reset point too — the
+        # latch must not outlive a close, independent of whether _on_closed
+        # nulled the handles.  Symmetric with connect/disconnect/reconnect.
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            health.record_timeout("stream_info", is_connected=True)
+        assert health.should_force_reconnect(_WEDGE_FORCE_RECONNECT_THRESHOLD)
+        health.record_closed()
+        assert health.consecutive_timeouts == 0
+        assert not health.should_force_reconnect(_WEDGE_FORCE_RECONNECT_THRESHOLD)
 
 
 class TestLifecycleContext:

@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from biff.nats_relay import NatsRelay
+from biff.nats_relay import _WEDGE_FORCE_RECONNECT_THRESHOLD, NatsRelay
 
 
 def _fake_nc() -> MagicMock:
@@ -27,6 +27,33 @@ def _fake_nc() -> MagicMock:
     nc.is_closed = False
     nc.close = AsyncMock()
     return nc
+
+
+def _live_nc() -> MagicMock:
+    """A NATS client stand-in reporting a live, responsive connection."""
+    nc = _fake_nc()
+    nc.is_connected = True
+    return nc
+
+
+def _wedged_relay() -> tuple[NatsRelay, MagicMock]:
+    """A relay with cached handles on a live-looking (half-open) client."""
+    relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+    nc = _live_nc()
+    relay._nc = nc
+    relay._js = MagicMock()
+    relay._kv = MagicMock()
+    relay._names_kv = MagicMock()
+    relay._health.record_connected(5.0, is_new_connection=True)
+    return relay, nc
+
+
+async def _timeout() -> str:
+    raise TimeoutError
+
+
+async def _ok() -> str:
+    return "ok"
 
 
 def _fresh_nc(*_a: object, **_k: object) -> MagicMock:
@@ -184,3 +211,197 @@ class TestHalfOpenWedgeRecovery:
 
         assert result_js is js
         assert result_kv is kv
+
+
+class TestProactiveWedgeDetector:
+    """N consecutive runtime timeouts force a reconnect without keepalive (biff-3hp).
+
+    The keepalive path (DES-041) takes ~60-80s to detect a half-open
+    connection.  The proactive detector tears the connection down after
+    ``_WEDGE_FORCE_RECONNECT_THRESHOLD`` consecutive JS/KV timeouts on a
+    still-connected socket, so the next ``_ensure_connected`` dials a fresh
+    client in ~N x per-request-timeout instead.
+    """
+
+    @pytest.mark.anyio()
+    async def test_threshold_timeouts_force_one_reconnect(self) -> None:
+        relay, nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+
+        # Connection torn down and handles cleared so the next call rebuilds.
+        nc.close.assert_awaited_once()
+        assert relay._nc is None
+        assert relay._js is None
+        assert relay._kv is None
+        assert relay._names_kv is None
+
+    @pytest.mark.anyio()
+    async def test_next_call_rebuilds_after_forced_reconnect(self) -> None:
+        relay, _nc = _wedged_relay()
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert relay._nc is None
+
+        js, kv, names_kv = MagicMock(), MagicMock(), MagicMock()
+        relay._provision = AsyncMock(return_value=(js, kv, names_kv))  # type: ignore[method-assign]
+        with patch("biff.nats_relay.nats.connect", AsyncMock(side_effect=_fresh_nc)):
+            result_js, result_kv = await relay._ensure_connected()
+
+        assert result_js is js
+        assert result_kv is kv
+        assert relay._nc is not None
+
+    @pytest.mark.anyio()
+    async def test_below_threshold_then_success_does_not_reconnect(self) -> None:
+        relay, nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        # A single slow request that then recovers must not force a reconnect.
+        assert await relay._tracked("stream_info", _ok()) == "ok"
+
+        nc.close.assert_not_awaited()
+        assert relay._nc is nc
+        assert relay._health.consecutive_timeouts == 0
+
+    @pytest.mark.anyio()
+    async def test_reconnect_fires_once_per_episode(self) -> None:
+        relay, nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert nc.close.await_count == 1
+        assert relay._nc is None
+
+        # Further timeouts on the torn-down connection must not tear down again.
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert nc.close.await_count == 1
+
+    @pytest.mark.anyio()
+    async def test_reconnecting_socket_is_not_torn_down(self) -> None:
+        # If nats-py's keepalive already fired (is_connected False, socket
+        # mid-reconnect), the proactive path must not double-tear-down.
+        relay, nc = _wedged_relay()
+        nc.is_connected = False
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD + 2):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+
+        nc.close.assert_not_awaited()
+        assert relay._nc is nc
+
+    @pytest.mark.anyio()
+    async def test_defers_when_client_reconnects_under_lock(self) -> None:
+        # Race: the _tracked gate saw is_connected=True and invoked
+        # _force_reconnect, but nats-py's keepalive flips the captured client
+        # to reconnecting (is_connected False, is_closed still False) before it
+        # acquires _connect_lock.  The under-lock guard must defer to nats-py's
+        # reconnect, not tear down a client already reconnecting.
+        relay, nc = _wedged_relay()
+
+        await relay._connect_lock.acquire()
+        task = asyncio.ensure_future(relay._force_reconnect())
+        await asyncio.sleep(0)  # let the task capture `wedged` and block on lock
+        nc.is_connected = False  # keepalive fires while we hold the lock
+        relay._connect_lock.release()
+        await task
+
+        nc.close.assert_not_awaited()
+        assert relay._nc is nc
+        assert relay._js is not None
+
+
+class TestCallbackGenerationGuard:
+    """Stale lifecycle callbacks from a superseded client must not touch state.
+
+    The connection callbacks (``_on_disconnect``/``_on_closed``) null
+    ``self._nc`` and the cached handles.  ``_force_reconnect`` closes the
+    wedged client and the next ``_ensure_connected`` dials a fresh one, so the
+    OLD client's callbacks can still fire asynchronously.  A per-connection
+    generation token makes a stale callback a no-op — it must never clear the
+    handles of the LIVE connection (Bugbot Medium).
+    """
+
+    @staticmethod
+    def _connect() -> AsyncMock:
+        return AsyncMock(side_effect=_fresh_nc)
+
+    @pytest.mark.anyio()
+    async def test_stale_callbacks_do_not_null_live_connection(self) -> None:
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()  # client A, generation 1
+            assert connect.await_args is not None
+            on_disconnect_a = connect.await_args.kwargs["disconnected_cb"]
+            on_closed_a = connect.await_args.kwargs["closed_cb"]
+
+            # Supersede A with a fresh client B (force reconnect + rebuild).
+            await relay._force_reconnect()
+            js_b, kv_b, names_b = MagicMock(), MagicMock(), MagicMock()
+            relay._provision = AsyncMock(return_value=(js_b, kv_b, names_b))  # type: ignore[method-assign]
+            await relay._ensure_connected()  # client B, generation 2
+            client_b = relay._nc
+            assert client_b is not None
+
+            # A's stale callbacks fire late — must be no-ops for B.
+            await on_closed_a()
+            await on_disconnect_a()
+
+        assert relay._nc is client_b
+        assert relay._js is js_b
+        assert relay._kv is kv_b
+        assert relay._names_kv is names_b
+
+    @pytest.mark.anyio()
+    async def test_current_close_callback_still_clears(self) -> None:
+        # The legitimate case must keep working: a close of the CURRENT client
+        # invalidates its _nc and handles.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+            assert relay._cached_handles() is not None
+            assert connect.await_args is not None
+            on_closed = connect.await_args.kwargs["closed_cb"]
+            await on_closed()
+
+        assert relay._nc is None
+        assert relay._js is None
+        assert relay._kv is None
+        assert relay._names_kv is None
+
+    @pytest.mark.anyio()
+    async def test_current_disconnect_callback_still_clears_handles(self) -> None:
+        # A disconnect of the CURRENT client invalidates handles (DES-029) but
+        # keeps _nc so nats-py's reconnect can rebuild on the same client.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+            assert connect.await_args is not None
+            on_disconnect = connect.await_args.kwargs["disconnected_cb"]
+            await on_disconnect()
+
+        assert relay._js is None
+        assert relay._kv is None
+        assert relay._names_kv is None
+        assert relay._nc is not None

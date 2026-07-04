@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-07-04T17:07:46.991220+00:00",
+  "timestamp": "2026-07-04T20:39:38.903583+00:00",
   "probcli_version": "unknown",
   "setsize": 2,
   "ok": true,
   "states_analysed": 6,
-  "transitions_fired": 31,
+  "transitions_fired": 32,
   "checks": [
     {
       "name": "init",
@@ -14,7 +14,7 @@
     {
       "name": "animate",
       "status": "passed",
-      "detail": "all ops covered"
+      "detail": "OK"
     },
     {
       "name": "cbc_assertions",
@@ -29,7 +29,7 @@
     {
       "name": "model_check",
       "status": "passed",
-      "detail": "6 states, 31 transitions"
+      "detail": "6 states, 32 transitions"
     }
   ],
   "operations": [
@@ -65,6 +65,11 @@
     },
     {
       "name": "Reconnect",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "ForceReconnect",
       "times_fired": 1,
       "covered": true
     },

@@ -62,10 +62,16 @@ times out.  If no transition can leave that state, the relay is
 wedged --- every tool call blocks on \texttt{nats: timeout} with
 no recovery (biff-tww).  This specification adds the half-open
 state explicitly and proves a liveness property: the connection
-can never be stuck there.  The proof is by deadlock analysis ---
-in the absence of a wedge-detection transition, probcli finds
-half-open to be a reachable terminal state, and that terminal
-state \emph{is} biff-tww.  With the recovery transition present,
+can never be stuck there.  Two independent transitions escape the
+wedge.  The keepalive detector ($WedgeDetected$) waits for
+nats-py's ping loop to declare the socket dead and hands it to the
+background reconnect; the proactive detector ($ForceReconnect$,
+biff-3hp) force-closes the socket after three consecutive request
+timeouts and drops the client, so the next lazy connect dials a
+fresh one.  The proof is by deadlock analysis --- in the absence
+of \emph{any} wedge-detection transition, probcli finds half-open
+to be a reachable terminal state, and that terminal state
+\emph{is} biff-tww.  With either recovery transition present,
 half-open is deadlock-free.
 
 %%----------------------------------------------------------------------
@@ -256,9 +262,14 @@ The relay's explicit, reversible \texttt{disconnect()}: it acts
 on a healthy $connected$ connection and releases it.  The next
 relay call reconnects via $EnsureConnected$.  It is deliberately
 \emph{not} the escape from $halfOpen$ --- the running server does
-not autonomously call \texttt{disconnect()} while wedged; only
-keepalive-driven wedge detection ($WedgeDetected$) can leave that
-state.
+not autonomously call \texttt{disconnect()} while wedged.  The
+wedge is left only by autonomous detection: the keepalive path
+($WedgeDetected$) or the proactive force-close ($ForceReconnect$),
+never by an ordinary \texttt{disconnect()}.  Note, however, that
+$disconnected$ is the state $ForceReconnect$ moves \emph{to}: a
+force-closed socket with its client dropped is, like a deliberate
+\texttt{disconnect()}, a connection whose next call must dial
+afresh.
 
 \subsection{Close (Permanent)}
 
@@ -352,16 +363,20 @@ with no way out.
   wtmpAvailable' = zfalse
 \end{schema}
 
-The recovery transition, and the entire content of the fix.
+The keepalive-driven recovery transition.
 Keepalive PINGs (\texttt{ping\_interval=20}, \texttt{max\_outstanding\_pings=3})
 detect that the server has stopped answering within
 $\sim$60\,s and fire nats-py's \texttt{\_on\_disconnect}, which
 invalidates the cached handles and hands the socket to nats-py's
-infinite reconnect loop.  $WedgeDetected$ is the \emph{only}
-operation enabled in $halfOpen$; removing it (the pre-fix code,
-whose \texttt{ping\_interval} default of 240\,s never fired in
-practice) makes $halfOpen$ a terminal state.  That terminal state
-is biff-tww, and probcli surfaces it as a reachable deadlock.
+infinite reconnect loop.  Before the proactive detector this was
+the \emph{only} operation enabled in $halfOpen$; removing it (the
+pre-fix code, whose \texttt{ping\_interval} default of 240\,s never
+fired in practice) made $halfOpen$ a terminal state, and probcli
+surfaced that terminal state --- biff-tww --- as a reachable
+deadlock (the frozen \texttt{nats-relay-passA-nowedge} artifacts).
+$ForceReconnect$ (below) now adds a second, faster escape from the
+same state; with either operation present, $halfOpen$ is
+deadlock-free.
 
 \subsection{Reconnect (nats-py Auto-Reconnect Completes)}
 
@@ -381,6 +396,64 @@ nats-py's background reconnect succeeds and fires
 handles.  This closes the recovery path
 $connected \to halfOpen \to reconnecting \to connected$, so no
 reachable state is stuck in $halfOpen$.
+
+\subsection{Force Reconnect (Proactive Wedge Teardown)}
+
+\begin{schema}{ForceReconnect}
+  \Delta Connection
+  \where
+  connState = halfOpen \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse
+\end{schema}
+
+The proactive escape from the wedge (\texttt{\_force\_reconnect},
+biff-3hp).  Where $WedgeDetected$ waits for nats-py's keepalive to
+declare the socket dead --- a $\sim$60--80\,s floor --- this
+operation acts on the relay's own evidence: after
+\texttt{\_WEDGE\_FORCE\_RECONNECT\_THRESHOLD} $= 3$ consecutive
+runtime request timeouts on a still-connected socket
+(\texttt{is\_connected} still true), \texttt{\_tracked} calls
+\texttt{safe\_close(nc)} and drops the client
+(\texttt{\_nc}, \texttt{\_js}, \texttt{\_kv}, \texttt{\_names\_kv}
+all set to $None$).  Each timed-out request blocks for the
+JetStream request timeout ($\sim$5\,s), so the bound is
+$3 \times 5\,\mathrm{s} \approx 15\,$s --- four to five times
+faster than the keepalive path.
+
+The target state is $disconnected$, not $reconnecting$.  This is
+the load-bearing distinction between the two escapes.
+$WedgeDetected$ leaves the \emph{same} client in nats-py's hands:
+the socket is handed to the background reconnect loop, so the
+model passes through $reconnecting$ and recovers by $Reconnect$.
+$ForceReconnect$ discards the client entirely; there is no socket
+left for nats-py to reconnect.  Recovery is therefore \emph{not} a
+new transition but the existing lazy connect: from $disconnected$,
+the next relay call fires $EnsureConnected$, whose slow path
+(\texttt{\_cached\_handles} returns $None$ because \texttt{\_nc}
+is $None$) dials a fresh \texttt{nats.connect} and re-provisions.
+The full proactive path is thus
+$connected \to halfOpen \to disconnected \to connected$, closed by
+operations the model already contains.
+
+The three-consecutive-timeout threshold is not modelled as a
+counter, and deliberately so.  The keepalive detector has its own
+three-missed-PING criterion (\texttt{max\_outstanding\_pings}),
+which the model abstracts into the single enabling of
+$WedgeDetected$ from $halfOpen$ rather than counting PINGs in the
+state.  Modelling one detector's threshold as explicit state while
+abstracting the other's would be asymmetric, and it would inflate
+the state space without strengthening the liveness property, which
+asks only that \emph{some} operation be enabled in $halfOpen$.
+The threshold is a latency parameter of the detector, recorded
+here in prose exactly as \texttt{ping\_interval} is recorded for
+$WedgeDetected$ --- not a component of $Connection$.  The
+handle-validity invariant is preserved: $ForceReconnect$ lands in
+$disconnected$ with every handle cleared, so no valid handle
+survives the wedge.
 
 %%----------------------------------------------------------------------
 \section{Session Presence}
@@ -640,16 +713,19 @@ verified by model checking with probcli (\texttt{z-spec test}):
     during a wedge are, in the model, no handles at all.
 
   \item \textbf{Wedge liveness (biff-tww)}: no reachable state is
-    stuck in $halfOpen$.  From $halfOpen$ the recovery sequence
-    $WedgeDetected \to Reconnect$ (via $reconnecting$) is always
-    enabled, so the connection cannot deadlock in the wedge.  The
-    proof is by deadlock analysis: removing $WedgeDetected$ (the
-    pre-fix code, whose keepalive ping never fired in time) makes
-    $halfOpen$ a reachable terminal state.  probcli surfaces it as
-    a deadlock along the trace
-    $EnsureConnected \to Request(reqTimeout)$, which \emph{is}
-    biff-tww.  With $WedgeDetected$ present the state space is
-    deadlock-free.
+    stuck in $halfOpen$.  Two independent recovery paths leave the
+    wedge: the keepalive path $WedgeDetected \to Reconnect$ (via
+    $reconnecting$, on the same client) and the proactive path
+    $ForceReconnect \to EnsureConnected$ (via $disconnected$, on a
+    fresh client).  Each is always enabled in $halfOpen$, so the
+    connection cannot deadlock in the wedge.  The proof is by
+    deadlock analysis: removing \emph{every} operation enabled in
+    $halfOpen$ (the pre-fix code, whose keepalive ping never fired
+    in time, with no proactive detector) makes $halfOpen$ a
+    reachable terminal state.  probcli surfaces it as a deadlock
+    along the trace $EnsureConnected \to Request(reqTimeout)$,
+    which \emph{is} biff-tww.  With either recovery transition
+    present the state space is deadlock-free.
 
   \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
     $streaming$, never to $idle$ or $stopped$.  The watcher
