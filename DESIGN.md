@@ -4808,3 +4808,67 @@ routing, self-talk guard, mutual-accept determinism, supersede,
 cross-repo, no PII regression), TDD red→green across both surfaces,
 ``make check`` (1545), hosted NATS E2E (33/33), tier-3b NATS E2E talk
 (14/14).
+
+## DES-044: Talk Notification Queue Bound — Drop-Oldest at 100
+
+**Date:** 2026-07-05
+**Status:** SETTLED
+**Topic:** Bound the talk notification queue; conform code and model to
+drop-oldest
+**Bead:** biff-vr4
+**Related:** DES-043 (session-scoped talk), ``docs/talk.tex``
+(``ReceiveOverflow``)
+
+### Context
+
+A z-spec coverage audit (jra) found a ``talk.tex`` model-vs-code
+divergence: the spec modelled a bounded notification queue, but the
+implementation used an unbounded ``asyncio.Queue``. That is the
+biff-tww shape — a bound the happy path never approaches — and a latent
+flood/DoS vector: a peer (or a NATS reconnect storm) can enqueue talk
+notifications faster than the 2-second poll drains them, growing memory
+without limit. The overflow-drop partition also had no test.
+
+The model itself was internally inconsistent with intent:
+``ReceiveOverflow`` was written as ``\Xi TalkState`` — state unchanged,
+i.e. the *incoming* notification is dropped (**drop-newest**) — which
+contradicts the operator ruling.
+
+### Decision
+
+1. **Bound the code to 100 with drop-oldest.** ``MAX_TALK_QUEUE = 100``.
+   A single non-blocking enqueue helper
+   (``_enqueue_talk_notification``) evicts the oldest entries
+   (``get_nowait`` in a ``while qsize() >= MAX`` loop) before
+   ``put_nowait`` — so length is pinned at 100 on overflow and the
+   newest 100 notifications are retained. It uses only the ``_nowait``
+   variants, so the NATS ``_on_notify`` callback never awaits and cannot
+   stall the event loop.
+
+2. **Conform the model to drop-oldest.** ``ReceiveOverflow`` changed
+   from ``\Xi`` (drop-newest) to ``\Delta TalkState`` with
+   ``queue' = tail~queue \cat \langle notif? \rangle`` and
+   ``queueLen' = queueLen`` — drop the head, append the new one, length
+   unchanged at ``maxQueueLen``. Operator ruling (Jim, 2026-07-04):
+   drop-oldest (keep newest — correct for a live conversation); do not
+   amend the spec to unbounded. The bound is legitimate: ProB
+   well-posedness plus a real unbounded-growth/DoS guard.
+
+### Rejected Alternatives
+
+- **``asyncio.Queue(maxsize=100)``.** Rejected: a bounded ``asyncio``
+  queue blocks the producer on ``put`` when full — here the producer is
+  the NATS callback on the event loop, so blocking would wedge inbound
+  delivery. Drop-oldest via the ``_nowait`` helper never blocks.
+- **Keep drop-newest (match the pre-change model).** Rejected: it
+  contradicts the operator ruling and drops the *newest* messages, which
+  is wrong for a live conversation. The model was corrected to the
+  ruling, not the code to the stale model.
+
+### Gate
+
+Spec-conformance / protocol change: ``z-spec check`` (fuzz OK) +
+exhaustive ``z-spec test`` at setsize 2 (``ReceiveOverflow`` covered,
+all states visited, deadlock-free, no counterexample), T2/T6 drop-oldest
+regression tests (red→green), ``make check`` (1550), hosted NATS E2E
+(33/33).
