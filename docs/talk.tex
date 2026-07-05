@@ -103,16 +103,48 @@ to the \texttt{type} field in the NATS JSON payload.
 \section{Global Constants}
 %%----------------------------------------------------------------------
 
+\begin{zed}
+  [QSLOT]
+\end{zed}
+
 \begin{axdef}
   maxQueueLen : \nat \\
   maxBodyLen : \nat
 \where
-  maxQueueLen = 100 \\
+  maxQueueLen = \# QSLOT \\
   maxBodyLen = 512
 \end{axdef}
 
-$maxQueueLen$ bounds the notification queue for animation.
-$maxBodyLen$ is the message body truncation limit.
+$maxQueueLen$ bounds the notification queue.  It is \emph{not} a fixed
+constant of the running system: the implementation's queue is
+memory-bounded, and its actual behaviour is documented in DES-043 ---
+it is not capped at any small number.  Here $maxQueueLen$ is defined as
+the cardinality of an abstract carrier $QSLOT$, the set of available
+queue slots, so that the bound is a \emph{scoping parameter} rather
+than a hard-wired value.  Because $QSLOT$ is a given set, its size is
+chosen by ProB --- uniformly by \texttt{DEFAULT\_SETSIZE}, or
+independently of the other carriers by \texttt{-card QSLOT}~$n$.  This
+lets an exhaustive check bound the queue small while keeping two
+distinct session keys, which is what exercises $MutualAutoAccept$.  The
+specification thus asserts only that the queue is bounded by some
+natural number; it pins that number to no value the real system does
+not enforce.  $maxBodyLen$ is the message body truncation limit.
+
+The intended verification is exhaustive model checking at set size~2,
+which supplies the two distinct session keys the mutual-invite
+tie-break requires:
+
+\begin{verbatim}
+probcli docs/talk.tex -model_check -noltl \
+  -p DEFAULT_SETSIZE 2 -card QSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 2000
+\end{verbatim}
+
+$MAX\_INITIALISATIONS$ must exceed the number of session identities
+($\# USER \times \# TTY \times \# SESSIONKEY$) that $Init$ leaves
+unconstrained, or ProB will silently drop initial states and report an
+incomplete exploration; at set size~2 the eight identities and two
+admissible $keyBelow$ orders together need at least sixteen.
 
 $keyBelow$ is a strict total order on session keys, modelling the
 lexicographic comparison the implementation uses to break mutual-invite
