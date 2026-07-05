@@ -1218,13 +1218,16 @@ class NatsRelay:
                 tty_count = tty_info.state.subjects.get(tty_subject, 0)
         except NotFoundError:
             pass
+        # Re-anchor to the current connection: the first _tracked's await
+        # may have let a concurrent loop rebuild self._nc, leaving `js`
+        # stale.  Fast path returns cached handles, so `owner = self._nc` at
+        # _tracked entry matches the connection this awaitable runs on
+        # (code-reviewer + alex-chen: residual two-_tracked race).  Kept OUT of
+        # the try below so a slow-path rebuild raising BucketNotFoundError (a
+        # NotFoundError subclass) surfaces as a provisioning failure instead of
+        # being swallowed into a tty_count-only undercount (silent-failure-hunter).
+        js, _ = await self._ensure_connected()
         try:
-            # Re-anchor to the current connection: the first _tracked's await
-            # may have let a concurrent loop rebuild self._nc, leaving `js`
-            # stale.  Fast path returns cached handles, so `owner = self._nc` at
-            # _tracked entry matches the connection this awaitable runs on
-            # (code-reviewer + alex-chen: residual two-_tracked race).
-            js, _ = await self._ensure_connected()
             user_info = await self._tracked(
                 "stream_info",
                 js.stream_info(self._stream_name, subjects_filter=user_subject),

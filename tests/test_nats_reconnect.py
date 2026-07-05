@@ -18,7 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from nats.js.errors import KeyNotFoundError
+from nats.js.errors import BucketNotFoundError, KeyNotFoundError, NotFoundError
 
 from biff.models import UserSession
 from biff.nats_relay import _WEDGE_FORCE_RECONNECT_THRESHOLD, NatsRelay
@@ -597,6 +597,75 @@ class TestSequentialTrackedRebuildRace:
         new_nc.close.assert_not_awaited()
         assert relay._nc is new_nc
         assert relay._kv is new_kv
+
+    @pytest.mark.anyio()
+    async def test_get_unread_summary_reanchor_provision_failure_propagates(
+        self,
+    ) -> None:
+        # The re-anchor _ensure_connected can raise BucketNotFoundError (a
+        # NotFoundError subclass) when a slow-path rebuild hits the
+        # js.key_value() fallback.  That is a connection/provisioning failure,
+        # not a genuine "0 unread" answer — it must propagate, not be swallowed
+        # into a tty_count-only undercount.
+        relay, _nc = _wedged_relay()
+
+        tty_subject = relay._subject_for_key("kai:tty1")
+        tty_info = MagicMock()
+        tty_info.state.subjects = {tty_subject: 3}
+
+        async def _tty_ok() -> object:
+            return tty_info
+
+        stale_js = MagicMock()
+        stale_js.stream_info = MagicMock(return_value=_tty_ok())
+
+        calls: list[int] = []
+
+        async def _ensure() -> tuple[object, object]:
+            calls.append(1)
+            if len(calls) == 1:
+                return stale_js, MagicMock()
+            raise BucketNotFoundError
+
+        with (
+            patch.object(relay, "_ensure_connected", _ensure),
+            pytest.raises(BucketNotFoundError),
+        ):
+            await relay.get_unread_summary("kai:tty1")
+
+    @pytest.mark.anyio()
+    async def test_get_unread_summary_second_stream_notfound_still_swallowed(
+        self,
+    ) -> None:
+        # Contrast: a genuine NotFoundError from the *second* stream_info (a
+        # missing user stream/subject) legitimately means 0 unread for that
+        # inbox and stays swallowed — the summary returns tty_count only.
+        relay, _nc = _wedged_relay()
+
+        tty_subject = relay._subject_for_key("kai:tty1")
+        tty_info = MagicMock()
+        tty_info.state.subjects = {tty_subject: 3}
+
+        async def _tty_ok() -> object:
+            return tty_info
+
+        async def _user_notfound() -> object:
+            raise NotFoundError
+
+        stale_js = MagicMock()
+        stale_js.stream_info = MagicMock(return_value=_tty_ok())
+        fresh_js = MagicMock()
+        fresh_js.stream_info = MagicMock(return_value=_user_notfound())
+
+        handles = iter([(stale_js, MagicMock()), (fresh_js, MagicMock())])
+
+        async def _ensure() -> tuple[object, object]:
+            return next(handles)
+
+        with patch.object(relay, "_ensure_connected", _ensure):
+            summary = await relay.get_unread_summary("kai:tty1")
+
+        assert summary.count == 3
         assert relay._health.consecutive_timeouts < _WEDGE_FORCE_RECONNECT_THRESHOLD
 
 
