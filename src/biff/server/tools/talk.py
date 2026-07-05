@@ -199,7 +199,11 @@ async def _do_talk(
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register talk tools."""
 
-    @mcp.tool(name="talk", description=TALK_BASE_DESCRIPTION)
+    @mcp.tool(
+        name="talk",
+        description=TALK_BASE_DESCRIPTION,
+        meta={"anthropic/alwaysLoad": True},
+    )
     @auto_enable(state)
     async def talk(to: str, message: str = "") -> str:
         """Accept an invite, send a message, or invite a teammate to talk.

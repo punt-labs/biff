@@ -158,6 +158,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @mcp.tool(
         name="read_messages",
         description="Check your inbox for new messages. Marks all as read.",
+        meta={"anthropic/alwaysLoad": True},
     )
     @auto_enable(state)
     async def read_messages() -> str:

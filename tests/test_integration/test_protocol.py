@@ -124,6 +124,43 @@ class TestToolListing:
             assert tool.inputSchema is not None, f"{tool.name} has no schema"
 
 
+class TestAlwaysLoadMeta:
+    """Verify the poll-marker tools opt out of Claude Code tool deferral.
+
+    Claude Code defers all MCP tools by default (loaded only via
+    ToolSearch), and a deferred tool's runtime-mutated description is not
+    reliably visible to the model.  biff surfaces incoming activity by
+    mutating the ``talk`` and ``read_messages`` descriptions, so both must
+    carry ``_meta['anthropic/alwaysLoad'] == True`` on the wire — the flag
+    Claude Code honors to keep a tool always-loaded.  Every other tool
+    stays deferred for token efficiency.
+    """
+
+    _ALWAYS_LOAD = "anthropic/alwaysLoad"
+
+    async def _meta_for(self, client: Client[Any], name: str) -> dict[str, Any]:
+        tools = await client.list_tools()
+        for tool in tools:
+            if tool.name == name:
+                assert tool.meta is not None, f"{name} has no _meta"
+                return tool.meta
+        raise AssertionError(f"{name} tool not found")
+
+    async def test_talk_is_always_loaded(self, biff_client: Client[Any]) -> None:
+        meta = await self._meta_for(biff_client, "talk")
+        assert meta.get(self._ALWAYS_LOAD) is True
+
+    async def test_read_messages_is_always_loaded(
+        self, biff_client: Client[Any]
+    ) -> None:
+        meta = await self._meta_for(biff_client, "read_messages")
+        assert meta.get(self._ALWAYS_LOAD) is True
+
+    async def test_non_marker_tool_is_deferred(self, biff_client: Client[Any]) -> None:
+        meta = await self._meta_for(biff_client, "who")
+        assert self._ALWAYS_LOAD not in meta
+
+
 class TestPlanToolProtocol:
     async def test_set_plan(self, biff_client: Client[Any], state: ServerState) -> None:
         result = await biff_client.call_tool("plan", {"message": "refactoring auth"})
