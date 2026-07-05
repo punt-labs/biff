@@ -108,27 +108,31 @@ to the \texttt{type} field in the NATS JSON payload.
 \end{zed}
 
 \begin{axdef}
-  maxQueueLen : \nat \\
+  maxQueueLen : \nat_1 \\
   maxBodyLen : \nat
 \where
+  QSLOT \neq \emptyset \\
   maxQueueLen = \# QSLOT \\
   maxBodyLen = 512
 \end{axdef}
 
-$maxQueueLen$ bounds the notification queue.  It is \emph{not} a fixed
-constant of the running system: the implementation's queue is
-memory-bounded, and its actual behaviour is documented in DES-043 ---
-it is not capped at any small number.  Here $maxQueueLen$ is defined as
-the cardinality of an abstract carrier $QSLOT$, the set of available
-queue slots, so that the bound is a \emph{scoping parameter} rather
-than a hard-wired value.  Because $QSLOT$ is a given set, its size is
-chosen by ProB --- uniformly by \texttt{DEFAULT\_SETSIZE}, or
-independently of the other carriers by \texttt{-card QSLOT}~$n$.  This
-lets an exhaustive check bound the queue small while keeping two
-distinct session keys, which is what exercises $MutualAutoAccept$.  The
-specification thus asserts only that the queue is bounded by some
-natural number; it pins that number to no value the real system does
-not enforce.  $maxBodyLen$ is the message body truncation limit.
+$maxQueueLen$ bounds the notification queue.  In the running system the
+queue is capped at a fixed $MAX\_TALK\_QUEUE = 100$ with drop-oldest
+eviction (DES-044).  In this model $maxQueueLen$ is deliberately
+\emph{not} pinned to $100$: it is the cardinality of an abstract carrier
+$QSLOT$, the set of available queue slots, so the bound is a
+\emph{scoping parameter} ProB can shrink for exhaustive checking rather
+than a hard-wired value.  $QSLOT$ is required non-empty, so
+$maxQueueLen \geq 1$ --- a queue with at least one slot, which keeps
+$ReceiveOverflow$ well defined ($tail$ is applied only to a non-empty
+queue).  Because $QSLOT$ is a given set, its size is chosen by ProB ---
+uniformly by \texttt{DEFAULT\_SETSIZE}, or independently of the other
+carriers by \texttt{-card QSLOT}~$n$.  This lets an exhaustive check
+bound the queue small while keeping two distinct session keys, which is
+what exercises $MutualAutoAccept$.  The specification asserts that the
+queue is bounded by some fixed natural number $\geq 1$; it deliberately
+does not fix that number to the concrete $100$ the implementation uses
+(DES-044).  $maxBodyLen$ is the message body truncation limit.
 
 The intended verification is exhaustive model checking at set size~2,
 which supplies the two distinct session keys the mutual-invite
