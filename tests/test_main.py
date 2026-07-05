@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
+import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
-from biff.__main__ import app
+from biff import logging_config
+from biff.__main__ import _suppress_nats_noise, app
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
+from biff.logging_config import configure_logging
 from biff.models import BiffConfig
+from biff.nats_relay import NatsRelay
+
+if TYPE_CHECKING:
+    import pytest
 
 runner = CliRunner()
 
@@ -475,3 +486,67 @@ class TestProductCommandErrorHandling:
     def test_value_error_exits_1(self, _mock_who: AsyncMock) -> None:
         result = runner.invoke(app, ["who"])
         assert result.exit_code == 1
+
+
+class TestNatsErrorStaysOffTerminal:
+    """A transient NATS error_cb reaches biff.log but never the REPL (biff-9la).
+
+    Boundary test: wire the real ``configure_logging`` + ``_suppress_nats_noise``
+    the CLI uses, fire the real ``error_cb``, and prove the terminal stays clean
+    while the file keeps the full record and traceback.  This is the exact
+    failure mode that dumped ``[ERROR] biff.nats_relay: NATS error: TimeoutError``
+    into the operator's interactive prompt.
+    """
+
+    def test_transient_error_is_file_only_not_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_file = tmp_path / "biff.log"
+        monkeypatch.setattr(logging_config, "_LOG_DIR", tmp_path)
+        monkeypatch.setattr(logging_config, "_LOG_FILE", log_file)
+
+        # dictConfig resolves ext://sys.stderr at configure time — capture it.
+        captured_stderr = io.StringIO()
+        monkeypatch.setattr(sys, "stderr", captured_stderr)
+
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = root.level
+        try:
+            configure_logging(stderr_level="WARNING")  # the REPL's floor
+            _suppress_nats_noise()
+
+            relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+            on_error = relay._connection_callbacks(relay._generation)["error_cb"]
+
+            # A real transient error — raised so it carries a traceback.
+            try:
+                raise TimeoutError(60, "Operation timed out")
+            except TimeoutError as exc:
+                raised = exc
+
+            async def _fire() -> None:
+                await on_error(raised)
+
+            asyncio.run(_fire())
+
+            for handler in root.handlers:
+                handler.flush()
+        finally:
+            for handler in root.handlers:
+                handler.close()
+            root.handlers[:] = saved_handlers
+            root.setLevel(saved_level)
+            logging.getLogger("biff.nats_relay").setLevel(logging.NOTSET)
+
+        # The interactive terminal stays clean — no error line, no traceback.
+        stderr_text = captured_stderr.getvalue()
+        assert "NATS error" not in stderr_text
+        assert "Traceback" not in stderr_text
+        assert "Operation timed out" not in stderr_text
+
+        # biff.log keeps the full record AND the traceback for diagnosis.
+        file_text = log_file.read_text(encoding="utf-8")
+        assert "NATS error" in file_text
+        assert "Traceback" in file_text
+        assert "Operation timed out" in file_text

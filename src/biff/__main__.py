@@ -99,9 +99,20 @@ def _install_eof_received_filter() -> None:
 
 
 def _suppress_nats_noise() -> None:
-    """Suppress nats.py noise common to all CLI invocations."""
+    """Suppress nats.py noise common to all CLI invocations.
+
+    Floor ``biff.nats_relay`` at INFO, not ERROR.  The two handler levels
+    already split terminal from file — stderr shows WARNING+, the file records
+    INFO+ (logging_config).  Capping the logger at ERROR defeated that split:
+    it dropped every transient connection log (disconnect, reconnect, wedge,
+    error_cb) from the FILE too, while the one ERROR-level line (error_cb)
+    still cleared the stderr floor and dumped a traceback into the interactive
+    REPL (biff-9la).  At INFO the transient events — all demoted to INFO in
+    nats_relay — reach biff.log for diagnosis and stay off the terminal, while
+    genuine WARNING+ anomalies (malformed messages) still surface.
+    """
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="nats")
-    logging.getLogger("biff.nats_relay").setLevel(logging.ERROR)
+    logging.getLogger("biff.nats_relay").setLevel(logging.INFO)
     _install_eof_received_filter()
 
 

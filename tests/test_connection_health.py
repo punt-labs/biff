@@ -60,10 +60,12 @@ def _connected_nc() -> MagicMock:
 
 
 def _onset_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    # INFO, not WARNING: the wedge onset is a transient, self-recovering event
+    # that must stay off the CLI's WARNING stderr floor (biff-9la).
     return [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and "NATS request timed out" in r.getMessage()
+        if r.levelno == logging.INFO and "NATS request timed out" in r.getMessage()
     ]
 
 
@@ -304,7 +306,9 @@ class TestLifecycleContext:
         health.record_disconnected()
 
         (record,) = [r for r in caplog.records if "Disconnected" in r.getMessage()]
-        assert record.levelno == logging.WARNING
+        # INFO, not WARNING: a disconnect is transient/auto-recovering and must
+        # stay off the CLI terminal — file only (biff-9la).
+        assert record.levelno == logging.INFO
         assert "after 30s connected" in record.getMessage()
 
     def test_reconnect_reports_downtime(
