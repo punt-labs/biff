@@ -464,6 +464,13 @@ class NatsRelay:
         connection — it must never force-reconnect a healthy client nor clear
         the live client's wedge latch (Copilot: tracked-timeout race).
         """
+        # WARNING: callers MUST NOT ``await`` between ``_ensure_connected()``
+        # and this call.  ``owner`` is the attribution token for the request;
+        # an ``await`` in that gap could let a force-reconnect swap ``self._nc``
+        # mid-flight, so a timeout on the now-stale handle would be misattributed
+        # to the fresh client and could spuriously force-reconnect it.  All 12
+        # call sites hold this: each calls ``_ensure_connected()`` then
+        # ``_tracked`` with only synchronous code between.
         owner = self._nc
         try:
             result = await awaitable
