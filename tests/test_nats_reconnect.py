@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from nats.js.errors import KeyNotFoundError
 
 from biff.nats_relay import _WEDGE_FORCE_RECONNECT_THRESHOLD, NatsRelay
 
@@ -57,6 +58,10 @@ async def _timeout() -> str:
 
 async def _ok() -> str:
     return "ok"
+
+
+async def _keynotfound() -> str:
+    raise KeyNotFoundError
 
 
 def _fresh_nc(*_a: object, **_k: object) -> MagicMock:
@@ -417,6 +422,56 @@ class TestTimeoutIdentityGuard:
         assert relay._health.consecutive_timeouts > 0
 
         assert await relay._tracked("stream_info", _ok()) == "ok"
+
+        assert relay._nc is nc
+        assert relay._health.consecutive_timeouts == 0
+
+    @pytest.mark.anyio()
+    async def test_keynotfound_on_superseded_client_does_not_clear_live_wedge(
+        self,
+    ) -> None:
+        # A "not found" is proof of server liveness, so _tracked charges it as a
+        # success.  But if the raising request belonged to a superseded client,
+        # that liveness signal must not clear the live client's wedge latch —
+        # the same identity guard the success/timeout paths use (Copilot:
+        # tracked-timeout race).
+        relay, _old_nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        new_nc = _live_nc()
+
+        async def _swap_then_keynotfound() -> str:
+            relay._nc = new_nc
+            raise KeyNotFoundError
+
+        with pytest.raises(KeyNotFoundError):
+            await relay._tracked("kv.get", _swap_then_keynotfound())
+
+        # The liveness signal belonged to the superseded client: the live
+        # client's wedge counter is untouched.
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+    @pytest.mark.anyio()
+    async def test_keynotfound_on_current_client_still_clears_wedge(self) -> None:
+        # Contrast: a KeyNotFoundError on the unchanged client is a live-server
+        # answer and still clears the latch and counter.
+        relay, nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert relay._health.consecutive_timeouts > 0
+
+        with pytest.raises(KeyNotFoundError):
+            await relay._tracked("kv.get", _keynotfound())
 
         assert relay._nc is nc
         assert relay._health.consecutive_timeouts == 0
