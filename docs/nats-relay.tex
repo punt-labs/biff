@@ -196,6 +196,8 @@ alongside the live one.
   kvProvisioned = ztrue \land
   streamsProvisioned = ztrue \land
   namesProvisioned = ztrue \\
+  connState \in \{ connected, reconnecting, halfOpen \} \implies
+  generation \geq 1 \\
   generation \leq maxGeneration
 \end{schema}
 
@@ -224,6 +226,19 @@ must survive.  A settle carries the generation it was issued on;
 comparing that to $generation$ is the model's \texttt{self.\_nc is
 owner} check.  It is bounded by $maxGeneration$ so the state space
 stays finite.
+
+The added invariant $connState \in \{ connected, reconnecting,
+halfOpen \} \implies generation \geq 1$ (equivalently $generation =
+0 \implies connState \in \{ disconnected, closed \}$) makes
+machine-checked the fact that reaching a live or recovering state
+requires at least one dial.  It holds by induction --- $generation$
+starts at $0$ in $disconnected$ and the only path to $connected$ is
+$EnsureConnected$ from $disconnected$, which bumps it to at least
+$1$ --- but stating it as an invariant proves the precondition
+$StaleRequestTimeout$ relies on: a superseded generation
+($owner? < generation$, hence $generation \geq 1$) must exist
+before a stale settle is possible.  It also guards against a future
+edit that reaches $connected$ without a dial.
 
 \begin{schema}{InitConnection}
   Connection'
@@ -546,6 +561,21 @@ $connected$, so it neither adds a transition out of $halfOpen$
 (the liveness proof is untouched) nor removes one (the current
 connection has other enabled operations, so no deadlock is
 introduced).
+
+Two subtleties are worth recording.  First, the $maxGeneration = 3$
+saturation clamp is sound only because no stated property
+distinguishes dials at or above the clamp: at saturation two
+distinct dials share the same $generation$ value, so $owner? <
+generation$ would treat a superseded timeout on the clamped dial as
+\emph{current} --- benign today, but load-bearing if
+$StaleRequestTimeout$ is ever strengthened to tie a request to a
+specific rebuild rather than to a monotone generation.  Second, the
+guard is a partial refinement of \texttt{self.\_nc is not owner}:
+$owner? < generation$ captures the redial-to-newer-live case (a
+fresh client already dialed), while the client-dropped-to-$None$
+-not-yet-redialed case is handled implicitly by the $connState =
+connected$ guard --- a settle arriving in that window lands in
+$disconnected$ or $reconnecting$, an unmodelled no-op.
 
 %%----------------------------------------------------------------------
 \section{Session Presence}
