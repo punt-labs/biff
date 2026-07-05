@@ -455,29 +455,40 @@ class NatsRelay:
         This is the choke point every hot-loop relay method routes its
         primary request through, so onset/recovery is logged once — never
         once per poller tick.
+
+        Health accounting is charged to the client that *owned* the request,
+        captured before the await.  If keepalive declares that client down and
+        ``_ensure_connected`` dials a fresh one while the request is pending,
+        ``self._nc`` no longer matches ``owner`` when the request settles.  A
+        timeout or success on a superseded client is then a no-op for the live
+        connection — it must never force-reconnect a healthy client nor clear
+        the live client's wedge latch (Copilot: tracked-timeout race).
         """
+        owner = self._nc
         try:
             result = await awaitable
         except TimeoutError:
-            nc = self._nc
-            is_connected = nc is not None and nc.is_connected
-            self._health.record_timeout(operation, is_connected=is_connected)
-            # Proactive wedge recovery (biff-3hp): only on a still-connected
-            # socket — if nats-py's keepalive already declared the connection
-            # down (is_connected False), it owns the reconnect.
-            if is_connected and self._health.should_force_reconnect(
-                _WEDGE_FORCE_RECONNECT_THRESHOLD
-            ):
-                await self._force_reconnect()
+            if self._nc is owner:
+                is_connected = owner is not None and owner.is_connected
+                self._health.record_timeout(operation, is_connected=is_connected)
+                # Proactive wedge recovery (biff-3hp): only on a still-connected
+                # socket — if nats-py's keepalive already declared the connection
+                # down (is_connected False), it owns the reconnect.
+                if is_connected and self._health.should_force_reconnect(
+                    _WEDGE_FORCE_RECONNECT_THRESHOLD
+                ):
+                    await self._force_reconnect()
             raise
         except (KeyNotFoundError, BucketNotFoundError, NotFoundError):
             # A "not found" is the server answering — proof of liveness.
             # Record success so last_ok/wedge counters stay accurate, then
             # re-raise so callers see identical behavior.  Do NOT treat other
             # errors (NoRespondersError, connection faults) as success.
-            self._health.record_success()
+            if self._nc is owner:
+                self._health.record_success()
             raise
-        self._health.record_success()
+        if self._nc is owner:
+            self._health.record_success()
         return result
 
     async def _force_reconnect(self) -> None:
@@ -561,6 +572,8 @@ class NatsRelay:
             self._names_kv = None
 
         async def _on_error(exc: Exception) -> None:
+            if self._generation != generation:
+                return  # stale callback from a superseded client
             # Python 3.14 raises APPLICATION_DATA_AFTER_CLOSE_NOTIFY during TLS
             # teardown.  Harmless — suppress.
             ssl_teardown = isinstance(exc, ssl.SSLError) and (
