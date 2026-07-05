@@ -252,8 +252,8 @@ A notification arrives from NATS and is appended to the queue.
 Self-echo (notifications from our own session key) is silently
 dropped.  A notification whose target session key $nto$ is not our
 own key is also dropped --- talk is session-scoped, so only the named
-session accepts it (DES-043).  The queue is bounded; overflow drops
-the notification.
+session accepts it (DES-043).  The queue is bounded; on overflow the
+oldest queued notification is dropped to make room (ReceiveOverflow).
 
 \begin{schema}{ReceiveNotification}
   \Delta TalkState \\
@@ -307,15 +307,27 @@ subject is shared, but only the named session accepts.
 \subsection{ReceiveOverflow}
 %%----------------------------------------------------------------------
 
-Queue is full; notification is dropped.
+Queue is full; the oldest queued notification is dropped and the new
+one appended (drop-oldest).  The newest $maxQueueLen$ notifications are
+retained; length stays at $maxQueueLen$.
 
 \begin{schema}{ReceiveOverflow}
-  \Xi TalkState \\
+  \Delta TalkState \\
   notif? : Notification
 \where
   queueLen = maxQueueLen \\
   notif?.nfromKey \neq myKey \\
-  notif?.nto = myKey
+  notif?.nto = myKey \\
+  queue' = tail~queue \cat \langle notif? \rangle \\
+  queueLen' = queueLen \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
+  pendingInvites' = pendingInvites
 \end{schema}
 
 %%----------------------------------------------------------------------

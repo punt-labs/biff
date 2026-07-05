@@ -19,11 +19,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from biff.__main__ import (
+    MAX_TALK_QUEUE,
     _AcceptOutcome,
     _check_for_accept,
     _consume_pending_invite,
     _drain_talk_messages,
     _drain_talk_notifications,
+    _enqueue_talk_notification,
     _talk_publish,
 )
 from biff.cli_session import CliContext
@@ -41,8 +43,70 @@ def _make_queue(
     return q
 
 
+def _drain_all(q: asyncio.Queue[dict[str, str]]) -> list[dict[str, str]]:
+    """Drain the queue into a list, preserving FIFO order."""
+    items: list[dict[str, str]] = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    return items
+
+
 MY_KEY = "kai:abc12345"
 OTHER_KEY = "eric:def67890"
+
+
+# -----------------------------------------------------------------------
+# Phase 0: _enqueue_talk_notification — bounded queue, drop-oldest
+# (talk.tex T2 maxQueueLen, T6 ReceiveOverflow; partition P3, biff-vr4)
+# -----------------------------------------------------------------------
+
+
+class TestEnqueueTalkNotification:
+    """The talk queue is bounded at MAX_TALK_QUEUE with drop-oldest overflow."""
+
+    def test_drops_oldest_when_full(self) -> None:
+        """T6/P3: at maxQueueLen, a new notif drops the oldest, keeps newest."""
+        q = _make_queue([{"seq": str(i)} for i in range(MAX_TALK_QUEUE)])
+        assert q.qsize() == MAX_TALK_QUEUE
+
+        _enqueue_talk_notification(q, {"seq": "new"})
+
+        assert q.qsize() == MAX_TALK_QUEUE  # length stays bounded
+        items = _drain_all(q)
+        assert {"seq": "0"} not in items  # oldest dropped
+        assert items[0] == {"seq": "1"}  # FIFO: new head is seq 1
+        assert items[-1] == {"seq": "new"}  # newest retained at tail
+
+    def test_no_drop_at_exactly_max(self) -> None:
+        """Boundary: filling to exactly maxQueueLen drops nothing."""
+        q = _make_queue([])
+        for i in range(MAX_TALK_QUEUE):
+            _enqueue_talk_notification(q, {"seq": str(i)})
+
+        items = _drain_all(q)
+        assert len(items) == MAX_TALK_QUEUE
+        assert items[0] == {"seq": "0"}  # oldest still present at the bound
+        assert items[-1] == {"seq": str(MAX_TALK_QUEUE - 1)}
+
+    def test_drop_begins_on_the_next_over_max(self) -> None:
+        """Boundary: the (maxQueueLen + 1)th notif is the first to drop."""
+        q = _make_queue([{"seq": str(i)} for i in range(MAX_TALK_QUEUE)])
+
+        _enqueue_talk_notification(q, {"seq": str(MAX_TALK_QUEUE)})
+
+        assert q.qsize() == MAX_TALK_QUEUE
+        items = _drain_all(q)
+        assert items[0] == {"seq": "1"}  # seq 0 dropped
+        assert items[-1] == {"seq": str(MAX_TALK_QUEUE)}  # newest kept
+
+    def test_below_max_appends_without_dropping(self) -> None:
+        """P1: below the bound, enqueue simply appends (no overflow)."""
+        q = _make_queue([{"seq": "0"}])
+
+        _enqueue_talk_notification(q, {"seq": "1"})
+
+        items = _drain_all(q)
+        assert items == [{"seq": "0"}, {"seq": "1"}]
 
 
 # -----------------------------------------------------------------------
