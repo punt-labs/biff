@@ -115,7 +115,6 @@ class TestPromptGateLifecycle:
         gate.clear()  # Start closed
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = CommandResult(text="output")
@@ -127,7 +126,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         # After the command completes, the gate should be set
@@ -142,7 +140,6 @@ class TestPromptGateLifecycle:
         gate.clear()
         notify = NotifyState()
         aqueue = _make_aqueue([""])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = CommandResult(text="")
@@ -154,7 +151,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert gate.is_set()
@@ -167,7 +163,6 @@ class TestPromptGateLifecycle:
         gate.clear()
         notify = NotifyState()
         aqueue = _make_aqueue(["badcmd"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.side_effect = ValueError("boom")
@@ -179,7 +174,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert gate.is_set()
@@ -192,7 +186,6 @@ class TestPromptGateLifecycle:
         gate.clear()
         notify = NotifyState()
         aqueue = _make_aqueue(["talk @eric"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.__main__._handle_repl_talk", new_callable=AsyncMock),
@@ -206,7 +199,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert gate.is_set()
@@ -229,7 +221,6 @@ class TestDispatchOutcomes:
         notify = NotifyState()
         # Put "exit" — dispatch returns None.
         aqueue = _make_aqueue(["exit"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = None  # exit signal
@@ -241,7 +232,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_dispatch.assert_awaited_once()
@@ -256,7 +246,6 @@ class TestDispatchOutcomes:
         # Put None directly — simulates EOF.
         q: asyncio.Queue[str | None] = asyncio.Queue()
         q.put_nowait(None)
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             await _repl_loop(
@@ -267,7 +256,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         # dispatch should NOT have been called (EOF before any input).
@@ -283,7 +271,6 @@ class TestDispatchOutcomes:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = CommandResult(text="3 online")
@@ -295,7 +282,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         captured = capsys.readouterr()
@@ -311,7 +297,6 @@ class TestDispatchOutcomes:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["badcmd"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.side_effect = ValueError("no relay")
@@ -323,7 +308,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         captured = capsys.readouterr()
@@ -346,7 +330,6 @@ class TestModeTransitions:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["talk @eric hello"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -362,7 +345,6 @@ class TestModeTransitions:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_talk.assert_awaited_once()
@@ -379,7 +361,6 @@ class TestModeTransitions:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["TALK @eric"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -395,7 +376,6 @@ class TestModeTransitions:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_talk.assert_awaited_once()
@@ -408,7 +388,6 @@ class TestModeTransitions:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -425,7 +404,6 @@ class TestModeTransitions:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_dispatch.assert_awaited_once()
@@ -448,7 +426,6 @@ class TestNotificationSync:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -463,7 +440,6 @@ class TestNotificationSync:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_sync.assert_awaited_once()
@@ -476,7 +452,6 @@ class TestNotificationSync:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["badcmd"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -491,7 +466,6 @@ class TestNotificationSync:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_sync.assert_not_awaited()
@@ -504,7 +478,6 @@ class TestNotificationSync:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["exit"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -519,7 +492,6 @@ class TestNotificationSync:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_sync.assert_not_awaited()
@@ -541,7 +513,6 @@ class TestMultiCommandSequence:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who", "status"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         call_count = 0
 
@@ -559,7 +530,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert call_count == 2
@@ -575,7 +545,6 @@ class TestMultiCommandSequence:
         q: asyncio.Queue[str | None] = asyncio.Queue()
         q.put_nowait("who")
         q.put_nowait("exit")
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         results: list[CommandResult | None] = [
             CommandResult(text="3 online"),
@@ -598,7 +567,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert call_idx == 2
@@ -613,7 +581,6 @@ class TestMultiCommandSequence:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["bad", "who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         call_idx = 0
 
@@ -633,7 +600,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert call_idx == 2
@@ -650,7 +616,6 @@ class TestMultiCommandSequence:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["talk @eric", "who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -668,7 +633,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_talk.assert_awaited_once()
@@ -721,7 +685,6 @@ class TestTimestampsCommand:
         notify = NotifyState()
         display = ReplDisplay()
         aqueue = _make_aqueue(["timestamps on"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             await _repl_loop(
@@ -732,7 +695,6 @@ class TestTimestampsCommand:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
                 display=display,
             )
 
@@ -747,25 +709,24 @@ class TestTimestampsCommand:
         Off → the talk renderer emits no stamp; after the loop processes
         `timestamps on`, the SAME display object makes the renderer prefix
         incoming messages with ``[HH:MM]``.  This connects the command path
-        (`_repl_loop`) to the render path (`_drain_talk_messages`) on one
+        (`_repl_loop`) to the render path (`_format_talk_lines`) on one
         display, showing the user-observable behavior change (biff-4uq).
         """
-        from biff.__main__ import _drain_talk_messages
+        from biff.__main__ import _format_talk_lines
+        from biff.talk_state import TalkNotification
 
         display = ReplDisplay()
-        session_key = "kai:abc12345"
-        talk_msg = {
-            "type": "message",
-            "from": "eric",
-            "from_tty": "tty2",
-            "body": "on it now",
-            "from_key": "eric:def67890",
-        }
+        talk_msg = TalkNotification(
+            ntype="message",
+            nfrom="eric",
+            nfrom_tty="tty2",
+            nfrom_key="eric:def67890",
+            nto="",
+            nbody="on it now",
+        )
 
         # Before: a received talk message renders without a stamp.
-        before: asyncio.Queue[dict[str, str]] = asyncio.Queue()
-        before.put_nowait(dict(talk_msg))
-        lines_before, _ = _drain_talk_messages(before, session_key, display)
+        lines_before = _format_talk_lines([talk_msg], display)
         assert re.search(r"\[\d{2}:\d{2}\]", lines_before[0]) is None
 
         # User types `timestamps on` at the REPL prompt.
@@ -773,7 +734,6 @@ class TestTimestampsCommand:
         gate = threading_mod.Event()
         gate.set()
         aqueue = _make_aqueue(["timestamps on"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock):
             await _repl_loop(
                 ctx,
@@ -783,14 +743,11 @@ class TestTimestampsCommand:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
                 display=display,
             )
 
         # After: the same display makes the renderer stamp the message.
-        after: asyncio.Queue[dict[str, str]] = asyncio.Queue()
-        after.put_nowait(dict(talk_msg))
-        lines_after, _ = _drain_talk_messages(after, session_key, display)
+        lines_after = _format_talk_lines([talk_msg], display)
         assert (
             re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ on it now", lines_after[0])
             is not None
@@ -830,7 +787,6 @@ class TestPromptOutputOrdering:
         gate = _RecordingGate(log)
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -846,7 +802,6 @@ class TestPromptOutputOrdering:
                 asyncio.Event(),
                 gate,  # type: ignore[arg-type]
                 ["prompt> "],
-                talk_q,
             )
 
         # A flush must have happened...
@@ -868,7 +823,6 @@ class TestPromptOutputOrdering:
         gate = _RecordingGate(log)
         notify = NotifyState()
         aqueue = _make_aqueue([""])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -884,7 +838,6 @@ class TestPromptOutputOrdering:
                 asyncio.Event(),
                 gate,  # type: ignore[arg-type]
                 ["prompt> "],
-                talk_q,
             )
 
         # No output → nothing to flush, but the gate must still open.

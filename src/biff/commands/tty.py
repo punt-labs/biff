@@ -36,6 +36,8 @@ async def tty(ctx: CliContext, name: str) -> CommandResult:
     # Update the frozen CliContext so subsequent calls (REPL) and
     # cli_session cleanup see the CURRENT name, not the stale original.
     object.__setattr__(ctx, "tty_name", claimed)
+    # Keep the talk state's outgoing from_tty in sync with the new name.
+    ctx.talk.set_tty_name(claimed)
 
     session = await ctx.relay.get_session(ctx.session_key)
     if session is None:
