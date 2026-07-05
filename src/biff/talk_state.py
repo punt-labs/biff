@@ -248,34 +248,44 @@ class TalkState:
     def poll_accept(self) -> tuple[AcceptOutcome, list[TalkNotification]]:
         """Drain the queue while inviting; detect accept or mutual auto-accept.
 
-        Returns ``(outcome, others)`` where *others* are third-party
-        notifications the front-end should show as banners.  Mirrors
-        talk.tex ``DrainAcceptWhileInviting`` (accept from the invited
-        session connects us), ``MutualAutoAccept`` (a mutual invite from
-        the invited session, our key higher, auto-accepts), and
-        ``DrainForeignAccept`` (any other accept is discarded).  On a
-        connecting outcome the phase advances to ``CONNECTED``.
+        Returns ``(outcome, banners)`` where *banners* are third-party
+        invites the front-end should show while we wait.  Mirrors talk.tex
+        ``DrainAcceptWhileInviting`` (accept from the invited session
+        connects us), ``MutualAutoAccept`` (a mutual invite from the invited
+        session, our key higher, auto-accepts), and ``DrainForeignAccept``
+        (any other accept is discarded).  On a connecting outcome the phase
+        advances to ``CONNECTED``.
+
+        Message and end frames are *preserved* in the queue (not returned
+        as banners): the accepter's opening line must render in the
+        connected conversation once ``Connected`` prints, not as a phone
+        banner during the handshake.
         """
         accepted = False
         auto = False
-        others: list[TalkNotification] = []
+        banners: list[TalkNotification] = []
+        keep: list[TalkNotification] = []
         for notif in self._drain():
             if notif.is_accept:
                 if notif.nfrom_key == self._partner_key:
                     accepted = True  # DrainAcceptWhileInviting
                 continue  # else DrainForeignAccept — discard
-            if notif.is_invite and notif.nfrom_key == self._partner_key:
-                if self._my_key > self._partner_key:
-                    auto = True  # MutualAutoAccept (higher key)
-                continue  # lower key keeps waiting; no banner
-            others.append(notif)
+            if notif.is_invite:
+                if notif.nfrom_key == self._partner_key:
+                    if self._my_key > self._partner_key:
+                        auto = True  # MutualAutoAccept (higher key)
+                    continue  # lower key keeps waiting; no banner
+                banners.append(notif)  # third-party invite → banner
+                continue
+            keep.append(notif)  # message / end — render after Connected
+        self._queue.extendleft(reversed(keep))
         if accepted or auto:
             self._phase = TalkPhase.CONNECTED
         if accepted:
-            return AcceptOutcome.ACCEPTED, others
+            return AcceptOutcome.ACCEPTED, banners
         if auto:
-            return AcceptOutcome.AUTO_ACCEPT, others
-        return AcceptOutcome.NONE, others
+            return AcceptOutcome.AUTO_ACCEPT, banners
+        return AcceptOutcome.NONE, banners
 
     def drain_connected(self) -> tuple[list[TalkNotification], bool]:
         """Drain the queue while connected; surface messages and remote hangup.

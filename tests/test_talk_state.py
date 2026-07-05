@@ -288,9 +288,23 @@ class TestPollAccept:
     def test_message_not_accept(self) -> None:
         st = self._inviting(OTHER_KEY)
         st.receive(_message("eric", OTHER_KEY, "hi"))
-        outcome, others = st.poll_accept()
+        outcome, banners = st.poll_accept()
         assert outcome is AcceptOutcome.NONE
-        assert len(others) == 1
+        # A message is not a banner — it is preserved for the connected loop.
+        assert banners == []
+        assert st.queued == 1
+
+    def test_opening_message_preserved_on_accept(self) -> None:
+        """The accepter's opening line survives poll_accept for the connected loop."""
+        st = self._inviting(OTHER_KEY)
+        st.receive(_accept("eric", OTHER_KEY))
+        st.receive(_message("eric", OTHER_KEY, "opening line"))
+        outcome, banners = st.poll_accept()
+        assert outcome is AcceptOutcome.ACCEPTED
+        assert banners == []
+        surfaced, ended = st.drain_connected()
+        assert [n.nbody for n in surfaced] == ["opening line"]
+        assert ended is False
 
 
 # ---------------------------------------------------------------------------

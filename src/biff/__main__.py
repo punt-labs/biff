@@ -313,6 +313,23 @@ def _print_hangup(notes: list[str]) -> None:
         print(note)
 
 
+def _render_connected_drain(
+    ctx: CliContext, repl_display: ReplDisplay, talk_prompt: str
+) -> bool:
+    """Drain queued talk frames, render them, and report a remote hangup.
+
+    Returns ``True`` when the partner ended the conversation (the caller
+    exits talk mode); otherwise reprints the talk prompt inline.
+    """
+    notifs, ended = ctx.talk.drain_connected()
+    notes = _format_talk_lines(notifs, repl_display)
+    if ended:
+        _print_hangup(notes)
+        return True
+    _print_inline_notifications(notes, talk_prompt)
+    return False
+
+
 async def _repl_talk(
     ctx: CliContext,
     target_user: str,
@@ -342,17 +359,19 @@ async def _repl_talk(
     print(f"Connected to {display}. Type 'end' to return to REPL.\n")
     _release_prompt(prompt_gate)
 
+    # Wake the first tick so the accepter's opening line (preserved by
+    # poll_accept) renders through the same drain path as every other
+    # incoming message — after Connected, in conversation format.  An empty
+    # drain is a harmless no-op (_print_inline_notifications skips no notes).
+    notify_event.set()
+
     try:
         while True:
             result = await _wait_for_input_or_notify(aqueue, notify_event)
             if result is _NO_INPUT:
                 notify_event.clear()
-                notifs, ended = ctx.talk.drain_connected()
-                notes = _format_talk_lines(notifs, repl_display)
-                if ended:
-                    _print_hangup(notes)
+                if _render_connected_drain(ctx, repl_display, talk_prompt):
                     break
-                _print_inline_notifications(notes, talk_prompt)
                 continue
 
             if result is None:
@@ -554,6 +573,9 @@ async def _talk_handshake(
     if len(args) > 1:
         print(f"you> {invite_body}")
 
+    # Clear the stdin thread's prompt first so the line lands clean, not
+    # appended to a stale ``user:tty ▶`` prompt (same pattern as :303/:311).
+    print("\r\033[K", end="")
     print(f"Waiting for {display} to respond... (type 'end' to cancel)")
 
     outcome = await _wait_for_talk_accept(ctx, aqueue, notify_event, prompt_gate)
