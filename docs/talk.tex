@@ -200,6 +200,7 @@ The talk state for a single REPL session.
   myKey : SESSIONKEY \\
   partner : USER \\
   partnerTty : TTY \\
+  partnerKey : SESSIONKEY \\
   pendingInvites : USER \pfun SESSIONKEY \\
   queue : \seq Notification \\
   queueLen : \nat
@@ -207,11 +208,15 @@ The talk state for a single REPL session.
   queueLen = \# queue \\
   queueLen \leq maxQueueLen \\
   phase = tpIdle \implies partner = myUser \\
-  phase = tpIdle \implies partnerTty = myTty
+  phase = tpIdle \implies partnerTty = myTty \\
+  phase = tpIdle \implies partnerKey = myKey
 \end{schema}
 
-When idle, $partner$ and $partnerTty$ are set to $myUser$ and
-$myTty$ as sentinel values (no active partner).  The
+When idle, $partner$, $partnerTty$, and $partnerKey$ are set to
+$myUser$, $myTty$, and $myKey$ as sentinel values (no active partner).
+$partnerKey$ records the exact session key we invited (or that invited
+us); it is the consent anchor for the accept handshake --- an accept is
+honoured only when its origin equals $partnerKey$ (DES-043).  The
 $pendingInvites$ partial function maps each user who has sent us an
 invite to that invite's originating session key --- the key a
 subsequent \texttt{talk} command uses to target its accept.  Because
@@ -231,7 +236,8 @@ notification queue populated by the NATS subscription callback.
   queue' = \langle \rangle \\
   queueLen' = 0 \\
   partner' = myUser' \\
-  partnerTty' = myTty'
+  partnerTty' = myTty' \\
+  partnerKey' = myKey'
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -264,6 +270,7 @@ the notification.
   myKey' = myKey \\
   partner' = partner \\
   partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites
 \end{schema}
 
@@ -336,15 +343,21 @@ newer invite from the same user supersedes the older one.
   myTty' = myTty \\
   myKey' = myKey \\
   partner' = partner \\
-  partnerTty' = partnerTty
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey
 \end{schema}
 
 %%----------------------------------------------------------------------
 \subsection{DrainAcceptWhileInviting}
 %%----------------------------------------------------------------------
 
-While in the inviting phase, an accept is drained from the queue.
-This completes the handshake and transitions to connected.
+While in the inviting phase, an accept from the very session we invited
+is drained from the queue.  This completes the handshake and transitions
+to connected.  The consent guard $(head~queue).nfromKey = partnerKey$ is
+essential: only the invited session's accept may connect us.  An accept
+from any other origin --- even one correctly addressed to us
+($nto = myKey$) --- must not complete the handshake, or a third party
+could forge the invited peer's consent (DES-043).
 
 \begin{schema}{DrainAcceptWhileInviting}
   \Delta TalkState
@@ -352,6 +365,7 @@ This completes the handshake and transitions to connected.
   phase = tpInviting \\
   queue \neq \langle \rangle \\
   (head~queue).ntype = ntAccept \\
+  (head~queue).nfromKey = partnerKey \\
   phase' = tpConnected \\
   queue' = tail~queue \\
   queueLen' = queueLen - 1 \\
@@ -360,6 +374,36 @@ This completes the handshake and transitions to connected.
   myKey' = myKey \\
   partner' = partner \\
   partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainForeignAccept}
+%%----------------------------------------------------------------------
+
+An accept whose origin is not the invited session ($nfromKey \neq
+partnerKey$) is drained and discarded without changing phase.  This is
+the model counterpart of the consent guard above: the initiator keeps
+waiting.  It also covers a stray accept arriving in any phase, matching
+the implementation, which drains the whole queue and honours only the
+invited peer's accept.
+
+\begin{schema}{DrainForeignAccept}
+  \Delta TalkState
+\where
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntAccept \\
+  (head~queue).nfromKey \neq partnerKey \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites
 \end{schema}
 
@@ -384,6 +428,7 @@ to the user.
   myKey' = myKey \\
   partner' = partner \\
   partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites
 \end{schema}
 
@@ -403,6 +448,7 @@ has hung up.  Transitions back to idle.
   phase' = tpIdle \\
   partner' = myUser \\
   partnerTty' = myTty \\
+  partnerKey' = myKey \\
   queue' = tail~queue \\
   queueLen' = queueLen - 1 \\
   myUser' = myUser \\
@@ -433,6 +479,7 @@ so the address must name a specific session; self-talk is disallowed
   phase' = tpInviting \\
   partner' = target? \\
   partnerTty' = targetTty? \\
+  partnerKey' = targetKey? \\
   queue' = queue \\
   queueLen' = queueLen \\
   myUser' = myUser \\
@@ -459,6 +506,7 @@ transitions directly to connected.
   phase' = tpConnected \\
   partner' = target? \\
   partnerTty' = targetTty? \\
+  partnerKey' = pendingInvites~target? \\
   pendingInvites' = \{ target? \} \ndres pendingInvites \\
   queue' = queue \\
   queueLen' = queueLen \\
@@ -489,6 +537,7 @@ exactly one side auto-accepts --- the handshake always completes.
 \where
   phase = tpInviting \\
   partnerKey? \neq myKey \\
+  partnerKey? = partnerKey \\
   (partnerKey? \mapsto myKey) \in keyBelow \\
   phase' = tpConnected \\
   myUser' = myUser \\
@@ -496,6 +545,7 @@ exactly one side auto-accepts --- the handshake always completes.
   myKey' = myKey \\
   partner' = partner \\
   partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
   queue' = queue \\
   queueLen' = queueLen
@@ -532,6 +582,7 @@ notification and transitions to idle.
   phase' = tpIdle \\
   partner' = myUser \\
   partnerTty' = myTty \\
+  partnerKey' = myKey \\
   queue' = queue \\
   queueLen' = queueLen \\
   myUser' = myUser \\
@@ -554,6 +605,7 @@ phase).  Cancels the invitation and returns to idle.
   phase' = tpIdle \\
   partner' = myUser \\
   partnerTty' = myTty \\
+  partnerKey' = myKey \\
   queue' = queue \\
   queueLen' = queueLen \\
   myUser' = myUser \\
@@ -610,6 +662,19 @@ The following properties must hold in all reachable states:
   total order, so for two distinct session keys exactly one satisfies
   the $MutualAutoAccept$ guard.  Simultaneous mutual invites always
   resolve; the handshake never deadlocks.
+
+\item \textbf{Accept consent boundary.}  An inviter transitions to
+  $tpConnected$ only via $DrainAcceptWhileInviting$ or
+  $MutualAutoAccept$, and both guard on $partnerKey$: the accept's
+  origin ($(head~queue).nfromKey = partnerKey$) or the mutual invite's
+  origin ($partnerKey? = partnerKey$) must equal the session we
+  invited.  Since $SendInvite$ sets $partnerKey$ to $targetKey?$ and no
+  operation reassigns it while inviting, a session in $tpConnected$
+  reached through the invite path is connected to exactly the peer it
+  invited.  An accept from any other origin is drained by
+  $DrainForeignAccept$ without changing phase, so a third party who
+  publishes an accept addressed to the inviter ($nto = myKey$) cannot
+  forge the invited peer's consent.
 \end{enumerate}
 
 \end{document}
