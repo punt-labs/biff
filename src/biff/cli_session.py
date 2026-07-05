@@ -96,7 +96,12 @@ async def _heartbeat_loop(
         except asyncio.CancelledError:
             return
         except Exception:  # noqa: BLE001
-            logger.warning("CLI heartbeat failed", exc_info=True)
+            # INFO, not WARNING: a transient NATS timeout auto-recovers on the
+            # next tick and must NOT dump a traceback into the interactive REPL.
+            # The stderr handler floors at WARNING, so INFO stays off the
+            # terminal while the file handler (INFO) keeps the full traceback
+            # for diagnosis.
+            logger.info("CLI heartbeat failed (transient); retrying", exc_info=True)
 
 
 async def _cli_session_cleanup(
