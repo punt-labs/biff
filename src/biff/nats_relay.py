@@ -464,13 +464,16 @@ class NatsRelay:
         connection — it must never force-reconnect a healthy client nor clear
         the live client's wedge latch (Copilot: tracked-timeout race).
         """
-        # WARNING: callers MUST NOT ``await`` between ``_ensure_connected()``
-        # and this call.  ``owner`` is the attribution token for the request;
-        # an ``await`` in that gap could let a force-reconnect swap ``self._nc``
-        # mid-flight, so a timeout on the now-stale handle would be misattributed
-        # to the fresh client and could spuriously force-reconnect it.  All 12
-        # call sites hold this: each calls ``_ensure_connected()`` then
-        # ``_tracked`` with only synchronous code between.
+        # INVARIANT: callers fetch the handle via ``_ensure_connected()``
+        # immediately before each ``_tracked``, with no ``await`` in between —
+        # so ``owner = self._nc`` at entry is the connection the awaitable runs
+        # on.  ``owner`` is the attribution token for the request; an ``await``
+        # in that gap could let a concurrent rebuild swap ``self._nc`` while the
+        # awaitable still runs on the stale handle, so a timeout on that handle
+        # would be misattributed to the fresh client and could spuriously
+        # force-reconnect it.  Sites issuing two sequential ``_tracked`` calls
+        # (``get_unread_summary``, ``heartbeat``) re-fetch the handle before the
+        # second one to preserve this.
         owner = self._nc
         try:
             result = await awaitable
@@ -1216,6 +1219,12 @@ class NatsRelay:
         except NotFoundError:
             pass
         try:
+            # Re-anchor to the current connection: the first _tracked's await
+            # may have let a concurrent loop rebuild self._nc, leaving `js`
+            # stale.  Fast path returns cached handles, so `owner = self._nc` at
+            # _tracked entry matches the connection this awaitable runs on
+            # (code-reviewer + alex-chen: residual two-_tracked race).
+            js, _ = await self._ensure_connected()
             user_info = await self._tracked(
                 "stream_info",
                 js.stream_info(self._stream_name, subjects_filter=user_subject),
@@ -1278,6 +1287,12 @@ class NatsRelay:
             logger.warning("Corrupt session for %s, skip heartbeat", session_key)
             return
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
+        # Re-anchor to the current connection: the kv.get above may have let a
+        # concurrent loop rebuild self._nc, leaving `kv` stale.  Fast path
+        # returns cached handles, so `owner = self._nc` at _tracked entry
+        # matches the connection this awaitable runs on — and the put runs on a
+        # live handle (code-reviewer + alex-chen: residual two-_tracked race).
+        _, kv = await self._ensure_connected()
         await self._tracked(
             "kv.put", kv.put(kv_key, updated.model_dump_json().encode())
         )

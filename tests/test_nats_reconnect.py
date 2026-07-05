@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from nats.js.errors import KeyNotFoundError
 
+from biff.models import UserSession
 from biff.nats_relay import _WEDGE_FORCE_RECONNECT_THRESHOLD, NatsRelay
 
 _LOGGER_NAME = "biff.nats_relay"
@@ -475,6 +476,128 @@ class TestTimeoutIdentityGuard:
 
         assert relay._nc is nc
         assert relay._health.consecutive_timeouts == 0
+
+
+class TestSequentialTrackedRebuildRace:
+    """The second of two sequential ``_tracked`` calls must re-anchor.
+
+    ``get_unread_summary`` and ``heartbeat`` each fetch a handle once and then
+    issue two sequential ``_tracked`` requests.  If a concurrent loop rebuilds
+    ``self._nc`` to a fresh live client during the first request's await, the
+    second request must run its awaitable on the *fresh* handle — not on the
+    stale one captured earlier.  Otherwise ``owner = self._nc`` reads the fresh
+    client while the awaitable runs on the stale one, so a stale-handle timeout
+    is misattributed to the healthy client and force-reconnects it
+    (code-reviewer + alex-chen: residual two-``_tracked`` race).
+    """
+
+    @pytest.mark.anyio()
+    async def test_get_unread_summary_second_op_reanchors(self) -> None:
+        relay, _old_nc = _wedged_relay()
+
+        # Wedge the current (old) client to threshold-1.
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        # The fresh, healthy client a concurrent loop installs mid-request.
+        new_nc = _live_nc()
+        new_js = MagicMock()
+        healthy_info = MagicMock()
+        healthy_info.state.subjects = {}
+
+        async def _rebuild_then_ok() -> object:
+            # A concurrent loop rebuilt the connection during this await.
+            relay._nc = new_nc
+            relay._js = new_js
+            return healthy_info
+
+        async def _stale_timeout() -> object:
+            raise TimeoutError
+
+        async def _fresh_ok() -> object:
+            return healthy_info
+
+        # The stale js captured at the top of get_unread_summary: the first op
+        # swaps the connection; a second op landing here would time out.
+        stale_calls: list[int] = []
+
+        def _stale_stream_info(*_a: object, **_k: object) -> object:
+            stale_calls.append(1)
+            if len(stale_calls) == 1:
+                return _rebuild_then_ok()
+            return _stale_timeout()
+
+        def _fresh_stream_info(*_a: object, **_k: object) -> object:
+            return _fresh_ok()
+
+        stale_js = MagicMock()
+        stale_js.stream_info = _stale_stream_info
+        new_js.stream_info = _fresh_stream_info
+        relay._js = stale_js
+
+        # With the fix the second op re-anchors to new_js and completes; without
+        # it, the stale-handle timeout force-reconnects the healthy new client.
+        await relay.get_unread_summary("kai:tty1")
+
+        new_nc.close.assert_not_awaited()
+        assert relay._nc is new_nc
+        assert relay._js is new_js
+        assert relay._health.consecutive_timeouts < _WEDGE_FORCE_RECONNECT_THRESHOLD
+
+    @pytest.mark.anyio()
+    async def test_heartbeat_second_op_reanchors(self) -> None:
+        relay, _old_nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        new_nc = _live_nc()
+        new_kv = MagicMock()
+
+        session = UserSession(user="kai", tty="tty1", plan="coding")
+        entry = MagicMock()
+        entry.value = session.model_dump_json().encode()
+
+        async def _get_then_rebuild() -> object:
+            relay._nc = new_nc
+            relay._kv = new_kv
+            return entry
+
+        async def _stale_put_timeout() -> object:
+            raise TimeoutError
+
+        async def _fresh_put_ok() -> object:
+            return MagicMock()
+
+        def _stale_get(*_a: object, **_k: object) -> object:
+            return _get_then_rebuild()
+
+        def _stale_put(*_a: object, **_k: object) -> object:
+            return _stale_put_timeout()
+
+        def _fresh_put(*_a: object, **_k: object) -> object:
+            return _fresh_put_ok()
+
+        stale_kv = MagicMock()
+        stale_kv.get = _stale_get
+        stale_kv.put = _stale_put
+        new_kv.put = _fresh_put
+        relay._kv = stale_kv
+
+        await relay.heartbeat("kai:tty1")
+
+        new_nc.close.assert_not_awaited()
+        assert relay._nc is new_nc
+        assert relay._kv is new_kv
+        assert relay._health.consecutive_timeouts < _WEDGE_FORCE_RECONNECT_THRESHOLD
 
 
 class TestCallbackGenerationGuard:
