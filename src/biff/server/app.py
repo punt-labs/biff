@@ -1006,7 +1006,21 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
             "All biff tool output is pre-formatted plain text using unicode "
             "characters for alignment. Always emit biff output verbatim — "
             "never reformat, never convert to markdown tables, never wrap "
-            "in code fences or boxes."
+            "in code fences or boxes.\n\n"
+            "HOW YOU RECEIVE (biff is passive/pull). Incoming talk invites, "
+            "talk messages, and /write mail are held on the server and surface "
+            "by MUTATING TOOL DESCRIPTIONS: the `talk` tool gains a leading "
+            "'[TALK] ...' and `read_messages` gains '(N unread)'. Both fire "
+            "tools/list_changed. NOTHING wakes you between turns — you only "
+            "notice a changed description on your NEXT activity. To stay "
+            "responsive you MUST run a poll loop: `/loop 1m /biff:poll`.\n\n"
+            "`/biff:poll` inspects those two descriptions and pulls ONLY when "
+            "one carries its marker — it is a description-check, not a blind "
+            "call. When `talk` shows '[TALK]', call `talk_read` (pending "
+            "invites + real-time messages); when `read_messages` shows "
+            "'(N unread)', call `read_messages` (mail). Reply with `talk` or "
+            "`write`. Cadence: talk is real-time (~1m); mail is async "
+            "(~5-10m)."
         ),
         lifespan=lifespan,
     )
