@@ -781,7 +781,11 @@ class TestCallbackGenerationGuard:
             caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
             await on_error_a(RuntimeError("boom from superseded client"))
 
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        errors = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.ERROR and r.name == _LOGGER_NAME
+        ]
         assert errors == [], "a superseded client's error_cb must no-op"
 
     @pytest.mark.anyio()
@@ -805,6 +809,8 @@ class TestCallbackGenerationGuard:
         errors = [
             r
             for r in caplog.records
-            if r.levelno == logging.ERROR and "boom" in r.getMessage()
+            if r.levelno == logging.ERROR
+            and r.name == _LOGGER_NAME
+            and "boom" in r.getMessage()
         ]
         assert len(errors) == 1
