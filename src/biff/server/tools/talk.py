@@ -1,18 +1,17 @@
-"""Real-time conversation tools — ``talk``, ``talk_listen``, ``talk_end``.
+"""Real-time conversation tools — ``talk``, ``talk_read``, ``talk_end``.
 
-``/talk`` initiates a real-time conversation with a teammate or agent.
-``/talk_listen`` blocks until a message arrives or times out.
-``/talk_end`` closes the conversation.
+Talk is ephemeral (BSD ``talk``): frames ride NATS core pub/sub with no
+durable inbox.  The MCP server holds a shared :class:`~biff.talk_state.TalkState`
+that an always-on subscription feeds (``_descriptions.subscribe_talk``);
+these tools drive it:
 
-Talk uses NATS core pub/sub for instant message notification.  When
-``/write`` delivers a message, :class:`~biff.nats_relay.NatsRelay`
-publishes a JSON notification on a core NATS subject carrying the
-sender and message body.  The background poller in ``_descriptions.py``
-subscribes to these notifications and writes the latest talk message
-to the unread status file so the status bar displays it within 0-2s.
-
-``talk_listen`` still exists for agent-to-agent conversations where
-blocking is appropriate.
+* ``talk`` — accept a pending invite (completing the human's handshake),
+  send a message while connected, or send an invite.  All ephemeral.
+* ``talk_read`` — drain the held state and return who wants to talk plus
+  any queued messages.  This is the tool the model calls after the
+  tool-list-changed push (DES-020/021).
+* ``talk_end`` — close the conversation (sends an end frame if connected).
+* ``talk_listen`` — the blocking variant for agent-to-agent flows.
 
 Talk is NATS-only.  LocalRelay and DormantRelay return an error message.
 """
@@ -20,7 +19,6 @@ Talk is NATS-only.  LocalRelay and DormantRelay return an error message.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -30,28 +28,23 @@ from biff.nats_relay import NatsRelay
 from biff.server.tools._activate import auto_enable
 from biff.server.tools._descriptions import (
     TALK_BASE_DESCRIPTION,
-    get_talk_partner,
     get_tty_name,
-    refresh_read_messages,
-    set_talk_partner,
+    refresh_talk,
 )
 from biff.server.tools._session import resolve_talk_target, update_current_session
-from biff.server.tools._tasks import fire_and_forget
+from biff.talk_state import TalkPhase
 from biff.tty import parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
+    from biff.talk_state import AgentDrain
 
 logger = logging.getLogger(__name__)
 
-_NO_MESSAGES = "No new messages. Still listening."
-
-
-def _reset_talk() -> None:
-    """Clear talk state — test isolation."""
-    set_talk_partner(None)
+_NO_MESSAGES = "No pending talk activity."
+_MAX_BODY = 512
 
 
 def format_talk_messages(messages: list[Message]) -> str:
@@ -72,158 +65,209 @@ async def fetch_all_unread(
     return sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
 
 
-async def _do_talk_listen(
+def format_agent_drain(drain: AgentDrain) -> str:
+    """Render a drained agent snapshot as human-readable talk output.
+
+    Lists pending invites (who wants to talk, with the accept hint and the
+    inviter's session key) followed by any queued messages and a hangup
+    line.  Empty when there is nothing to show.
+    """
+    lines: list[str] = []
+    for user, key in sorted(drain.pending.items()):
+        safe_user = terminal_safe(user)
+        lines.append(
+            f"📞 {safe_user} wants to talk — "
+            f"talk @{safe_user} to accept [{terminal_safe(key)}]"
+        )
+    for notif in drain.messages:
+        sender = terminal_safe(notif.nfrom)
+        sender_tty = terminal_safe(notif.nfrom_tty)
+        label = f"{sender}:{sender_tty}" if sender_tty else sender
+        if notif.is_end:
+            lines.append(f"{label} ended the conversation.")
+        elif notif.nbody:
+            lines.append(f"{label}: {terminal_safe(notif.nbody)}")
+    return "\n".join(lines)
+
+
+async def _resolve_target(
+    state: ServerState, user: str, tty: str | None
+) -> tuple[str, str, str | None]:
+    """Resolve an address to ``(relay_key, display, target_repo)`` or raise."""
+    all_sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
+    if not any(s.user == user for s in all_sessions):
+        msg = f"{user} is not online."
+        raise ValueError(msg)
+    return resolve_talk_target(
+        all_sessions,
+        user,
+        tty,
+        sender_key=state.session_key,
+        sender_repo=state.config.repo_name,
+    )
+
+
+async def _accept_invite(
     mcp: FastMCP[ServerState],
     state: ServerState,
-    relay: NatsRelay,
-    timeout: float,
+    *,
+    user: str,
+    relay_tty: str,
+    relay_key: str,
+    display: str,
+    target_repo: str | None,
+    message: str,
 ) -> str:
-    """Core talk_listen logic — subscribe, check inbox, block, return messages."""
-    user = state.config.user
-    session_key = state.session_key
-
-    nc = await relay.get_nc()
-    subject = relay.talk_notify_subject(user)
-
-    # Subscribe FIRST to avoid missing notifications during fetch.
-    event = asyncio.Event()
-
-    async def _on_notify(_msg: object) -> None:
-        # Filter targeted notifications not for this session.
-        data = getattr(_msg, "data", b"")
-        if data and data != b"1":
-            try:
-                raw: object = json.loads(data)
-                if isinstance(raw, dict):
-                    to_key = str(raw.get("to_key", ""))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
-                    if to_key and to_key != session_key:
-                        return
-            except (json.JSONDecodeError, TypeError):
-                logger.debug("Failed to parse talk notification", exc_info=True)
-        event.set()
-
-    sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
-        subject, cb=_on_notify
+    """Accept a pending invite (completing the human's handshake)."""
+    talk_state = state.talk
+    talk_state.begin_connected(
+        partner=user, partner_tty=relay_tty, partner_key=relay_key
     )
+    await talk_state.send_accept(
+        target_user=user, to_key=relay_key, target_repo=target_repo
+    )
+    if message:
+        await talk_state.send_message(
+            target_user=user, to_key=relay_key, body=message, target_repo=target_repo
+        )
+    await refresh_talk(mcp, state)
+    opening = f' Sent: "{terminal_safe(message[:_MAX_BODY])}".' if message else ""
+    return (
+        f"Connected to {display} — accepted their invite.{opening} "
+        "Use talk_read to see replies, talk_end to close."
+    )
+
+
+async def _do_talk(
+    mcp: FastMCP[ServerState], state: ServerState, to: str, message: str
+) -> str:
+    """Accept an invite, send a message while connected, or send an invite."""
+    talk_state = state.talk
+    if not isinstance(state.relay, NatsRelay):
+        return "Talk requires a NATS relay connection."
+    await update_current_session(state)
+    user, tty = parse_address(to)
+
+    pending_key = talk_state.consume_pending_invite(user)
+    resolve_user, resolve_tty = (user, tty)
+    if pending_key is not None:
+        resolve_user, _, resolve_tty = pending_key.partition(":")
     try:
-        # Check for existing unread messages.
-        all_unread = await fetch_all_unread(relay, session_key, user)
-        if all_unread:
-            await refresh_read_messages(mcp, state)
-            return format_talk_messages(all_unread)
+        relay_key, display, target_repo = await _resolve_target(
+            state, resolve_user, resolve_tty
+        )
+    except ValueError as exc:
+        return str(exc)
 
-        # No messages — wait for notification.
-        try:
-            await asyncio.wait_for(event.wait(), timeout=timeout)
-        except TimeoutError:
-            return _NO_MESSAGES
+    if pending_key is not None:
+        return await _accept_invite(
+            mcp,
+            state,
+            user=user,
+            relay_tty=resolve_tty or "",
+            relay_key=relay_key,
+            display=display,
+            target_repo=target_repo,
+            message=message,
+        )
 
-        # Notification received — fetch messages.
-        all_unread = await fetch_all_unread(relay, session_key, user)
-        if not all_unread:
-            return _NO_MESSAGES
+    connected_here = (
+        talk_state.phase is TalkPhase.CONNECTED and talk_state.partner_key == relay_key
+    )
+    if connected_here:
+        if not message:
+            return f"Already connected to {display}. Provide a message to send."
+        await talk_state.send_message(
+            target_user=user, to_key=relay_key, body=message, target_repo=target_repo
+        )
+        await refresh_talk(mcp, state)
+        return f'Sent to {display}: "{terminal_safe(message[:_MAX_BODY])}".'
 
-        await refresh_read_messages(mcp, state)
-        return format_talk_messages(all_unread)
-    finally:
-        await sub.unsubscribe()
+    talk_state.begin_invite(
+        partner=user, partner_tty=resolve_tty or "", partner_key=relay_key
+    )
+    invite_body = message or (
+        f"wants to talk — reply with: talk {state.config.user}:{get_tty_name()}"
+    )
+    await talk_state.send_invite(
+        target_user=user, to_key=relay_key, body=invite_body, target_repo=target_repo
+    )
+    await refresh_talk(mcp, state)
+    return f"Invite sent to {display}. When they accept, talk_read shows replies."
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register talk tools."""
 
-    @mcp.tool(
-        name="talk",
-        description=TALK_BASE_DESCRIPTION,
-    )
+    @mcp.tool(name="talk", description=TALK_BASE_DESCRIPTION)
     @auto_enable(state)
     async def talk(to: str, message: str = "") -> str:
-        """Initiate a talk session.
+        """Accept an invite, send a message, or invite a teammate to talk.
 
-        ``to`` is an address like ``@user`` or ``@user:tty``.
-        An optional opening message is sent immediately.
-        Once started, incoming messages from the partner appear on
-        the status bar within 0-2s.  Use ``/write`` to reply.
+        ``to`` is an address like ``@user`` or ``@user:tty``.  If that user
+        already invited you, this accepts (completing their handshake) and
+        sends *message* as the opening line.  If you are already connected,
+        *message* is sent.  Otherwise this sends an invite.  All frames are
+        ephemeral — no durable inbox.  Use ``talk_read`` to see replies.
         """
-        relay = state.relay
-        if not isinstance(relay, NatsRelay):
+        return await _do_talk(mcp, state, to, message)
+
+    @mcp.tool(
+        name="talk_read",
+        description=(
+            "Show pending talk invites and queued talk messages held by the "
+            "server, and mark them read. Call this after a talk notification."
+        ),
+    )
+    @auto_enable(state)
+    async def talk_read() -> str:
+        """Drain and return the held ephemeral talk state.
+
+        Returns who wants to talk (with the accept hint) plus any queued
+        messages.  Reads from the server-held ``TalkState`` — never the
+        durable inbox — so an unsolicited invite is surfaced even to a
+        fresh agent (biff-9la).
+        """
+        if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."
-
         await update_current_session(state)
-        user, tty = parse_address(to)
-
-        all_sessions = await relay.get_sessions_for_repos(state.visible_repos)
-        sessions = [s for s in all_sessions if s.user == user]
-        if not sessions:
-            return f"{user} is not online."
-
-        try:
-            relay_key, display_target, target_repo = resolve_talk_target(
-                all_sessions,
-                user,
-                tty,
-                sender_key=state.session_key,
-                sender_repo=state.config.repo_name,
-            )
-        except ValueError as exc:
-            return str(exc)
-        set_talk_partner(display_target)
-
-        if message:
-            msg = Message(
-                from_user=state.config.user,
-                from_tty=get_tty_name(),
-                to_user=relay_key,
-                body=message[:512],
-            )
-            await refresh_read_messages(mcp, state)
-            fire_and_forget(
-                relay.deliver(
-                    msg, sender_key=state.session_key, target_repo=target_repo
-                ),
-                logger=logger,
-                description="talk delivery",
-            )
-
-        return (
-            f"Talk session started with {display_target}. "
-            f"Replies appear on the status bar. Use /write to reply."
-        )
+        drain = state.talk.drain_for_agent()
+        await refresh_talk(mcp, state)
+        return format_agent_drain(drain) or _NO_MESSAGES
 
     @mcp.tool(
         name="talk_listen",
         description=(
-            "Block until a message arrives (agent-to-agent only). "
-            "Human sessions should NOT call this — incoming messages "
-            "appear on the status bar automatically after /talk."
+            "Block until talk activity arrives (agent-to-agent). Human "
+            "sessions are prompted to call talk_read by the tool list instead."
         ),
     )
     @auto_enable(state)
     async def talk_listen(timeout: int = 30) -> str:
-        """Block until a message arrives or timeout expires.
-
-        For agent-to-agent conversations where status bar display
-        is not available.  Human sessions use status bar auto-read
-        after ``/talk`` — do not call ``talk_listen`` in that case.
-        """
-        relay = state.relay
-        if not isinstance(relay, NatsRelay):
+        """Block until the held talk state has activity or *timeout* expires."""
+        if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."
-
         await update_current_session(state)
-        return await _do_talk_listen(mcp, state, relay, float(timeout))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + float(timeout)
+        while state.talk.queued == 0 and loop.time() < deadline:
+            await asyncio.sleep(0.25)
+        drain = state.talk.drain_for_agent()
+        await refresh_talk(mcp, state)
+        return format_agent_drain(drain) or _NO_MESSAGES
 
-    @mcp.tool(
-        name="talk_end",
-        description="End the current talk session.",
-    )
+    @mcp.tool(name="talk_end", description="End the current talk session.")
     @auto_enable(state)
     async def talk_end() -> str:
-        """Close the active talk session."""
-        partner = get_talk_partner()
-
-        if partner is None:
+        """Close the active talk session, sending an end frame if connected."""
+        talk_state = state.talk
+        if talk_state.phase is TalkPhase.IDLE:
             return "No active talk session."
-
-        set_talk_partner(None)
+        partner = talk_state.partner
+        if isinstance(state.relay, NatsRelay):
+            await talk_state.send_end(
+                target_user=partner, to_key=talk_state.partner_key
+            )
+        talk_state.reset()
+        await refresh_talk(mcp, state)
         return f"Talk session with {partner} ended."

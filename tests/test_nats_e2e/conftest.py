@@ -21,7 +21,6 @@ from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import _reset_session
-from biff.server.tools.talk import _reset_talk
 from biff.testing import NotificationTracker, RecordingClient, Transcript
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
@@ -35,7 +34,6 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     WORK_QUEUE consumer state can interfere across tests if only
     messages are purged.  Test nats-server is disposable.
     """
-    _reset_talk()
     yield
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
@@ -121,7 +119,6 @@ async def kai_tracked(
 ) -> AsyncIterator[tuple[Client[Any], NotificationTracker, ServerState]]:
     """MCP client for kai with notification tracking and NatsRelay."""
     _reset_session()
-    _reset_talk()
     tracker = NotificationTracker()
     config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(
@@ -131,7 +128,6 @@ async def kai_tracked(
     async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
         yield client, tracker, state
     _reset_session()
-    _reset_talk()
 
 
 @pytest.fixture

@@ -1,8 +1,10 @@
-"""NATS E2E tests for talk — real-time conversation over NATS.
+"""NATS E2E tests for talk — ephemeral real-time conversation over NATS.
 
-Two MCP servers (kai and eric) backed by NatsRelay.  Tests exercise
-the full talk flow: initiation, blocking listen, message delivery
-with instant notification, and session cleanup.
+Two MCP servers (kai and eric) backed by NatsRelay.  Talk is ephemeral
+(BSD talk): frames ride NATS core pub/sub with no durable inbox.  The
+receiving server holds the frame in its shared TalkState (fed by the
+always-on subscription); the model surfaces it via ``talk_read``.  These
+tests exercise the invite -> read -> accept -> message -> end round-trip.
 """
 
 from __future__ import annotations
@@ -19,47 +21,29 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import create_state
-from biff.server.tools.talk import _reset_talk
 from biff.testing import RecordingClient, Transcript
 
 pytestmark = pytest.mark.nats
 
-
-@pytest.fixture(autouse=True)
-def _clean_talk_state() -> None:  # pyright: ignore[reportUnusedFunction]
-    """Reset module-level talk state between tests."""
-    _reset_talk()
+_TEST_REPO = "_test-nats-e2e"
 
 
 class TestTalkInitiation:
-    """Starting a talk session."""
+    """Starting a talk session sends an ephemeral invite."""
 
-    async def test_talk_starts_session(
+    async def test_talk_sends_invite(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """kai can start a talk session with eric."""
-        # eric must be online (set a plan to register session)
+        """kai inviting eric returns an invite confirmation."""
         await eric.call("plan", message="available")
-
         result = await kai.call("talk", to="@eric:tty2", message="hey, review my PR?")
-        assert "Talk session started" in result
+        assert "Invite sent" in result
         assert "eric" in result
-
-    async def test_talk_with_opening_message_delivers(
-        self, kai: RecordingClient, eric: RecordingClient
-    ) -> None:
-        """Opening message in /talk is delivered to recipient's inbox."""
-        await eric.call("plan", message="available")
-
-        await kai.call("talk", to="@eric:tty2", message="check PR #42")
-        result = await eric.call("read_messages")
-        assert "check PR #42" in result
 
     async def test_talk_offline_user(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
         """Talk to an offline user returns error."""
-        # eric has NOT registered a session
         result = await kai.call("talk", to="@nobody")
         assert "not online" in result
 
@@ -78,75 +62,64 @@ class TestTalkInitiation:
         assert "your own session" in result
 
 
-class TestTalkListen:
-    """Blocking receive via talk_listen."""
+class TestTalkReceive:
+    """The invited agent surfaces the invite and messages via talk_read."""
 
-    async def test_listen_returns_existing_messages(
+    async def test_read_surfaces_invite(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """talk_listen returns messages already in the inbox."""
+        """After kai invites eric, eric's talk_read shows who wants to talk."""
         await eric.call("plan", message="available")
-        await kai.call("write", to="@eric", message="are you there?")
+        await kai.call("talk", to="@eric:tty2", message="are you there?")
+        await asyncio.sleep(0.3)  # let eric's subscription receive the frame
 
-        # eric calls talk_listen — message is already waiting
-        result = await eric.call("talk_listen", timeout=2)
-        assert "are you there?" in result
+        result = await eric.call("talk_read")
         assert "kai" in result
+        assert "wants to talk" in result
 
-    async def test_listen_timeout_no_messages(
+    async def test_read_no_activity(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """talk_listen returns timeout message when no messages arrive."""
+        """talk_read with nothing held returns the idle sentinel."""
         await eric.call("plan", message="available")
+        result = await eric.call("talk_read")
+        assert "No pending talk activity" in result
 
-        result = await eric.call("talk_listen", timeout=1)
-        assert "No new messages" in result
-
-    async def test_listen_wakes_on_notification(
+    async def test_listen_wakes_on_invite(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """talk_listen wakes instantly when a message is delivered."""
+        """talk_listen wakes when an invite frame arrives."""
         await eric.call("plan", message="available")
         await kai.call("plan", message="available")
 
-        # Start eric listening in background with long timeout
         listen_task = asyncio.create_task(eric.call("talk_listen", timeout=10))
-
-        # Give subscription time to be established
         await asyncio.sleep(0.3)
+        await kai.call("talk", to="@eric:tty2", message="urgent: deploy broken")
 
-        # kai sends a message — notification wakes eric
-        await kai.call("write", to="@eric", message="urgent: deploy broken")
-
-        # eric should receive quickly (not wait the full 10s)
         result = await asyncio.wait_for(listen_task, timeout=5.0)
-        assert "urgent: deploy broken" in result
         assert "kai" in result
+        assert "wants to talk" in result
 
-    async def test_listen_format_is_chat_style(
+    async def test_listen_timeout(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """talk_listen formats messages in chat style, not table."""
+        """talk_listen returns the idle sentinel when nothing arrives."""
         await eric.call("plan", message="available")
-        await kai.call("write", to="@eric", message="hello from talk")
-
-        result = await eric.call("talk_listen", timeout=2)
-        # Chat format: [HH:MM:SS] user: message
-        assert "] kai: hello from talk" in result
+        result = await eric.call("talk_listen", timeout=1)
+        assert "No pending talk activity" in result
 
 
 class TestTalkEnd:
     """Ending a talk session."""
 
-    async def test_end_active_session(
+    async def test_end_after_invite(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """talk_end closes an active session."""
+        """talk_end closes an outstanding invite (inviting phase)."""
         await eric.call("plan", message="available")
         await kai.call("talk", to="@eric:tty2")
-
         result = await kai.call("talk_end")
-        assert "Talk session with eric:tty2 ended" in result
+        assert "Talk session with eric ended" in result
 
     async def test_end_no_session(self, kai: RecordingClient) -> None:
         """talk_end with no active session returns error."""
@@ -155,82 +128,69 @@ class TestTalkEnd:
 
 
 class TestTalkConversation:
-    """Full talk conversation flow."""
+    """Full ephemeral talk conversation flow."""
 
     @pytest.mark.transcript
     async def test_full_talk_flow(
         self, kai: RecordingClient, eric: RecordingClient
     ) -> None:
-        """Complete talk conversation: initiate, exchange, end."""
+        """Complete conversation: invite, accept, exchange, end."""
         kai.transcript.title = "NATS E2E: talk conversation"
         kai.transcript.description = (
-            "Real-time conversation between two MCP servers via NATS."
+            "Ephemeral real-time conversation between two MCP servers via NATS."
         )
 
-        # Both online
         await kai.call("plan", message="implementing talk")
         await eric.call("plan", message="reviewing PRs")
 
-        # kai initiates talk with opening message
-        result = await kai.call(
-            "talk", to="@eric:tty2", message="can you review PR #42?"
-        )
-        assert "Talk session started" in result
+        # kai invites eric.
+        result = await kai.call("talk", to="@eric:tty2", message="review PR #42?")
+        assert "Invite sent" in result
 
-        # eric receives the opening message via talk_listen
-        result = await eric.call("talk_listen", timeout=2)
-        assert "can you review PR #42?" in result
+        # eric sees the invite and accepts by talking back.
+        await asyncio.sleep(0.3)
+        read = await eric.call("talk_read")
+        assert "kai" in read
+        result = await eric.call("talk", to="@kai:tty1", message="sure, looking now")
+        assert "accepted their invite" in result
 
-        # eric replies via write
-        await eric.call("write", to="@kai", message="sure, looking now")
+        # kai sees the acceptance/opening message and replies.
+        await asyncio.sleep(0.3)
+        read = await kai.call("talk_read")
+        assert "sure, looking now" in read
+        result = await kai.call("talk", to="@eric:tty2", message="thanks!")
+        assert "Sent to eric:tty2" in result
 
-        # kai receives reply via talk_listen
-        result = await kai.call("talk_listen", timeout=2)
-        assert "sure, looking now" in result
+        # eric sees the reply.
+        await asyncio.sleep(0.3)
+        read = await eric.call("talk_read")
+        assert "thanks!" in read
 
-        # kai ends the talk session
+        # kai ends the session.
         result = await kai.call("talk_end")
         assert "ended" in result
 
 
-_TEST_REPO = "_test-nats-e2e"
-
-
 class TestTalkTtyNameResolution:
-    """Talk resolves friendly tty_name to actual session key for delivery."""
+    """Talk resolves a friendly tty_name to the correct session (session-scoped)."""
 
-    async def test_talk_resolves_tty_name(
+    async def test_invite_reaches_named_session_only(
         self,
         nats_server: str,
         shared_data_dir: Path,
         transcript: Transcript,
     ) -> None:
-        """Opening message via /talk @user:tty_name reaches the correct session."""
-        # eric has two sessions: tty_a and tty_b (hex IDs).
-        # tty_a names itself "dev-laptop" via /tty.
-        # kai talks to @eric:dev-laptop — the message must reach tty_a, not tty_b.
+        """An invite to @eric:dev-laptop reaches tty_a's TalkState, not tty_b's."""
         eric_cfg = BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server)
         eric_a_state = create_state(
-            eric_cfg,
-            shared_data_dir / "eric-a",
-            tty="aaaa1111",
-            hostname="test",
-            pwd="/test",
+            eric_cfg, shared_data_dir / "eric-a", tty="aaaa1111", hostname="t", pwd="/t"
         )
         eric_b_state = create_state(
-            eric_cfg,
-            shared_data_dir / "eric-b",
-            tty="bbbb2222",
-            hostname="test",
-            pwd="/test",
+            eric_cfg, shared_data_dir / "eric-b", tty="bbbb2222", hostname="t", pwd="/t"
         )
         kai_cfg = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
         kai_state = create_state(
-            kai_cfg,
-            shared_data_dir / "kai",
-            tty="cccc3333",
-            hostname="test",
-            pwd="/test",
+            kai_cfg, shared_data_dir / "kai", tty="cccc3333", hostname="t", pwd="/t"
         )
 
         eric_a_mcp = create_server(eric_a_state)
@@ -250,61 +210,48 @@ class TestTalkTtyNameResolution:
             )
             kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
-            # Register both eric sessions
             await eric_a.call("plan", message="on laptop")
             await eric_b.call("plan", message="on desktop")
 
-            # Name eric_a's session "dev-laptop"
             result = await eric_a.call("tty", name="dev-laptop")
             assert "dev-laptop" in result
 
-            # kai talks to @eric:dev-laptop (friendly name, not hex ID)
             result = await kai_r.call(
                 "talk", to="@eric:dev-laptop", message="hey laptop session"
             )
-            assert "Talk session started" in result
+            assert "Invite sent" in result
             assert "eric:dev-laptop" in result
 
-            # eric_a (dev-laptop) should receive the message
-            result_a = await eric_a.call("read_messages")
-            assert "hey laptop session" in result_a
+            await asyncio.sleep(0.3)
+            result_a = await eric_a.call("talk_read")
+            assert "kai" in result_a
 
-            # eric_b should NOT have the message
-            result_b = await eric_b.call("read_messages")
-            assert "No new messages" in result_b
+            result_b = await eric_b.call("talk_read")
+            assert "No pending talk activity" in result_b
 
 
-class TestTalkSelfEcho:
-    """Notification payload includes sender session key for self-echo rejection."""
+class TestTalkInviteFrame:
+    """The invite frame carries session-scoped routing metadata."""
 
-    async def test_notification_carries_from_key(
+    async def test_invite_frame_carries_keys(
         self,
         nats_server: str,
         shared_data_dir: Path,
         transcript: Transcript,
     ) -> None:
-        """deliver() includes from_key in the NATS notification payload."""
+        """talk publishes an invite frame with from_key and to_key (DES-043)."""
         eric_cfg = BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server)
         eric_state = create_state(
-            eric_cfg,
-            shared_data_dir / "eric",
-            tty="eeee1111",
-            hostname="test",
-            pwd="/test",
+            eric_cfg, shared_data_dir / "eric", tty="eeee1111", hostname="t", pwd="/t"
         )
         kai_cfg = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
         kai_state = create_state(
-            kai_cfg,
-            shared_data_dir / "kai",
-            tty="kkkk1111",
-            hostname="test",
-            pwd="/test",
+            kai_cfg, shared_data_dir / "kai", tty="kkkk1111", hostname="t", pwd="/t"
         )
 
         eric_mcp = create_server(eric_state)
         kai_mcp = create_server(kai_state)
 
-        # Subscribe to eric's talk notification subject before any messages
         nc = await nats_lib.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
         received: list[bytes] = []
 
@@ -327,19 +274,16 @@ class TestTalkSelfEcho:
                 )
 
                 await eric_r.call("plan", message="available")
-
-                # kai talks to eric's session — this triggers a notification
                 await kai_r.call("talk", to="@eric:eeee1111", message="hello")
                 await asyncio.sleep(0.3)
 
-                # Notification carries from_key = kai's session key and
-                # to_key = eric's session key (session-scoped, DES-043).
                 assert len(received) >= 1
-                data = json.loads(received[0])
-                assert data["from"] == "kai"
-                assert data["body"] == "hello"
-                assert data["from_key"] == "kai:kkkk1111"
-                assert data["to_key"] == "eric:eeee1111"
+                frames = [json.loads(r) for r in received]
+                invite = next(f for f in frames if f.get("type") == "invite")
+                assert invite["from"] == "kai"
+                assert invite["body"] == "hello"
+                assert invite["from_key"] == "kai:kkkk1111"
+                assert invite["to_key"] == "eric:eeee1111"
         finally:
             await sub.unsubscribe()  # pyright: ignore[reportUnknownMemberType]
             await nc.close()

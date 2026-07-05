@@ -103,6 +103,7 @@ class TestToolListing:
             "who",
             "plan",
             "talk",
+            "talk_read",
             "talk_listen",
             "talk_end",
             "tty",

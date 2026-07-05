@@ -61,6 +61,21 @@ class AcceptOutcome(Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class AgentDrain:
+    """Result of an MCP agent-mode drain (non-modal front-end).
+
+    The MCP server is not modal like the REPL, so it drains the whole
+    queue in one pass: invites are recorded, an accept from the invited
+    session connects us, messages are surfaced, and an end resets to idle.
+    """
+
+    messages: tuple[TalkNotification, ...]
+    pending: Mapping[str, str]
+    connected: bool
+    ended: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TalkNotification:
     """A typed talk notification (talk.tex ``Notification`` schema)."""
 
@@ -282,6 +297,49 @@ class TalkState:
         if ended:
             self.reset()
         return surfaced, ended
+
+    def drain_for_agent(self) -> AgentDrain:
+        """Drain the whole queue in one non-modal pass for the MCP agent.
+
+        Records invites in ``pendingInvites`` (talk.tex DrainInvite), lets
+        an accept from the invited session complete an outstanding invite
+        (DrainAcceptWhileInviting / MutualAutoAccept), surfaces messages
+        and end frames, and resets to idle on a remote hangup (DrainEnd).
+        Returns an :class:`AgentDrain` snapshot; the ``talk`` tool then
+        decides whether to accept, connect, or invite.
+        """
+        messages: list[TalkNotification] = []
+        connected = False
+        ended = False
+        for notif in self._drain():
+            if notif.is_invite:
+                self._pending[notif.nfrom] = notif.nfrom_key
+                if (
+                    self._phase is TalkPhase.INVITING
+                    and notif.nfrom_key == self._partner_key
+                    and self._my_key > self._partner_key
+                ):
+                    self._phase = TalkPhase.CONNECTED
+                    connected = True
+            elif notif.is_accept:
+                if (
+                    self._phase is TalkPhase.INVITING
+                    and notif.nfrom_key == self._partner_key
+                ):
+                    self._phase = TalkPhase.CONNECTED
+                    connected = True
+            elif notif.is_end:
+                ended = True
+                messages.append(notif)
+                self.reset()
+            else:
+                messages.append(notif)
+        return AgentDrain(
+            messages=tuple(messages),
+            pending=dict(self._pending),
+            connected=connected,
+            ended=ended,
+        )
 
     # -- Local transitions (talk.tex Send*/Respond/End operations) --
 

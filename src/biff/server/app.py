@@ -923,6 +923,9 @@ async def _active_lifespan(
         repo=state.config.repo_name,
     )
     set_tty_name(final_name)
+    # Keep the shared talk state's outgoing from_tty in sync with the
+    # claimed display name (talk_state.py send_* frames).
+    state.talk.set_tty_name(final_name)
     # Register this session as active so SessionEnd hooks can find it.
     # Written after register_session succeeds so the invariant
     # "marker exists iff KV row exists" holds under registration failure.

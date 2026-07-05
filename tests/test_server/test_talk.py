@@ -13,7 +13,6 @@ from biff.nats_relay import NatsRelay
 from biff.server.tools._session import resolve_talk_target
 from biff.server.tools.talk import (
     _NO_MESSAGES,
-    _reset_talk,
     format_talk_messages,
 )
 
@@ -65,21 +64,6 @@ class TestFormatTalkMessages:
         assert "\x1b[2J" not in result
         assert "\x1b[2K" not in result
         assert "hi[2Jthere" in result
-
-
-class TestTalkState:
-    def test_initial_state_is_none(self) -> None:
-        _reset_talk()
-        from biff.server.tools._descriptions import get_talk_partner
-
-        assert get_talk_partner() is None
-
-    def test_reset_clears_partner(self) -> None:
-        from biff.server.tools._descriptions import get_talk_partner, set_talk_partner
-
-        set_talk_partner("eric")
-        _reset_talk()
-        assert get_talk_partner() is None
 
 
 class TestResolveTalkTarget:
@@ -214,5 +198,4 @@ class TestValidatedSenderKey:
 
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:
-        assert "No new messages" in _NO_MESSAGES
-        assert "listening" in _NO_MESSAGES.lower()
+        assert "talk" in _NO_MESSAGES.lower()
