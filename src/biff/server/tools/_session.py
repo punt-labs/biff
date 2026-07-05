@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING
 
 from biff.models import UserSession
 from biff.server.tools._descriptions import get_tty_name
+from biff.tty import build_session_key
+
+_NO_SESSION_HINT = (
+    "Talk needs a specific session — use talk @user:ttyN (run /who to see ttys)."
+)
+_SELF_TALK = "You can't talk to your own session."
 
 if TYPE_CHECKING:
     from biff.server.state import ServerState
@@ -102,6 +108,42 @@ def resolve_tty_name(
         if local:
             return local[0]
     return candidates[0]
+
+
+def resolve_talk_target(
+    sessions: Sequence[UserSession],
+    user: str,
+    tty: str | None,
+    *,
+    sender_key: str,
+    sender_repo: str = "",
+) -> tuple[str, str, str | None]:
+    """Resolve a talk address to a specific session.
+
+    Returns ``(session_key, display, target_repo)``.  Talk is
+    session-scoped: the address MUST name a session
+    (``@user:ttyN``).  A bare ``@user`` has no unambiguous target
+    and raises ``ValueError`` directing the caller to a session.
+
+    *target_repo* is set when the resolved session runs in a repo
+    other than *sender_repo* (cross-repo talk, DES-030).
+
+    Raises ``ValueError`` when *tty* is missing (no session named) or
+    when the resolved key equals *sender_key* (self-talk).
+    """
+    if not tty:
+        raise ValueError(_NO_SESSION_HINT)
+    session = resolve_tty_name(sessions, user, tty, local_repo=sender_repo)
+    target_repo: str | None = None
+    if session is not None:
+        key = build_session_key(session.user, session.tty)
+        if session.repo and sender_repo and session.repo != sender_repo:
+            target_repo = session.repo
+    else:
+        key = f"{user}:{tty}"
+    if key == sender_key:
+        raise ValueError(_SELF_TALK)
+    return key, f"{user}:{tty}", target_repo
 
 
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:

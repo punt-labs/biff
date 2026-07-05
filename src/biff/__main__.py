@@ -24,9 +24,10 @@ import queue as queue_mod
 import sys
 import threading as threading_mod
 import warnings
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
+from enum import Enum, auto
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -37,7 +38,6 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
     from nats.aio.client import Client as NatsClient
 
-    from biff.models import UserSession
     from biff.server.state import ServerState
 
 from biff import commands
@@ -194,18 +194,19 @@ def _handle_timestamps(args: list[str], repl_display: ReplDisplay) -> None:
 def _drain_talk_notifications(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
-    pending_invites: set[str] | None = None,
+    pending_invites: dict[str, str] | None = None,
     # None keeps the historical timestamp-free banner for callers/tests that
     # predate the display toggle — see ReplDisplay (biff-4uq).
     display: ReplDisplay | None = None,
 ) -> list[str]:
     """Drain talk notification queue and return banner lines.
 
-    When *pending_invites* is provided, invite senders are recorded
-    so ``_has_pending_invite`` can check later (after the notification
-    has been displayed and drained from the queue).  When *display* has
-    timestamps enabled, incoming message banners carry a local ``[HH:MM]``
-    stamp, matching modal talk mode.
+    When *pending_invites* is provided, each invite records the inviter's
+    session key under the inviter's user so ``_consume_pending_invite``
+    can later target the accept at that exact session.  A newer invite
+    from the same user supersedes the older one (DES-043).  When
+    *display* has timestamps enabled, incoming message banners carry a
+    local ``[HH:MM]`` stamp, matching modal talk mode.
     """
     lines: list[str] = []
     if talk_notifications is None:
@@ -227,7 +228,8 @@ def _drain_talk_notifications(
         if msg_type == "accept":
             continue  # Silent — handled by _wait_for_talk_accept.
         if msg_type == "invite" and pending_invites is not None:
-            pending_invites.add(sender)
+            # Latest invite wins — supersedes any older pending invite.
+            pending_invites[data.get("from", "")] = data.get("from_key", "")
         if msg_type == "invite" and body:
             lines.append(f"  \033[1;33m📞 {sender}: {body}\033[0m")
         elif body:
@@ -243,7 +245,7 @@ async def _poll_notify(
     notify: object,
     prompt: str,
     talk_notifications: asyncio.Queue[dict[str, str]] | None = None,
-    pending_invites: set[str] | None = None,
+    pending_invites: dict[str, str] | None = None,
     *,
     inline: bool = False,
     display: ReplDisplay | None = None,
@@ -350,31 +352,12 @@ def _print_inline_notifications(notes: list[str], prompt: str) -> None:
         print(prompt, end="", flush=True)
 
 
-def _resolve_from_sessions(
-    sessions: Sequence[UserSession],
-    user: str,
-    tty: str | None,
-    sender_repo: str,
-) -> tuple[str, str | None]:
-    """Resolve a target from a pre-fetched session list.
+class _AcceptOutcome(Enum):
+    """Result of waiting for a talk invitation to be accepted."""
 
-    Returns ``(relay_key, target_repo)``.  Delegates to
-    :func:`resolve_tty_name` for consistent disambiguation.
-    """
-    from biff.server.tools._session import resolve_tty_name
-    from biff.tty import build_session_key
-
-    if not tty:
-        return user, None
-    target_repo: str | None = None
-    resolved = resolve_tty_name(sessions, user, tty, local_repo=sender_repo)
-    if resolved:
-        target = build_session_key(resolved.user, resolved.tty)
-        if resolved.repo and resolved.repo != sender_repo:
-            target_repo = resolved.repo
-    else:
-        target = f"{user}:{tty}"
-    return target, target_repo
+    NONE = auto()  # nothing yet — keep waiting
+    ACCEPTED = auto()  # the partner accepted our invite
+    AUTO_ACCEPT = auto()  # mutual invite; we are the higher key and auto-accept
 
 
 async def _talk_publish(
@@ -383,9 +366,15 @@ async def _talk_publish(
     msg_type: str,
     body: str = "",
     *,
+    to_key: str,
     target_repo: str | None = None,
 ) -> None:
-    """Publish a talk notification to the target user."""
+    """Publish a session-scoped talk notification to *target_user*.
+
+    *to_key* is the target session key; the per-user notify subject is
+    shared, so the ``to_key`` field is what routes the notification to a
+    single session (DES-043).
+    """
     from biff.nats_relay import NatsRelay
 
     if not isinstance(ctx.relay, NatsRelay):
@@ -398,6 +387,7 @@ async def _talk_publish(
             "from_tty": ctx.tty_name,
             "body": body,
             "from_key": ctx.session_key,
+            "to_key": to_key,
         }
     ).encode()
     subject = ctx.relay.talk_notify_subject(target_user, target_repo=target_repo)
@@ -423,6 +413,7 @@ async def _repl_talk(
     talk_notifications: asyncio.Queue[dict[str, str]],
     repl_display: ReplDisplay,
     *,
+    to_key: str,
     target_repo: str | None = None,
 ) -> None:
     """Modal talk sub-loop — send lines to target, show incoming messages.
@@ -461,12 +452,19 @@ async def _repl_talk(
 
             line = result.strip()
             if line.lower() == "end":
-                await _talk_publish(ctx, target_user, "end", target_repo=target_repo)
+                await _talk_publish(
+                    ctx, target_user, "end", to_key=to_key, target_repo=target_repo
+                )
                 break
 
             if line:
                 await _talk_publish(
-                    ctx, target_user, "message", line[:512], target_repo=target_repo
+                    ctx,
+                    target_user,
+                    "message",
+                    line[:512],
+                    to_key=to_key,
+                    target_repo=target_repo,
                 )
 
             _release_prompt(prompt_gate)
@@ -503,7 +501,7 @@ async def _repl_loop(
     from biff.dispatch import dispatch
 
     repl_display = display if display is not None else ReplDisplay()
-    pending_invites: set[str] = set()
+    pending_invites: dict[str, str] = {}
 
     while True:
         result = await _wait_for_input_or_notify(aqueue, notify_event)
@@ -573,23 +571,40 @@ async def _repl_loop(
         _release_prompt(prompt_gate)
 
 
-def _has_pending_invite(pending_invites: set[str], from_user: str) -> bool:
-    """Check if there's a pending invite from a specific user.
+def _consume_pending_invite(
+    pending_invites: dict[str, str], from_user: str
+) -> str | None:
+    """Pop and return the inviter's session key for *from_user*.
 
-    Consumes the invite from the set so it's one-shot.
+    One-shot: the pending invite is removed.  Returns ``None`` when no
+    usable invite exists (absent, or an invite with no session key).
     """
-    if from_user in pending_invites:
-        pending_invites.discard(from_user)
-        return True
-    return False
+    return pending_invites.pop(from_user, None) or None
+
+
+def _display_talk_banner(data: dict[str, str]) -> None:
+    """Print a third-party notification as a terminal-safe banner."""
+    sender = terminal_safe(data.get("from", "?"))
+    body = terminal_safe(data.get("body", ""))
+    if body:
+        print(f"\r\033[K  \033[1;33m📞 {sender}: {body}\033[0m")
 
 
 def _check_for_accept(
     talk_notifications: asyncio.Queue[dict[str, str]],
     session_key: str,
-) -> bool:
-    """Drain notifications, return True if an accept was found."""
-    found = False
+    target_key: str,
+) -> _AcceptOutcome:
+    """Drain notifications; detect an accept or a mutual-invite auto-accept.
+
+    Returns ``ACCEPTED`` when the partner accepted our invite.  Returns
+    ``AUTO_ACCEPT`` when the partner we invited has independently invited
+    us and our session key is the lexicographically higher one — the
+    deterministic tie-break that prevents mutual-invite deadlock: the
+    lower key stays the inviter, the higher key auto-accepts (DES-043).
+    """
+    accepted = False
+    auto = False
     while not talk_notifications.empty():
         try:
             data = talk_notifications.get_nowait()
@@ -597,15 +612,27 @@ def _check_for_accept(
             break
         if data.get("from_key", "") == session_key:
             continue
-        if data.get("type") == "accept":
-            found = True
+        msg_type = data.get("type")
+        if msg_type == "accept":
+            # Consent boundary: only the session we invited may accept.  An
+            # accept from any other origin — even one targeted at us — is
+            # ignored, exactly as a mismatched to_key would be.
+            if data.get("from_key", "") == target_key:
+                accepted = True
             continue
-        # Display non-accept notifications as banners.
-        sender = terminal_safe(data.get("from", "?"))
-        body = terminal_safe(data.get("body", ""))
-        if body:
-            print(f"\r\033[K  \033[1;33m📞 {sender}: {body}\033[0m")
-    return found
+        if msg_type == "invite" and data.get("from_key", "") == target_key:
+            # Mutual invite from the very session we invited.  The higher
+            # key auto-accepts; the lower key stays inviting (no banner).
+            if session_key > target_key:
+                auto = True
+            continue
+        # Display non-accept notifications from third parties as banners.
+        _display_talk_banner(data)
+    if accepted:
+        return _AcceptOutcome.ACCEPTED
+    if auto:
+        return _AcceptOutcome.AUTO_ACCEPT
+    return _AcceptOutcome.NONE
 
 
 async def _wait_for_talk_accept(
@@ -614,31 +641,56 @@ async def _wait_for_talk_accept(
     notify_event: asyncio.Event,
     talk_notifications: asyncio.Queue[dict[str, str]],
     prompt_gate: threading_mod.Event,
-) -> bool:
-    """Wait for the target to accept the talk invitation.
+    target_key: str,
+) -> _AcceptOutcome:
+    """Wait for the target to accept, or for a mutual-invite auto-accept.
 
-    Returns ``True`` if an accept notification was received,
-    ``False`` if the user typed ``end`` or EOF.
+    Returns the :class:`_AcceptOutcome`; ``NONE`` when the user typed
+    ``end`` or EOF before any accept arrived.
     """
     while True:
         result = await _wait_for_input_or_notify(aqueue, notify_event)
         if result is _NO_INPUT:
             notify_event.clear()
-            if _check_for_accept(talk_notifications, ctx.session_key):
-                return True
+            outcome = _check_for_accept(talk_notifications, ctx.session_key, target_key)
+            if outcome is not _AcceptOutcome.NONE:
+                return outcome
             continue
 
         if result is None or not isinstance(result, str):
-            return False
+            return _AcceptOutcome.NONE
         if result.strip().lower() in ("end", "exit", "quit"):
-            return False
+            return _AcceptOutcome.NONE
         _release_prompt(prompt_gate)
+
+
+async def _publish_talk_control(
+    nc: object,
+    subject: str,
+    msg_type: str,
+    ctx: CliContext,
+    to_key: str,
+    body: str = "",
+) -> None:
+    """Publish a session-scoped invite/accept control notification."""
+    data = json.dumps(
+        {
+            "type": msg_type,
+            "from": ctx.user,
+            "from_tty": ctx.tty_name,
+            "body": body,
+            "from_key": ctx.session_key,
+            "to_key": to_key,
+        }
+    ).encode()
+    await nc.publish(subject, data)  # type: ignore[attr-defined]
 
 
 async def _talk_handshake(
     ctx: CliContext,
     nc: object,
     target_subject: str,
+    target_key: str,
     display: str,
     args: list[str],
     responding: bool,
@@ -650,14 +702,7 @@ async def _talk_handshake(
     """Execute the talk handshake. Returns True if talk should proceed."""
     if responding:
         # We're accepting an existing invite. Send accept, enter talk.
-        accept_data = json.dumps(
-            {
-                "type": "accept",
-                "from": ctx.user,
-                "from_key": ctx.session_key,
-            }
-        ).encode()
-        await nc.publish(target_subject, accept_data)  # type: ignore[attr-defined]
+        await _publish_talk_control(nc, target_subject, "accept", ctx, target_key)
         return True
 
     # We're initiating. Send invite and wait for accept.
@@ -665,25 +710,19 @@ async def _talk_handshake(
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
 
-    invite_data = json.dumps(
-        {
-            "type": "invite",
-            "from": ctx.user,
-            "body": invite_body,
-            "from_key": ctx.session_key,
-        }
-    ).encode()
-    await nc.publish(target_subject, invite_data)  # type: ignore[attr-defined]
+    await _publish_talk_control(
+        nc, target_subject, "invite", ctx, target_key, invite_body
+    )
 
     if len(args) > 1:
         print(f"you> {invite_body}")
 
     print(f"Waiting for {display} to respond... (type 'end' to cancel)")
 
-    accepted = await _wait_for_talk_accept(
-        ctx, aqueue, notify_event, talk_notifications, prompt_gate
+    outcome = await _wait_for_talk_accept(
+        ctx, aqueue, notify_event, talk_notifications, prompt_gate, target_key
     )
-    if not accepted:
+    if outcome is _AcceptOutcome.NONE:
         print(f"Talk with {display} cancelled.")
         try:
             s = await ctx.relay.get_session(ctx.session_key)
@@ -692,6 +731,10 @@ async def _talk_handshake(
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).debug("Failed to clear plan")
         return False
+    if outcome is _AcceptOutcome.AUTO_ACCEPT:
+        # Mutual invite: we are the higher key — accept the partner's invite
+        # so their side stops waiting.  Deterministic, no deadlock (DES-043).
+        await _publish_talk_control(nc, target_subject, "accept", ctx, target_key)
     return True
 
 
@@ -704,15 +747,16 @@ async def _handle_repl_talk(
     current_prompt: list[str],
     repl_prompt: str,
     talk_notifications: asyncio.Queue[dict[str, str]],
-    pending_invites: set[str],
+    pending_invites: dict[str, str],
     repl_display: ReplDisplay,
 ) -> None:
     """Parse talk args and enter modal talk mode."""
     from biff.nats_relay import NatsRelay
+    from biff.server.tools._session import resolve_talk_target
     from biff.tty import parse_address
 
     if not args:
-        print("Usage: talk @user [message]")
+        print("Usage: talk @user:ttyN [message]")
         return
 
     try:
@@ -721,8 +765,6 @@ async def _handle_repl_talk(
         print(f"Error: {exc}")
         return
 
-    display = f"{user_target}:{tty_target}" if tty_target else user_target
-
     if not isinstance(ctx.relay, NatsRelay):
         print("Talk requires a NATS relay.")
         return
@@ -730,13 +772,28 @@ async def _handle_repl_talk(
     all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     sessions = [s for s in all_sessions if s.user == user_target]
     if not sessions:
-        print(f"{display} is not online.")
+        print(f"{user_target} is not online.")
         return
 
-    # Determine target_repo for cross-repo talk notifications.
-    _, target_repo = _resolve_from_sessions(
-        all_sessions, user_target, tty_target, ctx.config.repo_name
-    )
+    # Responding to a pending invite targets the exact inviting session;
+    # otherwise the address itself must name the session (talk is
+    # session-scoped — DES-043).
+    responding_key = _consume_pending_invite(pending_invites, user_target)
+    responding = responding_key is not None
+    resolve_user, resolve_tty = (user_target, tty_target)
+    if responding_key is not None:
+        resolve_user, _, resolve_tty = responding_key.partition(":")
+    try:
+        target_key, display, target_repo = resolve_talk_target(
+            all_sessions,
+            resolve_user,
+            resolve_tty,
+            sender_key=ctx.session_key,
+            sender_repo=ctx.config.repo_name,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return
 
     # Update plan to show talk activity.
     session = await ctx.relay.get_session(ctx.session_key)
@@ -747,14 +804,11 @@ async def _handle_repl_talk(
     nc = await ctx.relay.get_nc()
     target_subject = ctx.relay.talk_notify_subject(user_target, target_repo=target_repo)
 
-    # Two-phase handshake: check if we're responding to an invite
-    # or initiating a new conversation.
-    responding = _has_pending_invite(pending_invites, user_target)
-
     if not await _talk_handshake(
         ctx,
         nc,
         target_subject,
+        target_key,
         display,
         args,
         responding,
@@ -776,6 +830,7 @@ async def _handle_repl_talk(
         repl_prompt,
         talk_notifications,
         repl_display,
+        to_key=target_key,
         target_repo=target_repo,
     )
 
@@ -1469,10 +1524,10 @@ async def _talk_interactive(to: str, opening: str) -> None:
     """Interactive talk loop using the shared CLI session lifecycle."""
     from biff.models import Message
     from biff.nats_relay import NatsRelay
+    from biff.server.tools._session import resolve_talk_target
     from biff.tty import parse_address
 
     user_target, tty_target = parse_address(to)
-    display = f"{user_target}:{tty_target}" if tty_target else user_target
 
     try:
         async with cli_session(interactive=True, user_override=_user_override) as ctx:
@@ -1486,10 +1541,18 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 print(f"{user_target} is not online.")
                 return
 
-            # Resolve :tty suffix via the already-fetched sessions list.
-            target, target_repo = _resolve_from_sessions(
-                all_sessions, user_target, tty_target, ctx.config.repo_name
-            )
+            # Talk is session-scoped: the address must name a session.
+            try:
+                target, display, target_repo = resolve_talk_target(
+                    all_sessions,
+                    user_target,
+                    tty_target,
+                    sender_key=ctx.session_key,
+                    sender_repo=ctx.config.repo_name,
+                )
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                raise typer.Exit(code=1) from None
 
             # Update plan to show talk activity.
             session = await ctx.relay.get_session(ctx.session_key)

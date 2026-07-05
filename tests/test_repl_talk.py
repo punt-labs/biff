@@ -19,10 +19,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from biff.__main__ import (
+    _AcceptOutcome,
     _check_for_accept,
+    _consume_pending_invite,
     _drain_talk_messages,
     _drain_talk_notifications,
-    _has_pending_invite,
     _talk_publish,
 )
 from biff.cli_session import CliContext
@@ -359,7 +360,7 @@ class TestDrainTalkMessages:
 
 class TestDrainTalkNotifications:
     def test_records_pending_invites(self) -> None:
-        pending: set[str] = set()
+        pending: dict[str, str] = {}
         q = _make_queue(
             [
                 {
@@ -371,7 +372,8 @@ class TestDrainTalkNotifications:
             ]
         )
         lines = _drain_talk_notifications(q, MY_KEY, pending)
-        assert "eric" in pending
+        # The inviter's session key is recorded so the accept can target it.
+        assert pending["eric"] == OTHER_KEY
         assert len(lines) == 1
         assert "📞" in lines[0]
 
@@ -395,18 +397,18 @@ class TestDrainTalkNotifications:
                 },
             ]
         )
-        pending: set[str] = set()
+        pending: dict[str, str] = {}
         lines = _drain_talk_notifications(q, MY_KEY, pending)
         assert lines == []
-        assert pending == set()
+        assert pending == {}
 
     def test_none_queue(self) -> None:
         lines = _drain_talk_notifications(None, MY_KEY)
         assert lines == []
 
-    def test_duplicate_invite_sender_idempotent(self) -> None:
-        """Partition 13: same sender invited twice, set unchanged."""
-        pending: set[str] = {"eric"}
+    def test_newer_invite_supersedes(self) -> None:
+        """A newer invite from the same user overrides the older session key."""
+        pending: dict[str, str] = {"eric": "eric:oldsess"}
         q = _make_queue(
             [
                 {
@@ -418,11 +420,12 @@ class TestDrainTalkNotifications:
             ]
         )
         _drain_talk_notifications(q, MY_KEY, pending)
-        assert pending == {"eric"}  # Set union is idempotent
+        # Latest invite wins — supersede (DES-043).
+        assert pending == {"eric": OTHER_KEY}
 
     def test_multiple_invite_senders(self) -> None:
         """Partition 14: two different invite senders both recorded."""
-        pending: set[str] = set()
+        pending: dict[str, str] = {}
         q = _make_queue(
             [
                 {"type": "invite", "from": "eric", "body": "hi", "from_key": OTHER_KEY},
@@ -435,7 +438,7 @@ class TestDrainTalkNotifications:
             ]
         )
         _drain_talk_notifications(q, MY_KEY, pending)
-        assert pending == {"eric", "priya"}
+        assert pending == {"eric": OTHER_KEY, "priya": "priya:xyz"}
 
     def test_no_pending_invites_without_set(self) -> None:
         """Invites are NOT recorded when pending_invites is None."""
@@ -524,38 +527,37 @@ class TestDrainTalkNotifications:
 # -----------------------------------------------------------------------
 
 
-class TestHasPendingInvite:
-    def test_found(self) -> None:
-        pending = {"eric", "priya"}
-        assert _has_pending_invite(pending, "eric") is True
+class TestConsumePendingInvite:
+    def test_found_returns_key(self) -> None:
+        pending = {"eric": OTHER_KEY, "priya": "priya:xyz"}
+        assert _consume_pending_invite(pending, "eric") == OTHER_KEY
 
-    def test_not_found(self) -> None:
-        pending = {"priya"}
-        assert _has_pending_invite(pending, "eric") is False
-        assert pending == {"priya"}  # Unchanged
+    def test_not_found_returns_none(self) -> None:
+        pending = {"priya": "priya:xyz"}
+        assert _consume_pending_invite(pending, "eric") is None
+        assert pending == {"priya": "priya:xyz"}  # Unchanged
 
     def test_consumes_one_shot(self) -> None:
-        pending = {"eric"}
-        assert _has_pending_invite(pending, "eric") is True
-        assert _has_pending_invite(pending, "eric") is False
-        assert pending == set()
+        pending = {"eric": OTHER_KEY}
+        assert _consume_pending_invite(pending, "eric") == OTHER_KEY
+        assert _consume_pending_invite(pending, "eric") is None
+        assert pending == {}
 
-    def test_empty_set(self) -> None:
-        """Partition 37/31: empty set → initiator path."""
-        pending: set[str] = set()
-        assert _has_pending_invite(pending, "eric") is False
+    def test_empty_map(self) -> None:
+        """Partition 37/31: empty map → initiator path."""
+        pending: dict[str, str] = {}
+        assert _consume_pending_invite(pending, "eric") is None
 
     def test_consume_one_of_many(self) -> None:
         """Partition 43/15: consume eric, priya remains."""
-        pending = {"eric", "priya"}
-        assert _has_pending_invite(pending, "eric") is True
-        assert pending == {"priya"}
+        pending = {"eric": OTHER_KEY, "priya": "priya:xyz"}
+        assert _consume_pending_invite(pending, "eric") == OTHER_KEY
+        assert pending == {"priya": "priya:xyz"}
 
-    def test_other_user_in_set(self) -> None:
-        """Partition 38/16: eric not in {priya} → initiator."""
-        pending = {"priya"}
-        assert _has_pending_invite(pending, "eric") is False
-        assert pending == {"priya"}
+    def test_empty_key_treated_as_none(self) -> None:
+        """An invite with no session key can't be targeted — treat as absent."""
+        pending = {"eric": ""}
+        assert _consume_pending_invite(pending, "eric") is None
 
 
 # -----------------------------------------------------------------------
@@ -564,13 +566,17 @@ class TestHasPendingInvite:
 
 
 class TestCheckForAccept:
+    # We (MY_KEY) invited OTHER_KEY; a normal accept comes from OTHER_KEY.
+    _TARGET = OTHER_KEY
+    _THIRD_PARTY = "zed:999999"  # not the session we invited
+
     def test_found(self) -> None:
         q = _make_queue(
             [
                 {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
             ]
         )
-        assert _check_for_accept(q, MY_KEY) is True
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.ACCEPTED
 
     def test_skips_self_echo(self) -> None:
         q = _make_queue(
@@ -578,11 +584,11 @@ class TestCheckForAccept:
                 {"type": "accept", "from": "kai", "from_key": MY_KEY},
             ]
         )
-        assert _check_for_accept(q, MY_KEY) is False
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
 
     def test_empty_queue(self) -> None:
         q = _make_queue([])
-        assert _check_for_accept(q, MY_KEY) is False
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
 
     def test_displays_non_accept_banners(
         self, capsys: pytest.CaptureFixture[str]
@@ -597,8 +603,8 @@ class TestCheckForAccept:
                 },
             ]
         )
-        result = _check_for_accept(q, MY_KEY)
-        assert result is False
+        result = _check_for_accept(q, MY_KEY, self._TARGET)
+        assert result is _AcceptOutcome.NONE
         captured = capsys.readouterr()
         assert "priya" in captured.out
         assert "wants to talk" in captured.out
@@ -615,7 +621,7 @@ class TestCheckForAccept:
                 },
             ]
         )
-        assert _check_for_accept(q, MY_KEY) is False
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
 
     def test_end_not_treated_as_accept(self) -> None:
         """Partition 24: ntEnd at head → not accept."""
@@ -624,10 +630,40 @@ class TestCheckForAccept:
                 {"type": "end", "from": "eric", "from_key": OTHER_KEY},
             ]
         )
-        assert _check_for_accept(q, MY_KEY) is False
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
 
-    def test_invite_not_treated_as_accept(self) -> None:
-        """Partition 24: ntInvite at head → not accept."""
+    def test_third_party_invite_not_treated_as_accept(self) -> None:
+        """An invite from a session we did not invite is only a banner."""
+        q = _make_queue(
+            [
+                {
+                    "type": "invite",
+                    "from": "zed",
+                    "body": "talk?",
+                    "from_key": self._THIRD_PARTY,
+                },
+            ]
+        )
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
+
+    def test_third_party_accept_not_treated_as_accept(self) -> None:
+        """An accept from a session we did not invite must be ignored.
+
+        Consent boundary: a third party who publishes a targeted accept
+        (to_key == our session) must not make us believe the invited peer
+        accepted.  Only an accept whose from_key is the invited target counts.
+        """
+        q = _make_queue(
+            [
+                {"type": "accept", "from": "zed", "from_key": self._THIRD_PARTY},
+            ]
+        )
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
+
+    def test_mutual_invite_higher_key_auto_accepts(self) -> None:
+        """We (higher key) invited them; their invite back → AUTO_ACCEPT."""
+        # MY_KEY 'kai:...' > OTHER_KEY 'eric:...' lexicographically.
+        assert MY_KEY > OTHER_KEY
         q = _make_queue(
             [
                 {
@@ -638,7 +674,43 @@ class TestCheckForAccept:
                 },
             ]
         )
-        assert _check_for_accept(q, MY_KEY) is False
+        outcome = _check_for_accept(q, MY_KEY, OTHER_KEY)
+        assert outcome is _AcceptOutcome.AUTO_ACCEPT
+
+    def test_mutual_invite_lower_key_keeps_waiting(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """We (lower key) invited them; their invite back → stay inviting."""
+        # From eric's side: OTHER_KEY < MY_KEY, so eric stays the inviter.
+        q = _make_queue(
+            [
+                {
+                    "type": "invite",
+                    "from": "kai",
+                    "body": "talk?",
+                    "from_key": MY_KEY,
+                },
+            ]
+        )
+        outcome = _check_for_accept(q, OTHER_KEY, MY_KEY)
+        assert outcome is _AcceptOutcome.NONE
+        # No banner spam for the partner's mutual invite.
+        assert "talk?" not in capsys.readouterr().out
+
+    def test_accept_beats_mutual_invite(self) -> None:
+        """A real accept present alongside a mutual invite wins as ACCEPTED."""
+        q = _make_queue(
+            [
+                {
+                    "type": "invite",
+                    "from": "eric",
+                    "body": "talk?",
+                    "from_key": OTHER_KEY,
+                },
+                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
+            ]
+        )
+        assert _check_for_accept(q, MY_KEY, OTHER_KEY) is _AcceptOutcome.ACCEPTED
 
     def test_accept_drains_entire_queue(self) -> None:
         """Partition 8/20: accept with trailing items, all drained."""
@@ -659,8 +731,8 @@ class TestCheckForAccept:
                 },
             ]
         )
-        result = _check_for_accept(q, MY_KEY)
-        assert result is True
+        result = _check_for_accept(q, MY_KEY, self._TARGET)
+        assert result is _AcceptOutcome.ACCEPTED
         assert q.empty()  # All items drained
 
     def test_accept_among_other_notifications(self) -> None:
@@ -675,7 +747,7 @@ class TestCheckForAccept:
                 {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
             ]
         )
-        assert _check_for_accept(q, MY_KEY) is True
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.ACCEPTED
 
 
 # -----------------------------------------------------------------------
@@ -715,7 +787,9 @@ class TestTalkPublish:
 
     @pytest.mark.anyio()
     async def test_publish_message(self, mock_nats_ctx: CliContext) -> None:
-        await _talk_publish(mock_nats_ctx, "eric", "message", "hello")
+        await _talk_publish(
+            mock_nats_ctx, "eric", "message", "hello", to_key="eric:def67890"
+        )
         subject, payload = await self._get_published(mock_nats_ctx)
         assert subject == "biff.test.talk.notify.eric"
         assert payload["type"] == "message"
@@ -723,18 +797,23 @@ class TestTalkPublish:
         assert payload["from_tty"] == "tty1"
         assert payload["body"] == "hello"
         assert payload["from_key"] == "kai:abc12345"
+        # Session-scoped: to_key routes the notification to one session.
+        assert payload["to_key"] == "eric:def67890"
 
     @pytest.mark.anyio()
     async def test_publish_end(self, mock_nats_ctx: CliContext) -> None:
-        await _talk_publish(mock_nats_ctx, "eric", "end")
+        await _talk_publish(mock_nats_ctx, "eric", "end", to_key="eric:def67890")
         _, payload = await self._get_published(mock_nats_ctx)
         assert payload["type"] == "end"
         assert payload["body"] == ""
+        assert payload["to_key"] == "eric:def67890"
 
     @pytest.mark.anyio()
     async def test_publish_body_passthrough(self, mock_nats_ctx: CliContext) -> None:
         long_body = "x" * 1000
-        await _talk_publish(mock_nats_ctx, "eric", "message", long_body)
+        await _talk_publish(
+            mock_nats_ctx, "eric", "message", long_body, to_key="eric:def67890"
+        )
         _, payload = await self._get_published(mock_nats_ctx)
         # _talk_publish sends the body as-is; truncation is the caller's job
         # (line[:512] in _repl_talk). Verify the body passes through.
@@ -743,24 +822,30 @@ class TestTalkPublish:
     @pytest.mark.anyio()
     async def test_publish_empty_body(self, mock_nats_ctx: CliContext) -> None:
         """Partition 47: empty body is valid."""
-        await _talk_publish(mock_nats_ctx, "eric", "message", "")
+        await _talk_publish(
+            mock_nats_ctx, "eric", "message", "", to_key="eric:def67890"
+        )
         _, payload = await self._get_published(mock_nats_ctx)
         assert payload["body"] == ""
 
     @pytest.mark.anyio()
     async def test_publish_invite(self, mock_nats_ctx: CliContext) -> None:
         """Partition: invite type published correctly."""
-        await _talk_publish(mock_nats_ctx, "eric", "invite", "wants to talk")
+        await _talk_publish(
+            mock_nats_ctx, "eric", "invite", "wants to talk", to_key="eric:def67890"
+        )
         _, payload = await self._get_published(mock_nats_ctx)
         assert payload["type"] == "invite"
         assert payload["body"] == "wants to talk"
+        assert payload["to_key"] == "eric:def67890"
 
     @pytest.mark.anyio()
     async def test_publish_accept(self, mock_nats_ctx: CliContext) -> None:
         """Partition: accept type published correctly."""
-        await _talk_publish(mock_nats_ctx, "eric", "accept")
+        await _talk_publish(mock_nats_ctx, "eric", "accept", to_key="eric:def67890")
         _, payload = await self._get_published(mock_nats_ctx)
         assert payload["type"] == "accept"
+        assert payload["to_key"] == "eric:def67890"
 
     @pytest.mark.anyio()
     async def test_non_nats_relay_noop(self) -> None:
@@ -776,4 +861,4 @@ class TestTalkPublish:
             tty_name="tty1",
         )
         # Should not raise, should do nothing.
-        await _talk_publish(ctx, "eric", "message", "hello")
+        await _talk_publish(ctx, "eric", "message", "hello", to_key="eric:def67890")

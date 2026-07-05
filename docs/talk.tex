@@ -103,16 +103,67 @@ to the \texttt{type} field in the NATS JSON payload.
 \section{Global Constants}
 %%----------------------------------------------------------------------
 
+\begin{zed}
+  [QSLOT]
+\end{zed}
+
 \begin{axdef}
   maxQueueLen : \nat \\
   maxBodyLen : \nat
 \where
-  maxQueueLen = 100 \\
+  maxQueueLen = \# QSLOT \\
   maxBodyLen = 512
 \end{axdef}
 
-$maxQueueLen$ bounds the notification queue for animation.
-$maxBodyLen$ is the message body truncation limit.
+$maxQueueLen$ bounds the notification queue.  It is \emph{not} a fixed
+constant of the running system: the implementation's queue is
+memory-bounded, and its actual behaviour is documented in DES-043 ---
+it is not capped at any small number.  Here $maxQueueLen$ is defined as
+the cardinality of an abstract carrier $QSLOT$, the set of available
+queue slots, so that the bound is a \emph{scoping parameter} rather
+than a hard-wired value.  Because $QSLOT$ is a given set, its size is
+chosen by ProB --- uniformly by \texttt{DEFAULT\_SETSIZE}, or
+independently of the other carriers by \texttt{-card QSLOT}~$n$.  This
+lets an exhaustive check bound the queue small while keeping two
+distinct session keys, which is what exercises $MutualAutoAccept$.  The
+specification thus asserts only that the queue is bounded by some
+natural number; it pins that number to no value the real system does
+not enforce.  $maxBodyLen$ is the message body truncation limit.
+
+The intended verification is exhaustive model checking at set size~2,
+which supplies the two distinct session keys the mutual-invite
+tie-break requires:
+
+\begin{verbatim}
+probcli docs/talk.tex -model_check -noltl \
+  -p DEFAULT_SETSIZE 2 -card QSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 2000
+\end{verbatim}
+
+$MAX\_INITIALISATIONS$ must exceed the number of session identities
+($\# USER \times \# TTY \times \# SESSIONKEY$) that $Init$ leaves
+unconstrained, or ProB will silently drop initial states and report an
+incomplete exploration; at set size~2 the eight identities and two
+admissible $keyBelow$ orders together need at least sixteen.
+
+$keyBelow$ is a strict total order on session keys, modelling the
+lexicographic comparison the implementation uses to break mutual-invite
+ties deterministically.  Because it is total and antisymmetric, for any
+two distinct keys exactly one is below the other --- so exactly one side
+of a simultaneous mutual invite auto-accepts and neither blocks forever.
+
+\begin{axdef}
+  keyBelow : SESSIONKEY \rel SESSIONKEY
+\where
+  \forall k : SESSIONKEY @ (k \mapsto k) \notin keyBelow \\
+  \forall j, k : SESSIONKEY @
+    (j \mapsto k) \in keyBelow \implies (k \mapsto j) \notin keyBelow \\
+  \forall j, k, l : SESSIONKEY @
+    (j \mapsto k) \in keyBelow \land (k \mapsto l) \in keyBelow
+      \implies (j \mapsto l) \in keyBelow \\
+  \forall j, k : SESSIONKEY @
+    j \neq k \implies (j \mapsto k) \in keyBelow \lor (k \mapsto j) \in keyBelow
+\end{axdef}
 
 %%----------------------------------------------------------------------
 \section{Notification}
@@ -126,8 +177,15 @@ identity and an optional body.
   nfrom : USER \\
   nfromTty : TTY \\
   nfromKey : SESSIONKEY \\
+  nto : SESSIONKEY \\
   nbody : MSGBODY
 \end{schema}
+
+$nto$ is the target session key.  Talk is session-scoped
+(DES-043): every notification names exactly one recipient session.
+The shared per-user NATS subject carries the notification, but $nto$
+routes it to a single session --- a session accepts a notification
+only when $nto$ matches its own key.
 
 %%----------------------------------------------------------------------
 \section{Talk State}
@@ -142,22 +200,29 @@ The talk state for a single REPL session.
   myKey : SESSIONKEY \\
   partner : USER \\
   partnerTty : TTY \\
-  pendingInvites : \power USER \\
+  partnerKey : SESSIONKEY \\
+  pendingInvites : USER \pfun SESSIONKEY \\
   queue : \seq Notification \\
   queueLen : \nat
 \where
   queueLen = \# queue \\
   queueLen \leq maxQueueLen \\
   phase = tpIdle \implies partner = myUser \\
-  phase = tpIdle \implies partnerTty = myTty
+  phase = tpIdle \implies partnerTty = myTty \\
+  phase = tpIdle \implies partnerKey = myKey
 \end{schema}
 
-When idle, $partner$ and $partnerTty$ are set to $myUser$ and
-$myTty$ as sentinel values (no active partner).  The
-$pendingInvites$ set records users who have sent us an invite
-that has been displayed but not yet consumed by a \texttt{talk}
-command.  $queue$ is the notification queue populated by the
-NATS subscription callback.
+When idle, $partner$, $partnerTty$, and $partnerKey$ are set to
+$myUser$, $myTty$, and $myKey$ as sentinel values (no active partner).
+$partnerKey$ records the exact session key we invited (or that invited
+us); it is the consent anchor for the accept handshake --- an accept is
+honoured only when its origin equals $partnerKey$ (DES-043).  The
+$pendingInvites$ partial function maps each user who has sent us an
+invite to that invite's originating session key --- the key a
+subsequent \texttt{talk} command uses to target its accept.  Because
+it is a function, a newer invite from the same user \emph{supersedes}
+the older one (the maplet is overwritten).  $queue$ is the
+notification queue populated by the NATS subscription callback.
 
 %%----------------------------------------------------------------------
 \section{Initialization}
@@ -171,7 +236,8 @@ NATS subscription callback.
   queue' = \langle \rangle \\
   queueLen' = 0 \\
   partner' = myUser' \\
-  partnerTty' = myTty'
+  partnerTty' = myTty' \\
+  partnerKey' = myKey'
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -184,13 +250,17 @@ NATS subscription callback.
 
 A notification arrives from NATS and is appended to the queue.
 Self-echo (notifications from our own session key) is silently
-dropped.  The queue is bounded; overflow drops the notification.
+dropped.  A notification whose target session key $nto$ is not our
+own key is also dropped --- talk is session-scoped, so only the named
+session accepts it (DES-043).  The queue is bounded; overflow drops
+the notification.
 
 \begin{schema}{ReceiveNotification}
   \Delta TalkState \\
   notif? : Notification
 \where
   notif?.nfromKey \neq myKey \\
+  notif?.nto = myKey \\
   queueLen < maxQueueLen \\
   queue' = queue \cat \langle notif? \rangle \\
   queueLen' = queueLen + 1 \\
@@ -200,6 +270,7 @@ dropped.  The queue is bounded; overflow drops the notification.
   myKey' = myKey \\
   partner' = partner \\
   partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites
 \end{schema}
 
@@ -217,6 +288,22 @@ A notification from our own session key is silently dropped.
 \end{schema}
 
 %%----------------------------------------------------------------------
+\subsection{ReceiveNotForSession}
+%%----------------------------------------------------------------------
+
+A notification addressed to a different session ($nto \neq myKey$) is
+silently dropped.  This is the session-scoping filter: the per-user
+subject is shared, but only the named session accepts.
+
+\begin{schema}{ReceiveNotForSession}
+  \Xi TalkState \\
+  notif? : Notification
+\where
+  notif?.nfromKey \neq myKey \\
+  notif?.nto \neq myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
 \subsection{ReceiveOverflow}
 %%----------------------------------------------------------------------
 
@@ -227,7 +314,8 @@ Queue is full; notification is dropped.
   notif? : Notification
 \where
   queueLen = maxQueueLen \\
-  notif?.nfromKey \neq myKey
+  notif?.nfromKey \neq myKey \\
+  notif?.nto = myKey
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -235,8 +323,10 @@ Queue is full; notification is dropped.
 %%----------------------------------------------------------------------
 
 During the REPL notification poll, an invite is drained from the
-queue.  The sender is recorded in $pendingInvites$ so that a
-subsequent \texttt{talk} command can detect it.
+queue.  The sender is mapped to the invite's session key in
+$pendingInvites$ so that a subsequent \texttt{talk} command can target
+its accept at that exact session.  Function override ($\oplus$) means a
+newer invite from the same user supersedes the older one.
 
 \begin{schema}{DrainInvite}
   \Delta TalkState
@@ -244,7 +334,8 @@ subsequent \texttt{talk} command can detect it.
   phase = tpIdle \\
   queue \neq \langle \rangle \\
   (head~queue).ntype = ntInvite \\
-  pendingInvites' = pendingInvites \cup \{ (head~queue).nfrom \} \\
+  pendingInvites' =
+    pendingInvites \oplus \{ (head~queue).nfrom \mapsto (head~queue).nfromKey \} \\
   queue' = tail~queue \\
   queueLen' = queueLen - 1 \\
   phase' = phase \\
@@ -252,15 +343,21 @@ subsequent \texttt{talk} command can detect it.
   myTty' = myTty \\
   myKey' = myKey \\
   partner' = partner \\
-  partnerTty' = partnerTty
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey
 \end{schema}
 
 %%----------------------------------------------------------------------
 \subsection{DrainAcceptWhileInviting}
 %%----------------------------------------------------------------------
 
-While in the inviting phase, an accept is drained from the queue.
-This completes the handshake and transitions to connected.
+While in the inviting phase, an accept from the very session we invited
+is drained from the queue.  This completes the handshake and transitions
+to connected.  The consent guard $(head~queue).nfromKey = partnerKey$ is
+essential: only the invited session's accept may connect us.  An accept
+from any other origin --- even one correctly addressed to us
+($nto = myKey$) --- must not complete the handshake, or a third party
+could forge the invited peer's consent (DES-043).
 
 \begin{schema}{DrainAcceptWhileInviting}
   \Delta TalkState
@@ -268,6 +365,7 @@ This completes the handshake and transitions to connected.
   phase = tpInviting \\
   queue \neq \langle \rangle \\
   (head~queue).ntype = ntAccept \\
+  (head~queue).nfromKey = partnerKey \\
   phase' = tpConnected \\
   queue' = tail~queue \\
   queueLen' = queueLen - 1 \\
@@ -276,6 +374,36 @@ This completes the handshake and transitions to connected.
   myKey' = myKey \\
   partner' = partner \\
   partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainForeignAccept}
+%%----------------------------------------------------------------------
+
+An accept whose origin is not the invited session ($nfromKey \neq
+partnerKey$) is drained and discarded without changing phase.  This is
+the model counterpart of the consent guard above: the initiator keeps
+waiting.  It also covers a stray accept arriving in any phase, matching
+the implementation, which drains the whole queue and honours only the
+invited peer's accept.
+
+\begin{schema}{DrainForeignAccept}
+  \Delta TalkState
+\where
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntAccept \\
+  (head~queue).nfromKey \neq partnerKey \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites
 \end{schema}
 
@@ -300,6 +428,7 @@ to the user.
   myKey' = myKey \\
   partner' = partner \\
   partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites
 \end{schema}
 
@@ -319,6 +448,7 @@ has hung up.  Transitions back to idle.
   phase' = tpIdle \\
   partner' = myUser \\
   partnerTty' = myTty \\
+  partnerKey' = myKey \\
   queue' = tail~queue \\
   queueLen' = queueLen - 1 \\
   myUser' = myUser \\
@@ -331,19 +461,25 @@ has hung up.  Transitions back to idle.
 \subsection{SendInvite}
 %%----------------------------------------------------------------------
 
-User types \texttt{talk @target} with no pending invite from
-target.  Publishes an invite and enters the inviting phase.
+User types \texttt{talk @target:tty} with no pending invite from
+target.  Publishes a session-scoped invite (whose $nto$ is
+$targetKey?$) and enters the inviting phase.  Talk is session-scoped,
+so the address must name a specific session; self-talk is disallowed
+($targetKey? \neq myKey$).
 
 \begin{schema}{SendInvite}
   \Delta TalkState \\
   target? : USER \\
-  targetTty? : TTY
+  targetTty? : TTY \\
+  targetKey? : SESSIONKEY
 \where
   phase = tpIdle \\
-  target? \notin pendingInvites \\
+  target? \notin \dom pendingInvites \\
+  targetKey? \neq myKey \\
   phase' = tpInviting \\
   partner' = target? \\
   partnerTty' = targetTty? \\
+  partnerKey' = targetKey? \\
   queue' = queue \\
   queueLen' = queueLen \\
   myUser' = myUser \\
@@ -366,16 +502,53 @@ transitions directly to connected.
   targetTty? : TTY
 \where
   phase = tpIdle \\
-  target? \in pendingInvites \\
+  target? \in \dom pendingInvites \\
   phase' = tpConnected \\
   partner' = target? \\
   partnerTty' = targetTty? \\
-  pendingInvites' = pendingInvites \setminus \{ target? \} \\
+  partnerKey' = pendingInvites~target? \\
+  pendingInvites' = \{ target? \} \ndres pendingInvites \\
   queue' = queue \\
   queueLen' = queueLen \\
   myUser' = myUser \\
   myTty' = myTty \\
   myKey' = myKey
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{MutualAutoAccept}
+%%----------------------------------------------------------------------
+
+Simultaneous mutual invites: two sessions each invited the other and
+both are in $tpInviting$.  Without a tie-break, both would wait forever
+for an accept.  The deterministic rule uses $keyBelow$: the
+lexicographically-lower session key stays the inviter, and the higher
+key auto-accepts.  This schema models the higher side --- an invite
+from the very session we invited ($partnerKey?$) arrives, and our key
+is above it ($partnerKey? \mapsto myKey \in keyBelow$), so we transition
+straight to connected (publishing an accept as a side effect).  The
+lower side takes no special operation; it simply receives our accept
+via $DrainAcceptWhileInviting$.  Since $keyBelow$ is a total order,
+exactly one side auto-accepts --- the handshake always completes.
+
+\begin{schema}{MutualAutoAccept}
+  \Delta TalkState \\
+  partnerKey? : SESSIONKEY
+\where
+  phase = tpInviting \\
+  partnerKey? \neq myKey \\
+  partnerKey? = partnerKey \\
+  (partnerKey? \mapsto myKey) \in keyBelow \\
+  phase' = tpConnected \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
+  pendingInvites' = pendingInvites \\
+  queue' = queue \\
+  queueLen' = queueLen
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -409,6 +582,7 @@ notification and transitions to idle.
   phase' = tpIdle \\
   partner' = myUser \\
   partnerTty' = myTty \\
+  partnerKey' = myKey \\
   queue' = queue \\
   queueLen' = queueLen \\
   myUser' = myUser \\
@@ -431,6 +605,7 @@ phase).  Cancels the invitation and returns to idle.
   phase' = tpIdle \\
   partner' = myUser \\
   partnerTty' = myTty \\
+  partnerKey' = myKey \\
   queue' = queue \\
   queueLen' = queueLen \\
   myUser' = myUser \\
@@ -461,15 +636,45 @@ The following properties must hold in all reachable states:
   $RespondToInvite$ which transitions from idle).
 
 \item \textbf{Handshake symmetry.}  If session~A is in $tpInviting$
-  with $partner = B$, then session~B must either be in $tpIdle$
-  (invite not yet seen) or about to transition to $tpConnected$
-  (via $RespondToInvite$).  Both cannot be in $tpInviting$
-  simultaneously with each other as partner (the pending invite
-  detection prevents this).
+  with $partner = B$, then session~B either is in $tpIdle$ (invite not
+  yet seen), transitions to $tpConnected$ via $RespondToInvite$, or ---
+  when B has also invited A --- resolves via $MutualAutoAccept$.  In the
+  mutual case the $keyBelow$ tie-break guarantees exactly one side
+  auto-accepts, so neither blocks.
 
 \item \textbf{Mutual hangup.}  $LocalEnd$ on one side publishes
   $ntEnd$.  $DrainEnd$ on the other side transitions to $tpIdle$.
   After both operations, both sides are idle.
+
+\item \textbf{Session-scoped delivery.}  A notification is queued only
+  when $nto = myKey$.  A talk therefore reaches exactly the named
+  session, never a user's other sessions ($ReceiveNotForSession$ drops
+  the rest).
+
+\item \textbf{Self-talk disallowed.}  $SendInvite$ requires
+  $targetKey? \neq myKey$; a session can never open a talk to itself.
+
+\item \textbf{Invite supersession.}  $pendingInvites$ is a function, so
+  at most one pending invite exists per user; a newer invite overwrites
+  the older via $\oplus$ in $DrainInvite$.
+
+\item \textbf{Deterministic mutual accept.}  $keyBelow$ is a strict
+  total order, so for two distinct session keys exactly one satisfies
+  the $MutualAutoAccept$ guard.  Simultaneous mutual invites always
+  resolve; the handshake never deadlocks.
+
+\item \textbf{Accept consent boundary.}  An inviter transitions to
+  $tpConnected$ only via $DrainAcceptWhileInviting$ or
+  $MutualAutoAccept$, and both guard on $partnerKey$: the accept's
+  origin ($(head~queue).nfromKey = partnerKey$) or the mutual invite's
+  origin ($partnerKey? = partnerKey$) must equal the session we
+  invited.  Since $SendInvite$ sets $partnerKey$ to $targetKey?$ and no
+  operation reassigns it while inviting, a session in $tpConnected$
+  reached through the invite path is connected to exactly the peer it
+  invited.  An accept from any other origin is drained by
+  $DrainForeignAccept$ without changing phase, so a third party who
+  publishes an accept addressed to the inviter ($nto = myKey$) cannot
+  forge the invited peer's consent.
 \end{enumerate}
 
 \end{document}

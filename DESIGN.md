@@ -4689,3 +4689,122 @@ Connection-lifecycle change: passed ``z-spec check`` (fuzz OK) +
 ``z-spec test`` (deadlock-free, the model contains ``ForceReconnect``),
 hosted NATS E2E (33/33), TDD red→green (11 tests), and djb concurrency
 review.
+
+## DES-043: Session-Scoped Talk — Talk Made Dual-Session-Aware
+
+**Date:** 2026-07-04
+**Status:** SETTLED
+**Topic:** Talk targets a specific session (``user:tty``), never a bare
+user; broadcast belongs to ``/wall``
+**Bead:** biff-sqc
+**Related:** DES-018 (talk v2 status-line auto-read), DES-020 (talk
+tool-description mutation), DES-039/DES-040 (dual-session identity),
+``docs/talk.tex``
+
+### Context
+
+DES-040 made one MCP server register **two** sessions: the agent
+(primary) and the human (companion, presence-only). The standalone
+``biff`` REPL is a third, separate session for the same human. So a
+single user — ``jfreeman`` — can be a companion shadow (``tty3``), a
+REPL (``tty14``), and stale rows (``tty1``) at the same time.
+
+Talk (DES-018/020) predates that model. Its notify subject is
+**per-user** (``{prefix}.{repo}.talk.notify.{user}``), and a message
+with no ``to_key`` is accepted by **every** session of that user
+(``tty.py`` ``is_notification_for_session``: absent ``to_key`` ⇒ always
+accepted). Before dual-session, one user ≈ one session, so
+"broadcast to the user" *was* "reach their one session." Dual-session
+broke that 1:1 assumption: a bare ``@user`` talk now fans out to the
+companion shadow + REPL + stale rows, and an agent could resolve a talk
+to *its own* companion — talking to itself. Talk was never updated;
+this is that update. The identity model (DES-040) is correct and was
+not changed.
+
+### Decision
+
+1. **Talk is session-scoped.** Every talk send — invite, accept,
+   message, end, on both the MCP tool and the REPL — sets ``to_key`` to
+   the target session key. The shared per-user notify subject is kept;
+   the ``to_key`` filter (``tty.py``, ``talk.py`` ``_on_notify``) then
+   delivers to exactly one session. A single shared resolver,
+   ``resolve_talk_target`` (``src/biff/server/tools/_session.py``),
+   serves both surfaces; the two prior duplicate resolvers are deleted.
+
+2. **Broadcast belongs to ``/wall``.** A bare ``@user`` with no ``tty``
+   is **rejected** — ``resolve_talk_target`` raises with
+   "Talk needs a specific session — use talk @user:ttyN (run /who to see
+   ttys)." No heuristic "freshest session" resolution. Users run
+   ``/who`` to find the session, then ``talk @user:ttyN``. ``/write``
+   and ``/wall`` still broadcast (bare ``to_user`` ⇒ no ``to_key``);
+   talk never rides the broadcast path and write/wall never acquire a
+   ``to_key``.
+
+3. **A session cannot talk to its own session key.**
+   ``resolve_talk_target`` rejects ``target == sender`` (exact
+   session-key match). Companion and REPL of one user have distinct keys
+   (distinct ttys), so this guards only genuine self-talk, not the
+   dual-session pair.
+
+4. **Cross-repo is reachable.** ``resolve_talk_target`` sets
+   ``target_repo`` when the peer's session is in a different visible
+   repo; the send publishes to that repo's notify subject, and the
+   repo-independent ``to_key`` selects the session. A human's REPL in
+   another repo is therefore reachable.
+
+5. **Stale invites are superseded; mutual invites are deterministic.**
+   ``pending_invites`` is now ``user → inviter-session-key`` — a newer
+   invite overwrites the older (supersede). For simultaneous mutual
+   invites, the lexicographically-**higher** session key auto-accepts
+   and the lower stays inviter, so exactly one side accepts and neither
+   blocks forever.
+
+### Rejected Alternatives
+
+- **Resolve a bare ``@user`` to the freshest session by
+  ``last_active``.** Rejected by operator ruling (Jim, 2026-07-04):
+  "no magic." Implicit session selection is surprising; explicit
+  ``@user:ttyN`` (found via ``/who``) is predictable. Broadcast intent
+  is served by ``/wall``.
+
+- **Make ``nats_relay``'s ``to_key`` unconditional.** Rejected: the
+  ``deliver``/``_publish_talk_notification`` path is shared with
+  ``/write`` and ``/wall``, which must broadcast. Setting ``to_key``
+  unconditionally would break bare-user ``/write`` and ``/wall``.
+  Instead the resolver always returns ``user:tty``, so talk naturally
+  takes the existing per-target ``to_key`` branch while write/wall keep
+  the broadcast branch.
+
+### Model
+
+``docs/talk.tex`` models the session-scoped protocol: ``Notification``
+carries ``nto`` (target session key) and a session queues a
+notification only when ``nto = myKey``; ``pendingInvites : USER \pfun
+SESSIONKEY`` (supersede via functional override, consume via domain
+subtraction); ``SendInvite`` requires ``targetKey \neq myKey``; a
+``keyBelow`` strict total order (irreflexive, antisymmetric,
+transitive, total) drives ``MutualAutoAccept`` so exactly one side of a
+mutual invite accepts.
+
+The notification-queue bound is carried by an abstract given set
+``[QSLOT]`` with ``maxQueueLen = \# QSLOT``, so the spec asserts only
+that the queue is bounded by *some* natural number — ProB scopes
+``QSLOT`` as a pure search-space control (``-card QSLOT n``) rather than
+the model asserting a fixed cap the running system does not enforce. A
+fixed ``maxQueueLen = 3`` was tried and rejected: it misrepresents the
+real system. The exhaustive setsize-2 run (``-card QSLOT 1``,
+``MAX_INITIALISATIONS 16``) visits all 10,562 states, deadlock-free,
+invariants hold, and covers ``MutualAutoAccept`` 2,112 times across two
+distinct session keys and both admissible tiebreak orders — proving the
+mutual-accept determinism operationally, in addition to its being a
+theorem of the ``keyBelow`` total-order axioms.
+
+### Gate
+
+Protocol/state-machine change: passed ``z-spec check`` (fuzz OK) +
+exhaustive ``z-spec test`` at setsize 2 (deadlock-free, invariants hold,
+``MutualAutoAccept`` covered), djb wire-correctness review (APPROVE —
+routing, self-talk guard, mutual-accept determinism, supersede,
+cross-repo, no PII regression), TDD red→green across both surfaces,
+``make check`` (1545), hosted NATS E2E (33/33), tier-3b NATS E2E talk
+(14/14).
