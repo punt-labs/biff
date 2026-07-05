@@ -158,18 +158,23 @@ unrecoverable NATS error.  $weShutdown$ is the shutdown signal.
   kvTtlSeconds : \nat \\
   watcherTimeoutSeconds : \nat \\
   maxSessions : \nat \\
-  restartDelaySeconds : \nat
+  restartDelaySeconds : \nat \\
+  maxGeneration : \nat
   \where
   kvTtlSeconds = 259200 \\
   watcherTimeoutSeconds = 5 \\
   maxSessions = 1000 \\
-  restartDelaySeconds = 2
+  restartDelaySeconds = 2 \\
+  maxGeneration = 3
 \end{axdef}
 
 $kvTtlSeconds$ is the NATS KV TTL (3 days).
 $watcherTimeoutSeconds$ is the \texttt{updates()} timeout that
 keeps the shutdown check responsive.  $maxSessions$ bounds the
-model for animation.
+model for animation.  $maxGeneration$ bounds the per-dial
+generation counter (below) so the reachable state space stays
+finite; three is enough to exhibit a superseded generation
+alongside the live one.
 
 %%----------------------------------------------------------------------
 \section{Connection State}
@@ -180,7 +185,8 @@ model for animation.
   kvProvisioned : ZBOOL \\
   streamsProvisioned : ZBOOL \\
   namesProvisioned : ZBOOL \\
-  wtmpAvailable : ZBOOL
+  wtmpAvailable : ZBOOL \\
+  generation : \nat
   \where
   connState \neq connected \implies
   kvProvisioned = zfalse \land
@@ -189,7 +195,8 @@ model for animation.
   connState = connected \implies
   kvProvisioned = ztrue \land
   streamsProvisioned = ztrue \land
-  namesProvisioned = ztrue
+  namesProvisioned = ztrue \\
+  generation \leq maxGeneration
 \end{schema}
 
 This is the generalised handle-validity invariant: valid
@@ -205,6 +212,19 @@ kept and re-used handles that this invariant forbids.
 $wtmpAvailable$ degrades independently --- wtmp provisioning
 failure is non-fatal --- and is cleared whenever the handles are.
 
+$generation$ is the formal counterpart of the relay's per-dial
+token \texttt{\_generation}.  Each fresh \texttt{nats.connect}
+(the slow path of \texttt{\_ensure\_connected}, taken when the
+client was dropped) bumps it; nats-py's own in-place reconnect,
+which reuses the same client, does not.  It exists so the model
+can distinguish a request settling on the \emph{current} client
+from one settling on a \emph{superseded} client that a rebuild has
+already replaced --- the race $ForceReconnect$'s identity guard
+must survive.  A settle carries the generation it was issued on;
+comparing that to $generation$ is the model's \texttt{self.\_nc is
+owner} check.  It is bounded by $maxGeneration$ so the state space
+stays finite.
+
 \begin{schema}{InitConnection}
   Connection'
   \where
@@ -212,7 +232,8 @@ failure is non-fatal --- and is cleared whenever the handles are.
   kvProvisioned' = zfalse \\
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse
+  wtmpAvailable' = zfalse \\
+  generation' = 0
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -229,12 +250,22 @@ failure is non-fatal --- and is cleared whenever the handles are.
   kvProvisioned' = ztrue \\
   streamsProvisioned' = ztrue \\
   namesProvisioned' = ztrue \\
-  wtmpAvailable' = wtmpAvailable
+  wtmpAvailable' = wtmpAvailable \\
+  ( connState = disconnected \land
+    ( ( generation < maxGeneration \land
+        generation' = generation + 1 ) \lor
+      ( generation = maxGeneration \land
+        generation' = generation ) ) ) \lor \\
+  ( connState = connected \land generation' = generation )
 \end{schema}
 
 The relay's lazy connect (\texttt{\_ensure\_connected}).  It is
 enabled only from $disconnected$ (a fresh connect) or $connected$
-(idempotent no-op).  It is \emph{not} enabled from $halfOpen$:
+(idempotent no-op).  The fresh connect from $disconnected$ dials a
+new client and so bumps $generation$ (saturating at
+$maxGeneration$ to keep the model finite); the idempotent no-op
+from $connected$ reuses the live client and leaves $generation$
+unchanged.  It is \emph{not} enabled from $halfOpen$:
 this is the formal counterpart of the DES-029 bug.  The fast path
 sees \texttt{is\_closed} false and returns the stale cached
 handles without reconnecting, so $EnsureConnected$ makes no
@@ -255,7 +286,8 @@ it only changes during provisioning.
   kvProvisioned' = zfalse \\
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse
+  wtmpAvailable' = zfalse \\
+  generation' = generation
 \end{schema}
 
 The relay's explicit, reversible \texttt{disconnect()}: it acts
@@ -281,7 +313,8 @@ afresh.
   kvProvisioned' = zfalse \\
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse
+  wtmpAvailable' = zfalse \\
+  generation' = generation
 \end{schema}
 
 Permanent shutdown, reachable from any \emph{definite} transport
@@ -304,7 +337,8 @@ an idempotent self-loop, which keeps $closed$ deadlock-free.
   kvProvisioned' = zfalse \\
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse
+  wtmpAvailable' = zfalse \\
+  generation' = generation
 \end{schema}
 
 Clears cached handles without changing the transport state
@@ -324,6 +358,7 @@ so it must not be modelled as an escape.
   result! : ReqOutcome
   \where
   connState = connected \\
+  generation' = generation \\
   ( result! = reqOk \land
     connState' = connected \land
     kvProvisioned' = ztrue \land
@@ -339,9 +374,10 @@ so it must not be modelled as an escape.
     wtmpAvailable' = zfalse )
 \end{schema}
 
-Every JetStream or KV round-trip issued by the relay ---
-\texttt{stream\_info} in \texttt{get\_unread\_summary}, \texttt{kv.get}
-in \texttt{heartbeat}, and the like.  From $connected$ it has two
+Every JetStream or KV round-trip issued \emph{and settled} on the
+current client --- \texttt{stream\_info} in
+\texttt{get\_unread\_summary}, \texttt{kv.get} in
+\texttt{heartbeat}, and the like.  From $connected$ it has two
 outcomes.  $reqOk$ leaves the connection $connected$ with its
 handles intact.  $reqTimeout$ is the half-open signature: the
 request timed out, the connection moves to $halfOpen$, and the
@@ -349,6 +385,14 @@ handles are invalidated to satisfy the handle-validity invariant.
 This is the operation that makes $halfOpen$ reachable, and the
 crash-loop of biff-tww is exactly $reqTimeout$ fired repeatedly
 with no way out.
+
+Because $Request$ both issues and settles on the current client,
+its $reqTimeout$ is the \emph{current-generation} timeout ---
+$\texttt{self.\_nc is owner}$ holds --- so it legitimately drives
+the wedge.  The distinct case where the client was replaced
+between issue and settle is $StaleRequestTimeout$ below, which does
+\emph{not} drive the wedge.  $generation$ is preserved either way:
+a round-trip never dials a new client.
 
 \subsection{Wedge Detected (Recovery)}
 
@@ -360,7 +404,8 @@ with no way out.
   kvProvisioned' = zfalse \\
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse
+  wtmpAvailable' = zfalse \\
+  generation' = generation
 \end{schema}
 
 The keepalive-driven recovery transition.
@@ -388,12 +433,15 @@ deadlock-free.
   kvProvisioned' = ztrue \\
   streamsProvisioned' = ztrue \\
   namesProvisioned' = ztrue \\
-  wtmpAvailable' = wtmpAvailable
+  wtmpAvailable' = wtmpAvailable \\
+  generation' = generation
 \end{schema}
 
 nats-py's background reconnect succeeds and fires
 \texttt{\_on\_reconnect}; the next relay call re-provisions the
-handles.  This closes the recovery path
+handles.  $generation$ is unchanged: nats-py reconnects the
+\emph{same} client in place --- no new \texttt{nats.connect} ---
+so the per-dial token does not advance.  This closes the recovery path
 $connected \to halfOpen \to reconnecting \to connected$, so no
 reachable state is stuck in $halfOpen$.
 
@@ -407,7 +455,8 @@ reachable state is stuck in $halfOpen$.
   kvProvisioned' = zfalse \\
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse
+  wtmpAvailable' = zfalse \\
+  generation' = generation
 \end{schema}
 
 The proactive escape from the wedge (\texttt{\_force\_reconnect},
@@ -454,6 +503,49 @@ $WedgeDetected$ --- not a component of $Connection$.  The
 handle-validity invariant is preserved: $ForceReconnect$ lands in
 $disconnected$ with every handle cleared, so no valid handle
 survives the wedge.
+
+\subsection{Stale Request Timeout (Superseded-Generation No-Op)}
+
+\begin{schema}{StaleRequestTimeout}
+  \Xi Connection \\
+  owner? : \nat
+  \where
+  connState = connected \\
+  owner? < generation
+\end{schema}
+
+The formal counterpart of \texttt{\_tracked}'s identity guard
+(Copilot: tracked-timeout race).  A JetStream or KV request issued
+on generation $owner?$ can still be in flight when its client is
+declared dead, force-closed, and replaced: $ForceReconnect$ drops
+to $disconnected$ and a fresh $EnsureConnected$ dials a new client,
+advancing $generation$ past $owner?$.  When that superseded request
+finally times out, the live connection is a \emph{different},
+healthy client.  The guard $owner? < generation$ is exactly
+\texttt{self.\_nc is not owner}: the settling timeout belongs to a
+generation the rebuild has already left behind.
+
+The operation is a $\Xi Connection$ --- it changes nothing.  This
+is the whole point: a timeout attributed to a superseded generation
+must \emph{not} record a wedge, must \emph{not} move the live
+connection to $halfOpen$, and must \emph{not} drive
+$ForceReconnect$ of the healthy client.  Without the guard, the
+pre-fix code read \texttt{self.\_nc} at exception time and charged
+the timeout --- and the force-close --- to whatever client happened
+to be current, tearing down a live connection.  Modelling the
+superseded timeout as a no-op from $connected$ proves that the live
+connection's state is invariant under it: the only transition that
+can move $connected \to halfOpen$ is $Request(reqTimeout)$, the
+\emph{current}-generation timeout.  The symmetric success case
+(\texttt{record\_success} on a superseded client clearing the live
+wedge latch) is likewise a no-op, and for the same reason: the
+guard fires before any health accounting.  $StaleRequestTimeout$
+is enabled only when $generation > 0$ --- a superseded generation
+must exist for a stale settle to be possible --- and only from
+$connected$, so it neither adds a transition out of $halfOpen$
+(the liveness proof is untouched) nor removes one (the current
+connection has other enabled operations, so no deadlock is
+introduced).
 
 %%----------------------------------------------------------------------
 \section{Session Presence}
@@ -726,6 +818,18 @@ verified by model checking with probcli (\texttt{z-spec test}):
     along the trace $EnsureConnected \to Request(reqTimeout)$,
     which \emph{is} biff-tww.  With either recovery transition
     present the state space is deadlock-free.
+
+  \item \textbf{Generation-guarded wedge (tracked-timeout race)}: a
+    timeout on a \emph{superseded} generation
+    ($StaleRequestTimeout$, $owner? < generation$) is a no-op ---
+    the live $connected$ connection is invariant under it.  Only
+    the \emph{current}-generation timeout $Request(reqTimeout)$
+    moves $connected \to halfOpen$, so a settle on a client the
+    rebuild has already replaced can never drive $ForceReconnect$
+    of the healthy connection.  $generation$ advances only on a
+    fresh dial ($EnsureConnected$ from $disconnected$), never on
+    nats-py's in-place $Reconnect$, mirroring the relay's
+    \texttt{\_generation} token.
 
   \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
     $streaming$, never to $idle$ or $stopped$.  The watcher
