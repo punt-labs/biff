@@ -13,12 +13,17 @@ These tests mock the connection, so they run in tiers 1-2 (no
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from nats.js.errors import BucketNotFoundError, KeyNotFoundError, NotFoundError
 
+from biff.models import UserSession
 from biff.nats_relay import _WEDGE_FORCE_RECONNECT_THRESHOLD, NatsRelay
+
+_LOGGER_NAME = "biff.nats_relay"
 
 
 def _fake_nc() -> MagicMock:
@@ -54,6 +59,10 @@ async def _timeout() -> str:
 
 async def _ok() -> str:
     return "ok"
+
+
+async def _keynotfound() -> str:
+    raise KeyNotFoundError
 
 
 def _fresh_nc(*_a: object, **_k: object) -> MagicMock:
@@ -320,6 +329,346 @@ class TestProactiveWedgeDetector:
         assert relay._js is not None
 
 
+class TestTimeoutIdentityGuard:
+    """A ``_tracked`` timeout is charged to the client that owned the request.
+
+    A JS/KV request can be pending when keepalive declares its client down and
+    ``_ensure_connected`` dials a fresh one — swapping ``self._nc``.  If that
+    pending request then times out, the timeout belongs to the *superseded*
+    client, not the live one.  Charging it to the new client (and force-closing
+    it) tears down a healthy connection (Copilot: tracked-timeout race).
+    """
+
+    @pytest.mark.anyio()
+    async def test_timeout_on_superseded_client_does_not_reconnect(self) -> None:
+        relay, _old_nc = _wedged_relay()
+
+        # Bring the wedge counter to threshold-1 on the current (old) client.
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        new_nc = _live_nc()
+
+        async def _swap_then_timeout() -> str:
+            # Keepalive declared the old client down; _ensure_connected dialed
+            # new_nc while this request was pending.  Now the request times out.
+            relay._nc = new_nc
+            raise TimeoutError
+
+        with pytest.raises(TimeoutError):
+            await relay._tracked("stream_info", _swap_then_timeout())
+
+        # The timeout belonged to the superseded client: not charged, no
+        # reconnect of the live client.
+        new_nc.close.assert_not_awaited()
+        assert relay._nc is new_nc
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+    @pytest.mark.anyio()
+    async def test_timeout_on_current_client_still_reconnects(self) -> None:
+        # Contrast: when the client is unchanged, threshold timeouts still force
+        # a reconnect (existing behavior preserved).
+        relay, nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+
+        nc.close.assert_awaited_once()
+        assert relay._nc is None
+
+    @pytest.mark.anyio()
+    async def test_success_on_superseded_client_does_not_clear_live_wedge(
+        self,
+    ) -> None:
+        # Mirror concern: a slow success returning on a superseded client must
+        # not clear the live client's wedge latch/counter.
+        relay, _old_nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        new_nc = _live_nc()
+
+        async def _swap_then_ok() -> str:
+            relay._nc = new_nc
+            return "ok"
+
+        assert await relay._tracked("stream_info", _swap_then_ok()) == "ok"
+
+        # The success belonged to the superseded client: the live client's
+        # wedge counter is untouched.
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+    @pytest.mark.anyio()
+    async def test_success_on_current_client_still_clears_wedge(self) -> None:
+        # A genuinely-current success still clears the latch and counter.
+        relay, nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert relay._health.consecutive_timeouts > 0
+
+        assert await relay._tracked("stream_info", _ok()) == "ok"
+
+        assert relay._nc is nc
+        assert relay._health.consecutive_timeouts == 0
+
+    @pytest.mark.anyio()
+    async def test_keynotfound_on_superseded_client_does_not_clear_live_wedge(
+        self,
+    ) -> None:
+        # A "not found" is proof of server liveness, so _tracked charges it as a
+        # success.  But if the raising request belonged to a superseded client,
+        # that liveness signal must not clear the live client's wedge latch —
+        # the same identity guard the success/timeout paths use (Copilot:
+        # tracked-timeout race).
+        relay, _old_nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        new_nc = _live_nc()
+
+        async def _swap_then_keynotfound() -> str:
+            relay._nc = new_nc
+            raise KeyNotFoundError
+
+        with pytest.raises(KeyNotFoundError):
+            await relay._tracked("kv.get", _swap_then_keynotfound())
+
+        # The liveness signal belonged to the superseded client: the live
+        # client's wedge counter is untouched.
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+    @pytest.mark.anyio()
+    async def test_keynotfound_on_current_client_still_clears_wedge(self) -> None:
+        # Contrast: a KeyNotFoundError on the unchanged client is a live-server
+        # answer and still clears the latch and counter.
+        relay, nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert relay._health.consecutive_timeouts > 0
+
+        with pytest.raises(KeyNotFoundError):
+            await relay._tracked("kv.get", _keynotfound())
+
+        assert relay._nc is nc
+        assert relay._health.consecutive_timeouts == 0
+
+
+class TestSequentialTrackedRebuildRace:
+    """The second of two sequential ``_tracked`` calls must re-anchor.
+
+    ``get_unread_summary`` and ``heartbeat`` each fetch a handle once and then
+    issue two sequential ``_tracked`` requests.  If a concurrent loop rebuilds
+    ``self._nc`` to a fresh live client during the first request's await, the
+    second request must run its awaitable on the *fresh* handle — not on the
+    stale one captured earlier.  Otherwise ``owner = self._nc`` reads the fresh
+    client while the awaitable runs on the stale one, so a stale-handle timeout
+    is misattributed to the healthy client and force-reconnects it
+    (code-reviewer + alex-chen: residual two-``_tracked`` race).
+    """
+
+    @pytest.mark.anyio()
+    async def test_get_unread_summary_second_op_reanchors(self) -> None:
+        relay, _old_nc = _wedged_relay()
+
+        # Wedge the current (old) client to threshold-1.
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        # The fresh, healthy client a concurrent loop installs mid-request.
+        new_nc = _live_nc()
+        new_js = MagicMock()
+        healthy_info = MagicMock()
+        healthy_info.state.subjects = {}
+
+        async def _rebuild_then_ok() -> object:
+            # A concurrent loop rebuilt the connection during this await.
+            relay._nc = new_nc
+            relay._js = new_js
+            return healthy_info
+
+        async def _stale_timeout() -> object:
+            raise TimeoutError
+
+        async def _fresh_ok() -> object:
+            return healthy_info
+
+        # The stale js captured at the top of get_unread_summary: the first op
+        # swaps the connection; a second op landing here would time out.
+        stale_calls: list[int] = []
+
+        def _stale_stream_info(*_a: object, **_k: object) -> object:
+            stale_calls.append(1)
+            if len(stale_calls) == 1:
+                return _rebuild_then_ok()
+            return _stale_timeout()
+
+        def _fresh_stream_info(*_a: object, **_k: object) -> object:
+            return _fresh_ok()
+
+        stale_js = MagicMock()
+        stale_js.stream_info = _stale_stream_info
+        new_js.stream_info = _fresh_stream_info
+        relay._js = stale_js
+
+        # With the fix the second op re-anchors to new_js and completes; without
+        # it, the stale-handle timeout force-reconnects the healthy new client.
+        await relay.get_unread_summary("kai:tty1")
+
+        new_nc.close.assert_not_awaited()
+        assert relay._nc is new_nc
+        assert relay._js is new_js
+        assert relay._health.consecutive_timeouts < _WEDGE_FORCE_RECONNECT_THRESHOLD
+
+    @pytest.mark.anyio()
+    async def test_heartbeat_second_op_reanchors(self) -> None:
+        relay, _old_nc = _wedged_relay()
+
+        for _ in range(_WEDGE_FORCE_RECONNECT_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await relay._tracked("stream_info", _timeout())
+        assert (
+            relay._health.consecutive_timeouts == _WEDGE_FORCE_RECONNECT_THRESHOLD - 1
+        )
+
+        new_nc = _live_nc()
+        new_kv = MagicMock()
+
+        session = UserSession(user="kai", tty="tty1", plan="coding")
+        entry = MagicMock()
+        entry.value = session.model_dump_json().encode()
+
+        async def _get_then_rebuild() -> object:
+            relay._nc = new_nc
+            relay._kv = new_kv
+            return entry
+
+        async def _stale_put_timeout() -> object:
+            raise TimeoutError
+
+        async def _fresh_put_ok() -> object:
+            return MagicMock()
+
+        def _stale_get(*_a: object, **_k: object) -> object:
+            return _get_then_rebuild()
+
+        def _stale_put(*_a: object, **_k: object) -> object:
+            return _stale_put_timeout()
+
+        def _fresh_put(*_a: object, **_k: object) -> object:
+            return _fresh_put_ok()
+
+        stale_kv = MagicMock()
+        stale_kv.get = _stale_get
+        stale_kv.put = _stale_put
+        new_kv.put = _fresh_put
+        relay._kv = stale_kv
+
+        await relay.heartbeat("kai:tty1")
+
+        new_nc.close.assert_not_awaited()
+        assert relay._nc is new_nc
+        assert relay._kv is new_kv
+
+    @pytest.mark.anyio()
+    async def test_get_unread_summary_reanchor_provision_failure_propagates(
+        self,
+    ) -> None:
+        # The re-anchor _ensure_connected can raise BucketNotFoundError (a
+        # NotFoundError subclass) when a slow-path rebuild hits the
+        # js.key_value() fallback.  That is a connection/provisioning failure,
+        # not a genuine "0 unread" answer — it must propagate, not be swallowed
+        # into a tty_count-only undercount.
+        relay, _nc = _wedged_relay()
+
+        tty_subject = relay._subject_for_key("kai:tty1")
+        tty_info = MagicMock()
+        tty_info.state.subjects = {tty_subject: 3}
+
+        async def _tty_ok() -> object:
+            return tty_info
+
+        stale_js = MagicMock()
+        stale_js.stream_info = MagicMock(return_value=_tty_ok())
+
+        calls: list[int] = []
+
+        async def _ensure() -> tuple[object, object]:
+            calls.append(1)
+            if len(calls) == 1:
+                return stale_js, MagicMock()
+            raise BucketNotFoundError
+
+        with (
+            patch.object(relay, "_ensure_connected", _ensure),
+            pytest.raises(BucketNotFoundError),
+        ):
+            await relay.get_unread_summary("kai:tty1")
+
+    @pytest.mark.anyio()
+    async def test_get_unread_summary_second_stream_notfound_still_swallowed(
+        self,
+    ) -> None:
+        # Contrast: a genuine NotFoundError from the *second* stream_info (a
+        # missing user stream/subject) legitimately means 0 unread for that
+        # inbox and stays swallowed — the summary returns tty_count only.
+        relay, _nc = _wedged_relay()
+
+        tty_subject = relay._subject_for_key("kai:tty1")
+        tty_info = MagicMock()
+        tty_info.state.subjects = {tty_subject: 3}
+
+        async def _tty_ok() -> object:
+            return tty_info
+
+        async def _user_notfound() -> object:
+            raise NotFoundError
+
+        stale_js = MagicMock()
+        stale_js.stream_info = MagicMock(return_value=_tty_ok())
+        fresh_js = MagicMock()
+        fresh_js.stream_info = MagicMock(return_value=_user_notfound())
+
+        handles = iter([(stale_js, MagicMock()), (fresh_js, MagicMock())])
+
+        async def _ensure() -> tuple[object, object]:
+            return next(handles)
+
+        with patch.object(relay, "_ensure_connected", _ensure):
+            summary = await relay.get_unread_summary("kai:tty1")
+
+        assert summary.count == 3
+        assert relay._health.consecutive_timeouts < _WEDGE_FORCE_RECONNECT_THRESHOLD
+
+
 class TestCallbackGenerationGuard:
     """Stale lifecycle callbacks from a superseded client must not touch state.
 
@@ -405,3 +754,63 @@ class TestCallbackGenerationGuard:
         assert relay._kv is None
         assert relay._names_kv is None
         assert relay._nc is not None
+
+    @pytest.mark.anyio()
+    async def test_stale_error_callback_no_ops(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A superseded client's error_cb must not log — it would blame the live
+        # connection for a dead client's error (Copilot: ungeneration-guarded
+        # error_cb).
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()  # client A, generation 1
+            assert connect.await_args is not None
+            on_error_a = connect.await_args.kwargs["error_cb"]
+
+            await relay._force_reconnect()
+            relay._provision = AsyncMock(  # type: ignore[method-assign]
+                return_value=(MagicMock(), MagicMock(), MagicMock())
+            )
+            await relay._ensure_connected()  # client B, generation 2
+
+            caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
+            await on_error_a(RuntimeError("boom from superseded client"))
+
+        errors = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.ERROR and r.name == _LOGGER_NAME
+        ]
+        assert errors == [], "a superseded client's error_cb must no-op"
+
+    @pytest.mark.anyio()
+    async def test_current_error_callback_still_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The current generation's error_cb still logs the error.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        connect = self._connect()
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+            assert connect.await_args is not None
+            on_error = connect.await_args.kwargs["error_cb"]
+
+            caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
+            await on_error(RuntimeError("boom"))
+
+        errors = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.ERROR
+            and r.name == _LOGGER_NAME
+            and "boom" in r.getMessage()
+        ]
+        assert len(errors) == 1

@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-07-04T20:39:38.903583+00:00",
+  "timestamp": "2026-07-05T02:38:48.688061+00:00",
   "probcli_version": "unknown",
   "setsize": 2,
   "ok": true,
-  "states_analysed": 6,
-  "transitions_fired": 32,
+  "states_analysed": 18,
+  "transitions_fired": 103,
   "checks": [
     {
       "name": "init",
@@ -29,7 +29,7 @@
     {
       "name": "model_check",
       "status": "passed",
-      "detail": "6 states, 32 transitions"
+      "detail": "18 states, 103 transitions"
     }
   ],
   "operations": [
@@ -70,6 +70,11 @@
     },
     {
       "name": "ForceReconnect",
+      "times_fired": 1,
+      "covered": true
+    },
+    {
+      "name": "StaleRequestTimeout",
       "times_fired": 1,
       "covered": true
     },
