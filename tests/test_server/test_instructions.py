@@ -31,7 +31,9 @@ class TestServerInstructions:
     def test_teaches_passive_pull(self, tmp_path: Path) -> None:
         text = _server_instructions(tmp_path)
         assert "passive" in text.lower()
-        assert "/loop 1m /biff:poll" in text
+        # Unified command: "/biff:poll 5m" starts polling; "/biff:poll" checks now.
+        assert "/biff:poll 5m" in text
+        assert "/biff:poll 1m" in text
 
     def test_names_the_exact_markers(self, tmp_path: Path) -> None:
         text = _server_instructions(tmp_path)
@@ -66,18 +68,25 @@ class TestTalkDescriptionMarker:
 
 
 class TestPollCommand:
-    """The bundled /biff:poll command names the same markers and receive tools."""
+    """The unified /biff:poll: a duration starts polling; no arg checks now."""
 
     def test_prod_and_dev_exist(self) -> None:
         assert (_COMMANDS / "poll.md").is_file()
         assert (_COMMANDS / "poll-dev.md").is_file()
 
-    def test_prod_references_markers_and_tools(self) -> None:
+    def test_prod_check_now_references_markers_and_tools(self) -> None:
         text = (_COMMANDS / "poll.md").read_text()
         assert "[TALK]" in text
         assert "unread)" in text
         assert "mcp__plugin_biff_tty__talk_read" in text
         assert "mcp__plugin_biff_tty__read_messages" in text
+
+    def test_prod_duration_form_sets_interval_and_loop(self) -> None:
+        text = (_COMMANDS / "poll.md").read_text()
+        assert "mcp__plugin_biff_tty__set_poll_interval" in text
+        assert "CronCreate" in text
+        # The recurring loop runs /biff:poll with NO argument (no re-schedule).
+        assert "with NO" in text
 
     def test_dev_routes_to_dev_plugin(self) -> None:
         text = (_COMMANDS / "poll-dev.md").read_text()
@@ -85,3 +94,4 @@ class TestPollCommand:
         assert "unread)" in text
         assert "mcp__plugin_biff-dev_tty__talk_read" in text
         assert "mcp__plugin_biff-dev_tty__read_messages" in text
+        assert "mcp__plugin_biff-dev_tty__set_poll_interval" in text
