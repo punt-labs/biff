@@ -191,6 +191,32 @@ def _handle_timestamps(args: list[str], repl_display: ReplDisplay) -> None:
     print(f"Timestamps {'on' if on else 'off'}.")
 
 
+MAX_TALK_QUEUE = 100
+"""Bound on the talk notification queue (talk.tex maxQueueLen).
+
+An unbounded queue is a flood/DoS vector: a peer can enqueue faster than the 2s
+poll drains, growing memory without limit.  The queue is capped with drop-oldest
+so the newest ``MAX_TALK_QUEUE`` notifications are always retained (biff-vr4).
+"""
+
+
+def _enqueue_talk_notification(
+    talk_notifications: asyncio.Queue[dict[str, str]],
+    notification: dict[str, str],
+) -> None:
+    """Enqueue a talk notification, dropping the oldest when full.
+
+    Bounds the queue at ``MAX_TALK_QUEUE`` with drop-oldest semantics.  Uses
+    ``put_nowait``/``get_nowait`` exclusively so it never awaits — the NATS
+    callback that calls this must never block the event loop.  See talk.tex
+    ReceiveOverflow (biff-vr4).
+    """
+    while talk_notifications.qsize() >= MAX_TALK_QUEUE:
+        with suppress(asyncio.QueueEmpty):
+            talk_notifications.get_nowait()
+    talk_notifications.put_nowait(notification)
+
+
 def _drain_talk_notifications(
     talk_notifications: asyncio.Queue[dict[str, str]] | None,
     session_key: str,
@@ -866,7 +892,7 @@ async def _setup_nats_subscription(
                     # Filter targeted notifications not for this session.
                     if not is_notification_for_session(notification, ctx.session_key):
                         return
-                    await talk_notifications.put(notification)
+                    _enqueue_talk_notification(talk_notifications, notification)
             except (json.JSONDecodeError, TypeError):
                 pass
         notify_event.set()
