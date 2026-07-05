@@ -582,6 +582,14 @@ def _consume_pending_invite(
     return pending_invites.pop(from_user, None) or None
 
 
+def _display_talk_banner(data: dict[str, str]) -> None:
+    """Print a third-party notification as a terminal-safe banner."""
+    sender = terminal_safe(data.get("from", "?"))
+    body = terminal_safe(data.get("body", ""))
+    if body:
+        print(f"\r\033[K  \033[1;33m📞 {sender}: {body}\033[0m")
+
+
 def _check_for_accept(
     talk_notifications: asyncio.Queue[dict[str, str]],
     session_key: str,
@@ -606,7 +614,11 @@ def _check_for_accept(
             continue
         msg_type = data.get("type")
         if msg_type == "accept":
-            accepted = True
+            # Consent boundary: only the session we invited may accept.  An
+            # accept from any other origin — even one targeted at us — is
+            # ignored, exactly as a mismatched to_key would be.
+            if data.get("from_key", "") == target_key:
+                accepted = True
             continue
         if msg_type == "invite" and data.get("from_key", "") == target_key:
             # Mutual invite from the very session we invited.  The higher
@@ -615,10 +627,7 @@ def _check_for_accept(
                 auto = True
             continue
         # Display non-accept notifications from third parties as banners.
-        sender = terminal_safe(data.get("from", "?"))
-        body = terminal_safe(data.get("body", ""))
-        if body:
-            print(f"\r\033[K  \033[1;33m📞 {sender}: {body}\033[0m")
+        _display_talk_banner(data)
     if accepted:
         return _AcceptOutcome.ACCEPTED
     if auto:

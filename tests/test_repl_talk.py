@@ -646,6 +646,20 @@ class TestCheckForAccept:
         )
         assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
 
+    def test_third_party_accept_not_treated_as_accept(self) -> None:
+        """An accept from a session we did not invite must be ignored.
+
+        Consent boundary: a third party who publishes a targeted accept
+        (to_key == our session) must not make us believe the invited peer
+        accepted.  Only an accept whose from_key is the invited target counts.
+        """
+        q = _make_queue(
+            [
+                {"type": "accept", "from": "zed", "from_key": self._THIRD_PARTY},
+            ]
+        )
+        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
+
     def test_mutual_invite_higher_key_auto_accepts(self) -> None:
         """We (higher key) invited them; their invite back → AUTO_ACCEPT."""
         # MY_KEY 'kai:...' > OTHER_KEY 'eric:...' lexicographically.
