@@ -234,11 +234,16 @@ machine-checked the fact that reaching a live or recovering state
 requires at least one dial.  It holds by induction --- $generation$
 starts at $0$ in $disconnected$ and the only path to $connected$ is
 $EnsureConnected$ from $disconnected$, which bumps it to at least
-$1$ --- but stating it as an invariant proves the precondition
-$StaleRequestTimeout$ relies on: a superseded generation
-($owner? < generation$, hence $generation \geq 1$) must exist
-before a stale settle is possible.  It also guards against a future
-edit that reaches $connected$ without a dial.
+$1$ --- but stating it as an invariant makes machine-checked the one
+fact $StaleRequestTimeout$ needs: a live state has $generation \geq 1$,
+so a strictly-smaller $owner?$ value exists.  It does \emph{not} prove
+that a genuinely-superseded live generation was ever issued --- $owner?$
+is a free $\nat$ the model never ties to an actually-dialled generation,
+so the precondition $owner? < generation$ can name a value that was never
+live.  This is sound only because $StaleRequestTimeout$ is a $\Xi$ no-op
+on connection state: a stale settle changes nothing, so a spurious
+$owner?$ cannot corrupt anything.  The invariant also guards against a
+future edit that reaches $connected$ without a dial.
 
 \begin{schema}{InitConnection}
   Connection'
@@ -575,7 +580,10 @@ $owner? < generation$ captures the redial-to-newer-live case (a
 fresh client already dialed), while the client-dropped-to-$None$
 -not-yet-redialed case is handled implicitly by the $connState =
 connected$ guard --- a settle arriving in that window lands in
-$disconnected$ or $reconnecting$, an unmodelled no-op.
+$disconnected$, an unmodelled no-op.  ($reconnecting$ is nats-py's
+in-place reconnect of the \emph{same} client and generation, so
+\texttt{self.\_nc is owner} still holds; it is a current settle, not a
+dropped-client window.)
 
 %%----------------------------------------------------------------------
 \section{Session Presence}
