@@ -122,12 +122,33 @@ $notifySent$.
 \section{Global Constants}
 %%----------------------------------------------------------------------
 
+The display queue and the unread counter are bounded.  In the running
+system the display rotation queue holds at most twenty items and the
+unread count is capped at one hundred.  Pinning those concrete numbers
+into the model, however, makes exhaustive checking hopeless: a sequence
+of up to twenty source keys over even two carriers, crossed with an
+unread count ranging over $0 \upto 100$, yields hundreds of thousands
+of reachable states before any interesting property is reached.
+
+Following the convention of the sister specification $talk.tex$, the
+two bounds are therefore not hard-wired.  Each is the cardinality of an
+abstract carrier---$QSLOT$ for queue slots, $USLOT$ for unread slots---so
+the bound is a \emph{scoping parameter} ProB shrinks for exhaustive
+checking rather than a fixed value.  Both carriers are required
+non-empty, so each bound is at least one.
+
+\begin{zed}
+  [QSLOT, USLOT]
+\end{zed}
+
 \begin{axdef}
   maxQueueSize : \nat \\
   maxUnreadCount : \nat
   \where
-  maxQueueSize = 20 \\
-  maxUnreadCount = 100
+  QSLOT \neq \emptyset \\
+  USLOT \neq \emptyset \\
+  maxQueueSize = \# QSLOT \\
+  maxUnreadCount = \# USLOT
 \end{axdef}
 
 Default descriptions and the idle marker are opaque constants:
@@ -135,8 +156,31 @@ Default descriptions and the idle marker are opaque constants:
 \begin{axdef}
   wallDescDefault : MSG \\
   talkDescDefault : MSG \\
+  readDescDefault : MSG \\
   idleMarker : MSG
 \end{axdef}
+
+$readDescDefault$ is the base \texttt{read\_messages} tool description,
+carrying no unread marker.  Its role in the read channel mirrors that of
+$talkDescDefault$ in the talk channel and $wallDescDefault$ in the wall
+channel.
+
+The intended verification is exhaustive model checking at set size~2,
+which supplies two distinct carrier elements throughout while keeping the
+queue and unread bounds at two:
+
+\begin{verbatim}
+probcli docs/notification.tex -model_check -noltl \
+  -p DEFAULT_SETSIZE 2 -p MAX_INITIALISATIONS 16 \
+  -p MAX_OPERATIONS 2000
+\end{verbatim}
+
+At set size~2 the carriers $QSLOT$ and $USLOT$ each hold two elements, so
+$maxQueueSize = maxUnreadCount = 2$; either may be shrunk independently
+with \texttt{-card QSLOT}~$n$ or \texttt{-card USLOT}~$n$ without
+disturbing the message and key carriers.  $MAX\_INITIALISATIONS$ must
+exceed the number of identities $Init$ leaves unconstrained, or ProB
+silently drops initial states and reports an incomplete exploration.
 
 %%----------------------------------------------------------------------
 \section{State}
