@@ -71,12 +71,18 @@ that transition them during the wall and talk notification flows.
 %%----------------------------------------------------------------------
 
 \begin{zed}
-  [USER, MSG, SOURCEKEY]
+  [USER, MSG, SOURCEKEY, SESSIONKEY]
 \end{zed}
 
 $USER$ identifies a biff user.  $MSG$ is an opaque message body.
 $SOURCEKEY$ uniquely identifies a display queue item (e.g.\
 \texttt{wall:2026-03-01T12:00:00} or \texttt{talk:eric}).
+$SESSIONKEY$ is a composite \texttt{user:tty} key naming one specific
+session; it is the same notion as the $SESSIONKEY$ of $talk.tex$, and it
+is what an accept must target (\texttt{talk @user:tty}).  A pending talk
+invite that retains its inviter's $SESSIONKEY$ can render an accept hint
+that names a session; one that has dropped it can only render a bare
+\texttt{@user}, which is not a runnable accept command.
 
 %%----------------------------------------------------------------------
 \section{Free Types}
@@ -199,8 +205,14 @@ the status bar, and the last notification outcome.
   toolContext : ZBOOL \\
   wallDesc : MSG \\
   talkDesc : MSG \\
+  readDesc : MSG \\
   wallDescChanged : ZBOOL \\
   talkDescChanged : ZBOOL \\
+  unreadCount : \nat \\
+  talkPending : USER \pfun SESSIONKEY \\
+  talkBare : \power USER \\
+  talkQueued : \nat \\
+  talkConnected : ZBOOL \\
   queueItems : \seq SOURCEKEY \\
   queueKinds : SOURCEKEY \pfun ItemKind \\
   queueTexts : SOURCEKEY \pfun MSG \\
@@ -220,6 +232,9 @@ the status bar, and the last notification outcome.
   (queueItems = \langle \rangle \implies
   currentIndex = 0) \\
   fileUnreadCount \leq maxUnreadCount \\
+  unreadCount \leq maxUnreadCount \\
+  talkQueued \leq maxQueueSize \\
+  \dom talkPending \cap talkBare = \emptyset \\
   (talkSubscribed = ztrue \implies
   natsConn = natsConnected) \\
   (kvProvisioned = ztrue \implies
@@ -235,6 +250,40 @@ is the last: \emph{a connected NATS client implies a captured session}.
 This ensures the suspenders notification path (the background poller)
 is always available when description-changed flags are set.
 
+\paragraph{The tool-description channels.}  Three of the components above
+model tool descriptions that Claude~Code shows to the agent, and two more
+model the underlying activity that a description marker is supposed to
+track.  These are the subject of the correctness argument in
+Section~\ref{sec:marker}.
+
+$readDesc$ is the \texttt{read\_messages} tool description; it gains a
+\texttt{(N unread)} marker when mail is pending.  Its source of truth is
+$unreadCount$, the server-side count of unread messages, which
+\emph{decreases} as mail is read---so a description tied to it clears
+itself.  This is the reference channel: it is known to behave correctly,
+and it is modelled here so that the talk channel can be judged against a
+worked example rather than against prose.
+
+$talkDesc$ is the \texttt{talk} tool description; it gains a
+\texttt{[TALK] \ldots} marker, including an accept hint, when a talk
+invite, queued message, or live connection exists.  Its activity has
+three sources: $talkPending$, a partial function mapping each user who
+has invited us to that invite's originating $SESSIONKEY$; $talkQueued$,
+the count of undrained talk messages; and $talkConnected$, whether a
+conversation is live.  A pending invite in $talkPending$ retains the
+inviter's session key, so its accept hint can name a session.
+
+$talkBare$ is the pathological representation: a set of users whose
+pending invite was recorded \emph{without} a session key---the tty was
+dropped.  A user in $talkBare$ is genuine activity (the marker appears),
+but its accept hint can only read \texttt{talk @user} with no
+\texttt{:tty}, which is not a runnable accept command.  The structural
+invariant $\dom talkPending \cap talkBare = \emptyset$ says a single
+invite is recorded one way or the other, never both.  In a correct
+implementation $talkBare$ is empty in every reachable state; the model
+admits it precisely so the defect can be reached and then proved
+unreachable.
+
 %%----------------------------------------------------------------------
 \section{Initialization}
 %%----------------------------------------------------------------------
@@ -249,8 +298,14 @@ is always available when description-changed flags are set.
   toolContext' = zfalse \\
   wallDesc' = wallDescDefault \\
   talkDesc' = talkDescDefault \\
+  readDesc' = readDescDefault \\
   wallDescChanged' = zfalse \\
   talkDescChanged' = zfalse \\
+  unreadCount' = 0 \\
+  talkPending' = \emptyset \\
+  talkBare' = \emptyset \\
+  talkQueued' = 0 \\
+  talkConnected' = zfalse \\
   queueItems' = \langle \rangle \\
   queueKinds' = \emptyset \\
   queueTexts' = \emptyset \\
@@ -288,6 +343,12 @@ the session is guaranteed to be captured.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -336,6 +397,12 @@ must execute $CaptureSession$ before $EnsureConnected$.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -367,6 +434,12 @@ antecedent $natsConn = natsConnected$ is false.
   talkSubscribed' = zfalse \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -406,6 +479,12 @@ it guarantees synchronous delivery within the request-response cycle.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = zfalse \\
@@ -441,6 +520,12 @@ so the poller always succeeds when needed.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = zfalse \\
@@ -506,6 +591,12 @@ tool context and a live NATS connection.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   talkDesc' = talkDesc \\
   talkDescChanged' = zfalse \\
   currentIndex' = currentIndex \\
@@ -534,6 +625,12 @@ notifications.
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   wallDescChanged' = zfalse \\
   talkDesc' = talkDesc \\
@@ -567,6 +664,12 @@ handles the receive-side effects.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -633,6 +736,12 @@ have a valid session when it fires the deferred notification.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   talkDesc' = talkDesc \\
   talkDescChanged' = talkDescChanged \\
   currentIndex' = currentIndex \\
@@ -685,6 +794,12 @@ session when it fires the deferred notification.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   wallDescChanged' = wallDescChanged \\
   fileExists' = fileExists \\
@@ -711,6 +826,12 @@ Called after any state change that affects what the status bar shows.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -749,6 +870,12 @@ Clears the changed flags regardless.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = zfalse \\
@@ -782,6 +909,12 @@ This is the slow path---no MCP involvement.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -828,6 +961,12 @@ queue.  With a single wall item, the cursor stays at zero.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -858,6 +997,12 @@ queue.  With a single wall item, the cursor stays at zero.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -869,6 +1014,319 @@ queue.  With a single wall item, the cursor stays at zero.
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult
 \end{schema}
+
+%%----------------------------------------------------------------------
+\section{Tool-Description Marker Channels}
+\label{sec:marker}
+%%----------------------------------------------------------------------
+
+The MCP server surfaces incoming activity by mutating a tool's
+\emph{description} and firing \texttt{tools/list\_changed}: the agent
+notices the changed text on its next turn.  Two such channels are
+modelled here.  The \texttt{read\_messages} channel is the reference: it
+is known to behave correctly.  The \texttt{talk} channel is the one under
+examination.
+
+The governing property, developed in Section~\ref{sec:markerprops}, is
+that for each channel the marker is present exactly when the underlying
+activity exists:
+\[
+  desc \neq default \iff activity.
+\]
+This section gives the operations of both channels.  It deliberately
+gives them first \emph{without} the reconciling transitions that make the
+property hold, so that Section~\ref{sec:markerprops} can exhibit the
+defect as a reachable state before Section~\ref{sec:markerfix} repairs
+it.
+
+\subsection{Read Channel (the self-clearing reference)}
+
+Mail arrives and raises the unread count; the description gains its
+marker.  Reading mail returns the count to zero and the description
+reverts.  Because the description is driven by a count that
+\emph{decreases}, this channel clears itself: there is no way to leave
+the marker set once the count reaches zero.
+
+\begin{schema}{MailArrive}
+  \Delta NotificationState
+  \where
+  unreadCount < maxUnreadCount \\
+  unreadCount' = unreadCount + 1 \\
+  readDesc' \neq readDescDefault \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\begin{schema}{ReadMail}
+  \Delta NotificationState
+  \where
+  unreadCount > 0 \\
+  unreadCount' = 0 \\
+  readDesc' = readDescDefault \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\subsection{Talk Channel (invite, message, drain)}
+
+An invite arrives and is recorded in $talkPending$, retaining the
+inviter's session key; the description gains its \texttt{[TALK]} marker.
+A talk message arrives and raises $talkQueued$.  Both set the marker.
+
+\begin{schema}{TalkInviteArrive}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  inviterKey? : SESSIONKEY
+  \where
+  natsConn = natsConnected \\
+  inviter? \notin talkBare \\
+  talkPending' = talkPending \oplus \{ inviter? \mapsto inviterKey? \} \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\begin{schema}{TalkMessageArrive}
+  \Delta NotificationState
+  \where
+  natsConn = natsConnected \\
+  talkQueued < maxQueueSize \\
+  talkQueued' = talkQueued + 1 \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+The defect (biff-9la, observed live).  The drain that ends a talk---the
+aggregate of accepting, exchanging, and hanging up---empties every source
+of talk activity, but leaves $talkDesc$ untouched.  Nothing reverts the
+marker; there is no withdrawal frame and no expiry.  $TalkDrainStale$
+models exactly this: it clears $talkPending$, $talkBare$, $talkQueued$
+and $talkConnected$, yet preserves $talkDesc$.
+
+\begin{schema}{TalkDrainStale}
+  \Delta NotificationState
+  \where
+  (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset \lor
+  talkQueued > 0 \lor talkConnected = ztrue) \\
+  talkPending' = \emptyset \\
+  talkBare' = \emptyset \\
+  talkQueued' = 0 \\
+  talkConnected' = zfalse \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = talkDescChanged \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+The coupled defect.  A second, independent fault records an invite
+\emph{without} its session key---the tty is dropped on the way into the
+pending representation.  $TalkInviteArriveBare$ puts the inviter into
+$talkBare$ and raises the marker; the resulting accept hint reads a bare
+\texttt{talk @user}, which fails at the prompt (``Talk needs a specific
+session'').
+
+\begin{schema}{TalkInviteArriveBare}
+  \Delta NotificationState \\
+  inviter? : USER
+  \where
+  natsConn = natsConnected \\
+  inviter? \notin \dom talkPending \\
+  talkBare' = talkBare \cup \{ inviter? \} \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Marker Consistency: the property and the defect}
+\label{sec:markerprops}
+%%----------------------------------------------------------------------
+
+Write $talkActivity$ for the disjunction of the three talk activity
+sources and $readActivity$ for a positive unread count:
+\begin{eqnarray*}
+  talkActivity & \defs & \dom talkPending \neq \emptyset \lor
+    talkBare \neq \emptyset \lor talkQueued > 0 \lor
+    talkConnected = ztrue \\
+  readActivity & \defs & unreadCount > 0.
+\end{eqnarray*}
+
+The intended invariant is that each marker is present exactly when its
+activity exists, and that a talk marker always carries a session-naming
+accept hint:
+
+\begin{schema}{MarkerConsistent}
+  NotificationState
+  \where
+  (talkDesc \neq talkDescDefault) \iff \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset \lor
+  talkQueued > 0 \lor talkConnected = ztrue) \\
+  (readDesc \neq readDescDefault) \iff unreadCount > 0
+\end{schema}
+
+\begin{schema}{HintNamesSession}
+  NotificationState
+  \where
+  talkDesc \neq talkDescDefault \implies talkBare = \emptyset
+\end{schema}
+
+Neither property is yet part of $NotificationState$, so both may fail.
+Two model-checking runs at set size~2 exhibit the failures as reachable
+states.
+
+\paragraph{The stale marker.}  Setting the ProB goal to
+\[
+  talkDesc \neq talkDescDefault \land \lnot\, talkActivity
+\]
+finds a reachable state: an invite arrives ($TalkInviteArrive$ or
+$TalkMessageArrive$ raises the marker), then $TalkDrainStale$ empties
+every activity source while preserving $talkDesc$.  The marker persists
+with nothing behind it.  This is the biff-9la defect.
+
+\paragraph{The bare hint.}  Setting the goal to
+\[
+  talkDesc \neq talkDescDefault \land talkBare \neq \emptyset
+\]
+finds a reachable state reached by $TalkInviteArriveBare$: the marker is
+present but the pending invite carries no session key, so its accept hint
+names no session.
+
+\paragraph{Liveness.}  The safety goals above show a \emph{bad state} is
+reachable.  The sharper statement is a liveness one: from some reachable
+marker-present state, the marker can never clear.  Expressed as the CTL
+formula
+\[
+  \mathrm{AG}\,(talkDesc \neq talkDescDefault \implies
+    \mathrm{EF}\;talkDesc = talkDescDefault),
+\]
+the model refutes it, because $TalkDrainStale$ is the only way to empty
+activity and it does not touch $talkDesc$: once set, the marker is
+permanent.  The liveness refutation is robust---it holds even though
+other operations remain enabled, so it is not masked the way a plain
+deadlock check would be.
 
 %%----------------------------------------------------------------------
 \section{System Properties}
