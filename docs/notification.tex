@@ -66,6 +66,21 @@ This specification models the four state spaces---NATS connection,
 MCP server session, filesystem, and status bar---and the operations
 that transition them during the wall and talk notification flows.
 
+A second delivery mechanism sits alongside the status bar: the server
+surfaces incoming activity by mutating a \emph{tool description} and
+firing \texttt{tools/list\_changed}.  The \texttt{read\_messages}
+description gains \texttt{(N unread)}; the \texttt{talk} description gains
+a \texttt{[TALK] \ldots} banner with an accept hint.
+Sections~\ref{sec:marker} to~\ref{sec:markerfix2} model these two
+channels and establish the governing invariant: for each channel the
+marker is present exactly when its activity exists, and a talk marker
+always carries a session-naming accept hint.  The read channel is
+self-clearing and serves as the reference; the talk channel, as
+originally built (biff-9la), was not.  The stale-marker defect is
+reproduced here as a reachable ProB state and then proved unreachable
+once the reconciling transitions of Section~\ref{sec:markerfix} are in
+place.
+
 %%----------------------------------------------------------------------
 \section{Basic Types}
 %%----------------------------------------------------------------------
@@ -1608,6 +1623,37 @@ reach Claude~Code.  Wall posting uses the belt path (tool context);
 wall reception from another user uses $KVWallReceive$ which defers to
 the poller.  Talk reception uses $NatsTalkCallback$ which also defers
 to the poller.  Both ultimately produce $lastNotifyResult = notifySent$.
+
+\paragraph{Erratum (biff-9la).}  The symmetry stated above concerns only
+\emph{notification delivery}---that a \texttt{tools/list\_changed} is
+sent.  It does not extend to the \emph{life-cycle of the tool
+description}, and the earlier drafts of this specification wrongly implied
+that it did by modelling $talkDesc$ as an opaque value with no invariant.
+Wall and talk are not symmetric here.  The wall and read markers are
+driven by sources that decrease---an unread count that falls to zero, a
+display item that is advanced away---so they clear themselves.  The talk
+marker is driven by $talkPending$, $talkQueued$ and $talkConnected$, and
+nothing in the original model reverted $talkDesc$ when those emptied:
+Sections~\ref{sec:markerprops} reproduces the resulting stale marker as a
+reachable state.  The corrected treatment requires the reconciling
+transitions of Section~\ref{sec:markerfix}; only then does the talk
+description track its activity as the read reference does.  The
+consistency invariant $MarkerConsistent$, not delivery symmetry, is the
+property that matters.
+
+\paragraph{Erratum ($talk.tex$ invariant~4).}  Invariant~4 of $talk.tex$
+(``Pending invites \ldots remain in the set until the next \texttt{talk}
+command'') describes exactly the grow-only behaviour that strands the
+marker.  If pending invites are never removed except by a subsequent
+\texttt{talk} command, then a marker driven by $talkPending$ can never
+clear on its own.  Under the invariant $MarkerConsistent$ that reading is
+superseded: a pending invite must also be removable by
+$DropPendingInvite$---an \emph{ntWithdraw} frame from the inviter or a
+time-to-live expiry aged out on a poller tick---so that the talk channel
+is self-clearing.  The consent-boundary guarantees of $talk.tex$
+(invariant~11) are unaffected: withdrawal and expiry only \emph{remove}
+pending invites, never complete a handshake, so they cannot forge
+consent.
 
 \begin{schema}{WallNotifySuccess}
   NotificationState
