@@ -190,6 +190,7 @@ silently drops initial states and reports an incomplete exploration.
 
 %%----------------------------------------------------------------------
 \section{State}
+\label{sec:state}
 %%----------------------------------------------------------------------
 
 The system state is flattened into a single schema for ProB
@@ -235,6 +236,11 @@ the status bar, and the last notification outcome.
   unreadCount \leq maxUnreadCount \\
   talkQueued \leq maxQueueSize \\
   \dom talkPending \cap talkBare = \emptyset \\
+  ((talkDesc \neq talkDescDefault) \iff \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset \lor \\
+  \quad~ talkQueued > 0 \lor talkConnected = ztrue)) \\
+  ((readDesc \neq readDescDefault) \iff unreadCount > 0) \\
+  (talkDesc \neq talkDescDefault \implies talkBare = \emptyset) \\
   (talkSubscribed = ztrue \implies
   natsConn = natsConnected) \\
   (kvProvisioned = ztrue \implies
@@ -779,7 +785,9 @@ session when it fires the deferred notification.
   \where
   talkSubscribed = ztrue \\
   toolContext = zfalse \\
-  talkDesc' \neq talkDesc \\
+  talkBare = \emptyset \\
+  talkQueued < maxQueueSize \\
+  talkDesc' \neq talkDescDefault \\
   talkDescChanged' = ztrue \\
   queueItems' = queueItems \cat \langle senderKey? \rangle \\
   queueKinds' = queueKinds \oplus \\
@@ -798,7 +806,7 @@ session when it fires the deferred notification.
   unreadCount' = unreadCount \\
   talkPending' = talkPending \\
   talkBare' = talkBare \\
-  talkQueued' = talkQueued \\
+  talkQueued' = talkQueued + 1 \\
   talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -1327,6 +1335,197 @@ activity and it does not touch $talkDesc$: once set, the marker is
 permanent.  The liveness refutation is robust---it holds even though
 other operations remain enabled, so it is not masked the way a plain
 deadlock check would be.
+
+%%----------------------------------------------------------------------
+\section{The Fix: reconciling transitions}
+\label{sec:markerfix}
+%%----------------------------------------------------------------------
+
+The repair has two parts.  First, $MarkerConsistent$, $HintNamesSession$
+and the read biconditional are promoted into the state schema
+(Section~\ref{sec:state}), so they are now invariants that every
+operation must respect.  Second, transitions are added that remove
+activity \emph{and reconcile the description in the same step}.
+
+Promoting the invariants has an immediate and welcome consequence: the
+two defect operations become infeasible.  $TalkDrainStale$ empties
+activity while preserving $talkDesc \neq talkDescDefault$; its post-state
+now contradicts $MarkerConsistent$, so it is enabled in no reachable
+state.  $TalkInviteArriveBare$ sets $talkBare \neq \emptyset$ while
+raising the marker; its post-state contradicts $HintNamesSession$, so it
+too is dead.  ProB reports both as uncovered operations.  This is the
+point of the exercise: once the consistency of marker and activity is an
+invariant, the specification \emph{proves} that no drain can strand the
+marker and no invite can be recorded without its session key.  The defect
+operations are kept in the text only as the negative results they now
+are.
+
+A dead operation is not a live transition, however.  Something must
+still remove activity, and---because the invariant forbids emptying
+activity without reverting the description---any such transition must do
+both at once.  Three suffice, and the proof in
+Section~\ref{sec:markerfix2} shows all three are needed.
+
+\subsection{Draining messages and ending the conversation}
+
+$TalkDrain$ empties the message queue and ends the connection.  If no
+pending invite remains behind, it reverts the description; otherwise the
+marker stays, now backed only by the surviving invites.
+
+\begin{schema}{TalkDrain}
+  \Delta NotificationState
+  \where
+  (talkQueued > 0 \lor talkConnected = ztrue) \\
+  talkQueued' = 0 \\
+  talkConnected' = zfalse \\
+  ((\dom talkPending = \emptyset \land talkBare = \emptyset) \implies \\
+  \quad (talkDesc' = talkDescDefault \land talkDescChanged' = zfalse)) \\
+  ((\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \implies \\
+  \quad (talkDesc' = talkDesc \land talkDescChanged' = talkDescChanged)) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\subsection{Dropping a pending invite}
+
+$DropPendingInvite$ removes one inviter's pending entry---whether it was
+recorded with its session key (in $talkPending$) or, in the defect model,
+without one (in $talkBare$).  It models two triggers with the same state
+effect: an \emph{ntWithdraw} notification from the inviter, and a
+time-to-live expiry aged out on a poller tick.  Either way, if no
+activity survives, the description reverts.
+
+\begin{schema}{DropPendingInvite}
+  \Delta NotificationState \\
+  inviter? : USER
+  \where
+  (inviter? \in \dom talkPending \lor inviter? \in talkBare) \\
+  talkPending' = \{ inviter? \} \ndres talkPending \\
+  talkBare' = talkBare \setminus \{ inviter? \} \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset \land \\
+  \quad talkQueued = 0 \land talkConnected = zfalse) \implies \\
+  \quad (talkDesc' = talkDescDefault \land talkDescChanged' = zfalse)) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset \lor \\
+  \quad talkQueued > 0 \lor talkConnected = ztrue) \implies \\
+  \quad (talkDesc' = talkDesc \land talkDescChanged' = talkDescChanged)) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\subsection{Accepting an invite}
+
+$TalkAccept$ is the ordinary path: a pending invite is consumed and the
+conversation becomes live.  Activity does not vanish---it moves from
+$talkPending$ to $talkConnected$---so the marker is preserved, consistent
+with the invariant.
+
+\begin{schema}{TalkAccept}
+  \Delta NotificationState \\
+  inviter? : USER
+  \where
+  inviter? \in \dom talkPending \\
+  talkPending' = \{ inviter? \} \ndres talkPending \\
+  talkConnected' = ztrue \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = talkDescChanged \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Marker Consistency: the proof}
+\label{sec:markerfix2}
+%%----------------------------------------------------------------------
+
+With the invariants promoted and the three reconciling transitions in
+place, three checks at set size~2 discharge the obligations.
+
+\paragraph{Safety.}  Ordinary model checking visits every reachable state
+and finds no invariant violation and no deadlock.  Because
+$MarkerConsistent$ and $HintNamesSession$ are now part of the state
+schema, this establishes that no reachable state has a marker without its
+activity, and none has a talk marker whose hint names no session.  The
+two goal predicates that were reachable in
+Section~\ref{sec:markerprops}---$talkDesc \neq talkDescDefault \land
+\lnot\, talkActivity$ and $talkDesc \neq talkDescDefault \land talkBare
+\neq \emptyset$---are now unreachable.
+
+\paragraph{Liveness.}  The CTL formula
+$\mathrm{AG}\,(talkDesc \neq talkDescDefault \implies
+\mathrm{EF}\; talkDesc = talkDescDefault)$
+now holds: from every marker-present state at least one reconciling
+transition is enabled and leads, directly or through $TalkAccept$, to a
+state in which the marker has cleared.
+
+\paragraph{Necessity of each transition.}  Each reconciling transition
+discharges a distinct obligation.  $TalkDrain$ is the only transition
+that clears $talkQueued$ or $talkConnected$; without it a marker backed
+by a queued message or a live connection can never clear.
+$DropPendingInvite$ is the only transition that removes a pending invite
+without the recipient's acceptance; without it a marker backed by an
+invite from a peer who never returns---exactly the biff-9la
+scenario---can never clear on its own, so the talk channel would not be
+self-clearing in the way the read reference is.  $TalkAccept$ is the
+ordinary progress transition; it is not required for the marker to clear,
+but without it the only exit from a pending invite is to drop it, and the
+handshake modelled in $talk.tex$ could never complete.
 
 %%----------------------------------------------------------------------
 \section{System Properties}
