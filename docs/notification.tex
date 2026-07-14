@@ -478,6 +478,105 @@ antecedent $natsConn = natsConnected$ is false.
 \end{schema}
 
 %%----------------------------------------------------------------------
+\section{Tool Context}
+\label{sec:toolcontext}
+%%----------------------------------------------------------------------
+
+A tool handler runs \emph{inside} the MCP request-response cycle; the
+background poller and the NATS subscription callbacks run \emph{outside}
+it.  The component $toolContext$ records which of the two the system is
+currently in: $ztrue$ during a tool call, $zfalse$ otherwise.  The
+distinction is not decoration.  It selects the notification path---belt
+when a request context is available, suspenders when it is not---and it
+gates every operation that can only occur inside a handler ($WallPost$,
+$TalkStart$, $NotifyBelt$) against every operation that can only occur
+in the background ($NotifySuspenders$, $KVWallReceive$,
+$NatsTalkCallback$, $PollTick$).
+
+The earlier drafts left $toolContext$ at its initial $zfalse$ with no
+operation to raise it.  The consequence was quiet but total: no reachable
+state had $toolContext = ztrue$, so the belt-path operations were enabled
+in no reachable state, and the guarantees stated for them
+($NotifyGuarantee$, $WallNotifySuccess$) held only \emph{vacuously}.  A
+vacuous proof is not a proof of anything.  The remedy is to model the
+entry into and exit from a tool handler explicitly, so that the belt path
+is reachable and its obligations bite.
+
+$EnterToolContext$ marks the start of a tool call; $LeaveToolContext$
+marks its end.  Each toggles $toolContext$ and changes nothing else, so
+neither can disturb any invariant.  Their guards make the two mutually
+exclusive: one may enter only from the background, and leave only from a
+handler.
+
+\begin{schema}{EnterToolContext}
+  \Delta NotificationState
+  \where
+  toolContext = zfalse \\
+  toolContext' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+\begin{schema}{LeaveToolContext}
+  \Delta NotificationState
+  \where
+  toolContext = ztrue \\
+  toolContext' = zfalse \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult
+\end{schema}
+
+A tool handler is therefore modelled as $EnterToolContext$, followed by
+the handler's own operation on the belt path, followed by
+$LeaveToolContext$; background work happens between these brackets, never
+inside them.  This is the smallest change that makes the belt path
+reachable without weakening any existing guard.
+
+%%----------------------------------------------------------------------
 \section{Notification Core}
 %%----------------------------------------------------------------------
 
