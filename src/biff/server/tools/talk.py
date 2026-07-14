@@ -22,6 +22,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from nats.errors import Error as NatsError
+
 from biff.formatting import terminal_safe
 from biff.models import Message
 from biff.nats_relay import NatsRelay
@@ -199,25 +201,39 @@ async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
     """Close the active talk session (talk.tex LocalEnd).
 
     An abandoned invite withdraws (``ntWithdraw``); a live conversation
-    hangs up (``end``).  Withdraw lets the invitee clear its pending marker
-    at once rather than waiting for the TTL sweep (notification.tex
-    WithdrawArrive).
+    hangs up (``end``).  The local reset and description refresh happen
+    *before* and *regardless of* the publish: the frame is a best-effort
+    core-NATS publish, and a wedged or reconnecting relay must never strand
+    the local session in a phantom talk state.  On a transient publish
+    failure the peer still clears via the pending-invite time-to-live sweep
+    (notification.tex ExpirePendingInvite), so we say so.
     """
     talk_state = state.talk
     if talk_state.phase is TalkPhase.IDLE:
         return "No active talk session."
     partner = talk_state.partner
-    if isinstance(state.relay, NatsRelay):
-        if talk_state.phase is TalkPhase.INVITING:
-            await talk_state.send_withdraw(
-                target_user=partner, to_key=talk_state.partner_key
-            )
-        else:
-            await talk_state.send_end(
-                target_user=partner, to_key=talk_state.partner_key
-            )
+    partner_key = talk_state.partner_key
+    was_inviting = talk_state.phase is TalkPhase.INVITING
     talk_state.reset()
+    transient = False
+    if isinstance(state.relay, NatsRelay):
+        try:
+            if was_inviting:
+                await talk_state.send_withdraw(target_user=partner, to_key=partner_key)
+            else:
+                await talk_state.send_end(target_user=partner, to_key=partner_key)
+        except (NatsError, TimeoutError, OSError):
+            logger.warning(
+                "talk_end publish to %s failed; peer falls back to the TTL sweep",
+                partner,
+                exc_info=True,
+            )
+            transient = True
     await refresh_talk(mcp, state)
+    if transient:
+        return (
+            f"Talk session with {partner} ended locally; peer will time out in ~5 min."
+        )
     return f"Talk session with {partner} ended."
 
 

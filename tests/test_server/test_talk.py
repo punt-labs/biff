@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import biff.server.tools.talk as talk_mod
 from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay
 from biff.server.tools._session import resolve_talk_target
@@ -15,6 +17,14 @@ from biff.server.tools.talk import (
     _NO_MESSAGES,
     format_talk_messages,
 )
+from biff.talk_state import TalkState
+from biff.talk_types import TalkPhase
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+    from biff.relay import Relay
+    from biff.server.state import ServerState
 
 
 class TestFormatTalkMessages:
@@ -194,6 +204,34 @@ class TestValidatedSenderKey:
 
     def test_empty_user_part(self) -> None:
         assert NatsRelay._validated_sender_key(":abc123", "kai") == ""
+
+
+class TestTalkEndResilience:
+    """talk_end resets local state even when the best-effort publish fails."""
+
+    async def test_publish_failure_still_resets_and_refreshes(self) -> None:
+        """A wedged relay must not strand the session in a phantom talk state."""
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_invite(partner="eric", partner_tty="def", partner_key="eric:def")
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        refresh = AsyncMock()
+        with patch.object(talk_mod, "refresh_talk", refresh):
+            result = await talk_mod._do_talk_end(
+                cast("FastMCP[ServerState]", MagicMock()),
+                cast("ServerState", state),
+            )
+        assert talk.phase is TalkPhase.IDLE  # reset despite the publish failure
+        refresh.assert_awaited_once()  # description refreshed regardless
+        assert "time out" in result.lower()  # actionable transient message
 
 
 class TestConstants:
