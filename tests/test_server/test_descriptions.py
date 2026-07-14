@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from biff.models import BiffConfig, Message, UnreadSummary, WallPost
+from biff.relay import LocalRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import (
@@ -19,8 +20,10 @@ from biff.server.tools._descriptions import (
     _write_unread_file,
     poll_inbox,
     refresh_read_messages,
+    talk_signal,
 )
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
+from biff.talk_state import TalkState
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -201,6 +204,38 @@ class TestUnreadFile:
         mcp = create_server(state)
         await refresh_read_messages(mcp, state)
         assert nested.exists()
+
+
+class TestTalkSignal:
+    """``talk_signal`` keys on invite identity so same-count churn is detected."""
+
+    def _talk(self, tmp_path: Path) -> TalkState:
+        return TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+
+    @staticmethod
+    def _invite(from_key: str) -> dict[str, str]:
+        return {
+            "type": "invite",
+            "from": "eric",
+            "from_key": from_key,
+            "to_key": "kai:t",
+        }
+
+    def test_same_count_session_churn_changes_signal(self, tmp_path: Path) -> None:
+        """One inviter session superseded by another keeps the count but changes
+        the signal, so the poller refreshes and never leaves a stale accept hint.
+        """
+        talk = self._talk(tmp_path)
+        talk.receive(self._invite("eric:aaa"))
+        talk.drain_idle()
+        before = talk_signal(talk)
+        talk.receive(self._invite("eric:bbb"))  # supersedes; count stays 1
+        talk.drain_idle()
+        after = talk_signal(talk)
+        assert len(talk.pending_invites) == 1
+        assert before != after
 
 
 class TestPollInbox:

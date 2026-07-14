@@ -369,9 +369,16 @@ def _talk_description(talk: TalkState) -> str:
     return TALK_BASE_DESCRIPTION
 
 
-def talk_signal(talk: TalkState) -> tuple[int, int, str]:
-    """A cheap change key for the held talk state (pending, queued, phase)."""
-    return (len(talk.pending_invites), talk.queued, talk.phase.name)
+def talk_signal(talk: TalkState) -> tuple[tuple[str, ...], int, str]:
+    """A cheap change key for the held talk state (pending, queued, phase).
+
+    The pending element is each invite's session key, not a bare count, so a
+    same-count churn — one inviter's session superseded by another's within a
+    single poll window — still changes the key and forces a description
+    refresh, never leaving a stale accept-hint teaser.
+    """
+    pending = tuple(sorted(inv.session_key for inv in talk.pending_invites.values()))
+    return (pending, talk.queued, talk.phase.name)
 
 
 async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -442,8 +449,8 @@ async def _active_tick(
     state: ServerState,
     last_count: int,
     last_wall: tuple[str, str],
-    last_talk: tuple[int, int, str],
-) -> tuple[int, tuple[str, str], tuple[int, int, str]]:
+    last_talk: tuple[tuple[str, ...], int, str],
+) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
     """One active-mode poller tick: check inbox, wall, and talk changes.
 
     Returns updated ``(count, wall_key, talk_signal)`` tracking state.
@@ -495,8 +502,8 @@ async def _safe_tick(
     state: ServerState,
     last_count: int,
     last_wall: tuple[str, str],
-    last_talk: tuple[int, int, str],
-) -> tuple[int, tuple[str, str], tuple[int, int, str]]:
+    last_talk: tuple[tuple[str, ...], int, str],
+) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
     """Wrap ``_active_tick`` with error handling.
 
     A transient NATS error must not kill the poller — log and retry
@@ -551,7 +558,7 @@ async def poll_inbox(
     tracker = state.activity
     last_count = -1  # Force initial refresh
     last_wall: tuple[str, str] = ("", "")  # Force initial refresh
-    last_talk = (-1, -1, "")  # Force initial refresh
+    last_talk: tuple[tuple[str, ...], int, str] = ((), -1, "")  # Force initial refresh
     talk_sub = await subscribe_talk(state)
 
     try:
