@@ -24,7 +24,7 @@ from biff.talk_state import (
     PENDING_INVITE_TTL,
     TalkState,
 )
-from biff.talk_types import AcceptOutcome, TalkPhase
+from biff.talk_types import AcceptOutcome, AgentDrain, TalkPhase
 
 MY_USER = "kai"
 MY_TTY = "abc12345"
@@ -646,7 +646,7 @@ class TestGrowOnlyGuards:
         st.begin_invite(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
         st.receive(_invite("eric", OTHER_KEY, body="talk?"))
         drain = st.drain_for_agent()
-        assert drain.connected is True
+        assert drain.outcome is AgentDrain.Outcome.CONNECTED
         assert st.phase is TalkPhase.CONNECTED
         assert st.pending_invites == {}  # moved to connected, not stranded
 
@@ -657,5 +657,5 @@ class TestGrowOnlyGuards:
         st.receive(_invite("eric", OTHER_KEY))  # eric also invited us
         st.receive(_accept("eric", OTHER_KEY))  # then accepted ours
         drain = st.drain_for_agent()
-        assert drain.connected is True
+        assert drain.outcome is AgentDrain.Outcome.CONNECTED
         assert st.pending_invites == {}

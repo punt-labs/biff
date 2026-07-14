@@ -139,9 +139,42 @@ class AgentDrain:
     The MCP server is not modal like the REPL, so it drains the whole
     queue in one pass: invites are recorded, an accept from the invited
     session connects us, messages are surfaced, and an end resets to idle.
+
+    The pass has a single terminal disposition (:class:`Outcome`) rather than
+    two independent ``connected``/``ended`` flags — the combination ``connected
+    and ended`` is meaningless (a pass that ends resets to idle), so it is made
+    unrepresentable.
     """
+
+    class Outcome(Enum):
+        """The terminal disposition of one agent-mode drain pass."""
+
+        ONGOING = auto()  # no handshake completed and no hangup this pass
+        CONNECTED = auto()  # an invite or accept completed the handshake
+        ENDED = auto()  # the remote hung up; the state reset to idle
 
     messages: tuple[TalkNotification, ...]
     pending: Mapping[str, PendingInvite]
-    connected: bool
-    ended: bool
+    outcome: Outcome
+
+    @classmethod
+    def settle(
+        cls,
+        *,
+        messages: tuple[TalkNotification, ...],
+        pending: Mapping[str, PendingInvite],
+        connected: bool,
+        ended: bool,
+    ) -> Self:
+        """Build a snapshot, reducing the two drain signals to one outcome.
+
+        A pass that both connects and ends resets to idle, so ``ended`` wins:
+        the meaningful terminal state is the hangup.
+        """
+        if ended:
+            outcome = cls.Outcome.ENDED
+        elif connected:
+            outcome = cls.Outcome.CONNECTED
+        else:
+            outcome = cls.Outcome.ONGOING
+        return cls(messages=messages, pending=pending, outcome=outcome)

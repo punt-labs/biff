@@ -324,7 +324,7 @@ class TalkState:
                 self.reset()
             else:
                 messages.append(notif)
-        return AgentDrain(
+        return AgentDrain.settle(
             messages=tuple(messages),
             pending=dict(self._pending),
             connected=connected,
