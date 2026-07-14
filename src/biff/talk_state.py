@@ -161,17 +161,21 @@ class TalkState:
     def receive(self, raw: Mapping[str, object]) -> bool:
         """Enqueue a talk notification, applying the session-scope filters.
 
-        Drops self-echo (``nfromKey == myKey``) and notifications
-        addressed to another session (``nto`` set and not our key —
-        DES-043).  On overflow, drops the oldest to retain the newest
-        ``MAX_TALK_QUEUE`` (drop-oldest).  Returns ``True`` when the
-        notification was enqueued.
+        Drops self-echo (``nfromKey == myKey``) and any control frame not
+        addressed to our session (talk.tex ``ReceiveNotForSession``: a
+        session-scoped control frame must carry ``nto == myKey``, so a
+        forged or reordered frame with a foreign or empty ``nto`` cannot
+        apply to all of our sessions — DES-043).  A typeless broadcast
+        message poke (the write/wall mail notification) legitimately carries
+        no ``nto`` and is still accepted so it can wake the poller.  On
+        overflow, drops the oldest to retain the newest ``MAX_TALK_QUEUE``
+        (drop-oldest).  Returns ``True`` when the notification was enqueued.
         """
         notif = TalkNotification.from_payload(raw)
         if notif.nfrom_key == self._my_key:
             return False  # ReceiveSelfEcho
-        if notif.nto and notif.nto != self._my_key:
-            return False  # ReceiveNotForSession
+        if notif.nto != self._my_key and (notif.nto or notif.is_control):
+            return False  # ReceiveNotForSession — foreign target or keyless control
         if notif.is_withdraw:
             return self._withdraw(notif.nfrom, notif.nfrom_key)  # WithdrawArrive
         if len(self._queue) >= MAX_TALK_QUEUE:

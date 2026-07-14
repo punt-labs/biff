@@ -58,7 +58,7 @@ def _make_state(*, relay: Relay | None = None) -> TalkState:
 
 
 def _invite(
-    from_user: str, from_key: str, body: str = "hi", to_key: str = ""
+    from_user: str, from_key: str, body: str = "hi", to_key: str = MY_KEY
 ) -> dict[str, str]:
     return {
         "type": "invite",
@@ -69,7 +69,7 @@ def _invite(
     }
 
 
-def _accept(from_user: str, from_key: str, to_key: str = "") -> dict[str, str]:
+def _accept(from_user: str, from_key: str, to_key: str = MY_KEY) -> dict[str, str]:
     return {
         "type": "accept",
         "from": from_user,
@@ -92,7 +92,7 @@ def _message(
 
 
 def _end(
-    from_user: str, from_key: str, tty: str = "tty2", to_key: str = ""
+    from_user: str, from_key: str, tty: str = "tty2", to_key: str = MY_KEY
 ) -> dict[str, str]:
     return {
         "type": "end",
@@ -127,10 +127,24 @@ class TestReceive:
         assert st.receive(notif) is False
         assert st.queued == 0
 
-    def test_broadcast_accepted(self) -> None:
-        """Empty to_key is a broadcast — accepted by any session."""
+    def test_broadcast_message_accepted(self) -> None:
+        """A keyless *message* is a broadcast poke (write/wall mail) — accepted."""
         st = _make_state()
         assert st.receive(_message("eric", OTHER_KEY, "hi", to_key="")) is True
+
+    def test_keyless_invite_dropped(self) -> None:
+        """A keyless *control* frame is dropped (ReceiveNotForSession)."""
+        st = _make_state()
+        assert st.receive(_invite("eric", OTHER_KEY, to_key="")) is False
+        assert st.queued == 0
+
+    def test_keyless_withdraw_dropped(self) -> None:
+        """A keyless withdraw cannot apply to all sessions — dropped, invite intact."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_idle()
+        assert st.receive(_withdraw("eric", OTHER_KEY, to_key="")) is False
+        assert _pending_keys(st) == {"eric": OTHER_KEY}
 
     def test_targeted_to_us_accepted(self) -> None:
         st = _make_state()

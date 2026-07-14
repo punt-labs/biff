@@ -61,7 +61,13 @@ class TestTalkDescriptionMarker:
     def test_pending_invite_has_marker(self, tmp_path: Path) -> None:
         talk = self._talk(tmp_path)
         talk.receive(
-            {"type": "invite", "from": "eric", "from_key": "eric:x", "body": "hi"}
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_key": "eric:x",
+                "body": "hi",
+                "to_key": "kai:t",
+            }
         )
         talk.drain_idle()  # record the pending invite
         assert _talk_description(talk).startswith("[TALK]")

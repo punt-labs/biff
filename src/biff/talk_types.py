@@ -131,6 +131,17 @@ class TalkNotification:
         """Whether this is a ``withdraw`` control frame (ntWithdraw)."""
         return self.ntype == "withdraw"
 
+    @property
+    def is_control(self) -> bool:
+        """Whether this is a session-scoped control frame.
+
+        Control frames (invite, accept, end, withdraw) carry a target session
+        key in production and must name our session to apply.  A typeless
+        broadcast message poke (write/wall mail notification) is not control
+        and legitimately carries no target key.
+        """
+        return self.ntype in {"invite", "accept", "end", "withdraw"}
+
 
 @dataclass(frozen=True, slots=True)
 class AgentDrain:
