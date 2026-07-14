@@ -23,6 +23,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from biff.formatting import terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
@@ -267,7 +268,7 @@ async def refresh_wall(
     """
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    from biff.formatting import format_remaining, terminal_safe  # noqa: PLC0415
+    from biff.formatting import format_remaining  # noqa: PLC0415
     from biff.server.tools.wall import WALL_BASE_DESCRIPTION  # noqa: PLC0415
 
     tool = await mcp.get_tool("wall")
@@ -344,11 +345,14 @@ def _talk_description(talk: TalkState) -> str:
     activity (an invite the human sent, or queued messages), and reflects
     a connected conversation otherwise.  Reads only — never drains.
     """
-    if talk.pending_invites:
-        who = ", ".join(sorted(talk.pending_invites))
+    invites = talk.pending_invites
+    if invites:
+        ordered = sorted(invites.values(), key=lambda inv: inv.user)
+        who = ", ".join(terminal_safe(inv.user) for inv in ordered)
         return (
             f"[TALK] {who} wants to talk — call talk_read to see it, then "
-            f"talk @{who.split(',')[0].strip()} to accept. Use talk_end to close."
+            f"{terminal_safe(ordered[0].accept_command)} to accept. "
+            "Use talk_end to close."
         )
     if talk.queued:
         noun = "message" if talk.queued == 1 else "messages"
@@ -466,8 +470,13 @@ async def _active_tick(
         last_wall = wall_key
         await refresh_wall(mcp, state, wall=current_wall)
 
+    # Age out pending talk invites whose inviter never returned and never
+    # withdrew (notification.tex ExpirePendingInvite). The reduced pending
+    # count changes talk_signal below, which drives the description refresh.
+    state.talk.expire_stale_invites()
+
     # Refresh talk tool description when the held TalkState changes
-    # (new invite, queued message, or phase transition).
+    # (new invite, queued message, phase transition, or an aged-out invite).
     talk_key = talk_signal(state.talk)
     if talk_key != last_talk:
         last_talk = talk_key

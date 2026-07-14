@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -43,6 +44,20 @@ always retained (biff-vr4).
 MAX_BODY_LEN = 512
 """Message body truncation limit (talk.tex ``maxBodyLen``)."""
 
+PENDING_INVITE_TTL = 600.0
+"""Seconds a pending talk invite survives unanswered (notification.tex
+``maxInviteAge`` / ``ExpirePendingInvite``).
+
+An invite whose inviter never returns and never sends an ``ntWithdraw``
+would otherwise strand the ``[TALK]`` marker forever (biff-9la).  The poller
+reaps invites older than this on its tick.  Ten minutes comfortably exceeds
+several talk poll cycles (~1 min each), so a genuinely-waiting invite is
+never reaped before the agent can act, while a stranded marker still
+self-heals within a bounded, human-scale window.  ``ntWithdraw`` is the fast
+clean path; this TTL is the crash/disconnect backstop, so it is deliberately
+conservative.
+"""
+
 
 class TalkPhase(Enum):
     """The three phases of a talk session from one side's perspective."""
@@ -61,6 +76,32 @@ class AcceptOutcome(Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class PendingInvite:
+    """A pending talk invite awaiting a response (notification.tex ``talkPending``).
+
+    Retains the inviter's session key so the accept hint names a specific
+    session (``talk @user:tty``, never a bare ``@user`` that fails at the
+    prompt), and the monotonic arrival time so the poller can age out an
+    invite whose inviter never returns (notification.tex ``ExpirePendingInvite``).
+    """
+
+    user: str
+    session_key: str
+    arrived: float
+
+    @property
+    def tty(self) -> str:
+        """The inviter's tty, parsed from the ``user:tty`` session key."""
+        _, _, tty = self.session_key.partition(":")
+        return tty
+
+    @property
+    def accept_command(self) -> str:
+        """A runnable command that accepts this invite by naming the session."""
+        return f"talk @{self.session_key}"
+
+
+@dataclass(frozen=True, slots=True)
 class AgentDrain:
     """Result of an MCP agent-mode drain (non-modal front-end).
 
@@ -70,7 +111,7 @@ class AgentDrain:
     """
 
     messages: tuple[TalkNotification, ...]
-    pending: Mapping[str, str]
+    pending: Mapping[str, PendingInvite]
     connected: bool
     ended: bool
 
@@ -118,6 +159,11 @@ class TalkNotification:
         """Whether this is an ``end`` control frame."""
         return self.ntype == "end"
 
+    @property
+    def is_withdraw(self) -> bool:
+        """Whether this is a ``withdraw`` control frame (ntWithdraw)."""
+        return self.ntype == "withdraw"
+
 
 @final
 class TalkState:
@@ -153,7 +199,7 @@ class TalkState:
     _partner: str
     _partner_tty: str
     _partner_key: str
-    _pending: dict[str, str]
+    _pending: dict[str, PendingInvite]
     _queue: deque[TalkNotification]
 
     def __new__(
@@ -198,8 +244,13 @@ class TalkState:
         return self._partner_key
 
     @property
-    def pending_invites(self) -> Mapping[str, str]:
-        """User to session-key map of invites awaiting a response."""
+    def pending_invites(self) -> Mapping[str, PendingInvite]:
+        """User-to-invite map of invites awaiting a response.
+
+        Each value carries the inviter's session key (so the accept hint
+        names a session) and monotonic arrival time (so the poller can age
+        it out).
+        """
         return dict(self._pending)
 
     @property
@@ -223,10 +274,28 @@ class TalkState:
             return False  # ReceiveSelfEcho
         if notif.nto and notif.nto != self._my_key:
             return False  # ReceiveNotForSession
+        if notif.is_withdraw:
+            return self._withdraw(notif.nfrom)  # WithdrawArrive
         if len(self._queue) >= MAX_TALK_QUEUE:
             self._queue.popleft()  # ReceiveOverflow — drop-oldest
         self._queue.append(notif)
         return True
+
+    def _withdraw(self, inviter: str) -> bool:
+        """Remove a withdrawn inviter's invite (notification.tex WithdrawArrive).
+
+        An ``ntWithdraw`` frame cancels the invite whether it was already
+        drained into ``_pending`` or is still queued and undrained, so the
+        marker reverts once nothing else survives.  Returns ``True`` when
+        something was removed, signalling the caller to wake the poller and
+        re-derive the description.
+        """
+        removed = self._pending.pop(inviter, None) is not None
+        before = len(self._queue)
+        self._queue = deque(
+            n for n in self._queue if not (n.is_invite and n.nfrom == inviter)
+        )
+        return removed or len(self._queue) != before
 
     # -- Drain (talk.tex Drain* operations) --
 
@@ -242,8 +311,24 @@ class TalkState:
         drained = self._drain()
         for notif in drained:
             if notif.is_invite:
-                self._pending[notif.nfrom] = notif.nfrom_key
+                self._record_invite(notif)
         return drained
+
+    def _record_invite(self, notif: TalkNotification) -> None:
+        """Record a keyed invite in the pending set (notification.tex TalkInviteArrive).
+
+        A keyless invite (empty session key) is ignored rather than
+        recorded: it could only render a bare ``talk @user`` hint that fails
+        at the prompt, which the HintNamesSession invariant forbids.  The
+        newest invite from a user supersedes the older one.
+        """
+        if not notif.nfrom_key:
+            return
+        self._pending[notif.nfrom] = PendingInvite(
+            user=notif.nfrom,
+            session_key=notif.nfrom_key,
+            arrived=time.monotonic(),
+        )
 
     def poll_accept(self) -> tuple[AcceptOutcome, list[TalkNotification]]:
         """Drain the queue while inviting; detect accept or mutual auto-accept.
@@ -323,21 +408,9 @@ class TalkState:
         ended = False
         for notif in self._drain():
             if notif.is_invite:
-                self._pending[notif.nfrom] = notif.nfrom_key
-                if (
-                    self._phase is TalkPhase.INVITING
-                    and notif.nfrom_key == self._partner_key
-                    and self._my_key > self._partner_key
-                ):
-                    self._phase = TalkPhase.CONNECTED
-                    connected = True
+                connected = self._absorb_invite(notif) or connected
             elif notif.is_accept:
-                if (
-                    self._phase is TalkPhase.INVITING
-                    and notif.nfrom_key == self._partner_key
-                ):
-                    self._phase = TalkPhase.CONNECTED
-                    connected = True
+                connected = self._absorb_accept(notif) or connected
             elif notif.is_end:
                 ended = True
                 messages.append(notif)
@@ -350,6 +423,57 @@ class TalkState:
             connected=connected,
             ended=ended,
         )
+
+    def _absorb_invite(self, notif: TalkNotification) -> bool:
+        """Record an invite, or complete a mutual handshake by auto-accept.
+
+        notification.tex TalkInviteArrive records the invite; when we are the
+        higher-keyed party in a mutual invite it is instead consumed into a
+        live connection (TalkAccept), so it is not left pending to strand the
+        marker after hangup.  Returns whether this frame connected us.
+        """
+        if (
+            self._phase is TalkPhase.INVITING
+            and notif.nfrom_key == self._partner_key
+            and self._my_key > self._partner_key
+        ):
+            self._phase = TalkPhase.CONNECTED
+            self._pending.pop(notif.nfrom, None)
+            return True
+        self._record_invite(notif)
+        return False
+
+    def _absorb_accept(self, notif: TalkNotification) -> bool:
+        """Complete our outstanding invite when the invited session accepts.
+
+        notification.tex TalkAccept: activity moves from ``talkPending`` to
+        ``talkConnected``; the accepted invite is consumed so it does not
+        strand the marker.  Returns whether this frame connected us.
+        """
+        if self._phase is TalkPhase.INVITING and notif.nfrom_key == self._partner_key:
+            self._phase = TalkPhase.CONNECTED
+            self._pending.pop(notif.nfrom, None)
+            return True
+        return False
+
+    def expire_stale_invites(self, *, now: float | None = None) -> int:
+        """Reap pending invites older than the TTL; return the number removed.
+
+        notification.tex ExpirePendingInvite: an invite whose monotonic age
+        reaches ``PENDING_INVITE_TTL`` is removed on a poller tick.  A fresh
+        invite (age below the bound) survives, which is the observable
+        difference from ``ntWithdraw`` (immediate).  The caller re-derives the
+        talk description after a non-zero return.
+        """
+        clock = time.monotonic() if now is None else now
+        stale = [
+            user
+            for user, invite in self._pending.items()
+            if clock - invite.arrived >= PENDING_INVITE_TTL
+        ]
+        for user in stale:
+            del self._pending[user]
+        return len(stale)
 
     # -- Local transitions (talk.tex Send*/Respond/End operations) --
 
@@ -372,10 +496,12 @@ class TalkState:
     def consume_pending_invite(self, user: str) -> str | None:
         """Pop and return the inviter's session key for *user*.
 
-        One-shot: the pending invite is removed.  Returns ``None`` when
-        no usable invite exists (absent, or an invite with no key).
+        One-shot: the pending invite is removed.  Returns ``None`` when no
+        usable invite exists.  Keyless invites are never recorded, so a
+        returned key always names a session.
         """
-        return self._pending.pop(user, None) or None
+        invite = self._pending.pop(user, None)
+        return invite.session_key if invite is not None else None
 
     def reset(self) -> None:
         """Return to idle, clearing the partner sentinels (talk.tex LocalEnd)."""
@@ -433,6 +559,22 @@ class TalkState:
     ) -> None:
         """Publish a session-scoped end (hangup) frame."""
         await self._publish("end", target_user, to_key, "", target_repo)
+
+    async def send_withdraw(
+        self,
+        *,
+        target_user: str,
+        to_key: str,
+        target_repo: str | None = None,
+    ) -> None:
+        """Publish a session-scoped withdraw frame (ntWithdraw — cancel an invite).
+
+        Sent when the inviter abandons an outstanding invite (talk_end while
+        inviting).  The recipient drops the inviter's pending entry on receipt
+        (notification.tex WithdrawArrive), so the marker reverts cleanly rather
+        than waiting for the time-to-live sweep.
+        """
+        await self._publish("withdraw", target_user, to_key, "", target_repo)
 
     async def _publish(
         self,

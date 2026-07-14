@@ -21,7 +21,9 @@ from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay, Relay
 from biff.talk_state import (
     MAX_TALK_QUEUE,
+    PENDING_INVITE_TTL,
     AcceptOutcome,
+    PendingInvite,
     TalkNotification,
     TalkPhase,
     TalkState,
@@ -31,6 +33,20 @@ MY_USER = "kai"
 MY_TTY = "abc12345"
 MY_KEY = "kai:abc12345"
 OTHER_KEY = "eric:def67890"
+
+
+def _pending_keys(st: TalkState) -> dict[str, str]:
+    """The user-to-session-key view of the held pending invites."""
+    return {user: inv.session_key for user, inv in st.pending_invites.items()}
+
+
+def _withdraw(from_user: str, from_key: str, to_key: str = "") -> dict[str, str]:
+    return {
+        "type": "withdraw",
+        "from": from_user,
+        "from_key": from_key,
+        "to_key": to_key,
+    }
 
 
 def _make_state(*, relay: Relay | None = None) -> TalkState:
@@ -179,7 +195,7 @@ class TestDrainIdle:
         st.receive(_invite("eric", OTHER_KEY))
         drained = st.drain_idle()
         assert len(drained) == 1
-        assert st.pending_invites == {"eric": OTHER_KEY}
+        assert _pending_keys(st) == {"eric": OTHER_KEY}
 
     def test_newer_invite_supersedes(self) -> None:
         st = _make_state()
@@ -187,14 +203,14 @@ class TestDrainIdle:
         st.drain_idle()
         st.receive(_invite("eric", OTHER_KEY))
         st.drain_idle()
-        assert st.pending_invites == {"eric": OTHER_KEY}
+        assert _pending_keys(st) == {"eric": OTHER_KEY}
 
     def test_multiple_invite_senders(self) -> None:
         st = _make_state()
         st.receive(_invite("eric", OTHER_KEY))
         st.receive(_invite("priya", "priya:xyz"))
         st.drain_idle()
-        assert st.pending_invites == {"eric": OTHER_KEY, "priya": "priya:xyz"}
+        assert _pending_keys(st) == {"eric": OTHER_KEY, "priya": "priya:xyz"}
 
     def test_accept_not_recorded(self) -> None:
         st = _make_state()
@@ -489,3 +505,169 @@ class TestSend:
         st = _make_state(relay=MagicMock(spec=LocalRelay))
         # Should not raise and should not attempt any publish.
         await st.send_message(target_user="eric", to_key=OTHER_KEY, body="hi")
+
+    @pytest.mark.anyio
+    async def test_send_withdraw(self) -> None:
+        st, nc = self._nats_state()
+        await st.send_withdraw(target_user="eric", to_key=OTHER_KEY)
+        _, payload = self._published(nc)
+        assert payload["type"] == "withdraw"
+        assert payload["to_key"] == OTHER_KEY
+
+
+# ---------------------------------------------------------------------------
+# PendingInvite value object (notification.tex talkPending / HintNamesSession)
+# ---------------------------------------------------------------------------
+
+
+class TestPendingInvite:
+    def test_tty_parsed_from_session_key(self) -> None:
+        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
+        assert inv.tty == "def67890"
+
+    def test_accept_command_names_session(self) -> None:
+        """HintNamesSession: the hint is a runnable ``talk @user:tty``."""
+        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
+        assert inv.accept_command == "talk @eric:def67890"
+        assert ":" in inv.accept_command  # never a bare @user
+
+
+# ---------------------------------------------------------------------------
+# HintNamesSession: keyless invites are never recorded (talkBare stays empty)
+# ---------------------------------------------------------------------------
+
+
+class TestHintNamesSession:
+    def test_keyless_invite_not_recorded(self) -> None:
+        """A keyless invite cannot name a session, so it never becomes pending."""
+        st = _make_state()
+        st.receive(_invite("eric", ""))
+        st.drain_idle()
+        assert st.pending_invites == {}
+
+    def test_recorded_invite_always_carries_a_named_session(self) -> None:
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.receive(_invite("priya", "priya:xyz"))
+        st.drain_for_agent()
+        for invite in st.pending_invites.values():
+            assert ":" in invite.session_key
+            assert invite.accept_command.startswith("talk @")
+            assert invite.accept_command != f"talk @{invite.user}"
+
+
+# ---------------------------------------------------------------------------
+# WithdrawArrive — ntWithdraw frame (notification.tex §WithdrawArrive)
+# ---------------------------------------------------------------------------
+
+
+class TestWithdraw:
+    def test_withdraw_removes_drained_pending(self) -> None:
+        """P-WD-1: a withdraw drops an invite already drained into pending."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_idle()
+        assert _pending_keys(st) == {"eric": OTHER_KEY}
+        assert st.receive(_withdraw("eric", OTHER_KEY)) is True
+        assert st.pending_invites == {}
+
+    def test_withdraw_cancels_undrained_queued_invite(self) -> None:
+        """A withdraw cancels an invite still queued (not yet drained)."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        assert st.queued == 1
+        assert st.receive(_withdraw("eric", OTHER_KEY)) is True
+        assert st.queued == 0
+        st.drain_idle()
+        assert st.pending_invites == {}
+
+    def test_withdraw_one_of_several_preserves_others(self) -> None:
+        """P-WD-2: withdrawing one inviter leaves the rest pending."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.receive(_invite("priya", "priya:xyz"))
+        st.drain_idle()
+        st.receive(_withdraw("eric", OTHER_KEY))
+        assert _pending_keys(st) == {"priya": "priya:xyz"}
+
+    def test_withdraw_non_pending_is_noop(self) -> None:
+        """P-WD-neg: withdrawing an unknown inviter changes nothing."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_idle()
+        assert st.receive(_withdraw("zed", "zed:999")) is False
+        assert _pending_keys(st) == {"eric": OTHER_KEY}
+
+
+# ---------------------------------------------------------------------------
+# ExpirePendingInvite / AgeTick — TTL sweep (notification.tex §ExpirePendingInvite)
+# ---------------------------------------------------------------------------
+
+
+class TestExpiry:
+    def _pending_state(self) -> tuple[TalkState, float]:
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_idle()
+        return st, st.pending_invites["eric"].arrived
+
+    def test_fresh_invite_survives_a_tick(self) -> None:
+        """P-EXP-boundary: an invite below the TTL is never reaped."""
+        st, arrived = self._pending_state()
+        assert st.expire_stale_invites(now=arrived + PENDING_INVITE_TTL - 0.001) == 0
+        assert _pending_keys(st) == {"eric": OTHER_KEY}
+
+    def test_matured_invite_reaped_at_ttl(self) -> None:
+        """P-EXP-1: an invite whose age reaches the TTL is reaped."""
+        st, arrived = self._pending_state()
+        assert st.expire_stale_invites(now=arrived + PENDING_INVITE_TTL) == 1
+        assert st.pending_invites == {}
+
+    def test_expiry_preserves_a_fresh_sibling(self) -> None:
+        """P-EXP-2: only invites past the TTL are removed, not fresh ones."""
+        st, arrived = self._pending_state()
+        # A second, fresher invite recorded well after the first.
+        st.receive(_invite("priya", "priya:xyz"))
+        st.drain_idle()
+        priya_arrived = st.pending_invites["priya"].arrived
+        # Sweep at a time that has matured eric but not priya.
+        now = arrived + PENDING_INVITE_TTL
+        assert now - priya_arrived < PENDING_INVITE_TTL
+        assert st.expire_stale_invites(now=now) == 1
+        assert _pending_keys(st) == {"priya": "priya:xyz"}
+
+
+# ---------------------------------------------------------------------------
+# Grow-only regression guards (notification.tex TalkDrain / TalkAccept)
+# ---------------------------------------------------------------------------
+
+
+class TestGrowOnlyGuards:
+    def test_drain_does_not_readd_consumed_invite(self) -> None:
+        """A consumed invite is not resurrected by a later empty drain."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_for_agent()
+        assert st.consume_pending_invite("eric") == OTHER_KEY
+        st.drain_for_agent()  # empty queue — must not re-add
+        assert st.pending_invites == {}
+
+    def test_auto_accept_consumes_pending_not_stranded(self) -> None:
+        """TalkAccept: a mutual auto-accept connects and clears the invite."""
+        st = _make_state()
+        st.begin_invite(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        st.receive(_invite("eric", OTHER_KEY, body="talk?"))
+        drain = st.drain_for_agent()
+        assert drain.connected is True
+        assert st.phase is TalkPhase.CONNECTED
+        assert st.pending_invites == {}  # moved to connected, not stranded
+
+    def test_accept_consumes_partner_pending(self) -> None:
+        """An accept from the invited session leaves no stranded pending entry."""
+        st = _make_state()
+        st.begin_invite(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        st.receive(_invite("eric", OTHER_KEY))  # eric also invited us
+        st.receive(_accept("eric", OTHER_KEY))  # then accepted ours
+        drain = st.drain_for_agent()
+        assert drain.connected is True
+        assert st.pending_invites == {}

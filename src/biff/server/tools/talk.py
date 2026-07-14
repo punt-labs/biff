@@ -68,16 +68,15 @@ async def fetch_all_unread(
 def format_agent_drain(drain: AgentDrain) -> str:
     """Render a drained agent snapshot as human-readable talk output.
 
-    Lists pending invites (who wants to talk, with the accept hint and the
-    inviter's session key) followed by any queued messages and a hangup
-    line.  Empty when there is nothing to show.
+    Lists pending invites (who wants to talk, with a runnable accept
+    command that names the inviter's session) followed by any queued
+    messages and a hangup line.  Empty when there is nothing to show.
     """
     lines: list[str] = []
-    for user, key in sorted(drain.pending.items()):
-        safe_user = terminal_safe(user)
+    for _user, invite in sorted(drain.pending.items()):
         lines.append(
-            f"📞 {safe_user} wants to talk — "
-            f"talk @{safe_user} to accept [{terminal_safe(key)}]"
+            f"📞 {terminal_safe(invite.user)} wants to talk — "
+            f"{terminal_safe(invite.accept_command)} to accept"
         )
     for notif in drain.messages:
         sender = terminal_safe(notif.nfrom)
@@ -196,6 +195,32 @@ async def _do_talk(
     return f"Invite sent to {display}. When they accept, talk_read shows replies."
 
 
+async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
+    """Close the active talk session (talk.tex LocalEnd).
+
+    An abandoned invite withdraws (``ntWithdraw``); a live conversation
+    hangs up (``end``).  Withdraw lets the invitee clear its pending marker
+    at once rather than waiting for the TTL sweep (notification.tex
+    WithdrawArrive).
+    """
+    talk_state = state.talk
+    if talk_state.phase is TalkPhase.IDLE:
+        return "No active talk session."
+    partner = talk_state.partner
+    if isinstance(state.relay, NatsRelay):
+        if talk_state.phase is TalkPhase.INVITING:
+            await talk_state.send_withdraw(
+                target_user=partner, to_key=talk_state.partner_key
+            )
+        else:
+            await talk_state.send_end(
+                target_user=partner, to_key=talk_state.partner_key
+            )
+    talk_state.reset()
+    await refresh_talk(mcp, state)
+    return f"Talk session with {partner} ended."
+
+
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register talk tools."""
 
@@ -264,14 +289,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @auto_enable(state)
     async def talk_end() -> str:
         """Close the active talk session, sending an end frame if connected."""
-        talk_state = state.talk
-        if talk_state.phase is TalkPhase.IDLE:
-            return "No active talk session."
-        partner = talk_state.partner
-        if isinstance(state.relay, NatsRelay):
-            await talk_state.send_end(
-                target_user=partner, to_key=talk_state.partner_key
-            )
-        talk_state.reset()
-        await refresh_talk(mcp, state)
-        return f"Talk session with {partner} ended."
+        return await _do_talk_end(mcp, state)
