@@ -315,33 +315,28 @@ class TalkState:
         decides whether to accept, connect, or invite.
         """
         messages: list[TalkNotification] = []
-        connected = False
-        ended = False
         for notif in self._drain():
             if notif.is_invite:
-                connected = self._absorb_invite(notif) or connected
+                self._absorb_invite(notif)
             elif notif.is_accept:
-                connected = self._absorb_accept(notif) or connected
+                self._absorb_accept(notif)
             elif notif.is_end:
-                ended = True
                 messages.append(notif)
                 self.reset()
             else:
                 messages.append(notif)
-        return AgentDrain.settle(
+        return AgentDrain(
             messages=tuple(messages),
             pending=dict(self._pending),
-            connected=connected,
-            ended=ended,
         )
 
-    def _absorb_invite(self, notif: TalkNotification) -> bool:
+    def _absorb_invite(self, notif: TalkNotification) -> None:
         """Record an invite, or complete a mutual handshake by auto-accept.
 
         notification.tex TalkInviteArrive records the invite; when we are the
         higher-keyed party in a mutual invite it is instead consumed into a
         live connection (TalkAccept), so it is not left pending to strand the
-        marker after hangup.  Returns whether this frame connected us.
+        marker after hangup.
         """
         if (
             self._phase is TalkPhase.INVITING
@@ -350,22 +345,19 @@ class TalkState:
         ):
             self._phase = TalkPhase.CONNECTED
             self._pending.pop(notif.nfrom, None)
-            return True
+            return
         self._record_invite(notif)
-        return False
 
-    def _absorb_accept(self, notif: TalkNotification) -> bool:
+    def _absorb_accept(self, notif: TalkNotification) -> None:
         """Complete our outstanding invite when the invited session accepts.
 
         notification.tex TalkAccept: activity moves from ``talkPending`` to
         ``talkConnected``; the accepted invite is consumed so it does not
-        strand the marker.  Returns whether this frame connected us.
+        strand the marker.
         """
         if self._phase is TalkPhase.INVITING and notif.nfrom_key == self._partner_key:
             self._phase = TalkPhase.CONNECTED
             self._pending.pop(notif.nfrom, None)
-            return True
-        return False
 
     def expire_stale_invites(self, *, now: float | None = None) -> int:
         """Reap pending invites older than the TTL; return the number removed.

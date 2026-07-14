@@ -131,27 +131,9 @@ class TestAgentDrain:
     def test_holds_drain_snapshot(self) -> None:
         note = TalkNotification.from_payload(_message("eric", OTHER_KEY, "yo"))
         invite = PendingInvite(user="priya", session_key="priya:xyz", arrived=1.0)
-        drain = AgentDrain.settle(
-            messages=(note,),
-            pending={"priya": invite},
-            connected=True,
-            ended=False,
-        )
+        drain = AgentDrain(messages=(note,), pending={"priya": invite})
         assert drain.messages == (note,)
         assert drain.pending["priya"] is invite
-        assert drain.outcome is AgentDrain.Outcome.CONNECTED
-
-    def test_settle_maps_signals_to_outcome(self) -> None:
-        """The two drain signals collapse to one outcome; a hangup wins."""
-        empty: dict[str, PendingInvite] = {}
-        ongoing = AgentDrain.settle(
-            messages=(), pending=empty, connected=False, ended=False
-        )
-        ended = AgentDrain.settle(
-            messages=(), pending=empty, connected=True, ended=True
-        )
-        assert ongoing.outcome is AgentDrain.Outcome.ONGOING
-        assert ended.outcome is AgentDrain.Outcome.ENDED
 
 
 # ---------------------------------------------------------------------------
