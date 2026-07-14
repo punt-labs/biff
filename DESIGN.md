@@ -4872,3 +4872,113 @@ exhaustive ``z-spec test`` at setsize 2 (``ReceiveOverflow`` covered,
 all states visited, deadlock-free, no counterexample), T2/T6 drop-oldest
 regression tests (red→green), ``make check`` (1550), hosted NATS E2E
 (33/33).
+
+## DES-045: Agent-Facing Talk — Shared TalkState + the Marker Lifecycle
+
+**Date:** 2026-07-14
+**Status:** SETTLED
+**Topic:** Make MCP talk share one implementation with the REPL; make the
+tool-description marker a proven function of underlying activity
+**Bead:** biff-9la
+**Related:** DES-020/021 (dynamic tool descriptions), DES-043
+(session-scoped talk), DES-044 (queue bound), ``docs/notification.tex``,
+``docs/talk.tex``
+
+### Context
+
+Agent↔human talk silently dropped. Root cause: two incompatible
+protocols wearing one name. The REPL drained ephemeral **core-NATS**
+pub/sub into a live state machine; the MCP path read a **durable
+JetStream inbox**. What the REPL published, the MCP session never saw —
+its "No new messages" was reading the wrong store. This is the
+recurring lesson (CLAUDE.md formal-methods note): the model was too
+coarse to force parity.
+
+Two further defects surfaced by observation once receive worked:
+
+1. **The `[TALK]` marker never cleared.** The server-held pending-invite
+   set was grow-only — draining re-added it, hangup/`reset` never
+   cleared it, and there was no withdrawal or TTL — contradicting the
+   module's own BSD-ephemeral "invite evaporates when the inviter
+   leaves" contract.
+2. **The accept hint dropped the tty**, rendering a bare `talk @user`
+   that fails under session-scoped talk (DES-043).
+
+### Decision
+
+1. **One ephemeral `TalkState`, two frontends.** Extract the talk state
+   machine (`talk_state.py`) so the REPL and the MCP server each compose
+   the *same* mutable `TalkState` into their frozen context, feed every
+   NATS frame into `TalkState.receive`, and drain it in their own idiom —
+   the REPL modally, the MCP server via a new `talk_read` tool. An
+   always-on subscription (started with the poller, ungated) feeds it, so
+   a fresh agent receives an unsolicited invite.
+
+2. **`alwaysLoad` fixes availability, not readability — and that is
+   enough.** Claude Code defers all MCP tools by default; a deferred
+   tool is only seen via ToolSearch, which returns a cached *base*
+   description. Marking `talk`/`read_messages` with
+   `_meta['anthropic/alwaysLoad'] = true` keeps them in the model's
+   context so the runtime-mutated marker is readable. Empirically
+   verified in-session: with the flag, the `[TALK]` marker renders in the
+   LLM's own tool list and the model acts on it. The `/biff:poll`
+   marker-gate is therefore **retained** (not replaced with a blind
+   pull). The earlier "readability fails" conclusion was a mis-timed
+   observation, corrected by direct in-session observation.
+
+3. **The marker is a proven function of activity.** `docs/notification.tex`
+   models both description channels with the biconditional
+   `desc ≠ base ⟺ activity` (`MarkerConsistent`) and a `HintNamesSession`
+   invariant (the accept hint always names a session). The defects are
+   reproduced as ProB counterexamples, then the reconciling transitions
+   the proof *forces* are added: `TalkDrain` (revert on drain-to-empty),
+   an `ntWithdraw` frame (`WithdrawArrive`), and a TTL sweep
+   (`ExpirePendingInvite` + `AgeTick`, `PENDING_INVITE_TTL = 300 s`).
+   `PendingInvite` retains the inviter's tty and validates a well-formed
+   `user:tty` at construction, so the hint is always runnable.
+
+4. **Withdrawal is session-key-guarded.** `WithdrawArrive` removes a
+   pending invite only when the withdrawal's originating session-key
+   equals the stored invite's key — the withdrawal-side mirror of the
+   accept consent guard (DES-043). A mismatch is `WithdrawForeign`
+   (no-op). This closes a **non-adversarial reordering** (a stale
+   session-A withdrawal deleting a live session-B invite, since
+   core-NATS gives no cross-session ordering) and raises a forged
+   suppression to accept-path parity (needs the inviter's ephemeral
+   key). Availability-only; consent boundary (talk.tex invariant 11)
+   untouched. The residual is documented in the `talk.tex` threat model.
+
+### Rejected Alternatives
+
+- **Blind-pull `/biff:poll` (drop the marker-gate).** Rejected: the
+  marker mechanism is proven and observed to work for talk exactly as it
+  does for `read_messages`/`wall`; `alwaysLoad` makes it readable. A
+  blind pull would call `talk_read`/`read_messages` every tick
+  needlessly.
+- **A durable talk inbox (make MCP match its old self).** Rejected:
+  talk is BSD-ephemeral by design (DES-043/044) — an invite evaporates
+  when the inviter leaves. The fix is to make the REPL and MCP share the
+  *ephemeral* machine, not to add durability.
+- **Crypto on the withdrawal frame.** Rejected: contradicts the
+  BSD-ephemeral, team-internal trust model. The session-key guard
+  brings the forged-withdrawal bar to accept-path parity; the residual
+  targeted-suppression is named in the threat model, not engineered
+  away.
+- **Username-only withdrawal (the first, spec-faithful implementation).**
+  Rejected once the model was extended: the spec itself had the gap —
+  `WithdrawArrive` keyed on user, not session-key — which reopened the
+  stale-marker class. The model was extended and the code conformed.
+
+### Gate
+
+Connection/protocol change: ``z-spec check`` (fuzz OK on
+``notification.tex`` + ``talk.tex``) + exhaustive ``z-spec test`` at
+setsize 2 (safety 843k/599k states, ``invariant_violated:0``,
+``deadlocked:0``, all states visited, ``INITIALISATION`` complete;
+defect ops ``TalkDrainStale``/``TalkInviteArriveBare``/``WithdrawStale``
+proven UNCOVERED; CTL liveness ``AG(marker ⇒ EF ¬marker)`` TRUE) —
+independently re-verified by the leader. Zero GAP on the
+``notification.tex`` coverage audit. Four-agent local review
+(code-reviewer, silent-failure-hunter, djb wire-safety, type-design)
+clean after two fix rounds. ``make check`` (1614). Live-verified in both
+directions before merge.

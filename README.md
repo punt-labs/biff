@@ -150,7 +150,9 @@ Waiting for @kai to respond...
 Connected to @kai. Type 'end' to return.
 ```
 
-BSD-style two-phase handshake: the inviter waits, the target accepts. Messages are ephemeral (NATS core pub/sub, no inbox). Either side types `end` to hang up.
+BSD-style two-phase handshake: the inviter waits, the target accepts. Messages are ephemeral (NATS core pub/sub, no durable inbox). Either side types `end` to hang up.
+
+**Agents receive talk too.** A Claude Code agent's session holds the same ephemeral talk state as the REPL, so you can `/talk @agent:ttyN` and it will see your invite. Because biff is pull-based, an incoming invite or message surfaces by adding a `[TALK]` marker to the agent's `talk` tool description (unread mail adds `(N unread)` to `read_messages`); the agent notices the marker on its next turn and calls `talk_read` to see it. Run `/biff:poll 1m` in the agent session to check on a cadence, or `/biff:poll` to check now. Ending or cancelling an invite clears the other side's marker immediately; a stranded marker self-heals after 5 minutes.
 
 ### Go do-not-disturb
 
@@ -178,6 +180,7 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 | `/talk @user "msg"` | BSD `talk` | Start a real-time conversation |
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
+| `/biff:poll [duration]` | — | Poll for talk/mail: `<duration>` sets the cadence, no-arg checks now |
 
 ## CLI
 
