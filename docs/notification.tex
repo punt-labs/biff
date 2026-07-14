@@ -1571,6 +1571,22 @@ the two concrete removal paths the implementation must supply---a
 withdrawal frame and a time-to-live expiry---have distinct preconditions
 and so are kept distinct in the model.
 
+The withdrawal path itself carries a further obligation the earlier drafts
+missed, which a second review found.  A withdrawal frame names the invite it
+cancels only by the inviter's user identity, but the pending invite is keyed
+by session: $talkPending$ records the inviter's $SESSIONKEY$.  If
+$WithdrawArrive$ removed on the bare user match, a withdrawal emitted by an
+earlier session could---because the talk transport gives no cross-session
+ordering---arrive after a fresh invite from a later session of the same user
+and silently delete the live invite.  The guard
+$talkPending~inviter? = withdrawKey?$ forecloses this: a withdrawal is applied
+only when its originating session key matches the stored one.  A frame whose
+key does not match is dropped by $WithdrawForeign$, the withdrawal-side
+analogue of $talk.tex$'s $DrainForeignAccept$.  The username-only version is
+retained as the dead operation $WithdrawStale$, whose reachability under the
+missing guard, and unreachability once the guard is present, are the subject
+of the reordering proof in Section~\ref{sec:markerfix2}.
+
 \subsection{Draining messages and ending the conversation}
 
 $TalkDrain$ empties the message queue and ends the connection.  If no
@@ -1955,8 +1971,28 @@ with the invariant.
 \label{sec:markerfix2}
 %%----------------------------------------------------------------------
 
-With the invariants promoted and the three reconciling transitions in
-place, three checks at set size~2 discharge the obligations.
+With the invariants promoted and the reconciling transitions in place, the
+checks that discharge the obligations are run at $DEFAULT\_SETSIZE~2$ with
+$USER$ shrunk to one and $SESSIONKEY$ kept at two.  Two session keys are
+essential here: the reordering defect turns on one user holding invites from
+two distinct sessions, and a single session key would collapse the two into
+one and hide the fault.  One user suffices, because every marker property is
+a statement about the \emph{aggregate} of the activity sources, not about how
+many users contribute to it; shrinking $USER$ keeps the state space
+exhaustible while losing no distinction the properties depend on.  At this
+scope the exploration reports $INITIALISATION$:$8$ against
+$SETUP\_CONSTANTS$:$8$---the $MAX\_INITIALISATIONS$ bound never binds---and
+terminates with ``all open states visited'': $598{,}824$ states,
+$9{,}938{,}416$ transitions, a complete check, not a truncated one.
+
+\begin{verbatim}
+probcli docs/notification.tex -model_check -noltl -coverage \
+  -goal "staleWithdrawHit = ztrue" \
+  -p DEFAULT_SETSIZE 2 \
+  -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 2 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000
+\end{verbatim}
 
 \paragraph{Safety.}  Ordinary model checking visits every reachable state
 and finds no invariant violation and no deadlock.  Because
@@ -1966,14 +2002,37 @@ activity, and none has a talk marker whose hint names no session.  The
 two goal predicates that were reachable in
 Section~\ref{sec:markerprops}---$talkDesc \neq talkDescDefault \land
 \lnot\, talkActivity$ and $talkDesc \neq talkDescDefault \land talkBare
-\neq \emptyset$---are now unreachable.
+\neq \emptyset$---are now unreachable, each being exactly the negation of a
+promoted invariant.
+
+\paragraph{The reordering defect, reached and then closed.}  The withdrawal
+key guard is proved the same way the stale marker was.  Delete the invariant
+$staleWithdrawHit = zfalse$ from the state schema, so that the username-only
+$WithdrawStale$ becomes feasible, and set the ProB goal to
+$staleWithdrawHit = ztrue$.  The check finds a reachable state by an
+eleven-step trace whose tail is the reordering exactly:
+$TalkInviteArrive(u, k_B)$ records an invite from the user's session~$B$,
+then $WithdrawStale(u, k_A)$---a withdrawal carrying the earlier session~$A$'s
+key---removes the live invite on the bare user match, clearing the marker with
+the current invite silently lost.  Restore the invariant, and the same goal is
+searched over the whole reachable space above: it is \emph{not} found, and the
+check reports ``all states visited.''  $WithdrawStale$ is then reported among
+the uncovered operations, alongside the earlier defect operations
+$TalkDrainStale$ and $TalkInviteArriveBare$: the operation that would suppress
+a live invite exists in the text but is enabled in no reachable state.  The
+key-matched $WithdrawArrive$ and its foreign-drop counterpart $WithdrawForeign$
+are both covered.
 
 \paragraph{Liveness.}  The CTL formula
 $\mathrm{AG}\,(talkDesc \neq talkDescDefault \implies
-\mathrm{EF}\; talkDesc = talkDescDefault)$
-now holds: from every marker-present state at least one reconciling
-transition is enabled and leads, directly or through $TalkAccept$, to a
-state in which the marker has cleared.
+\mathrm{EF}\; talkDesc = talkDescDefault)$,
+checked at the same scope, is reported \textsc{true}: from every
+marker-present state at least one reconciling transition is enabled and
+leads, directly or through $TalkAccept$, to a state in which the marker has
+cleared.  The key guard does not weaken this---an invite keyed to $k$ can
+still be cleared by a matching $WithdrawArrive(u, k)$, and unconditionally by
+the time-to-live $ExpirePendingInvite$---so the channel remains
+self-clearing.
 
 \paragraph{Necessity of each transition.}  Each reconciling transition
 discharges a distinct obligation.  $TalkDrain$ is the only transition
@@ -1982,13 +2041,18 @@ by a queued message or a live connection can never clear.
 $WithdrawArrive$ and $ExpirePendingInvite$ are the two transitions that
 remove a pending invite without the recipient's acceptance, and they are
 enabled under different conditions: $WithdrawArrive$ on receipt of an
-\emph{ntWithdraw} frame from an inviter who cancels, $ExpirePendingInvite$
-on a poller tick once the clock has reached $maxInviteAge$.  The second is
+\emph{ntWithdraw} frame \emph{whose key matches the pending invite}, from an
+inviter who cancels; $ExpirePendingInvite$ on a poller tick once the clock
+has reached $maxInviteAge$.  The second is
 what covers exactly the biff-9la scenario---an invite from a peer who
 never returns and never withdraws: only the time-to-live path clears it,
 so without $ExpirePendingInvite$ (and the $AgeTick$ that drives its
 clock) the talk channel would not be self-clearing in the way the read
-reference is.  $TalkAccept$ is the ordinary progress transition; it is not
+reference is.  $WithdrawForeign$ removes nothing; it is the transition that
+\emph{declines} to act on a mismatched frame, and it is kept as an explicit
+operation so that the implementation owes a case for recognising and
+discarding such a frame rather than acting on its user field alone.
+$TalkAccept$ is the ordinary progress transition; it is not
 required for the marker to clear, but without it the only exit from a
 pending invite is to remove it, and the handshake modelled in $talk.tex$
 could never complete.
@@ -2099,12 +2163,21 @@ marker.  If pending invites are never removed except by a subsequent
 \texttt{talk} command, then a marker driven by $talkPending$ can never
 clear on its own.  Under the invariant $MarkerConsistent$ that reading is
 superseded: a pending invite must also be removable by $WithdrawArrive$---an
-\emph{ntWithdraw} frame from the inviter---or by $ExpirePendingInvite$---a
-time-to-live expiry aged out on a poller tick---so that the talk channel
-is self-clearing.  The consent-boundary guarantees of $talk.tex$
-(invariant~11) are unaffected: withdrawal and expiry only \emph{remove}
-pending invites, never complete a handshake, so they cannot forge
-consent.
+\emph{ntWithdraw} frame from the inviter \emph{whose session key matches the
+stored invite}---or by $ExpirePendingInvite$---a time-to-live expiry aged out
+on a poller tick---so that the talk channel is self-clearing.  The key
+qualification on $WithdrawArrive$ is not incidental: a withdrawal matched on
+the inviter's user identity alone would, under the transport's lack of
+cross-session ordering, let a stale withdrawal from one session delete a live
+invite from another, reintroducing the stranded-marker defect by a
+non-adversarial path.  $WithdrawArrive$ therefore guards on
+$talkPending~inviter? = withdrawKey?$, and a mismatched frame is dropped by
+$WithdrawForeign$; this is the withdrawal-side mirror of the accept-side
+consent guard $(head~queue).nfromKey = partnerKey$ that $talk.tex$'s
+$DrainAcceptWhileInviting$ already imposes (DES-043).  The consent-boundary
+guarantees of $talk.tex$ (invariant~11) are unaffected: withdrawal and expiry
+only \emph{remove} pending invites, never complete a handshake, so they cannot
+forge consent.
 
 \begin{schema}{WallNotifySuccess}
   NotificationState
