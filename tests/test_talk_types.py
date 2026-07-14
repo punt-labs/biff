@@ -105,6 +105,15 @@ class TestPendingInvite:
         with pytest.raises(ValueError, match="user:tty"):
             PendingInvite(user="eric", session_key="eric:", arrived=0.0)
 
+    def test_empty_user_key_rejected(self) -> None:
+        """HintNamesSession: a ``:tty`` key with an empty user is malformed.
+
+        It would render ``talk @:def67890``, which names no user and fails at
+        the prompt, so it must be rejected at construction like the other halves.
+        """
+        with pytest.raises(ValueError, match="user:tty"):
+            PendingInvite(user="eric", session_key=":def67890", arrived=0.0)
+
     def test_well_formed_key_accepted(self) -> None:
         inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
         assert inv.session_key == OTHER_KEY

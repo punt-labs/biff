@@ -52,14 +52,16 @@ class PendingInvite:
     def __post_init__(self) -> None:
         """Enforce HintNamesSession: the key must name a session (``user:tty``).
 
-        A bare (colonless) or empty-tty key could only render ``talk @user``,
-        which is not a runnable accept command; rejecting it at construction
-        keeps every recorded invite's hint runnable (notification.tex
-        ``HintNamesSession``).  This is the single validation gate — the wire
-        boundary constructs through :meth:`from_notification` and inherits it.
+        A key missing either half — colonless (``user``), empty-tty (``user:``),
+        or empty-user (``:tty``) — could only render a hint that fails at the
+        prompt (``talk @user`` or ``talk @:tty``), so it is rejected at
+        construction to keep every recorded invite's hint runnable
+        (notification.tex ``HintNamesSession``).  This is the single validation
+        gate — the wire boundary constructs through :meth:`from_notification`
+        and inherits it.
         """
-        _, sep, tty = self.session_key.partition(":")
-        if not sep or not tty:
+        user, sep, tty = self.session_key.partition(":")
+        if not user or not sep or not tty:
             msg = f"session key must name a session (user:tty): {self.session_key!r}"
             raise ValueError(msg)
 
