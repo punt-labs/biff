@@ -54,7 +54,7 @@ from biff.hook import hook_app
 from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
-from biff.talk_state import AcceptOutcome, TalkNotification
+from biff.talk_types import AcceptOutcome, TalkNotification
 
 # ---------------------------------------------------------------------------
 # Global flags

@@ -713,7 +713,7 @@ class TestTimestampsCommand:
         display, showing the user-observable behavior change (biff-4uq).
         """
         from biff.__main__ import _format_talk_lines
-        from biff.talk_state import TalkNotification
+        from biff.talk_types import TalkNotification
 
         display = ReplDisplay()
         talk_msg = TalkNotification(
@@ -862,7 +862,8 @@ class TestInviteCancelWithdraw:
     @pytest.mark.anyio()
     async def test_cancel_while_inviting_withdraws(self, tmp_path: object) -> None:
         from biff.__main__ import _talk_handshake
-        from biff.talk_state import AcceptOutcome, TalkPhase, TalkState
+        from biff.talk_state import TalkState
+        from biff.talk_types import AcceptOutcome, TalkPhase
 
         ctx = _make_ctx(tmp_path)
         ctx.talk.begin_invite(

@@ -22,12 +22,9 @@ from biff.relay import LocalRelay, Relay
 from biff.talk_state import (
     MAX_TALK_QUEUE,
     PENDING_INVITE_TTL,
-    AcceptOutcome,
-    PendingInvite,
-    TalkNotification,
-    TalkPhase,
     TalkState,
 )
+from biff.talk_types import AcceptOutcome, TalkPhase
 
 MY_USER = "kai"
 MY_TTY = "abc12345"
@@ -104,30 +101,6 @@ def _end(
         "from_key": from_key,
         "to_key": to_key,
     }
-
-
-# ---------------------------------------------------------------------------
-# TalkNotification
-# ---------------------------------------------------------------------------
-
-
-class TestTalkNotification:
-    def test_from_payload_full(self) -> None:
-        n = TalkNotification.from_payload(_message("eric", OTHER_KEY, "yo"))
-        assert n.ntype == "message"
-        assert n.nfrom == "eric"
-        assert n.nfrom_tty == "tty2"
-        assert n.nfrom_key == OTHER_KEY
-        assert n.nbody == "yo"
-
-    def test_unknown_type_defaults_to_message(self) -> None:
-        n = TalkNotification.from_payload({"from": "eric", "from_key": OTHER_KEY})
-        assert n.ntype == "message"
-
-    def test_type_predicates(self) -> None:
-        assert TalkNotification.from_payload(_invite("e", OTHER_KEY)).is_invite
-        assert TalkNotification.from_payload(_accept("e", OTHER_KEY)).is_accept
-        assert TalkNotification.from_payload(_end("e", OTHER_KEY)).is_end
 
 
 # ---------------------------------------------------------------------------
@@ -513,23 +486,6 @@ class TestSend:
         _, payload = self._published(nc)
         assert payload["type"] == "withdraw"
         assert payload["to_key"] == OTHER_KEY
-
-
-# ---------------------------------------------------------------------------
-# PendingInvite value object (notification.tex talkPending / HintNamesSession)
-# ---------------------------------------------------------------------------
-
-
-class TestPendingInvite:
-    def test_tty_parsed_from_session_key(self) -> None:
-        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
-        assert inv.tty == "def67890"
-
-    def test_accept_command_names_session(self) -> None:
-        """HintNamesSession: the hint is a runnable ``talk @user:tty``."""
-        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
-        assert inv.accept_command == "talk @eric:def67890"
-        assert ":" in inv.accept_command  # never a bare @user
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,8 @@ from biff.formatting import terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
-from biff.talk_state import TalkPhase, TalkState
+from biff.talk_state import TalkState
+from biff.talk_types import TalkPhase
 
 
 class _Sentinel:

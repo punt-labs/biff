@@ -32,14 +32,14 @@ from biff.server.tools._descriptions import (
     refresh_talk,
 )
 from biff.server.tools._session import resolve_talk_target, update_current_session
-from biff.talk_state import TalkPhase
+from biff.talk_types import TalkPhase
 from biff.tty import parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-    from biff.talk_state import AgentDrain
+    from biff.talk_types import AgentDrain
 
 logger = logging.getLogger(__name__)
 

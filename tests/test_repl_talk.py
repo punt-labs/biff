@@ -18,7 +18,7 @@ from biff.__main__ import (
     _print_talk_banner,
 )
 from biff.repl_display import ReplDisplay
-from biff.talk_state import TalkNotification
+from biff.talk_types import TalkNotification
 
 if TYPE_CHECKING:
     import pytest
