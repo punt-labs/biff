@@ -10,6 +10,7 @@ dependency.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Self
@@ -48,11 +49,33 @@ class PendingInvite:
     session_key: str
     arrived: float
 
-    @property
-    def tty(self) -> str:
-        """The inviter's tty, parsed from the ``user:tty`` session key."""
-        _, _, tty = self.session_key.partition(":")
-        return tty
+    def __post_init__(self) -> None:
+        """Enforce HintNamesSession: the key must name a session (``user:tty``).
+
+        A bare (colonless) or empty-tty key could only render ``talk @user``,
+        which is not a runnable accept command; rejecting it at construction
+        keeps every recorded invite's hint runnable (notification.tex
+        ``HintNamesSession``).  This is the single validation gate — the wire
+        boundary constructs through :meth:`from_notification` and inherits it.
+        """
+        _, sep, tty = self.session_key.partition(":")
+        if not sep or not tty:
+            msg = f"session key must name a session (user:tty): {self.session_key!r}"
+            raise ValueError(msg)
+
+    @classmethod
+    def from_notification(cls, notif: TalkNotification) -> Self:
+        """Build a pending invite from an invite frame, timing its arrival.
+
+        The frame's session key is validated by ``__post_init__``; a malformed
+        frame raises ``ValueError`` at this wire boundary rather than being
+        recorded.
+        """
+        return cls(
+            user=notif.nfrom,
+            session_key=notif.nfrom_key,
+            arrived=time.monotonic(),
+        )
 
     @property
     def accept_command(self) -> str:

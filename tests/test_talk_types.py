@@ -9,6 +9,8 @@ relay-backed state machine.
 
 from __future__ import annotations
 
+import pytest
+
 from biff.talk_types import (
     AcceptOutcome,
     AgentDrain,
@@ -87,15 +89,37 @@ class TestTalkNotification:
 
 
 class TestPendingInvite:
-    def test_tty_parsed_from_session_key(self) -> None:
-        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
-        assert inv.tty == "def67890"
-
     def test_accept_command_names_session(self) -> None:
         """HintNamesSession: the hint is a runnable ``talk @user:tty``."""
         inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
         assert inv.accept_command == "talk @eric:def67890"
         assert ":" in inv.accept_command  # never a bare @user
+
+    def test_colonless_key_rejected(self) -> None:
+        """HintNamesSession: a key with no ``:`` cannot name a session."""
+        with pytest.raises(ValueError, match="user:tty"):
+            PendingInvite(user="eric", session_key="eric", arrived=0.0)
+
+    def test_empty_tty_key_rejected(self) -> None:
+        """HintNamesSession: a ``user:`` key with an empty tty is malformed."""
+        with pytest.raises(ValueError, match="user:tty"):
+            PendingInvite(user="eric", session_key="eric:", arrived=0.0)
+
+    def test_well_formed_key_accepted(self) -> None:
+        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
+        assert inv.session_key == OTHER_KEY
+
+    def test_from_notification_validates_and_records(self) -> None:
+        notif = TalkNotification.from_payload(_invite("eric", OTHER_KEY))
+        inv = PendingInvite.from_notification(notif)
+        assert inv.user == "eric"
+        assert inv.session_key == OTHER_KEY
+
+    def test_from_notification_rejects_keyless_frame(self) -> None:
+        """A keyless invite frame is rejected at the wire boundary, not recorded."""
+        notif = TalkNotification.from_payload(_invite("eric", ""))
+        with pytest.raises(ValueError, match="user:tty"):
+            PendingInvite.from_notification(notif)
 
 
 # ---------------------------------------------------------------------------

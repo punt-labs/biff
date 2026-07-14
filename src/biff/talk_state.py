@@ -224,20 +224,18 @@ class TalkState:
         return drained
 
     def _record_invite(self, notif: TalkNotification) -> None:
-        """Record a keyed invite in the pending set (notification.tex TalkInviteArrive).
+        """Record an invite in the pending set (notification.tex TalkInviteArrive).
 
-        A keyless invite (empty session key) is ignored rather than
-        recorded: it could only render a bare ``talk @user`` hint that fails
-        at the prompt, which the HintNamesSession invariant forbids.  The
-        newest invite from a user supersedes the older one.
+        Construction is the single validation gate: a frame whose session key
+        does not name a session is rejected by :meth:`PendingInvite.from_notification`
+        and dropped here with a debug log rather than recorded, since it could
+        only render a bare ``talk @user`` hint that fails at the prompt
+        (HintNamesSession).  The newest invite from a user supersedes the older.
         """
-        if not notif.nfrom_key:
-            return
-        self._pending[notif.nfrom] = PendingInvite(
-            user=notif.nfrom,
-            session_key=notif.nfrom_key,
-            arrived=time.monotonic(),
-        )
+        try:
+            self._pending[notif.nfrom] = PendingInvite.from_notification(notif)
+        except ValueError:
+            logger.debug("dropping malformed invite frame: %r", notif, exc_info=True)
 
     def poll_accept(self) -> tuple[AcceptOutcome, list[TalkNotification]]:
         """Drain the queue while inviting; detect accept or mutual auto-accept.
