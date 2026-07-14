@@ -290,6 +290,8 @@ This creates one mission per stage, wired with `depends_on` edges. The worker pi
 
 `subagent_type` matches the ethos handle. The full org roster is available via `ethos identity list` for cross-domain review.
 
+**Watching workers — judge by the FILESYSTEM, never by commits.** Every sub-agent runs in the background (`run_in_background=true`). Watch it on a `/loop 10m` that checks progress via the working tree — `git status --short`, `git diff --stat <write-set>`, and reading the changed files — **never** via commit count and **never** by running `git commit` yourself. A worker editing files is working, even with zero commits or pushes; lack of a commit is NOT a stall and NEVER a reason to intervene, ping "where's your commit?", commit by proxy, or `TaskStop`. Let workers commit and push their OWN work on their own timeline — reviewing in-flight work needs saves, not commits. Only a genuine filesystem stall (no edits changing across multiple 10m checks) with an unresponsive worker justifies `SendMessage` for status and, as a last resort, taking over. Do NOT kill an agent that is making progress.
+
 ## Knowledge Propagation Protocol
 
 After merging a PR that introduces new patterns, design decisions, or hard-won debugging insights, propagate knowledge outward before closing the session:
