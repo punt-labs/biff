@@ -750,7 +750,9 @@ async def _setup_nats_subscription(
                     }
                     ctx.talk.receive(notification)
             except (json.JSONDecodeError, TypeError):
-                pass
+                logging.getLogger(__name__).debug(
+                    "Failed to process talk notification", exc_info=True
+                )
         notify_event.set()
 
     return await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
