@@ -37,7 +37,7 @@ def _pending_keys(st: TalkState) -> dict[str, str]:
     return {user: inv.session_key for user, inv in st.pending_invites.items()}
 
 
-def _withdraw(from_user: str, from_key: str, to_key: str = "") -> dict[str, str]:
+def _withdraw(from_user: str, from_key: str, to_key: str = MY_KEY) -> dict[str, str]:
     return {
         "type": "withdraw",
         "from": from_user,
@@ -552,6 +552,38 @@ class TestWithdraw:
         st.receive(_invite("eric", OTHER_KEY))
         st.drain_idle()
         assert st.receive(_withdraw("zed", "zed:999")) is False
+        assert _pending_keys(st) == {"eric": OTHER_KEY}
+
+    def test_key_matched_withdraw_clears(self) -> None:
+        """WithdrawArrive: a withdraw whose key matches the invite clears it."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_idle()
+        assert st.receive(_withdraw("eric", OTHER_KEY)) is True
+        assert st.pending_invites == {}
+
+    def test_stale_cross_session_withdraw_preserves_live_invite(self) -> None:
+        """Reordering: a late session-A withdraw keeps a live session-B invite.
+
+        Core NATS gives no cross-session ordering, so an ``ntWithdraw`` from an
+        earlier session can arrive after a fresh invite from a later session of
+        the same user.  Keyed on the user alone it would wrongly clear the live
+        invite (WithdrawStale); the key guard drops it (WithdrawForeign).
+        """
+        st = _make_state()
+        st.receive(_invite("eric", "eric:sessionB"))  # the live invite
+        st.drain_idle()
+        assert _pending_keys(st) == {"eric": "eric:sessionB"}
+        # A stale withdraw keyed to eric's earlier session A arrives late.
+        assert st.receive(_withdraw("eric", "eric:sessionA")) is False
+        assert _pending_keys(st) == {"eric": "eric:sessionB"}
+
+    def test_foreign_key_withdraw_is_noop(self) -> None:
+        """WithdrawForeign: a withdraw whose key names another session is dropped."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_idle()
+        assert st.receive(_withdraw("eric", "eric:wrongkey")) is False
         assert _pending_keys(st) == {"eric": OTHER_KEY}
 
 

@@ -173,27 +173,38 @@ class TalkState:
         if notif.nto and notif.nto != self._my_key:
             return False  # ReceiveNotForSession
         if notif.is_withdraw:
-            return self._withdraw(notif.nfrom)  # WithdrawArrive
+            return self._withdraw(notif.nfrom, notif.nfrom_key)  # WithdrawArrive
         if len(self._queue) >= MAX_TALK_QUEUE:
             self._queue.popleft()  # ReceiveOverflow — drop-oldest
         self._queue.append(notif)
         return True
 
-    def _withdraw(self, inviter: str) -> bool:
-        """Remove a withdrawn inviter's invite (notification.tex WithdrawArrive).
+    def _withdraw(self, inviter: str, withdraw_key: str) -> bool:
+        """Cancel an invite only when the frame's key matches (WithdrawArrive).
 
-        An ``ntWithdraw`` frame cancels the invite whether it was already
-        drained into ``_pending`` or is still queued and undrained, so the
-        marker reverts once nothing else survives.  Returns ``True`` when
-        something was removed, signalling the caller to wake the poller and
-        re-derive the description.
+        An ``ntWithdraw`` frame carries the inviter's originating session key.
+        The invite — whether already drained into ``_pending`` or still queued
+        and undrained — is cancelled only when that key equals the one recorded
+        against it.  A frame whose key names a different session, or a user with
+        no matching pending invite, is a foreign withdrawal and dropped with no
+        state change (notification.tex WithdrawForeign): core NATS gives no
+        cross-session ordering, so a late withdrawal from an earlier session
+        must not disturb a live invite from a later one.  This is the
+        withdrawal-side mirror of the accept consent guard (DES-043).  Returns
+        ``True`` when something was removed, so the caller wakes the poller and
+        re-derives the description.
         """
-        removed = self._pending.pop(inviter, None) is not None
+        pending = self._pending.get(inviter)
+        matched = pending is not None and pending.session_key == withdraw_key
+        if matched:
+            del self._pending[inviter]
         before = len(self._queue)
         self._queue = deque(
-            n for n in self._queue if not (n.is_invite and n.nfrom == inviter)
+            n
+            for n in self._queue
+            if not (n.is_invite and n.nfrom == inviter and n.nfrom_key == withdraw_key)
         )
-        return removed or len(self._queue) != before
+        return matched or len(self._queue) != before
 
     # -- Drain (talk.tex Drain* operations) --
 
