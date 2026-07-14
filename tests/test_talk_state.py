@@ -150,6 +150,16 @@ class TestReceive:
         st = _make_state()
         assert st.receive(_message("eric", OTHER_KEY, "hi", to_key=MY_KEY)) is True
 
+    def test_targeted_control_frame_accepted(self) -> None:
+        """A control frame naming our session is accepted (ReceiveNotForSession).
+
+        The positive mirror of ``test_keyless_invite_dropped``: the ``nto ==
+        myKey`` guard admits a control frame addressed to us, not just messages.
+        """
+        st = _make_state()
+        assert st.receive(_invite("eric", OTHER_KEY, to_key=MY_KEY)) is True
+        assert st.queued == 1
+
     def test_overflow_drops_oldest(self) -> None:
         """ReceiveOverflow: at the bound, the oldest is dropped, newest kept."""
         st = _make_state()
@@ -599,6 +609,23 @@ class TestWithdraw:
         st.drain_idle()
         assert st.receive(_withdraw("eric", "eric:wrongkey")) is False
         assert _pending_keys(st) == {"eric": OTHER_KEY}
+
+    def test_foreign_key_withdraw_preserves_undrained_queued_invite(self) -> None:
+        """WithdrawForeign on the queue branch: a foreign-key withdraw against a
+        still-queued invite leaves it intact (the ``n.nfrom_key == withdraw_key``
+        queue guard).
+
+        The other foreign-key tests drain first, exercising only the ``_pending``
+        branch; this covers the undrained queue path of the same key guard.
+        """
+        st = _make_state()
+        st.receive(_invite("eric", "eric:sessionB"))  # live invite, still queued
+        assert st.queued == 1
+        # A withdraw keyed to eric's earlier session A arrives before we drain.
+        assert st.receive(_withdraw("eric", "eric:sessionA")) is False
+        assert st.queued == 1  # the live queued invite is preserved
+        st.drain_idle()
+        assert _pending_keys(st) == {"eric": "eric:sessionB"}
 
 
 # ---------------------------------------------------------------------------
