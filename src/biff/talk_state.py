@@ -44,18 +44,17 @@ always retained (biff-vr4).
 MAX_BODY_LEN = 512
 """Message body truncation limit (talk.tex ``maxBodyLen``)."""
 
-PENDING_INVITE_TTL = 600.0
+PENDING_INVITE_TTL = 300.0
 """Seconds a pending talk invite survives unanswered (notification.tex
 ``maxInviteAge`` / ``ExpirePendingInvite``).
 
 An invite whose inviter never returns and never sends an ``ntWithdraw``
 would otherwise strand the ``[TALK]`` marker forever (biff-9la).  The poller
-reaps invites older than this on its tick.  Ten minutes comfortably exceeds
+reaps invites older than this on its tick.  Five minutes comfortably exceeds
 several talk poll cycles (~1 min each), so a genuinely-waiting invite is
 never reaped before the agent can act, while a stranded marker still
 self-heals within a bounded, human-scale window.  ``ntWithdraw`` is the fast
-clean path; this TTL is the crash/disconnect backstop, so it is deliberately
-conservative.
+clean path; this TTL is the crash/disconnect backstop.
 """
 
 
