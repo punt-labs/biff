@@ -257,7 +257,8 @@ the status bar, and the last notification outcome.
   fileItems : \seq SOURCEKEY \\
   barLine2 : MSG \\
   barStale : ZBOOL \\
-  lastNotifyResult : NotifyResult
+  lastNotifyResult : NotifyResult \\
+  staleWithdrawHit : ZBOOL
   \where
   \dom queueKinds = \ran queueItems \\
   \dom queueTexts = \ran queueItems \\
@@ -283,7 +284,8 @@ the status bar, and the last notification outcome.
   (kvProvisioned = ztrue \implies
   natsConn = natsConnected) \\
   (natsConn = natsConnected \implies
-  session = sessCaptured)
+  session = sessCaptured) \\
+  staleWithdrawHit = zfalse
 \end{schema}
 
 Key invariants: queue metadata maps have the same domain as the
@@ -372,7 +374,8 @@ factor at two rather than one per user.
   fileItems' = \langle \rangle \\
   barLine2' = idleMarker \\
   barStale' = ztrue \\
-  lastNotifyResult' = notifyDropped
+  lastNotifyResult' = notifyDropped \\
+  staleWithdrawHit' = zfalse
 \end{schema}
 
 The initial state has $session' = sessNone$ and
@@ -420,7 +423,8 @@ the session is guaranteed to be captured.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 After $CaptureSession$, the system has $session = sessCaptured$
@@ -475,7 +479,8 @@ must execute $CaptureSession$ before $EnsureConnected$.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Close Connection}
@@ -513,7 +518,8 @@ antecedent $natsConn = natsConnected$ is false.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -576,7 +582,8 @@ handler.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \begin{schema}{LeaveToolContext}
@@ -608,7 +615,8 @@ handler.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 A tool handler is therefore modelled as $EnterToolContext$, followed by
@@ -659,7 +667,8 @@ it guarantees synchronous delivery within the request-response cycle.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
-  barStale' = zfalse
+  barStale' = zfalse \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Suspenders Path (No Tool Context)}
@@ -701,7 +710,8 @@ so the poller always succeeds when needed.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
-  barStale' = zfalse
+  barStale' = zfalse \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Total Notification}
@@ -767,7 +777,8 @@ tool context and a live NATS connection.
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Talk Start (Tool Handler)}
@@ -807,7 +818,8 @@ notifications.
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{External Message Deliver (CLI)}
@@ -849,7 +861,8 @@ handles the receive-side effects.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -915,7 +928,8 @@ have a valid session when it fires the deferred notification.
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{NATS Talk Callback}
@@ -975,7 +989,8 @@ session when it fires the deferred notification.
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Sync Unread File}
@@ -1013,7 +1028,8 @@ Called after any state change that affects what the status bar shows.
   currentIndex' = currentIndex \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Poll Tick (Background Poller)}
@@ -1059,7 +1075,8 @@ Clears the changed flags regardless.
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Status Bar Refresh}
@@ -1100,7 +1117,8 @@ This is the slow path---no MCP involvement.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1150,7 +1168,8 @@ queue.  With a single wall item, the cursor stays at zero.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \begin{schema}{AdvanceWall}
@@ -1187,7 +1206,8 @@ queue.  With a single wall item, the cursor stays at zero.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1251,7 +1271,8 @@ the marker set once the count reaches zero.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \begin{schema}{ReadMail}
@@ -1283,7 +1304,8 @@ the marker set once the count reaches zero.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Talk Channel (invite, message, drain)}
@@ -1324,7 +1346,8 @@ A talk message arrives and raises $talkQueued$.  Both set the marker.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \begin{schema}{TalkMessageArrive}
@@ -1357,7 +1380,8 @@ A talk message arrives and raises $talkQueued$.  Both set the marker.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 The defect (biff-9la, observed live).  The drain that ends a talk---the
@@ -1397,7 +1421,8 @@ and $talkConnected$, yet preserves $talkDesc$.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 The coupled defect.  A second, independent fault records an invite
@@ -1438,7 +1463,8 @@ session'').
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1582,7 +1608,8 @@ marker stays, now backed only by the surviving invites.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Withdrawing a pending invite (ntWithdraw frame)}
@@ -1595,21 +1622,162 @@ Section~\ref{sec:markerfix2} then owes a separate test for each.
 
 $WithdrawArrive$ is the first: the recipient receives an \emph{ntWithdraw}
 notification from the inviter---the inviter ran \texttt{talk\_end}, hung up,
-or otherwise cancelled---and removes that inviter's pending entry, whether
-it was recorded with its session key (in $talkPending$) or, in the defect
-model, without one (in $talkBare$).  Its precondition is the arrival of the
-frame on a live connection; it does \emph{not} depend on how long the invite
-has been pending.  If no activity survives, the description reverts and the
-clock returns to zero.
+or otherwise cancelled---and removes that inviter's pending entry.  A
+withdrawal frame carries the inviter's originating session key in the field
+$withdrawKey?$; this is the \emph{ntWithdraw} analogue of the $nfromKey$ that
+$talk.tex$ guards on for accepts.  The removal is honoured only when that key
+equals the session key stored against the pending invite---%
+$inviter? \in \dom talkPending$ and $talkPending~inviter? = withdrawKey?$.
+The guard is not decoration.  The talk transport is core NATS publish and
+subscribe; it gives no cross-session ordering, so a withdrawal emitted by an
+earlier session of the same user may be delivered \emph{after} a fresh invite
+from a later session of that user.  A user invites us from session~$A$,
+withdraws, and re-invites from session~$B$; because $talkPending$ is a
+function keyed on the user, the re-invite supersedes the first, so
+$talkPending$ now maps that user to $B$'s key.  A withdrawal keyed to
+session~$A$ that arrives late must not disturb the live session~$B$
+invite---and with the key guard it does not, because the stored key (session
+$B$'s) differs from the withdrawal's key (session $A$'s), so the equality
+$talkPending~inviter? = withdrawKey?$ fails and no removal occurs.  Without
+the guard, the withdrawal would delete the current invite on a bare user
+match, the marker would clear, and the live invite would be silently lost.  This is
+exactly the stale-marker defect class the specification exists to prevent,
+reached here by a non-adversarial reordering rather than by an attacker; the
+key guard is the withdrawal-side counterpart of the accept-side consent
+boundary of $talk.tex$ (DES-043, invariant~11).  A withdrawal whose key does
+not match is not applied here; it is handled by $WithdrawForeign$ below.
+$WithdrawArrive$'s precondition is otherwise the arrival of the frame on a
+live connection; it does \emph{not} depend on how long the invite has been
+pending.  If no activity survives, the description reverts and the clock
+returns to zero.
 
 \begin{schema}{WithdrawArrive}
   \Delta NotificationState \\
-  inviter? : USER
+  inviter? : USER \\
+  withdrawKey? : SESSIONKEY
   \where
   natsConn = natsConnected \\
-  (inviter? \in \dom talkPending \lor inviter? \in talkBare) \\
+  inviter? \in \dom talkPending \\
+  talkPending~inviter? = withdrawKey? \\
   talkPending' = \{ inviter? \} \ndres talkPending \\
-  talkBare' = talkBare \setminus \{ inviter? \} \\
+  talkBare' = talkBare \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset) \implies
+  pendingAge' = 0) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset) \implies
+  pendingAge' = pendingAge) \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset \land \\
+  \quad talkQueued = 0 \land talkConnected = zfalse) \implies \\
+  \quad (talkDesc' = talkDescDefault \land talkDescChanged' = zfalse)) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset \lor \\
+  \quad talkQueued > 0 \lor talkConnected = ztrue) \implies \\
+  \quad (talkDesc' = talkDesc \land talkDescChanged' = talkDescChanged)) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{A withdrawal that names the wrong session (WithdrawForeign)}
+
+$WithdrawForeign$ is the withdrawal-side counterpart of $talk.tex$'s
+$DrainForeignAccept$.  A withdrawal frame arrives whose key does \emph{not}
+match the pending invite it purports to cancel---either the user has no
+pending invite at all, or the stored invite carries a different session key,
+as in the reordering above.  The frame is dropped: the pending set, the
+marker, the clock, and every other component are left exactly as they were.
+Modelling it as a distinct operation, rather than as a silent no-op, forces
+the test-partition of Section~\ref{sec:markerfix2} to owe a case for it, and
+records in the specification that the implementation must recognise and
+discard such a frame rather than acting on its user field alone.
+
+\begin{schema}{WithdrawForeign}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  withdrawKey? : SESSIONKEY
+  \where
+  natsConn = natsConnected \\
+  \lnot\, (inviter? \in \dom talkPending \land
+  talkPending~inviter? = withdrawKey?) \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  pendingAge' = pendingAge \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = talkDescChanged \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{The withdrawal gap, as a dead operation (WithdrawStale)}
+
+$WithdrawStale$ is the defect this section exists to close, kept in the text
+as the negative result it now is.  It models the username-only withdrawal:
+an \emph{ntWithdraw} frame arrives whose key does not match the stored invite
+($talkPending~inviter? \neq withdrawKey?$), yet it removes the invite anyway,
+on the bare user match.  The removed invite is the live one; the marker
+clears with nothing behind it and the current invite is silently lost.  The
+history component $staleWithdrawHit$ records that this has happened, so the
+suppression can be named as a reachable state.
+
+Promoting $staleWithdrawHit = zfalse$ into $NotificationState$
+(Section~\ref{sec:state}) makes $WithdrawStale$ infeasible: its post-state
+sets $staleWithdrawHit' = ztrue$, which the invariant forbids.  ProB reports
+it as an uncovered operation, and the goal $staleWithdrawHit = ztrue$ is
+unreachable.  Delete the invariant---as an earlier, username-only draft
+implicitly did---and $WithdrawStale$ becomes enabled: with two distinct
+session keys it drives the model to $staleWithdrawHit = ztrue$, the reordering
+counterexample of Section~\ref{sec:markerfix2}.  This is the same device by
+which $TalkDrainStale$ and $TalkInviteArriveBare$ are proved dead against
+$MarkerConsistent$ and $HintNamesSession$.
+
+\begin{schema}{WithdrawStale}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  withdrawKey? : SESSIONKEY
+  \where
+  natsConn = natsConnected \\
+  inviter? \in \dom talkPending \\
+  talkPending~inviter? \neq withdrawKey? \\
+  talkPending' = \{ inviter? \} \ndres talkPending \\
+  talkBare' = talkBare \\
+  staleWithdrawHit' = ztrue \\
   ((\dom talkPending' = \emptyset \land talkBare' = \emptyset) \implies
   pendingAge' = 0) \\
   ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset) \implies
@@ -1684,7 +1852,8 @@ the description, not the activity.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 $ExpirePendingInvite$ then reaps an invite once its clock has reached the
@@ -1733,7 +1902,8 @@ zero.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Accepting an invite}
@@ -1776,7 +1946,8 @@ with the invariant.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
