@@ -693,4 +693,51 @@ The following properties must hold in all reachable states:
   forge the invited peer's consent.
 \end{enumerate}
 
+%%----------------------------------------------------------------------
+\section{Threat Model: forgeable frames and the withdrawal primitive}
+%%----------------------------------------------------------------------
+
+Talk inherits the BSD trust model of the programs it is named for: a frame
+is trusted for what it claims to be.  Notifications travel on a shared
+per-user NATS subject and carry their own $nfrom$, $nfromTty$ and $nfromKey$;
+nothing in the protocol binds those fields to a verified sender.  A frame is
+therefore \emph{forgeable}, and the specification's guarantees are stated
+against that fact rather than against an assumption of authenticity.
+
+The consent boundary (invariant~11) is robust under forgery on the
+\emph{connect} side.  An accept is honoured only when
+$(head~queue).nfromKey = partnerKey$, so a forged accept connects the inviter
+to nobody it did not itself invite: to be honoured, the forgery must carry
+the exact ephemeral session key the inviter chose as its target, which a
+third party does not hold.  Forging a session identity, not merely a
+username, is the bar.
+
+A withdrawal frame---the \emph{ntWithdraw} of the sister specification
+$notification.tex$, which $talk.tex$ would model as a fifth $NotifType$---sits
+on the \emph{availability} side of this boundary, and the honest reading is
+that it introduces a targeted invite-suppression primitive.  A withdrawal
+removes a pending invite; a party who can forge one can cancel an invitation
+the recipient has not yet answered, denying the handshake.  This is a
+denial-of-availability, not a breach of consent: withdrawal only \emph{removes}
+pending state and never drives a transition into $tpConnected$, so no forged
+frame can connect a session to a peer or speak in another's place.  The
+consent boundary is untouched.
+
+The residual, then, is availability, and the session-key guard on the
+recipient's side---$notification.tex$'s $WithdrawArrive$, which applies a
+withdrawal only when $talkPending~inviter? = withdrawKey?$ and otherwise drops
+it via $WithdrawForeign$---raises the bar for that residual to the same height
+as the accept guard.  Before the guard, a withdrawal matched on the inviter's
+username alone: any party who knew the username could suppress the invite, and
+even an \emph{honest} but stale withdrawal from the inviter's own earlier
+session could delete a live invite from a later one, since the transport gives
+no cross-session ordering.  After the guard, a suppressing withdrawal must
+carry the inviter's ephemeral session key, exactly as a connecting accept
+must---so targeted suppression now demands the same session-identity forgery
+that consent already demands, and the non-adversarial reordering is closed
+outright.  The guard does not make withdrawal unforgeable; it makes a forged
+or stale withdrawal no cheaper than a forged accept, which is the most the
+BSD-ephemeral trust model admits.  The corresponding obligation on the
+recipient is the $WithdrawArrive$ key match of $notification.tex$.
+
 \end{document}
