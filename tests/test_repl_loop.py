@@ -843,3 +843,59 @@ class TestPromptOutputOrdering:
         # No output → nothing to flush, but the gate must still open.
         assert "gate_set" in log
         assert "write" not in log
+
+
+# -----------------------------------------------------------------------
+# Invite-cancel withdraw parity (notification.tex WithdrawArrive)
+# -----------------------------------------------------------------------
+
+
+class TestInviteCancelWithdraw:
+    """Cancelling an outgoing REPL invite withdraws it, not ends it.
+
+    Abandoning an invite while still INVITING publishes ``ntWithdraw`` so
+    the invitee's ``[TALK]`` marker clears at once (notification.tex
+    WithdrawArrive), matching the MCP ``talk_end`` path.  A connected hangup
+    stays an ``end`` frame (DrainEnd) — that path is unchanged.
+    """
+
+    @pytest.mark.anyio()
+    async def test_cancel_while_inviting_withdraws(self, tmp_path: object) -> None:
+        from biff.__main__ import _talk_handshake
+        from biff.talk_state import AcceptOutcome, TalkPhase, TalkState
+
+        ctx = _make_ctx(tmp_path)
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
+        )
+        gate = threading_mod.Event()
+        with (
+            patch(
+                "biff.__main__._wait_for_talk_accept",
+                new_callable=AsyncMock,
+                return_value=AcceptOutcome.NONE,
+            ),
+            patch.object(
+                TalkState, "send_withdraw", new_callable=AsyncMock
+            ) as spy_withdraw,
+            patch.object(TalkState, "send_end", new_callable=AsyncMock) as spy_end,
+        ):
+            proceed = await _talk_handshake(
+                ctx,
+                "eric",
+                "eric:def67890",
+                "eric:tty2",
+                ["talk", "@eric"],
+                responding=False,
+                aqueue=_make_aqueue([]),
+                notify_event=asyncio.Event(),
+                prompt_gate=gate,
+            )
+
+        assert proceed is False
+        spy_withdraw.assert_awaited_once_with(
+            target_user="eric", to_key="eric:def67890", target_repo=None
+        )
+        spy_end.assert_not_awaited()
+        # The cancel returns us to idle (talk.tex LocalEnd).
+        assert ctx.talk.phase is TalkPhase.IDLE

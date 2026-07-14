@@ -592,6 +592,13 @@ async def _talk_handshake(
     outcome = await _wait_for_talk_accept(ctx, aqueue, notify_event, prompt_gate)
     if outcome is AcceptOutcome.NONE:
         print(f"Talk with {display} cancelled.")
+        # Abandoning an outgoing invite withdraws it (ntWithdraw) so the
+        # invitee's [TALK] marker clears at once (notification.tex
+        # WithdrawArrive) instead of lingering until the TTL sweep.  A
+        # connected hangup is a distinct path (send_end / DrainEnd).
+        await ctx.talk.send_withdraw(
+            target_user=target_user, to_key=target_key, target_repo=target_repo
+        )
         ctx.talk.reset()
         try:
             s = await ctx.relay.get_session(ctx.session_key)
