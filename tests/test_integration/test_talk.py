@@ -23,3 +23,7 @@ class TestTalkRequiresNats:
     async def test_talk_end_no_session(self, recorder: RecordingClient) -> None:
         result = await recorder.call("talk_end")
         assert "No active talk session" in result
+
+    async def test_talk_read_requires_nats(self, recorder: RecordingClient) -> None:
+        result = await recorder.call("talk_read")
+        assert "NATS relay" in result

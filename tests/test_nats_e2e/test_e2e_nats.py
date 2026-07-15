@@ -486,11 +486,12 @@ class TestConsumerCleanup:
 
 
 class TestTalkSelfEchoFilter:
-    """Self-echo rejection in the talk notification callback.
+    """Self-echo rejection in the always-on talk subscription.
 
-    The ``_on_talk_msg`` callback inside ``_manage_talk_subscription``
-    compares ``from_key`` in the NATS notification payload against
-    ``state.session_key`` and drops self-originated messages.
+    The ``subscribe_talk`` callback feeds every frame into
+    ``state.talk.receive``, which compares ``from_key`` against
+    ``state.session_key`` and drops self-originated frames (talk.tex
+    ReceiveSelfEcho).
     """
 
     async def test_self_echo_rejected(
@@ -499,15 +500,11 @@ class TestTalkSelfEchoFilter:
         shared_data_dir: Path,
         transcript: Transcript,
     ) -> None:
-        """Notification with from_key == session_key must NOT update talk message."""
+        """A frame with from_key == session_key must NOT enter the held state."""
         from biff.models import BiffConfig
         from biff.server.app import create_server
         from biff.server.state import create_state
-        from biff.server.tools._descriptions import (
-            _manage_talk_subscription,
-            _reset_session,
-            set_talk_partner,
-        )
+        from biff.server.tools._descriptions import _reset_session
 
         _reset_session()
         repo = f"_test-selfecho-{id(self)}"
@@ -520,35 +517,27 @@ class TestTalkSelfEchoFilter:
         async with Client(FastMCPTransport(mcp)) as kai_raw:
             RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
-            # Set up talk subscription to "eric"
-            set_talk_partner("eric")
-            _, sub = await _manage_talk_subscription(mcp, state, None, None)
-            assert sub is not None
+            # The server's poller establishes the always-on talk subscription.
+            await asyncio.sleep(0.5)
 
-            # Publish a talk notification FROM this session (self-echo)
+            # Publish a talk frame FROM this session (self-echo).
             relay = state.relay
             assert isinstance(relay, NatsRelay)
             nc = await relay.get_nc()
             subject = relay.talk_notify_subject("kai")
             payload = json.dumps(
                 {
+                    "type": "message",
                     "from": "kai",
                     "body": "self-echo should be ignored",
                     "from_key": state.session_key,
+                    "to_key": state.session_key,
                 }
             ).encode()
             await nc.publish(subject, payload)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
 
-            # Import _talk_message to check it was NOT set
-            from biff.server.tools._descriptions import _talk_message
-
-            assert _talk_message == "", (
-                f"Self-echo was not rejected: _talk_message={_talk_message!r}"
-            )
-
-            # Clean up subscription
-            await sub.unsubscribe()  # type: ignore[attr-defined]
+            assert state.talk.queued == 0, "Self-echo was not rejected"
 
         _reset_session()
 
@@ -558,15 +547,11 @@ class TestTalkSelfEchoFilter:
         shared_data_dir: Path,
         transcript: Transcript,
     ) -> None:
-        """Notification with from_key != session_key updates talk message."""
+        """A frame targeted at this session enters the held state."""
         from biff.models import BiffConfig
         from biff.server.app import create_server
         from biff.server.state import create_state
-        from biff.server.tools._descriptions import (
-            _manage_talk_subscription,
-            _reset_session,
-            set_talk_partner,
-        )
+        from biff.server.tools._descriptions import _reset_session
 
         _reset_session()
         repo = f"_test-selfecho-accept-{id(self)}"
@@ -579,32 +564,28 @@ class TestTalkSelfEchoFilter:
         async with Client(FastMCPTransport(mcp)) as kai_raw:
             RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
-            # Set up talk subscription — kai is talking to eric
-            set_talk_partner("eric")
-            _, sub = await _manage_talk_subscription(mcp, state, None, None)
-            assert sub is not None
+            # The server's poller establishes the always-on talk subscription.
+            await asyncio.sleep(0.5)
 
-            # Publish a talk notification FROM eric's session (different key)
+            # Publish a talk frame FROM eric's session (different key) to us.
             relay = state.relay
             assert isinstance(relay, NatsRelay)
             nc = await relay.get_nc()
             subject = relay.talk_notify_subject("kai")
             payload = json.dumps(
                 {
+                    "type": "message",
                     "from": "eric",
                     "body": "hello from eric",
                     "from_key": "eric:tty2",
+                    "to_key": state.session_key,
                 }
             ).encode()
             await nc.publish(subject, payload)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
 
-            from biff.server.tools._descriptions import _talk_message
-
-            assert _talk_message == "@eric: hello from eric", (
-                f"Expected talk message update, got: {_talk_message!r}"
-            )
-
-            await sub.unsubscribe()  # type: ignore[attr-defined]
+            drain = state.talk.drain_for_agent()
+            bodies = [m.nbody for m in drain.messages]
+            assert bodies == ["hello from eric"], bodies
 
         _reset_session()

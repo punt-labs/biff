@@ -3,19 +3,31 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import biff.server.tools.talk as talk_mod
 from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay
+from biff.server.tools._descriptions import _talk_description
 from biff.server.tools._session import resolve_talk_target
 from biff.server.tools.talk import (
     _NO_MESSAGES,
-    _reset_talk,
+    format_agent_drain,
     format_talk_messages,
 )
+from biff.talk_state import TalkState
+from biff.talk_types import AgentDrain, PendingInvite, TalkPhase
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+    from biff.relay import Relay
+    from biff.server.state import ServerState
 
 
 class TestFormatTalkMessages:
@@ -53,6 +65,30 @@ class TestFormatTalkMessages:
     def test_empty_list(self) -> None:
         assert format_talk_messages([]) == ""
 
+
+class TestFormatAgentDrain:
+    """``talk_read`` names the inviter's session by its display tty.
+
+    Same source as the ``[TALK]`` marker (``PendingInvite.accept_command``),
+    so both surfaces render the reconciled ``talk @user:ttyN`` hint — the form
+    ``/who`` shows and ``talk @user:ttyN`` resolves against — never the opaque
+    session-key hex.
+    """
+
+    def test_accept_hint_uses_display_tty_not_key_hex(self) -> None:
+        invite = PendingInvite(
+            user="jfreeman",
+            session_key="jfreeman:75abc665",
+            tty="tty6",
+            arrived=0.0,
+        )
+        drain = AgentDrain(messages=(), pending={"jfreeman": invite})
+
+        rendered = format_agent_drain(drain)
+
+        assert "talk @jfreeman:tty6" in rendered
+        assert "75abc665" not in rendered
+
     def test_escapes_neutralized(self) -> None:
         """Remote body/sender can't inject terminal escapes (biff-lbj)."""
         msg = Message(
@@ -65,21 +101,6 @@ class TestFormatTalkMessages:
         assert "\x1b[2J" not in result
         assert "\x1b[2K" not in result
         assert "hi[2Jthere" in result
-
-
-class TestTalkState:
-    def test_initial_state_is_none(self) -> None:
-        _reset_talk()
-        from biff.server.tools._descriptions import get_talk_partner
-
-        assert get_talk_partner() is None
-
-    def test_reset_clears_partner(self) -> None:
-        from biff.server.tools._descriptions import get_talk_partner, set_talk_partner
-
-        set_talk_partner("eric")
-        _reset_talk()
-        assert get_talk_partner() is None
 
 
 class TestResolveTalkTarget:
@@ -212,7 +233,761 @@ class TestValidatedSenderKey:
         assert NatsRelay._validated_sender_key(":abc123", "kai") == ""
 
 
+class TestTalkEndResilience:
+    """talk_end resets local state even when the best-effort publish fails."""
+
+    async def test_inviting_withdraw_failure_cites_the_ttl_sweep(self) -> None:
+        """A wedged relay must not strand the session in a phantom talk state.
+
+        The INVITING withdraw legitimately cites the TTL sweep: the invitee's
+        pending invite is reaped by ``PENDING_INVITE_TTL`` (unlike a connected
+        session), so the ~5-min timeout promise is accurate here.
+        """
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_invite(partner="eric", partner_tty="def", partner_key="eric:def")
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        refresh = AsyncMock()
+        with patch.object(talk_mod, "refresh_talk", refresh):
+            result = await talk_mod._do_talk_end(
+                cast("FastMCP[ServerState]", MagicMock()),
+                cast("ServerState", state),
+            )
+        assert talk.phase is TalkPhase.IDLE  # reset despite the publish failure
+        refresh.assert_awaited_once()  # description refreshed regardless
+        assert "~5 min" in result  # the accurate pending-invite TTL promise
+
+    async def test_connected_hangup_failure_names_real_outcome_not_ttl(self) -> None:
+        """A failed connected hangup must not promise a TTL/auto-timeout recovery.
+
+        ``PENDING_INVITE_TTL`` reaps pending invites, not a CONNECTED session, so
+        a lost ``end`` frame leaves the peer connected — there is no ~5-min sweep
+        for a live conversation.  The returned text must name that real outcome
+        instead of the false reassurance the inviting-withdraw path can honestly
+        make.
+        """
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_connected(partner="eric", partner_tty="def", partner_key="eric:def")
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        with patch.object(talk_mod, "refresh_talk", AsyncMock()):
+            result = await talk_mod._do_talk_end(
+                cast("FastMCP[ServerState]", MagicMock()),
+                cast("ServerState", state),
+            )
+        assert talk.phase is TalkPhase.IDLE  # local session ended regardless
+        lowered = result.lower()
+        assert "min" not in lowered  # no false ~5-min timeout promise
+        assert "time out" not in lowered  # no false auto-timeout claim
+        assert "eric" in result  # names the partner
+        assert "may not" in lowered  # states the peer might not know
+
+    async def test_publish_failure_logs_at_info_not_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The best-effort publish failure stays off the WARNING stderr floor.
+
+        The CLI raises the stderr handler to WARNING, so a WARNING here would
+        dump a traceback into the interactive REPL; INFO keeps it in biff.log.
+        """
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_invite(partner="eric", partner_tty="def", partner_key="eric:def")
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        with (
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+            caplog.at_level(logging.INFO, logger="biff.server.tools.talk"),
+        ):
+            await talk_mod._do_talk_end(
+                cast("FastMCP[ServerState]", MagicMock()),
+                cast("ServerState", state),
+            )
+        records = [r for r in caplog.records if r.name == "biff.server.tools.talk"]
+        assert records  # the failure was logged
+        assert all(r.levelno == logging.INFO for r in records)
+
+
+class TestDoTalk:
+    """_do_talk: the invite hint carries ``@`` and the accept names display tty."""
+
+    def _state(self, sessions: list[UserSession]) -> tuple[MagicMock, AsyncMock]:
+        relay = MagicMock(spec=NatsRelay)
+        nc = AsyncMock()
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.jfreeman")
+        relay.get_sessions_for_repos = AsyncMock(return_value=sessions)
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        state.session_key = "kai:kaihex01"
+        state.config.user = "kai"
+        state.config.repo_name = "myrepo"
+        state.visible_repos = frozenset({"myrepo"})
+        return state, nc
+
+    @staticmethod
+    def _invite_frame() -> dict[str, str]:
+        return {
+            "type": "invite",
+            "from": "jfreeman",
+            "from_tty": "tty6",
+            "from_key": "jfreeman:75abc665",
+            "body": "wants to talk",
+            "to_key": "kai:kaihex01",
+        }
+
+    async def test_invite_hint_carries_at_prefix(self) -> None:
+        """A fresh invite body suggests a runnable ``talk @user:tty`` accept."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, nc = self._state(sessions)
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+            patch.object(talk_mod, "get_tty_name", return_value="tty1"),
+        ):
+            state_ = cast("ServerState", state)
+            await talk_mod._do_talk(mcp, state_, "@jfreeman:tty6", "")
+        body: str = json.loads(nc.publish.call_args[0][1])["body"]
+        assert "talk @kai:tty1" in body
+
+    async def test_accept_connected_hint_uses_display_tty_not_hex(self) -> None:
+        """Accepting a pending invite names the partner by ``ttyN``, not the key hex."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # record the pending invite
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert state.talk.partner_tty == "tty6"
+        hint = _talk_description(state.talk)
+        assert "talk @jfreeman:tty6" in hint
+        assert "75abc665" not in hint
+
+    async def test_invite_publish_failure_rolls_back_phase(self) -> None:
+        """A transient send_invite failure must not strand the session INVITING."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+            patch.object(talk_mod, "get_tty_name", return_value="tty1"),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman:tty6", ""
+            )
+        assert state.talk.phase is TalkPhase.IDLE  # rolled back, not stuck INVITING
+        assert "not sent" in result.lower()
+
+    async def test_accept_publish_failure_rolls_back_phase(self) -> None:
+        """A transient send_accept failure must not strand the session CONNECTED."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # record the pending invite
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert state.talk.phase is TalkPhase.IDLE  # rolled back, not stuck CONNECTED
+        assert "not sent" in result.lower()
+
+    async def test_accept_publish_failure_restores_pending_invite(self) -> None:
+        """A failed accept publish must leave the invite acceptable for a retry.
+
+        Consuming the invite before the publish and not restoring it on failure
+        would strand the responder: the retry sends a fresh *outbound* invite
+        instead of re-accepting.  The invite is restored so a retry re-accepts.
+        """
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert "jfreeman" in state.talk.pending_invites  # restored, not lost
+
+    async def test_retry_after_accept_failure_reaccepts_not_reinvites(self) -> None:
+        """The restored invite lets a retry re-accept rather than re-invite."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, nc = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+            # Relay recovers; the retry must re-accept the still-pending invite.
+            state.relay.get_nc = AsyncMock(return_value=nc)
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert state.talk.phase is TalkPhase.CONNECTED
+        assert state.talk.pending_invites == {}  # consumed on the successful retry
+        sent_type = json.loads(nc.publish.call_args[0][1])["type"]
+        assert sent_type == "accept"  # re-accept, not a fresh outbound invite
+
+    async def test_pending_invite_survives_failed_resolution(self) -> None:
+        """An invite whose target fails to resolve stays acceptable later.
+
+        Consuming before resolution would pop the invite and leave it
+        unacceptable when the resolve then fails (offline/ambiguous tty).
+        """
+        state, _ = self._state([])  # jfreeman offline → resolution fails
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # record the pending invite
+        assert "jfreeman" in state.talk.pending_invites
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "not online" in result.lower()
+        assert "jfreeman" in state.talk.pending_invites  # NOT consumed on failure
+
+    async def test_successful_accept_consumes_invite(self) -> None:
+        """A successful accept still consumes the pending invite (one-shot)."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()
+        assert "jfreeman" in state.talk.pending_invites
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert state.talk.pending_invites == {}  # consumed on success
+        assert state.talk.phase is TalkPhase.CONNECTED
+
+    async def test_connected_message_publish_failure_returns_transient(self) -> None:
+        """A send_message failure while connected returns a message, never raises."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.begin_connected(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman:tty6", "hello"
+            )
+        assert "not sent" in result.lower()  # transient, actionable
+        assert state.talk.phase is TalkPhase.CONNECTED  # connection left intact
+
+    async def test_invite_superseded_during_resolve_refuses(self) -> None:
+        """A supersession during the resolve await must not accept the stale key.
+
+        ``_do_talk`` peeks the pending invite, then awaits ``_resolve_target``.
+        The always-on talk subscription can supersede the invite (a newer
+        session of the same user) during that await.  Accepting the stale
+        snapshot — or consuming whatever is now current — is a TOCTOU: the fix
+        re-peeks after the await and refuses when the invite changed (CR-3).
+        """
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, nc = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # the invite we peek
+
+        async def _supersede_during_resolve(
+            _repos: object,
+        ) -> list[UserSession]:
+            # A newer invite from the same user lands while we resolve.
+            state.talk.receive(
+                {
+                    "type": "invite",
+                    "from": "jfreeman",
+                    "from_tty": "tty9",
+                    "from_key": "jfreeman:99newkey",
+                    "body": "from my other session",
+                    "to_key": "kai:kaihex01",
+                }
+            )
+            state.talk.drain_idle()
+            return sessions
+
+        state.relay.get_sessions_for_repos = AsyncMock(
+            side_effect=_supersede_during_resolve
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "changed" in result.lower()  # refused, not a stale-key connect
+        assert state.talk.phase is TalkPhase.IDLE  # not connected to the stale key
+        # The newer superseding invite is preserved, not consumed unchecked.
+        assert state.talk.pending_invites["jfreeman"].session_key == "jfreeman:99newkey"
+        nc.publish.assert_not_awaited()  # no accept sent to the stale key
+
+
+class TestAgentAutoAcceptPublish:
+    """talk_read/talk_listen publish the accept a mutual glare owes (F4).
+
+    ``drain_for_agent`` connects the higher-key side but is pure state; the
+    caller must emit the accept frame or the lower-key partner never connects
+    (talk.tex ``MutualAutoAccept``).
+    """
+
+    @staticmethod
+    def _state() -> tuple[MagicMock, AsyncMock]:
+        relay = MagicMock(spec=NatsRelay)
+        nc = AsyncMock()
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.eric")
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",  # 'kai' > 'eric' — the higher, auto-accepting side
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        return state, nc
+
+    async def test_publishes_accept_for_mutual_glare(self) -> None:
+        state, nc = self._state()
+        state.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "talk?",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        drain = state.talk.drain_for_agent()  # connects us; signals the accept
+        assert drain.auto_accept is not None
+
+        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+
+        payload = json.loads(nc.publish.call_args[0][1])
+        assert payload["type"] == "accept"
+        assert payload["to_key"] == "eric:def456"  # to the invited session
+
+    async def test_no_publish_without_auto_accept(self) -> None:
+        state, nc = self._state()
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "unsolicited",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        drain = state.talk.drain_for_agent()  # plain invite — no glare
+        assert drain.auto_accept is None
+
+        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+
+        nc.publish.assert_not_awaited()
+
+    @staticmethod
+    def _glare_drain(state: MagicMock) -> AgentDrain:
+        """Drive a mutual glare and return the drain that owes an accept."""
+        state.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "talk?",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        return cast("AgentDrain", state.talk.drain_for_agent())
+
+    async def test_publish_retries_once_then_warns_on_failure(self) -> None:
+        state, _ = self._state()
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        drain = self._glare_drain(state)
+
+        # Best-effort: a wedged relay must not raise out of talk_read, but the
+        # persistent failure is reported so the agent (which cannot see the log)
+        # learns the partner may not have connected.
+        published = await talk_mod._publish_agent_auto_accept(
+            cast("ServerState", state), drain
+        )
+        assert published is False
+        assert state.relay.get_nc.await_count == 2  # retried once
+        assert state.talk.phase is TalkPhase.CONNECTED  # still locally connected
+
+        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        assert "eric:tty2" in output
+        assert "may not have connected" in output
+
+    async def test_publish_success_needs_no_retry_and_no_warning(self) -> None:
+        state, nc = self._state()
+        drain = self._glare_drain(state)
+
+        published = await talk_mod._publish_agent_auto_accept(
+            cast("ServerState", state), drain
+        )
+        assert published is True
+        nc.publish.assert_awaited_once()  # one attempt, no retry
+
+        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        assert "may not have connected" not in output
+
+
+class TestDoTalkNoClobber:
+    """Starting a new invite must never clobber a live talk (silent data loss).
+
+    While CONNECTED to A, ``talk @B`` (B is a different online user with no
+    pending invite) must refuse — leave the phase CONNECTED to A and send no
+    frame — rather than overwrite the live connection with a fresh invite to B.
+    """
+
+    def _state(self, sessions: list[UserSession]) -> tuple[MagicMock, AsyncMock]:
+        relay = MagicMock(spec=NatsRelay)
+        nc = AsyncMock()
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.eric")
+        relay.get_sessions_for_repos = AsyncMock(return_value=sessions)
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        state.session_key = "kai:kaihex01"
+        state.config.user = "kai"
+        state.config.repo_name = "myrepo"
+        state.visible_repos = frozenset({"myrepo"})
+        return state, nc
+
+    @staticmethod
+    def _sessions() -> list[UserSession]:
+        return [
+            UserSession(
+                user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo"
+            ),
+            UserSession(user="eric", tty="eric789", tty_name="tty9", repo="myrepo"),
+        ]
+
+    @staticmethod
+    def _record_invite(state: MagicMock, *, user: str, key: str, tty: str) -> None:
+        """Record a pending invite from *user* by feeding and draining a frame."""
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": user,
+                "from_tty": tty,
+                "from_key": key,
+                "body": "wants to talk",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        state.talk.drain_idle()
+
+    async def test_connected_to_a_talk_b_refuses_and_keeps_connection(self) -> None:
+        """``talk @B`` while connected to A blocks, keeps A, sends nothing."""
+        state, nc = self._state(self._sessions())
+        state.talk.begin_connected(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@eric:tty9", "hi"
+            )
+        assert "already in a talk" in result.lower()
+        assert "jfreeman:tty6" in result  # names the live partner
+        assert state.talk.phase is TalkPhase.CONNECTED  # A not abandoned
+        assert state.talk.partner_key == "jfreeman:75abc665"  # still A
+        nc.publish.assert_not_called()  # no invite frame sent to B
+
+    async def test_connected_to_a_talk_a_still_sends_message(self) -> None:
+        """``talk @A`` while connected to A still routes to the send branch."""
+        state, nc = self._state(self._sessions())
+        state.talk.begin_connected(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman:tty6", "hi"
+            )
+        assert "sent to" in result.lower()
+        assert state.talk.phase is TalkPhase.CONNECTED
+        payload: dict[str, str] = json.loads(nc.publish.call_args[0][1])
+        assert payload["type"] == "message"
+        assert payload["body"] == "hi"
+
+    async def test_idle_talk_b_still_starts_invite(self) -> None:
+        """``talk @B`` while idle still starts a fresh invite (unchanged)."""
+        state, nc = self._state(self._sessions())
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+            patch.object(talk_mod, "get_tty_name", return_value="tty1"),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@eric:tty9", ""
+            )
+        assert "invite sent" in result.lower()
+        assert state.talk.phase is TalkPhase.INVITING
+        assert state.talk.partner_key == "eric:eric789"
+        payload: dict[str, str] = json.loads(nc.publish.call_args[0][1])
+        assert payload["type"] == "invite"
+
+    async def test_inviting_b_talk_c_refuses(self) -> None:
+        """``talk @C`` while an invite to B is outstanding blocks, sends nothing."""
+        state, nc = self._state(
+            [
+                *self._sessions(),
+                UserSession(user="priya", tty="pri111", tty_name="tty3", repo="myrepo"),
+            ]
+        )
+        state.talk.begin_invite(
+            partner="eric", partner_tty="tty9", partner_key="eric:eric789"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@priya:tty3", ""
+            )
+        assert "already in a talk" in result.lower()
+        assert state.talk.phase is TalkPhase.INVITING  # invite to B untouched
+        assert state.talk.partner_key == "eric:eric789"
+        nc.publish.assert_not_called()
+
+    async def test_connected_to_a_accept_b_refuses_and_keeps_connection(self) -> None:
+        """Accepting B's pending invite while connected to A blocks, keeps A."""
+        state, nc = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        state.talk.begin_connected(
+            partner="eric", partner_tty="tty9", partner_key="eric:eric789"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", "hi"
+            )
+        assert "already in a talk" in result.lower()
+        assert "eric:tty9" in result  # names the live partner A
+        assert state.talk.phase is TalkPhase.CONNECTED  # A not abandoned
+        assert state.talk.partner_key == "eric:eric789"  # still A
+        assert "jfreeman" in state.talk.pending_invites  # NOT consumed
+        nc.publish.assert_not_called()  # no accept frame sent to B
+
+    async def test_idle_accept_b_still_connects(self) -> None:
+        """Accepting B's pending invite while idle still connects (unchanged)."""
+        state, nc = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "connected to" in result.lower()
+        assert state.talk.phase is TalkPhase.CONNECTED
+        assert state.talk.partner_key == "jfreeman:75abc665"
+        assert state.talk.pending_invites == {}  # consumed on success
+        assert json.loads(nc.publish.call_args[0][1])["type"] == "accept"
+
+    async def test_inviting_b_accept_b_completes_mutual(self) -> None:
+        """Accepting B's invite while INVITING B (glare) connects, not refuses."""
+        state, _ = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        state.talk.begin_invite(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "connected to" in result.lower()  # same partner → completes
+        assert state.talk.phase is TalkPhase.CONNECTED
+        assert state.talk.partner_key == "jfreeman:75abc665"
+        assert state.talk.pending_invites == {}  # consumed on success
+
+    async def test_inviting_b_accept_c_refuses(self) -> None:
+        """Accepting C's invite while INVITING B blocks, keeps the B invite."""
+        state, nc = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        state.talk.begin_invite(
+            partner="eric", partner_tty="tty9", partner_key="eric:eric789"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "already in a talk" in result.lower()
+        assert state.talk.phase is TalkPhase.INVITING  # invite to B untouched
+        assert state.talk.partner_key == "eric:eric789"
+        assert "jfreeman" in state.talk.pending_invites  # C's invite NOT consumed
+        nc.publish.assert_not_called()
+
+
+class TestTalkDescriptionActions:
+    """The idle-activity ``talk`` descriptions direct talk_read, not talk_end.
+
+    ``talk_end`` returns "No active talk session" and clears nothing when idle
+    with only pending invites or queued messages — ``talk_read`` is the action.
+    """
+
+    def _talk(self) -> TalkState:
+        relay = MagicMock(spec=NatsRelay)
+        return TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+
+    def test_pending_invite_description_directs_talk_read(self) -> None:
+        talk = self._talk()
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "jfreeman",
+                "from_tty": "tty6",
+                "from_key": "jfreeman:75abc665",
+                "body": "wants to talk",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        talk.drain_idle()
+        desc = _talk_description(talk)
+        assert "[TALK]" in desc
+        assert "talk_read" in desc
+        assert "talk_end" not in desc
+
+    def test_queued_message_description_directs_talk_read(self) -> None:
+        talk = self._talk()
+        talk.receive(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_key": "eric:def67890",
+                "body": "hi",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        desc = _talk_description(talk)
+        assert "[TALK]" in desc
+        assert "talk_read" in desc
+        assert "talk_end" not in desc
+
+
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:
-        assert "No new messages" in _NO_MESSAGES
-        assert "listening" in _NO_MESSAGES.lower()
+        assert "talk" in _NO_MESSAGES.lower()

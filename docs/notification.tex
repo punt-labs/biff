@@ -66,17 +66,38 @@ This specification models the four state spaces---NATS connection,
 MCP server session, filesystem, and status bar---and the operations
 that transition them during the wall and talk notification flows.
 
+A second delivery mechanism sits alongside the status bar: the server
+surfaces incoming activity by mutating a \emph{tool description} and
+firing \texttt{tools/list\_changed}.  The \texttt{read\_messages}
+description gains \texttt{(N unread)}; the \texttt{talk} description gains
+a \texttt{[TALK] \ldots} banner with an accept hint.
+Sections~\ref{sec:marker} to~\ref{sec:markerfix2} model these two
+channels and establish the governing invariant: for each channel the
+marker is present exactly when its activity exists, and a talk marker
+always carries a session-naming accept hint.  The read channel is
+self-clearing and serves as the reference; the talk channel, as
+originally built (biff-9la), was not.  The stale-marker defect is
+reproduced here as a reachable ProB state and then proved unreachable
+once the reconciling transitions of Section~\ref{sec:markerfix} are in
+place.
+
 %%----------------------------------------------------------------------
 \section{Basic Types}
 %%----------------------------------------------------------------------
 
 \begin{zed}
-  [USER, MSG, SOURCEKEY]
+  [USER, MSG, SOURCEKEY, SESSIONKEY]
 \end{zed}
 
 $USER$ identifies a biff user.  $MSG$ is an opaque message body.
 $SOURCEKEY$ uniquely identifies a display queue item (e.g.\
 \texttt{wall:2026-03-01T12:00:00} or \texttt{talk:eric}).
+$SESSIONKEY$ is a composite \texttt{user:tty} key naming one specific
+session; it is the same notion as the $SESSIONKEY$ of $talk.tex$, and it
+is what an accept must target (\texttt{talk @user:tty}).  A pending talk
+invite that retains its inviter's $SESSIONKEY$ can render an accept hint
+that names a session; one that has dropped it can only render a bare
+\texttt{@user}, which is not a runnable accept command.
 
 %%----------------------------------------------------------------------
 \section{Free Types}
@@ -122,12 +143,53 @@ $notifySent$.
 \section{Global Constants}
 %%----------------------------------------------------------------------
 
+The display queue and the unread counter are bounded.  In the running
+system the display rotation queue holds at most twenty items and the
+unread count is capped at one hundred.  Pinning those concrete numbers
+into the model, however, makes exhaustive checking hopeless: a sequence
+of up to twenty source keys over even two carriers, crossed with an
+unread count ranging over $0 \upto 100$, yields hundreds of thousands
+of reachable states before any interesting property is reached.
+
+Following the convention of the sister specification $talk.tex$, the
+bounds are therefore not hard-wired.  Each is the cardinality of an
+abstract carrier---$QSLOT$ for queue slots, $USLOT$ for unread slots---so
+the bound is a \emph{scoping parameter} ProB shrinks for exhaustive
+checking rather than a fixed value.  A third carrier, $ASLOT$, plays the
+same role for the pending-invite time-to-live: $maxInviteAge$ is its
+cardinality, and a pending invite whose age reaches that bound may be
+aged out.  A fourth carrier, $PSLOT$, bounds the pending-invite set
+itself: $maxPending$ is its cardinality, the number of pending invites
+the recipient will retain at once.  This bound is not decoration.  A
+pending invite is keyed by the wire-controlled inviter identity; the
+time-to-live is eventual, not a cap, so without a size bound each
+distinct forged inviter would add a permanent entry, an
+unbounded-growth denial of service (the biff-vr4 analogue).  The bound
+caps the set exactly as $maxQueueSize$ caps the message queue, and
+$TalkInviteArriveOverflow$ evicts to hold it, mirroring $ReceiveOverflow$
+of $talk.tex$.  All four carriers are required non-empty, so each bound
+is at least one; at $\# ASLOT = 1$ the clock has a single tick, which is
+the smallest model in which a fresh invite (age $0$) and an expired one
+(age $1$) are distinct.
+
+\begin{zed}
+  [QSLOT, USLOT, ASLOT, PSLOT]
+\end{zed}
+
 \begin{axdef}
   maxQueueSize : \nat \\
-  maxUnreadCount : \nat
+  maxUnreadCount : \nat \\
+  maxInviteAge : \nat \\
+  maxPending : \nat
   \where
-  maxQueueSize = 20 \\
-  maxUnreadCount = 100
+  QSLOT \neq \emptyset \\
+  USLOT \neq \emptyset \\
+  ASLOT \neq \emptyset \\
+  PSLOT \neq \emptyset \\
+  maxQueueSize = \# QSLOT \\
+  maxUnreadCount = \# USLOT \\
+  maxInviteAge = \# ASLOT \\
+  maxPending = \# PSLOT
 \end{axdef}
 
 Default descriptions and the idle marker are opaque constants:
@@ -135,11 +197,45 @@ Default descriptions and the idle marker are opaque constants:
 \begin{axdef}
   wallDescDefault : MSG \\
   talkDescDefault : MSG \\
+  readDescDefault : MSG \\
   idleMarker : MSG
 \end{axdef}
 
+$readDescDefault$ is the base \texttt{read\_messages} tool description,
+carrying no unread marker.  Its role in the read channel mirrors that of
+$talkDescDefault$ in the talk channel and $wallDescDefault$ in the wall
+channel.
+
+The intended verification is exhaustive model checking at set size~2,
+which supplies two distinct carrier elements throughout.  Modelling the
+tool-context brackets (Section~\ref{sec:toolcontext}) roughly doubles the
+reachable state count and, by making the belt path live, opens the
+receive-flow subspace behind $TalkStart$; at the full queue and unread
+bounds the check no longer terminates in a practical time.  The bounded
+carriers exist precisely for this: shrinking $QSLOT$, $USLOT$ and $ASLOT$
+to one keeps the exploration complete while retaining every distinction
+the properties depend on.
+
+\begin{verbatim}
+probcli docs/notification.tex -model_check -noltl -coverage \
+  -p DEFAULT_SETSIZE 2 \
+  -card SOURCEKEY 1 -card SESSIONKEY 1 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000
+\end{verbatim}
+
+Each carrier may be shrunk independently with \texttt{-card}~$X$~$n$
+without disturbing the message and key carriers.  $MAX\_INITIALISATIONS$
+must exceed the number of identities $Init$ leaves unconstrained, or ProB
+silently drops initial states and reports an incomplete exploration; at
+these bounds $Init$ is fully determined, so exploration reports
+$INITIALISATION$:$8$ against $SETUP\_CONSTANTS$:$8$ with the bound never
+binding, and terminates with ``all open states visited''---a complete
+check, not a truncated one.
+
 %%----------------------------------------------------------------------
 \section{State}
+\label{sec:state}
 %%----------------------------------------------------------------------
 
 The system state is flattened into a single schema for ProB
@@ -155,8 +251,15 @@ the status bar, and the last notification outcome.
   toolContext : ZBOOL \\
   wallDesc : MSG \\
   talkDesc : MSG \\
+  readDesc : MSG \\
   wallDescChanged : ZBOOL \\
   talkDescChanged : ZBOOL \\
+  unreadCount : \nat \\
+  talkPending : USER \pfun SESSIONKEY \\
+  talkBare : \power USER \\
+  talkQueued : \nat \\
+  talkConnected : ZBOOL \\
+  pendingAge : \nat \\
   queueItems : \seq SOURCEKEY \\
   queueKinds : SOURCEKEY \pfun ItemKind \\
   queueTexts : SOURCEKEY \pfun MSG \\
@@ -166,7 +269,8 @@ the status bar, and the last notification outcome.
   fileItems : \seq SOURCEKEY \\
   barLine2 : MSG \\
   barStale : ZBOOL \\
-  lastNotifyResult : NotifyResult
+  lastNotifyResult : NotifyResult \\
+  staleWithdrawHit : ZBOOL
   \where
   \dom queueKinds = \ran queueItems \\
   \dom queueTexts = \ran queueItems \\
@@ -176,20 +280,82 @@ the status bar, and the last notification outcome.
   (queueItems = \langle \rangle \implies
   currentIndex = 0) \\
   fileUnreadCount \leq maxUnreadCount \\
+  unreadCount \leq maxUnreadCount \\
+  talkQueued \leq maxQueueSize \\
+  \# talkPending + \# talkBare \leq maxPending \\
+  pendingAge \leq maxInviteAge \\
+  ((\dom talkPending = \emptyset \land talkBare = \emptyset) \implies
+  pendingAge = 0) \\
+  \dom talkPending \cap talkBare = \emptyset \\
+  ((talkDesc \neq talkDescDefault) \iff \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset \lor \\
+  \quad~ talkQueued > 0 \lor talkConnected = ztrue)) \\
+  ((readDesc \neq readDescDefault) \iff unreadCount > 0) \\
+  (talkDesc \neq talkDescDefault \implies talkBare = \emptyset) \\
   (talkSubscribed = ztrue \implies
   natsConn = natsConnected) \\
   (kvProvisioned = ztrue \implies
   natsConn = natsConnected) \\
   (natsConn = natsConnected \implies
-  session = sessCaptured)
+  session = sessCaptured) \\
+  staleWithdrawHit = zfalse
 \end{schema}
 
 Key invariants: queue metadata maps have the same domain as the
 queue sequence range; subscription and KV require a live connection;
-the current index is always within bounds.  The critical invariant
+the current index is always within bounds; the pending-invite set is
+bounded, $\# talkPending + \# talkBare \leq maxPending$, so no stream
+of forged inviters can grow it without limit.  The critical invariant
 is the last: \emph{a connected NATS client implies a captured session}.
 This ensures the suspenders notification path (the background poller)
 is always available when description-changed flags are set.
+
+\paragraph{The tool-description channels.}  Three of the components above
+model tool descriptions that Claude~Code shows to the agent, and two more
+model the underlying activity that a description marker is supposed to
+track.  These are the subject of the correctness argument in
+Section~\ref{sec:marker}.
+
+$readDesc$ is the \texttt{read\_messages} tool description; it gains a
+\texttt{(N unread)} marker when mail is pending.  Its source of truth is
+$unreadCount$, the server-side count of unread messages, which
+\emph{decreases} as mail is read---so a description tied to it clears
+itself.  This is the reference channel: it is known to behave correctly,
+and it is modelled here so that the talk channel can be judged against a
+worked example rather than against prose.
+
+$talkDesc$ is the \texttt{talk} tool description; it gains a
+\texttt{[TALK] \ldots} marker, including an accept hint, when a talk
+invite, queued message, or live connection exists.  Its activity has
+three sources: $talkPending$, a partial function mapping each user who
+has invited us to that invite's originating $SESSIONKEY$; $talkQueued$,
+the count of undrained talk messages; and $talkConnected$, whether a
+conversation is live.  A pending invite in $talkPending$ retains the
+inviter's session key, so its accept hint can name a session.
+
+$talkBare$ is the pathological representation: a set of users whose
+pending invite was recorded \emph{without} a session key---the tty was
+dropped.  A user in $talkBare$ is genuine activity (the marker appears),
+but its accept hint can only read \texttt{talk @user} with no
+\texttt{:tty}, which is not a runnable accept command.  The structural
+invariant $\dom talkPending \cap talkBare = \emptyset$ says a single
+invite is recorded one way or the other, never both.  In a correct
+implementation $talkBare$ is empty in every reachable state; the model
+admits it precisely so the defect can be reached and then proved
+unreachable.
+
+\paragraph{The pending-invite clock.}  $pendingAge$ is an abstract clock
+for the pending set, bounded by $maxInviteAge$.  It advances on poller
+ticks ($AgeTick$) while any invite is pending and is pinned to zero
+whenever no invite is pending---the invariant
+$(\dom talkPending = \emptyset \land talkBare = \emptyset) \implies
+pendingAge = 0$ says exactly this, so a fresh invite always starts its
+life at age zero.  Its sole purpose is to make the time-to-live path of
+Section~\ref{sec:markerfix} reachable: an invite may be expired
+($ExpirePendingInvite$) only once the clock has reached its bound.  The
+clock is deliberately global rather than per-invite; at these bounds that
+loses nothing the marker property depends on, and it keeps the state
+factor at two rather than one per user.
 
 %%----------------------------------------------------------------------
 \section{Initialization}
@@ -205,8 +371,15 @@ is always available when description-changed flags are set.
   toolContext' = zfalse \\
   wallDesc' = wallDescDefault \\
   talkDesc' = talkDescDefault \\
+  readDesc' = readDescDefault \\
   wallDescChanged' = zfalse \\
   talkDescChanged' = zfalse \\
+  unreadCount' = 0 \\
+  talkPending' = \emptyset \\
+  talkBare' = \emptyset \\
+  talkQueued' = 0 \\
+  talkConnected' = zfalse \\
+  pendingAge' = 0 \\
   queueItems' = \langle \rangle \\
   queueKinds' = \emptyset \\
   queueTexts' = \emptyset \\
@@ -216,7 +389,8 @@ is always available when description-changed flags are set.
   fileItems' = \langle \rangle \\
   barLine2' = idleMarker \\
   barStale' = ztrue \\
-  lastNotifyResult' = notifyDropped
+  lastNotifyResult' = notifyDropped \\
+  staleWithdrawHit' = zfalse
 \end{schema}
 
 The initial state has $session' = sessNone$ and
@@ -237,6 +411,7 @@ the session is guaranteed to be captured.
 \begin{schema}{CaptureSession}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   session = sessNone \\
   natsConn = natsDisconnected \\
   session' = sessCaptured \\
@@ -244,6 +419,12 @@ the session is guaranteed to be captured.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -257,7 +438,8 @@ the session is guaranteed to be captured.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 After $CaptureSession$, the system has $session = sessCaptured$
@@ -286,12 +468,19 @@ must execute $CaptureSession$ before $EnsureConnected$.
 \begin{schema}{EnsureConnected}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   natsConn = natsDisconnected \lor natsConn = natsConnected \\
   natsConn' = natsConnected \\
   kvProvisioned' = ztrue \\
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -305,7 +494,8 @@ must execute $CaptureSession$ before $EnsureConnected$.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Close Connection}
@@ -318,11 +508,18 @@ antecedent $natsConn = natsConnected$ is false.
 \begin{schema}{CloseConnection}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   natsConn' = natsClosed \\
   kvProvisioned' = zfalse \\
   talkSubscribed' = zfalse \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -336,8 +533,112 @@ antecedent $natsConn = natsConnected$ is false.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
+
+%%----------------------------------------------------------------------
+\section{Tool Context}
+\label{sec:toolcontext}
+%%----------------------------------------------------------------------
+
+A tool handler runs \emph{inside} the MCP request-response cycle; the
+background poller and the NATS subscription callbacks run \emph{outside}
+it.  The component $toolContext$ records which of the two the system is
+currently in: $ztrue$ during a tool call, $zfalse$ otherwise.  The
+distinction is not decoration.  It selects the notification path---belt
+when a request context is available, suspenders when it is not---and it
+gates every operation that can only occur inside a handler ($WallPost$,
+$TalkStart$, $NotifyBelt$) against every operation that can only occur
+in the background ($NotifySuspenders$, $KVWallReceive$,
+$NatsTalkCallback$, $PollTick$).
+
+The earlier drafts left $toolContext$ at its initial $zfalse$ with no
+operation to raise it.  The consequence was quiet but total: no reachable
+state had $toolContext = ztrue$, so the belt-path operations were enabled
+in no reachable state, and the guarantees stated for them
+($NotifyGuarantee$, $WallNotifySuccess$) held only \emph{vacuously}.  A
+vacuous proof is not a proof of anything.  The remedy is to model the
+entry into and exit from a tool handler explicitly, so that the belt path
+is reachable and its obligations bite.
+
+$EnterToolContext$ marks the start of a tool call; $LeaveToolContext$
+marks its end.  Each toggles $toolContext$ and changes nothing else, so
+neither can disturb any invariant.  Their guards make the two mutually
+exclusive: one may enter only from the background, and leave only from a
+handler.
+
+\begin{schema}{EnterToolContext}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  toolContext = zfalse \\
+  toolContext' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\begin{schema}{LeaveToolContext}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  toolContext = ztrue \\
+  toolContext' = zfalse \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+A tool handler is therefore modelled as $EnterToolContext$, followed by
+the handler's own operation on the belt path, followed by
+$LeaveToolContext$; background work happens between these brackets, never
+inside them.  This is the smallest change that makes the belt path
+reachable without weakening any existing guard.
 
 %%----------------------------------------------------------------------
 \section{Notification Core}
@@ -355,6 +656,7 @@ it guarantees synchronous delivery within the request-response cycle.
 \begin{schema}{NotifyBelt}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   toolContext = ztrue \\
   lastNotifyResult' = notifySent \\
   session' = session \\
@@ -362,6 +664,12 @@ it guarantees synchronous delivery within the request-response cycle.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = zfalse \\
@@ -374,7 +682,8 @@ it guarantees synchronous delivery within the request-response cycle.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
-  barStale' = zfalse
+  barStale' = zfalse \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Suspenders Path (No Tool Context)}
@@ -389,6 +698,7 @@ so the poller always succeeds when needed.
 \begin{schema}{NotifySuspenders}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   toolContext = zfalse \\
   session = sessCaptured \\
   lastNotifyResult' = notifySent \\
@@ -397,6 +707,12 @@ so the poller always succeeds when needed.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = zfalse \\
@@ -409,7 +725,8 @@ so the poller always succeeds when needed.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
-  barStale' = zfalse
+  barStale' = zfalse \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Total Notification}
@@ -441,6 +758,7 @@ tool context and a live NATS connection.
   wallText? : MSG \\
   wallKey? : SOURCEKEY
   \where
+  pendingAge' = pendingAge \\
   toolContext = ztrue \\
   natsConn = natsConnected \\
   wallDesc' \neq wallDesc \\
@@ -462,13 +780,20 @@ tool context and a live NATS connection.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   talkDesc' = talkDesc \\
   talkDescChanged' = zfalse \\
   currentIndex' = currentIndex \\
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Talk Start (Tool Handler)}
@@ -481,6 +806,7 @@ notifications.
   \Delta NotificationState \\
   partner? : USER
   \where
+  pendingAge' = pendingAge \\
   toolContext = ztrue \\
   natsConn = natsConnected \\
   session' = session \\
@@ -490,6 +816,12 @@ notifications.
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   wallDescChanged' = zfalse \\
   talkDesc' = talkDesc \\
@@ -501,7 +833,8 @@ notifications.
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{External Message Deliver (CLI)}
@@ -517,12 +850,19 @@ handles the receive-side effects.
   body? : MSG \\
   toUser? : USER
   \where
+  pendingAge' = pendingAge \\
   natsConn = natsConnected \\
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -536,7 +876,8 @@ handles the receive-side effects.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -568,6 +909,7 @@ have a valid session when it fires the deferred notification.
   wallText? : MSG \\
   wallKey? : SOURCEKEY
   \where
+  pendingAge' = pendingAge \\
   natsConn = natsConnected \\
   toolContext = zfalse \\
   wallDesc' \neq wallDesc \\
@@ -589,13 +931,20 @@ have a valid session when it fires the deferred notification.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   talkDesc' = talkDesc \\
   talkDescChanged' = talkDescChanged \\
   currentIndex' = currentIndex \\
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{NATS Talk Callback}
@@ -624,9 +973,12 @@ session when it fires the deferred notification.
   senderBody? : MSG \\
   senderKey? : SOURCEKEY
   \where
+  pendingAge' = pendingAge \\
   talkSubscribed = ztrue \\
   toolContext = zfalse \\
-  talkDesc' \neq talkDesc \\
+  talkBare = \emptyset \\
+  talkQueued < maxQueueSize \\
+  talkDesc' \neq talkDescDefault \\
   talkDescChanged' = ztrue \\
   queueItems' = queueItems \cat \langle senderKey? \rangle \\
   queueKinds' = queueKinds \oplus \\
@@ -641,12 +993,19 @@ session when it fires the deferred notification.
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued + 1 \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   wallDescChanged' = wallDescChanged \\
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Sync Unread File}
@@ -658,6 +1017,7 @@ Called after any state change that affects what the status bar shows.
   \Delta NotificationState \\
   count? : \nat
   \where
+  pendingAge' = pendingAge \\
   count? \leq maxUnreadCount \\
   fileExists' = ztrue \\
   fileUnreadCount' = count? \\
@@ -667,6 +1027,12 @@ Called after any state change that affects what the status bar shows.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -677,7 +1043,8 @@ Called after any state change that affects what the status bar shows.
   currentIndex' = currentIndex \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Poll Tick (Background Poller)}
@@ -691,6 +1058,7 @@ Clears the changed flags regardless.
 \begin{schema}{PollTick}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   toolContext = zfalse \\
   ((wallDescChanged = ztrue \lor \\
   \quad~ talkDescChanged = ztrue) \implies \\
@@ -705,6 +1073,12 @@ Clears the changed flags regardless.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = zfalse \\
@@ -716,7 +1090,8 @@ Clears the changed flags regardless.
   fileExists' = fileExists \\
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
-  barLine2' = barLine2
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Status Bar Refresh}
@@ -728,6 +1103,7 @@ This is the slow path---no MCP involvement.
 \begin{schema}{StatusBarRefresh}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   (fileExists = ztrue \land \\
   \quad~ fileItems \neq \langle \rangle \implies \\
   \quad~ barLine2' \neq idleMarker) \\
@@ -738,6 +1114,12 @@ This is the slow path---no MCP involvement.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -750,7 +1132,8 @@ This is the slow path---no MCP involvement.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -770,6 +1153,7 @@ queue.  With a single wall item, the cursor stays at zero.
 \begin{schema}{AdvanceTalk}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   queueItems \neq \langle \rangle \\
   queueKinds(queueItems(currentIndex + 1)) = itemTalk \\
   \# queueItems' = \# queueItems - 1 \\
@@ -784,6 +1168,12 @@ queue.  With a single wall item, the cursor stays at zero.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -793,12 +1183,14 @@ queue.  With a single wall item, the cursor stays at zero.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \begin{schema}{AdvanceWall}
   \Delta NotificationState
   \where
+  pendingAge' = pendingAge \\
   queueItems \neq \langle \rangle \\
   queueKinds(queueItems(currentIndex + 1)) = itemWall \\
   queueItems' = queueItems \\
@@ -814,6 +1206,12 @@ queue.  With a single wall item, the cursor stays at zero.
   talkSubscribed' = talkSubscribed \\
   session' = session \\
   toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
   wallDescChanged' = wallDescChanged \\
@@ -823,8 +1221,942 @@ queue.  With a single wall item, the cursor stays at zero.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Tool-Description Marker Channels}
+\label{sec:marker}
+%%----------------------------------------------------------------------
+
+The MCP server surfaces incoming activity by mutating a tool's
+\emph{description} and firing \texttt{tools/list\_changed}: the agent
+notices the changed text on its next turn.  Two such channels are
+modelled here.  The \texttt{read\_messages} channel is the reference: it
+is known to behave correctly.  The \texttt{talk} channel is the one under
+examination.
+
+The governing property, developed in Section~\ref{sec:markerprops}, is
+that for each channel the marker is present exactly when the underlying
+activity exists:
+\[
+  desc \neq default \iff activity.
+\]
+This section gives the operations of both channels.  It deliberately
+gives them first \emph{without} the reconciling transitions that make the
+property hold, so that Section~\ref{sec:markerprops} can exhibit the
+defect as a reachable state before Section~\ref{sec:markerfix} repairs
+it.
+
+\subsection{Read Channel (the self-clearing reference)}
+
+Mail arrives and raises the unread count; the description gains its
+marker.  Reading mail returns the count to zero and the description
+reverts.  Because the description is driven by a count that
+\emph{decreases}, this channel clears itself: there is no way to leave
+the marker set once the count reaches zero.
+
+\begin{schema}{MailArrive}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  unreadCount < maxUnreadCount \\
+  unreadCount' = unreadCount + 1 \\
+  readDesc' \neq readDescDefault \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\begin{schema}{ReadMail}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  unreadCount > 0 \\
+  unreadCount' = 0 \\
+  readDesc' = readDescDefault \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{Talk Channel (invite, message, drain)}
+
+An invite arrives and is recorded in $talkPending$, retaining the
+inviter's session key; the description gains its \texttt{[TALK]} marker.
+A talk message arrives and raises $talkQueued$.  Both set the marker.
+
+$TalkInviteArrive$ fires when the invite either supersedes one already
+recorded for that user ($inviter? \in \dom talkPending$, no growth) or
+there is room for a new entry ($\# talkPending + \# talkBare <
+maxPending$).  This is the exact analogue of $ReceiveNotification$'s
+$queueLen < maxQueueLen$ guard in $talk.tex$: it keeps the pending set
+within its bound.  When a \emph{new} inviter arrives and the set is
+already full, $TalkInviteArriveOverflow$ takes over, evicting one
+existing entry before inserting---the drop-to-make-room counterpart of
+$ReceiveOverflow$.
+
+\begin{schema}{TalkInviteArrive}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  inviterKey? : SESSIONKEY
+  \where
+  pendingAge' = pendingAge \\
+  natsConn = natsConnected \\
+  inviter? \notin talkBare \\
+  (inviter? \in \dom talkPending \lor
+  \# talkPending + \# talkBare < maxPending) \\
+  talkPending' = talkPending \oplus \{ inviter? \mapsto inviterKey? \} \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+The pending set is bounded by $maxPending$ ($\# PSLOT$), exactly as the
+message queue is bounded by $maxQueueSize$.  When a \emph{new} inviter
+arrives and the set is full, $TalkInviteArriveOverflow$ evicts one
+existing entry---the oldest by arrival in the implementation---and
+inserts the new one, so the bound is held and no stream of forged
+inviters can exhaust memory.  The model records the eviction only as
+the removal of \emph{some} pending entry $evicted?$: $talkPending$ is an
+unordered function, so arrival order is not expressible here, and
+``oldest by arrival'' is the obligation the implementation discharges.
+What the model proves is the invariant---$\# talkPending + \# talkBare
+\leq maxPending$ across the whole reachable space---not the choice of
+victim.  This is the pending-set mirror of $ReceiveOverflow$ in
+$talk.tex$, where a full queue drops its head before appending.
+
+\begin{schema}{TalkInviteArriveOverflow}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  inviterKey? : SESSIONKEY \\
+  evicted? : USER
+  \where
+  pendingAge' = pendingAge \\
+  natsConn = natsConnected \\
+  inviter? \notin talkBare \\
+  inviter? \notin \dom talkPending \\
+  \# talkPending + \# talkBare = maxPending \\
+  evicted? \in \dom talkPending \\
+  talkPending' =
+  (\{ evicted? \} \ndres talkPending) \oplus
+  \{ inviter? \mapsto inviterKey? \} \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\begin{schema}{TalkMessageArrive}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  natsConn = natsConnected \\
+  talkQueued < maxQueueSize \\
+  talkQueued' = talkQueued + 1 \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+The defect (biff-9la, observed live).  The drain that ends a talk---the
+aggregate of accepting, exchanging, and hanging up---empties every source
+of talk activity, but leaves $talkDesc$ untouched.  Nothing reverts the
+marker; there is no withdrawal frame and no expiry.  $TalkDrainStale$
+models exactly this: it clears $talkPending$, $talkBare$, $talkQueued$
+and $talkConnected$, yet preserves $talkDesc$.
+
+\begin{schema}{TalkDrainStale}
+  \Delta NotificationState
+  \where
+  pendingAge' = 0 \\
+  (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset \lor
+  talkQueued > 0 \lor talkConnected = ztrue) \\
+  talkPending' = \emptyset \\
+  talkBare' = \emptyset \\
+  talkQueued' = 0 \\
+  talkConnected' = zfalse \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = talkDescChanged \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+The coupled defect.  A second, independent fault records an invite
+\emph{without} its session key---the tty is dropped on the way into the
+pending representation.  $TalkInviteArriveBare$ puts the inviter into
+$talkBare$ and raises the marker; the resulting accept hint reads a bare
+\texttt{talk @user}, which fails at the prompt (``Talk needs a specific
+session'').
+
+\begin{schema}{TalkInviteArriveBare}
+  \Delta NotificationState \\
+  inviter? : USER
+  \where
+  pendingAge' = pendingAge \\
+  natsConn = natsConnected \\
+  inviter? \notin \dom talkPending \\
+  talkBare' = talkBare \cup \{ inviter? \} \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Marker Consistency: the property and the defect}
+\label{sec:markerprops}
+%%----------------------------------------------------------------------
+
+Write $talkActivity$ for the disjunction of the three talk activity
+sources and $readActivity$ for a positive unread count:
+\begin{eqnarray*}
+  talkActivity & \defs & \dom talkPending \neq \emptyset \lor
+    talkBare \neq \emptyset \lor talkQueued > 0 \lor
+    talkConnected = ztrue \\
+  readActivity & \defs & unreadCount > 0.
+\end{eqnarray*}
+
+The intended invariant is that each marker is present exactly when its
+activity exists, and that a talk marker always carries a session-naming
+accept hint:
+
+\begin{schema}{MarkerConsistent}
+  NotificationState
+  \where
+  (talkDesc \neq talkDescDefault) \iff \\
+  \quad (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset \lor
+  talkQueued > 0 \lor talkConnected = ztrue) \\
+  (readDesc \neq readDescDefault) \iff unreadCount > 0
+\end{schema}
+
+\begin{schema}{HintNamesSession}
+  NotificationState
+  \where
+  talkDesc \neq talkDescDefault \implies talkBare = \emptyset
+\end{schema}
+
+Neither property is yet part of $NotificationState$, so both may fail.
+Two model-checking runs at set size~2 exhibit the failures as reachable
+states.
+
+\paragraph{The stale marker.}  Setting the ProB goal to
+\[
+  talkDesc \neq talkDescDefault \land \lnot\, talkActivity
+\]
+finds a reachable state: an invite arrives ($TalkInviteArrive$ or
+$TalkMessageArrive$ raises the marker), then $TalkDrainStale$ empties
+every activity source while preserving $talkDesc$.  The marker persists
+with nothing behind it.  This is the biff-9la defect.
+
+\paragraph{The bare hint.}  Setting the goal to
+\[
+  talkDesc \neq talkDescDefault \land talkBare \neq \emptyset
+\]
+finds a reachable state reached by $TalkInviteArriveBare$: the marker is
+present but the pending invite carries no session key, so its accept hint
+names no session.
+
+\paragraph{Liveness.}  The safety goals above show a \emph{bad state} is
+reachable.  The sharper statement is a liveness one: from some reachable
+marker-present state, the marker can never clear.  Expressed as the CTL
+formula
+\[
+  \mathrm{AG}\,(talkDesc \neq talkDescDefault \implies
+    \mathrm{EF}\;talkDesc = talkDescDefault),
+\]
+the model refutes it, because $TalkDrainStale$ is the only way to empty
+activity and it does not touch $talkDesc$: once set, the marker is
+permanent.  The liveness refutation is robust---it holds even though
+other operations remain enabled, so it is not masked the way a plain
+deadlock check would be.
+
+%%----------------------------------------------------------------------
+\section{The Fix: reconciling transitions}
+\label{sec:markerfix}
+%%----------------------------------------------------------------------
+
+The repair has two parts.  First, $MarkerConsistent$, $HintNamesSession$
+and the read biconditional are promoted into the state schema
+(Section~\ref{sec:state}), so they are now invariants that every
+operation must respect.  Second, transitions are added that remove
+activity \emph{and reconcile the description in the same step}.
+
+Promoting the invariants has an immediate and welcome consequence: the
+two defect operations become infeasible.  $TalkDrainStale$ empties
+activity while preserving $talkDesc \neq talkDescDefault$; its post-state
+now contradicts $MarkerConsistent$, so it is enabled in no reachable
+state.  $TalkInviteArriveBare$ sets $talkBare \neq \emptyset$ while
+raising the marker; its post-state contradicts $HintNamesSession$, so it
+too is dead.  ProB reports both as uncovered operations.  This is the
+point of the exercise: once the consistency of marker and activity is an
+invariant, the specification \emph{proves} that no drain can strand the
+marker and no invite can be recorded without its session key.  The defect
+operations are kept in the text only as the negative results they now
+are.
+
+A dead operation is not a live transition, however.  Something must
+still remove activity, and---because the invariant forbids emptying
+activity without reverting the description---any such transition must do
+both at once.  Four suffice: $TalkDrain$, $WithdrawArrive$,
+$ExpirePendingInvite$ and $TalkAccept$; the proof in
+Section~\ref{sec:markerfix2} shows each discharges an obligation the
+others do not.  $WithdrawArrive$ and $ExpirePendingInvite$ together
+replace the single abstract $DropPendingInvite$ of the earlier drafts:
+the two concrete removal paths the implementation must supply---a
+withdrawal frame and a time-to-live expiry---have distinct preconditions
+and so are kept distinct in the model.
+
+The withdrawal path itself carries a further obligation the earlier drafts
+missed, which a second review found.  A withdrawal frame names the invite it
+cancels only by the inviter's user identity, but the pending invite is keyed
+by session: $talkPending$ records the inviter's $SESSIONKEY$.  If
+$WithdrawArrive$ removed on the bare user match, a withdrawal emitted by an
+earlier session could---because the talk transport gives no cross-session
+ordering---arrive after a fresh invite from a later session of the same user
+and silently delete the live invite.  The guard
+$talkPending~inviter? = withdrawKey?$ forecloses this: a withdrawal is applied
+only when its originating session key matches the stored one.  A frame whose
+key does not match is dropped by $WithdrawForeign$, the withdrawal-side
+analogue of $talk.tex$'s $DrainForeignAccept$.  The username-only version is
+retained as the dead operation $WithdrawStale$, whose reachability under the
+missing guard, and unreachability once the guard is present, are the subject
+of the reordering proof in Section~\ref{sec:markerfix2}.
+
+\subsection{Draining messages and ending the conversation}
+
+$TalkDrain$ empties the message queue and ends the connection.  If no
+pending invite remains behind, it reverts the description; otherwise the
+marker stays, now backed only by the surviving invites.
+
+\begin{schema}{TalkDrain}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  (talkQueued > 0 \lor talkConnected = ztrue) \\
+  talkQueued' = 0 \\
+  talkConnected' = zfalse \\
+  ((\dom talkPending = \emptyset \land talkBare = \emptyset) \implies \\
+  \quad (talkDesc' = talkDescDefault \land talkDescChanged' = zfalse)) \\
+  ((\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \implies \\
+  \quad (talkDesc' = talkDesc \land talkDescChanged' = talkDescChanged)) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{Withdrawing a pending invite (ntWithdraw frame)}
+
+The earlier drafts collapsed the two ways a pending invite can be removed
+into a single abstract operation.  The two mechanisms have genuinely
+different preconditions, however, and the implementation must provide both,
+so they are modelled here as distinct operations---the partition of
+Section~\ref{sec:markerfix2} then owes a separate test for each.
+
+$WithdrawArrive$ is the first: the recipient receives an \emph{ntWithdraw}
+notification from the inviter---the inviter ran \texttt{talk\_end}, hung up,
+or otherwise cancelled---and removes that inviter's pending entry.  A
+withdrawal frame carries the inviter's originating session key in the field
+$withdrawKey?$; this is the \emph{ntWithdraw} analogue of the $nfromKey$ that
+$talk.tex$ guards on for accepts.  The removal is honoured only when that key
+equals the session key stored against the pending invite---%
+$inviter? \in \dom talkPending$ and $talkPending~inviter? = withdrawKey?$.
+The guard is not decoration.  The talk transport is core NATS publish and
+subscribe; it gives no cross-session ordering, so a withdrawal emitted by an
+earlier session of the same user may be delivered \emph{after} a fresh invite
+from a later session of that user.  A user invites us from session~$A$,
+withdraws, and re-invites from session~$B$; because $talkPending$ is a
+function keyed on the user, the re-invite supersedes the first, so
+$talkPending$ now maps that user to $B$'s key.  A withdrawal keyed to
+session~$A$ that arrives late must not disturb the live session~$B$
+invite---and with the key guard it does not, because the stored key (session
+$B$'s) differs from the withdrawal's key (session $A$'s), so the equality
+$talkPending~inviter? = withdrawKey?$ fails and no removal occurs.  Without
+the guard, the withdrawal would delete the current invite on a bare user
+match, the marker would clear, and the live invite would be silently lost.  This is
+exactly the stale-marker defect class the specification exists to prevent,
+reached here by a non-adversarial reordering rather than by an attacker; the
+key guard is the withdrawal-side counterpart of the accept-side consent
+boundary of $talk.tex$ (DES-043, invariant~11).  A withdrawal whose key does
+not match is not applied here; it is handled by $WithdrawForeign$ below.
+$WithdrawArrive$'s precondition is otherwise the arrival of the frame on a
+live connection; it does \emph{not} depend on how long the invite has been
+pending.  If no activity survives, the description reverts and the clock
+returns to zero.
+
+\begin{schema}{WithdrawArrive}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  withdrawKey? : SESSIONKEY
+  \where
+  natsConn = natsConnected \\
+  inviter? \in \dom talkPending \\
+  talkPending~inviter? = withdrawKey? \\
+  talkPending' = \{ inviter? \} \ndres talkPending \\
+  talkBare' = talkBare \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset) \implies
+  pendingAge' = 0) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset) \implies
+  pendingAge' = pendingAge) \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset \land \\
+  \quad talkQueued = 0 \land talkConnected = zfalse) \implies \\
+  \quad (talkDesc' = talkDescDefault \land talkDescChanged' = zfalse)) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset \lor \\
+  \quad talkQueued > 0 \lor talkConnected = ztrue) \implies \\
+  \quad (talkDesc' = talkDesc \land talkDescChanged' = talkDescChanged)) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{A withdrawal that names the wrong session (WithdrawForeign)}
+
+$WithdrawForeign$ is the withdrawal-side counterpart of $talk.tex$'s
+$DrainForeignAccept$.  A withdrawal frame arrives whose key does \emph{not}
+match the pending invite it purports to cancel---either the user has no
+pending invite at all, or the stored invite carries a different session key,
+as in the reordering above.  The frame is dropped: the pending set, the
+marker, the clock, and every other component are left exactly as they were.
+Modelling it as a distinct operation, rather than as a silent no-op, forces
+the test-partition of Section~\ref{sec:markerfix2} to owe a case for it, and
+records in the specification that the implementation must recognise and
+discard such a frame rather than acting on its user field alone.
+
+\begin{schema}{WithdrawForeign}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  withdrawKey? : SESSIONKEY
+  \where
+  natsConn = natsConnected \\
+  \lnot\, (inviter? \in \dom talkPending \land
+  talkPending~inviter? = withdrawKey?) \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  pendingAge' = pendingAge \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = talkDescChanged \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{The withdrawal gap, as a dead operation (WithdrawStale)}
+
+$WithdrawStale$ is the defect this section exists to close, kept in the text
+as the negative result it now is.  It models the username-only withdrawal:
+an \emph{ntWithdraw} frame arrives whose key does not match the stored invite
+($talkPending~inviter? \neq withdrawKey?$), yet it removes the invite anyway,
+on the bare user match.  The removed invite is the live one; the marker
+clears with nothing behind it and the current invite is silently lost.  The
+history component $staleWithdrawHit$ records that this has happened, so the
+suppression can be named as a reachable state.
+
+Promoting $staleWithdrawHit = zfalse$ into $NotificationState$
+(Section~\ref{sec:state}) makes $WithdrawStale$ infeasible: its post-state
+sets $staleWithdrawHit' = ztrue$, which the invariant forbids.  ProB reports
+it as an uncovered operation, and the goal $staleWithdrawHit = ztrue$ is
+unreachable.  Delete the invariant---as an earlier, username-only draft
+implicitly did---and $WithdrawStale$ becomes enabled: with two distinct
+session keys it drives the model to $staleWithdrawHit = ztrue$, the reordering
+counterexample of Section~\ref{sec:markerfix2}.  This is the same device by
+which $TalkDrainStale$ and $TalkInviteArriveBare$ are proved dead against
+$MarkerConsistent$ and $HintNamesSession$.
+
+\begin{schema}{WithdrawStale}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  withdrawKey? : SESSIONKEY
+  \where
+  natsConn = natsConnected \\
+  inviter? \in \dom talkPending \\
+  talkPending~inviter? \neq withdrawKey? \\
+  talkPending' = \{ inviter? \} \ndres talkPending \\
+  talkBare' = talkBare \\
+  staleWithdrawHit' = ztrue \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset) \implies
+  pendingAge' = 0) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset) \implies
+  pendingAge' = pendingAge) \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset \land \\
+  \quad talkQueued = 0 \land talkConnected = zfalse) \implies \\
+  \quad (talkDesc' = talkDescDefault \land talkDescChanged' = zfalse)) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset \lor \\
+  \quad talkQueued > 0 \lor talkConnected = ztrue) \implies \\
+  \quad (talkDesc' = talkDesc \land talkDescChanged' = talkDescChanged)) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult
 \end{schema}
+
+\subsection{Expiring a pending invite (time-to-live)}
+
+The second mechanism covers the inviter who never sends a withdrawal---a
+crash, a dropped connection, an abandoned session.  No frame arrives, so
+$WithdrawArrive$ is never enabled for that invite; the only thing that
+changes is the clock.  $AgeTick$ models the passage of time on a poller
+tick: while any invite is pending and the clock is below its bound, the
+clock advances by one.  It touches nothing else---not the pending set, not
+the description, not the activity.
+
+\begin{schema}{AgeTick}
+  \Delta NotificationState
+  \where
+  toolContext = zfalse \\
+  (\dom talkPending \neq \emptyset \lor talkBare \neq \emptyset) \\
+  pendingAge < maxInviteAge \\
+  pendingAge' = pendingAge + 1 \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+$ExpirePendingInvite$ then reaps an invite once its clock has reached the
+bound.  Its precondition---$pendingAge = maxInviteAge$ on a poller
+tick---is distinct from $WithdrawArrive$'s, which fires on frame receipt at
+any age.  The state effect is the same: the inviter's entry is removed, and
+if no activity survives, the description reverts and the clock returns to
+zero.
+
+\begin{schema}{ExpirePendingInvite}
+  \Delta NotificationState \\
+  inviter? : USER
+  \where
+  toolContext = zfalse \\
+  pendingAge = maxInviteAge \\
+  (inviter? \in \dom talkPending \lor inviter? \in talkBare) \\
+  talkPending' = \{ inviter? \} \ndres talkPending \\
+  talkBare' = talkBare \setminus \{ inviter? \} \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset) \implies
+  pendingAge' = 0) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset) \implies
+  pendingAge' = pendingAge) \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset \land \\
+  \quad talkQueued = 0 \land talkConnected = zfalse) \implies \\
+  \quad (talkDesc' = talkDescDefault \land talkDescChanged' = zfalse)) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset \lor \\
+  \quad talkQueued > 0 \lor talkConnected = ztrue) \implies \\
+  \quad (talkDesc' = talkDesc \land talkDescChanged' = talkDescChanged)) \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{Accepting an invite}
+
+$TalkAccept$ is the ordinary path: a pending invite is consumed and the
+conversation becomes live.  Activity does not vanish---it moves from
+$talkPending$ to $talkConnected$---so the marker is preserved, consistent
+with the invariant.
+
+\begin{schema}{TalkAccept}
+  \Delta NotificationState \\
+  inviter? : USER
+  \where
+  inviter? \in \dom talkPending \\
+  talkPending' = \{ inviter? \} \ndres talkPending \\
+  talkConnected' = ztrue \\
+  ((\dom talkPending' = \emptyset \land talkBare' = \emptyset) \implies
+  pendingAge' = 0) \\
+  ((\dom talkPending' \neq \emptyset \lor talkBare' \neq \emptyset) \implies
+  pendingAge' = pendingAge) \\
+  talkDesc' = talkDesc \\
+  talkDescChanged' = talkDescChanged \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Marker Consistency: the proof}
+\label{sec:markerfix2}
+%%----------------------------------------------------------------------
+
+With the invariants promoted and the reconciling transitions in place, the
+checks that discharge the obligations are run at $DEFAULT\_SETSIZE~2$ with
+$USER$ shrunk to one and $SESSIONKEY$ kept at two.  Two session keys are
+essential here: the reordering defect turns on one user holding invites from
+two distinct sessions, and a single session key would collapse the two into
+one and hide the fault.  One user suffices, because every marker property is
+a statement about the \emph{aggregate} of the activity sources, not about how
+many users contribute to it; shrinking $USER$ keeps the state space
+exhaustible while losing no distinction the properties depend on.  At this
+scope the exploration reports $INITIALISATION$:$8$ against
+$SETUP\_CONSTANTS$:$8$---the $MAX\_INITIALISATIONS$ bound never binds---and
+terminates with ``all open states visited'': $598{,}824$ states,
+$9{,}938{,}416$ transitions, a complete check, not a truncated one.
+
+\begin{verbatim}
+probcli docs/notification.tex -model_check -noltl -coverage \
+  -goal "staleWithdrawHit = ztrue" \
+  -p DEFAULT_SETSIZE 2 \
+  -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 2 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000
+\end{verbatim}
+
+\paragraph{Safety.}  Ordinary model checking visits every reachable state
+and finds no invariant violation and no deadlock.  Because
+$MarkerConsistent$ and $HintNamesSession$ are now part of the state
+schema, this establishes that no reachable state has a marker without its
+activity, and none has a talk marker whose hint names no session.  The
+two goal predicates that were reachable in
+Section~\ref{sec:markerprops}---$talkDesc \neq talkDescDefault \land
+\lnot\, talkActivity$ and $talkDesc \neq talkDescDefault \land talkBare
+\neq \emptyset$---are now unreachable, each being exactly the negation of a
+promoted invariant.
+
+\paragraph{The reordering defect, reached and then closed.}  The withdrawal
+key guard is proved the same way the stale marker was.  Delete the invariant
+$staleWithdrawHit = zfalse$ from the state schema, so that the username-only
+$WithdrawStale$ becomes feasible, and set the ProB goal to
+$staleWithdrawHit = ztrue$.  The check finds a reachable state by an
+eleven-step trace whose tail is the reordering exactly:
+$TalkInviteArrive(u, k_B)$ records an invite from the user's session~$B$,
+then $WithdrawStale(u, k_A)$---a withdrawal carrying the earlier session~$A$'s
+key---removes the live invite on the bare user match, clearing the marker with
+the current invite silently lost.  Restore the invariant, and the same goal is
+searched over the whole reachable space above: it is \emph{not} found, and the
+check reports ``all states visited.''  $WithdrawStale$ is then reported among
+the uncovered operations, alongside the earlier defect operations
+$TalkDrainStale$ and $TalkInviteArriveBare$: the operation that would suppress
+a live invite exists in the text but is enabled in no reachable state.  The
+key-matched $WithdrawArrive$ and its foreign-drop counterpart $WithdrawForeign$
+are both covered.
+
+\paragraph{The pending-set bound.}  This scope shrinks $USER$ to one, which
+suffices for every marker property but cannot exercise
+$TalkInviteArriveOverflow$: that operation fires only when a \emph{new}
+inviter arrives at a full pending set, and with a single user there is no
+second inviter to overflow it.  It is therefore reported uncovered here,
+alongside the three dead defect operations---but for an entirely different
+reason.  It is a live transition awaiting a second user, not a suppressed one.
+The exhaustive two-user check of the Global Constants section
+($DEFAULT\_SETSIZE~2$ with $PSLOT$ at one, so $maxPending = 1$) covers it:
+one user fills the single pending slot, a second arrives and overflows it,
+$TalkInviteArriveOverflow$ evicts the incumbent, and the bound
+$\# talkPending + \# talkBare \leq maxPending$ holds across all $598{,}825$
+reachable states with no invariant violation and no deadlock.  That bound is
+the pending-set analogue of the queue cap $maxQueueLen$ of $talk.tex$; it
+closes the unbounded-growth denial of service that a wire-controlled inviter
+key---each distinct forgery a permanent entry, the time-to-live being eventual
+rather than a cap---would otherwise permit.
+
+\paragraph{Liveness.}  The CTL formula
+$\mathrm{AG}\,(talkDesc \neq talkDescDefault \implies
+\mathrm{EF}\; talkDesc = talkDescDefault)$,
+checked at the same scope, is reported \textsc{true}: from every
+marker-present state at least one reconciling transition is enabled and
+leads, directly or through $TalkAccept$, to a state in which the marker has
+cleared.  The key guard does not weaken this---an invite keyed to $k$ can
+still be cleared by a matching $WithdrawArrive(u, k)$, and unconditionally by
+the time-to-live $ExpirePendingInvite$---so the channel remains
+self-clearing.
+
+\paragraph{Necessity of each transition.}  Each reconciling transition
+discharges a distinct obligation.  $TalkDrain$ is the only transition
+that clears $talkQueued$ or $talkConnected$; without it a marker backed
+by a queued message or a live connection can never clear.
+$WithdrawArrive$ and $ExpirePendingInvite$ are the two transitions that
+remove a pending invite without the recipient's acceptance, and they are
+enabled under different conditions: $WithdrawArrive$ on receipt of an
+\emph{ntWithdraw} frame \emph{whose key matches the pending invite}, from an
+inviter who cancels; $ExpirePendingInvite$ on a poller tick once the clock
+has reached $maxInviteAge$.  The second is
+what covers exactly the biff-9la scenario---an invite from a peer who
+never returns and never withdraws: only the time-to-live path clears it,
+so without $ExpirePendingInvite$ (and the $AgeTick$ that drives its
+clock) the talk channel would not be self-clearing in the way the read
+reference is.  $WithdrawForeign$ removes nothing; it is the transition that
+\emph{declines} to act on a mismatched frame, and it is kept as an explicit
+operation so that the implementation owes a case for recognising and
+discarding such a frame rather than acting on its user field alone.
+$TalkAccept$ is the ordinary progress transition; it is not
+required for the marker to clear, but without it the only exit from a
+pending invite is to remove it, and the handshake modelled in $talk.tex$
+could never complete.
 
 %%----------------------------------------------------------------------
 \section{System Properties}
@@ -907,6 +2239,46 @@ reach Claude~Code.  Wall posting uses the belt path (tool context);
 wall reception from another user uses $KVWallReceive$ which defers to
 the poller.  Talk reception uses $NatsTalkCallback$ which also defers
 to the poller.  Both ultimately produce $lastNotifyResult = notifySent$.
+
+\paragraph{Erratum (biff-9la).}  The symmetry stated above concerns only
+\emph{notification delivery}---that a \texttt{tools/list\_changed} is
+sent.  It does not extend to the \emph{life-cycle of the tool
+description}, and the earlier drafts of this specification wrongly implied
+that it did by modelling $talkDesc$ as an opaque value with no invariant.
+Wall and talk are not symmetric here.  The wall and read markers are
+driven by sources that decrease---an unread count that falls to zero, a
+display item that is advanced away---so they clear themselves.  The talk
+marker is driven by $talkPending$, $talkQueued$ and $talkConnected$, and
+nothing in the original model reverted $talkDesc$ when those emptied:
+Sections~\ref{sec:markerprops} reproduces the resulting stale marker as a
+reachable state.  The corrected treatment requires the reconciling
+transitions of Section~\ref{sec:markerfix}; only then does the talk
+description track its activity as the read reference does.  The
+consistency invariant $MarkerConsistent$, not delivery symmetry, is the
+property that matters.
+
+\paragraph{Erratum ($talk.tex$ invariant~4).}  Invariant~4 of $talk.tex$
+(``Pending invites \ldots remain in the set until the next \texttt{talk}
+command'') describes exactly the grow-only behaviour that strands the
+marker.  If pending invites are never removed except by a subsequent
+\texttt{talk} command, then a marker driven by $talkPending$ can never
+clear on its own.  Under the invariant $MarkerConsistent$ that reading is
+superseded: a pending invite must also be removable by $WithdrawArrive$---an
+\emph{ntWithdraw} frame from the inviter \emph{whose session key matches the
+stored invite}---or by $ExpirePendingInvite$---a time-to-live expiry aged out
+on a poller tick---so that the talk channel is self-clearing.  The key
+qualification on $WithdrawArrive$ is not incidental: a withdrawal matched on
+the inviter's user identity alone would, under the transport's lack of
+cross-session ordering, let a stale withdrawal from one session delete a live
+invite from another, reintroducing the stranded-marker defect by a
+non-adversarial path.  $WithdrawArrive$ therefore guards on
+$talkPending~inviter? = withdrawKey?$, and a mismatched frame is dropped by
+$WithdrawForeign$; this is the withdrawal-side mirror of the accept-side
+consent guard $(head~queue).nfromKey = partnerKey$ that $talk.tex$'s
+$DrainAcceptWhileInviting$ already imposes (DES-043).  The consent-boundary
+guarantees of $talk.tex$ (invariant~11) are unaffected: withdrawal and expiry
+only \emph{remove} pending invites, never complete a handshake, so they cannot
+forge consent.
 
 \begin{schema}{WallNotifySuccess}
   NotificationState

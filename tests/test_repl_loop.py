@@ -15,13 +15,19 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from biff.__main__ import _handle_timestamps, _release_prompt, _repl_loop
+from biff.__main__ import (
+    _handle_timestamps,
+    _poll_notify,
+    _release_prompt,
+    _repl_loop,
+)
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.repl_display import ReplDisplay
 from biff.repl_notify import NotifyState
+from biff.talk_state import PENDING_INVITE_TTL
 
 
 def _make_ctx(tmp_path: object) -> CliContext:
@@ -115,7 +121,6 @@ class TestPromptGateLifecycle:
         gate.clear()  # Start closed
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = CommandResult(text="output")
@@ -127,7 +132,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         # After the command completes, the gate should be set
@@ -142,7 +146,6 @@ class TestPromptGateLifecycle:
         gate.clear()
         notify = NotifyState()
         aqueue = _make_aqueue([""])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = CommandResult(text="")
@@ -154,7 +157,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert gate.is_set()
@@ -167,7 +169,6 @@ class TestPromptGateLifecycle:
         gate.clear()
         notify = NotifyState()
         aqueue = _make_aqueue(["badcmd"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.side_effect = ValueError("boom")
@@ -179,7 +180,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert gate.is_set()
@@ -192,7 +192,6 @@ class TestPromptGateLifecycle:
         gate.clear()
         notify = NotifyState()
         aqueue = _make_aqueue(["talk @eric"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.__main__._handle_repl_talk", new_callable=AsyncMock),
@@ -206,7 +205,6 @@ class TestPromptGateLifecycle:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert gate.is_set()
@@ -229,7 +227,6 @@ class TestDispatchOutcomes:
         notify = NotifyState()
         # Put "exit" — dispatch returns None.
         aqueue = _make_aqueue(["exit"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = None  # exit signal
@@ -241,7 +238,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_dispatch.assert_awaited_once()
@@ -256,7 +252,6 @@ class TestDispatchOutcomes:
         # Put None directly — simulates EOF.
         q: asyncio.Queue[str | None] = asyncio.Queue()
         q.put_nowait(None)
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             await _repl_loop(
@@ -267,7 +262,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         # dispatch should NOT have been called (EOF before any input).
@@ -283,7 +277,6 @@ class TestDispatchOutcomes:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.return_value = CommandResult(text="3 online")
@@ -295,7 +288,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         captured = capsys.readouterr()
@@ -311,7 +303,6 @@ class TestDispatchOutcomes:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["badcmd"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             mock_dispatch.side_effect = ValueError("no relay")
@@ -323,7 +314,6 @@ class TestDispatchOutcomes:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         captured = capsys.readouterr()
@@ -346,7 +336,6 @@ class TestModeTransitions:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["talk @eric hello"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -362,7 +351,6 @@ class TestModeTransitions:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_talk.assert_awaited_once()
@@ -379,7 +367,6 @@ class TestModeTransitions:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["TALK @eric"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -395,7 +382,6 @@ class TestModeTransitions:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_talk.assert_awaited_once()
@@ -408,7 +394,6 @@ class TestModeTransitions:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -425,7 +410,6 @@ class TestModeTransitions:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_dispatch.assert_awaited_once()
@@ -448,7 +432,6 @@ class TestNotificationSync:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -463,7 +446,6 @@ class TestNotificationSync:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_sync.assert_awaited_once()
@@ -476,7 +458,6 @@ class TestNotificationSync:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["badcmd"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -491,7 +472,6 @@ class TestNotificationSync:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_sync.assert_not_awaited()
@@ -504,7 +484,6 @@ class TestNotificationSync:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["exit"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -519,7 +498,6 @@ class TestNotificationSync:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_sync.assert_not_awaited()
@@ -541,7 +519,6 @@ class TestMultiCommandSequence:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["who", "status"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         call_count = 0
 
@@ -559,7 +536,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert call_count == 2
@@ -575,7 +551,6 @@ class TestMultiCommandSequence:
         q: asyncio.Queue[str | None] = asyncio.Queue()
         q.put_nowait("who")
         q.put_nowait("exit")
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         results: list[CommandResult | None] = [
             CommandResult(text="3 online"),
@@ -598,7 +573,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert call_idx == 2
@@ -613,7 +587,6 @@ class TestMultiCommandSequence:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["bad", "who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         call_idx = 0
 
@@ -633,7 +606,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         assert call_idx == 2
@@ -650,7 +622,6 @@ class TestMultiCommandSequence:
         gate.set()
         notify = NotifyState()
         aqueue = _make_aqueue(["talk @eric", "who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch(
@@ -668,7 +639,6 @@ class TestMultiCommandSequence:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
             )
 
         mock_talk.assert_awaited_once()
@@ -721,7 +691,6 @@ class TestTimestampsCommand:
         notify = NotifyState()
         display = ReplDisplay()
         aqueue = _make_aqueue(["timestamps on"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch:
             await _repl_loop(
@@ -732,7 +701,6 @@ class TestTimestampsCommand:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
                 display=display,
             )
 
@@ -747,25 +715,24 @@ class TestTimestampsCommand:
         Off → the talk renderer emits no stamp; after the loop processes
         `timestamps on`, the SAME display object makes the renderer prefix
         incoming messages with ``[HH:MM]``.  This connects the command path
-        (`_repl_loop`) to the render path (`_drain_talk_messages`) on one
+        (`_repl_loop`) to the render path (`_format_talk_lines`) on one
         display, showing the user-observable behavior change (biff-4uq).
         """
-        from biff.__main__ import _drain_talk_messages
+        from biff.__main__ import _format_talk_lines
+        from biff.talk_types import TalkNotification
 
         display = ReplDisplay()
-        session_key = "kai:abc12345"
-        talk_msg = {
-            "type": "message",
-            "from": "eric",
-            "from_tty": "tty2",
-            "body": "on it now",
-            "from_key": "eric:def67890",
-        }
+        talk_msg = TalkNotification(
+            ntype="message",
+            nfrom="eric",
+            nfrom_tty="tty2",
+            nfrom_key="eric:def67890",
+            nto="",
+            nbody="on it now",
+        )
 
         # Before: a received talk message renders without a stamp.
-        before: asyncio.Queue[dict[str, str]] = asyncio.Queue()
-        before.put_nowait(dict(talk_msg))
-        lines_before, _ = _drain_talk_messages(before, session_key, display)
+        lines_before = _format_talk_lines([talk_msg], display)
         assert re.search(r"\[\d{2}:\d{2}\]", lines_before[0]) is None
 
         # User types `timestamps on` at the REPL prompt.
@@ -773,7 +740,6 @@ class TestTimestampsCommand:
         gate = threading_mod.Event()
         gate.set()
         aqueue = _make_aqueue(["timestamps on"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         with patch("biff.dispatch.dispatch", new_callable=AsyncMock):
             await _repl_loop(
                 ctx,
@@ -783,14 +749,11 @@ class TestTimestampsCommand:
                 asyncio.Event(),
                 gate,
                 ["prompt> "],
-                talk_q,
                 display=display,
             )
 
         # After: the same display makes the renderer stamp the message.
-        after: asyncio.Queue[dict[str, str]] = asyncio.Queue()
-        after.put_nowait(dict(talk_msg))
-        lines_after, _ = _drain_talk_messages(after, session_key, display)
+        lines_after = _format_talk_lines([talk_msg], display)
         assert (
             re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ on it now", lines_after[0])
             is not None
@@ -830,7 +793,6 @@ class TestPromptOutputOrdering:
         gate = _RecordingGate(log)
         notify = NotifyState()
         aqueue = _make_aqueue(["who"])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -846,7 +808,6 @@ class TestPromptOutputOrdering:
                 asyncio.Event(),
                 gate,  # type: ignore[arg-type]
                 ["prompt> "],
-                talk_q,
             )
 
         # A flush must have happened...
@@ -868,7 +829,6 @@ class TestPromptOutputOrdering:
         gate = _RecordingGate(log)
         notify = NotifyState()
         aqueue = _make_aqueue([""])
-        talk_q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
         with (
             patch("biff.dispatch.dispatch", new_callable=AsyncMock) as mock_dispatch,
@@ -884,9 +844,204 @@ class TestPromptOutputOrdering:
                 asyncio.Event(),
                 gate,  # type: ignore[arg-type]
                 ["prompt> "],
-                talk_q,
             )
 
         # No output → nothing to flush, but the gate must still open.
         assert "gate_set" in log
         assert "write" not in log
+
+
+# -----------------------------------------------------------------------
+# Invite-cancel withdraw parity (notification.tex WithdrawArrive)
+# -----------------------------------------------------------------------
+
+
+class TestInviteCancelWithdraw:
+    """Cancelling an outgoing REPL invite withdraws it, not ends it.
+
+    Abandoning an invite while still INVITING publishes ``ntWithdraw`` so
+    the invitee's ``[TALK]`` marker clears at once (notification.tex
+    WithdrawArrive), matching the MCP ``talk_end`` path.  A connected hangup
+    stays an ``end`` frame (DrainEnd) — that path is unchanged.
+    """
+
+    @pytest.mark.anyio()
+    async def test_cancel_while_inviting_withdraws(self, tmp_path: object) -> None:
+        from biff.__main__ import _talk_handshake
+        from biff.talk_state import TalkState
+        from biff.talk_types import AcceptOutcome, TalkPhase
+
+        ctx = _make_ctx(tmp_path)
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
+        )
+        gate = threading_mod.Event()
+        with (
+            patch(
+                "biff.__main__._wait_for_talk_accept",
+                new_callable=AsyncMock,
+                return_value=AcceptOutcome.NONE,
+            ),
+            patch.object(
+                TalkState, "send_withdraw", new_callable=AsyncMock
+            ) as spy_withdraw,
+            patch.object(TalkState, "send_end", new_callable=AsyncMock) as spy_end,
+        ):
+            proceed = await _talk_handshake(
+                ctx,
+                "eric",
+                "eric:def67890",
+                "eric:tty2",
+                ["talk", "@eric"],
+                responding=False,
+                aqueue=_make_aqueue([]),
+                notify_event=asyncio.Event(),
+                prompt_gate=gate,
+            )
+
+        assert proceed is False
+        spy_withdraw.assert_awaited_once_with(
+            target_user="eric", to_key="eric:def67890", target_repo=None
+        )
+        spy_end.assert_not_awaited()
+        # The cancel returns us to idle (talk.tex LocalEnd).
+        assert ctx.talk.phase is TalkPhase.IDLE
+
+    @pytest.mark.anyio()
+    async def test_ctrl_c_while_inviting_withdraws(self, tmp_path: object) -> None:
+        """A Ctrl-C during the inviting-wait fires the withdraw, then exits.
+
+        ``asyncio.run`` cancels the main task on SIGINT, so the accept-wait
+        raises ``CancelledError`` (not ``KeyboardInterrupt``). The handshake
+        clears the invitee's marker on the fast path (ntWithdraw) and re-raises
+        so the cancellation propagates and the process exits to the shell.
+        """
+        from biff.__main__ import _talk_handshake
+        from biff.talk_state import TalkState
+        from biff.talk_types import TalkPhase
+
+        ctx = _make_ctx(tmp_path)
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
+        )
+        gate = threading_mod.Event()
+        with (
+            patch(
+                "biff.__main__._wait_for_talk_accept",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError,
+            ),
+            patch.object(
+                TalkState, "send_withdraw", new_callable=AsyncMock
+            ) as spy_withdraw,
+            patch.object(TalkState, "send_end", new_callable=AsyncMock) as spy_end,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _talk_handshake(
+                ctx,
+                "eric",
+                "eric:def67890",
+                "eric:tty2",
+                ["talk", "@eric"],
+                responding=False,
+                aqueue=_make_aqueue([]),
+                notify_event=asyncio.Event(),
+                prompt_gate=gate,
+            )
+
+        spy_withdraw.assert_awaited_once_with(
+            target_user="eric", to_key="eric:def67890", target_repo=None
+        )
+        spy_end.assert_not_awaited()
+        # The withdraw completes before the re-raise, returning us to idle.
+        assert ctx.talk.phase is TalkPhase.IDLE
+
+    @pytest.mark.anyio()
+    async def test_withdraw_publish_failure_still_resets(
+        self, tmp_path: object
+    ) -> None:
+        """A wedged relay on withdraw must not strand the invite or leak a trace.
+
+        When ``send_withdraw`` raises (relay disconnected, including the Ctrl-C
+        cancel path), the local state still resets — no exception escapes and the
+        invitee falls back to the pending-invite TTL sweep.
+        """
+        from biff.__main__ import _withdraw_talk_invite
+        from biff.talk_state import TalkState
+        from biff.talk_types import TalkPhase
+
+        ctx = _make_ctx(tmp_path)
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
+        )
+        with patch.object(
+            TalkState,
+            "send_withdraw",
+            new_callable=AsyncMock,
+            side_effect=TimeoutError("relay wedged"),
+        ):
+            await _withdraw_talk_invite(ctx, "eric", "eric:def67890")
+
+        # No exception escaped; local state reset despite the failed publish.
+        assert ctx.talk.phase is TalkPhase.IDLE
+
+
+class TestInvitingWaitInputGate:
+    """The inviting-wait must open the prompt gate so a typed line is read.
+
+    Without releasing the gate the stdin thread stays parked at
+    ``prompt_gate.wait()`` and never calls ``input()``, so a typed ``end``
+    never reaches the cancel check — the REPL-cancel bug this guards.
+    """
+
+    @pytest.mark.anyio()
+    async def test_wait_for_accept_opens_gate_before_reading(
+        self, tmp_path: object
+    ) -> None:
+        from biff.__main__ import _wait_for_talk_accept
+        from biff.talk_types import AcceptOutcome
+
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()  # starts closed, as after the stdin read
+        aqueue = _make_aqueue(["end"])
+
+        outcome = await _wait_for_talk_accept(ctx, aqueue, asyncio.Event(), gate)
+
+        assert outcome is AcceptOutcome.NONE
+        assert gate.is_set(), "gate must open so the stdin thread reads the line"
+
+
+class TestPollNotifyExpiresInvites:
+    """The REPL idle tick must age out stranded pending invites (CR-4).
+
+    Only the MCP poller called ``expire_stale_invites``; the REPL tick drained
+    banners but never reaped, so a crashed inviter's ``[TALK]`` marker never
+    cleared in the REPL.  The tick now mirrors the server's ``_active_tick``.
+    """
+
+    @pytest.mark.anyio()
+    async def test_repl_tick_ages_out_stale_invite(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = _make_ctx(tmp_path)
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: 0.0)
+        ctx.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def67890",
+                "body": "wants to talk",
+                "to_key": "kai:abc12345",
+            }
+        )
+        ctx.talk.drain_idle()  # record the pending invite at t=0
+        assert "eric" in ctx.talk.pending_invites
+
+        # The inviter never returns; the tick fires well past the TTL.
+        monkeypatch.setattr(
+            "biff.talk_state.time.monotonic", lambda: PENDING_INVITE_TTL + 1.0
+        )
+        await _poll_notify(ctx, NotifyState(), "prompt> ")
+
+        assert "eric" not in ctx.talk.pending_invites  # reaped by the tick

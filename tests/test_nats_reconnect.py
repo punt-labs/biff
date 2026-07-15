@@ -778,13 +778,16 @@ class TestCallbackGenerationGuard:
             )
             await relay._ensure_connected()  # client B, generation 2
 
-            caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
+            caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
             await on_error_a(RuntimeError("boom from superseded client"))
 
+        # error_cb logs at INFO now (transient, auto-recovering — biff-9la), so
+        # filter by the error message to skip benign "Connected"/"Reconnected"
+        # INFO lines the setup emits.
         errors = [
             r
             for r in caplog.records
-            if r.levelno == logging.ERROR and r.name == _LOGGER_NAME
+            if r.name == _LOGGER_NAME and "NATS error" in r.getMessage()
         ]
         assert errors == [], "a superseded client's error_cb must no-op"
 
@@ -803,14 +806,17 @@ class TestCallbackGenerationGuard:
             assert connect.await_args is not None
             on_error = connect.await_args.kwargs["error_cb"]
 
-            caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
+            caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
             await on_error(RuntimeError("boom"))
 
+        # INFO, not ERROR: transient, auto-recovering — file only (biff-9la).
         errors = [
             r
             for r in caplog.records
-            if r.levelno == logging.ERROR
+            if r.levelno == logging.INFO
             and r.name == _LOGGER_NAME
             and "boom" in r.getMessage()
         ]
         assert len(errors) == 1
+        # The full traceback is preserved for diagnosis in biff.log.
+        assert errors[0].exc_info is not None

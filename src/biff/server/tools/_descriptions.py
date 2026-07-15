@@ -23,10 +23,12 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from biff.formatting import terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
-from biff.tty import is_notification_for_session
+from biff.talk_state import TalkState
+from biff.talk_types import TalkPhase
 
 
 class _Sentinel:
@@ -84,13 +86,6 @@ _tty_name: str = ""
 # Set by the ``mesg`` tool so the unread file includes availability state.
 _biff_enabled: bool = True
 
-# Set by the ``talk`` tool and background poller NATS subscription.
-# ``_talk_partner`` drives subscription lifecycle in
-# ``_manage_talk_subscription``; ``_talk_message`` feeds the talk
-# tool description (always shows latest message for Claude).
-_talk_partner: str | None = None
-_talk_message: str = ""
-
 # Track the last wall content spoken via vox to avoid re-speaking on
 # every refresh_wall tick (the description changes due to the countdown
 # timer, but the wall content is the same).
@@ -125,34 +120,12 @@ def set_biff_enabled(*, enabled: bool) -> None:
     _biff_enabled = enabled
 
 
-def get_talk_partner() -> str | None:
-    """Return the active talk partner username, or ``None``."""
-    return _talk_partner
-
-
-def set_talk_partner(partner: str | None) -> None:
-    """Update the active talk partner.  Clears talk message when ending."""
-    global _talk_partner, _talk_message
-    _talk_partner = partner
-    if partner is None:
-        _talk_message = ""
-
-
-def set_talk_message(message: str) -> None:
-    """Update the latest talk message for status bar display."""
-    global _talk_message
-    _talk_message = message
-
-
 def _reset_session() -> None:
-    """Clear stored session, tty name, biff_enabled, talk — test isolation."""
+    """Clear stored session, tty name, biff_enabled — test isolation."""
     global _session, _tty_name, _biff_enabled
-    global _talk_partner, _talk_message
     _session = None
     _tty_name = ""
     _biff_enabled = True
-    _talk_partner = None
-    _talk_message = ""
 
 
 async def notify_tool_list_changed() -> None:
@@ -296,7 +269,7 @@ async def refresh_wall(
     """
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    from biff.formatting import format_remaining, terminal_safe  # noqa: PLC0415
+    from biff.formatting import format_remaining  # noqa: PLC0415
     from biff.server.tools.wall import WALL_BASE_DESCRIPTION  # noqa: PLC0415
 
     tool = await mcp.get_tool("wall")
@@ -366,133 +339,133 @@ TALK_BASE_DESCRIPTION = (
 )
 
 
+def _talk_description(talk: TalkState) -> str:
+    """Build the ``talk`` tool description from the held ephemeral state.
+
+    Prompts the model to call ``talk_read`` when there is undrained
+    activity (an invite the human sent, or queued messages), and reflects
+    a connected conversation otherwise.  Reads only — never drains.
+
+    An invite is rendered as "wants to talk" whether it has already drained
+    into ``pendingInvites`` or is still queued and undrained — an unsolicited
+    invite must direct the agent to accept, never surface as a chat message.
+    """
+    invites = talk.pending_invites
+    if invites:
+        ordered = sorted(invites.values(), key=lambda inv: inv.user)
+        who = ", ".join(terminal_safe(inv.user) for inv in ordered)
+        # Direct talk_read/accept, not talk_end: there is no active session to
+        # close, and talk_end returns "No active talk session" and clears
+        # nothing when idle with only pending invites.
+        return (
+            f"[TALK] {who} wants to talk — call talk_read to see it, then "
+            f"{terminal_safe(ordered[0].accept_command)} to accept."
+        )
+    queued_inviters = talk.queued_invite_users
+    if queued_inviters:
+        who = ", ".join(terminal_safe(user) for user in queued_inviters)
+        # An undrained invite: talk_read moves it into pendingInvites and prints
+        # the runnable accept hint, so direct the agent there rather than
+        # mislabelling it as a new message.
+        return (
+            f"[TALK] {who} wants to talk — call talk_read to see it, then "
+            "talk to accept."
+        )
+    if talk.queued:
+        # Reached only when no invite is queued, so every queued frame is a chat
+        # message.  Direct talk_read, not talk_end: queued messages are drained
+        # by talk_read; talk_end is a no-op with nothing to close here.
+        noun = "message" if talk.queued == 1 else "messages"
+        return f"[TALK] {talk.queued} new {noun} — call talk_read to see them."
+    if talk.phase is TalkPhase.CONNECTED:
+        partner = terminal_safe(talk.partner)
+        tty = terminal_safe(talk.partner_tty)
+        address = f"@{partner}:{tty}" if tty else f"@{partner}"
+        return (
+            f"[TALK] connected to {partner} — talk {address} <message> "
+            "to reply, talk_end to close."
+        )
+    return TALK_BASE_DESCRIPTION
+
+
+def talk_signal(talk: TalkState) -> tuple[tuple[str, ...], int, str]:
+    """A cheap change key for the held talk state (pending, queued, phase).
+
+    The pending element is each invite's session key, not a bare count, so a
+    same-count churn — one inviter's session superseded by another's within a
+    single poll window — still changes the key and forces a description
+    refresh, never leaving a stale accept-hint teaser.
+    """
+    pending = tuple(sorted(inv.session_key for inv in talk.pending_invites.values()))
+    return (pending, talk.queued, talk.phase.name)
+
+
 async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
-    """Update the ``talk`` tool description with the latest talk message.
+    """Update the ``talk`` tool description from the held ``TalkState``.
 
-    Mirrors :func:`refresh_wall` — mutates the tool description so that
-    ``notify_tool_list_changed()`` causes Claude Code to re-read the tool
-    list, see a changed description, and trigger a UI re-render.  Without
-    the description change, the notification is a no-op from Claude Code's
-    perspective (it re-reads the same descriptions and does nothing).
-
-    Queue management (add/remove talk items) is handled by callers:
-    ``_on_talk_msg`` adds items, ``_manage_talk_subscription`` removes
-    them on talk end.
+    Reads the shared ephemeral state (never drains it — the model's
+    ``talk_read`` tool is the drainer) and, when the summary changes,
+    mutates the tool description and fires
+    ``notifications/tools/list_changed`` so Claude Code re-reads the tool
+    list and the model calls ``talk_read`` (DES-020/021).  Ephemeral:
+    nothing is persisted; the unread status file is still written for the
+    human status bar.
     """
     tool = await mcp.get_tool("talk")
     if tool is None:
         return
     old_desc = tool.description
-    if _talk_partner and _talk_message:
-        tool.description = (
-            f"[TALK] {_talk_message} — "
-            f"Use /write @{_talk_partner} to reply. "
-            "Use talk_end to close."
-        )
-    else:
-        tool.description = TALK_BASE_DESCRIPTION
+    tool.description = _talk_description(state.talk)
     if tool.description != old_desc:
         await notify_tool_list_changed()
     await _sync_unread_file(state)
 
 
-async def _manage_talk_subscription(
-    mcp: FastMCP[ServerState],
-    state: ServerState,
-    current_partner: str | None,
-    sub: object | None,
-) -> tuple[str | None, object | None]:
-    """Subscribe or unsubscribe to talk notifications as partner changes.
+async def subscribe_talk(state: ServerState) -> object | None:
+    """Establish the always-on talk subscription feeding the held ``TalkState``.
 
-    Returns ``(new_partner, new_sub)`` for the caller to track.
-    When the talk partner changes, the old subscription is dropped and
-    a new one created.  NATS-only — no-ops for non-NATS relays.
+    Started once at poller start (ungated — a fresh agent must receive an
+    unsolicited invite, biff-9la).  Every talk frame flows into
+    ``state.talk.receive`` (self-echo and session-scope filtering happen
+    there) and wakes the poller so the next active tick refreshes the tool
+    description and fires the list-changed push.  NATS-only.
     """
     from biff.nats_relay import NatsRelay  # noqa: PLC0415
 
-    wanted = _talk_partner
-    if wanted == current_partner:
-        return current_partner, sub
-
-    # Unsubscribe old — and reset talk tool description
-    if sub is not None:
-        with suppress(Exception):
-            await sub.unsubscribe()  # type: ignore[attr-defined]
-        sub = None
-
-    # Clear talk items whenever the partner changes (including talk end) —
-    # stale messages from the previous partner must not rotate into view.
-    state.display_queue.remove_by_kind("talk")
-
-    if wanted is None or not isinstance(state.relay, NatsRelay):
-        await refresh_talk(mcp, state)
-        return wanted, None
-
-    # Subscribe new — capture messages from talk partner on status line
+    if not isinstance(state.relay, NatsRelay):
+        return None
     try:
         nc = await state.relay.get_nc()
         subject = state.relay.talk_notify_subject(state.config.user)
 
         async def _on_talk_msg(msg: object) -> None:
-            from biff.formatting import terminal_safe  # noqa: PLC0415
-
             try:
-                data = json.loads(msg.data)  # type: ignore[attr-defined]
-                sender = data.get("from", "")
-                body = data.get("body", "")
-                from_key = data.get("from_key", "")
-
-                # Reject self-echo: if the notification came from
-                # this session, ignore it (same user, different tty).
-                if from_key and from_key == state.session_key:
-                    return
-
-                # Reject targeted notifications not for this session.
-                if not is_notification_for_session(data, state.session_key):
-                    return
-
-                # _talk_partner may be "user:tty" but notification
-                # from field is always just the username.
-                partner_user = (
-                    _talk_partner.split(":")[0]
-                    if _talk_partner and ":" in _talk_partner
-                    else _talk_partner
-                )
-                if sender and sender == partner_user and body:
-                    # sender/body are raw NATS content; strip terminal escapes
-                    # before this reaches the tool description + status line
-                    # (biff-lbj).  Keep raw `sender` for routing/source_key.
-                    display_text = f"{terminal_safe(sender)}: {terminal_safe(body)}"
-                    set_talk_message(display_text)
-                    # Add to display queue — coalesce per sender so rapid
-                    # messages replace the previous one instead of growing
-                    # the queue without bound.
-                    source_key = f"talk:{sender}"
-                    state.display_queue.remove_by_source_key(source_key)
-                    item = DisplayItem(
-                        kind="talk",
-                        text=display_text,
-                        source_key=source_key,
-                    )
-                    state.display_queue.add(item)
-                    state.display_queue.force_to_front(item.source_key)
-                    # Wake the poller from napping so the next 2s
-                    # tick runs _active_tick and fires the MCP
-                    # notification.  Do NOT call refresh_talk here
-                    # — sending notifications from a NATS callback
-                    # is unreliable (different coroutine context).
+                data = getattr(msg, "data", b"")
+                raw: object = json.loads(data)
+                if isinstance(raw, dict):
+                    frame: dict[str, str] = {
+                        str(k): str(v)  # pyright: ignore[reportUnknownArgumentType]
+                        for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+                    }
+                    woke = state.talk.receive(frame)
+                else:
+                    # A non-dict payload (a legacy ``b"1"`` bare wake) carries no
+                    # frame — wake the poller so it re-checks, enqueue nothing.
+                    woke = True
+                if woke:
+                    # Do NOT fire notifications here — sending from a NATS
+                    # callback is unreliable (different coroutine context).
+                    # Wake the poller; its next tick refreshes + notifies.
                     state.activity.wake()
             except (json.JSONDecodeError, AttributeError, TypeError):
                 logger.debug("Failed to process talk notification", exc_info=True)
 
-        sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+        return await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
             subject, cb=_on_talk_msg
         )
     except Exception:  # noqa: BLE001
         logger.warning("Failed to subscribe to talk notifications", exc_info=True)
-        sub = None
-
-    return wanted, sub
+        return None
 
 
 async def _active_tick(
@@ -500,11 +473,11 @@ async def _active_tick(
     state: ServerState,
     last_count: int,
     last_wall: tuple[str, str],
-    last_talk: str,
-) -> tuple[int, tuple[str, str], str]:
+    last_talk: tuple[tuple[str, ...], int, str],
+) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
     """One active-mode poller tick: check inbox, wall, and talk changes.
 
-    Returns updated ``(count, wall_key, talk_message)`` tracking state.
+    Returns updated ``(count, wall_key, talk_signal)`` tracking state.
     """
     primary = await state.relay.get_unread_summary(state.session_key)
     companion_count = 0
@@ -529,9 +502,16 @@ async def _active_tick(
         last_wall = wall_key
         await refresh_wall(mcp, state, wall=current_wall)
 
-    # Refresh talk tool description when talk message changes
-    if _talk_message != last_talk:
-        last_talk = _talk_message
+    # Age out pending talk invites whose inviter never returned and never
+    # withdrew (notification.tex ExpirePendingInvite). The reduced pending
+    # count changes talk_signal below, which drives the description refresh.
+    state.talk.expire_stale_invites()
+
+    # Refresh talk tool description when the held TalkState changes
+    # (new invite, queued message, phase transition, or an aged-out invite).
+    talk_key = talk_signal(state.talk)
+    if talk_key != last_talk:
+        last_talk = talk_key
         await refresh_talk(mcp, state)
 
     # Rotate display queue — talk items expire, wall items cycle
@@ -546,8 +526,8 @@ async def _safe_tick(
     state: ServerState,
     last_count: int,
     last_wall: tuple[str, str],
-    last_talk: str,
-) -> tuple[int, tuple[str, str], str]:
+    last_talk: tuple[tuple[str, ...], int, str],
+) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
     """Wrap ``_active_tick`` with error handling.
 
     A transient NATS error must not kill the poller — log and retry
@@ -594,16 +574,16 @@ async def poll_inbox(
     When *shutdown* is set, exits cleanly between iterations —
     no NATS operations are interrupted mid-flight.
 
-    Also manages a NATS subscription for talk notifications: when a
-    talk partner is active, incoming messages are captured and written
-    to the unread status file for status bar display.
+    Establishes an always-on NATS subscription for talk notifications
+    (ungated — a fresh agent must receive an unsolicited invite, biff-9la):
+    every frame flows into the shared ``TalkState`` and the tool
+    description tracks it so the model is prompted to call ``talk_read``.
     """
     tracker = state.activity
     last_count = -1  # Force initial refresh
     last_wall: tuple[str, str] = ("", "")  # Force initial refresh
-    last_talk = ""
-    talk_partner_tracked: str | None = None
-    talk_sub: object | None = None
+    last_talk: tuple[tuple[str, ...], int, str] = ((), -1, "")  # Force initial refresh
+    talk_sub = await subscribe_talk(state)
 
     try:
         while shutdown is None or not shutdown.is_set():
@@ -616,10 +596,13 @@ async def poll_inbox(
             else:
                 await asyncio.sleep(interval)
 
-            # Manage talk subscription lifecycle
-            talk_partner_tracked, talk_sub = await _manage_talk_subscription(
-                mcp, state, talk_partner_tracked, talk_sub
-            )
+            # Retry the talk subscription while it is not established. The first
+            # attempt can fail (NATS down at startup, subscribe_talk returns
+            # None); without this retry the whole talk channel — invites and
+            # messages — is silently dropped for the server's lifetime even
+            # after NATS recovers. Cheap: only runs while unsubscribed.
+            if talk_sub is None:
+                talk_sub = await subscribe_talk(state)
 
             # Transition: active → napping (connection stays open)
             if not tracker.napping and tracker.idle_seconds() > idle_threshold:

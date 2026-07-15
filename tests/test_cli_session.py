@@ -74,6 +74,37 @@ class TestHeartbeatLoop:
         # Should return without raising
         await _heartbeat_loop(relay, "kai:abc", shutdown, interval=0.01)
 
+    @pytest.mark.anyio()
+    async def test_transient_error_logs_at_info_not_terminal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A transient heartbeat failure logs at INFO (with traceback) — never
+        WARNING+ — so the REPL's WARNING-level stderr handler keeps it off the
+        interactive terminal while the file handler still records it (biff-9la).
+        """
+        import logging
+
+        relay = AsyncMock()
+        relay.heartbeat.side_effect = TimeoutError("relay wedged")
+        shutdown = asyncio.Event()
+
+        async def _stop_after_one() -> None:
+            await asyncio.sleep(0.05)
+            shutdown.set()
+
+        task = asyncio.create_task(_stop_after_one())
+        with caplog.at_level(logging.INFO, logger="biff.cli_session"):
+            await _heartbeat_loop(relay, "kai:abc", shutdown, interval=0.01)
+        await task
+
+        records = [r for r in caplog.records if r.name == "biff.cli_session"]
+        assert records, "heartbeat failure was not logged at all"
+        # Nothing at WARNING or above — that is what would reach the terminal.
+        assert all(r.levelno < logging.WARNING for r in records)
+        # The detail is preserved: INFO level, with the traceback attached.
+        info = next(r for r in records if r.levelno == logging.INFO)
+        assert info.exc_info is not None
+
 
 class TestCliSessionLifecycle:
     """Test cli_session() using a mock NatsRelay.

@@ -7,20 +7,26 @@ import json
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
 from biff.models import BiffConfig, Message, UnreadSummary, WallPost
+from biff.relay import LocalRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
+from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
+    _talk_description,
     _write_unread_file,
     poll_inbox,
     refresh_read_messages,
+    talk_signal,
 )
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
+from biff.talk_state import TalkState
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -203,6 +209,158 @@ class TestUnreadFile:
         assert nested.exists()
 
 
+class TestTalkSignal:
+    """``talk_signal`` keys on invite identity so same-count churn is detected."""
+
+    def _talk(self, tmp_path: Path) -> TalkState:
+        return TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+
+    @staticmethod
+    def _invite(from_key: str) -> dict[str, str]:
+        return {
+            "type": "invite",
+            "from": "eric",
+            "from_key": from_key,
+            "to_key": "kai:t",
+        }
+
+    def test_same_count_session_churn_changes_signal(self, tmp_path: Path) -> None:
+        """One inviter session superseded by another keeps the count but changes
+        the signal, so the poller refreshes and never leaves a stale accept hint.
+        """
+        talk = self._talk(tmp_path)
+        talk.receive(self._invite("eric:aaa"))
+        talk.drain_idle()
+        before = talk_signal(talk)
+        talk.receive(self._invite("eric:bbb"))  # supersedes; count stays 1
+        talk.drain_idle()
+        after = talk_signal(talk)
+        assert len(talk.pending_invites) == 1
+        assert before != after
+
+
+class TestTalkDescriptionAcceptHint:
+    """The ``[TALK]`` marker names the inviter's session by its display tty.
+
+    The accept hint must read as the ``@user:ttyN`` address ``/who`` shows —
+    the form ``talk @user:ttyN`` resolves against — not the opaque session-key
+    hex the inviter's session actually keys on.  Same source as
+    ``format_agent_drain`` (``PendingInvite.accept_command``), so both surfaces
+    stay reconciled.
+    """
+
+    def test_marker_renders_display_tty_not_key_hex(self, tmp_path: Path) -> None:
+        talk = TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "jfreeman",
+                "from_tty": "tty6",
+                "from_key": "jfreeman:75abc665",
+                "to_key": "kai:t",
+            }
+        )
+        talk.drain_idle()  # records the pending invite
+
+        desc = _talk_description(talk)
+
+        assert "talk @jfreeman:tty6" in desc
+        assert "75abc665" not in desc
+
+
+class TestTalkDescriptionQueuedInvite:
+    """A queued (undrained) invite reads as an invite, not a chat message.
+
+    An unsolicited invite lands in the queue before ``talk_read`` moves it into
+    ``pendingInvites``.  Rendering that queued frame as "N new message" would
+    tell the agent to read a message when it should accept a talk; the marker
+    must read "wants to talk" for a queued invite and "new message" only for a
+    queued chat message.  Both light ``[TALK]``.
+    """
+
+    def _talk(self, tmp_path: Path) -> TalkState:
+        return TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+
+    def test_queued_invite_reads_as_invite(self, tmp_path: Path) -> None:
+        talk = self._talk(tmp_path)
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def67890",
+                "to_key": "kai:t",
+            }
+        )  # left undrained — still in the queue, not yet in pendingInvites
+
+        desc = _talk_description(talk)
+
+        assert "[TALK]" in desc
+        assert "eric wants to talk" in desc
+        assert "new message" not in desc
+
+    def test_queued_chat_message_reads_as_message(self, tmp_path: Path) -> None:
+        talk = self._talk(tmp_path)
+        talk.receive(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def67890",
+                "body": "hi",
+                "to_key": "kai:t",
+            }
+        )
+
+        desc = _talk_description(talk)
+
+        assert "[TALK]" in desc
+        assert "1 new message" in desc
+        assert "wants to talk" not in desc
+
+
+class TestTalkDescriptionConnectedHint:
+    """The connected ``[TALK]`` hint names the partner's session (DES-043).
+
+    A bare ``talk @user`` reply hint can fail resolution when the partner
+    runs several sessions; the connected hint must carry the partner's tty so
+    it reads as the session-scoped ``talk @user:tty`` the accept path emits.
+    """
+
+    def test_connected_hint_carries_partner_tty(self, tmp_path: Path) -> None:
+        talk = TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+        talk.begin_connected(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+
+        desc = _talk_description(talk)
+
+        assert "talk @jfreeman:tty6" in desc
+        assert "talk @jfreeman <" not in desc
+
+    def test_connected_hint_falls_back_to_bare_without_tty(
+        self, tmp_path: Path
+    ) -> None:
+        talk = TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+        talk.begin_connected(
+            partner="jfreeman", partner_tty="", partner_key="jfreeman:75abc665"
+        )
+
+        desc = _talk_description(talk)
+
+        assert "talk @jfreeman <message>" in desc
+
+
 class TestPollInbox:
     """Verify the background inbox poller detects changes and refreshes."""
 
@@ -299,6 +457,30 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
         assert mtime_after_stable == mtime_after_initial
+
+    async def test_talk_subscription_retries_after_initial_failure(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed first subscribe_talk is retried until it succeeds.
+
+        A NATS outage during server startup makes the first subscribe_talk
+        return None; without a retry the whole talk channel stays silently
+        disabled for the server's lifetime even after NATS recovers.
+        """
+        fake_sub = AsyncMock()
+        calls = 0
+
+        async def flaky_subscribe(state: ServerState) -> object | None:
+            nonlocal calls
+            calls += 1
+            return None if calls == 1 else fake_sub
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", flaky_subscribe)
+        mcp = create_server(state_with_path)
+        await self._run_poller(mcp, state_with_path, cycles=8)
+        assert calls >= 2  # retried past the initial None
+        # Establishing the subscription is proven by its clean teardown on exit.
+        fake_sub.unsubscribe.assert_awaited_once()
 
     async def test_cancellation_is_clean(self, state_with_path: ServerState) -> None:
         """Cancelling the poller task does not raise."""

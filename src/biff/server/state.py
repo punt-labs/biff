@@ -14,6 +14,7 @@ from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay, Relay
 from biff.server.activity import ActivityTracker
 from biff.server.display_queue import DisplayQueue
+from biff.talk_state import TalkState
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
 
 
@@ -54,6 +55,28 @@ class ServerState:
     repo_root: Path | None = None
     org_repos: frozenset[str] = field(default_factory=lambda: frozenset[str]())
     companion: CompanionSession | None = None
+    talk: TalkState = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Compose the shared ephemeral talk state from this server's identity.
+
+        ``TalkState`` is mutable and held by reference inside the frozen
+        state — the same seating ``ActivityTracker`` and ``DisplayQueue``
+        get.  The always-on talk subscription feeds it every frame and the
+        state-returning tool drains it (talk_state.py, DES-020/021).  The
+        display ``tty_name`` is populated after registration via
+        ``TalkState.set_tty_name``.
+        """
+        object.__setattr__(
+            self,
+            "talk",
+            TalkState(
+                relay=self.relay,
+                user=self.config.user,
+                tty=self.tty,
+                session_key=self.session_key,
+            ),
+        )
 
     @property
     def session_key(self) -> str:

@@ -1,928 +1,700 @@
-"""Tests for REPL talk functions (biff.__main__ talk subsystem).
+"""Tests for the REPL talk presentation layer (biff.__main__ formatters).
 
-Coverage for the Z specification docs/talk.tex: handshake detection,
-notification queue draining, accept checking, message publishing,
-rejected partitions, and boundary conditions.  All tests use mock
-queues — no NATS, no network.
-
-Partition numbers reference the TTF partition table generated from
-the Z spec via ``/z-spec:partition``.
+The talk *protocol* state machine lives in ``biff.talk_state`` and is
+covered by ``tests/test_talk_state.py``.  These tests cover the CLI's
+*rendering* of drained notifications — the ANSI banners, the timestamp
+toggle, and terminal-escape neutralisation — which is the REPL front-end's
+responsibility (talk.tex Drain* display side).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
 import re
+import threading
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from biff.__main__ import (
-    MAX_TALK_QUEUE,
-    _AcceptOutcome,
-    _check_for_accept,
-    _consume_pending_invite,
-    _drain_talk_messages,
-    _drain_talk_notifications,
-    _enqueue_talk_notification,
-    _talk_publish,
+    _enter_talk_phase,
+    _format_idle_banners,
+    _format_talk_lines,
+    _handle_repl_talk,
+    _print_talk_banner,
+    _publish_auto_accept,
+    _repl_talk,
+    _run_talk_handshake,
+    _talk_handshake,
+    _withdraw_talk_invite,
 )
-from biff.cli_session import CliContext
-from biff.models import BiffConfig
+from biff.models import UserSession
+from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
+from biff.talk_state import TalkState
+from biff.talk_types import PendingInvite, TalkNotification, TalkPhase
 
+if TYPE_CHECKING:
+    import pytest
 
-def _make_queue(
-    items: list[dict[str, str]],
-) -> asyncio.Queue[dict[str, str]]:
-    """Build an asyncio.Queue pre-loaded with items."""
-    q: asyncio.Queue[dict[str, str]] = asyncio.Queue()
-    for item in items:
-        q.put_nowait(item)
-    return q
+    from biff.relay import Relay
 
-
-def _drain_all(q: asyncio.Queue[dict[str, str]]) -> list[dict[str, str]]:
-    """Drain the queue into a list, preserving FIFO order."""
-    items: list[dict[str, str]] = []
-    while not q.empty():
-        items.append(q.get_nowait())
-    return items
-
-
-MY_KEY = "kai:abc12345"
 OTHER_KEY = "eric:def67890"
 
 
-# -----------------------------------------------------------------------
-# Phase 0: _enqueue_talk_notification — bounded queue, drop-oldest
-# (talk.tex T2 maxQueueLen, T6 ReceiveOverflow; partition P3, biff-vr4)
-# -----------------------------------------------------------------------
+def _notif(
+    ntype: str,
+    nfrom: str = "eric",
+    nfrom_tty: str = "tty2",
+    body: str = "",
+    from_key: str = OTHER_KEY,
+) -> TalkNotification:
+    return TalkNotification(
+        ntype=ntype,
+        nfrom=nfrom,
+        nfrom_tty=nfrom_tty,
+        nfrom_key=from_key,
+        nto="",
+        nbody=body,
+    )
 
 
-class TestEnqueueTalkNotification:
-    """The talk queue is bounded at MAX_TALK_QUEUE with drop-oldest overflow."""
-
-    def test_drops_oldest_when_full(self) -> None:
-        """T6/P3: at maxQueueLen, a new notif drops the oldest, keeps newest."""
-        q = _make_queue([{"seq": str(i)} for i in range(MAX_TALK_QUEUE)])
-        assert q.qsize() == MAX_TALK_QUEUE
-
-        _enqueue_talk_notification(q, {"seq": "new"})
-
-        assert q.qsize() == MAX_TALK_QUEUE  # length stays bounded
-        items = _drain_all(q)
-        assert {"seq": "0"} not in items  # oldest dropped
-        assert items[0] == {"seq": "1"}  # FIFO: new head is seq 1
-        assert items[-1] == {"seq": "new"}  # newest retained at tail
-
-    def test_no_drop_at_exactly_max(self) -> None:
-        """Boundary: filling to exactly maxQueueLen drops nothing."""
-        q = _make_queue([])
-        for i in range(MAX_TALK_QUEUE):
-            _enqueue_talk_notification(q, {"seq": str(i)})
-
-        items = _drain_all(q)
-        assert len(items) == MAX_TALK_QUEUE
-        assert items[0] == {"seq": "0"}  # oldest still present at the bound
-        assert items[-1] == {"seq": str(MAX_TALK_QUEUE - 1)}
-
-    def test_drop_begins_on_the_next_over_max(self) -> None:
-        """Boundary: the (maxQueueLen + 1)th notif is the first to drop."""
-        q = _make_queue([{"seq": str(i)} for i in range(MAX_TALK_QUEUE)])
-
-        _enqueue_talk_notification(q, {"seq": str(MAX_TALK_QUEUE)})
-
-        assert q.qsize() == MAX_TALK_QUEUE
-        items = _drain_all(q)
-        assert items[0] == {"seq": "1"}  # seq 0 dropped
-        assert items[-1] == {"seq": str(MAX_TALK_QUEUE)}  # newest kept
-
-    def test_below_max_appends_without_dropping(self) -> None:
-        """P1: below the bound, enqueue simply appends (no overflow)."""
-        q = _make_queue([{"seq": "0"}])
-
-        _enqueue_talk_notification(q, {"seq": "1"})
-
-        items = _drain_all(q)
-        assert items == [{"seq": "0"}, {"seq": "1"}]
+# ---------------------------------------------------------------------------
+# _format_talk_lines — connected-mode rendering
+# ---------------------------------------------------------------------------
 
 
-# -----------------------------------------------------------------------
-# Phase 1: _drain_talk_messages
-# -----------------------------------------------------------------------
+class TestFormatTalkLines:
+    def test_empty(self) -> None:
+        assert _format_talk_lines([]) == []
 
+    def test_message_conversation_style(self) -> None:
+        lines = _format_talk_lines([_notif("message", body="hello there")])
+        assert len(lines) == 1
+        assert "eric:tty2" in lines[0]
+        assert "hello there" in lines[0]
+        assert "\033[36m" in lines[0]  # cyan
+        assert "📞" not in lines[0]
 
-class TestDrainTalkMessages:
-    def test_empty_queue(self) -> None:
-        q = _make_queue([])
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert lines == []
-        assert ended is False
+    def test_message_without_tty(self) -> None:
+        lines = _format_talk_lines([_notif("message", nfrom_tty="", body="hi")])
+        assert "eric ▶ hi" in lines[0]
 
-    def test_none_queue(self) -> None:
-        lines, ended = _drain_talk_messages(None, MY_KEY)
-        assert lines == []
-        assert ended is False
+    def test_empty_body_message_not_formatted(self) -> None:
+        assert _format_talk_lines([_notif("message", body="")]) == []
 
-    def test_filters_invite_and_accept(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "eric",
-                    "body": "wants to talk",
-                    "from_key": OTHER_KEY,
-                },
-                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert lines == []
-        assert ended is False
-
-    def test_self_echo_suppressed(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "kai",
-                    "from_tty": "tty1",
-                    "body": "hello",
-                    "from_key": MY_KEY,
-                },
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert lines == []
-        assert ended is False
-
-    def test_end_sets_ended(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "end",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert ended is True
+    def test_end_renders_hangup(self) -> None:
+        lines = _format_talk_lines([_notif("end")])
         assert len(lines) == 1
         assert "ended the conversation" in lines[0]
         assert "eric:tty2" in lines[0]
 
-    def _message_queue(self) -> asyncio.Queue[dict[str, str]]:
-        return _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "hello",
-                    "from_key": OTHER_KEY,
-                },
-            ]
+    def test_end_without_tty(self) -> None:
+        lines = _format_talk_lines([_notif("end", nfrom_tty="")])
+        assert "eric has ended" in lines[0]
+
+    def test_multiple_messages(self) -> None:
+        lines = _format_talk_lines(
+            [_notif("message", body="first"), _notif("message", body="second")]
         )
-
-    def test_no_timestamp_without_display(self) -> None:
-        """Default (no display) keeps the historical timestamp-free line."""
-        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY)
-        assert len(lines) == 1
-        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
-        assert "eric:tty2 ▶ hello" in lines[0]
-
-    def test_no_timestamp_when_display_off(self) -> None:
-        """A display with timestamps off renders no stamp."""
-        display = ReplDisplay()
-        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY, display)
-        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
-
-    def test_timestamp_prefix_when_display_on(self) -> None:
-        """A display with timestamps on prefixes the message with [HH:MM]."""
-        display = ReplDisplay()
-        display.set_timestamps(on=True)
-        lines, _ = _drain_talk_messages(self._message_queue(), MY_KEY, display)
-        assert len(lines) == 1
-        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hello", lines[0]) is not None
-
-    def test_escape_injection_in_body_is_neutralized(self) -> None:
-        """A remote body cannot inject terminal escapes into our output."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "clear\x1b[2Jme\x1b]0;pwned\x07",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, _ = _drain_talk_messages(q, MY_KEY)
-        # The dangerous escapes are gone; only our own color codes remain.
-        assert "\x1b[2J" not in lines[0]
-        assert "\x1b]0;" not in lines[0]
-        assert "\x07" not in lines[0]
-        # The printable remainder survives, defanged.
-        assert "clear[2Jme]0;pwned" in lines[0]
-
-    def test_escape_injection_in_sender_is_neutralized(self) -> None:
-        """A remote sender/tty cannot inject terminal escapes either."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "e\x1b[2Jvil",
-                    "from_tty": "tty2",
-                    "body": "hi",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, _ = _drain_talk_messages(q, MY_KEY)
-        assert "\x1b[2J" not in lines[0]
-        assert "e[2Jvil:tty2 ▶ hi" in lines[0]
-
-    def test_message_conversation_style(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "hello there",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert ended is False
-        assert len(lines) == 1
-        assert "eric:tty2" in lines[0]
-        assert "hello there" in lines[0]
-        # Cyan color, no phone emoji
-        assert "\033[36m" in lines[0]
-        assert "📞" not in lines[0]
-
-    def test_message_without_tty(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "body": "hi",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, _ = _drain_talk_messages(q, MY_KEY)
-        assert len(lines) == 1
-        # No colon separator when from_tty is missing
-        assert "eric ▶ hi" in lines[0]
-
-    def test_multiple_messages_all_formatted(self) -> None:
-        """Partition 26: two messages drained, both formatted."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "first",
-                    "from_key": OTHER_KEY,
-                },
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "second",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert ended is False
         assert len(lines) == 2
         assert "first" in lines[0]
         assert "second" in lines[1]
 
-    def test_all_four_types_only_message_and_end_processed(self) -> None:
-        """Partition 4/12: queue with all 4 notification types."""
-        q = _make_queue(
-            [
-                {"type": "invite", "from": "a", "body": "inv", "from_key": "a:1"},
-                {"type": "accept", "from": "b", "from_key": "b:2"},
-                {
-                    "type": "message",
-                    "from": "c",
-                    "from_tty": "tty3",
-                    "body": "msg",
-                    "from_key": "c:3",
-                },
-                {"type": "end", "from": "d", "from_tty": "tty4", "from_key": "d:4"},
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert ended is True
-        assert len(lines) == 2  # message + end, invite/accept skipped
-        assert "msg" in lines[0]
+    def test_mixed_message_and_end(self) -> None:
+        lines = _format_talk_lines([_notif("message", body="bye"), _notif("end")])
+        assert len(lines) == 2
+        assert "bye" in lines[0]
         assert "ended the conversation" in lines[1]
 
-    def test_other_key_not_suppressed(self) -> None:
-        """Partition 20/8: other key messages are NOT suppressed."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "visible",
-                    "from_key": OTHER_KEY,
-                },
-            ]
+    def test_no_timestamp_without_display(self) -> None:
+        lines = _format_talk_lines([_notif("message", body="hi")])
+        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
+
+    def test_no_timestamp_when_display_off(self) -> None:
+        lines = _format_talk_lines([_notif("message", body="hi")], ReplDisplay())
+        assert re.search(r"\[\d{2}:\d{2}\]", lines[0]) is None
+
+    def test_timestamp_prefix_when_display_on(self) -> None:
+        display = ReplDisplay()
+        display.set_timestamps(on=True)
+        lines = _format_talk_lines([_notif("message", body="hello")], display)
+        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hello", lines[0]) is not None
+
+    def test_escape_injection_in_body_neutralized(self) -> None:
+        lines = _format_talk_lines(
+            [_notif("message", body="clear\x1b[2Jme\x1b]0;pwned\x07")]
         )
-        lines, _ = _drain_talk_messages(q, MY_KEY)
-        assert len(lines) == 1
-        assert "visible" in lines[0]
+        assert "\x1b[2J" not in lines[0]
+        assert "\x1b]0;" not in lines[0]
+        assert "\x07" not in lines[0]
+        assert "clear[2Jme]0;pwned" in lines[0]
 
-    def test_end_does_not_set_ended_for_message(self) -> None:
-        """Partition 35: ntMessage does NOT set ended."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "still here",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        _, ended = _drain_talk_messages(q, MY_KEY)
-        assert ended is False
-
-    def test_end_without_tty(self) -> None:
-        """Partition 30: end notification without from_tty."""
-        q = _make_queue(
-            [
-                {"type": "end", "from": "eric", "from_key": OTHER_KEY},
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert ended is True
-        assert "eric" in lines[0]
-        # No colon when tty missing
-        assert "eric has ended" in lines[0]
-
-    def test_empty_body_message_not_formatted(self) -> None:
-        """Partition 47 boundary: message with empty body produces no line."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, _ = _drain_talk_messages(q, MY_KEY)
-        assert lines == []
-
-    def test_mixed_messages_and_end(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "bye",
-                    "from_key": OTHER_KEY,
-                },
-                {
-                    "type": "end",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines, ended = _drain_talk_messages(q, MY_KEY)
-        assert ended is True
-        assert len(lines) == 2
+    def test_escape_injection_in_sender_neutralized(self) -> None:
+        lines = _format_talk_lines([_notif("message", nfrom="e\x1b[2Jvil", body="hi")])
+        assert "\x1b[2J" not in lines[0]
+        assert "e[2Jvil:tty2 ▶ hi" in lines[0]
 
 
-# -----------------------------------------------------------------------
-# Phase 1: _drain_talk_notifications (REPL mode, not talk mode)
-# -----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# _format_idle_banners — idle-mode rendering
+# ---------------------------------------------------------------------------
 
 
-class TestDrainTalkNotifications:
-    def test_records_pending_invites(self) -> None:
-        pending: dict[str, str] = {}
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "eric",
-                    "body": "wants to talk",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines = _drain_talk_notifications(q, MY_KEY, pending)
-        # The inviter's session key is recorded so the accept can target it.
-        assert pending["eric"] == OTHER_KEY
+class TestFormatIdleBanners:
+    def test_empty(self) -> None:
+        assert _format_idle_banners([]) == []
+
+    def test_invite_renders_phone_banner(self) -> None:
+        lines = _format_idle_banners([_notif("invite", body="wants to talk")])
         assert len(lines) == 1
         assert "📞" in lines[0]
+        assert "wants to talk" in lines[0]
 
-    def test_skips_accept(self) -> None:
-        q = _make_queue(
-            [
-                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
-            ]
-        )
-        lines = _drain_talk_notifications(q, MY_KEY)
-        assert lines == []
+    def test_accept_is_silent(self) -> None:
+        assert _format_idle_banners([_notif("accept")]) == []
 
-    def test_self_echo_suppressed(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "kai",
-                    "body": "wants to talk",
-                    "from_key": MY_KEY,
-                },
-            ]
-        )
-        pending: dict[str, str] = {}
-        lines = _drain_talk_notifications(q, MY_KEY, pending)
-        assert lines == []
-        assert pending == {}
-
-    def test_none_queue(self) -> None:
-        lines = _drain_talk_notifications(None, MY_KEY)
-        assert lines == []
-
-    def test_newer_invite_supersedes(self) -> None:
-        """A newer invite from the same user overrides the older session key."""
-        pending: dict[str, str] = {"eric": "eric:oldsess"}
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "eric",
-                    "body": "again",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        _drain_talk_notifications(q, MY_KEY, pending)
-        # Latest invite wins — supersede (DES-043).
-        assert pending == {"eric": OTHER_KEY}
-
-    def test_multiple_invite_senders(self) -> None:
-        """Partition 14: two different invite senders both recorded."""
-        pending: dict[str, str] = {}
-        q = _make_queue(
-            [
-                {"type": "invite", "from": "eric", "body": "hi", "from_key": OTHER_KEY},
-                {
-                    "type": "invite",
-                    "from": "priya",
-                    "body": "hey",
-                    "from_key": "priya:xyz",
-                },
-            ]
-        )
-        _drain_talk_notifications(q, MY_KEY, pending)
-        assert pending == {"eric": OTHER_KEY, "priya": "priya:xyz"}
-
-    def test_no_pending_invites_without_set(self) -> None:
-        """Invites are NOT recorded when pending_invites is None."""
-        q = _make_queue(
-            [
-                {"type": "invite", "from": "eric", "body": "hi", "from_key": OTHER_KEY},
-            ]
-        )
-        lines = _drain_talk_notifications(q, MY_KEY, None)
-        assert len(lines) == 1  # Still displayed
-        # But no set to record into
-
-    def test_end_notification_in_repl_mode(self) -> None:
-        """End notifications outside talk mode display with label."""
-        q = _make_queue(
-            [
-                {
-                    "type": "end",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines = _drain_talk_notifications(q, MY_KEY)
-        # end type has no body, so no line produced
-        assert lines == []
-
-    def test_message_in_repl_mode(self) -> None:
-        """Regular messages outside talk mode show with sender prefix."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "hi there",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines = _drain_talk_notifications(q, MY_KEY)
+    def test_message_shows_sender_prefix(self) -> None:
+        lines = _format_idle_banners([_notif("message", body="hi there")])
         assert len(lines) == 1
         assert "eric:tty2" in lines[0]
         assert "hi there" in lines[0]
 
+    def test_end_without_body_renders_nothing(self) -> None:
+        assert _format_idle_banners([_notif("end")]) == []
+
     def test_banner_stamped_when_display_on(self) -> None:
-        """The idle-prompt message banner honors the timestamps toggle too."""
         display = ReplDisplay()
         display.set_timestamps(on=True)
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "hi there",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines = _drain_talk_notifications(q, MY_KEY, None, display)
-        assert len(lines) == 1
+        lines = _format_idle_banners([_notif("message", body="hi there")], display)
         assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hi there", lines[0]) is not None
 
-    def test_banner_escape_injection_is_neutralized(self) -> None:
-        """The idle-prompt banner also strips remote terminal escapes."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "from_tty": "tty2",
-                    "body": "hi\x1b[2Jthere",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        lines = _drain_talk_notifications(q, MY_KEY)
+    def test_banner_escape_injection_neutralized(self) -> None:
+        lines = _format_idle_banners([_notif("message", body="hi\x1b[2Jthere")])
         assert "\x1b[2J" not in lines[0]
         assert "hi[2Jthere" in lines[0]
 
 
-# -----------------------------------------------------------------------
-# Phase 2: _has_pending_invite
-# -----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# _print_talk_banner — third-party banner during the accept wait
+# ---------------------------------------------------------------------------
 
 
-class TestConsumePendingInvite:
-    def test_found_returns_key(self) -> None:
-        pending = {"eric": OTHER_KEY, "priya": "priya:xyz"}
-        assert _consume_pending_invite(pending, "eric") == OTHER_KEY
+class TestPrintTalkBanner:
+    def test_prints_banner_with_body(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _print_talk_banner(_notif("invite", nfrom="priya", body="wants to talk"))
+        out = capsys.readouterr().out
+        assert "priya" in out
+        assert "wants to talk" in out
+        assert "📞" in out
 
-    def test_not_found_returns_none(self) -> None:
-        pending = {"priya": "priya:xyz"}
-        assert _consume_pending_invite(pending, "eric") is None
-        assert pending == {"priya": "priya:xyz"}  # Unchanged
-
-    def test_consumes_one_shot(self) -> None:
-        pending = {"eric": OTHER_KEY}
-        assert _consume_pending_invite(pending, "eric") == OTHER_KEY
-        assert _consume_pending_invite(pending, "eric") is None
-        assert pending == {}
-
-    def test_empty_map(self) -> None:
-        """Partition 37/31: empty map → initiator path."""
-        pending: dict[str, str] = {}
-        assert _consume_pending_invite(pending, "eric") is None
-
-    def test_consume_one_of_many(self) -> None:
-        """Partition 43/15: consume eric, priya remains."""
-        pending = {"eric": OTHER_KEY, "priya": "priya:xyz"}
-        assert _consume_pending_invite(pending, "eric") == OTHER_KEY
-        assert pending == {"priya": "priya:xyz"}
-
-    def test_empty_key_treated_as_none(self) -> None:
-        """An invite with no session key can't be targeted — treat as absent."""
-        pending = {"eric": ""}
-        assert _consume_pending_invite(pending, "eric") is None
+    def test_no_body_prints_nothing(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _print_talk_banner(_notif("invite", body=""))
+        assert capsys.readouterr().out == ""
 
 
-# -----------------------------------------------------------------------
-# Phase 3: _check_for_accept
-# -----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# _withdraw_talk_invite — best-effort withdraw log level (biff-9la)
+# ---------------------------------------------------------------------------
 
 
-class TestCheckForAccept:
-    # We (MY_KEY) invited OTHER_KEY; a normal accept comes from OTHER_KEY.
-    _TARGET = OTHER_KEY
-    _THIRD_PARTY = "zed:999999"  # not the session we invited
+class TestWithdrawTalkInviteResilience:
+    """The best-effort withdraw failure stays off the WARNING stderr floor.
 
-    def test_found(self) -> None:
-        q = _make_queue(
-            [
-                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.ACCEPTED
+    The CLI raises the stderr handler to WARNING, so a WARNING here would dump
+    a traceback into the interactive REPL; INFO keeps it in biff.log while the
+    local state still resets and the invitee falls back to the TTL sweep.
+    """
 
-    def test_skips_self_echo(self) -> None:
-        q = _make_queue(
-            [
-                {"type": "accept", "from": "kai", "from_key": MY_KEY},
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
-
-    def test_empty_queue(self) -> None:
-        q = _make_queue([])
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
-
-    def test_displays_non_accept_banners(
-        self, capsys: pytest.CaptureFixture[str]
+    async def test_publish_failure_logs_at_info_and_resets(
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "priya",
-                    "body": "wants to talk",
-                    "from_key": "priya:xyz",
-                },
-            ]
-        )
-        result = _check_for_accept(q, MY_KEY, self._TARGET)
-        assert result is _AcceptOutcome.NONE
-        captured = capsys.readouterr()
-        assert "priya" in captured.out
-        assert "wants to talk" in captured.out
-
-    def test_message_not_treated_as_accept(self) -> None:
-        """Partition 24: ntMessage at head → not accept."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "eric",
-                    "body": "hi",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
-
-    def test_end_not_treated_as_accept(self) -> None:
-        """Partition 24: ntEnd at head → not accept."""
-        q = _make_queue(
-            [
-                {"type": "end", "from": "eric", "from_key": OTHER_KEY},
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
-
-    def test_third_party_invite_not_treated_as_accept(self) -> None:
-        """An invite from a session we did not invite is only a banner."""
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "zed",
-                    "body": "talk?",
-                    "from_key": self._THIRD_PARTY,
-                },
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
-
-    def test_third_party_accept_not_treated_as_accept(self) -> None:
-        """An accept from a session we did not invite must be ignored.
-
-        Consent boundary: a third party who publishes a targeted accept
-        (to_key == our session) must not make us believe the invited peer
-        accepted.  Only an accept whose from_key is the invited target counts.
-        """
-        q = _make_queue(
-            [
-                {"type": "accept", "from": "zed", "from_key": self._THIRD_PARTY},
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.NONE
-
-    def test_mutual_invite_higher_key_auto_accepts(self) -> None:
-        """We (higher key) invited them; their invite back → AUTO_ACCEPT."""
-        # MY_KEY 'kai:...' > OTHER_KEY 'eric:...' lexicographically.
-        assert MY_KEY > OTHER_KEY
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "eric",
-                    "body": "talk?",
-                    "from_key": OTHER_KEY,
-                },
-            ]
-        )
-        outcome = _check_for_accept(q, MY_KEY, OTHER_KEY)
-        assert outcome is _AcceptOutcome.AUTO_ACCEPT
-
-    def test_mutual_invite_lower_key_keeps_waiting(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """We (lower key) invited them; their invite back → stay inviting."""
-        # From eric's side: OTHER_KEY < MY_KEY, so eric stays the inviter.
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "kai",
-                    "body": "talk?",
-                    "from_key": MY_KEY,
-                },
-            ]
-        )
-        outcome = _check_for_accept(q, OTHER_KEY, MY_KEY)
-        assert outcome is _AcceptOutcome.NONE
-        # No banner spam for the partner's mutual invite.
-        assert "talk?" not in capsys.readouterr().out
-
-    def test_accept_beats_mutual_invite(self) -> None:
-        """A real accept present alongside a mutual invite wins as ACCEPTED."""
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "eric",
-                    "body": "talk?",
-                    "from_key": OTHER_KEY,
-                },
-                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, OTHER_KEY) is _AcceptOutcome.ACCEPTED
-
-    def test_accept_drains_entire_queue(self) -> None:
-        """Partition 8/20: accept with trailing items, all drained."""
-        q = _make_queue(
-            [
-                {
-                    "type": "message",
-                    "from": "priya",
-                    "body": "hey",
-                    "from_key": "priya:xyz",
-                },
-                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
-                {
-                    "type": "invite",
-                    "from": "bob",
-                    "body": "talk?",
-                    "from_key": "bob:123",
-                },
-            ]
-        )
-        result = _check_for_accept(q, MY_KEY, self._TARGET)
-        assert result is _AcceptOutcome.ACCEPTED
-        assert q.empty()  # All items drained
-
-    def test_accept_among_other_notifications(self) -> None:
-        q = _make_queue(
-            [
-                {
-                    "type": "invite",
-                    "from": "priya",
-                    "body": "hey",
-                    "from_key": "priya:xyz",
-                },
-                {"type": "accept", "from": "eric", "from_key": OTHER_KEY},
-            ]
-        )
-        assert _check_for_accept(q, MY_KEY, self._TARGET) is _AcceptOutcome.ACCEPTED
-
-
-# -----------------------------------------------------------------------
-# Phase 4: _talk_publish
-# -----------------------------------------------------------------------
-
-
-class TestTalkPublish:
-    @pytest.fixture()
-    def mock_nats_ctx(self) -> CliContext:
-        """CliContext with a mock NatsRelay."""
-        from biff.nats_relay import NatsRelay
-
         relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_invite(partner="eric", partner_tty="def", partner_key="eric:def")
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.relay = MagicMock()
+        ctx.relay.get_session = AsyncMock(return_value=None)
+        ctx.session_key = "kai:abc"
+
+        with caplog.at_level(logging.INFO, logger="biff.__main__"):
+            await _withdraw_talk_invite(ctx, "eric", "eric:def")
+
+        assert talk.phase is TalkPhase.IDLE  # local state reset despite the failure
+        records = [r for r in caplog.records if r.name == "biff.__main__"]
+        assert records  # the failure was logged
+        assert all(r.levelno == logging.INFO for r in records)
+
+
+# ---------------------------------------------------------------------------
+# _enter_talk_phase — refuse to clobber a live talk on the initiator path
+# ---------------------------------------------------------------------------
+
+
+class TestEnterTalkPhase:
+    """Setting the handshake phase must never clobber a live talk.
+
+    A ``talk @B`` (no pending invite from B) while CONNECTED to A — or while
+    inviting a third party — must be refused, leaving the live partner intact
+    and sending no frame, rather than overwriting it with a fresh invite.
+    """
+
+    def _ctx(self) -> MagicMock:
+        relay = MagicMock(spec=NatsRelay)
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        ctx = MagicMock()
+        ctx.talk = talk
+        return ctx
+
+    def test_idle_initiator_begins_invite(self) -> None:
+        ctx = self._ctx()
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=None,
+        )
+        assert proceed is True
+        assert ctx.talk.phase is TalkPhase.INVITING
+        assert ctx.talk.partner_key == "eric:def456"
+
+    def test_pending_responder_begins_connected(self) -> None:
+        ctx = self._ctx()
+        pending = PendingInvite(
+            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=pending,
+        )
+        assert proceed is True
+        assert ctx.talk.phase is TalkPhase.CONNECTED
+        assert ctx.talk.partner_key == "eric:def456"
+
+    def test_connected_to_a_initiator_to_b_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._ctx()
+        ctx.talk.begin_connected(
+            partner="alice", partner_tty="tty7", partner_key="alice:aaa111"
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=None,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.CONNECTED  # A not abandoned
+        assert ctx.talk.partner_key == "alice:aaa111"  # still A
+        out = capsys.readouterr().out
+        assert "already in a talk" in out.lower()
+        assert "alice:tty7" in out  # names the live partner
+
+    def test_inviting_b_initiator_to_c_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._ctx()
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="priya",
+            resolve_tty="tty3",
+            target_key="priya:ccc333",
+            pending=None,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.INVITING  # invite to B untouched
+        assert ctx.talk.partner_key == "eric:def456"
+        assert "already in a talk" in capsys.readouterr().out.lower()
+
+    def test_connected_to_a_accept_b_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Accepting B's invite while connected to A blocks, keeps A intact."""
+        ctx = self._ctx()
+        ctx.talk.begin_connected(
+            partner="alice", partner_tty="tty7", partner_key="alice:aaa111"
+        )
+        pending = PendingInvite(
+            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=pending,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.CONNECTED  # A not abandoned
+        assert ctx.talk.partner_key == "alice:aaa111"  # still A
+        out = capsys.readouterr().out
+        assert "already in a talk" in out.lower()
+        assert "alice:tty7" in out  # names the live partner A
+
+    def test_inviting_b_accept_b_completes_mutual(self) -> None:
+        """Accepting B's invite while INVITING B (glare) connects, not refuses."""
+        ctx = self._ctx()
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        pending = PendingInvite(
+            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=pending,
+        )
+        assert proceed is True  # same partner → completes the handshake
+        assert ctx.talk.phase is TalkPhase.CONNECTED
+        assert ctx.talk.partner_key == "eric:def456"
+
+    def test_inviting_b_accept_c_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Accepting C's invite while INVITING B blocks, keeps the B invite."""
+        ctx = self._ctx()
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        pending = PendingInvite(
+            user="priya", session_key="priya:ccc333", tty="tty3", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="priya",
+            resolve_tty="tty3",
+            target_key="priya:ccc333",
+            pending=pending,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.INVITING  # invite to B untouched
+        assert ctx.talk.partner_key == "eric:def456"
+        assert "already in a talk" in capsys.readouterr().out.lower()
+
+
+# ---------------------------------------------------------------------------
+# _run_talk_handshake — invite/accept publish rollback (biff-9la, H)
+# ---------------------------------------------------------------------------
+
+
+class TestRunTalkHandshakeRollback:
+    """A transient invite publish must not strand the REPL session.
+
+    The plan is set and the phase advanced *before* the handshake publishes; a
+    failed ``send_invite`` rolls both back so the session is not left INVITING
+    with a phantom ``talking to …`` plan and no peer.
+    """
+
+    async def test_invite_publish_failure_rolls_back_phase_and_plan(self) -> None:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        session = UserSession(
+            user="kai", tty="kaihex01", tty_name="tty1", plan="idle", repo="myrepo"
+        )
+        relay.get_session = AsyncMock(return_value=session)
+        relay.update_session = AsyncMock()
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        talk.begin_invite(partner="eric", partner_tty="tty2", partner_key="eric:def456")
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.relay = relay
+        ctx.session_key = "kai:kaihex01"
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+
+        proceed = await _run_talk_handshake(
+            ctx,
+            "eric",
+            "eric:def456",
+            "eric:tty2",
+            ["@eric:tty2"],
+            False,  # not responding — this is an outgoing invite
+            asyncio.Queue(),
+            asyncio.Event(),
+            threading.Event(),
+            target_repo=None,
+        )
+
+        assert proceed is False
+        assert talk.phase is TalkPhase.IDLE  # phase rolled back, not stuck INVITING
+        restored = relay.update_session.await_args_list[-1].args[0]
+        assert restored.plan == "idle"  # plan restored to its prior value
+
+
+# ---------------------------------------------------------------------------
+# _repl_talk — connected-loop send resilience (F1)
+# ---------------------------------------------------------------------------
+
+
+class TestReplTalkSendResilience:
+    """A wedged relay during a connected send must not crash the REPL.
+
+    The server twin catches the publish trio and returns a "try again" line
+    with the connection intact.  The REPL connected loop must do the same: a
+    ``send_message`` that raises prints a notice and keeps the loop alive; a
+    ``send_end`` that raises still returns to idle.  Left unguarded the error
+    escapes ``asyncio.run``, dumps a traceback, and exits the process — losing
+    the typed line.
+    """
+
+    @staticmethod
+    def _connected_ctx() -> MagicMock:
+        relay = MagicMock(spec=NatsRelay)
+        # Every publish path (send_message/send_end) routes through get_nc.
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        relay.talk_notify_subject = MagicMock(return_value="biff.t.talk.notify.eric")
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        talk.begin_connected(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+        ctx.session_key = "kai:kaihex01"
+        ctx.relay = MagicMock()
+        ctx.relay.get_session = AsyncMock(return_value=None)
+        return ctx
+
+    async def _run(self, ctx: MagicMock, lines: list[str]) -> None:
+        aqueue: asyncio.Queue[str | None] = asyncio.Queue()
+        for line in lines:
+            aqueue.put_nowait(line)
+        await asyncio.wait_for(
+            _repl_talk(
+                ctx,
+                "eric",
+                "eric:tty2",
+                aqueue,
+                asyncio.Event(),
+                threading.Event(),
+                [""],
+                "kai> ",
+                ReplDisplay(),
+                to_key="eric:def456",
+                target_repo=None,
+            ),
+            timeout=5.0,
+        )
+
+    async def test_send_message_failure_keeps_loop_alive(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._connected_ctx()
+        # "hello" fails to publish; the loop must survive and process "end".
+        await self._run(ctx, ["hello", "end"])
+        out = capsys.readouterr().out
+        assert "not sent" in out.lower()  # the failure surfaced as a notice
+        assert ctx.talk.phase is TalkPhase.IDLE  # loop exited cleanly on end
+
+    async def test_send_end_failure_still_returns_to_idle(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._connected_ctx()
+        # A wedged relay on the very hangup must still break to idle, no crash.
+        await self._run(ctx, ["end"])
+        assert ctx.talk.phase is TalkPhase.IDLE
+        assert "not sent" in capsys.readouterr().out.lower()
+
+
+# ---------------------------------------------------------------------------
+# _handle_repl_talk — responder accept-failure restores the invite (CR-2)
+# ---------------------------------------------------------------------------
+
+
+class TestReplAcceptRestoresPendingInvite:
+    """A responder whose accept publish fails keeps the invite acceptable.
+
+    The REPL twin of the MCP ``_accept_invite`` restore: consuming the invite
+    before the accept and not restoring it would leave a retry sending a fresh
+    outbound invite instead of re-accepting.
+    """
+
+    @staticmethod
+    def _invite_frame(to_key: str) -> dict[str, str]:
+        return {
+            "type": "invite",
+            "from": "jfreeman",
+            "from_tty": "tty6",
+            "from_key": "jfreeman:75abc665",
+            "body": "wants to talk",
+            "to_key": to_key,
+        }
+
+    async def test_accept_publish_failure_restores_invite(self) -> None:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        relay.talk_notify_subject = MagicMock(return_value="biff.t.talk.notify.jf")
+        relay.get_sessions_for_repos = AsyncMock(
+            return_value=[
+                UserSession(
+                    user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo"
+                )
+            ]
+        )
+        relay.get_session = AsyncMock(return_value=None)
+        relay.update_session = AsyncMock()
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        talk.receive(self._invite_frame("kai:kaihex01"))
+        talk.drain_idle()  # record the pending invite
+        assert "jfreeman" in talk.pending_invites
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.relay = relay
+        ctx.session_key = "kai:kaihex01"
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+        ctx.config.repo_name = "myrepo"
+        ctx.visible_repos = frozenset({"myrepo"})
+
+        await _handle_repl_talk(
+            ctx,
+            ["@jfreeman"],
+            asyncio.Queue(),
+            asyncio.Event(),
+            threading.Event(),
+            [""],
+            "kai> ",
+            ReplDisplay(),
+        )
+
+        assert talk.phase is TalkPhase.IDLE  # not stranded CONNECTED
+        assert "jfreeman" in talk.pending_invites  # restored for a retry
+
+
+# ---------------------------------------------------------------------------
+# _publish_auto_accept / mutual-glare auto-accept publish (F2)
+# ---------------------------------------------------------------------------
+
+
+class TestPublishAutoAccept:
+    """The higher-key auto-accept must actually reach the partner (F2).
+
+    The lower-key side connects ONLY on receiving this accept (talk.tex
+    MutualAutoAccept — no symmetric fallback), so a dropped accept strands it.
+    The publish retries once, and the handshake warns the user when both fail.
+    """
+
+    @staticmethod
+    def _talk(*, get_nc: AsyncMock) -> TalkState:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = get_nc
+        relay.talk_notify_subject = MagicMock(return_value="biff.t.talk.notify.eric")
+        return TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+
+    async def test_retries_once_then_gives_up_on_persistent_failure(self) -> None:
+        get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        talk = self._talk(get_nc=get_nc)
+        ctx = MagicMock()
+        ctx.talk = talk
+
+        ok = await _publish_auto_accept(ctx, "eric", "eric:def456", target_repo=None)
+
+        assert ok is False
+        assert get_nc.await_count == 2  # published once, retried once
+
+    async def test_succeeds_without_retry_when_publish_works(self) -> None:
+        get_nc = AsyncMock(return_value=AsyncMock())
+        talk = self._talk(get_nc=get_nc)
+        ctx = MagicMock()
+        ctx.talk = talk
+
+        ok = await _publish_auto_accept(ctx, "eric", "eric:def456", target_repo=None)
+
+        assert ok is True
+        assert get_nc.await_count == 1  # no retry on success
+
+    async def test_handshake_warns_when_auto_accept_never_reaches_partner(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # send_invite succeeds (get_nc call 1), both accept attempts fail (2, 3).
         nc = AsyncMock()
-        relay.get_nc = AsyncMock(return_value=nc)
-        relay.talk_notify_subject = MagicMock(return_value="biff.test.talk.notify.eric")
-        return CliContext(
-            relay=relay,
-            config=BiffConfig(user="kai", repo_name="test"),
-            session_key="kai:abc12345",
-            user="kai",
-            tty="abc12345",
-            tty_name="tty1",
+        get_nc = AsyncMock(
+            side_effect=[nc, TimeoutError("wedged"), TimeoutError("wedged")]
+        )
+        talk = self._talk(get_nc=get_nc)
+        # We are the higher key ('kai' > 'eric') — the auto-accepting side.
+        talk.begin_invite(partner="eric", partner_tty="tty2", partner_key="eric:def456")
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "talk?",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+        notify = asyncio.Event()
+        notify.set()  # wake the accept poll immediately
+
+        proceed = await _talk_handshake(
+            ctx,
+            "eric",
+            "eric:def456",
+            "eric:tty2",
+            ["@eric"],
+            False,  # initiating — glare completes via MutualAutoAccept
+            asyncio.Queue(),
+            notify,
+            threading.Event(),
+            target_repo=None,
         )
 
-    async def _get_published(  # pyright: ignore[reportUnknownParameterType]
-        self, ctx: CliContext
-    ) -> tuple[str, dict[str, str]]:
-        """Extract published subject and payload from the mock nc."""
-        nc = await ctx.relay.get_nc()  # type: ignore[attr-defined]  # pyright: ignore[reportUnknownMemberType]
-        nc.publish.assert_awaited_once()  # pyright: ignore[reportUnknownMemberType]
-        pos = nc.publish.call_args[0]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        subject: str = str(pos[0])  # pyright: ignore[reportUnknownArgumentType]
-        payload: dict[str, str] = json.loads(pos[1])  # pyright: ignore[reportUnknownArgumentType]
-        return subject, payload
-
-    @pytest.mark.anyio()
-    async def test_publish_message(self, mock_nats_ctx: CliContext) -> None:
-        await _talk_publish(
-            mock_nats_ctx, "eric", "message", "hello", to_key="eric:def67890"
-        )
-        subject, payload = await self._get_published(mock_nats_ctx)
-        assert subject == "biff.test.talk.notify.eric"
-        assert payload["type"] == "message"
-        assert payload["from"] == "kai"
-        assert payload["from_tty"] == "tty1"
-        assert payload["body"] == "hello"
-        assert payload["from_key"] == "kai:abc12345"
-        # Session-scoped: to_key routes the notification to one session.
-        assert payload["to_key"] == "eric:def67890"
-
-    @pytest.mark.anyio()
-    async def test_publish_end(self, mock_nats_ctx: CliContext) -> None:
-        await _talk_publish(mock_nats_ctx, "eric", "end", to_key="eric:def67890")
-        _, payload = await self._get_published(mock_nats_ctx)
-        assert payload["type"] == "end"
-        assert payload["body"] == ""
-        assert payload["to_key"] == "eric:def67890"
-
-    @pytest.mark.anyio()
-    async def test_publish_body_passthrough(self, mock_nats_ctx: CliContext) -> None:
-        long_body = "x" * 1000
-        await _talk_publish(
-            mock_nats_ctx, "eric", "message", long_body, to_key="eric:def67890"
-        )
-        _, payload = await self._get_published(mock_nats_ctx)
-        # _talk_publish sends the body as-is; truncation is the caller's job
-        # (line[:512] in _repl_talk). Verify the body passes through.
-        assert payload["body"] == long_body
-
-    @pytest.mark.anyio()
-    async def test_publish_empty_body(self, mock_nats_ctx: CliContext) -> None:
-        """Partition 47: empty body is valid."""
-        await _talk_publish(
-            mock_nats_ctx, "eric", "message", "", to_key="eric:def67890"
-        )
-        _, payload = await self._get_published(mock_nats_ctx)
-        assert payload["body"] == ""
-
-    @pytest.mark.anyio()
-    async def test_publish_invite(self, mock_nats_ctx: CliContext) -> None:
-        """Partition: invite type published correctly."""
-        await _talk_publish(
-            mock_nats_ctx, "eric", "invite", "wants to talk", to_key="eric:def67890"
-        )
-        _, payload = await self._get_published(mock_nats_ctx)
-        assert payload["type"] == "invite"
-        assert payload["body"] == "wants to talk"
-        assert payload["to_key"] == "eric:def67890"
-
-    @pytest.mark.anyio()
-    async def test_publish_accept(self, mock_nats_ctx: CliContext) -> None:
-        """Partition: accept type published correctly."""
-        await _talk_publish(mock_nats_ctx, "eric", "accept", to_key="eric:def67890")
-        _, payload = await self._get_published(mock_nats_ctx)
-        assert payload["type"] == "accept"
-        assert payload["to_key"] == "eric:def67890"
-
-    @pytest.mark.anyio()
-    async def test_non_nats_relay_noop(self) -> None:
-        from biff.relay import LocalRelay
-
-        relay = MagicMock(spec=LocalRelay)
-        ctx = CliContext(
-            relay=relay,
-            config=BiffConfig(user="kai", repo_name="test"),
-            session_key="kai:abc12345",
-            user="kai",
-            tty="abc12345",
-            tty_name="tty1",
-        )
-        # Should not raise, should do nothing.
-        await _talk_publish(ctx, "eric", "message", "hello", to_key="eric:def67890")
+        out = capsys.readouterr().out.lower()
+        assert proceed is True  # we are connected locally; proceed to the loop
+        assert "may not have" in out  # user warned the partner might be stranded
+        assert get_nc.await_count == 3  # invite + two accept attempts (retry)

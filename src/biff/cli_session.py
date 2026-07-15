@@ -21,13 +21,14 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from biff.config import load_cli_config
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
+from biff.talk_state import TalkState
 from biff.tty import (
     build_session_key,
     claim_tty_name,
@@ -50,6 +51,27 @@ class CliContext:
     tty: str
     tty_name: str = ""
     org_repos: frozenset[str] = frozenset()
+    talk: TalkState = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Compose the shared ephemeral talk state from this session's identity.
+
+        ``TalkState`` is mutable and held by reference inside the frozen
+        context — the same seating ``ServerState`` gives its
+        ``ActivityTracker``.  Both front-ends feed it every talk
+        notification and drain it in their own idiom (talk_state.py).
+        """
+        object.__setattr__(
+            self,
+            "talk",
+            TalkState(
+                relay=self.relay,
+                user=self.user,
+                tty=self.tty,
+                session_key=self.session_key,
+                tty_name=self.tty_name,
+            ),
+        )
 
     @property
     def visible_repos(self) -> frozenset[str]:
@@ -74,7 +96,12 @@ async def _heartbeat_loop(
         except asyncio.CancelledError:
             return
         except Exception:  # noqa: BLE001
-            logger.warning("CLI heartbeat failed", exc_info=True)
+            # INFO, not WARNING: a transient NATS timeout auto-recovers on the
+            # next tick and must NOT dump a traceback into the interactive REPL.
+            # The stderr handler floors at WARNING, so INFO stays off the
+            # terminal while the file handler (INFO) keeps the full traceback
+            # for diagnosis.
+            logger.info("CLI heartbeat failed (transient); retrying", exc_info=True)
 
 
 async def _cli_session_cleanup(

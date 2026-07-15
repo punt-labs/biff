@@ -213,18 +213,29 @@ class _ConnectionHealth:
             )
 
     def record_provision_timeout(self, seconds: float) -> None:
-        """Log a WARNING when JetStream/KV provisioning exceeds its bound."""
-        logger.warning(
+        """Log an INFO when JetStream/KV provisioning exceeds its bound.
+
+        INFO, not WARNING: provisioning timeout tears the connection down and
+        the next call reconnects — a transient, self-recovering event.  At
+        WARNING it would clear the CLI's stderr floor and print into the
+        interactive REPL; at INFO it reaches biff.log only (biff-9la).
+        """
+        logger.info(
             "NATS provisioning timed out after %.0fs at %s — tearing down connection",
             seconds,
             self._host,
         )
 
     def record_disconnected(self) -> None:
-        """Log a WARNING with connection lifetime — the frequency signal.
+        """Log an INFO with connection lifetime — the frequency signal.
 
         Short lifetimes recurring in the log mean the connection keeps
         flapping; a long lifetime before a disconnect is a one-off outage.
+
+        INFO, not WARNING: a disconnect is a transient, auto-recovering event
+        (nats-py reconnects) — it must stay off the CLI's WARNING stderr floor
+        and reach biff.log only, or it prints into the interactive REPL
+        (biff-9la).
 
         Clears the wedge counter and force-reconnect latch: once nats-py's
         keepalive has declared the socket down, it owns recovery, so the
@@ -236,13 +247,13 @@ class _ConnectionHealth:
         self._disconnected_at = time.monotonic()
         if self._connected_at is not None:
             uptime = self._disconnected_at - self._connected_at
-            logger.warning(
+            logger.info(
                 "Disconnected from NATS at %s after %.0fs connected",
                 self._host,
                 uptime,
             )
         else:
-            logger.warning("Disconnected from NATS at %s", self._host)
+            logger.info("Disconnected from NATS at %s", self._host)
         self._connected_at = None
 
     def record_reconnected(self) -> None:
@@ -266,7 +277,12 @@ class _ConnectionHealth:
         self._force_reconnect_fired = False
 
     def record_closed(self) -> None:
-        """Log a WARNING when the connection closes for good.
+        """Log an INFO when the connection closes for good.
+
+        INFO, not WARNING: a close fires on intentional teardown (CLI exit,
+        disconnect) and on nats-py giving up mid-reconnect — background
+        lifecycle events that must not clear the CLI's WARNING stderr floor and
+        print into the interactive REPL; biff.log keeps them (biff-9la).
 
         Clears the wedge counter and force-reconnect latch: a close is a
         lifecycle reset point like connect/disconnect/reconnect, so the latch
@@ -274,7 +290,7 @@ class _ConnectionHealth:
         the next connect resets too, but the latch's safety should not depend
         on a different callback nulling the handles).
         """
-        logger.warning("NATS connection closed at %s", self._host)
+        logger.info("NATS connection closed at %s", self._host)
         self._connected_at = None
         self._timeout_count = 0
         self._wedge_onset_at = None
@@ -315,11 +331,16 @@ class _ConnectionHealth:
         return True
 
     def record_timeout(self, operation: str, *, is_connected: bool) -> None:
-        """Record a runtime JS/KV timeout, logging the onset WARNING once.
+        """Record a runtime JS/KV timeout, logging the onset once at INFO.
 
         The first timeout after a healthy period is the wedge onset — it
         describes the connection state and staleness in prose so the log is
         self-explaining.  Repeats are counted silently to avoid loop-spam.
+
+        INFO, not WARNING: a half-open timeout self-recovers (keepalive or the
+        proactive teardown reconnects), so it must stay off the CLI's WARNING
+        stderr floor and reach biff.log only — otherwise the onset prints into
+        the interactive REPL (biff-9la).
 
         The wording tracks the actual state: a still-connected socket that
         stops answering is half-open; a socket that is mid-reconnect is
@@ -334,7 +355,7 @@ class _ConnectionHealth:
                 )
             else:
                 state = "connection is not responding — socket is reconnecting"
-            logger.warning(
+            logger.info(
                 "NATS request timed out (%s); %s, last successful request %s ago",
                 operation,
                 state,
@@ -590,9 +611,17 @@ class NatsRelay:
                 "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(exc)
             )
             if not ssl_teardown:
-                # Log repr: nats-py raises message-less errors during outages
-                # that logged as "" and hid the cause (biff-wr3).
-                logger.error("NATS error: %r", exc)
+                # INFO, not ERROR: these callback errors (TimeoutError, SSL
+                # shutdown timed out, Disconnected) are transient, background
+                # events that nats-py auto-recovers from — the connection
+                # self-heals without a restart.  At ERROR they cleared the
+                # CLI's WARNING stderr floor and dumped a traceback into the
+                # interactive REPL (biff-9la); at INFO they reach biff.log
+                # only.  exc_info keeps the full traceback for diagnosis; %r
+                # keeps the cause visible for message-less errors (biff-wr3).
+                logger.info(
+                    "NATS error (transient, auto-recovering): %r", exc, exc_info=exc
+                )
 
         return {
             "disconnected_cb": _on_disconnect,
@@ -744,7 +773,10 @@ class NatsRelay:
             self._wtmp_available = True
         except BadRequestError as exc:
             if "maximum number of streams" in str(exc):
-                logger.warning("Wtmp stream unavailable: %s", exc)
+                # INFO: wtmp degrades gracefully (session history disabled),
+                # core messaging is unaffected — a background provisioning
+                # event that must stay off the CLI terminal (biff-9la).
+                logger.info("Wtmp stream unavailable: %s", exc)
                 self._wtmp_available = False
             else:
                 # Shared stream config differs — use as-is.
@@ -754,7 +786,10 @@ class NatsRelay:
                 )
                 self._wtmp_available = True
         except Exception:  # noqa: BLE001 — provisioning must never crash startup
-            logger.warning("Wtmp stream provisioning failed", exc_info=True)
+            # INFO: degrades gracefully; a background connect/reconnect event
+            # that must not print into the interactive REPL (biff-9la).  The
+            # traceback stays in biff.log for diagnosis.
+            logger.info("Wtmp stream provisioning failed", exc_info=True)
             self._wtmp_available = False
 
     async def _cleanup_legacy_streams(self, js: JetStreamContext) -> None:
@@ -782,7 +817,10 @@ class NatsRelay:
                     self._repo_name,
                 )
         except Exception:  # noqa: BLE001 — best-effort cleanup must never crash startup
-            logger.warning("Legacy stream cleanup failed", exc_info=True)
+            # INFO: best-effort background cleanup on connect/reconnect; a
+            # failure is non-fatal and must not print into the interactive
+            # REPL (biff-9la).  The traceback stays in biff.log.
+            logger.info("Legacy stream cleanup failed", exc_info=True)
 
     @property
     def wtmp_available(self) -> bool:
@@ -1287,7 +1325,10 @@ class NatsRelay:
         except (KeyNotFoundError, BucketNotFoundError):
             return  # Session not found — nothing to heartbeat
         except (ValidationError, ValueError):
-            logger.warning("Corrupt session for %s, skip heartbeat", session_key)
+            # INFO: heartbeat runs in the background loop; a skipped tick is
+            # harmless (3-day TTL) and must not print into the interactive
+            # REPL (biff-9la).  biff.log records the anomaly.
+            logger.info("Corrupt session for %s, skip heartbeat", session_key)
             return
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
         # Re-anchor to the current connection: the kv.get above may have let a
@@ -1306,7 +1347,10 @@ class NatsRelay:
                     existing.user, existing.tty_name, session_key
                 )
             except Exception:  # noqa: BLE001
-                logger.warning("Failed to refresh TTY name reservation", exc_info=True)
+                # INFO: reservation refresh runs inside the background
+                # heartbeat; a transient failure retries next tick and must
+                # not print into the interactive REPL (biff-9la).
+                logger.info("Failed to refresh TTY name reservation", exc_info=True)
 
     async def get_sessions(self) -> list[UserSession]:
         """Return all sessions for this repo (NATS KV TTL handles expiry).
@@ -1351,7 +1395,11 @@ class NatsRelay:
         except NotFoundError:
             return frozenset()
         except Exception:  # noqa: BLE001
-            logger.warning("Org discovery failed for %s", org, exc_info=True)
+            # INFO: org discovery runs at session startup and is best-effort
+            # (returns empty on any transient failure) — it must not print a
+            # traceback into the interactive REPL (biff-9la).  biff.log keeps
+            # the full detail.
+            logger.info("Org discovery failed for %s", org, exc_info=True)
             return frozenset()
 
     async def _discover_repos_for_org_inner(self, org: str) -> frozenset[str]:
@@ -1392,7 +1440,10 @@ class NatsRelay:
         except NotFoundError:
             return []
         except Exception:  # noqa: BLE001
-            logger.warning("Failed to query sessions for repo %s", repo, exc_info=True)
+            # INFO: a transient peer-repo query failure returns [] and
+            # self-recovers on the next call — it must not print a traceback
+            # into the interactive REPL (biff-9la).  biff.log keeps the detail.
+            logger.info("Failed to query sessions for repo %s", repo, exc_info=True)
             return []
 
     async def _get_sessions_for_repo_inner(self, repo: str) -> list[UserSession]:
@@ -1445,7 +1496,10 @@ class NatsRelay:
         except NotFoundError:
             pass  # Already deleted by fetch() — expected.
         except (TimeoutError, NatsError) as exc:
-            logger.warning(
+            # INFO: the consumer auto-expires (inactive_threshold), so this
+            # teardown-path failure is self-healing and must not print into
+            # the interactive REPL (biff-9la).
+            logger.info(
                 "Consumer cleanup failed for %s (will auto-expire): %s",
                 session_key,
                 exc,
@@ -1489,16 +1543,21 @@ class NatsRelay:
         Uses compare-and-set to avoid overwriting a reservation
         legitimately claimed by another session after TTL lapse.
         """
+        # INFO throughout: refresh runs inside the background heartbeat loop,
+        # and every branch here is a benign, self-recovering reservation race
+        # (TTL lapse, another session took the name, concurrent update).  At
+        # WARNING these would clear the CLI's stderr floor and print into the
+        # interactive REPL (biff-9la); at INFO biff.log keeps the detail.
         self._validate_user(user)
         names_kv = await self._ensure_names_kv()
         key = f"{user}.{name}"
         try:
             entry = await names_kv.get(key)
         except (KeyNotFoundError, BucketNotFoundError):
-            logger.warning("TTY reservation %s gone, cannot refresh", key)
+            logger.info("TTY reservation %s gone, cannot refresh", key)
             return
         if entry.value is None or entry.value.decode() != session_key:
-            logger.warning(
+            logger.info(
                 "TTY reservation %s owned by another session, skipping refresh",
                 key,
             )
@@ -1506,7 +1565,7 @@ class NatsRelay:
         try:
             await names_kv.update(key, session_key.encode(), last=entry.revision)
         except KeyWrongLastSequenceError:
-            logger.warning(
+            logger.info(
                 "TTY reservation %s changed concurrently, skipping refresh", key
             )
 
