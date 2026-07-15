@@ -629,9 +629,9 @@ class TestAgentAutoAcceptPublish:
 
         nc.publish.assert_not_awaited()
 
-    async def test_publish_failure_is_swallowed(self) -> None:
-        state, _ = self._state()
-        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+    @staticmethod
+    def _glare_drain(state: MagicMock) -> AgentDrain:
+        """Drive a mutual glare and return the drain that owes an accept."""
         state.talk.begin_invite(
             partner="eric", partner_tty="tty2", partner_key="eric:def456"
         )
@@ -645,11 +645,39 @@ class TestAgentAutoAcceptPublish:
                 "to_key": "kai:kaihex01",
             }
         )
-        drain = state.talk.drain_for_agent()
+        return cast("AgentDrain", state.talk.drain_for_agent())
 
-        # Best-effort: a wedged relay must not raise out of talk_read.
-        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+    async def test_publish_retries_once_then_warns_on_failure(self) -> None:
+        state, _ = self._state()
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        drain = self._glare_drain(state)
+
+        # Best-effort: a wedged relay must not raise out of talk_read, but the
+        # persistent failure is reported so the agent (which cannot see the log)
+        # learns the partner may not have connected.
+        published = await talk_mod._publish_agent_auto_accept(
+            cast("ServerState", state), drain
+        )
+        assert published is False
+        assert state.relay.get_nc.await_count == 2  # retried once
         assert state.talk.phase is TalkPhase.CONNECTED  # still locally connected
+
+        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        assert "eric:tty2" in output
+        assert "may not have connected" in output
+
+    async def test_publish_success_needs_no_retry_and_no_warning(self) -> None:
+        state, nc = self._state()
+        drain = self._glare_drain(state)
+
+        published = await talk_mod._publish_agent_auto_accept(
+            cast("ServerState", state), drain
+        )
+        assert published is True
+        nc.publish.assert_awaited_once()  # one attempt, no retry
+
+        output = talk_mod._agent_drain_output(drain, accept_published=published)
+        assert "may not have connected" not in output
 
 
 class TestDoTalkNoClobber:

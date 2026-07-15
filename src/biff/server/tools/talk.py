@@ -298,27 +298,61 @@ async def _send_or_invite(
     return f"Invite sent to {display}. When they accept, talk_read shows replies."
 
 
-async def _publish_agent_auto_accept(state: ServerState, drain: AgentDrain) -> None:
-    """Publish the accept a higher-key mutual-glare auto-accept owes the partner.
+async def _publish_agent_auto_accept(state: ServerState, drain: AgentDrain) -> bool:
+    """Publish the accept a higher-key mutual-glare auto-accept owes; retry once.
 
     ``drain_for_agent`` transitions the higher-key side to CONNECTED on a mutual
     glare but cannot publish (it is pure state), so the caller must emit the
     accept frame here: the lower-key partner connects ONLY on receiving it
-    (talk.tex ``MutualAutoAccept`` — no symmetric fallback), so skipping it
-    strands the partner and silently drops our messages there.  Best-effort like
-    every talk publish; on failure the partner falls back to the TTL sweep.
+    (talk.tex ``MutualAutoAccept`` — no symmetric fallback), so a dropped accept
+    strands the partner and silently drops our messages there.  Retry once before
+    giving up, mirroring the human path (``__main__._publish_auto_accept``).
+
+    Returns whether the accept was published.  ``True`` when there was no glare to
+    publish; ``False`` only after both attempts fail — the caller surfaces that to
+    the agent, which cannot see ``biff.log`` (biff-9la: talk is never silently
+    dropped).
     """
     notif = drain.auto_accept
     if notif is None:
-        return
-    try:
-        await state.talk.send_accept(target_user=notif.nfrom, to_key=notif.nfrom_key)
-    except (NatsError, TimeoutError, OSError):
-        logger.info(
-            "agent auto-accept to %s failed; partner may not have connected",
-            notif.nfrom,
-            exc_info=True,
-        )
+        return True
+    for attempt in (1, 2):
+        try:
+            await state.talk.send_accept(
+                target_user=notif.nfrom, to_key=notif.nfrom_key
+            )
+        except (NatsError, TimeoutError, OSError):
+            logger.info(
+                "agent auto-accept to %s failed (attempt %d/2)",
+                notif.nfrom,
+                attempt,
+                exc_info=True,
+            )
+        else:
+            return True
+    return False
+
+
+def _agent_drain_output(drain: AgentDrain, *, accept_published: bool) -> str:
+    """Render the agent drain, appending a warning if the accept never went out.
+
+    On a mutual-glare auto-accept the drain connects us but shows nothing about
+    the consumed invite, so a failed accept publish would otherwise leave the
+    agent believing it is connected while the partner strands.  Surface the
+    failure in the returned text — the only channel the agent operator can see.
+    """
+    text = format_agent_drain(drain) or _NO_MESSAGES
+    if accept_published:
+        return text
+    notif = drain.auto_accept
+    partner = notif.nfrom if notif is not None else "the partner"
+    if notif is not None and notif.nfrom_tty:
+        partner = f"{notif.nfrom}:{notif.nfrom_tty}"
+    warning = (
+        f"⚠ Couldn't confirm {terminal_safe(partner)} joined the talk — they may "
+        "not have connected; send a message or talk_end and retry."
+    )
+    return f"{text}\n{warning}"
 
 
 async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
@@ -404,9 +438,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "Talk requires a NATS relay connection."
         await update_current_session(state)
         drain = state.talk.drain_for_agent()
-        await _publish_agent_auto_accept(state, drain)
+        published = await _publish_agent_auto_accept(state, drain)
         await refresh_talk(mcp, state)
-        return format_agent_drain(drain) or _NO_MESSAGES
+        return _agent_drain_output(drain, accept_published=published)
 
     @mcp.tool(
         name="talk_listen",
@@ -430,9 +464,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         while not state.talk.has_pending_traffic and loop.time() < deadline:
             await asyncio.sleep(0.25)
         drain = state.talk.drain_for_agent()
-        await _publish_agent_auto_accept(state, drain)
+        published = await _publish_agent_auto_accept(state, drain)
         await refresh_talk(mcp, state)
-        return format_agent_drain(drain) or _NO_MESSAGES
+        return _agent_drain_output(drain, accept_published=published)
 
     @mcp.tool(name="talk_end", description="End the current talk session.")
     @auto_enable(state)
