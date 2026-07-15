@@ -343,6 +343,46 @@ def _render_connected_drain(
     return False
 
 
+async def _send_connected_line(
+    ctx: CliContext,
+    line: str,
+    target_user: str,
+    display: str,
+    *,
+    to_key: str,
+    target_repo: str | None,
+) -> bool:
+    """Publish a typed talk line; return ``True`` when the loop should break.
+
+    ``end`` hangs up and breaks; any other non-empty line sends a message and
+    continues; an empty line is a no-op.  Both publishes are best-effort: a
+    wedged or reconnecting relay must never crash the REPL out of ``asyncio.run``
+    with a lost line, so a failed publish prints a notice and the loop survives
+    (the ``end`` case still breaks to idle; the ``finally`` in ``_repl_talk``
+    resets, and the peer clears via the TTL sweep).  This mirrors the server
+    twin, which catches the same trio and returns "try again" intact.
+    """
+    if line.lower() == "end":
+        try:
+            await ctx.talk.send_end(
+                target_user=target_user, to_key=to_key, target_repo=target_repo
+            )
+        except (NatsError, TimeoutError, OSError):
+            print(f"\r\033[KCould not reach {display} — end not sent.")
+        return True
+    if line:
+        try:
+            await ctx.talk.send_message(
+                target_user=target_user,
+                to_key=to_key,
+                body=line,
+                target_repo=target_repo,
+            )
+        except (NatsError, TimeoutError, OSError):
+            print(f"\r\033[KCould not reach {display} — not sent; try again.")
+    return False
+
+
 async def _repl_talk(
     ctx: CliContext,
     target_user: str,
@@ -392,21 +432,15 @@ async def _repl_talk(
             if not isinstance(result, str):
                 break
 
-            line = result.strip()
-            if line.lower() == "end":
-                await ctx.talk.send_end(
-                    target_user=target_user, to_key=to_key, target_repo=target_repo
-                )
+            if await _send_connected_line(
+                ctx,
+                result.strip(),
+                target_user,
+                display,
+                to_key=to_key,
+                target_repo=target_repo,
+            ):
                 break
-
-            if line:
-                await ctx.talk.send_message(
-                    target_user=target_user,
-                    to_key=to_key,
-                    body=line,
-                    target_repo=target_repo,
-                )
-
             _release_prompt(prompt_gate)
     finally:
         # Whatever exit path (end, EOF, remote hangup) — return to idle so

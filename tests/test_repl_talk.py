@@ -21,6 +21,7 @@ from biff.__main__ import (
     _format_idle_banners,
     _format_talk_lines,
     _print_talk_banner,
+    _repl_talk,
     _run_talk_handshake,
     _withdraw_talk_invite,
 )
@@ -446,3 +447,85 @@ class TestRunTalkHandshakeRollback:
         assert talk.phase is TalkPhase.IDLE  # phase rolled back, not stuck INVITING
         restored = relay.update_session.await_args_list[-1].args[0]
         assert restored.plan == "idle"  # plan restored to its prior value
+
+
+# ---------------------------------------------------------------------------
+# _repl_talk — connected-loop send resilience (F1)
+# ---------------------------------------------------------------------------
+
+
+class TestReplTalkSendResilience:
+    """A wedged relay during a connected send must not crash the REPL.
+
+    The server twin catches the publish trio and returns a "try again" line
+    with the connection intact.  The REPL connected loop must do the same: a
+    ``send_message`` that raises prints a notice and keeps the loop alive; a
+    ``send_end`` that raises still returns to idle.  Left unguarded the error
+    escapes ``asyncio.run``, dumps a traceback, and exits the process — losing
+    the typed line.
+    """
+
+    @staticmethod
+    def _connected_ctx() -> MagicMock:
+        relay = MagicMock(spec=NatsRelay)
+        # Every publish path (send_message/send_end) routes through get_nc.
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        relay.talk_notify_subject = MagicMock(return_value="biff.t.talk.notify.eric")
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        talk.begin_connected(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+        ctx.session_key = "kai:kaihex01"
+        ctx.relay = MagicMock()
+        ctx.relay.get_session = AsyncMock(return_value=None)
+        return ctx
+
+    async def _run(self, ctx: MagicMock, lines: list[str]) -> None:
+        aqueue: asyncio.Queue[str | None] = asyncio.Queue()
+        for line in lines:
+            aqueue.put_nowait(line)
+        await asyncio.wait_for(
+            _repl_talk(
+                ctx,
+                "eric",
+                "eric:tty2",
+                aqueue,
+                asyncio.Event(),
+                threading.Event(),
+                [""],
+                "kai> ",
+                ReplDisplay(),
+                to_key="eric:def456",
+                target_repo=None,
+            ),
+            timeout=5.0,
+        )
+
+    async def test_send_message_failure_keeps_loop_alive(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._connected_ctx()
+        # "hello" fails to publish; the loop must survive and process "end".
+        await self._run(ctx, ["hello", "end"])
+        out = capsys.readouterr().out
+        assert "not sent" in out.lower()  # the failure surfaced as a notice
+        assert ctx.talk.phase is TalkPhase.IDLE  # loop exited cleanly on end
+
+    async def test_send_end_failure_still_returns_to_idle(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._connected_ctx()
+        # A wedged relay on the very hangup must still break to idle, no crash.
+        await self._run(ctx, ["end"])
+        assert ctx.talk.phase is TalkPhase.IDLE
+        assert "not sent" in capsys.readouterr().out.lower()
