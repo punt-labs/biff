@@ -950,6 +950,35 @@ class TestInviteCancelWithdraw:
         # The withdraw completes before the re-raise, returning us to idle.
         assert ctx.talk.phase is TalkPhase.IDLE
 
+    @pytest.mark.anyio()
+    async def test_withdraw_publish_failure_still_resets(
+        self, tmp_path: object
+    ) -> None:
+        """A wedged relay on withdraw must not strand the invite or leak a trace.
+
+        When ``send_withdraw`` raises (relay disconnected, including the Ctrl-C
+        cancel path), the local state still resets — no exception escapes and the
+        invitee falls back to the pending-invite TTL sweep.
+        """
+        from biff.__main__ import _withdraw_talk_invite
+        from biff.talk_state import TalkState
+        from biff.talk_types import TalkPhase
+
+        ctx = _make_ctx(tmp_path)
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
+        )
+        with patch.object(
+            TalkState,
+            "send_withdraw",
+            new_callable=AsyncMock,
+            side_effect=TimeoutError("relay wedged"),
+        ):
+            await _withdraw_talk_invite(ctx, "eric", "eric:def67890")
+
+        # No exception escaped; local state reset despite the failed publish.
+        assert ctx.talk.phase is TalkPhase.IDLE
+
 
 class TestInvitingWaitInputGate:
     """The inviting-wait must open the prompt gate so a typed line is read.

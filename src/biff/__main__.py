@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
+from nats.errors import Error as NatsError
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -51,6 +52,7 @@ from biff.config import (
 )
 from biff.formatting import terminal_safe
 from biff.hook import hook_app
+from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
@@ -566,11 +568,25 @@ async def _withdraw_talk_invite(
     marker clears at once (notification.tex ``WithdrawArrive``) instead of
     lingering until the TTL sweep, then resets to idle and clears the talk
     plan.  A connected hangup is a distinct path (``send_end`` / ``DrainEnd``).
+
+    The local reset and plan-clear happen *regardless of* the publish: the
+    withdraw is a best-effort core-NATS publish, so a wedged or reconnecting
+    relay (including the Ctrl-C cancel path) must never strand the session in a
+    phantom inviting state or leak a terminal traceback.  On a publish failure
+    the invitee still clears via the pending-invite TTL sweep
+    (notification.tex ``ExpirePendingInvite``).
     """
-    await ctx.talk.send_withdraw(
-        target_user=target_user, to_key=target_key, target_repo=target_repo
-    )
     ctx.talk.reset()
+    try:
+        await ctx.talk.send_withdraw(
+            target_user=target_user, to_key=target_key, target_repo=target_repo
+        )
+    except (NatsError, TimeoutError, OSError):
+        logging.getLogger(__name__).warning(
+            "talk withdraw to %s failed; invitee falls back to the TTL sweep",
+            target_user,
+            exc_info=True,
+        )
     try:
         s = await ctx.relay.get_session(ctx.session_key)
         if s is not None:
@@ -662,7 +678,6 @@ async def _handle_repl_talk(
     repl_display: ReplDisplay,
 ) -> None:
     """Parse talk args and enter modal talk mode."""
-    from biff.nats_relay import NatsRelay
     from biff.server.tools._session import resolve_talk_target
     from biff.tty import parse_address
 
@@ -765,8 +780,6 @@ async def _setup_nats_subscription(
     there).  Returns the subscription object (for cleanup) or ``None``
     if the relay is not NATS-backed.
     """
-    from biff.nats_relay import NatsRelay
-
     if not isinstance(ctx.relay, NatsRelay):
         return None
 
@@ -1311,7 +1324,6 @@ def talk(
 
 async def _talk_fetch_and_print(relay: object, session_key: str, user: str) -> None:
     """Fetch and print any unread messages using shared formatting."""
-    from biff.nats_relay import NatsRelay
     from biff.server.tools.talk import fetch_all_unread, format_talk_messages
 
     if not isinstance(relay, NatsRelay):
@@ -1386,7 +1398,6 @@ async def _talk_loop(
 ) -> None:
     """Run the talk conversation loop with notification-driven message display."""
     from biff.models import Message
-    from biff.nats_relay import NatsRelay
 
     if not isinstance(relay, NatsRelay):
         return
@@ -1440,7 +1451,6 @@ async def _talk_loop(
 async def _talk_interactive(to: str, opening: str) -> None:
     """Interactive talk loop using the shared CLI session lifecycle."""
     from biff.models import Message
-    from biff.nats_relay import NatsRelay
     from biff.server.tools._session import resolve_talk_target
     from biff.tty import parse_address
 
