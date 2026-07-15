@@ -47,6 +47,16 @@ with drop-oldest so the newest ``MAX_TALK_QUEUE`` notifications are
 always retained (biff-vr4).
 """
 
+MAX_PENDING_INVITES = 100
+"""Bound on the drained pending-invite set (notification.tex ``maxPending``).
+
+The drop-oldest analog of ``MAX_TALK_QUEUE`` (DES-044) for ``talkPending``:
+without it a peer forging invites from a stream of distinct sessions could
+grow ``_pending`` without limit even as the queue stays bounded.  At the cap a
+new inviter evicts the oldest-by-arrival entry; superseding an existing
+inviter overwrites in place and never evicts.
+"""
+
 MAX_BODY_LEN = 512
 """Message body truncation limit (talk.tex ``maxBodyLen``)."""
 
@@ -268,13 +278,20 @@ class TalkState:
         *arrived* carries the frame's original enqueue time so the TTL window is
         anchored to arrival, not to drain time — otherwise a late drain would
         restart the clock and let a stale invite outlive ``PENDING_INVITE_TTL``.
+
+        The set is bounded at ``MAX_PENDING_INVITES``: a new inviter recorded at
+        the cap evicts the oldest-by-arrival entry first (drop-oldest), while
+        superseding an existing inviter overwrites in place and never evicts.
         """
         try:
-            self._pending[notif.nfrom] = PendingInvite.from_notification(
-                notif, arrived=arrived
-            )
+            invite = PendingInvite.from_notification(notif, arrived=arrived)
         except ValueError:
             logger.debug("dropping malformed invite frame: %r", notif, exc_info=True)
+            return
+        at_capacity = len(self._pending) >= MAX_PENDING_INVITES
+        if notif.nfrom not in self._pending and at_capacity:
+            self._pending.pop(next(iter(self._pending)))  # evict oldest-by-arrival
+        self._pending[notif.nfrom] = invite
 
     def poll_accept(self) -> tuple[AcceptOutcome, list[TalkNotification]]:
         """Drain the queue while inviting; detect accept or mutual auto-accept.

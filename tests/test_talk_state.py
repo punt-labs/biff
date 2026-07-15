@@ -21,6 +21,7 @@ import pytest
 from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay, Relay
 from biff.talk_state import (
+    MAX_PENDING_INVITES,
     MAX_TALK_QUEUE,
     PENDING_INVITE_TTL,
     TalkState,
@@ -860,3 +861,44 @@ class TestGrowOnlyGuards:
         st.drain_for_agent()
         assert st.phase is TalkPhase.CONNECTED
         assert st.pending_invites == {}
+
+
+# ---------------------------------------------------------------------------
+# Pending-set bound — drop-oldest on new keys (notification.tex maxPending)
+# ---------------------------------------------------------------------------
+
+
+class TestPendingBound:
+    """``_pending`` is bounded at ``MAX_PENDING_INVITES`` (drop-oldest)."""
+
+    @staticmethod
+    def _fill_to_cap(st: TalkState) -> None:
+        for i in range(MAX_PENDING_INVITES):
+            st.receive(_invite(f"u{i}", f"u{i}:s{i}"))
+        st.drain_idle()
+
+    def test_new_inviter_at_cap_evicts_oldest(self) -> None:
+        st = _make_state()
+        self._fill_to_cap(st)
+        assert len(st.pending_invites) == MAX_PENDING_INVITES
+        st.receive(_invite("newcomer", "newcomer:sess"))
+        st.drain_idle()
+        assert len(st.pending_invites) == MAX_PENDING_INVITES  # still bounded
+        assert "u0" not in st.pending_invites  # oldest-by-arrival evicted
+        assert "newcomer" in st.pending_invites
+
+    def test_supersede_at_cap_does_not_evict(self) -> None:
+        st = _make_state()
+        self._fill_to_cap(st)
+        st.receive(_invite("u0", "u0:newsession"))  # same inviter, new session
+        st.drain_idle()
+        assert len(st.pending_invites) == MAX_PENDING_INVITES  # nothing evicted
+        assert st.pending_invites["u0"].session_key == "u0:newsession"
+
+    def test_bound_never_exceeded(self) -> None:
+        st = _make_state()
+        for i in range(MAX_PENDING_INVITES + 50):
+            st.receive(_invite(f"u{i}", f"u{i}:s{i}"))
+            st.drain_idle()  # drain each so the queue bound never masks this
+            assert len(st.pending_invites) <= MAX_PENDING_INVITES
+        assert len(st.pending_invites) == MAX_PENDING_INVITES
