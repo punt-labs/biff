@@ -152,32 +152,44 @@ unread count ranging over $0 \upto 100$, yields hundreds of thousands
 of reachable states before any interesting property is reached.
 
 Following the convention of the sister specification $talk.tex$, the
-two bounds are therefore not hard-wired.  Each is the cardinality of an
+bounds are therefore not hard-wired.  Each is the cardinality of an
 abstract carrier---$QSLOT$ for queue slots, $USLOT$ for unread slots---so
 the bound is a \emph{scoping parameter} ProB shrinks for exhaustive
 checking rather than a fixed value.  A third carrier, $ASLOT$, plays the
 same role for the pending-invite time-to-live: $maxInviteAge$ is its
 cardinality, and a pending invite whose age reaches that bound may be
-aged out.  All three carriers are required non-empty, so each bound is at
-least one; at $\# ASLOT = 1$ the clock has a single tick, which is the
-smallest model in which a fresh invite (age $0$) and an expired one (age
-$1$) are distinct.
+aged out.  A fourth carrier, $PSLOT$, bounds the pending-invite set
+itself: $maxPending$ is its cardinality, the number of pending invites
+the recipient will retain at once.  This bound is not decoration.  A
+pending invite is keyed by the wire-controlled inviter identity; the
+time-to-live is eventual, not a cap, so without a size bound each
+distinct forged inviter would add a permanent entry, an
+unbounded-growth denial of service (the biff-vr4 analogue).  The bound
+caps the set exactly as $maxQueueSize$ caps the message queue, and
+$TalkInviteArriveOverflow$ evicts to hold it, mirroring $ReceiveOverflow$
+of $talk.tex$.  All four carriers are required non-empty, so each bound
+is at least one; at $\# ASLOT = 1$ the clock has a single tick, which is
+the smallest model in which a fresh invite (age $0$) and an expired one
+(age $1$) are distinct.
 
 \begin{zed}
-  [QSLOT, USLOT, ASLOT]
+  [QSLOT, USLOT, ASLOT, PSLOT]
 \end{zed}
 
 \begin{axdef}
   maxQueueSize : \nat \\
   maxUnreadCount : \nat \\
-  maxInviteAge : \nat
+  maxInviteAge : \nat \\
+  maxPending : \nat
   \where
   QSLOT \neq \emptyset \\
   USLOT \neq \emptyset \\
   ASLOT \neq \emptyset \\
+  PSLOT \neq \emptyset \\
   maxQueueSize = \# QSLOT \\
   maxUnreadCount = \# USLOT \\
-  maxInviteAge = \# ASLOT
+  maxInviteAge = \# ASLOT \\
+  maxPending = \# PSLOT
 \end{axdef}
 
 Default descriptions and the idle marker are opaque constants:
@@ -208,7 +220,7 @@ the properties depend on.
 probcli docs/notification.tex -model_check -noltl -coverage \
   -p DEFAULT_SETSIZE 2 \
   -card SOURCEKEY 1 -card SESSIONKEY 1 \
-  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
   -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000
 \end{verbatim}
 
@@ -270,6 +282,7 @@ the status bar, and the last notification outcome.
   fileUnreadCount \leq maxUnreadCount \\
   unreadCount \leq maxUnreadCount \\
   talkQueued \leq maxQueueSize \\
+  \# talkPending + \# talkBare \leq maxPending \\
   pendingAge \leq maxInviteAge \\
   ((\dom talkPending = \emptyset \land talkBare = \emptyset) \implies
   pendingAge = 0) \\
@@ -290,7 +303,9 @@ the status bar, and the last notification outcome.
 
 Key invariants: queue metadata maps have the same domain as the
 queue sequence range; subscription and KV require a live connection;
-the current index is always within bounds.  The critical invariant
+the current index is always within bounds; the pending-invite set is
+bounded, $\# talkPending + \# talkBare \leq maxPending$, so no stream
+of forged inviters can grow it without limit.  The critical invariant
 is the last: \emph{a connected NATS client implies a captured session}.
 This ensures the suspenders notification path (the background poller)
 is always available when description-changed flags are set.
@@ -1314,6 +1329,16 @@ An invite arrives and is recorded in $talkPending$, retaining the
 inviter's session key; the description gains its \texttt{[TALK]} marker.
 A talk message arrives and raises $talkQueued$.  Both set the marker.
 
+$TalkInviteArrive$ fires when the invite either supersedes one already
+recorded for that user ($inviter? \in \dom talkPending$, no growth) or
+there is room for a new entry ($\# talkPending + \# talkBare <
+maxPending$).  This is the exact analogue of $ReceiveNotification$'s
+$queueLen < maxQueueLen$ guard in $talk.tex$: it keeps the pending set
+within its bound.  When a \emph{new} inviter arrives and the set is
+already full, $TalkInviteArriveOverflow$ takes over, evicting one
+existing entry before inserting---the drop-to-make-room counterpart of
+$ReceiveOverflow$.
+
 \begin{schema}{TalkInviteArrive}
   \Delta NotificationState \\
   inviter? : USER \\
@@ -1322,7 +1347,65 @@ A talk message arrives and raises $talkQueued$.  Both set the marker.
   pendingAge' = pendingAge \\
   natsConn = natsConnected \\
   inviter? \notin talkBare \\
+  (inviter? \in \dom talkPending \lor
+  \# talkPending + \# talkBare < maxPending) \\
   talkPending' = talkPending \oplus \{ inviter? \mapsto inviterKey? \} \\
+  talkDesc' \neq talkDescDefault \\
+  talkDescChanged' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  session' = session \\
+  toolContext' = toolContext \\
+  wallDesc' = wallDesc \\
+  readDesc' = readDesc \\
+  wallDescChanged' = wallDescChanged \\
+  unreadCount' = unreadCount \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  lastNotifyResult' = lastNotifyResult \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+The pending set is bounded by $maxPending$ ($\# PSLOT$), exactly as the
+message queue is bounded by $maxQueueSize$.  When a \emph{new} inviter
+arrives and the set is full, $TalkInviteArriveOverflow$ evicts one
+existing entry---the oldest by arrival in the implementation---and
+inserts the new one, so the bound is held and no stream of forged
+inviters can exhaust memory.  The model records the eviction only as
+the removal of \emph{some} pending entry $evicted?$: $talkPending$ is an
+unordered function, so arrival order is not expressible here, and
+``oldest by arrival'' is the obligation the implementation discharges.
+What the model proves is the invariant---$\# talkPending + \# talkBare
+\leq maxPending$ across the whole reachable space---not the choice of
+victim.  This is the pending-set mirror of $ReceiveOverflow$ in
+$talk.tex$, where a full queue drops its head before appending.
+
+\begin{schema}{TalkInviteArriveOverflow}
+  \Delta NotificationState \\
+  inviter? : USER \\
+  inviterKey? : SESSIONKEY \\
+  evicted? : USER
+  \where
+  pendingAge' = pendingAge \\
+  natsConn = natsConnected \\
+  inviter? \notin talkBare \\
+  inviter? \notin \dom talkPending \\
+  \# talkPending + \# talkBare = maxPending \\
+  evicted? \in \dom talkPending \\
+  talkPending' =
+  (\{ evicted? \} \ndres talkPending) \oplus
+  \{ inviter? \mapsto inviterKey? \} \\
   talkDesc' \neq talkDescDefault \\
   talkDescChanged' = ztrue \\
   natsConn' = natsConn \\
@@ -1990,7 +2073,7 @@ probcli docs/notification.tex -model_check -noltl -coverage \
   -goal "staleWithdrawHit = ztrue" \
   -p DEFAULT_SETSIZE 2 \
   -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 2 \
-  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
   -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000
 \end{verbatim}
 
@@ -2022,6 +2105,24 @@ $TalkDrainStale$ and $TalkInviteArriveBare$: the operation that would suppress
 a live invite exists in the text but is enabled in no reachable state.  The
 key-matched $WithdrawArrive$ and its foreign-drop counterpart $WithdrawForeign$
 are both covered.
+
+\paragraph{The pending-set bound.}  This scope shrinks $USER$ to one, which
+suffices for every marker property but cannot exercise
+$TalkInviteArriveOverflow$: that operation fires only when a \emph{new}
+inviter arrives at a full pending set, and with a single user there is no
+second inviter to overflow it.  It is therefore reported uncovered here,
+alongside the three dead defect operations---but for an entirely different
+reason.  It is a live transition awaiting a second user, not a suppressed one.
+The exhaustive two-user check of the Global Constants section
+($DEFAULT\_SETSIZE~2$ with $PSLOT$ at one, so $maxPending = 1$) covers it:
+one user fills the single pending slot, a second arrives and overflows it,
+$TalkInviteArriveOverflow$ evicts the incumbent, and the bound
+$\# talkPending + \# talkBare \leq maxPending$ holds across all $598{,}825$
+reachable states with no invariant violation and no deadlock.  That bound is
+the pending-set analogue of the queue cap $maxQueueLen$ of $talk.tex$; it
+closes the unbounded-growth denial of service that a wire-controlled inviter
+key---each distinct forgery a permanent entry, the time-to-live being eventual
+rather than a cap---would otherwise permit.
 
 \paragraph{Liveness.}  The CTL formula
 $\mathrm{AG}\,(talkDesc \neq talkDescDefault \implies
