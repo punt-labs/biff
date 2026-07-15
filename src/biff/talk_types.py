@@ -41,12 +41,16 @@ class PendingInvite:
 
     Retains the inviter's session key so the accept hint names a specific
     session (``talk @user:tty``, never a bare ``@user`` that fails at the
-    prompt), and the monotonic arrival time so the poller can age out an
-    invite whose inviter never returns (notification.tex ``ExpirePendingInvite``).
+    prompt), the inviter's display tty name (``ttyN``) so the hint reads as
+    the same address ``/who`` shows and ``talk @user:ttyN`` resolves against
+    — not the opaque session-key hex — and the monotonic arrival time so the
+    poller can age out an invite whose inviter never returns (notification.tex
+    ``ExpirePendingInvite``).
     """
 
     user: str
     session_key: str
+    tty: str
     arrived: float
 
     def __post_init__(self) -> None:
@@ -76,12 +80,22 @@ class PendingInvite:
         return cls(
             user=notif.nfrom,
             session_key=notif.nfrom_key,
+            tty=notif.nfrom_tty,
             arrived=time.monotonic(),
         )
 
     @property
     def accept_command(self) -> str:
-        """A runnable command that accepts this invite by naming the session."""
+        """A runnable command that accepts this invite by naming the session.
+
+        Prefers the inviter's display tty name (``talk @user:ttyN``) — the
+        form ``/who`` shows and ``resolve_talk_target`` matches — so the
+        printed hint is exactly what the recipient types.  Falls back to the
+        session key when the frame carried no display tty (still a runnable
+        ``talk @user:tty`` by the ``HintNamesSession`` invariant).
+        """
+        if self.tty:
+            return f"talk @{self.user}:{self.tty}"
         return f"talk @{self.session_key}"
 
 

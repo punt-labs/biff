@@ -22,8 +22,16 @@ from biff.talk_types import (
 OTHER_KEY = "eric:def67890"
 
 
-def _invite(from_user: str, from_key: str, body: str = "hi") -> dict[str, str]:
-    return {"type": "invite", "from": from_user, "from_key": from_key, "body": body}
+def _invite(
+    from_user: str, from_key: str, body: str = "hi", tty: str = "tty2"
+) -> dict[str, str]:
+    return {
+        "type": "invite",
+        "from": from_user,
+        "from_tty": tty,
+        "from_key": from_key,
+        "body": body,
+    }
 
 
 def _accept(from_user: str, from_key: str) -> dict[str, str]:
@@ -89,21 +97,30 @@ class TestTalkNotification:
 
 
 class TestPendingInvite:
-    def test_accept_command_names_session(self) -> None:
-        """HintNamesSession: the hint is a runnable ``talk @user:tty``."""
-        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
-        assert inv.accept_command == "talk @eric:def67890"
+    def test_accept_command_uses_display_tty(self) -> None:
+        """The hint names the session by the display tty ``/who`` shows.
+
+        Not the opaque session-key hex — ``talk @eric:tty2`` is what the
+        recipient types and what ``resolve_talk_target`` matches.
+        """
+        inv = PendingInvite(user="eric", session_key=OTHER_KEY, tty="tty2", arrived=0.0)
+        assert inv.accept_command == "talk @eric:tty2"
         assert ":" in inv.accept_command  # never a bare @user
+
+    def test_accept_command_falls_back_to_key_without_tty(self) -> None:
+        """A frame with no display tty still renders a runnable session hint."""
+        inv = PendingInvite(user="eric", session_key=OTHER_KEY, tty="", arrived=0.0)
+        assert inv.accept_command == "talk @eric:def67890"
 
     def test_colonless_key_rejected(self) -> None:
         """HintNamesSession: a key with no ``:`` cannot name a session."""
         with pytest.raises(ValueError, match="user:tty"):
-            PendingInvite(user="eric", session_key="eric", arrived=0.0)
+            PendingInvite(user="eric", session_key="eric", tty="tty2", arrived=0.0)
 
     def test_empty_tty_key_rejected(self) -> None:
         """HintNamesSession: a ``user:`` key with an empty tty is malformed."""
         with pytest.raises(ValueError, match="user:tty"):
-            PendingInvite(user="eric", session_key="eric:", arrived=0.0)
+            PendingInvite(user="eric", session_key="eric:", tty="tty2", arrived=0.0)
 
     def test_empty_user_key_rejected(self) -> None:
         """HintNamesSession: a ``:tty`` key with an empty user is malformed.
@@ -112,17 +129,19 @@ class TestPendingInvite:
         the prompt, so it must be rejected at construction like the other halves.
         """
         with pytest.raises(ValueError, match="user:tty"):
-            PendingInvite(user="eric", session_key=":def67890", arrived=0.0)
+            PendingInvite(user="eric", session_key=":def67890", tty="tty2", arrived=0.0)
 
     def test_well_formed_key_accepted(self) -> None:
-        inv = PendingInvite(user="eric", session_key=OTHER_KEY, arrived=0.0)
+        inv = PendingInvite(user="eric", session_key=OTHER_KEY, tty="tty2", arrived=0.0)
         assert inv.session_key == OTHER_KEY
 
-    def test_from_notification_validates_and_records(self) -> None:
-        notif = TalkNotification.from_payload(_invite("eric", OTHER_KEY))
+    def test_from_notification_carries_display_tty(self) -> None:
+        notif = TalkNotification.from_payload(_invite("eric", OTHER_KEY, tty="tty2"))
         inv = PendingInvite.from_notification(notif)
         assert inv.user == "eric"
         assert inv.session_key == OTHER_KEY
+        assert inv.tty == "tty2"
+        assert inv.accept_command == "talk @eric:tty2"
 
     def test_from_notification_rejects_keyless_frame(self) -> None:
         """A keyless invite frame is rejected at the wire boundary, not recorded."""
@@ -139,7 +158,9 @@ class TestPendingInvite:
 class TestAgentDrain:
     def test_holds_drain_snapshot(self) -> None:
         note = TalkNotification.from_payload(_message("eric", OTHER_KEY, "yo"))
-        invite = PendingInvite(user="priya", session_key="priya:xyz", arrived=1.0)
+        invite = PendingInvite(
+            user="priya", session_key="priya:xyz", tty="tty3", arrived=1.0
+        )
         drain = AgentDrain(messages=(note,), pending={"priya": invite})
         assert drain.messages == (note,)
         assert drain.pending["priya"] is invite

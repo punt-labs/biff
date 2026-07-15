@@ -15,10 +15,11 @@ from biff.nats_relay import NatsRelay
 from biff.server.tools._session import resolve_talk_target
 from biff.server.tools.talk import (
     _NO_MESSAGES,
+    format_agent_drain,
     format_talk_messages,
 )
 from biff.talk_state import TalkState
-from biff.talk_types import TalkPhase
+from biff.talk_types import AgentDrain, PendingInvite, TalkPhase
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -61,6 +62,30 @@ class TestFormatTalkMessages:
 
     def test_empty_list(self) -> None:
         assert format_talk_messages([]) == ""
+
+
+class TestFormatAgentDrain:
+    """``talk_read`` names the inviter's session by its display tty.
+
+    Same source as the ``[TALK]`` marker (``PendingInvite.accept_command``),
+    so both surfaces render the reconciled ``talk @user:ttyN`` hint — the form
+    ``/who`` shows and ``talk @user:ttyN`` resolves against — never the opaque
+    session-key hex.
+    """
+
+    def test_accept_hint_uses_display_tty_not_key_hex(self) -> None:
+        invite = PendingInvite(
+            user="jfreeman",
+            session_key="jfreeman:75abc665",
+            tty="tty6",
+            arrived=0.0,
+        )
+        drain = AgentDrain(messages=(), pending={"jfreeman": invite})
+
+        rendered = format_agent_drain(drain)
+
+        assert "talk @jfreeman:tty6" in rendered
+        assert "75abc665" not in rendered
 
     def test_escapes_neutralized(self) -> None:
         """Remote body/sender can't inject terminal escapes (biff-lbj)."""

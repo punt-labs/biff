@@ -17,6 +17,7 @@ from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
+    _talk_description,
     _write_unread_file,
     poll_inbox,
     refresh_read_messages,
@@ -236,6 +237,37 @@ class TestTalkSignal:
         after = talk_signal(talk)
         assert len(talk.pending_invites) == 1
         assert before != after
+
+
+class TestTalkDescriptionAcceptHint:
+    """The ``[TALK]`` marker names the inviter's session by its display tty.
+
+    The accept hint must read as the ``@user:ttyN`` address ``/who`` shows —
+    the form ``talk @user:ttyN`` resolves against — not the opaque session-key
+    hex the inviter's session actually keys on.  Same source as
+    ``format_agent_drain`` (``PendingInvite.accept_command``), so both surfaces
+    stay reconciled.
+    """
+
+    def test_marker_renders_display_tty_not_key_hex(self, tmp_path: Path) -> None:
+        talk = TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "jfreeman",
+                "from_tty": "tty6",
+                "from_key": "jfreeman:75abc665",
+                "to_key": "kai:t",
+            }
+        )
+        talk.drain_idle()  # records the pending invite
+
+        desc = _talk_description(talk)
+
+        assert "talk @jfreeman:tty6" in desc
+        assert "75abc665" not in desc
 
 
 class TestPollInbox:
