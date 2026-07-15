@@ -160,6 +160,24 @@ class TalkNotification:
 
 
 @dataclass(frozen=True, slots=True)
+class QueuedNotification:
+    """A queued notification paired with its monotonic arrival time.
+
+    The arrival time is the time-to-live anchor for an *undrained* invite: on
+    the MCP path an invite sits in the bounded queue until ``talk_read`` drains
+    it into ``talkPending``, so without an enqueue-time stamp a never-drained
+    invite (a crashed inviter that never sends ``ntWithdraw``, an idle-but-alive
+    agent) would strand the ``[TALK]`` marker forever.  Stamping at enqueue lets
+    the poller reap an aged invite still sitting in the queue — the same
+    backstop ``notification.tex`` ``ExpirePendingInvite`` gives the invite it
+    models as pending-on-arrival.
+    """
+
+    notif: TalkNotification
+    arrived: float
+
+
+@dataclass(frozen=True, slots=True)
 class AgentDrain:
     """Result of an MCP agent-mode drain (non-modal front-end).
 

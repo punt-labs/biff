@@ -26,6 +26,7 @@ from biff.talk_types import (
     AcceptOutcome,
     AgentDrain,
     PendingInvite,
+    QueuedNotification,
     TalkNotification,
     TalkPhase,
 )
@@ -98,7 +99,7 @@ class TalkState:
     _partner_tty: str
     _partner_key: str
     _pending: dict[str, PendingInvite]
-    _queue: deque[TalkNotification]
+    _queue: deque[QueuedNotification]
 
     def __new__(
         cls,
@@ -135,6 +136,16 @@ class TalkState:
     def partner(self) -> str:
         """The partner user, or our own user when idle (sentinel)."""
         return self._partner
+
+    @property
+    def partner_tty(self) -> str:
+        """The partner's tty, or our own when idle (sentinel).
+
+        Names the connected partner's session so the connected hint reads as
+        ``talk @user:tty`` (session-scoped, DES-043) rather than a bare
+        ``@user`` that fails resolution when the partner has several sessions.
+        """
+        return self._partner_tty
 
     @property
     def partner_key(self) -> str:
@@ -180,7 +191,7 @@ class TalkState:
             return self._withdraw(notif.nfrom, notif.nfrom_key)  # WithdrawArrive
         if len(self._queue) >= MAX_TALK_QUEUE:
             self._queue.popleft()  # ReceiveOverflow — drop-oldest
-        self._queue.append(notif)
+        self._queue.append(QueuedNotification(notif, time.monotonic()))
         return True
 
     def _withdraw(self, inviter: str, withdraw_key: str) -> bool:
@@ -204,9 +215,13 @@ class TalkState:
             del self._pending[inviter]
         before = len(self._queue)
         self._queue = deque(
-            n
-            for n in self._queue
-            if not (n.is_invite and n.nfrom == inviter and n.nfrom_key == withdraw_key)
+            q
+            for q in self._queue
+            if not (
+                q.notif.is_invite
+                and q.notif.nfrom == inviter
+                and q.notif.nfrom_key == withdraw_key
+            )
         )
         return matched or len(self._queue) != before
 
@@ -274,7 +289,10 @@ class TalkState:
                 banners.append(notif)  # third-party invite → banner
                 continue
             keep.append(notif)  # message / end — render after Connected
-        self._queue.extendleft(reversed(keep))
+        now = time.monotonic()
+        self._queue.extendleft(
+            QueuedNotification(notif, now) for notif in reversed(keep)
+        )
         if accepted or auto:
             self._phase = TalkPhase.CONNECTED
         if accepted:
@@ -360,13 +378,18 @@ class TalkState:
             self._pending.pop(notif.nfrom, None)
 
     def expire_stale_invites(self, *, now: float | None = None) -> int:
-        """Reap pending invites older than the TTL; return the number removed.
+        """Reap invites older than the TTL, drained or not; return the count.
 
         notification.tex ExpirePendingInvite: an invite whose monotonic age
-        reaches ``PENDING_INVITE_TTL`` is removed on a poller tick.  A fresh
-        invite (age below the bound) survives, which is the observable
-        difference from ``ntWithdraw`` (immediate).  The caller re-derives the
-        talk description after a non-zero return.
+        reaches ``PENDING_INVITE_TTL`` is removed on a poller tick.  The model
+        holds every invite in ``talkPending`` from arrival, so the backstop must
+        cover both the drained invites in ``_pending`` and an *undrained* invite
+        still sitting in ``_queue`` — otherwise a never-drained invite (a
+        crashed inviter that never sends ``ntWithdraw``, an idle-but-alive
+        agent) strands the ``[TALK]`` marker forever, since the marker is lit by
+        the queued frame.  A fresh invite (age below the bound) survives, the
+        observable difference from ``ntWithdraw`` (immediate).  The caller
+        re-derives the talk description after a non-zero return.
         """
         clock = time.monotonic() if now is None else now
         stale = [
@@ -376,7 +399,22 @@ class TalkState:
         ]
         for user in stale:
             del self._pending[user]
-        return len(stale)
+        return len(stale) + self._expire_queued_invites(clock)
+
+    def _expire_queued_invites(self, clock: float) -> int:
+        """Drop undrained invite frames past the TTL; return the number dropped.
+
+        Only invite frames age out — a queued message clears by being drained
+        (talk.tex ``DrainMessage``), never by time-to-live — so a stuck message
+        is left untouched while a stranded invite is reaped.
+        """
+        before = len(self._queue)
+        self._queue = deque(
+            q
+            for q in self._queue
+            if not (q.notif.is_invite and clock - q.arrived >= PENDING_INVITE_TTL)
+        )
+        return before - len(self._queue)
 
     # -- Local transitions (talk.tex Send*/Respond/End operations) --
 
@@ -506,7 +544,12 @@ class TalkState:
         await nc.publish(subject, payload)
 
     def _drain(self) -> list[TalkNotification]:
-        """Pop all queued notifications in FIFO order."""
-        drained = list(self._queue)
+        """Pop all queued notifications in FIFO order, shedding arrival stamps.
+
+        The enqueue-time stamp is a queue-only time-to-live anchor
+        (:class:`QueuedNotification`); once drained, an invite's age is carried
+        by its ``PendingInvite.arrived`` instead, so the frames surface bare.
+        """
+        drained = [q.notif for q in self._queue]
         self._queue.clear()
         return drained

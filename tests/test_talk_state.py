@@ -13,6 +13,7 @@ Z spec via ``/z-spec:partition``.
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -664,6 +665,33 @@ class TestExpiry:
         assert now - priya_arrived < PENDING_INVITE_TTL
         assert st.expire_stale_invites(now=now) == 1
         assert _pending_keys(st) == {"priya": "priya:xyz"}
+
+    def test_undrained_queued_invite_reaped_at_ttl(self) -> None:
+        """P-EXP-backstop: an invite never drained into ``_pending`` still ages
+        out of the queue, so a crashed inviter cannot strand the marker.
+        """
+        st = _make_state()
+        before = time.monotonic()
+        st.receive(_invite("eric", OTHER_KEY))  # enqueued, never drained
+        assert st.queued == 1  # the queued frame lights the marker
+        # Below the bound: the queued invite survives.
+        assert st.expire_stale_invites(now=before + PENDING_INVITE_TTL - 1.0) == 0
+        assert st.queued == 1
+        # Past the bound: the queued invite is dropped and the marker clears.
+        after = time.monotonic()
+        assert st.expire_stale_invites(now=after + PENDING_INVITE_TTL) == 1
+        assert st.queued == 0
+        assert st.pending_invites == {}
+
+    def test_undrained_queued_message_survives_ttl(self) -> None:
+        """A queued message has no time-to-live — only invites age out — so a
+        stuck message is left for the agent's drain, never silently reaped.
+        """
+        st = _make_state()
+        st.receive(_message("eric", OTHER_KEY, "still here"))
+        after = time.monotonic()
+        assert st.expire_stale_invites(now=after + PENDING_INVITE_TTL) == 0
+        assert st.queued == 1
 
 
 # ---------------------------------------------------------------------------
