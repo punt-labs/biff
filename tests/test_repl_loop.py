@@ -900,3 +900,28 @@ class TestInviteCancelWithdraw:
         spy_end.assert_not_awaited()
         # The cancel returns us to idle (talk.tex LocalEnd).
         assert ctx.talk.phase is TalkPhase.IDLE
+
+
+class TestInvitingWaitInputGate:
+    """The inviting-wait must open the prompt gate so a typed line is read.
+
+    Without releasing the gate the stdin thread stays parked at
+    ``prompt_gate.wait()`` and never calls ``input()``, so a typed ``end``
+    never reaches the cancel check — the REPL-cancel bug this guards.
+    """
+
+    @pytest.mark.anyio()
+    async def test_wait_for_accept_opens_gate_before_reading(
+        self, tmp_path: object
+    ) -> None:
+        from biff.__main__ import _wait_for_talk_accept
+        from biff.talk_types import AcceptOutcome
+
+        ctx = _make_ctx(tmp_path)
+        gate = threading_mod.Event()  # starts closed, as after the stdin read
+        aqueue = _make_aqueue(["end"])
+
+        outcome = await _wait_for_talk_accept(ctx, aqueue, asyncio.Event(), gate)
+
+        assert outcome is AcceptOutcome.NONE
+        assert gate.is_set(), "gate must open so the stdin thread reads the line"

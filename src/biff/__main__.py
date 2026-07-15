@@ -530,6 +530,11 @@ async def _wait_for_talk_accept(
     ``end`` or EOF before any accept arrived.  Third-party notifications
     surfaced by :meth:`TalkState.poll_accept` print as banners.
     """
+    # Open the prompt gate before waiting so the stdin thread actually calls
+    # ``input()`` and reads the user's line.  Without this the thread stays
+    # parked at ``prompt_gate.wait()`` and a typed ``end`` never reaches the
+    # cancel check below — the same release the connected loop does up front.
+    _release_prompt(prompt_gate)
     while True:
         result = await _wait_for_input_or_notify(aqueue, notify_event)
         if result is _NO_INPUT:
