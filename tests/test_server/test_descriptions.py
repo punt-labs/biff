@@ -7,6 +7,7 @@ import json
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,6 +15,7 @@ from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.relay import LocalRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
+from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
@@ -455,6 +457,30 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
         assert mtime_after_stable == mtime_after_initial
+
+    async def test_talk_subscription_retries_after_initial_failure(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed first subscribe_talk is retried until it succeeds.
+
+        A NATS outage during server startup makes the first subscribe_talk
+        return None; without a retry the whole talk channel stays silently
+        disabled for the server's lifetime even after NATS recovers.
+        """
+        fake_sub = AsyncMock()
+        calls = 0
+
+        async def flaky_subscribe(state: ServerState) -> object | None:
+            nonlocal calls
+            calls += 1
+            return None if calls == 1 else fake_sub
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", flaky_subscribe)
+        mcp = create_server(state_with_path)
+        await self._run_poller(mcp, state_with_path, cycles=8)
+        assert calls >= 2  # retried past the initial None
+        # Establishing the subscription is proven by its clean teardown on exit.
+        fake_sub.unsubscribe.assert_awaited_once()
 
     async def test_cancellation_is_clean(self, state_with_path: ServerState) -> None:
         """Cancelling the poller task does not raise."""

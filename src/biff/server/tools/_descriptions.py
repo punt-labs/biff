@@ -596,6 +596,14 @@ async def poll_inbox(
             else:
                 await asyncio.sleep(interval)
 
+            # Retry the talk subscription while it is not established. The first
+            # attempt can fail (NATS down at startup, subscribe_talk returns
+            # None); without this retry the whole talk channel — invites and
+            # messages — is silently dropped for the server's lifetime even
+            # after NATS recovers. Cheap: only runs while unsubscribed.
+            if talk_sub is None:
+                talk_sub = await subscribe_talk(state)
+
             # Transition: active → napping (connection stays open)
             if not tracker.napping and tracker.idle_seconds() > idle_threshold:
                 tracker.enter_nap()
