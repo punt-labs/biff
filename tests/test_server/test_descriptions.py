@@ -270,6 +270,42 @@ class TestTalkDescriptionAcceptHint:
         assert "75abc665" not in desc
 
 
+class TestTalkDescriptionConnectedHint:
+    """The connected ``[TALK]`` hint names the partner's session (DES-043).
+
+    A bare ``talk @user`` reply hint can fail resolution when the partner
+    runs several sessions; the connected hint must carry the partner's tty so
+    it reads as the session-scoped ``talk @user:tty`` the accept path emits.
+    """
+
+    def test_connected_hint_carries_partner_tty(self, tmp_path: Path) -> None:
+        talk = TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+        talk.begin_connected(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+
+        desc = _talk_description(talk)
+
+        assert "talk @jfreeman:tty6" in desc
+        assert "talk @jfreeman <" not in desc
+
+    def test_connected_hint_falls_back_to_bare_without_tty(
+        self, tmp_path: Path
+    ) -> None:
+        talk = TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+        talk.begin_connected(
+            partner="jfreeman", partner_tty="", partner_key="jfreeman:75abc665"
+        )
+
+        desc = _talk_description(talk)
+
+        assert "talk @jfreeman <message>" in desc
+
+
 class TestPollInbox:
     """Verify the background inbox poller detects changes and refreshes."""
 

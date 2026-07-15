@@ -362,8 +362,11 @@ def _talk_description(talk: TalkState) -> str:
             "Use talk_end to close."
         )
     if talk.phase is TalkPhase.CONNECTED:
+        partner = terminal_safe(talk.partner)
+        tty = terminal_safe(talk.partner_tty)
+        address = f"@{partner}:{tty}" if tty else f"@{partner}"
         return (
-            f"[TALK] connected to {talk.partner} — talk @{talk.partner} <message> "
+            f"[TALK] connected to {partner} — talk {address} <message> "
             "to reply, talk_end to close."
         )
     return TALK_BASE_DESCRIPTION
