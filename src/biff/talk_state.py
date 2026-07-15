@@ -617,9 +617,7 @@ class TalkState:
         target_repo: str | None = None,
     ) -> None:
         """Publish a session-scoped message frame (body truncated to the limit)."""
-        await self._publish(
-            "message", target_user, to_key, body[:MAX_BODY_LEN], target_repo
-        )
+        await self._publish("message", target_user, to_key, body, target_repo)
 
     async def send_end(
         self,
@@ -655,7 +653,13 @@ class TalkState:
         body: str,
         target_repo: str | None,
     ) -> None:
-        """Publish one ephemeral talk frame; no-op for non-NATS relays."""
+        """Publish one ephemeral talk frame; no-op for non-NATS relays.
+
+        Every frame body is truncated to ``MAX_BODY_LEN`` here — the single
+        DoS/footprint bound — so an oversized invite or accept body (both carry
+        user input) cannot slip past a per-call-site slice and grow the peer's
+        bounded queue to ``MAX_TALK_QUEUE`` frames of unbounded body.
+        """
         relay = self._relay
         if not isinstance(relay, NatsRelay):
             return
@@ -665,7 +669,7 @@ class TalkState:
                 "type": ntype,
                 "from": self._my_user,
                 "from_tty": self._my_tty_name,
-                "body": body,
+                "body": body[:MAX_BODY_LEN],
                 "from_key": self._my_key,
                 "to_key": to_key,
             }

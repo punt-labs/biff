@@ -34,6 +34,7 @@ from biff.server.tools._descriptions import (
     refresh_talk,
 )
 from biff.server.tools._session import resolve_talk_target, update_current_session
+from biff.talk_state import MAX_BODY_LEN
 from biff.talk_types import TalkPhase
 from biff.tty import parse_address
 
@@ -46,7 +47,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _NO_MESSAGES = "No pending talk activity."
-_MAX_BODY = 512
 
 
 def format_talk_messages(messages: list[Message]) -> str:
@@ -166,7 +166,7 @@ async def _accept_invite(
         await refresh_talk(mcp, state)
         return f"Could not reach {accept_display} — accept not sent; try again."
     await refresh_talk(mcp, state)
-    opening = f' Sent: "{terminal_safe(message[:_MAX_BODY])}".' if message else ""
+    opening = f' Sent: "{terminal_safe(message[:MAX_BODY_LEN])}".' if message else ""
     return (
         f"Connected to {accept_display} — accepted their invite.{opening} "
         "Use talk_read to see replies, talk_end to close."
@@ -267,7 +267,7 @@ async def _send_or_invite(
             await refresh_talk(mcp, state)
             return f"Could not reach {display} — message not sent; try again."
         await refresh_talk(mcp, state)
-        return f'Sent to {display}: "{terminal_safe(message[:_MAX_BODY])}".'
+        return f'Sent to {display}: "{terminal_safe(message[:MAX_BODY_LEN])}".'
 
     if talk_state.phase is not TalkPhase.IDLE:
         return (

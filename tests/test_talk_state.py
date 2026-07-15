@@ -21,6 +21,7 @@ import pytest
 from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay, Relay
 from biff.talk_state import (
+    MAX_BODY_LEN,
     MAX_PENDING_INVITES,
     MAX_TALK_QUEUE,
     PENDING_INVITE_TTL,
@@ -704,6 +705,22 @@ class TestSend:
         _, payload = self._published(nc)
         assert payload["type"] == "invite"
         assert payload["body"] == "wants to talk"
+
+    @pytest.mark.anyio
+    async def test_send_invite_truncates_body(self) -> None:
+        # The invite body carries user input, so an oversized invite must be
+        # bounded at publish just like a message — MAX_BODY_LEN is the DoS floor.
+        st, nc = self._nats_state()
+        await st.send_invite(target_user="eric", to_key=OTHER_KEY, body="x" * 1000)
+        _, payload = self._published(nc)
+        assert len(payload["body"]) == MAX_BODY_LEN
+
+    @pytest.mark.anyio
+    async def test_send_normal_body_unchanged(self) -> None:
+        st, nc = self._nats_state()
+        await st.send_invite(target_user="eric", to_key=OTHER_KEY, body="hi there")
+        _, payload = self._published(nc)
+        assert payload["body"] == "hi there"
 
     @pytest.mark.anyio
     async def test_send_accept(self) -> None:
