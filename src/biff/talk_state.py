@@ -167,6 +167,18 @@ class TalkState:
         """Number of notifications waiting to be drained."""
         return len(self._queue)
 
+    @property
+    def has_activity(self) -> bool:
+        """Whether there is drain-worthy activity to surface right now.
+
+        True when frames are queued, an invite already sits in
+        ``pendingInvites`` (drained but unanswered), or a live connection is
+        open.  ``talk_listen`` waits on this so an invite that drained into
+        ``pendingInvites`` with an empty queue returns at once instead of
+        sleeping to timeout — a pending invite is real activity, not silence.
+        """
+        return bool(self._queue or self._pending) or self._phase is TalkPhase.CONNECTED
+
     # -- Receive (talk.tex ReceiveNotification family) --
 
     def receive(self, raw: Mapping[str, object]) -> bool:

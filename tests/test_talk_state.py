@@ -630,6 +630,36 @@ class TestWithdraw:
 
 
 # ---------------------------------------------------------------------------
+# has_activity — the talk_listen wait predicate
+# ---------------------------------------------------------------------------
+
+
+class TestHasActivity:
+    """``talk_listen`` waits on ``has_activity`` so a drained invite returns."""
+
+    def test_idle_empty_has_no_activity(self) -> None:
+        assert _make_state().has_activity is False
+
+    def test_queued_frame_is_activity(self) -> None:
+        st = _make_state()
+        st.receive(_message("eric", OTHER_KEY, "hi"))
+        assert st.has_activity is True
+
+    def test_pending_invite_is_activity_with_empty_queue(self) -> None:
+        """A drained invite (queue empty) is activity — not silence to sleep on."""
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))
+        st.drain_idle()  # invite moves to pending; queue drains to empty
+        assert st.queued == 0
+        assert st.has_activity is True
+
+    def test_connected_is_activity(self) -> None:
+        st = _make_state()
+        st.begin_connected(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        assert st.has_activity is True
+
+
+# ---------------------------------------------------------------------------
 # ExpirePendingInvite / AgeTick — TTL sweep (notification.tex §ExpirePendingInvite)
 # ---------------------------------------------------------------------------
 
