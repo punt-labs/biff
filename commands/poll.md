@@ -53,7 +53,9 @@ If `$ARGUMENTS` is `force`, run both pulls unconditionally.
    conversation" and carries no marker):
    - Call `mcp__plugin_biff_tty__talk_read`.
    - If it reports a pending invite (a line with "wants to talk"), tell the user
-     who wants to talk and that `/biff:talk @<user>` accepts it.
+     who wants to talk and that `/biff:talk @<user>:<tty>` accepts it — use the
+     session-scoped `@<user>:<tty>` address `talk_read` prints (talk is
+     session-scoped, so a bare `@<user>` can fail to resolve).
    - If it returns talk messages, surface them.
    - Emit the tool output verbatim — no reformatting, code fences, tables, or
      boxes.
