@@ -350,17 +350,18 @@ def _talk_description(talk: TalkState) -> str:
     if invites:
         ordered = sorted(invites.values(), key=lambda inv: inv.user)
         who = ", ".join(terminal_safe(inv.user) for inv in ordered)
+        # Direct talk_read/accept, not talk_end: there is no active session to
+        # close, and talk_end returns "No active talk session" and clears
+        # nothing when idle with only pending invites.
         return (
             f"[TALK] {who} wants to talk — call talk_read to see it, then "
-            f"{terminal_safe(ordered[0].accept_command)} to accept. "
-            "Use talk_end to close."
+            f"{terminal_safe(ordered[0].accept_command)} to accept."
         )
     if talk.queued:
         noun = "message" if talk.queued == 1 else "messages"
-        return (
-            f"[TALK] {talk.queued} new {noun} — call talk_read to see them. "
-            "Use talk_end to close."
-        )
+        # Direct talk_read, not talk_end: queued messages are drained by
+        # talk_read; talk_end is a no-op with nothing to close here.
+        return f"[TALK] {talk.queued} new {noun} — call talk_read to see them."
     if talk.phase is TalkPhase.CONNECTED:
         partner = terminal_safe(talk.partner)
         tty = terminal_safe(talk.partner_tty)
@@ -431,11 +432,16 @@ async def subscribe_talk(state: ServerState) -> object | None:
                         str(k): str(v)  # pyright: ignore[reportUnknownArgumentType]
                         for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
                     }
-                    if state.talk.receive(frame):
-                        # Do NOT fire notifications here — sending from a NATS
-                        # callback is unreliable (different coroutine context).
-                        # Wake the poller; its next tick refreshes + notifies.
-                        state.activity.wake()
+                    woke = state.talk.receive(frame)
+                else:
+                    # A non-dict payload (a legacy ``b"1"`` bare wake) carries no
+                    # frame — wake the poller so it re-checks, enqueue nothing.
+                    woke = True
+                if woke:
+                    # Do NOT fire notifications here — sending from a NATS
+                    # callback is unreliable (different coroutine context).
+                    # Wake the poller; its next tick refreshes + notifies.
+                    state.activity.wake()
             except (json.JSONDecodeError, AttributeError, TypeError):
                 logger.debug("Failed to process talk notification", exc_info=True)
 

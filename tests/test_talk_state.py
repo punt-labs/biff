@@ -105,6 +105,16 @@ def _end(
     }
 
 
+def _wake_poke(
+    from_user: str = "eric",
+    from_key: str = OTHER_KEY,
+    body: str = "you have mail",
+    to_key: str = "",
+) -> dict[str, str]:
+    """A mail/wall notification riding the talk subject — no ``type`` field."""
+    return {"from": from_user, "from_key": from_key, "body": body, "to_key": to_key}
+
+
 # ---------------------------------------------------------------------------
 # receive — ReceiveNotification family (talk.tex §ReceiveNotification)
 # ---------------------------------------------------------------------------
@@ -129,10 +139,30 @@ class TestReceive:
         assert st.receive(notif) is False
         assert st.queued == 0
 
-    def test_broadcast_message_accepted(self) -> None:
-        """A keyless *message* is a broadcast poke (write/wall mail) — accepted."""
+    def test_typeless_mail_poke_wakes_without_enqueue(self) -> None:
+        """A write/wall mail notification rides the talk subject with no ``type``.
+
+        It wakes the poller (``receive`` returns ``True``) but is never enqueued
+        or surfaced — otherwise the mail body would appear as a phantom talk
+        message when the agent next drains.
+        """
         st = _make_state()
-        assert st.receive(_message("eric", OTHER_KEY, "hi", to_key="")) is True
+        assert st.receive(_wake_poke(body="you have mail")) is True
+        assert st.queued == 0
+        assert st.drain_for_agent().messages == ()
+
+    def test_unknown_type_poke_wakes_without_enqueue(self) -> None:
+        """A frame typed outside the modeled set wakes the poller, enqueues nothing."""
+        st = _make_state()
+        raw = {"type": "garbage", "from": "eric", "from_key": OTHER_KEY, "body": "x"}
+        assert st.receive(raw) is True
+        assert st.queued == 0
+
+    def test_typed_message_still_enqueues(self) -> None:
+        """A real (typed) message addressed to us is enqueued as before."""
+        st = _make_state()
+        assert st.receive(_message("eric", OTHER_KEY, "hi", to_key=MY_KEY)) is True
+        assert st.queued == 1
 
     def test_keyless_invite_dropped(self) -> None:
         """A keyless *control* frame is dropped (ReceiveNotForSession)."""
@@ -946,6 +976,38 @@ class TestPendingBound:
         st.drain_idle()
         assert len(st.pending_invites) == MAX_PENDING_INVITES  # nothing evicted
         assert st.pending_invites["u0"].session_key == "u0:newsession"
+
+    def test_eviction_targets_oldest_by_arrival_not_insertion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A superseded-then-refreshed invite is not the eviction victim.
+
+        Superseding ``u0`` refreshes its ``arrived`` without moving its dict
+        position, so insertion order (``u0`` first) diverges from arrival order
+        (``u1`` now oldest).  The new inviter at the cap must evict ``u1`` — the
+        true oldest by arrival — not the freshly-refreshed ``u0``.  The buggy
+        ``next(iter(...))`` eviction would wrongly drop ``u0``.
+        """
+        clock = [1000.0]
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: clock[0])
+        st = _make_state()
+        for i in range(MAX_PENDING_INVITES):
+            clock[0] = 1000.0 + i  # u0 arrives oldest, u99 newest
+            st.receive(_invite(f"u{i}", f"u{i}:s{i}"))
+            st.drain_idle()
+        # Supersede u0 at a fresh, newest time: refreshes arrival, keeps position.
+        clock[0] = 2000.0
+        st.receive(_invite("u0", "u0:refreshed"))
+        st.drain_idle()
+        assert st.pending_invites["u0"].arrived == 2000.0
+        # New inviter at the cap must evict u1 (the true oldest by arrival).
+        clock[0] = 2001.0
+        st.receive(_invite("newcomer", "newcomer:sess"))
+        st.drain_idle()
+        assert "u1" not in st.pending_invites  # true oldest-by-arrival evicted
+        assert "u0" in st.pending_invites  # refreshed — not evicted
+        assert "newcomer" in st.pending_invites
+        assert len(st.pending_invites) == MAX_PENDING_INVITES
 
     def test_bound_never_exceeded(self) -> None:
         st = _make_state()

@@ -404,6 +404,118 @@ class TestDoTalk:
         assert state.talk.phase is TalkPhase.IDLE  # rolled back, not stuck CONNECTED
         assert "not sent" in result.lower()
 
+    async def test_pending_invite_survives_failed_resolution(self) -> None:
+        """An invite whose target fails to resolve stays acceptable later.
+
+        Consuming before resolution would pop the invite and leave it
+        unacceptable when the resolve then fails (offline/ambiguous tty).
+        """
+        state, _ = self._state([])  # jfreeman offline → resolution fails
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # record the pending invite
+        assert "jfreeman" in state.talk.pending_invites
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "not online" in result.lower()
+        assert "jfreeman" in state.talk.pending_invites  # NOT consumed on failure
+
+    async def test_successful_accept_consumes_invite(self) -> None:
+        """A successful accept still consumes the pending invite (one-shot)."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()
+        assert "jfreeman" in state.talk.pending_invites
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert state.talk.pending_invites == {}  # consumed on success
+        assert state.talk.phase is TalkPhase.CONNECTED
+
+    async def test_connected_message_publish_failure_returns_transient(self) -> None:
+        """A send_message failure while connected returns a message, never raises."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.begin_connected(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman:tty6", "hello"
+            )
+        assert "not sent" in result.lower()  # transient, actionable
+        assert state.talk.phase is TalkPhase.CONNECTED  # connection left intact
+
+
+class TestTalkDescriptionActions:
+    """The idle-activity ``talk`` descriptions direct talk_read, not talk_end.
+
+    ``talk_end`` returns "No active talk session" and clears nothing when idle
+    with only pending invites or queued messages — ``talk_read`` is the action.
+    """
+
+    def _talk(self) -> TalkState:
+        relay = MagicMock(spec=NatsRelay)
+        return TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+
+    def test_pending_invite_description_directs_talk_read(self) -> None:
+        talk = self._talk()
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "jfreeman",
+                "from_tty": "tty6",
+                "from_key": "jfreeman:75abc665",
+                "body": "wants to talk",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        talk.drain_idle()
+        desc = _talk_description(talk)
+        assert "[TALK]" in desc
+        assert "talk_read" in desc
+        assert "talk_end" not in desc
+
+    def test_queued_message_description_directs_talk_read(self) -> None:
+        talk = self._talk()
+        talk.receive(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_key": "eric:def67890",
+                "body": "hi",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        desc = _talk_description(talk)
+        assert "[TALK]" in desc
+        assert "talk_read" in desc
+        assert "talk_end" not in desc
+
 
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:

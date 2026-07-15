@@ -767,7 +767,10 @@ async def _handle_repl_talk(
     # Responding to a pending invite targets the exact inviting session;
     # otherwise the address itself must name the session (talk is
     # session-scoped — DES-043).
-    pending = ctx.talk.consume_pending_invite(user_target)
+    # Peek, do not consume yet: resolving the target can fail (offline,
+    # ambiguous tty), and consuming before resolution would strand an invite
+    # that could no longer be accepted.  Consume only once resolution succeeds.
+    pending = ctx.talk.pending_invites.get(user_target)
     responding = pending is not None
     resolve_user, resolve_tty = (user_target, tty_target)
     if pending is not None:
@@ -783,6 +786,8 @@ async def _handle_repl_talk(
     except ValueError as exc:
         print(f"Error: {exc}")
         return
+    if pending is not None:
+        ctx.talk.consume_pending_invite(user_target)  # commit — resolution ok
 
     # Enter the appropriate phase before the handshake so the accept poll and
     # connected drain see the partner key (talk.tex SendInvite / RespondToInvite).

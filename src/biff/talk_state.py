@@ -198,17 +198,21 @@ class TalkState:
         session-scoped: a control frame is dropped unless ``nto == myKey``
         (talk.tex ``ReceiveNotForSession``), so a forged or reordered frame
         with a foreign or empty ``nto`` cannot apply to all of our sessions
-        (DES-043).  A keyless *non-control* frame is not a modeled talk frame
-        at all — it is a mail/wall wake-poke riding the talk subject — so it
-        is accepted (regardless of ``nto``) purely to wake the poller.  On
+        (DES-043).  A wake poke — a mail/wall notification riding the talk
+        subject with a missing or unrecognized ``type`` — is not a modeled talk
+        frame: it wakes the poller (returns ``True``) but is *never* enqueued,
+        so a ``/write`` mail body cannot surface as a phantom talk message.  On
         overflow, drops the oldest to retain the newest ``MAX_TALK_QUEUE``
-        (drop-oldest).  Returns ``True`` when the notification was enqueued.
+        (drop-oldest).  Returns ``True`` when the frame should wake the poller
+        (a real frame was enqueued, or a wake poke was accepted).
         """
         notif = TalkNotification.from_payload(raw)
         if notif.nfrom_key == self._my_key:
             return False  # ReceiveSelfEcho
         if notif.nto != self._my_key and (notif.nto or notif.is_control):
             return False  # ReceiveNotForSession — foreign target or keyless control
+        if notif.is_wake_poke:
+            return True  # mail/wall poke — wake the poller, enqueue nothing
         if notif.is_withdraw:
             return self._withdraw(notif.nfrom, notif.nfrom_key)  # WithdrawArrive
         if len(self._queue) >= MAX_TALK_QUEUE:
@@ -290,7 +294,12 @@ class TalkState:
             return
         at_capacity = len(self._pending) >= MAX_PENDING_INVITES
         if notif.nfrom not in self._pending and at_capacity:
-            self._pending.pop(next(iter(self._pending)))  # evict oldest-by-arrival
+            # Evict the true oldest by arrival time, not by dict insertion order:
+            # superseding an inviter refreshes its ``arrived`` without moving its
+            # key, so ``next(iter(...))`` could evict a recently-refreshed invite
+            # (notification.tex TalkInviteArriveOverflow evicts oldest-by-arrival).
+            oldest = min(self._pending, key=lambda u: self._pending[u].arrived)
+            del self._pending[oldest]
         self._pending[notif.nfrom] = invite
 
     def poll_accept(self) -> tuple[AcceptOutcome, list[TalkNotification]]:

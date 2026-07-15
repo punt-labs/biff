@@ -60,9 +60,12 @@ If `$ARGUMENTS` is `force`, run both pulls unconditionally.
 
 1. Look at your own current `talk` and `read_messages` tool descriptions. Do not
    call any tool for this step.
-2. **Talk** — pull only if the `talk` description begins with the marker
-   `[TALK]` (emitted by refresh_talk; the base starts with "Start a real-time
-   conversation" and carries no marker):
+2. **Talk** — pull only if the `talk` description begins with `[TALK]` AND
+   signals *new activity* — it contains `wants to talk` (a pending invite) or
+   `new message` (queued messages). Do NOT pull on the bare connected form
+   (`[TALK] connected to …`): that marks an already-open session with nothing
+   new to read, so calling `talk_read` every tick just churns. The base
+   description (no `[TALK]`) starts with "Start a real-time conversation".
    - Call `mcp__plugin_biff_tty__talk_read`.
    - If it reports a pending invite (a line with "wants to talk"), tell the user
      who wants to talk and that `/biff:talk @<user>:<tty>` accepts it — use the

@@ -18,6 +18,12 @@ from typing import TYPE_CHECKING, Self
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+_CONTROL_TYPES = frozenset({"invite", "accept", "end", "withdraw"})
+"""The session-scoped control frame types (talk.tex control notifications)."""
+
+_KNOWN_TYPES = _CONTROL_TYPES | {"message"}
+"""Every modeled talk frame type — a frame typed outside this set is a wake poke."""
+
 
 class TalkPhase(Enum):
     """The three phases of a talk session from one side's perspective."""
@@ -54,19 +60,33 @@ class PendingInvite:
     arrived: float
 
     def __post_init__(self) -> None:
-        """Enforce HintNamesSession: the key must name a session (``user:tty``).
+        """Enforce HintNamesSession: the key must name *this inviter's* session.
 
         A key missing either half — colonless (``user``), empty-tty (``user:``),
         or empty-user (``:tty``) — could only render a hint that fails at the
         prompt (``talk @user`` or ``talk @:tty``), so it is rejected at
         construction to keep every recorded invite's hint runnable
-        (notification.tex ``HintNamesSession``).  This is the single validation
-        gate — the wire boundary constructs through :meth:`from_notification`
-        and inherits it.
+        (notification.tex ``HintNamesSession``).
+
+        The key's user half must also equal ``user`` — the frame's ``from``.
+        The accept path derives its target tty from ``session_key`` while the
+        pending set is keyed by ``user``, so a frame whose ``from`` and
+        ``from_key`` name different users (``user=A``, ``session_key=B:tty``)
+        would let an accept addressed to ``A`` connect to ``B`` instead.  A
+        mismatch is a forged or corrupt frame and is rejected here.
+
+        This is the single validation gate — the wire boundary constructs
+        through :meth:`from_notification` and inherits it.
         """
-        user, sep, tty = self.session_key.partition(":")
-        if not user or not sep or not tty:
+        key_user, sep, tty = self.session_key.partition(":")
+        if not key_user or not sep or not tty:
             msg = f"session key must name a session (user:tty): {self.session_key!r}"
+            raise ValueError(msg)
+        if key_user != self.user:
+            msg = (
+                f"invite user {self.user!r} does not match session-key user "
+                f"{key_user!r}"
+            )
             raise ValueError(msg)
 
     @classmethod
@@ -122,12 +142,16 @@ class TalkNotification:
     def from_payload(cls, raw: Mapping[str, object]) -> Self:
         """Build a notification from a raw NATS JSON payload.
 
-        Unknown ``type`` defaults to ``message`` — matching the REPL's
-        historical drain behaviour where any non-control frame renders
-        as a conversation line.
+        A missing or unrecognized ``type`` yields a wake-poke frame
+        (:attr:`is_wake_poke`) — the shape a mail/wall notification takes when
+        it rides the talk subject purely to wake the poller.  Such a frame is
+        never enqueued or surfaced as a conversation line, so a ``/write`` mail
+        body cannot appear as a phantom talk message.  The ``type`` is preserved
+        verbatim (defaulting to the empty string) rather than coerced to
+        ``message``, which would resurrect that phantom.
         """
         return cls(
-            ntype=str(raw.get("type", "message")),
+            ntype=str(raw.get("type", "")),
             nfrom=str(raw.get("from", "?")),
             nfrom_tty=str(raw.get("from_tty", "")),
             nfrom_key=str(raw.get("from_key", "")),
@@ -164,7 +188,19 @@ class TalkNotification:
         broadcast message poke (write/wall mail notification) is not control
         and legitimately carries no target key.
         """
-        return self.ntype in {"invite", "accept", "end", "withdraw"}
+        return self.ntype in _CONTROL_TYPES
+
+    @property
+    def is_wake_poke(self) -> bool:
+        """Whether this frame is a bare wake poke, not a modeled talk frame.
+
+        A ``/write`` or ``/wall`` mail notification rides the talk subject with
+        no ``type`` purely to wake the poller; a frame whose ``type`` is missing
+        or unrecognized is such a poke.  It wakes the poller so the next tick
+        re-checks, but is never enqueued or surfaced as a conversation line —
+        otherwise a mail body would appear as a phantom talk message.
+        """
+        return self.ntype not in _KNOWN_TYPES
 
 
 @dataclass(frozen=True, slots=True)

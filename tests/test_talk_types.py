@@ -68,9 +68,27 @@ class TestTalkNotification:
         assert n.nfrom_key == OTHER_KEY
         assert n.nbody == "yo"
 
-    def test_unknown_type_defaults_to_message(self) -> None:
+    def test_missing_type_is_wake_poke(self) -> None:
+        """A typeless frame (mail/wall poke) parses as a wake poke, not a message.
+
+        The ``type`` is preserved empty rather than coerced to ``message`` so
+        the poke wakes the poller without surfacing a phantom conversation line.
+        """
         n = TalkNotification.from_payload({"from": "eric", "from_key": OTHER_KEY})
-        assert n.ntype == "message"
+        assert n.ntype == ""
+        assert n.is_wake_poke
+        assert not n.is_control
+
+    def test_unknown_type_is_wake_poke(self) -> None:
+        """A frame typed outside the modeled set is a wake poke, never surfaced."""
+        n = TalkNotification.from_payload({"type": "garbage", "from_key": OTHER_KEY})
+        assert n.is_wake_poke
+
+    def test_known_types_are_not_wake_pokes(self) -> None:
+        invite = TalkNotification.from_payload(_invite("e", OTHER_KEY))
+        message = TalkNotification.from_payload(_message("e", OTHER_KEY, "y"))
+        assert not invite.is_wake_poke
+        assert not message.is_wake_poke
 
     def test_missing_fields_default_to_placeholders(self) -> None:
         n = TalkNotification.from_payload({})
@@ -134,6 +152,27 @@ class TestPendingInvite:
     def test_well_formed_key_accepted(self) -> None:
         inv = PendingInvite(user="eric", session_key=OTHER_KEY, tty="tty2", arrived=0.0)
         assert inv.session_key == OTHER_KEY
+
+    def test_user_mismatched_key_rejected(self) -> None:
+        """A frame whose ``from`` and ``from_key`` name different users is forged.
+
+        The accept path derives its target from ``session_key`` while the
+        pending set is keyed by ``user``; a mismatch would let an accept
+        addressed to ``eric`` connect to ``mallory`` instead, so it is dropped
+        at construction.
+        """
+        with pytest.raises(ValueError, match="does not match session-key user"):
+            PendingInvite(
+                user="eric", session_key="mallory:def67890", tty="tty2", arrived=0.0
+            )
+
+    def test_from_notification_rejects_user_mismatch(self) -> None:
+        """The wire boundary drops an invite whose ``from`` and key user differ."""
+        notif = TalkNotification.from_payload(
+            {"type": "invite", "from": "eric", "from_key": "mallory:sess"}
+        )
+        with pytest.raises(ValueError, match="does not match session-key user"):
+            PendingInvite.from_notification(notif)
 
     def test_from_notification_carries_display_tty(self) -> None:
         notif = TalkNotification.from_payload(_invite("eric", OTHER_KEY, tty="tty2"))

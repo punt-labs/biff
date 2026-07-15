@@ -159,7 +159,10 @@ async def _do_talk(
     await update_current_session(state)
     user, tty = parse_address(to)
 
-    pending = talk_state.consume_pending_invite(user)
+    # Peek, do not consume yet: resolving the target can fail (offline,
+    # ambiguous tty), and consuming before resolution would strand an invite
+    # that could no longer be accepted.  Consume only once resolution succeeds.
+    pending = talk_state.pending_invites.get(user)
     resolve_user, resolve_tty = (user, tty)
     if pending is not None:
         resolve_user, _, resolve_tty = pending.session_key.partition(":")
@@ -171,6 +174,7 @@ async def _do_talk(
         return str(exc)
 
     if pending is not None:
+        talk_state.consume_pending_invite(user)  # commit — resolution succeeded
         # Name the connected partner by the inviter's DISPLAY tty (``ttyN``),
         # not the session-key hex, so the connected hint reads ``talk @user:ttyN``
         # — the address ``/who`` shows and ``resolve_talk_target`` matches.
@@ -193,9 +197,19 @@ async def _do_talk(
     if connected_here:
         if not message:
             return f"Already connected to {display}. Provide a message to send."
-        await talk_state.send_message(
-            target_user=user, to_key=relay_key, body=message, target_repo=target_repo
-        )
+        try:
+            await talk_state.send_message(
+                target_user=user,
+                to_key=relay_key,
+                body=message,
+                target_repo=target_repo,
+            )
+        except (NatsError, TimeoutError, OSError):
+            # The message publish failed transiently (disconnect/timeout). The
+            # connection is left intact — this is a best-effort core-NATS
+            # publish, not a teardown — so the caller can simply retry.
+            await refresh_talk(mcp, state)
+            return f"Could not reach {display} — message not sent; try again."
         await refresh_talk(mcp, state)
         return f'Sent to {display}: "{terminal_safe(message[:_MAX_BODY])}".'
 
