@@ -364,8 +364,10 @@ async def _send_connected_line(
     wedged or reconnecting relay must never crash the REPL out of ``asyncio.run``
     with a lost line, so a failed publish prints a notice and the loop survives
     (the ``end`` case still breaks to idle; the ``finally`` in ``_repl_talk``
-    resets, and the peer clears via the TTL sweep).  This mirrors the server
-    twin, which catches the same trio and returns "try again" intact.
+    resets).  A connected hangup has no TTL sweep — the pending-invite sweep
+    reaps invites only, never a live session — so a lost ``end`` may leave the
+    peer connected until it next interacts; the printed notice says end was not
+    sent.  This mirrors the server twin, which catches the same trio intact.
     """
     if line.lower() == "end":
         try:

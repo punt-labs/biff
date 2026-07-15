@@ -362,9 +362,13 @@ async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
     hangs up (``end``).  The local reset and description refresh happen
     *before* and *regardless of* the publish: the frame is a best-effort
     core-NATS publish, and a wedged or reconnecting relay must never strand
-    the local session in a phantom talk state.  On a transient publish
-    failure the peer still clears via the pending-invite time-to-live sweep
-    (notification.tex ExpirePendingInvite), so we say so.
+    the local session in a phantom talk state.  A transient failure has
+    different consequences per phase: a lost *withdraw* still clears the
+    invitee via the pending-invite time-to-live sweep (notification.tex
+    ExpirePendingInvite), but a lost *end* has no such recovery — the TTL
+    sweep reaps pending invites only, never a CONNECTED session, so the peer
+    may stay connected until it next interacts.  The returned text names the
+    real per-phase outcome rather than promising a timeout that does not apply.
     """
     talk_state = state.talk
     if talk_state.phase is TalkPhase.IDLE:
@@ -383,17 +387,30 @@ async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
         except (NatsError, TimeoutError, OSError):
             # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
             # so a WARNING here would dump this best-effort-publish traceback
-            # into the interactive REPL. The peer still clears via the TTL sweep.
+            # into the interactive REPL.
+            recovery = (
+                "invitee falls back to the pending-invite TTL sweep"
+                if was_inviting
+                else "no TTL sweep for a connected session; peer may stay connected"
+            )
             logger.info(
-                "talk_end publish to %s failed; peer falls back to the TTL sweep",
+                "talk_end publish to %s failed; %s",
                 partner,
+                recovery,
                 exc_info=True,
             )
             transient = True
     await refresh_talk(mcp, state)
     if transient:
+        if was_inviting:
+            return (
+                f"Talk invite to {partner} withdrawn locally; "
+                "their pending invite times out in ~5 min."
+            )
         return (
-            f"Talk session with {partner} ended locally; peer will time out in ~5 min."
+            f"Talk session with {partner} ended locally, but reaching them failed — "
+            "they may not know the talk ended; send nothing further or ask them to "
+            "run talk_end."
         )
     return f"Talk session with {partner} ended."
 

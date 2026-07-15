@@ -236,8 +236,13 @@ class TestValidatedSenderKey:
 class TestTalkEndResilience:
     """talk_end resets local state even when the best-effort publish fails."""
 
-    async def test_publish_failure_still_resets_and_refreshes(self) -> None:
-        """A wedged relay must not strand the session in a phantom talk state."""
+    async def test_inviting_withdraw_failure_cites_the_ttl_sweep(self) -> None:
+        """A wedged relay must not strand the session in a phantom talk state.
+
+        The INVITING withdraw legitimately cites the TTL sweep: the invitee's
+        pending invite is reaped by ``PENDING_INVITE_TTL`` (unlike a connected
+        session), so the ~5-min timeout promise is accurate here.
+        """
         relay = MagicMock(spec=NatsRelay)
         relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
         talk = TalkState(
@@ -258,7 +263,40 @@ class TestTalkEndResilience:
             )
         assert talk.phase is TalkPhase.IDLE  # reset despite the publish failure
         refresh.assert_awaited_once()  # description refreshed regardless
-        assert "time out" in result.lower()  # actionable transient message
+        assert "~5 min" in result  # the accurate pending-invite TTL promise
+
+    async def test_connected_hangup_failure_names_real_outcome_not_ttl(self) -> None:
+        """A failed connected hangup must not promise a TTL/auto-timeout recovery.
+
+        ``PENDING_INVITE_TTL`` reaps pending invites, not a CONNECTED session, so
+        a lost ``end`` frame leaves the peer connected — there is no ~5-min sweep
+        for a live conversation.  The returned text must name that real outcome
+        instead of the false reassurance the inviting-withdraw path can honestly
+        make.
+        """
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_connected(partner="eric", partner_tty="def", partner_key="eric:def")
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        with patch.object(talk_mod, "refresh_talk", AsyncMock()):
+            result = await talk_mod._do_talk_end(
+                cast("FastMCP[ServerState]", MagicMock()),
+                cast("ServerState", state),
+            )
+        assert talk.phase is TalkPhase.IDLE  # local session ended regardless
+        lowered = result.lower()
+        assert "min" not in lowered  # no false ~5-min timeout promise
+        assert "time out" not in lowered  # no false auto-timeout claim
+        assert "eric" in result  # names the partner
+        assert "may not" in lowered  # states the peer might not know
 
     async def test_publish_failure_logs_at_info_not_warning(
         self, caplog: pytest.LogCaptureFixture
