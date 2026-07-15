@@ -20,6 +20,7 @@ from biff.__main__ import (
     _enter_talk_phase,
     _format_idle_banners,
     _format_talk_lines,
+    _handle_repl_talk,
     _print_talk_banner,
     _repl_talk,
     _run_talk_handshake,
@@ -529,3 +530,74 @@ class TestReplTalkSendResilience:
         await self._run(ctx, ["end"])
         assert ctx.talk.phase is TalkPhase.IDLE
         assert "not sent" in capsys.readouterr().out.lower()
+
+
+# ---------------------------------------------------------------------------
+# _handle_repl_talk — responder accept-failure restores the invite (CR-2)
+# ---------------------------------------------------------------------------
+
+
+class TestReplAcceptRestoresPendingInvite:
+    """A responder whose accept publish fails keeps the invite acceptable.
+
+    The REPL twin of the MCP ``_accept_invite`` restore: consuming the invite
+    before the accept and not restoring it would leave a retry sending a fresh
+    outbound invite instead of re-accepting.
+    """
+
+    @staticmethod
+    def _invite_frame(to_key: str) -> dict[str, str]:
+        return {
+            "type": "invite",
+            "from": "jfreeman",
+            "from_tty": "tty6",
+            "from_key": "jfreeman:75abc665",
+            "body": "wants to talk",
+            "to_key": to_key,
+        }
+
+    async def test_accept_publish_failure_restores_invite(self) -> None:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        relay.talk_notify_subject = MagicMock(return_value="biff.t.talk.notify.jf")
+        relay.get_sessions_for_repos = AsyncMock(
+            return_value=[
+                UserSession(
+                    user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo"
+                )
+            ]
+        )
+        relay.get_session = AsyncMock(return_value=None)
+        relay.update_session = AsyncMock()
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        talk.receive(self._invite_frame("kai:kaihex01"))
+        talk.drain_idle()  # record the pending invite
+        assert "jfreeman" in talk.pending_invites
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.relay = relay
+        ctx.session_key = "kai:kaihex01"
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+        ctx.config.repo_name = "myrepo"
+        ctx.visible_repos = frozenset({"myrepo"})
+
+        await _handle_repl_talk(
+            ctx,
+            ["@jfreeman"],
+            asyncio.Queue(),
+            asyncio.Event(),
+            threading.Event(),
+            [""],
+            "kai> ",
+            ReplDisplay(),
+        )
+
+        assert talk.phase is TalkPhase.IDLE  # not stranded CONNECTED
+        assert "jfreeman" in talk.pending_invites  # restored for a retry

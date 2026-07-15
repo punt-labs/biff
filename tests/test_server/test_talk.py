@@ -404,6 +404,51 @@ class TestDoTalk:
         assert state.talk.phase is TalkPhase.IDLE  # rolled back, not stuck CONNECTED
         assert "not sent" in result.lower()
 
+    async def test_accept_publish_failure_restores_pending_invite(self) -> None:
+        """A failed accept publish must leave the invite acceptable for a retry.
+
+        Consuming the invite before the publish and not restoring it on failure
+        would strand the responder: the retry sends a fresh *outbound* invite
+        instead of re-accepting.  The invite is restored so a retry re-accepts.
+        """
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert "jfreeman" in state.talk.pending_invites  # restored, not lost
+
+    async def test_retry_after_accept_failure_reaccepts_not_reinvites(self) -> None:
+        """The restored invite lets a retry re-accept rather than re-invite."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, nc = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+            # Relay recovers; the retry must re-accept the still-pending invite.
+            state.relay.get_nc = AsyncMock(return_value=nc)
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert state.talk.phase is TalkPhase.CONNECTED
+        assert state.talk.pending_invites == {}  # consumed on the successful retry
+        sent_type = json.loads(nc.publish.call_args[0][1])["type"]
+        assert sent_type == "accept"  # re-accept, not a fresh outbound invite
+
     async def test_pending_invite_survives_failed_resolution(self) -> None:
         """An invite whose target fails to resolve stays acceptable later.
 

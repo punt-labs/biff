@@ -553,6 +553,18 @@ class TalkState:
         """
         return self._pending.pop(user, None)
 
+    def restore_pending_invite(self, invite: PendingInvite) -> None:
+        """Re-insert an invite consumed by a failed accept publish (CR-2).
+
+        The accept path pops the invite *before* publishing the accept frame; a
+        transient publish failure would otherwise discard it, so a retry would
+        send a fresh *outbound* invite instead of re-accepting.  Restoring keeps
+        the invite acceptable on the next attempt.  A newer invite from the same
+        user that arrived meanwhile is not overwritten (``setdefault``), so the
+        restore never clobbers a supersession.
+        """
+        self._pending.setdefault(invite.user, invite)
+
     def reset(self) -> None:
         """Return to idle, clearing the partner sentinels (talk.tex LocalEnd)."""
         self._phase = TalkPhase.IDLE

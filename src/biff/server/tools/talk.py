@@ -134,7 +134,9 @@ async def _accept_invite(
             f"Already in a talk with {talk_state.partner_display} — "
             "use talk_end (or 'end') first."
         )
-    talk_state.consume_pending_invite(user)  # commit — resolved and not busy elsewhere
+    # Consume, but keep the popped invite: a failed accept publish must restore
+    # it so a retry re-accepts rather than sending a fresh outbound invite (CR-2).
+    consumed = talk_state.consume_pending_invite(user)
     # Name the connected partner by the inviter's DISPLAY tty (``ttyN``), not the
     # session-key hex, so the connected hint reads ``talk @user:ttyN`` — the
     # address ``/who`` shows and ``resolve_talk_target`` matches.
@@ -155,9 +157,12 @@ async def _accept_invite(
                 target_repo=target_repo,
             )
     except (NatsError, TimeoutError, OSError):
-        # The accept publish failed transiently; roll the phase back to idle so
-        # the session is not stranded in a phantom CONNECTED state with no peer.
+        # The accept publish failed transiently; roll the phase back to idle and
+        # restore the consumed invite so the session is not stranded in a phantom
+        # CONNECTED state and the invite stays acceptable on retry.
         talk_state.reset()
+        if consumed is not None:
+            talk_state.restore_pending_invite(consumed)
         await refresh_talk(mcp, state)
         return f"Could not reach {accept_display} — accept not sent; try again."
     await refresh_talk(mcp, state)

@@ -882,8 +882,13 @@ async def _handle_repl_talk(
         pending=pending,
     ):
         return
-    if pending is not None:
-        ctx.talk.consume_pending_invite(user_target)  # commit — resolved, not busy
+    # Consume, but keep the popped invite: a responder whose accept publish fails
+    # must restore it so a retry re-accepts rather than sending a fresh outbound
+    # invite (CR-2).  For a responder, a False handshake result is always a
+    # publish failure (the accept path has no graceful cancel).
+    consumed = (
+        ctx.talk.consume_pending_invite(user_target) if pending is not None else None
+    )
 
     if not await _run_talk_handshake(
         ctx,
@@ -897,6 +902,8 @@ async def _handle_repl_talk(
         prompt_gate,
         target_repo=target_repo,
     ):
+        if consumed is not None:
+            ctx.talk.restore_pending_invite(consumed)
         return
 
     await _repl_talk(
