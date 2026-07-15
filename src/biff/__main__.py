@@ -253,6 +253,11 @@ async def _poll_notify(
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).debug("Notify check failed", exc_info=True)
 
+    # Age out invites whose inviter never returned and never withdrew, mirroring
+    # the server's _active_tick (notification.tex ExpirePendingInvite).  Without
+    # this the REPL never reaps a stranded invite, so a crashed inviter's [TALK]
+    # marker lingers until restart (CR-4).
+    ctx.talk.expire_stale_invites()
     notes.extend(_format_idle_banners(ctx.talk.drain_idle(), display))
 
     if notes and inline:

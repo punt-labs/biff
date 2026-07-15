@@ -15,13 +15,19 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from biff.__main__ import _handle_timestamps, _release_prompt, _repl_loop
+from biff.__main__ import (
+    _handle_timestamps,
+    _poll_notify,
+    _release_prompt,
+    _repl_loop,
+)
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.repl_display import ReplDisplay
 from biff.repl_notify import NotifyState
+from biff.talk_state import PENDING_INVITE_TTL
 
 
 def _make_ctx(tmp_path: object) -> CliContext:
@@ -1003,3 +1009,39 @@ class TestInvitingWaitInputGate:
 
         assert outcome is AcceptOutcome.NONE
         assert gate.is_set(), "gate must open so the stdin thread reads the line"
+
+
+class TestPollNotifyExpiresInvites:
+    """The REPL idle tick must age out stranded pending invites (CR-4).
+
+    Only the MCP poller called ``expire_stale_invites``; the REPL tick drained
+    banners but never reaped, so a crashed inviter's ``[TALK]`` marker never
+    cleared in the REPL.  The tick now mirrors the server's ``_active_tick``.
+    """
+
+    @pytest.mark.anyio()
+    async def test_repl_tick_ages_out_stale_invite(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = _make_ctx(tmp_path)
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: 0.0)
+        ctx.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def67890",
+                "body": "wants to talk",
+                "to_key": "kai:abc12345",
+            }
+        )
+        ctx.talk.drain_idle()  # record the pending invite at t=0
+        assert "eric" in ctx.talk.pending_invites
+
+        # The inviter never returns; the tick fires well past the TTL.
+        monkeypatch.setattr(
+            "biff.talk_state.time.monotonic", lambda: PENDING_INVITE_TTL + 1.0
+        )
+        await _poll_notify(ctx, NotifyState(), "prompt> ")
+
+        assert "eric" not in ctx.talk.pending_invites  # reaped by the tick
