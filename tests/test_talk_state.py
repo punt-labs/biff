@@ -1023,6 +1023,42 @@ class TestGrowOnlyGuards:
         assert st.pending_invites == {}
 
 
+class TestAgentAutoAcceptSignal:
+    """A higher-key mutual glare must tell the caller to publish an accept (F4).
+
+    ``drain_for_agent`` is pure state — it cannot publish — so it signals the
+    auto-accept through ``AgentDrain.auto_accept``.  The lower-key partner
+    connects ONLY on that accept frame (talk.tex ``MutualAutoAccept`` has no
+    symmetric fallback), so the caller (``talk_read``/``talk_listen``) must
+    publish it or the partner strands.
+    """
+
+    def test_mutual_glare_signals_the_invite_to_accept(self) -> None:
+        st = _make_state()  # MY_KEY 'kai:...' > OTHER_KEY 'eric:...' — higher side
+        st.begin_invite(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        st.receive(_invite("eric", OTHER_KEY, body="talk?"))
+        drain = st.drain_for_agent()
+        assert st.phase is TalkPhase.CONNECTED
+        assert drain.auto_accept is not None
+        assert drain.auto_accept.nfrom == "eric"
+        assert drain.auto_accept.nfrom_key == OTHER_KEY
+
+    def test_plain_invite_signals_no_auto_accept(self) -> None:
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))  # unsolicited — merely recorded
+        drain = st.drain_for_agent()
+        assert drain.auto_accept is None
+
+    def test_received_accept_signals_no_auto_accept(self) -> None:
+        """DrainAcceptWhileInviting owes no accept — we received one, not sent."""
+        st = _make_state()
+        st.begin_invite(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        st.receive(_accept("eric", OTHER_KEY))
+        drain = st.drain_for_agent()
+        assert st.phase is TalkPhase.CONNECTED
+        assert drain.auto_accept is None
+
+
 # ---------------------------------------------------------------------------
 # Pending-set bound — drop-oldest on new keys (notification.tex maxPending)
 # ---------------------------------------------------------------------------

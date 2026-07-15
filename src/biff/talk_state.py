@@ -425,10 +425,14 @@ class TalkState:
         """
         messages: list[TalkNotification] = []
         ended = False
+        auto_accept: TalkNotification | None = None
         for q in self._drain_queued():
             notif = q.notif
             if notif.is_invite:
-                self._absorb_invite(notif, arrived=q.arrived)
+                if self._absorb_invite(notif, arrived=q.arrived):
+                    # Higher-key mutual glare: the caller must publish an accept
+                    # so the lower-key partner connects (talk.tex MutualAutoAccept).
+                    auto_accept = notif
             elif notif.is_accept:
                 self._absorb_accept(notif)
             elif (
@@ -454,15 +458,19 @@ class TalkState:
         return AgentDrain(
             messages=tuple(messages),
             pending=dict(self._pending),
+            auto_accept=auto_accept,
         )
 
-    def _absorb_invite(self, notif: TalkNotification, *, arrived: float) -> None:
+    def _absorb_invite(self, notif: TalkNotification, *, arrived: float) -> bool:
         """Record an invite, or complete a mutual handshake by auto-accept.
 
         notification.tex TalkInviteArrive records the invite; when we are the
         higher-keyed party in a mutual invite it is instead consumed into a
         live connection (TalkAccept), so it is not left pending to strand the
-        marker after hangup.
+        marker after hangup.  Returns ``True`` when this frame auto-accepted a
+        mutual glare, so the caller can publish the obligatory accept frame
+        (talk.tex MutualAutoAccept); ``False`` when the invite was merely
+        recorded.
         """
         if (
             self._phase is TalkPhase.INVITING
@@ -471,8 +479,9 @@ class TalkState:
         ):
             self._phase = TalkPhase.CONNECTED
             self._pending.pop(notif.nfrom, None)
-            return
+            return True
         self._record_invite(notif, arrived=arrived)
+        return False
 
     def _absorb_accept(self, notif: TalkNotification) -> None:
         """Complete our outstanding invite when the invited session accepts.

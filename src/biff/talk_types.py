@@ -231,7 +231,16 @@ class AgentDrain:
     The connect and reset happen as side effects on the ``TalkState`` during
     the pass; this snapshot carries only what the front-end renders — the
     pending invites and the surfaced messages.
+
+    ``auto_accept`` names the invite that triggered a higher-key mutual-glare
+    auto-accept during the pass (talk.tex ``MutualAutoAccept``), or is ``None``
+    when no auto-accept occurred.  The caller must publish an ``accept`` frame to
+    that invite's origin: the lower-key partner connects ONLY on receiving it
+    (there is no symmetric fallback), so without this side effect the partner
+    strands.  ``None`` is the contract for "no glare completed", not a failure.
     """
 
     messages: tuple[TalkNotification, ...]
     pending: Mapping[str, PendingInvite]
+    # None is the documented "no mutual-glare auto-accept happened" contract.
+    auto_accept: TalkNotification | None = None

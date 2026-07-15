@@ -560,6 +560,98 @@ class TestDoTalk:
         nc.publish.assert_not_awaited()  # no accept sent to the stale key
 
 
+class TestAgentAutoAcceptPublish:
+    """talk_read/talk_listen publish the accept a mutual glare owes (F4).
+
+    ``drain_for_agent`` connects the higher-key side but is pure state; the
+    caller must emit the accept frame or the lower-key partner never connects
+    (talk.tex ``MutualAutoAccept``).
+    """
+
+    @staticmethod
+    def _state() -> tuple[MagicMock, AsyncMock]:
+        relay = MagicMock(spec=NatsRelay)
+        nc = AsyncMock()
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.eric")
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",  # 'kai' > 'eric' — the higher, auto-accepting side
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        return state, nc
+
+    async def test_publishes_accept_for_mutual_glare(self) -> None:
+        state, nc = self._state()
+        state.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "talk?",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        drain = state.talk.drain_for_agent()  # connects us; signals the accept
+        assert drain.auto_accept is not None
+
+        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+
+        payload = json.loads(nc.publish.call_args[0][1])
+        assert payload["type"] == "accept"
+        assert payload["to_key"] == "eric:def456"  # to the invited session
+
+    async def test_no_publish_without_auto_accept(self) -> None:
+        state, nc = self._state()
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "unsolicited",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        drain = state.talk.drain_for_agent()  # plain invite — no glare
+        assert drain.auto_accept is None
+
+        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+
+        nc.publish.assert_not_awaited()
+
+    async def test_publish_failure_is_swallowed(self) -> None:
+        state, _ = self._state()
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        state.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "talk?",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        drain = state.talk.drain_for_agent()
+
+        # Best-effort: a wedged relay must not raise out of talk_read.
+        await talk_mod._publish_agent_auto_accept(cast("ServerState", state), drain)
+        assert state.talk.phase is TalkPhase.CONNECTED  # still locally connected
+
+
 class TestDoTalkNoClobber:
     """Starting a new invite must never clobber a live talk (silent data loss).
 

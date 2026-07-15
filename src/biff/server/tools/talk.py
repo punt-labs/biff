@@ -298,6 +298,29 @@ async def _send_or_invite(
     return f"Invite sent to {display}. When they accept, talk_read shows replies."
 
 
+async def _publish_agent_auto_accept(state: ServerState, drain: AgentDrain) -> None:
+    """Publish the accept a higher-key mutual-glare auto-accept owes the partner.
+
+    ``drain_for_agent`` transitions the higher-key side to CONNECTED on a mutual
+    glare but cannot publish (it is pure state), so the caller must emit the
+    accept frame here: the lower-key partner connects ONLY on receiving it
+    (talk.tex ``MutualAutoAccept`` — no symmetric fallback), so skipping it
+    strands the partner and silently drops our messages there.  Best-effort like
+    every talk publish; on failure the partner falls back to the TTL sweep.
+    """
+    notif = drain.auto_accept
+    if notif is None:
+        return
+    try:
+        await state.talk.send_accept(target_user=notif.nfrom, to_key=notif.nfrom_key)
+    except (NatsError, TimeoutError, OSError):
+        logger.info(
+            "agent auto-accept to %s failed; partner may not have connected",
+            notif.nfrom,
+            exc_info=True,
+        )
+
+
 async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
     """Close the active talk session (talk.tex LocalEnd).
 
@@ -381,6 +404,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "Talk requires a NATS relay connection."
         await update_current_session(state)
         drain = state.talk.drain_for_agent()
+        await _publish_agent_auto_accept(state, drain)
         await refresh_talk(mcp, state)
         return format_agent_drain(drain) or _NO_MESSAGES
 
@@ -406,6 +430,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         while not state.talk.has_pending_traffic and loop.time() < deadline:
             await asyncio.sleep(0.25)
         drain = state.talk.drain_for_agent()
+        await _publish_agent_auto_accept(state, drain)
         await refresh_talk(mcp, state)
         return format_agent_drain(drain) or _NO_MESSAGES
 
