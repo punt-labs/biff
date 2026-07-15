@@ -326,15 +326,21 @@ class TalkState:
 
         Mirrors talk.tex ``DrainMessage`` (a message is displayed) and
         ``DrainEnd`` (an end frame returns us to idle).  Invites and
-        accepts are protocol noise here and dropped.  Returns
-        ``(notifications, ended)`` where *ended* is ``True`` when the
-        remote side hung up; on hangup the state resets to idle.
+        accepts are protocol noise here and dropped.  A message or end whose
+        originating key is not the connected partner's is a foreign frame
+        (talk.tex ``DrainForeignMessage`` / ``DrainForeignEnd``): it is
+        dequeued and skipped so a forged frame cannot inject a line into the
+        conversation or hang it up.  Returns ``(notifications, ended)`` where
+        *ended* is ``True`` when the partner hung up; on hangup the state
+        resets to idle.
         """
         surfaced: list[TalkNotification] = []
         ended = False
         for notif in self._drain():
             if notif.is_invite or notif.is_accept:
                 continue
+            if notif.nfrom_key != self._partner_key:
+                continue  # DrainForeignMessage / DrainForeignEnd — not the partner
             if notif.is_end:
                 ended = True
             surfaced.append(notif)
@@ -349,6 +355,10 @@ class TalkState:
         an accept from the invited session complete an outstanding invite
         (DrainAcceptWhileInviting / MutualAutoAccept), surfaces messages
         and end frames, and resets to idle on a remote hangup (DrainEnd).
+        While connected, a message or end from a key other than the partner's
+        is a foreign frame (``DrainForeignMessage`` / ``DrainForeignEnd``) and
+        is dequeued and skipped — never surfaced, never a hangup — so a forged
+        frame cannot inject a line or tear down the conversation.
         Returns an :class:`AgentDrain` snapshot; the ``talk`` tool then
         decides whether to accept, connect, or invite.
         """
@@ -359,6 +369,11 @@ class TalkState:
                 self._absorb_invite(notif, arrived=q.arrived)
             elif notif.is_accept:
                 self._absorb_accept(notif)
+            elif (
+                self._phase is TalkPhase.CONNECTED
+                and notif.nfrom_key != self._partner_key
+            ):
+                continue  # DrainForeignMessage / DrainForeignEnd — not the partner
             elif notif.is_end:
                 messages.append(notif)
                 self.reset()

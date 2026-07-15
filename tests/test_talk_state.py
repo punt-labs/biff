@@ -164,6 +164,9 @@ class TestReceive:
     def test_overflow_drops_oldest(self) -> None:
         """ReceiveOverflow: at the bound, the oldest is dropped, newest kept."""
         st = _make_state()
+        # Connected to the sender so drain_connected surfaces the partner's
+        # messages (DrainForeignMessage binds surfacing to the partner key).
+        st.begin_connected(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
         for i in range(MAX_TALK_QUEUE):
             st.receive(_message("eric", OTHER_KEY, f"m{i}"))
         assert st.queued == MAX_TALK_QUEUE
@@ -365,6 +368,80 @@ class TestDrainConnected:
         surfaced, ended = st.drain_connected()
         assert ended is True
         assert len(surfaced) == 2
+
+
+# ---------------------------------------------------------------------------
+# Connected-phase partner binding (talk.tex DrainForeignMessage / DrainForeignEnd)
+# ---------------------------------------------------------------------------
+
+
+_FORGED_KEY = "mallory:99999999"
+
+
+class TestConnectedPartnerBinding:
+    """While connected, only the partner's frames surface or hang up.
+
+    A forged message or end from a key other than ``partner_key`` is dequeued
+    and skipped — it cannot inject a line or tear down the conversation.
+    """
+
+    def _connected(self) -> TalkState:
+        st = _make_state()
+        st.begin_connected(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        return st
+
+    def test_drain_connected_drops_foreign_message(self) -> None:
+        st = self._connected()
+        st.receive(_message("mallory", _FORGED_KEY, "forged", to_key=MY_KEY))
+        surfaced, ended = st.drain_connected()
+        assert surfaced == []
+        assert ended is False
+
+    def test_drain_connected_ignores_foreign_end(self) -> None:
+        st = self._connected()
+        st.receive(_end("mallory", _FORGED_KEY))
+        _surfaced, ended = st.drain_connected()
+        assert ended is False
+        assert st.phase is TalkPhase.CONNECTED  # forged end did not hang us up
+
+    def test_drain_connected_surfaces_partner_message(self) -> None:
+        st = self._connected()
+        st.receive(_message("eric", OTHER_KEY, "real", to_key=MY_KEY))
+        surfaced, _ended = st.drain_connected()
+        assert [n.nbody for n in surfaced] == ["real"]
+
+    def test_drain_connected_partner_end_resets(self) -> None:
+        st = self._connected()
+        st.receive(_end("eric", OTHER_KEY))
+        _surfaced, ended = st.drain_connected()
+        assert ended is True
+        assert st.phase is TalkPhase.IDLE
+
+    def test_drain_for_agent_drops_foreign_message_while_connected(self) -> None:
+        st = self._connected()
+        st.receive(_message("mallory", _FORGED_KEY, "forged", to_key=MY_KEY))
+        drain = st.drain_for_agent()
+        assert drain.messages == ()
+
+    def test_drain_for_agent_ignores_foreign_end_while_connected(self) -> None:
+        st = self._connected()
+        st.receive(_end("mallory", _FORGED_KEY))
+        drain = st.drain_for_agent()
+        assert st.phase is TalkPhase.CONNECTED
+        assert not any(n.is_end for n in drain.messages)
+
+    def test_drain_for_agent_surfaces_partner_message_while_connected(self) -> None:
+        st = self._connected()
+        st.receive(_message("eric", OTHER_KEY, "real", to_key=MY_KEY))
+        drain = st.drain_for_agent()
+        assert [n.nbody for n in drain.messages] == ["real"]
+
+    def test_drain_for_agent_partner_end_resets_while_connected(self) -> None:
+        st = self._connected()
+        st.receive(_end("eric", OTHER_KEY))
+        drain = st.drain_for_agent()
+        assert any(n.is_end for n in drain.messages)
+        assert st.phase is TalkPhase.IDLE
 
 
 # ---------------------------------------------------------------------------
