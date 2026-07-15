@@ -901,6 +901,53 @@ class TestInviteCancelWithdraw:
         # The cancel returns us to idle (talk.tex LocalEnd).
         assert ctx.talk.phase is TalkPhase.IDLE
 
+    @pytest.mark.anyio()
+    async def test_ctrl_c_while_inviting_withdraws(self, tmp_path: object) -> None:
+        """A Ctrl-C during the inviting-wait routes through withdraw, not exit.
+
+        The interrupt is raised in the main thread inside the accept-wait; the
+        handshake catches it and clears the invitee's marker on the fast path
+        (ntWithdraw) before returning to the REPL, exactly like a typed ``end``.
+        """
+        from biff.__main__ import _talk_handshake
+        from biff.talk_state import TalkState
+        from biff.talk_types import TalkPhase
+
+        ctx = _make_ctx(tmp_path)
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
+        )
+        gate = threading_mod.Event()
+        with (
+            patch(
+                "biff.__main__._wait_for_talk_accept",
+                new_callable=AsyncMock,
+                side_effect=KeyboardInterrupt,
+            ),
+            patch.object(
+                TalkState, "send_withdraw", new_callable=AsyncMock
+            ) as spy_withdraw,
+            patch.object(TalkState, "send_end", new_callable=AsyncMock) as spy_end,
+        ):
+            proceed = await _talk_handshake(
+                ctx,
+                "eric",
+                "eric:def67890",
+                "eric:tty2",
+                ["talk", "@eric"],
+                responding=False,
+                aqueue=_make_aqueue([]),
+                notify_event=asyncio.Event(),
+                prompt_gate=gate,
+            )
+
+        assert proceed is False
+        spy_withdraw.assert_awaited_once_with(
+            target_user="eric", to_key="eric:def67890", target_repo=None
+        )
+        spy_end.assert_not_awaited()
+        assert ctx.talk.phase is TalkPhase.IDLE
+
 
 class TestInvitingWaitInputGate:
     """The inviting-wait must open the prompt gate so a typed line is read.

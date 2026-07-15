@@ -553,6 +553,32 @@ async def _wait_for_talk_accept(
         _release_prompt(prompt_gate)
 
 
+async def _withdraw_talk_invite(
+    ctx: CliContext,
+    target_user: str,
+    target_key: str,
+    *,
+    target_repo: str | None = None,
+) -> None:
+    """Withdraw an outstanding outgoing invite and return to idle.
+
+    Abandoning an invite publishes ``ntWithdraw`` so the invitee's ``[TALK]``
+    marker clears at once (notification.tex ``WithdrawArrive``) instead of
+    lingering until the TTL sweep, then resets to idle and clears the talk
+    plan.  A connected hangup is a distinct path (``send_end`` / ``DrainEnd``).
+    """
+    await ctx.talk.send_withdraw(
+        target_user=target_user, to_key=target_key, target_repo=target_repo
+    )
+    ctx.talk.reset()
+    try:
+        s = await ctx.relay.get_session(ctx.session_key)
+        if s is not None:
+            await ctx.relay.update_session(s.model_copy(update={"plan": ""}))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).debug("Failed to clear plan")
+
+
 async def _talk_handshake(
     ctx: CliContext,
     target_user: str,
@@ -594,23 +620,24 @@ async def _talk_handshake(
     print("\r\033[K", end="")
     print(f"Waiting for {display} to respond... (type 'end' to cancel)")
 
-    outcome = await _wait_for_talk_accept(ctx, aqueue, notify_event, prompt_gate)
+    # A Ctrl-C while inviting is a cancel, not a REPL exit: the interrupt
+    # is raised in the main thread inside the wait, so catch it here and
+    # route it through the same withdraw as a typed ``end`` (idempotent —
+    # only one of the two paths runs per handshake) before returning to the
+    # REPL, so the invitee's marker clears now rather than at the TTL sweep.
+    try:
+        outcome = await _wait_for_talk_accept(ctx, aqueue, notify_event, prompt_gate)
+    except KeyboardInterrupt:
+        print(f"\r\033[KTalk with {display} cancelled.")
+        await _withdraw_talk_invite(
+            ctx, target_user, target_key, target_repo=target_repo
+        )
+        return False
     if outcome is AcceptOutcome.NONE:
         print(f"Talk with {display} cancelled.")
-        # Abandoning an outgoing invite withdraws it (ntWithdraw) so the
-        # invitee's [TALK] marker clears at once (notification.tex
-        # WithdrawArrive) instead of lingering until the TTL sweep.  A
-        # connected hangup is a distinct path (send_end / DrainEnd).
-        await ctx.talk.send_withdraw(
-            target_user=target_user, to_key=target_key, target_repo=target_repo
+        await _withdraw_talk_invite(
+            ctx, target_user, target_key, target_repo=target_repo
         )
-        ctx.talk.reset()
-        try:
-            s = await ctx.relay.get_session(ctx.session_key)
-            if s is not None:
-                await ctx.relay.update_session(s.model_copy(update={"plan": ""}))
-        except Exception:  # noqa: BLE001
-            logging.getLogger(__name__).debug("Failed to clear plan")
         return False
     if outcome is AcceptOutcome.AUTO_ACCEPT:
         # Mutual invite: we are the higher key — accept the partner's invite
