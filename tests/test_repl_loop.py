@@ -903,11 +903,12 @@ class TestInviteCancelWithdraw:
 
     @pytest.mark.anyio()
     async def test_ctrl_c_while_inviting_withdraws(self, tmp_path: object) -> None:
-        """A Ctrl-C during the inviting-wait routes through withdraw, not exit.
+        """A Ctrl-C during the inviting-wait fires the withdraw, then exits.
 
-        The interrupt is raised in the main thread inside the accept-wait; the
-        handshake catches it and clears the invitee's marker on the fast path
-        (ntWithdraw) before returning to the REPL, exactly like a typed ``end``.
+        ``asyncio.run`` cancels the main task on SIGINT, so the accept-wait
+        raises ``CancelledError`` (not ``KeyboardInterrupt``). The handshake
+        clears the invitee's marker on the fast path (ntWithdraw) and re-raises
+        so the cancellation propagates and the process exits to the shell.
         """
         from biff.__main__ import _talk_handshake
         from biff.talk_state import TalkState
@@ -922,14 +923,15 @@ class TestInviteCancelWithdraw:
             patch(
                 "biff.__main__._wait_for_talk_accept",
                 new_callable=AsyncMock,
-                side_effect=KeyboardInterrupt,
+                side_effect=asyncio.CancelledError,
             ),
             patch.object(
                 TalkState, "send_withdraw", new_callable=AsyncMock
             ) as spy_withdraw,
             patch.object(TalkState, "send_end", new_callable=AsyncMock) as spy_end,
+            pytest.raises(asyncio.CancelledError),
         ):
-            proceed = await _talk_handshake(
+            await _talk_handshake(
                 ctx,
                 "eric",
                 "eric:def67890",
@@ -941,11 +943,11 @@ class TestInviteCancelWithdraw:
                 prompt_gate=gate,
             )
 
-        assert proceed is False
         spy_withdraw.assert_awaited_once_with(
             target_user="eric", to_key="eric:def67890", target_repo=None
         )
         spy_end.assert_not_awaited()
+        # The withdraw completes before the re-raise, returning us to idle.
         assert ctx.talk.phase is TalkPhase.IDLE
 
 

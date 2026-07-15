@@ -620,19 +620,22 @@ async def _talk_handshake(
     print("\r\033[K", end="")
     print(f"Waiting for {display} to respond... (type 'end' to cancel)")
 
-    # A Ctrl-C while inviting is a cancel, not a REPL exit: the interrupt
-    # is raised in the main thread inside the wait, so catch it here and
-    # route it through the same withdraw as a typed ``end`` (idempotent —
-    # only one of the two paths runs per handshake) before returning to the
-    # REPL, so the invitee's marker clears now rather than at the TTL sweep.
+    # A Ctrl-C during the invite fires the withdraw, then exits the REPL to
+    # the shell.  ``asyncio.run`` cancels the main task on SIGINT, so the wait
+    # raises ``CancelledError`` — not ``KeyboardInterrupt``, which the runner
+    # re-raises only after the task has unwound.  Catch the cancel, publish
+    # ``ntWithdraw`` (notification.tex WithdrawArrive) so the invitee's
+    # ``[TALK]`` marker clears at once rather than at the TTL sweep, then
+    # re-raise so the cancellation propagates and the process exits normally.
+    # ``end``/``exit``/``quit`` is the graceful in-REPL cancel that returns to
+    # the prompt (``AcceptOutcome.NONE`` below); Ctrl-C is a process exit.
     try:
         outcome = await _wait_for_talk_accept(ctx, aqueue, notify_event, prompt_gate)
-    except KeyboardInterrupt:
-        print(f"\r\033[KTalk with {display} cancelled.")
+    except (asyncio.CancelledError, KeyboardInterrupt):
         await _withdraw_talk_invite(
             ctx, target_user, target_key, target_repo=target_repo
         )
-        return False
+        raise
     if outcome is AcceptOutcome.NONE:
         print(f"Talk with {display} cancelled.")
         await _withdraw_talk_invite(
