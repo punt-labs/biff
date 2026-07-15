@@ -693,6 +693,26 @@ class TestExpiry:
         assert st.expire_stale_invites(now=after + PENDING_INVITE_TTL) == 0
         assert st.queued == 1
 
+    def test_drain_preserves_enqueue_ttl_anchor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The TTL is anchored to enqueue time, not drain time.
+
+        An invite enqueued at T and drained at T+X must still be reaped at
+        T+TTL — draining it into ``_pending`` must not restart the clock, or a
+        late drain would let the invite outlive the window (up to ~2x).
+        """
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: 1000.0)
+        st = _make_state()
+        st.receive(_invite("eric", OTHER_KEY))  # enqueued at T=1000
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: 1200.0)
+        st.drain_idle()  # drained 200s later; arrived must stay 1000, not 1200
+        assert st.pending_invites["eric"].arrived == 1000.0
+        # Not yet reaped just before the original window closes.
+        assert st.expire_stale_invites(now=1000.0 + PENDING_INVITE_TTL - 0.001) == 0
+        # Reaped exactly at enqueue + TTL — the drain did not restart the clock.
+        assert st.expire_stale_invites(now=1000.0 + PENDING_INVITE_TTL) == 1
+
 
 # ---------------------------------------------------------------------------
 # Grow-only regression guards (notification.tex TalkDrain / TalkAccept)

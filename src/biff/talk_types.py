@@ -70,18 +70,26 @@ class PendingInvite:
             raise ValueError(msg)
 
     @classmethod
-    def from_notification(cls, notif: TalkNotification) -> Self:
+    def from_notification(
+        cls, notif: TalkNotification, *, arrived: float | None = None
+    ) -> Self:
         """Build a pending invite from an invite frame, timing its arrival.
 
         The frame's session key is validated by ``__post_init__``; a malformed
         frame raises ``ValueError`` at this wire boundary rather than being
         recorded.
+
+        *arrived* preserves the frame's original enqueue time when the invite
+        is drained out of the bounded queue into ``talkPending``: without it the
+        TTL window would restart at drain time and a stale invite could outlive
+        ``PENDING_INVITE_TTL`` (up to ~2x).  Defaults to ``time.monotonic()``
+        for the direct-record path where the frame is recorded on arrival.
         """
         return cls(
             user=notif.nfrom,
             session_key=notif.nfrom_key,
             tty=notif.nfrom_tty,
-            arrived=time.monotonic(),
+            arrived=time.monotonic() if arrived is None else arrived,
         )
 
     @property

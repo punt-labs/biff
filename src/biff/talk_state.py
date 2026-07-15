@@ -236,13 +236,15 @@ class TalkState:
         (function override).  Returns every drained notification for the
         front-end to render.
         """
-        drained = self._drain()
-        for notif in drained:
-            if notif.is_invite:
-                self._record_invite(notif)
-        return drained
+        drained = self._drain_queued()
+        for q in drained:
+            if q.notif.is_invite:
+                self._record_invite(q.notif, arrived=q.arrived)
+        return [q.notif for q in drained]
 
-    def _record_invite(self, notif: TalkNotification) -> None:
+    def _record_invite(
+        self, notif: TalkNotification, *, arrived: float | None = None
+    ) -> None:
         """Record an invite in the pending set (notification.tex TalkInviteArrive).
 
         Construction is the single validation gate: a frame whose session key
@@ -250,9 +252,15 @@ class TalkState:
         and dropped here with a debug log rather than recorded, since it could
         only render a bare ``talk @user`` hint that fails at the prompt
         (HintNamesSession).  The newest invite from a user supersedes the older.
+
+        *arrived* carries the frame's original enqueue time so the TTL window is
+        anchored to arrival, not to drain time — otherwise a late drain would
+        restart the clock and let a stale invite outlive ``PENDING_INVITE_TTL``.
         """
         try:
-            self._pending[notif.nfrom] = PendingInvite.from_notification(notif)
+            self._pending[notif.nfrom] = PendingInvite.from_notification(
+                notif, arrived=arrived
+            )
         except ValueError:
             logger.debug("dropping malformed invite frame: %r", notif, exc_info=True)
 
@@ -333,9 +341,10 @@ class TalkState:
         decides whether to accept, connect, or invite.
         """
         messages: list[TalkNotification] = []
-        for notif in self._drain():
+        for q in self._drain_queued():
+            notif = q.notif
             if notif.is_invite:
-                self._absorb_invite(notif)
+                self._absorb_invite(notif, arrived=q.arrived)
             elif notif.is_accept:
                 self._absorb_accept(notif)
             elif notif.is_end:
@@ -348,7 +357,7 @@ class TalkState:
             pending=dict(self._pending),
         )
 
-    def _absorb_invite(self, notif: TalkNotification) -> None:
+    def _absorb_invite(self, notif: TalkNotification, *, arrived: float) -> None:
         """Record an invite, or complete a mutual handshake by auto-accept.
 
         notification.tex TalkInviteArrive records the invite; when we are the
@@ -364,7 +373,7 @@ class TalkState:
             self._phase = TalkPhase.CONNECTED
             self._pending.pop(notif.nfrom, None)
             return
-        self._record_invite(notif)
+        self._record_invite(notif, arrived=arrived)
 
     def _absorb_accept(self, notif: TalkNotification) -> None:
         """Complete our outstanding invite when the invited session accepts.
@@ -543,6 +552,18 @@ class TalkState:
         subject = relay.talk_notify_subject(target_user, target_repo=target_repo)
         await nc.publish(subject, payload)
 
+    def _drain_queued(self) -> list[QueuedNotification]:
+        """Pop all queued notifications in FIFO order, keeping arrival stamps.
+
+        Invite-recording drains (``drain_idle``, ``drain_for_agent``) need each
+        frame's enqueue time to carry an invite's original TTL anchor into
+        ``PendingInvite.arrived`` — so the pending window measures from arrival,
+        not from drain.
+        """
+        drained = list(self._queue)
+        self._queue.clear()
+        return drained
+
     def _drain(self) -> list[TalkNotification]:
         """Pop all queued notifications in FIFO order, shedding arrival stamps.
 
@@ -550,6 +571,4 @@ class TalkState:
         (:class:`QueuedNotification`); once drained, an invite's age is carried
         by its ``PendingInvite.arrived`` instead, so the frames surface bare.
         """
-        drained = [q.notif for q in self._queue]
-        self._queue.clear()
-        return drained
+        return [q.notif for q in self._drain_queued()]
