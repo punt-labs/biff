@@ -424,6 +424,7 @@ class TalkState:
         tool then decides whether to accept, connect, or invite.
         """
         messages: list[TalkNotification] = []
+        ended = False
         for q in self._drain_queued():
             notif = q.notif
             if notif.is_invite:
@@ -438,12 +439,18 @@ class TalkState:
             elif notif.is_end:
                 if self._phase is TalkPhase.CONNECTED:
                     messages.append(notif)  # DrainEnd — the connected partner
-                    self.reset()
+                    ended = True
                 # An end outside the connected phase is not a modeled reset
                 # (talk.tex DrainEnd guards phase = tpConnected): drop it so a
                 # forged end cannot cancel an outstanding outgoing invite.
             else:
                 messages.append(notif)
+        # Defer the reset until the whole batch drains: resetting mid-loop flips
+        # phase CONNECTED→IDLE and disarms the foreign-frame guard for every
+        # later frame, so a forged message trailing the partner's end would fall
+        # through and surface.  drain_connected uses the same deferred-reset.
+        if ended:
+            self.reset()
         return AgentDrain(
             messages=tuple(messages),
             pending=dict(self._pending),

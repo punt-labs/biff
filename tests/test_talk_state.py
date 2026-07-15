@@ -484,6 +484,62 @@ class TestConnectedPartnerBinding:
         assert any(n.is_end for n in drain.messages)
         assert st.phase is TalkPhase.IDLE
 
+    def test_partner_end_then_foreign_message_does_not_surface_foreign(self) -> None:
+        """A partner ``end`` mid-batch must not disarm the foreign-frame guard.
+
+        The partner's ``end`` resets the session to idle, but that reset must be
+        deferred until after the whole batch drains — otherwise every later
+        frame sees ``phase != CONNECTED`` and a forged ``message`` from any
+        session falls through and is surfaced.  The end is the connected
+        partner's; the trailing message is a foreign key that must be dropped.
+        """
+        st = self._connected()
+        st.receive(_end("eric", OTHER_KEY))  # the connected partner hangs up
+        st.receive(_message("mallory", _FORGED_KEY, "forged", to_key=MY_KEY))
+        drain = st.drain_for_agent()
+        bodies = [n.nbody for n in drain.messages]
+        assert "forged" not in bodies  # the foreign frame must not surface
+        assert st.phase is TalkPhase.IDLE  # the deferred reset still fires
+
+    def test_partner_end_then_foreign_end_does_not_hang_up_again(self) -> None:
+        """A trailing forged ``end`` after the partner's real end is dropped."""
+        st = self._connected()
+        st.receive(_end("eric", OTHER_KEY))
+        st.receive(_end("mallory", _FORGED_KEY))
+        drain = st.drain_for_agent()
+        ends = [n for n in drain.messages if n.is_end]
+        assert [n.nfrom_key for n in ends] == [OTHER_KEY]  # only the partner's end
+        assert st.phase is TalkPhase.IDLE
+
+    def test_partner_end_then_partner_message_still_surfaces(self) -> None:
+        """A trailing frame from the *partner* after its end still surfaces.
+
+        Deferring the reset keeps the partner key live for the rest of the
+        batch, so a stray in-order partner frame is not misclassified as
+        foreign — only a different key is dropped.
+        """
+        st = self._connected()
+        st.receive(_end("eric", OTHER_KEY))
+        st.receive(_message("eric", OTHER_KEY, "trailing", to_key=MY_KEY))
+        drain = st.drain_for_agent()
+        assert "trailing" in [n.nbody for n in drain.messages]
+        assert st.phase is TalkPhase.IDLE
+
+    def test_mid_batch_auto_accept_then_foreign_message_dropped(self) -> None:
+        """A mutual auto-accept mid-batch arms the foreign guard for later frames.
+
+        Once the higher-key side auto-connects on the partner's glare invite,
+        a trailing foreign-key message in the same batch must be dropped — the
+        connected-partner binding applies from the moment of connection.
+        """
+        st = _make_state()
+        st.begin_invite(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        st.receive(_invite("eric", OTHER_KEY, body="talk?"))  # mutual glare
+        st.receive(_message("mallory", _FORGED_KEY, "forged", to_key=MY_KEY))
+        drain = st.drain_for_agent()
+        assert st.phase is TalkPhase.CONNECTED
+        assert "forged" not in [n.nbody for n in drain.messages]
+
 
 # ---------------------------------------------------------------------------
 # Inviting-phase end binding (talk.tex DrainEnd guards phase = tpConnected)
