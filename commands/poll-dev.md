@@ -1,6 +1,6 @@
 ---
 description: Poll for talk/mail — "/biff-dev:poll-dev 5m" starts polling every 5m; "/biff-dev:poll-dev" checks now
-argument-hint: "[duration | force]"
+argument-hint: "[duration | n | force]"
 allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__talk_read", "mcp__plugin_biff-dev_tty__read_messages", "mcp__plugin_biff-dev_tty__set_poll_interval", "CronCreate", "CronList", "CronDelete"]
 ---
 <!-- markdownlint-disable MD041 -->
@@ -13,7 +13,7 @@ Arguments: $ARGUMENTS
 
 biff is passive/pull. Incoming talk (invites + real-time messages) and /write
 mail are held on the biff server and surface by MUTATING the descriptions of the
-`talk` and `read_messages` tools. One command, two forms:
+`talk` and `read_messages` tools. One command, three forms:
 
 ### A. `/biff-dev:poll-dev <duration>` — start polling every `<duration>`
 
@@ -36,9 +36,21 @@ Trigger when `$ARGUMENTS` is a duration like `1m`, `5m`, `10m` (parse the
      - `durable`: true
 3. Confirm what was set in one line: the poll interval, the loop job id from
    `CronCreate`, and the 7-day durable-loop expiry.
-4. Then fall through and run one check now (section B).
+4. Then fall through and run one check now (section C).
 
-### B. `/biff-dev:poll-dev` (no duration) — check now
+### B. `/biff-dev:poll-dev n` — stop polling
+
+Trigger when `$ARGUMENTS` is `n`, `off`, or `stop`. Turn the server-side cadence
+off and remove the recurring model check.
+
+1. Call `mcp__plugin_biff-dev_tty__set_poll_interval` with `interval` set to `n`
+   — this disables the server-side poll cadence.
+2. Remove the recurring `/loop` job: call `CronList`; for any job whose `prompt`
+   field exactly matches `/biff-dev:poll-dev`, call `CronDelete` on it.
+3. Confirm in one line: polling disabled and the loop job removed. Do NOT fall
+   through to a check.
+
+### C. `/biff-dev:poll-dev` (no duration) — check now
 
 Also the path when `$ARGUMENTS` is empty or `force`. Inspect the two live tool
 descriptions (the biff server mutates them and fires tools/list_changed when
