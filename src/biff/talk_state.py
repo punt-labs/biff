@@ -370,14 +370,18 @@ class TalkState:
 
         Records invites in ``pendingInvites`` (talk.tex DrainInvite), lets
         an accept from the invited session complete an outstanding invite
-        (DrainAcceptWhileInviting / MutualAutoAccept), surfaces messages
-        and end frames, and resets to idle on a remote hangup (DrainEnd).
-        While connected, a message or end from a key other than the partner's
-        is a foreign frame (``DrainForeignMessage`` / ``DrainForeignEnd``) and
-        is dequeued and skipped — never surfaced, never a hangup — so a forged
-        frame cannot inject a line or tear down the conversation.
-        Returns an :class:`AgentDrain` snapshot; the ``talk`` tool then
-        decides whether to accept, connect, or invite.
+        (DrainAcceptWhileInviting / MutualAutoAccept), surfaces messages,
+        and resets to idle on the connected partner's hangup (DrainEnd).
+        An ``end`` frame drives a reset only in the connected phase, since
+        talk.tex ``DrainEnd`` (and ``DrainForeignEnd``) guard
+        ``phase = tpConnected``: a forged or stray end while inviting or idle
+        is dequeued and dropped, never a reset, so it cannot cancel an
+        outgoing invite.  While connected, a message or end from a key other
+        than the partner's is a foreign frame (``DrainForeignMessage`` /
+        ``DrainForeignEnd``), dequeued and skipped — never surfaced, never a
+        hangup — so a forged frame cannot inject a line or tear down the
+        conversation.  Returns an :class:`AgentDrain` snapshot; the ``talk``
+        tool then decides whether to accept, connect, or invite.
         """
         messages: list[TalkNotification] = []
         for q in self._drain_queued():
@@ -392,8 +396,12 @@ class TalkState:
             ):
                 continue  # DrainForeignMessage / DrainForeignEnd — not the partner
             elif notif.is_end:
-                messages.append(notif)
-                self.reset()
+                if self._phase is TalkPhase.CONNECTED:
+                    messages.append(notif)  # DrainEnd — the connected partner
+                    self.reset()
+                # An end outside the connected phase is not a modeled reset
+                # (talk.tex DrainEnd guards phase = tpConnected): drop it so a
+                # forged end cannot cancel an outstanding outgoing invite.
             else:
                 messages.append(notif)
         return AgentDrain(

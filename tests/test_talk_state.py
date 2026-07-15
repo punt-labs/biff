@@ -446,6 +446,58 @@ class TestConnectedPartnerBinding:
 
 
 # ---------------------------------------------------------------------------
+# Inviting-phase end binding (talk.tex DrainEnd guards phase = tpConnected)
+# ---------------------------------------------------------------------------
+
+
+class TestInvitingPhaseEnd:
+    """An ``end`` frame resets only while connected — never while inviting.
+
+    ``talk.tex`` guards both ``DrainEnd`` and ``DrainForeignEnd`` on
+    ``phase = tpConnected``: no schema resets on an end while inviting.  A
+    forged ``end`` must not cancel an outstanding outgoing invite.
+    """
+
+    def _inviting(self, *, partner_key: str = OTHER_KEY) -> TalkState:
+        st = _make_state()
+        st.begin_invite(partner="eric", partner_tty="tty2", partner_key=partner_key)
+        return st
+
+    def test_foreign_end_while_inviting_does_not_reset(self) -> None:
+        st = self._inviting()
+        st.receive(_end("mallory", _FORGED_KEY))
+        drain = st.drain_for_agent()
+        assert st.phase is TalkPhase.INVITING  # forged end did not cancel the invite
+        assert not any(n.is_end for n in drain.messages)
+
+    def test_partner_keyed_end_while_inviting_does_not_reset(self) -> None:
+        """Even the invited session's end cannot reset an unaccepted invite.
+
+        There is no live connection to hang up before the accept, and
+        ``DrainEnd`` guards ``phase = tpConnected`` — so the end is dropped.
+        """
+        st = self._inviting()
+        st.receive(_end("eric", OTHER_KEY))
+        drain = st.drain_for_agent()
+        assert st.phase is TalkPhase.INVITING
+        assert not any(n.is_end for n in drain.messages)
+
+    def test_accept_still_connects_while_inviting(self) -> None:
+        """The invited partner's accept still completes the handshake."""
+        st = self._inviting()
+        st.receive(_accept("eric", OTHER_KEY))
+        st.drain_for_agent()
+        assert st.phase is TalkPhase.CONNECTED
+
+    def test_end_while_idle_does_not_reset_or_surface(self) -> None:
+        st = _make_state()
+        st.receive(_end("mallory", _FORGED_KEY))
+        drain = st.drain_for_agent()
+        assert st.phase is TalkPhase.IDLE
+        assert not any(n.is_end for n in drain.messages)
+
+
+# ---------------------------------------------------------------------------
 # consume_pending_invite (talk.tex §RespondToInvite consumption)
 # ---------------------------------------------------------------------------
 
