@@ -504,6 +504,21 @@ class TestDoTalkNoClobber:
             UserSession(user="eric", tty="eric789", tty_name="tty9", repo="myrepo"),
         ]
 
+    @staticmethod
+    def _record_invite(state: MagicMock, *, user: str, key: str, tty: str) -> None:
+        """Record a pending invite from *user* by feeding and draining a frame."""
+        state.talk.receive(
+            {
+                "type": "invite",
+                "from": user,
+                "from_tty": tty,
+                "from_key": key,
+                "body": "wants to talk",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        state.talk.drain_idle()
+
     async def test_connected_to_a_talk_b_refuses_and_keeps_connection(self) -> None:
         """``talk @B`` while connected to A blocks, keeps A, sends nothing."""
         state, nc = self._state(self._sessions())
@@ -584,6 +599,87 @@ class TestDoTalkNoClobber:
         assert "already in a talk" in result.lower()
         assert state.talk.phase is TalkPhase.INVITING  # invite to B untouched
         assert state.talk.partner_key == "eric:eric789"
+        nc.publish.assert_not_called()
+
+    async def test_connected_to_a_accept_b_refuses_and_keeps_connection(self) -> None:
+        """Accepting B's pending invite while connected to A blocks, keeps A."""
+        state, nc = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        state.talk.begin_connected(
+            partner="eric", partner_tty="tty9", partner_key="eric:eric789"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", "hi"
+            )
+        assert "already in a talk" in result.lower()
+        assert "eric:tty9" in result  # names the live partner A
+        assert state.talk.phase is TalkPhase.CONNECTED  # A not abandoned
+        assert state.talk.partner_key == "eric:eric789"  # still A
+        assert "jfreeman" in state.talk.pending_invites  # NOT consumed
+        nc.publish.assert_not_called()  # no accept frame sent to B
+
+    async def test_idle_accept_b_still_connects(self) -> None:
+        """Accepting B's pending invite while idle still connects (unchanged)."""
+        state, nc = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "connected to" in result.lower()
+        assert state.talk.phase is TalkPhase.CONNECTED
+        assert state.talk.partner_key == "jfreeman:75abc665"
+        assert state.talk.pending_invites == {}  # consumed on success
+        assert json.loads(nc.publish.call_args[0][1])["type"] == "accept"
+
+    async def test_inviting_b_accept_b_completes_mutual(self) -> None:
+        """Accepting B's invite while INVITING B (glare) connects, not refuses."""
+        state, _ = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        state.talk.begin_invite(
+            partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "connected to" in result.lower()  # same partner → completes
+        assert state.talk.phase is TalkPhase.CONNECTED
+        assert state.talk.partner_key == "jfreeman:75abc665"
+        assert state.talk.pending_invites == {}  # consumed on success
+
+    async def test_inviting_b_accept_c_refuses(self) -> None:
+        """Accepting C's invite while INVITING B blocks, keeps the B invite."""
+        state, nc = self._state(self._sessions())
+        self._record_invite(state, user="jfreeman", key="jfreeman:75abc665", tty="tty6")
+        state.talk.begin_invite(
+            partner="eric", partner_tty="tty9", partner_key="eric:eric789"
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "already in a talk" in result.lower()
+        assert state.talk.phase is TalkPhase.INVITING  # invite to B untouched
+        assert state.talk.partner_key == "eric:eric789"
+        assert "jfreeman" in state.talk.pending_invites  # C's invite NOT consumed
         nc.publish.assert_not_called()
 
 

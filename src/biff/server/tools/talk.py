@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-    from biff.talk_types import AgentDrain
+    from biff.talk_types import AgentDrain, PendingInvite
 
 logger = logging.getLogger(__name__)
 
@@ -113,16 +113,35 @@ async def _accept_invite(
     state: ServerState,
     *,
     user: str,
-    relay_tty: str,
+    pending: PendingInvite,
     relay_key: str,
     display: str,
+    resolve_tty: str,
     target_repo: str | None,
     message: str,
 ) -> str:
-    """Accept a pending invite (completing the human's handshake)."""
+    """Accept a pending invite, refusing if it would clobber a live talk.
+
+    Accepting B's invite while CONNECTED to a *different* peer A (or INVITING a
+    different peer) would overwrite the live connection with no end frame — the
+    accept-path twin of the new-invite clobber.  The invited session's key is
+    *relay_key*; the same-partner cases (a mutual glare completing, or an
+    idempotent re-accept of the current partner) share that key and pass.
+    """
     talk_state = state.talk
+    if talk_state.phase is not TalkPhase.IDLE and talk_state.partner_key != relay_key:
+        return (
+            f"Already in a talk with {talk_state.partner_display} — "
+            "use talk_end (or 'end') first."
+        )
+    talk_state.consume_pending_invite(user)  # commit — resolved and not busy elsewhere
+    # Name the connected partner by the inviter's DISPLAY tty (``ttyN``), not the
+    # session-key hex, so the connected hint reads ``talk @user:ttyN`` — the
+    # address ``/who`` shows and ``resolve_talk_target`` matches.
+    partner_tty = pending.tty or resolve_tty or ""
+    accept_display = f"{user}:{partner_tty}" if partner_tty else display
     talk_state.begin_connected(
-        partner=user, partner_tty=relay_tty, partner_key=relay_key
+        partner=user, partner_tty=partner_tty, partner_key=relay_key
     )
     try:
         await talk_state.send_accept(
@@ -140,11 +159,11 @@ async def _accept_invite(
         # the session is not stranded in a phantom CONNECTED state with no peer.
         talk_state.reset()
         await refresh_talk(mcp, state)
-        return f"Could not reach {display} — accept not sent; try again."
+        return f"Could not reach {accept_display} — accept not sent; try again."
     await refresh_talk(mcp, state)
     opening = f' Sent: "{terminal_safe(message[:_MAX_BODY])}".' if message else ""
     return (
-        f"Connected to {display} — accepted their invite.{opening} "
+        f"Connected to {accept_display} — accepted their invite.{opening} "
         "Use talk_read to see replies, talk_end to close."
     )
 
@@ -174,19 +193,14 @@ async def _do_talk(
         return str(exc)
 
     if pending is not None:
-        talk_state.consume_pending_invite(user)  # commit — resolution succeeded
-        # Name the connected partner by the inviter's DISPLAY tty (``ttyN``),
-        # not the session-key hex, so the connected hint reads ``talk @user:ttyN``
-        # — the address ``/who`` shows and ``resolve_talk_target`` matches.
-        partner_tty = pending.tty or resolve_tty or ""
-        accept_display = f"{user}:{partner_tty}" if partner_tty else display
         return await _accept_invite(
             mcp,
             state,
             user=user,
-            relay_tty=partner_tty,
+            pending=pending,
             relay_key=relay_key,
-            display=accept_display,
+            display=display,
+            resolve_tty=resolve_tty or "",
             target_repo=target_repo,
             message=message,
         )

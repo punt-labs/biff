@@ -324,6 +324,74 @@ class TestEnterTalkPhase:
         assert ctx.talk.partner_key == "eric:def456"
         assert "already in a talk" in capsys.readouterr().out.lower()
 
+    def test_connected_to_a_accept_b_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Accepting B's invite while connected to A blocks, keeps A intact."""
+        ctx = self._ctx()
+        ctx.talk.begin_connected(
+            partner="alice", partner_tty="tty7", partner_key="alice:aaa111"
+        )
+        pending = PendingInvite(
+            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=pending,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.CONNECTED  # A not abandoned
+        assert ctx.talk.partner_key == "alice:aaa111"  # still A
+        out = capsys.readouterr().out
+        assert "already in a talk" in out.lower()
+        assert "alice:tty7" in out  # names the live partner A
+
+    def test_inviting_b_accept_b_completes_mutual(self) -> None:
+        """Accepting B's invite while INVITING B (glare) connects, not refuses."""
+        ctx = self._ctx()
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        pending = PendingInvite(
+            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=pending,
+        )
+        assert proceed is True  # same partner → completes the handshake
+        assert ctx.talk.phase is TalkPhase.CONNECTED
+        assert ctx.talk.partner_key == "eric:def456"
+
+    def test_inviting_b_accept_c_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Accepting C's invite while INVITING B blocks, keeps the B invite."""
+        ctx = self._ctx()
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        pending = PendingInvite(
+            user="priya", session_key="priya:ccc333", tty="tty3", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="priya",
+            resolve_tty="tty3",
+            target_key="priya:ccc333",
+            pending=pending,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.INVITING  # invite to B untouched
+        assert ctx.talk.partner_key == "eric:def456"
+        assert "already in a talk" in capsys.readouterr().out.lower()
+
 
 # ---------------------------------------------------------------------------
 # _run_talk_handshake — invite/accept publish rollback (biff-9la, H)

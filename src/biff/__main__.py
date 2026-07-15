@@ -746,11 +746,22 @@ def _enter_talk_phase(
     the address ``/who`` shows, not the session-key hex; an initiator names the
     partner by the address tty.
 
-    Starting a new invite while already CONNECTED or INVITING would abandon the
-    live partner with no end frame, so the initiator path is refused unless the
-    phase is idle.  Returns ``False`` (and prints why) when refused.
+    Both paths abandon the live partner with no end frame if allowed to proceed
+    while busy: the initiator would overwrite it with a fresh invite, and the
+    responder would overwrite it with a connection to the inviter.  A responder
+    is refused only when CONNECTED/INVITING to a *different* peer — the invited
+    session's key is *target_key*, so the same-partner cases (a mutual glare
+    completing, an idempotent re-accept) share that key and pass.  An initiator
+    is refused whenever the phase is not idle.  Returns ``False`` (and prints
+    why) when refused.
     """
     if pending is not None:
+        if ctx.talk.phase is not TalkPhase.IDLE and ctx.talk.partner_key != target_key:
+            print(
+                f"Already in a talk with {ctx.talk.partner_display} — "
+                "use talk_end (or 'end') first."
+            )
+            return False
         partner_tty = pending.tty or resolve_tty or ""
         ctx.talk.begin_connected(
             partner=user_target, partner_tty=partner_tty, partner_key=target_key
@@ -824,12 +835,11 @@ async def _handle_repl_talk(
     except ValueError as exc:
         print(f"Error: {exc}")
         return
-    if pending is not None:
-        ctx.talk.consume_pending_invite(user_target)  # commit — resolution ok
 
     # Enter the appropriate phase before the handshake so the accept poll and
     # connected drain see the partner key; the helper refuses to clobber a live
-    # talk on the initiator path.
+    # talk on either the initiator or the accept path.  Consume the pending
+    # invite only after the guard passes, so a refused accept leaves it intact.
     if not _enter_talk_phase(
         ctx,
         user_target=user_target,
@@ -838,6 +848,8 @@ async def _handle_repl_talk(
         pending=pending,
     ):
         return
+    if pending is not None:
+        ctx.talk.consume_pending_invite(user_target)  # commit — resolved, not busy
 
     if not await _run_talk_handshake(
         ctx,
