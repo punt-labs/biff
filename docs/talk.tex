@@ -254,6 +254,17 @@ it is a function, a newer invite from the same user \emph{supersedes}
 the older one (the maplet is overwritten).  $queue$ is the
 notification queue populated by the NATS subscription callback.
 
+Here $pendingInvites$ is keyed by $USER$, a finite given set, so its
+size is intrinsically bounded and this model does not cap it
+explicitly.  The running system is not so lucky: it keys the pending
+set by the inviter's \emph{wire-controlled} identity, an unbounded
+string, so a stream of forged inviters would grow it without limit ---
+the same unbounded-growth denial of service the queue cap $maxQueueLen$
+(DES-044) guards against.  The sister specification $notification.tex$
+therefore bounds the pending set by $maxPending$ ($\# PSLOT$) and evicts
+the oldest entry on overflow ($TalkInviteArriveOverflow$), the
+pending-set mirror of this queue's $maxQueueLen$ and $ReceiveOverflow$.
+
 %%----------------------------------------------------------------------
 \section{Initialization}
 %%----------------------------------------------------------------------
