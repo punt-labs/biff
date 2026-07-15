@@ -9,8 +9,10 @@ responsibility (talk.tex Drain* display side).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import threading
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,8 +20,10 @@ from biff.__main__ import (
     _format_idle_banners,
     _format_talk_lines,
     _print_talk_banner,
+    _run_talk_handshake,
     _withdraw_talk_invite,
 )
+from biff.models import UserSession
 from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.talk_state import TalkState
@@ -222,3 +226,58 @@ class TestWithdrawTalkInviteResilience:
         records = [r for r in caplog.records if r.name == "biff.__main__"]
         assert records  # the failure was logged
         assert all(r.levelno == logging.INFO for r in records)
+
+
+# ---------------------------------------------------------------------------
+# _run_talk_handshake — invite/accept publish rollback (biff-9la, H)
+# ---------------------------------------------------------------------------
+
+
+class TestRunTalkHandshakeRollback:
+    """A transient invite publish must not strand the REPL session.
+
+    The plan is set and the phase advanced *before* the handshake publishes; a
+    failed ``send_invite`` rolls both back so the session is not left INVITING
+    with a phantom ``talking to …`` plan and no peer.
+    """
+
+    async def test_invite_publish_failure_rolls_back_phase_and_plan(self) -> None:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        session = UserSession(
+            user="kai", tty="kaihex01", tty_name="tty1", plan="idle", repo="myrepo"
+        )
+        relay.get_session = AsyncMock(return_value=session)
+        relay.update_session = AsyncMock()
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        talk.begin_invite(partner="eric", partner_tty="tty2", partner_key="eric:def456")
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.relay = relay
+        ctx.session_key = "kai:kaihex01"
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+
+        proceed = await _run_talk_handshake(
+            ctx,
+            "eric",
+            "eric:def456",
+            "eric:tty2",
+            ["@eric:tty2"],
+            False,  # not responding — this is an outgoing invite
+            asyncio.Queue(),
+            asyncio.Event(),
+            threading.Event(),
+            target_repo=None,
+        )
+
+        assert proceed is False
+        assert talk.phase is TalkPhase.IDLE  # phase rolled back, not stuck INVITING
+        restored = relay.update_session.await_args_list[-1].args[0]
+        assert restored.plan == "idle"  # plan restored to its prior value

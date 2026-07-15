@@ -365,6 +365,45 @@ class TestDoTalk:
         assert "talk @jfreeman:tty6" in hint
         assert "75abc665" not in hint
 
+    async def test_invite_publish_failure_rolls_back_phase(self) -> None:
+        """A transient send_invite failure must not strand the session INVITING."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+            patch.object(talk_mod, "get_tty_name", return_value="tty1"),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman:tty6", ""
+            )
+        assert state.talk.phase is TalkPhase.IDLE  # rolled back, not stuck INVITING
+        assert "not sent" in result.lower()
+
+    async def test_accept_publish_failure_rolls_back_phase(self) -> None:
+        """A transient send_accept failure must not strand the session CONNECTED."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # record the pending invite
+        state.relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert state.talk.phase is TalkPhase.IDLE  # rolled back, not stuck CONNECTED
+        assert "not sent" in result.lower()
+
 
 class TestConstants:
     def test_no_messages_sentinel(self) -> None:

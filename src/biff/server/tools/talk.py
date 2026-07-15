@@ -124,13 +124,23 @@ async def _accept_invite(
     talk_state.begin_connected(
         partner=user, partner_tty=relay_tty, partner_key=relay_key
     )
-    await talk_state.send_accept(
-        target_user=user, to_key=relay_key, target_repo=target_repo
-    )
-    if message:
-        await talk_state.send_message(
-            target_user=user, to_key=relay_key, body=message, target_repo=target_repo
+    try:
+        await talk_state.send_accept(
+            target_user=user, to_key=relay_key, target_repo=target_repo
         )
+        if message:
+            await talk_state.send_message(
+                target_user=user,
+                to_key=relay_key,
+                body=message,
+                target_repo=target_repo,
+            )
+    except (NatsError, TimeoutError, OSError):
+        # The accept publish failed transiently; roll the phase back to idle so
+        # the session is not stranded in a phantom CONNECTED state with no peer.
+        talk_state.reset()
+        await refresh_talk(mcp, state)
+        return f"Could not reach {display} — accept not sent; try again."
     await refresh_talk(mcp, state)
     opening = f' Sent: "{terminal_safe(message[:_MAX_BODY])}".' if message else ""
     return (
@@ -195,9 +205,19 @@ async def _do_talk(
     invite_body = message or (
         f"wants to talk — reply with: talk @{state.config.user}:{get_tty_name()}"
     )
-    await talk_state.send_invite(
-        target_user=user, to_key=relay_key, body=invite_body, target_repo=target_repo
-    )
+    try:
+        await talk_state.send_invite(
+            target_user=user,
+            to_key=relay_key,
+            body=invite_body,
+            target_repo=target_repo,
+        )
+    except (NatsError, TimeoutError, OSError):
+        # The invite publish failed transiently; roll the phase back to idle so
+        # the session is not stranded in a phantom INVITING state with no peer.
+        talk_state.reset()
+        await refresh_talk(mcp, state)
+        return f"Could not reach {display} — invite not sent; try again."
     await refresh_talk(mcp, state)
     return f"Invite sent to {display}. When they accept, talk_read shows replies."
 

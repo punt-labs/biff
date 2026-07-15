@@ -665,10 +665,69 @@ async def _talk_handshake(
     if outcome is AcceptOutcome.AUTO_ACCEPT:
         # Mutual invite: we are the higher key — accept the partner's invite
         # so their side stops waiting.  Deterministic, no deadlock (DES-043).
-        await ctx.talk.send_accept(
-            target_user=target_user, to_key=target_key, target_repo=target_repo
-        )
+        # Best-effort: poll_accept already advanced us to CONNECTED, so a failed
+        # publish must not tear down the live connection — the partner falls back
+        # to its own mutual-invite auto-accept.  INFO keeps it off the REPL.
+        try:
+            await ctx.talk.send_accept(
+                target_user=target_user, to_key=target_key, target_repo=target_repo
+            )
+        except (NatsError, TimeoutError, OSError):
+            logging.getLogger(__name__).info(
+                "talk auto-accept to %s failed; partner falls back to mutual detect",
+                target_user,
+                exc_info=True,
+            )
     return True
+
+
+async def _run_talk_handshake(
+    ctx: CliContext,
+    user_target: str,
+    target_key: str,
+    display: str,
+    args: list[str],
+    responding: bool,
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+    prompt_gate: threading_mod.Event,
+    *,
+    target_repo: str | None,
+) -> bool:
+    """Set the talk plan, run the handshake, and roll back on a publish failure.
+
+    Returns ``True`` when talk should proceed.  On a transient invite/accept
+    publish failure the phase and plan are reset so the session is not stranded
+    in a phantom inviting/connected state with no peer (mirrors the reset-first
+    best-effort pattern in ``_withdraw_talk_invite`` / ``_do_talk_end``).
+    """
+    session = await ctx.relay.get_session(ctx.session_key)
+    prior_plan = session.plan if session is not None else ""
+    if session is not None:
+        await ctx.relay.update_session(
+            session.model_copy(update={"plan": f"talking to {display}"})
+        )
+    try:
+        return await _talk_handshake(
+            ctx,
+            user_target,
+            target_key,
+            display,
+            args,
+            responding,
+            aqueue,
+            notify_event,
+            prompt_gate,
+            target_repo=target_repo,
+        )
+    except (NatsError, TimeoutError, OSError):
+        ctx.talk.reset()
+        if session is not None:
+            await ctx.relay.update_session(
+                session.model_copy(update={"plan": prior_plan})
+            )
+        print(f"Could not reach {display} — talk not started.")
+        return False
 
 
 async def _handle_repl_talk(
@@ -740,13 +799,7 @@ async def _handle_repl_talk(
             partner=user_target, partner_tty=resolve_tty or "", partner_key=target_key
         )
 
-    # Update plan to show talk activity.
-    session = await ctx.relay.get_session(ctx.session_key)
-    if session is not None:
-        updated = session.model_copy(update={"plan": f"talking to {display}"})
-        await ctx.relay.update_session(updated)
-
-    if not await _talk_handshake(
+    if not await _run_talk_handshake(
         ctx,
         user_target,
         target_key,
