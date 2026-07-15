@@ -198,6 +198,15 @@ async def _do_talk(
         return str(exc)
 
     if pending is not None:
+        # Re-peek after the resolve await (which yields to the loop): the
+        # always-on talk subscription or the TTL sweep can supersede or withdraw
+        # the invite while _resolve_target runs.  relay_key was resolved from the
+        # snapshot's session key; if the current invite no longer names that
+        # session, refuse rather than connect to the stale key or consume a newer
+        # superseding invite unchecked (CR-3 TOCTOU).
+        current = talk_state.pending_invites.get(user)
+        if current is None or current.session_key != pending.session_key:
+            return f"{user}'s invite changed while connecting — try talk again."
         return await _accept_invite(
             mcp,
             state,
@@ -210,6 +219,37 @@ async def _do_talk(
             message=message,
         )
 
+    return await _send_or_invite(
+        mcp,
+        state,
+        user=user,
+        relay_key=relay_key,
+        display=display,
+        resolve_tty=resolve_tty or "",
+        target_repo=target_repo,
+        message=message,
+    )
+
+
+async def _send_or_invite(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    *,
+    user: str,
+    relay_key: str,
+    display: str,
+    resolve_tty: str,
+    target_repo: str | None,
+    message: str,
+) -> str:
+    """Send to the connected partner, or start a new invite (no pending accept).
+
+    A same-key CONNECTED session sends *message* (a failed publish leaves the
+    connection intact — best-effort core NATS, not a teardown).  Otherwise an
+    idle session publishes a fresh invite; a non-idle phase to a *different*
+    peer refuses rather than clobber the live talk with no end frame.
+    """
+    talk_state = state.talk
     connected_here = (
         talk_state.phase is TalkPhase.CONNECTED and talk_state.partner_key == relay_key
     )
@@ -224,18 +264,11 @@ async def _do_talk(
                 target_repo=target_repo,
             )
         except (NatsError, TimeoutError, OSError):
-            # The message publish failed transiently (disconnect/timeout). The
-            # connection is left intact — this is a best-effort core-NATS
-            # publish, not a teardown — so the caller can simply retry.
             await refresh_talk(mcp, state)
             return f"Could not reach {display} — message not sent; try again."
         await refresh_talk(mcp, state)
         return f'Sent to {display}: "{terminal_safe(message[:_MAX_BODY])}".'
 
-    # Guard the fallthrough: an invite here would clobber a live conversation or
-    # an outstanding invite to a *different* peer, abandoning it with no end
-    # frame.  Only start a new invite when idle — the accept and connected-send
-    # branches above already handle the pending-invite and same-partner cases.
     if talk_state.phase is not TalkPhase.IDLE:
         return (
             f"Already in a talk with {talk_state.partner_display} — "
@@ -243,7 +276,7 @@ async def _do_talk(
         )
 
     talk_state.begin_invite(
-        partner=user, partner_tty=resolve_tty or "", partner_key=relay_key
+        partner=user, partner_tty=resolve_tty, partner_key=relay_key
     )
     invite_body = message or (
         f"wants to talk — reply with: talk @{state.config.user}:{get_tty_name()}"

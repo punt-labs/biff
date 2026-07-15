@@ -509,6 +509,56 @@ class TestDoTalk:
         assert "not sent" in result.lower()  # transient, actionable
         assert state.talk.phase is TalkPhase.CONNECTED  # connection left intact
 
+    async def test_invite_superseded_during_resolve_refuses(self) -> None:
+        """A supersession during the resolve await must not accept the stale key.
+
+        ``_do_talk`` peeks the pending invite, then awaits ``_resolve_target``.
+        The always-on talk subscription can supersede the invite (a newer
+        session of the same user) during that await.  Accepting the stale
+        snapshot — or consuming whatever is now current — is a TOCTOU: the fix
+        re-peeks after the await and refuses when the invite changed (CR-3).
+        """
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, nc = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # the invite we peek
+
+        async def _supersede_during_resolve(
+            _repos: object,
+        ) -> list[UserSession]:
+            # A newer invite from the same user lands while we resolve.
+            state.talk.receive(
+                {
+                    "type": "invite",
+                    "from": "jfreeman",
+                    "from_tty": "tty9",
+                    "from_key": "jfreeman:99newkey",
+                    "body": "from my other session",
+                    "to_key": "kai:kaihex01",
+                }
+            )
+            state.talk.drain_idle()
+            return sessions
+
+        state.relay.get_sessions_for_repos = AsyncMock(
+            side_effect=_supersede_during_resolve
+        )
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            result = await talk_mod._do_talk(
+                mcp, cast("ServerState", state), "@jfreeman", ""
+            )
+        assert "changed" in result.lower()  # refused, not a stale-key connect
+        assert state.talk.phase is TalkPhase.IDLE  # not connected to the stale key
+        # The newer superseding invite is preserved, not consumed unchecked.
+        assert state.talk.pending_invites["jfreeman"].session_key == "jfreeman:99newkey"
+        nc.publish.assert_not_awaited()  # no accept sent to the stale key
+
 
 class TestDoTalkNoClobber:
     """Starting a new invite must never clobber a live talk (silent data loss).
