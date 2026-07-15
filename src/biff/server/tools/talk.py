@@ -228,7 +228,10 @@ async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
             else:
                 await talk_state.send_end(target_user=partner, to_key=partner_key)
         except (NatsError, TimeoutError, OSError):
-            logger.warning(
+            # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
+            # so a WARNING here would dump this best-effort-publish traceback
+            # into the interactive REPL. The peer still clears via the TTL sweep.
+            logger.info(
                 "talk_end publish to %s failed; peer falls back to the TTL sweep",
                 partner,
                 exc_info=True,

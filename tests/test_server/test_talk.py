@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -258,6 +259,38 @@ class TestTalkEndResilience:
         assert talk.phase is TalkPhase.IDLE  # reset despite the publish failure
         refresh.assert_awaited_once()  # description refreshed regardless
         assert "time out" in result.lower()  # actionable transient message
+
+    async def test_publish_failure_logs_at_info_not_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The best-effort publish failure stays off the WARNING stderr floor.
+
+        The CLI raises the stderr handler to WARNING, so a WARNING here would
+        dump a traceback into the interactive REPL; INFO keeps it in biff.log.
+        """
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_invite(partner="eric", partner_tty="def", partner_key="eric:def")
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        with (
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+            caplog.at_level(logging.INFO, logger="biff.server.tools.talk"),
+        ):
+            await talk_mod._do_talk_end(
+                cast("FastMCP[ServerState]", MagicMock()),
+                cast("ServerState", state),
+            )
+        records = [r for r in caplog.records if r.name == "biff.server.tools.talk"]
+        assert records  # the failure was logged
+        assert all(r.levelno == logging.INFO for r in records)
 
 
 class TestDoTalk:

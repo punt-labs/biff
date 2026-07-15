@@ -582,7 +582,11 @@ async def _withdraw_talk_invite(
             target_user=target_user, to_key=target_key, target_repo=target_repo
         )
     except (NatsError, TimeoutError, OSError):
-        logging.getLogger(__name__).warning(
+        # INFO, not WARNING: the CLI raises the stderr handler to WARNING, so a
+        # WARNING here would dump this best-effort-publish traceback into the
+        # interactive REPL. The invitee still clears via the pending-invite TTL
+        # sweep (notification.tex ExpirePendingInvite); the log stays in biff.log.
+        logging.getLogger(__name__).info(
             "talk withdraw to %s failed; invitee falls back to the TTL sweep",
             target_user,
             exc_info=True,

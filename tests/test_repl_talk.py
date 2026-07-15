@@ -9,19 +9,26 @@ responsibility (talk.tex Drain* display side).
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock, MagicMock
 
 from biff.__main__ import (
     _format_idle_banners,
     _format_talk_lines,
     _print_talk_banner,
+    _withdraw_talk_invite,
 )
+from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
-from biff.talk_types import TalkNotification
+from biff.talk_state import TalkState
+from biff.talk_types import TalkNotification, TalkPhase
 
 if TYPE_CHECKING:
     import pytest
+
+    from biff.relay import Relay
 
 OTHER_KEY = "eric:def67890"
 
@@ -175,3 +182,43 @@ class TestPrintTalkBanner:
     def test_no_body_prints_nothing(self, capsys: pytest.CaptureFixture[str]) -> None:
         _print_talk_banner(_notif("invite", body=""))
         assert capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------------------
+# _withdraw_talk_invite — best-effort withdraw log level (biff-9la)
+# ---------------------------------------------------------------------------
+
+
+class TestWithdrawTalkInviteResilience:
+    """The best-effort withdraw failure stays off the WARNING stderr floor.
+
+    The CLI raises the stderr handler to WARNING, so a WARNING here would dump
+    a traceback into the interactive REPL; INFO keeps it in biff.log while the
+    local state still resets and the invitee falls back to the TTL sweep.
+    """
+
+    async def test_publish_failure_logs_at_info_and_resets(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="abc",
+            session_key="kai:abc",
+        )
+        talk.begin_invite(partner="eric", partner_tty="def", partner_key="eric:def")
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.relay = MagicMock()
+        ctx.relay.get_session = AsyncMock(return_value=None)
+        ctx.session_key = "kai:abc"
+
+        with caplog.at_level(logging.INFO, logger="biff.__main__"):
+            await _withdraw_talk_invite(ctx, "eric", "eric:def")
+
+        assert talk.phase is TalkPhase.IDLE  # local state reset despite the failure
+        records = [r for r in caplog.records if r.name == "biff.__main__"]
+        assert records  # the failure was logged
+        assert all(r.levelno == logging.INFO for r in records)
