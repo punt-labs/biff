@@ -380,9 +380,11 @@ class TestConsumePendingInvite:
         st.drain_idle()
         return st
 
-    def test_found_returns_key(self) -> None:
+    def test_found_returns_invite(self) -> None:
         st = self._with_pending({"eric": OTHER_KEY, "priya": "priya:xyz"})
-        assert st.consume_pending_invite("eric") == OTHER_KEY
+        invite = st.consume_pending_invite("eric")
+        assert invite is not None
+        assert invite.session_key == OTHER_KEY
 
     def test_not_found_returns_none(self) -> None:
         st = self._with_pending({"priya": "priya:xyz"})
@@ -390,7 +392,9 @@ class TestConsumePendingInvite:
 
     def test_one_shot(self) -> None:
         st = self._with_pending({"eric": OTHER_KEY})
-        assert st.consume_pending_invite("eric") == OTHER_KEY
+        first = st.consume_pending_invite("eric")
+        assert first is not None
+        assert first.session_key == OTHER_KEY
         assert st.consume_pending_invite("eric") is None
 
     def test_empty_key_treated_as_none(self) -> None:
@@ -755,7 +759,9 @@ class TestGrowOnlyGuards:
         st = _make_state()
         st.receive(_invite("eric", OTHER_KEY))
         st.drain_for_agent()
-        assert st.consume_pending_invite("eric") == OTHER_KEY
+        consumed = st.consume_pending_invite("eric")
+        assert consumed is not None
+        assert consumed.session_key == OTHER_KEY
         st.drain_for_agent()  # empty queue — must not re-add
         assert st.pending_invites == {}
 

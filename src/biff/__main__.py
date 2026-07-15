@@ -617,7 +617,7 @@ async def _talk_handshake(
         return True
 
     # We're initiating. Send invite and wait for accept.
-    invite_body = f"wants to talk — reply with: talk {ctx.user}:{ctx.tty_name}"
+    invite_body = f"wants to talk — reply with: talk @{ctx.user}:{ctx.tty_name}"
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
 
@@ -704,11 +704,11 @@ async def _handle_repl_talk(
     # Responding to a pending invite targets the exact inviting session;
     # otherwise the address itself must name the session (talk is
     # session-scoped — DES-043).
-    responding_key = ctx.talk.consume_pending_invite(user_target)
-    responding = responding_key is not None
+    pending = ctx.talk.consume_pending_invite(user_target)
+    responding = pending is not None
     resolve_user, resolve_tty = (user_target, tty_target)
-    if responding_key is not None:
-        resolve_user, _, resolve_tty = responding_key.partition(":")
+    if pending is not None:
+        resolve_user, _, resolve_tty = pending.session_key.partition(":")
     try:
         target_key, display, target_repo = resolve_talk_target(
             all_sessions,
@@ -721,13 +721,15 @@ async def _handle_repl_talk(
         print(f"Error: {exc}")
         return
 
-    # Enter the appropriate phase before the handshake so the accept poll
-    # and connected drain see the partner key (talk.tex SendInvite /
-    # RespondToInvite).  ``resolve_tty`` is the partner tty (address for an
-    # initiator, the invite's session for a responder).
-    if responding:
+    # Enter the appropriate phase before the handshake so the accept poll and
+    # connected drain see the partner key (talk.tex SendInvite / RespondToInvite).
+    # An initiator names the partner by the address tty (``resolve_tty``); a
+    # responder prefers the invite's DISPLAY tty (``ttyN``) so the connected
+    # prompt reads the address ``/who`` shows, not the session-key hex.
+    if pending is not None:
+        partner_tty = pending.tty or resolve_tty or ""
         ctx.talk.begin_connected(
-            partner=user_target, partner_tty=resolve_tty or "", partner_key=target_key
+            partner=user_target, partner_tty=partner_tty, partner_key=target_key
         )
     else:
         ctx.talk.begin_invite(

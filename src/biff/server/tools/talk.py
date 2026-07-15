@@ -149,10 +149,10 @@ async def _do_talk(
     await update_current_session(state)
     user, tty = parse_address(to)
 
-    pending_key = talk_state.consume_pending_invite(user)
+    pending = talk_state.consume_pending_invite(user)
     resolve_user, resolve_tty = (user, tty)
-    if pending_key is not None:
-        resolve_user, _, resolve_tty = pending_key.partition(":")
+    if pending is not None:
+        resolve_user, _, resolve_tty = pending.session_key.partition(":")
     try:
         relay_key, display, target_repo = await _resolve_target(
             state, resolve_user, resolve_tty
@@ -160,14 +160,19 @@ async def _do_talk(
     except ValueError as exc:
         return str(exc)
 
-    if pending_key is not None:
+    if pending is not None:
+        # Name the connected partner by the inviter's DISPLAY tty (``ttyN``),
+        # not the session-key hex, so the connected hint reads ``talk @user:ttyN``
+        # — the address ``/who`` shows and ``resolve_talk_target`` matches.
+        partner_tty = pending.tty or resolve_tty or ""
+        accept_display = f"{user}:{partner_tty}" if partner_tty else display
         return await _accept_invite(
             mcp,
             state,
             user=user,
-            relay_tty=resolve_tty or "",
+            relay_tty=partner_tty,
             relay_key=relay_key,
-            display=display,
+            display=accept_display,
             target_repo=target_repo,
             message=message,
         )
@@ -188,7 +193,7 @@ async def _do_talk(
         partner=user, partner_tty=resolve_tty or "", partner_key=relay_key
     )
     invite_body = message or (
-        f"wants to talk — reply with: talk {state.config.user}:{get_tty_name()}"
+        f"wants to talk — reply with: talk @{state.config.user}:{get_tty_name()}"
     )
     await talk_state.send_invite(
         target_user=user, to_key=relay_key, body=invite_body, target_repo=target_repo

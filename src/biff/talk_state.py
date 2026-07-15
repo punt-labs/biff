@@ -455,15 +455,16 @@ class TalkState:
         self._partner_tty = partner_tty
         self._partner_key = partner_key
 
-    def consume_pending_invite(self, user: str) -> str | None:
-        """Pop and return the inviter's session key for *user*.
+    def consume_pending_invite(self, user: str) -> PendingInvite | None:
+        """Pop and return the pending invite for *user*.
 
         One-shot: the pending invite is removed.  Returns ``None`` when no
         usable invite exists.  Keyless invites are never recorded, so a
-        returned key always names a session.
+        returned invite always names a session and carries the inviter's
+        display tty — the caller sets ``partner_tty`` from it so the connected
+        hint reads ``talk @user:ttyN``, never the opaque session-key hex.
         """
-        invite = self._pending.pop(user, None)
-        return invite.session_key if invite is not None else None
+        return self._pending.pop(user, None)
 
     def reset(self) -> None:
         """Return to idle, clearing the partner sentinels (talk.tex LocalEnd)."""

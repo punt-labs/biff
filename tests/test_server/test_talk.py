@@ -12,6 +12,7 @@ import pytest
 import biff.server.tools.talk as talk_mod
 from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay
+from biff.server.tools._descriptions import _talk_description
 from biff.server.tools._session import resolve_talk_target
 from biff.server.tools.talk import (
     _NO_MESSAGES,
@@ -257,6 +258,79 @@ class TestTalkEndResilience:
         assert talk.phase is TalkPhase.IDLE  # reset despite the publish failure
         refresh.assert_awaited_once()  # description refreshed regardless
         assert "time out" in result.lower()  # actionable transient message
+
+
+class TestDoTalk:
+    """_do_talk: the invite hint carries ``@`` and the accept names display tty."""
+
+    def _state(self, sessions: list[UserSession]) -> tuple[MagicMock, AsyncMock]:
+        relay = MagicMock(spec=NatsRelay)
+        nc = AsyncMock()
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.jfreeman")
+        relay.get_sessions_for_repos = AsyncMock(return_value=sessions)
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        state = MagicMock()
+        state.talk = talk
+        state.relay = relay
+        state.session_key = "kai:kaihex01"
+        state.config.user = "kai"
+        state.config.repo_name = "myrepo"
+        state.visible_repos = frozenset({"myrepo"})
+        return state, nc
+
+    @staticmethod
+    def _invite_frame() -> dict[str, str]:
+        return {
+            "type": "invite",
+            "from": "jfreeman",
+            "from_tty": "tty6",
+            "from_key": "jfreeman:75abc665",
+            "body": "wants to talk",
+            "to_key": "kai:kaihex01",
+        }
+
+    async def test_invite_hint_carries_at_prefix(self) -> None:
+        """A fresh invite body suggests a runnable ``talk @user:tty`` accept."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, nc = self._state(sessions)
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+            patch.object(talk_mod, "get_tty_name", return_value="tty1"),
+        ):
+            state_ = cast("ServerState", state)
+            await talk_mod._do_talk(mcp, state_, "@jfreeman:tty6", "")
+        body: str = json.loads(nc.publish.call_args[0][1])["body"]
+        assert "talk @kai:tty1" in body
+
+    async def test_accept_connected_hint_uses_display_tty_not_hex(self) -> None:
+        """Accepting a pending invite names the partner by ``ttyN``, not the key hex."""
+        sessions = [
+            UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
+        ]
+        state, _ = self._state(sessions)
+        state.talk.receive(self._invite_frame())
+        state.talk.drain_idle()  # record the pending invite
+        mcp = cast("FastMCP[ServerState]", MagicMock())
+        with (
+            patch.object(talk_mod, "update_current_session", AsyncMock()),
+            patch.object(talk_mod, "refresh_talk", AsyncMock()),
+        ):
+            await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
+        assert state.talk.partner_tty == "tty6"
+        hint = _talk_description(state.talk)
+        assert "talk @jfreeman:tty6" in hint
+        assert "75abc665" not in hint
 
 
 class TestConstants:
