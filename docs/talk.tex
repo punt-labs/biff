@@ -150,6 +150,32 @@ unconstrained, or ProB will silently drop initial states and report an
 incomplete exploration; at set size~2 the eight identities and two
 admissible $keyBelow$ orders together need at least sixteen.
 
+The two connected-phase foreign-frame operations,
+$DrainForeignMessage$ and $DrainForeignEnd$, are the exception to the
+set-size-2 scope.  Their guard --- $phase = tpConnected$ with
+$(head~queue).nfromKey \neq partnerKey$ --- is a three-party predicate:
+it needs $myKey$, the connected $partnerKey$ (which is $\neq myKey$),
+and a third \emph{forger} key distinct from both.  At two session keys
+the third does not exist, so the operations are enabled in no reachable
+state and ProB reports them uncovered; the guarantee they enforce holds
+only vacuously there.  Exhausting their behaviour therefore takes a
+third session key.  The other carriers are irrelevant to the threat and
+may be shrunk to one, which keeps the check small:
+
+\begin{verbatim}
+probcli docs/talk.tex -model_check -noltl -coverage \
+  -card USER 1 -card TTY 1 -card MSGBODY 1 \
+  -card SESSIONKEY 3 -card QSLOT 1 \
+  -p MAX_INITIALISATIONS 64 -p MAX_OPERATIONS 4000
+\end{verbatim}
+
+At this scope every operation is covered and all $1{,}141$ reachable
+states are visited, with no invariant violation and no deadlock: a
+forged message or end carrying the third key is drained by
+$DrainForeignMessage$ or $DrainForeignEnd$ and never reaches
+$DrainMessage$ or $DrainEnd$, so it neither speaks in the partner's
+place nor hangs up the call.
+
 $keyBelow$ is a strict total order on session keys, modelling the
 lexicographic comparison the implementation uses to break mutual-invite
 ties deterministically.  Because it is total and antisymmetric, for any
@@ -427,8 +453,14 @@ invited peer's accept.
 \subsection{DrainMessage}
 %%----------------------------------------------------------------------
 
-During talk mode, a message notification is drained and displayed
-to the user.
+During talk mode, a message notification \emph{from the connected
+partner} is drained and displayed to the user.  The consent guard
+$(head~queue).nfromKey = partnerKey$ binds the frame to the invited
+peer: only the partner may speak.  A message whose origin is any other
+session --- even one correctly addressed to us ($nto = myKey$) --- must
+not be surfaced in the partner's place, or a third party could
+impersonate the peer during a live conversation (DES-043).  Such a
+frame is drained without display by $DrainForeignMessage$.
 
 \begin{schema}{DrainMessage}
   \Delta TalkState
@@ -436,6 +468,38 @@ to the user.
   phase = tpConnected \\
   queue \neq \langle \rangle \\
   (head~queue).ntype = ntMessage \\
+  (head~queue).nfromKey = partnerKey \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainForeignMessage}
+%%----------------------------------------------------------------------
+
+A connected-phase message whose origin is not the connected partner
+($nfromKey \neq partnerKey$) is drained and discarded without display.
+This is the conversation-side counterpart of $DrainForeignAccept$: the
+frame is dequeued so the poll makes progress, but it neither reaches
+the user nor changes any component beyond the queue.  A forged
+$ntMessage$ addressed to us ($nto = myKey$) is thereby prevented from
+speaking in the partner's place.
+
+\begin{schema}{DrainForeignMessage}
+  \Delta TalkState
+\where
+  phase = tpConnected \\
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntMessage \\
+  (head~queue).nfromKey \neq partnerKey \\
   queue' = tail~queue \\
   queueLen' = queueLen - 1 \\
   phase' = phase \\
@@ -452,8 +516,13 @@ to the user.
 \subsection{DrainEnd}
 %%----------------------------------------------------------------------
 
-During talk mode, an end notification is drained.  The remote side
-has hung up.  Transitions back to idle.
+During talk mode, an end notification \emph{from the connected
+partner} is drained: the peer has hung up, and the session transitions
+back to idle.  The consent guard $(head~queue).nfromKey = partnerKey$
+is essential --- only the connected partner may end the call.  A forged
+$ntEnd$ from any other origin must not tear down the conversation, or a
+third party could hang up a call it is not part of (DES-043); such a
+frame is drained by $DrainForeignEnd$.
 
 \begin{schema}{DrainEnd}
   \Delta TalkState
@@ -461,6 +530,7 @@ has hung up.  Transitions back to idle.
   phase = tpConnected \\
   queue \neq \langle \rangle \\
   (head~queue).ntype = ntEnd \\
+  (head~queue).nfromKey = partnerKey \\
   phase' = tpIdle \\
   partner' = myUser \\
   partnerTty' = myTty \\
@@ -470,6 +540,37 @@ has hung up.  Transitions back to idle.
   myUser' = myUser \\
   myTty' = myTty \\
   myKey' = myKey \\
+  pendingInvites' = pendingInvites
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{DrainForeignEnd}
+%%----------------------------------------------------------------------
+
+A connected-phase end frame whose origin is not the connected partner
+($nfromKey \neq partnerKey$) is drained and discarded, leaving the
+phase unchanged.  This is the hangup-side counterpart of
+$DrainForeignAccept$: the call continues, and only the partner's
+$ntEnd$ can end it.  A forged $ntEnd$ addressed to us ($nto = myKey$)
+is thereby prevented from tearing down a conversation it is not part
+of.
+
+\begin{schema}{DrainForeignEnd}
+  \Delta TalkState
+\where
+  phase = tpConnected \\
+  queue \neq \langle \rangle \\
+  (head~queue).ntype = ntEnd \\
+  (head~queue).nfromKey \neq partnerKey \\
+  queue' = tail~queue \\
+  queueLen' = queueLen - 1 \\
+  phase' = phase \\
+  myUser' = myUser \\
+  myTty' = myTty \\
+  myKey' = myKey \\
+  partner' = partner \\
+  partnerTty' = partnerTty \\
+  partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites
 \end{schema}
 
@@ -691,6 +792,16 @@ The following properties must hold in all reachable states:
   $DrainForeignAccept$ without changing phase, so a third party who
   publishes an accept addressed to the inviter ($nto = myKey$) cannot
   forge the invited peer's consent.
+
+  The same $partnerKey$ anchor governs the \emph{conversation}, not
+  only the connect.  In $tpConnected$, $DrainMessage$ surfaces a
+  message and $DrainEnd$ acts on an end only when
+  $(head~queue).nfromKey = partnerKey$; a frame from any other origin
+  is neither displayed in the partner's place nor able to hang up the
+  call, but is drained by $DrainForeignMessage$ or $DrainForeignEnd$
+  with no effect beyond dequeue.  A session in $tpConnected$ therefore
+  both connects to, and converses with, exactly the peer it invited or
+  accepted.
 \end{enumerate}
 
 %%----------------------------------------------------------------------
@@ -711,6 +822,22 @@ to nobody it did not itself invite: to be honoured, the forgery must carry
 the exact ephemeral session key the inviter chose as its target, which a
 third party does not hold.  Forging a session identity, not merely a
 username, is the bar.
+
+The same boundary now governs the \emph{conversation}, not only the
+connect, and this is a correction: earlier drafts guarded the
+handshake but left the connected phase open, so the guarantee below
+overclaimed relative to the model.  A message is surfaced, and an end
+acts, only when $(head~queue).nfromKey = partnerKey$ ($DrainMessage$,
+$DrainEnd$); a frame from any other origin is drained without effect
+by $DrainForeignMessage$ or $DrainForeignEnd$.  A forged $ntMessage$
+carrying $nto = myKey$ therefore cannot be displayed in the partner's
+place, and a forged $ntEnd$ cannot hang up the call: to be honoured,
+either forgery must carry the exact ephemeral session key of the
+connected peer, which a third party does not hold.  The guarantee that
+no forged frame can \emph{speak in another's place} is now true by
+construction, and its residual reduces to partner-key forgery --- the
+same session-identity bar the consent boundary already sets, no higher
+and no lower.
 
 A withdrawal frame---the \emph{ntWithdraw} of the sister specification
 $notification.tex$, which $talk.tex$ would model as a fifth $NotifType$---sits
