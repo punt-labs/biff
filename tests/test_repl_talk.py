@@ -22,8 +22,10 @@ from biff.__main__ import (
     _format_talk_lines,
     _handle_repl_talk,
     _print_talk_banner,
+    _publish_auto_accept,
     _repl_talk,
     _run_talk_handshake,
+    _talk_handshake,
     _withdraw_talk_invite,
 )
 from biff.models import UserSession
@@ -601,3 +603,98 @@ class TestReplAcceptRestoresPendingInvite:
 
         assert talk.phase is TalkPhase.IDLE  # not stranded CONNECTED
         assert "jfreeman" in talk.pending_invites  # restored for a retry
+
+
+# ---------------------------------------------------------------------------
+# _publish_auto_accept / mutual-glare auto-accept publish (F2)
+# ---------------------------------------------------------------------------
+
+
+class TestPublishAutoAccept:
+    """The higher-key auto-accept must actually reach the partner (F2).
+
+    The lower-key side connects ONLY on receiving this accept (talk.tex
+    MutualAutoAccept — no symmetric fallback), so a dropped accept strands it.
+    The publish retries once, and the handshake warns the user when both fail.
+    """
+
+    @staticmethod
+    def _talk(*, get_nc: AsyncMock) -> TalkState:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = get_nc
+        relay.talk_notify_subject = MagicMock(return_value="biff.t.talk.notify.eric")
+        return TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+
+    async def test_retries_once_then_gives_up_on_persistent_failure(self) -> None:
+        get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        talk = self._talk(get_nc=get_nc)
+        ctx = MagicMock()
+        ctx.talk = talk
+
+        ok = await _publish_auto_accept(ctx, "eric", "eric:def456", target_repo=None)
+
+        assert ok is False
+        assert get_nc.await_count == 2  # published once, retried once
+
+    async def test_succeeds_without_retry_when_publish_works(self) -> None:
+        get_nc = AsyncMock(return_value=AsyncMock())
+        talk = self._talk(get_nc=get_nc)
+        ctx = MagicMock()
+        ctx.talk = talk
+
+        ok = await _publish_auto_accept(ctx, "eric", "eric:def456", target_repo=None)
+
+        assert ok is True
+        assert get_nc.await_count == 1  # no retry on success
+
+    async def test_handshake_warns_when_auto_accept_never_reaches_partner(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # send_invite succeeds (get_nc call 1), both accept attempts fail (2, 3).
+        nc = AsyncMock()
+        get_nc = AsyncMock(
+            side_effect=[nc, TimeoutError("wedged"), TimeoutError("wedged")]
+        )
+        talk = self._talk(get_nc=get_nc)
+        # We are the higher key ('kai' > 'eric') — the auto-accepting side.
+        talk.begin_invite(partner="eric", partner_tty="tty2", partner_key="eric:def456")
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def456",
+                "body": "talk?",
+                "to_key": "kai:kaihex01",
+            }
+        )
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+        notify = asyncio.Event()
+        notify.set()  # wake the accept poll immediately
+
+        proceed = await _talk_handshake(
+            ctx,
+            "eric",
+            "eric:def456",
+            "eric:tty2",
+            ["@eric"],
+            False,  # initiating — glare completes via MutualAutoAccept
+            asyncio.Queue(),
+            notify,
+            threading.Event(),
+            target_repo=None,
+        )
+
+        out = capsys.readouterr().out.lower()
+        assert proceed is True  # we are connected locally; proceed to the loop
+        assert "may not have" in out  # user warned the partner might be stranded
+        assert get_nc.await_count == 3  # invite + two accept attempts (retry)

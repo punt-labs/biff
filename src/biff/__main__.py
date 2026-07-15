@@ -701,23 +701,54 @@ async def _talk_handshake(
             ctx, target_user, target_key, target_repo=target_repo
         )
         return False
-    if outcome is AcceptOutcome.AUTO_ACCEPT:
-        # Mutual invite: we are the higher key — accept the partner's invite
-        # so their side stops waiting.  Deterministic, no deadlock (DES-043).
-        # Best-effort: poll_accept already advanced us to CONNECTED, so a failed
-        # publish must not tear down the live connection — the partner falls back
-        # to its own mutual-invite auto-accept.  INFO keeps it off the REPL.
+    if outcome is AcceptOutcome.AUTO_ACCEPT and not await _publish_auto_accept(
+        ctx, target_user, target_key, target_repo=target_repo
+    ):
+        # The lower-key partner connects ONLY on receiving this accept — there is
+        # no symmetric fallback on their side (talk.tex MutualAutoAccept) — so a
+        # persistent failure strands them.  poll_accept already advanced us to
+        # CONNECTED locally; proceed, but warn that the partner may not have.
+        print(
+            f"Warning: couldn't confirm {display} joined — they may not have "
+            "connected. Send a message or type 'end' and retry."
+        )
+    return True
+
+
+async def _publish_auto_accept(
+    ctx: CliContext,
+    target_user: str,
+    target_key: str,
+    *,
+    target_repo: str | None,
+) -> bool:
+    """Publish the higher-key side's accept on a mutual-invite glare; retry once.
+
+    On simultaneous mutual invites the ``keyBelow`` tie-break makes the higher
+    key auto-accept and publish an accept; the lower-key partner connects ONLY
+    on receiving that frame (talk.tex ``MutualAutoAccept`` — the lower side has
+    no auto-accept of its own).  A dropped accept therefore strands the partner
+    and silently discards our subsequent messages on their side, so retry once
+    before giving up.  Returns whether the accept was published.
+    """
+    logger = logging.getLogger(__name__)
+    for attempt in (1, 2):
         try:
             await ctx.talk.send_accept(
                 target_user=target_user, to_key=target_key, target_repo=target_repo
             )
         except (NatsError, TimeoutError, OSError):
-            logging.getLogger(__name__).info(
-                "talk auto-accept to %s failed; partner falls back to mutual detect",
+            # INFO, not WARNING: the CLI floors stderr at WARNING, so a WARNING
+            # here would dump this best-effort-publish traceback into the REPL.
+            logger.info(
+                "talk auto-accept to %s failed (attempt %d/2)",
                 target_user,
+                attempt,
                 exc_info=True,
             )
-    return True
+        else:
+            return True
+    return False
 
 
 async def _run_talk_handshake(
