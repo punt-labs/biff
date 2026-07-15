@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
 from biff.__main__ import (
+    _enter_talk_phase,
     _format_idle_banners,
     _format_talk_lines,
     _print_talk_banner,
@@ -27,7 +28,7 @@ from biff.models import UserSession
 from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.talk_state import TalkState
-from biff.talk_types import TalkNotification, TalkPhase
+from biff.talk_types import PendingInvite, TalkNotification, TalkPhase
 
 if TYPE_CHECKING:
     import pytest
@@ -226,6 +227,102 @@ class TestWithdrawTalkInviteResilience:
         records = [r for r in caplog.records if r.name == "biff.__main__"]
         assert records  # the failure was logged
         assert all(r.levelno == logging.INFO for r in records)
+
+
+# ---------------------------------------------------------------------------
+# _enter_talk_phase — refuse to clobber a live talk on the initiator path
+# ---------------------------------------------------------------------------
+
+
+class TestEnterTalkPhase:
+    """Setting the handshake phase must never clobber a live talk.
+
+    A ``talk @B`` (no pending invite from B) while CONNECTED to A — or while
+    inviting a third party — must be refused, leaving the live partner intact
+    and sending no frame, rather than overwriting it with a fresh invite.
+    """
+
+    def _ctx(self) -> MagicMock:
+        relay = MagicMock(spec=NatsRelay)
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        ctx = MagicMock()
+        ctx.talk = talk
+        return ctx
+
+    def test_idle_initiator_begins_invite(self) -> None:
+        ctx = self._ctx()
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=None,
+        )
+        assert proceed is True
+        assert ctx.talk.phase is TalkPhase.INVITING
+        assert ctx.talk.partner_key == "eric:def456"
+
+    def test_pending_responder_begins_connected(self) -> None:
+        ctx = self._ctx()
+        pending = PendingInvite(
+            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=pending,
+        )
+        assert proceed is True
+        assert ctx.talk.phase is TalkPhase.CONNECTED
+        assert ctx.talk.partner_key == "eric:def456"
+
+    def test_connected_to_a_initiator_to_b_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._ctx()
+        ctx.talk.begin_connected(
+            partner="alice", partner_tty="tty7", partner_key="alice:aaa111"
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="eric",
+            resolve_tty="tty2",
+            target_key="eric:def456",
+            pending=None,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.CONNECTED  # A not abandoned
+        assert ctx.talk.partner_key == "alice:aaa111"  # still A
+        out = capsys.readouterr().out
+        assert "already in a talk" in out.lower()
+        assert "alice:tty7" in out  # names the live partner
+
+    def test_inviting_b_initiator_to_c_refuses(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ctx = self._ctx()
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        proceed = _enter_talk_phase(
+            ctx,
+            user_target="priya",
+            resolve_tty="tty3",
+            target_key="priya:ccc333",
+            pending=None,
+        )
+        assert proceed is False
+        assert ctx.talk.phase is TalkPhase.INVITING  # invite to B untouched
+        assert ctx.talk.partner_key == "eric:def456"
+        assert "already in a talk" in capsys.readouterr().out.lower()
 
 
 # ---------------------------------------------------------------------------

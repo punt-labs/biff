@@ -56,7 +56,7 @@ from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
-from biff.talk_types import AcceptOutcome, TalkNotification
+from biff.talk_types import AcceptOutcome, PendingInvite, TalkNotification, TalkPhase
 
 # ---------------------------------------------------------------------------
 # Global flags
@@ -730,6 +730,44 @@ async def _run_talk_handshake(
         return False
 
 
+def _enter_talk_phase(
+    ctx: CliContext,
+    *,
+    user_target: str,
+    resolve_tty: str | None,
+    target_key: str,
+    pending: PendingInvite | None,
+) -> bool:
+    """Set the talk phase for the handshake; refuse to clobber a live talk.
+
+    A responder enters CONNECTED against the inviter's session (talk.tex
+    RespondToInvite); an initiator enters INVITING (SendInvite).  A responder
+    prefers the invite's DISPLAY tty (``ttyN``) so the connected prompt reads
+    the address ``/who`` shows, not the session-key hex; an initiator names the
+    partner by the address tty.
+
+    Starting a new invite while already CONNECTED or INVITING would abandon the
+    live partner with no end frame, so the initiator path is refused unless the
+    phase is idle.  Returns ``False`` (and prints why) when refused.
+    """
+    if pending is not None:
+        partner_tty = pending.tty or resolve_tty or ""
+        ctx.talk.begin_connected(
+            partner=user_target, partner_tty=partner_tty, partner_key=target_key
+        )
+        return True
+    if ctx.talk.phase is not TalkPhase.IDLE:
+        print(
+            f"Already in a talk with {ctx.talk.partner_display} — "
+            "use talk_end (or 'end') first."
+        )
+        return False
+    ctx.talk.begin_invite(
+        partner=user_target, partner_tty=resolve_tty or "", partner_key=target_key
+    )
+    return True
+
+
 async def _handle_repl_talk(
     ctx: CliContext,
     args: list[str],
@@ -790,19 +828,16 @@ async def _handle_repl_talk(
         ctx.talk.consume_pending_invite(user_target)  # commit — resolution ok
 
     # Enter the appropriate phase before the handshake so the accept poll and
-    # connected drain see the partner key (talk.tex SendInvite / RespondToInvite).
-    # An initiator names the partner by the address tty (``resolve_tty``); a
-    # responder prefers the invite's DISPLAY tty (``ttyN``) so the connected
-    # prompt reads the address ``/who`` shows, not the session-key hex.
-    if pending is not None:
-        partner_tty = pending.tty or resolve_tty or ""
-        ctx.talk.begin_connected(
-            partner=user_target, partner_tty=partner_tty, partner_key=target_key
-        )
-    else:
-        ctx.talk.begin_invite(
-            partner=user_target, partner_tty=resolve_tty or "", partner_key=target_key
-        )
+    # connected drain see the partner key; the helper refuses to clobber a live
+    # talk on the initiator path.
+    if not _enter_talk_phase(
+        ctx,
+        user_target=user_target,
+        resolve_tty=resolve_tty,
+        target_key=target_key,
+        pending=pending,
+    ):
+        return
 
     if not await _run_talk_handshake(
         ctx,

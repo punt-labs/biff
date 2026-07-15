@@ -213,6 +213,16 @@ async def _do_talk(
         await refresh_talk(mcp, state)
         return f'Sent to {display}: "{terminal_safe(message[:_MAX_BODY])}".'
 
+    # Guard the fallthrough: an invite here would clobber a live conversation or
+    # an outstanding invite to a *different* peer, abandoning it with no end
+    # frame.  Only start a new invite when idle — the accept and connected-send
+    # branches above already handle the pending-invite and same-partner cases.
+    if talk_state.phase is not TalkPhase.IDLE:
+        return (
+            f"Already in a talk with {talk_state.partner_display} — "
+            "use talk_end (or 'end') first."
+        )
+
     talk_state.begin_invite(
         partner=user, partner_tty=resolve_tty or "", partner_key=relay_key
     )

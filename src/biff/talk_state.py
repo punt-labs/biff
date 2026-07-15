@@ -163,6 +163,19 @@ class TalkState:
         return self._partner_key
 
     @property
+    def partner_display(self) -> str:
+        """The partner address as ``user:tty`` (or bare ``user`` when tty-less).
+
+        The session-scoped form ``/who`` shows and ``talk @user:tty`` resolves,
+        used when naming the current partner in a "already in a talk" refusal.
+        """
+        return (
+            f"{self._partner}:{self._partner_tty}"
+            if self._partner_tty
+            else self._partner
+        )
+
+    @property
     def pending_invites(self) -> Mapping[str, PendingInvite]:
         """User-to-invite map of invites awaiting a response.
 
