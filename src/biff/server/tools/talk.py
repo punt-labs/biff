@@ -361,9 +361,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await update_current_session(state)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + float(timeout)
-        # A pending invite already drained into ``pendingInvites`` (queue empty)
-        # is real activity — return it promptly instead of sleeping to timeout.
-        while not state.talk.has_activity and loop.time() < deadline:
+        # Block until there is new drainable traffic — queued frames or a
+        # pending invite.  A bare open connection is not, by itself, activity,
+        # so an active conversation with an empty queue keeps waiting for the
+        # partner's next frame instead of returning at once.
+        while not state.talk.has_pending_traffic and loop.time() < deadline:
             await asyncio.sleep(0.25)
         drain = state.talk.drain_for_agent()
         await refresh_talk(mcp, state)

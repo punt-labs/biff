@@ -81,7 +81,7 @@ def _accept(from_user: str, from_key: str, to_key: str = MY_KEY) -> dict[str, st
 
 
 def _message(
-    from_user: str, from_key: str, body: str, tty: str = "tty2", to_key: str = ""
+    from_user: str, from_key: str, body: str, tty: str = "tty2", to_key: str = MY_KEY
 ) -> dict[str, str]:
     return {
         "type": "message",
@@ -168,6 +168,16 @@ class TestReceive:
         """A keyless *control* frame is dropped (ReceiveNotForSession)."""
         st = _make_state()
         assert st.receive(_invite("eric", OTHER_KEY, to_key="")) is False
+        assert st.queued == 0
+
+    def test_keyless_message_dropped(self) -> None:
+        """A keyless typed ``message`` is dropped, not broadcast (ReceiveNotForSession).
+
+        Every modeled frame is session-scoped: a ``message`` with an empty
+        ``nto`` names no session, so it must not leak into a session's queue.
+        """
+        st = _make_state()
+        assert st.receive(_message("eric", OTHER_KEY, "hi", to_key="")) is False
         assert st.queued == 0
 
     def test_keyless_withdraw_dropped(self) -> None:
@@ -794,33 +804,45 @@ class TestWithdraw:
 
 
 # ---------------------------------------------------------------------------
-# has_activity — the talk_listen wait predicate
+# has_pending_traffic — the talk_listen wait predicate
 # ---------------------------------------------------------------------------
 
 
-class TestHasActivity:
-    """``talk_listen`` waits on ``has_activity`` so a drained invite returns."""
+class TestHasPendingTraffic:
+    """``talk_listen`` blocks on ``has_pending_traffic`` (queued-or-pending)."""
 
-    def test_idle_empty_has_no_activity(self) -> None:
-        assert _make_state().has_activity is False
+    def test_idle_empty_has_no_traffic(self) -> None:
+        assert _make_state().has_pending_traffic is False
 
-    def test_queued_frame_is_activity(self) -> None:
+    def test_queued_frame_is_traffic(self) -> None:
         st = _make_state()
         st.receive(_message("eric", OTHER_KEY, "hi"))
-        assert st.has_activity is True
+        assert st.has_pending_traffic is True
 
-    def test_pending_invite_is_activity_with_empty_queue(self) -> None:
-        """A drained invite (queue empty) is activity — not silence to sleep on."""
+    def test_pending_invite_is_traffic_with_empty_queue(self) -> None:
+        """A drained invite (queue empty) is traffic — not silence to sleep on."""
         st = _make_state()
         st.receive(_invite("eric", OTHER_KEY))
         st.drain_idle()  # invite moves to pending; queue drains to empty
         assert st.queued == 0
-        assert st.has_activity is True
+        assert st.has_pending_traffic is True
 
-    def test_connected_is_activity(self) -> None:
+    def test_bare_connected_is_not_traffic(self) -> None:
+        """A live connection with an empty queue is not, by itself, new traffic.
+
+        ``talk_listen`` must keep waiting for the partner's next frame while
+        connected, not return the idle sentinel at once.
+        """
         st = _make_state()
         st.begin_connected(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
-        assert st.has_activity is True
+        assert st.has_pending_traffic is False
+
+    def test_connected_with_queued_message_is_traffic(self) -> None:
+        """Once the partner's frame arrives, the connected session has traffic."""
+        st = _make_state()
+        st.begin_connected(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        st.receive(_message("eric", OTHER_KEY, "still here"))
+        assert st.has_pending_traffic is True
 
 
 # ---------------------------------------------------------------------------

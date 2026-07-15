@@ -191,41 +191,59 @@ class TalkState:
         return len(self._queue)
 
     @property
-    def has_activity(self) -> bool:
-        """Whether there is drain-worthy activity to surface right now.
+    def has_pending_traffic(self) -> bool:
+        """Whether new inbound traffic is waiting to be drained right now.
 
-        True when frames are queued, an invite already sits in
-        ``pendingInvites`` (drained but unanswered), or a live connection is
-        open.  ``talk_listen`` waits on this so an invite that drained into
-        ``pendingInvites`` with an empty queue returns at once instead of
-        sleeping to timeout — a pending invite is real activity, not silence.
+        True when frames are queued or an invite already sits in
+        ``pendingInvites`` (drained but unanswered).  ``talk_listen`` blocks on
+        this so an invite that drained into ``pendingInvites`` with an empty
+        queue returns at once, while a bare open connection with an empty queue
+        keeps waiting for the partner's next frame — a live connection is not,
+        by itself, new traffic to surface.
         """
-        return bool(self._queue or self._pending) or self._phase is TalkPhase.CONNECTED
+        return bool(self._queue or self._pending)
+
+    @property
+    def queued_invite_users(self) -> tuple[str, ...]:
+        """Distinct senders of undrained invite frames still in the queue.
+
+        An invite rides the queue until ``talk_read`` drains it into
+        ``pendingInvites``; before then the ``[TALK]`` marker must read as an
+        invite ("wants to talk"), not a chat message, so a fresh unsolicited
+        invite directs the agent to accept rather than to read a phantom
+        message.  Order-preserving and de-duplicated so a repeated inviter is
+        named once.
+        """
+        return tuple(
+            dict.fromkeys(q.notif.nfrom for q in self._queue if q.notif.is_invite)
+        )
 
     # -- Receive (talk.tex ReceiveNotification family) --
 
     def receive(self, raw: Mapping[str, object]) -> bool:
         """Enqueue a talk notification, applying the session-scope filters.
 
-        Drops self-echo (``nfromKey == myKey``).  Control frames are
-        session-scoped: a control frame is dropped unless ``nto == myKey``
-        (talk.tex ``ReceiveNotForSession``), so a forged or reordered frame
-        with a foreign or empty ``nto`` cannot apply to all of our sessions
-        (DES-043).  A wake poke — a mail/wall notification riding the talk
-        subject with a missing or unrecognized ``type`` — is not a modeled talk
-        frame: it wakes the poller (returns ``True``) but is *never* enqueued,
-        so a ``/write`` mail body cannot surface as a phantom talk message.  On
-        overflow, drops the oldest to retain the newest ``MAX_TALK_QUEUE``
-        (drop-oldest).  Returns ``True`` when the frame should wake the poller
-        (a real frame was enqueued, or a wake poke was accepted).
+        Drops self-echo (``nfromKey == myKey``).  Every *modeled* talk frame
+        (invite, accept, message, end, withdraw) is session-scoped: it is
+        dropped unless ``nto == myKey`` (talk.tex ``ReceiveNotForSession``), so
+        a forged or reordered frame with a foreign or empty ``nto`` — a typed
+        ``message`` included — cannot apply to all of our sessions (DES-043).
+        A wake poke — a mail/wall notification riding the talk subject with a
+        missing or unrecognized ``type`` — is not a modeled talk frame: it is
+        diverted *before* the session filter, wakes the poller (returns
+        ``True``), but is *never* enqueued, so a ``/write`` mail body cannot
+        surface as a phantom talk message.  On overflow, drops the oldest to
+        retain the newest ``MAX_TALK_QUEUE`` (drop-oldest).  Returns ``True``
+        when the frame should wake the poller (a real frame was enqueued, or a
+        wake poke was accepted).
         """
         notif = TalkNotification.from_payload(raw)
         if notif.nfrom_key == self._my_key:
             return False  # ReceiveSelfEcho
-        if notif.nto != self._my_key and (notif.nto or notif.is_control):
-            return False  # ReceiveNotForSession — foreign target or keyless control
         if notif.is_wake_poke:
-            return True  # mail/wall poke — wake the poller, enqueue nothing
+            return True  # mail/wall poke — diverted before the session filter
+        if notif.nto != self._my_key:
+            return False  # ReceiveNotForSession — every modeled frame is scoped
         if notif.is_withdraw:
             return self._withdraw(notif.nfrom, notif.nfrom_key)  # WithdrawArrive
         if len(self._queue) >= MAX_TALK_QUEUE:

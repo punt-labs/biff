@@ -345,6 +345,10 @@ def _talk_description(talk: TalkState) -> str:
     Prompts the model to call ``talk_read`` when there is undrained
     activity (an invite the human sent, or queued messages), and reflects
     a connected conversation otherwise.  Reads only — never drains.
+
+    An invite is rendered as "wants to talk" whether it has already drained
+    into ``pendingInvites`` or is still queued and undrained — an unsolicited
+    invite must direct the agent to accept, never surface as a chat message.
     """
     invites = talk.pending_invites
     if invites:
@@ -357,10 +361,21 @@ def _talk_description(talk: TalkState) -> str:
             f"[TALK] {who} wants to talk — call talk_read to see it, then "
             f"{terminal_safe(ordered[0].accept_command)} to accept."
         )
+    queued_inviters = talk.queued_invite_users
+    if queued_inviters:
+        who = ", ".join(terminal_safe(user) for user in queued_inviters)
+        # An undrained invite: talk_read moves it into pendingInvites and prints
+        # the runnable accept hint, so direct the agent there rather than
+        # mislabelling it as a new message.
+        return (
+            f"[TALK] {who} wants to talk — call talk_read to see it, then "
+            "talk to accept."
+        )
     if talk.queued:
+        # Reached only when no invite is queued, so every queued frame is a chat
+        # message.  Direct talk_read, not talk_end: queued messages are drained
+        # by talk_read; talk_end is a no-op with nothing to close here.
         noun = "message" if talk.queued == 1 else "messages"
-        # Direct talk_read, not talk_end: queued messages are drained by
-        # talk_read; talk_end is a no-op with nothing to close here.
         return f"[TALK] {talk.queued} new {noun} — call talk_read to see them."
     if talk.phase is TalkPhase.CONNECTED:
         partner = terminal_safe(talk.partner)

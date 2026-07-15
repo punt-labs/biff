@@ -270,6 +270,59 @@ class TestTalkDescriptionAcceptHint:
         assert "75abc665" not in desc
 
 
+class TestTalkDescriptionQueuedInvite:
+    """A queued (undrained) invite reads as an invite, not a chat message.
+
+    An unsolicited invite lands in the queue before ``talk_read`` moves it into
+    ``pendingInvites``.  Rendering that queued frame as "N new message" would
+    tell the agent to read a message when it should accept a talk; the marker
+    must read "wants to talk" for a queued invite and "new message" only for a
+    queued chat message.  Both light ``[TALK]``.
+    """
+
+    def _talk(self, tmp_path: Path) -> TalkState:
+        return TalkState(
+            relay=LocalRelay(tmp_path), user="kai", tty="t", session_key="kai:t"
+        )
+
+    def test_queued_invite_reads_as_invite(self, tmp_path: Path) -> None:
+        talk = self._talk(tmp_path)
+        talk.receive(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def67890",
+                "to_key": "kai:t",
+            }
+        )  # left undrained — still in the queue, not yet in pendingInvites
+
+        desc = _talk_description(talk)
+
+        assert "[TALK]" in desc
+        assert "eric wants to talk" in desc
+        assert "new message" not in desc
+
+    def test_queued_chat_message_reads_as_message(self, tmp_path: Path) -> None:
+        talk = self._talk(tmp_path)
+        talk.receive(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def67890",
+                "body": "hi",
+                "to_key": "kai:t",
+            }
+        )
+
+        desc = _talk_description(talk)
+
+        assert "[TALK]" in desc
+        assert "1 new message" in desc
+        assert "wants to talk" not in desc
+
+
 class TestTalkDescriptionConnectedHint:
     """The connected ``[TALK]`` hint names the partner's session (DES-043).
 
