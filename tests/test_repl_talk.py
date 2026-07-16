@@ -24,6 +24,7 @@ from biff.__main__ import (
     _print_talk_banner,
     _publish_auto_accept,
     _repl_talk,
+    _ReplTalkSubscription,
     _run_talk_handshake,
     _talk_handshake,
     _withdraw_talk_invite,
@@ -698,3 +699,75 @@ class TestPublishAutoAccept:
         assert proceed is True  # we are connected locally; proceed to the loop
         assert "may not have" in out  # user warned the partner might be stranded
         assert get_nc.await_count == 3  # invite + two accept attempts (retry)
+
+
+class TestReplTalkSubscriptionResilience:
+    """A failed re-subscribe must not crash the REPL — it retries next tick.
+
+    The re-subscribe runs on the idle tick in exactly the flaky window a client
+    replacement opens: ``get_nc``/``subscribe`` can raise ``NatsError``,
+    ``TimeoutError``, ``OSError``, or a base ``nats.errors.Error``.  An
+    unguarded raise dumps a traceback and exits the REPL, killing the retry
+    loop that was meant to self-heal (biff-9la).
+    """
+
+    @staticmethod
+    def _wedged_ctx() -> MagicMock:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("dial in progress"))
+        relay.connection_generation = 1
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.kai")
+        ctx = MagicMock()
+        ctx.relay = relay
+        ctx.user = "kai"
+        return ctx
+
+    async def test_reconcile_survives_failed_resubscribe(self) -> None:
+        ctx = self._wedged_ctx()
+        sub = _ReplTalkSubscription(ctx, asyncio.Event())
+
+        await sub.reconcile()  # must not raise
+
+        assert sub._handle is None  # nothing bound on the dead client
+        assert sub._generation == 0  # generation unchanged — binds only on success
+
+    async def test_reconcile_reattempts_after_failure(self) -> None:
+        ctx = self._wedged_ctx()
+        sub = _ReplTalkSubscription(ctx, asyncio.Event())
+
+        await sub.reconcile()
+        await sub.reconcile()  # a second tick re-attempts (self-heals)
+
+        assert ctx.relay.get_nc.await_count == 2
+
+    async def test_resubscribe_failure_warns_once_then_recovers(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ctx = self._wedged_ctx()
+        sub = _ReplTalkSubscription(ctx, asyncio.Event())
+
+        with caplog.at_level(logging.DEBUG, logger="biff.__main__"):
+            await sub.reconcile()  # onset — one WARNING
+            await sub.reconcile()  # retry — DEBUG only
+
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1
+
+            # NATS recovers: get_nc + subscribe now succeed.
+            ctx.relay.get_nc = AsyncMock(return_value=AsyncMock())
+            ctx.relay.connection_generation = 2
+            await sub.reconcile()
+
+        assert sub._handle is not None
+        assert sub._generation == 2
+        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(infos) == 1  # one recovery line
+
+    async def test_startup_establish_survives_failure(self) -> None:
+        """The startup ``establish`` is crash-safe via the same guard."""
+        ctx = self._wedged_ctx()
+        sub = _ReplTalkSubscription(ctx, asyncio.Event())
+
+        await sub.establish()  # startup call — must not raise
+
+        assert sub._handle is None

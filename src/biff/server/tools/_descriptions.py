@@ -27,6 +27,7 @@ from biff.formatting import terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
+from biff.talk_resubscribe import TalkResubscribeLatch
 from biff.talk_state import TalkState
 from biff.talk_types import TalkPhase
 
@@ -444,7 +445,9 @@ def _relay_generation(state: ServerState) -> int:
     return relay.connection_generation if isinstance(relay, NatsRelay) else 0
 
 
-async def subscribe_talk(state: ServerState) -> TalkSubscription | None:
+async def subscribe_talk(
+    state: ServerState, latch: TalkResubscribeLatch
+) -> TalkSubscription | None:
     """Establish the always-on talk subscription feeding the held ``TalkState``.
 
     Started once at poller start (ungated — a fresh agent must receive an
@@ -491,14 +494,17 @@ async def subscribe_talk(state: ServerState) -> TalkSubscription | None:
         handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
             subject, cb=_on_talk_msg
         )
-        return TalkSubscription(handle, generation)
     except Exception:  # noqa: BLE001
-        logger.warning("Failed to subscribe to talk notifications", exc_info=True)
+        latch.record_failure()
         return None
+    latch.record_success()
+    return TalkSubscription(handle, generation)
 
 
 async def _reconcile_talk_sub(
-    state: ServerState, talk_sub: TalkSubscription | None
+    state: ServerState,
+    talk_sub: TalkSubscription | None,
+    latch: TalkResubscribeLatch,
 ) -> TalkSubscription | None:
     """Re-establish the talk SUB when it is unbound or its client was replaced.
 
@@ -520,7 +526,7 @@ async def _reconcile_talk_sub(
         # orphaned handle is best-effort and its failure is expected.
         with suppress(Exception):
             await talk_sub.handle.unsubscribe()  # type: ignore[attr-defined]
-    return await subscribe_talk(state)
+    return await subscribe_talk(state, latch)
 
 
 async def _active_tick(
@@ -638,7 +644,8 @@ async def poll_inbox(
     last_count = -1  # Force initial refresh
     last_wall: tuple[str, str] = ("", "")  # Force initial refresh
     last_talk: tuple[tuple[str, ...], int, str] = ((), -1, "")  # Force initial refresh
-    talk_sub = await subscribe_talk(state)
+    talk_latch = TalkResubscribeLatch(logger)
+    talk_sub = await subscribe_talk(state, talk_latch)
 
     try:
         while shutdown is None or not shutdown.is_set():
@@ -657,7 +664,7 @@ async def poll_inbox(
             # new client carries no SUB — without this the talk channel is
             # silently dead for the rest of the server's lifetime. Cheap: a
             # generation compare when nothing changed.
-            talk_sub = await _reconcile_talk_sub(state, talk_sub)
+            talk_sub = await _reconcile_talk_sub(state, talk_sub, talk_latch)
 
             # Transition: active → napping (connection stays open)
             if not tracker.napping and tracker.idle_seconds() > idle_threshold:

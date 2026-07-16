@@ -56,6 +56,7 @@ from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
+from biff.talk_resubscribe import TalkResubscribeLatch
 from biff.talk_types import AcceptOutcome, PendingInvite, TalkNotification, TalkPhase
 
 # ---------------------------------------------------------------------------
@@ -994,6 +995,7 @@ class _ReplTalkSubscription:
     _notify_event: asyncio.Event
     _handle: object | None
     _generation: int
+    _latch: TalkResubscribeLatch
 
     def __new__(cls, ctx: CliContext, notify_event: asyncio.Event) -> Self:
         self = super().__new__(cls)
@@ -1001,20 +1003,35 @@ class _ReplTalkSubscription:
         self._notify_event = notify_event
         self._handle = None
         self._generation = 0
+        self._latch = TalkResubscribeLatch(logging.getLogger(__name__))
         return self
 
     async def establish(self) -> None:
-        """Subscribe on the live client, capturing the generation it binds to."""
+        """Subscribe on the live client, capturing the generation it binds to.
+
+        A dial in progress (the client mid-replacement) can make ``get_nc`` or
+        ``subscribe`` raise; a raise here must not crash the REPL and kill the
+        retry loop that was meant to self-heal.  On failure, leave the handle
+        and generation unchanged so the next ``reconcile`` tick retries, and
+        let the latch log the failure once (biff-9la).  The generation binds
+        only after a successful subscribe.
+        """
         relay = self._ctx.relay
         if not isinstance(relay, NatsRelay):
             return
-        nc = await relay.get_nc()
-        generation = relay.connection_generation
-        subject = relay.talk_notify_subject(self._ctx.user)
-        self._handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
-            subject, cb=self._on_notify
-        )
+        try:
+            nc = await relay.get_nc()
+            generation = relay.connection_generation
+            subject = relay.talk_notify_subject(self._ctx.user)
+            handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+                subject, cb=self._on_notify
+            )
+        except Exception:  # noqa: BLE001
+            self._latch.record_failure()
+            return
+        self._handle = handle
         self._generation = generation
+        self._latch.record_success()
 
     async def reconcile(self) -> None:
         """Re-subscribe when the relay replaced its client since we bound.

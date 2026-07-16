@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from biff.models import BiffConfig, Message, UnreadSummary, WallPost
+from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
@@ -26,9 +28,11 @@ from biff.server.tools._descriptions import (
     _write_unread_file,
     poll_inbox,
     refresh_read_messages,
+    subscribe_talk,
     talk_signal,
 )
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
+from biff.talk_resubscribe import TalkResubscribeLatch
 from biff.talk_state import TalkState
 
 if TYPE_CHECKING:
@@ -36,6 +40,12 @@ if TYPE_CHECKING:
 
 _TEST_REPO = "_test-server"
 _KAI_SESSION = "kai:tty1"
+_TALK_LOGGER = "test.talk_resubscribe"
+
+
+def _test_latch() -> TalkResubscribeLatch:
+    """A fresh latch for reconcile tests that do not assert on its logs."""
+    return TalkResubscribeLatch(logging.getLogger(_TALK_LOGGER))
 
 
 @pytest.fixture
@@ -473,7 +483,9 @@ class TestPollInbox:
         fake_sub = AsyncMock()
         calls = 0
 
-        async def flaky_subscribe(state: ServerState) -> TalkSubscription | None:
+        async def flaky_subscribe(
+            state: ServerState, latch: TalkResubscribeLatch
+        ) -> TalkSubscription | None:
             nonlocal calls
             calls += 1
             # LocalRelay has no generation, so _relay_generation is 0 — bind the
@@ -609,7 +621,9 @@ class TestReconcileTalkSub:
         current = TalkSubscription(handle, generation=3)
         calls = 0
 
-        async def _sub(_state: ServerState) -> TalkSubscription | None:
+        async def _sub(
+            _state: ServerState, _latch: TalkResubscribeLatch
+        ) -> TalkSubscription | None:
             nonlocal calls
             calls += 1
             return TalkSubscription(AsyncMock(), 3)
@@ -617,7 +631,7 @@ class TestReconcileTalkSub:
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(3))
 
-        result = await _reconcile_talk_sub(state, current)
+        result = await _reconcile_talk_sub(state, current, _test_latch())
 
         assert result is current
         assert calls == 0
@@ -634,13 +648,17 @@ class TestReconcileTalkSub:
         stale = AsyncMock()
         fresh = TalkSubscription(AsyncMock(), 4)
 
-        async def _sub(_state: ServerState) -> TalkSubscription | None:
+        async def _sub(
+            _state: ServerState, _latch: TalkResubscribeLatch
+        ) -> TalkSubscription | None:
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
 
-        result = await _reconcile_talk_sub(state, TalkSubscription(stale, 3))
+        result = await _reconcile_talk_sub(
+            state, TalkSubscription(stale, 3), _test_latch()
+        )
 
         assert result is fresh
         stale.unsubscribe.assert_awaited_once()
@@ -651,13 +669,15 @@ class TestReconcileTalkSub:
         """A None handle (failed initial subscribe) is retried."""
         fresh = TalkSubscription(AsyncMock(), 1)
 
-        async def _sub(_state: ServerState) -> TalkSubscription | None:
+        async def _sub(
+            _state: ServerState, _latch: TalkResubscribeLatch
+        ) -> TalkSubscription | None:
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
 
-        result = await _reconcile_talk_sub(state, None)
+        result = await _reconcile_talk_sub(state, None, _test_latch())
 
         assert result is fresh
 
@@ -671,13 +691,63 @@ class TestReconcileTalkSub:
         """
         stale = AsyncMock()
 
-        async def _sub(_state: ServerState) -> TalkSubscription | None:
+        async def _sub(
+            _state: ServerState, _latch: TalkResubscribeLatch
+        ) -> TalkSubscription | None:
             return None
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(5))
 
-        result = await _reconcile_talk_sub(state, TalkSubscription(stale, 2))
+        result = await _reconcile_talk_sub(
+            state, TalkSubscription(stale, 2), _test_latch()
+        )
 
         assert result is None
         stale.unsubscribe.assert_awaited_once()
+
+
+class TestSubscribeTalkLatch:
+    """The poller's ``subscribe_talk`` routes failures/successes through the latch.
+
+    A NATS outage fails the re-subscribe on every tick; without the latch the
+    old code logged a WARNING+traceback per tick (a flood).  The latch surfaces
+    the onset once at WARNING, keeps retries at DEBUG, and logs one INFO on
+    recovery — the same onset/recovery discipline as ``_ConnectionHealth``.
+    """
+
+    @staticmethod
+    def _nats_state(tmp_path: Path) -> tuple[ServerState, MagicMock]:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        relay.connection_generation = 1
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.kai")
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        return state, relay
+
+    async def test_failure_then_recovery_logs_once_each(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        state, relay = self._nats_state(tmp_path)
+        latch = TalkResubscribeLatch(logging.getLogger(_TALK_LOGGER))
+
+        with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
+            assert await subscribe_talk(state, latch) is None  # onset — WARNING
+            assert await subscribe_talk(state, latch) is None  # retry — DEBUG
+
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1  # not one per tick
+
+            relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
+            sub = await subscribe_talk(state, latch)
+
+        assert sub is not None
+        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(infos) == 1  # one recovery line
