@@ -120,31 +120,28 @@ class TestResolveTalkTarget:
     def test_literal_tty_resolves(self) -> None:
         """When tty matches a literal session key, uses that key."""
         sessions = [UserSession(user="eric", tty="def456")]
-        relay_key, display, target_repo = resolve_talk_target(
+        relay_key, display = resolve_talk_target(
             sessions, "eric", "def456", sender_key=self._SENDER
         )
         assert relay_key == "eric:def456"
         assert display == "eric:def456"
-        assert target_repo is None
 
     def test_tty_name_resolves_to_hex(self) -> None:
         """Friendly tty_name resolves to the session's actual hex key."""
         sessions = [UserSession(user="eric", tty="def456", tty_name="laptop")]
-        relay_key, display, target_repo = resolve_talk_target(
+        relay_key, display = resolve_talk_target(
             sessions, "eric", "laptop", sender_key=self._SENDER
         )
         assert relay_key == "eric:def456"
         assert display == "eric:laptop"
-        assert target_repo is None
 
     def test_unresolved_tty_falls_back(self) -> None:
         """Unknown tty falls back to raw value (best-effort delivery)."""
-        relay_key, display, target_repo = resolve_talk_target(
+        relay_key, display = resolve_talk_target(
             [], "eric", "unknown", sender_key=self._SENDER
         )
         assert relay_key == "eric:unknown"
         assert display == "eric:unknown"
-        assert target_repo is None
 
     def test_reaches_only_named_session(self) -> None:
         """Two sessions for one user — only the named tty is targeted."""
@@ -152,7 +149,7 @@ class TestResolveTalkTarget:
             UserSession(user="eric", tty="aaa111", tty_name="laptop"),
             UserSession(user="eric", tty="bbb222", tty_name="desktop"),
         ]
-        relay_key, _, _ = resolve_talk_target(
+        relay_key, _ = resolve_talk_target(
             sessions, "eric", "desktop", sender_key=self._SENDER
         )
         assert relay_key == "eric:bbb222"
@@ -163,16 +160,21 @@ class TestResolveTalkTarget:
         with pytest.raises(ValueError, match="your own session"):
             resolve_talk_target(sessions, "kai", "here", sender_key=self._SENDER)
 
-    def test_cross_repo_sets_target_repo(self) -> None:
-        """A session in a different repo yields its repo as target_repo."""
+    def test_cross_repo_resolves_identity_not_repo(self) -> None:
+        """A cross-repo peer resolves to its identity key — repo is not routed.
+
+        Talk routes on (org, identity) (talk.tex ``subjectOf``); the peer's
+        repository never enters the resolution.  The local repo still wins a
+        tty_name collision (presence), but no target repo is returned.
+        """
         sessions = [
             UserSession(user="eric", tty="ccc333", tty_name="peer", repo="other")
         ]
-        relay_key, _, target_repo = resolve_talk_target(
+        relay_key, display = resolve_talk_target(
             sessions, "eric", "peer", sender_key=self._SENDER, sender_repo="mine"
         )
         assert relay_key == "eric:ccc333"
-        assert target_repo == "other"
+        assert display == "eric:peer"
 
 
 class TestTalkNotificationToKey:
@@ -202,12 +204,18 @@ class TestTalkNotificationToKey:
         await relay._publish_talk_notification("eric:def456", msg, "kai:abc123")
         assert self._payload(nc)["to_key"] == "eric:def456"
 
-    async def test_broadcast_omits_to_key(self) -> None:
-        """A bare ``user`` target (write/wall) has no to_key — broadcast."""
+    async def test_broadcast_publishes_no_wake(self) -> None:
+        """A bare ``user`` target (write/wall) has no identity subject to wake.
+
+        Talk frames route on ``(org, identity)`` (talk.tex ``subjectOf``); a
+        bare-user broadcast names no single session, so no instant-wake frame
+        is published.  The recipient still drains the durable inbox on its
+        next poll tick.
+        """
         relay, nc = self._relay_with_mock_nc()
         msg = Message(from_user="kai", from_tty="tty1", to_user="eric", body="hi")
         await relay._publish_talk_notification("eric", msg, "kai:abc123")
-        assert "to_key" not in self._payload(nc)
+        nc.publish.assert_not_awaited()
 
 
 class TestValidatedSenderKey:

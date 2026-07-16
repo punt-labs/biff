@@ -102,7 +102,7 @@ async def _measure_core_nats_latency(
     another client's subscription callback receives it.  Single
     subscription for all trials (matches MCP server behaviour).
     """
-    subject = f"biff.{repo}.talk.notify.testuser"
+    subject = f"biff.{repo}.talk.notify.testuser:tty1"
 
     received = asyncio.Event()
     t_recv = 0.0

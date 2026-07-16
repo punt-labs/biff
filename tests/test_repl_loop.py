@@ -900,9 +900,7 @@ class TestInviteCancelWithdraw:
             )
 
         assert proceed is False
-        spy_withdraw.assert_awaited_once_with(
-            target_user="eric", to_key="eric:def67890", target_repo=None
-        )
+        spy_withdraw.assert_awaited_once_with(to_key="eric:def67890")
         spy_end.assert_not_awaited()
         # The cancel returns us to idle (talk.tex LocalEnd).
         assert ctx.talk.phase is TalkPhase.IDLE
@@ -949,9 +947,7 @@ class TestInviteCancelWithdraw:
                 prompt_gate=gate,
             )
 
-        spy_withdraw.assert_awaited_once_with(
-            target_user="eric", to_key="eric:def67890", target_repo=None
-        )
+        spy_withdraw.assert_awaited_once_with(to_key="eric:def67890")
         spy_end.assert_not_awaited()
         # The withdraw completes before the re-raise, returning us to idle.
         assert ctx.talk.phase is TalkPhase.IDLE

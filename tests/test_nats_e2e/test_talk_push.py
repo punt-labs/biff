@@ -36,17 +36,16 @@ _TEST_REPO = "_test-nats-e2e"
 
 async def _publish_talk_frame(
     nc: Any,
-    repo: str,
-    to_user: str,
+    org: str,
     *,
     ntype: str = "message",
     from_user: str,
     body: str,
     from_key: str,
-    to_key: str = "",
+    to_key: str,
 ) -> None:
-    """Publish a talk frame on the core NATS subject."""
-    subject = f"biff.{repo}.talk.notify.{to_user}"
+    """Publish a talk frame on the recipient's (org, identity) core subject."""
+    subject = f"biff.{org}.talk.notify.{to_key}"
     payload = json.dumps(
         {
             "type": ntype,
@@ -117,7 +116,6 @@ class TestTalkPushNotification:
             await _publish_talk_frame(
                 nc,
                 _TEST_REPO,
-                "kai",
                 from_user="eric",
                 body="PR looks good",
                 from_key="eric:tty2",
@@ -158,7 +156,6 @@ class TestTalkPushNotification:
             await _publish_talk_frame(
                 nc,
                 _TEST_REPO,
-                "kai",
                 from_user="eric",
                 body="notification test",
                 from_key="eric:tty2",
@@ -192,7 +189,6 @@ class TestTalkPushNotification:
                 await _publish_talk_frame(
                     nc,
                     _TEST_REPO,
-                    "kai",
                     from_user="eric",
                     body=f"rapid message {i}",
                     from_key="eric:tty2",
@@ -223,7 +219,6 @@ class TestTalkPushNotification:
             await _publish_talk_frame(
                 nc,
                 _TEST_REPO,
-                "kai",
                 from_user="eric",
                 body="should be ignored",
                 from_key=kai_state.session_key,
@@ -282,7 +277,6 @@ class TestTalkPushNotification:
                 await _publish_talk_frame(
                     nc,
                     _TEST_REPO,
-                    "kai",
                     from_user="eric",
                     body="after reconnect",
                     from_key="eric:tty2",

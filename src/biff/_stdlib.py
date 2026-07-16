@@ -83,6 +83,17 @@ def display_repo_name(name: str) -> str:
     return name.replace("__", "/", 1) if name else name
 
 
+def repo_org(repo_name: str) -> str:
+    """Return the organization component of a sanitized repo name.
+
+    Sanitized names are ``owner__repo`` (``sanitize_repo_name`` maps the
+    slug's ``/`` to ``__``); the organization is the owner.  A name with no
+    ``__`` separator — a bare local directory with no remote — is its own
+    org, so org-scoped routing degenerates to repo-local for such sessions.
+    """
+    return repo_name.partition("__")[0] or repo_name
+
+
 def sanitize_repo_name(name: str) -> str:
     """Sanitize a repo name or slug for use in NATS resource names.
 

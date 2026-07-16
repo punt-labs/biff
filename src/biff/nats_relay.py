@@ -52,6 +52,7 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
+from biff._stdlib import repo_org
 from biff.models import (
     Message,
     RelayAuth,
@@ -390,6 +391,9 @@ class NatsRelay:
         self._auth = auth
         self._name = name
         self._repo_name = repo_name
+        # Talk routes on (org, identity), never on repo (talk.tex subjectOf):
+        # the org is the isolation boundary, derived once from our own repo.
+        self._org = repo_org(repo_name)
         # Validate stream_prefix — must be a simple alphanumeric-dash token.
         # Dots, wildcards, or spaces would break NATS subject routing.
         if not stream_prefix or not all(c.isalnum() or c == "-" for c in stream_prefix):
@@ -1018,16 +1022,24 @@ class NatsRelay:
         """Instance shorthand for :meth:`wall_kv_key`."""
         return self.wall_kv_key(self._repo_name)
 
-    def talk_notify_subject(self, user: str, *, target_repo: str | None = None) -> str:
-        """NATS core subject for talk notifications to a user.
+    def talk_notify_subject(self, session_key: str) -> str:
+        """NATS core subject for talk frames addressed to *session_key*.
 
-        Published by :meth:`deliver` after every message delivery.
-        Subscribed by ``talk_listen`` for instant wake-up.  Core NATS
-        (no stream) — messages are dropped if nobody is listening.
+        Keyed on ``(org, identity)`` (talk.tex ``subjectOf``): the
+        organization is the isolation boundary and the globally-unique
+        ``user:tty`` identity selects the one session, so a frame reaches
+        the addressed ``@user:tty`` whatever repository either party runs
+        in.  The repository is never a routing coordinate — a reply routes
+        to ``(myOrg, peer)`` from the sender's own org and the peer's
+        identity, both held locally (biff-e9u).  A session subscribes to
+        ``subjectOf`` of its own key; a sender publishes to ``subjectOf``
+        of the peer's key.  Core NATS (no stream) — frames are dropped if
+        nobody is listening.
         """
+        user, _, tty = session_key.partition(":")
         self._validate_user(user)
-        repo = self._validate_repo(target_repo) if target_repo else self._repo_name
-        return f"{self._stream_prefix}.{repo}.talk.notify.{user}"
+        self._validate_tty(tty)
+        return f"{self._stream_prefix}.{self._org}.talk.notify.{user}:{tty}"
 
     async def get_nc(self) -> NatsClient:
         """Return the raw NATS client, connecting if necessary.
@@ -1094,17 +1106,13 @@ class NatsRelay:
             )
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
-        await self._publish_talk_notification(
-            message.to_user, message, sender_key, target_repo=target_repo
-        )
+        await self._publish_talk_notification(message.to_user, message, sender_key)
 
     async def _publish_talk_notification(
         self,
         to_user: str,
         message: Message | None = None,
         sender_key: str = "",
-        *,
-        target_repo: str | None = None,
     ) -> None:
         """Publish a talk notification so ``talk_listen`` wakes up.
 
@@ -1112,35 +1120,38 @@ class NatsRelay:
         key so the status line poller can display incoming talk messages
         and reject self-echo.  Falls back to ``b"1"`` if no message.
 
+        The subject is ``subjectOf`` of the targeted recipient identity
+        (talk.tex): only a ``user:tty`` recipient names a single session to
+        wake.  A bare-user broadcast has no session identity, so no
+        instant-wake frame is published — its recipient still drains the
+        durable inbox on the next poll tick.
+
         Best-effort: failures are logged at debug level and never
         propagate — the JetStream delivery (the critical path) has
         already succeeded.
         """
         if self._nc is None or self._nc.is_closed:
             return
-        original_to = to_user
-        user = to_user.split(":")[0] if ":" in to_user else to_user
+        if ":" not in to_user:
+            return
         try:
-            subject = self.talk_notify_subject(user, target_repo=target_repo)
+            subject = self.talk_notify_subject(to_user)
             if message is not None:
                 data: dict[str, str] = {
                     "from": message.from_user,
                     "body": message.body,
+                    "to_key": to_user,
                 }
                 if sender_key:
                     data["from_key"] = sender_key
                 if message.from_tty:
                     data["from_tty"] = message.from_tty
-                # Only set to_key for tty-targeted messages (user:tty);
-                # omitting it signals broadcast to all user sessions.
-                if ":" in original_to:
-                    data["to_key"] = original_to
                 payload = json.dumps(data).encode()
             else:
                 payload = b"1"
             await self._nc.publish(subject, payload)
         except Exception:  # noqa: BLE001 — notification is best-effort
-            logger.debug("Talk notification failed for %s", user)
+            logger.debug("Talk notification failed for %s", to_user)
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.

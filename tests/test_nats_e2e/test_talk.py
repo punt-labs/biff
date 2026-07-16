@@ -258,7 +258,7 @@ class TestTalkInviteFrame:
         async def _capture(msg: object) -> None:
             received.append(msg.data)  # type: ignore[attr-defined]
 
-        subject = f"biff.{_TEST_REPO}.talk.notify.eric"
+        subject = f"biff.{_TEST_REPO}.talk.notify.eric:eeee1111"
         sub = await nc.subscribe(subject, cb=_capture)  # pyright: ignore[reportUnknownMemberType]
 
         try:

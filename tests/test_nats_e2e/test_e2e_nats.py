@@ -524,7 +524,7 @@ class TestTalkSelfEchoFilter:
             relay = state.relay
             assert isinstance(relay, NatsRelay)
             nc = await relay.get_nc()
-            subject = relay.talk_notify_subject("kai")
+            subject = relay.talk_notify_subject(state.session_key)
             payload = json.dumps(
                 {
                     "type": "message",
@@ -571,7 +571,7 @@ class TestTalkSelfEchoFilter:
             relay = state.relay
             assert isinstance(relay, NatsRelay)
             nc = await relay.get_nc()
-            subject = relay.talk_notify_subject("kai")
+            subject = relay.talk_notify_subject(state.session_key)
             payload = json.dumps(
                 {
                     "type": "message",

@@ -306,35 +306,66 @@ class TestSessionRepoBackfill:
         assert session.repo == "already-set"
 
 
-class TestTalkNotifySubjectCrossRepo:
-    """talk_notify_subject uses target_repo for cross-repo notifications."""
+class TestTalkNotifySubjectOrgKeyed:
+    """talk_notify_subject keys on (org, identity), never on the repo.
 
-    def test_default_uses_own_repo(self) -> None:
+    talk.tex ``subjectOf k = (keyOrg k, k)``: the subject namespace is the
+    organization (the ``owner`` of a sanitized ``owner__repo`` name), and
+    within it the frame is addressed to the globally-unique ``user:tty``
+    identity.  Two sessions in different repos of the same org share the
+    org namespace, so a reply reaches the addressed identity whatever
+    repository either party runs in (biff-e9u).
+    """
+
+    def test_subject_uses_org_and_full_identity(self) -> None:
+        from biff.nats_relay import NatsRelay
+
+        relay = NatsRelay(
+            url="nats://localhost",
+            repo_name="punt-labs__biff",
+            stream_prefix="biff-test",
+        )
+        subject = relay.talk_notify_subject("kai:abc123")
+        assert subject == "biff-test.punt-labs.talk.notify.kai:abc123"
+
+    def test_same_org_different_repo_share_namespace(self) -> None:
+        """A biff session and a vox session of one org route to one namespace."""
+        from biff.nats_relay import NatsRelay
+
+        biff_relay = NatsRelay(
+            url="nats://localhost",
+            repo_name="punt-labs__biff",
+            stream_prefix="biff-test",
+        )
+        vox_relay = NatsRelay(
+            url="nats://localhost",
+            repo_name="punt-labs__vox",
+            stream_prefix="biff-test",
+        )
+        # The biff session publishing a reply to the vox peer and the vox
+        # session subscribing to its own identity resolve to the SAME subject.
+        assert biff_relay.talk_notify_subject(
+            "eric:vox111"
+        ) == vox_relay.talk_notify_subject("eric:vox111")
+
+    def test_repoless_name_is_its_own_org(self) -> None:
+        """A bare local repo name (no ``__``) is its own org — degenerate case."""
         from biff.nats_relay import NatsRelay
 
         relay = NatsRelay(
             url="nats://localhost", repo_name="myrepo", stream_prefix="biff-test"
         )
-        subject = relay.talk_notify_subject("kai")
-        assert subject == "biff-test.myrepo.talk.notify.kai"
+        subject = relay.talk_notify_subject("kai:abc123")
+        assert subject == "biff-test.myrepo.talk.notify.kai:abc123"
 
-    def test_cross_repo_uses_target(self) -> None:
+    def test_invalid_identity_raises(self) -> None:
         from biff.nats_relay import NatsRelay
 
         relay = NatsRelay(
             url="nats://localhost", repo_name="myrepo", stream_prefix="biff-test"
         )
-        subject = relay.talk_notify_subject("kai", target_repo="otherrepo")
-        assert subject == "biff-test.otherrepo.talk.notify.kai"
-
-    def test_invalid_target_repo_raises(self) -> None:
-        from biff.nats_relay import NatsRelay
-
-        relay = NatsRelay(
-            url="nats://localhost", repo_name="myrepo", stream_prefix="biff-test"
-        )
-        with pytest.raises(ValueError, match="Invalid repo name"):
-            relay.talk_notify_subject("kai", target_repo="bad.repo")
+        with pytest.raises(ValueError, match="Invalid tty"):
+            relay.talk_notify_subject("kai:bad.tty")
 
 
 # -- Org-based peer discovery (DES-034) --

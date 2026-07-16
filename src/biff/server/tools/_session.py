@@ -117,16 +117,18 @@ def resolve_talk_target(
     *,
     sender_key: str,
     sender_repo: str = "",
-) -> tuple[str, str, str | None]:
+) -> tuple[str, str]:
     """Resolve a talk address to a specific session.
 
-    Returns ``(session_key, display, target_repo)``.  Talk is
-    session-scoped: the address MUST name a session
-    (``@user:ttyN``).  A bare ``@user`` has no unambiguous target
-    and raises ``ValueError`` directing the caller to a session.
+    Returns ``(session_key, display)``.  Talk is session-scoped: the
+    address MUST name a session (``@user:ttyN``).  A bare ``@user`` has no
+    unambiguous target and raises ``ValueError`` directing the caller to a
+    session.
 
-    *target_repo* is set when the resolved session runs in a repo
-    other than *sender_repo* (cross-repo talk, DES-030).
+    Talk routes on ``(org, identity)`` (talk.tex ``subjectOf``), never on
+    the peer's repository, so no target repo is returned.  *sender_repo*
+    still disambiguates a tty_name shared across repos (presence, not
+    routing): the local repo wins on a collision.
 
     Raises ``ValueError`` when *tty* is missing (no session named) or
     when the resolved key equals *sender_key* (self-talk).
@@ -134,16 +136,13 @@ def resolve_talk_target(
     if not tty:
         raise ValueError(_NO_SESSION_HINT)
     session = resolve_tty_name(sessions, user, tty, local_repo=sender_repo)
-    target_repo: str | None = None
     if session is not None:
         key = build_session_key(session.user, session.tty)
-        if session.repo and sender_repo and session.repo != sender_repo:
-            target_repo = session.repo
     else:
         key = f"{user}:{tty}"
     if key == sender_key:
         raise ValueError(_SELF_TALK)
-    return key, f"{user}:{tty}", target_repo
+    return key, f"{user}:{tty}"
 
 
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:
