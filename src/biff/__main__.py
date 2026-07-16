@@ -404,6 +404,7 @@ async def _repl_talk(
     *,
     to_key: str,
     target_repo: str | None = None,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> None:
     """Modal talk sub-loop — send lines to target, show incoming messages.
 
@@ -413,6 +414,13 @@ async def _repl_talk(
 
     Messages are sent via the shared ``TalkState`` (ephemeral core-NATS
     publish, no inbox) and received by draining it each 2s tick.
+
+    The connected loop runs *instead of* the REPL idle loop, so a wedge
+    teardown that swaps the NATS client mid-conversation would orphan the talk
+    SUB on the dead client and silently stop incoming partner messages (sends
+    still work — they redial).  Reconciling the SUB on each poll tick re-binds
+    it regardless of REPL mode; the call is crash-safe via the latch and a
+    no-op when the generation is unchanged.
     """
     talk_prompt = f"{ctx.user}:{ctx.tty_name} ▶ "
     current_prompt[0] = talk_prompt
@@ -431,6 +439,8 @@ async def _repl_talk(
             result = await _wait_for_input_or_notify(aqueue, notify_event)
             if result is _NO_INPUT:
                 notify_event.clear()
+                if talk_sub is not None:
+                    await talk_sub.reconcile()
                 if _render_connected_drain(ctx, repl_display, talk_prompt):
                     break
                 continue
@@ -539,6 +549,7 @@ async def _repl_loop(
                 current_prompt,
                 prompt,
                 repl_display,
+                talk_sub=talk_sub,
             )
             _release_prompt(prompt_gate)
             continue
@@ -582,12 +593,20 @@ async def _wait_for_talk_accept(
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
+    *,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> AcceptOutcome:
     """Wait for the target to accept, or for a mutual-invite auto-accept.
 
     Returns the :class:`AcceptOutcome`; ``NONE`` when the user typed
     ``end`` or EOF before any accept arrived.  Third-party notifications
     surfaced by :meth:`TalkState.poll_accept` print as banners.
+
+    The accept wait blocks outside the REPL idle loop, so a wedge teardown
+    that swaps the NATS client while we wait would orphan the talk SUB on the
+    dead client — the invitee's accept and opening line would never arrive.
+    Reconciling the SUB on each poll tick re-binds it regardless; the call is
+    crash-safe via the latch and a no-op when the generation is unchanged.
     """
     # Open the prompt gate before waiting so the stdin thread actually calls
     # ``input()`` and reads the user's line.  Without this the thread stays
@@ -598,6 +617,8 @@ async def _wait_for_talk_accept(
         result = await _wait_for_input_or_notify(aqueue, notify_event)
         if result is _NO_INPUT:
             notify_event.clear()
+            if talk_sub is not None:
+                await talk_sub.reconcile()
             outcome, others = ctx.talk.poll_accept()
             for notif in others:
                 _print_talk_banner(notif)
@@ -668,6 +689,7 @@ async def _talk_handshake(
     prompt_gate: threading_mod.Event,
     *,
     target_repo: str | None = None,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> bool:
     """Execute the talk handshake. Returns True if talk should proceed."""
     if responding:
@@ -707,7 +729,9 @@ async def _talk_handshake(
     # ``end``/``exit``/``quit`` is the graceful in-REPL cancel that returns to
     # the prompt (``AcceptOutcome.NONE`` below); Ctrl-C is a process exit.
     try:
-        outcome = await _wait_for_talk_accept(ctx, aqueue, notify_event, prompt_gate)
+        outcome = await _wait_for_talk_accept(
+            ctx, aqueue, notify_event, prompt_gate, talk_sub=talk_sub
+        )
     except (asyncio.CancelledError, KeyboardInterrupt):
         await _withdraw_talk_invite(
             ctx, target_user, target_key, target_repo=target_repo
@@ -781,6 +805,7 @@ async def _run_talk_handshake(
     prompt_gate: threading_mod.Event,
     *,
     target_repo: str | None,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> bool:
     """Set the talk plan, run the handshake, and roll back on a publish failure.
 
@@ -807,6 +832,7 @@ async def _run_talk_handshake(
             notify_event,
             prompt_gate,
             target_repo=target_repo,
+            talk_sub=talk_sub,
         )
     except (NatsError, TimeoutError, OSError):
         ctx.talk.reset()
@@ -876,6 +902,8 @@ async def _handle_repl_talk(
     current_prompt: list[str],
     repl_prompt: str,
     repl_display: ReplDisplay,
+    *,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> None:
     """Parse talk args and enter modal talk mode."""
     from biff.server.tools._session import resolve_talk_target
@@ -955,6 +983,7 @@ async def _handle_repl_talk(
         notify_event,
         prompt_gate,
         target_repo=target_repo,
+        talk_sub=talk_sub,
     ):
         if consumed is not None:
             ctx.talk.restore_pending_invite(consumed)
@@ -972,6 +1001,7 @@ async def _handle_repl_talk(
         repl_display,
         to_key=target_key,
         target_repo=target_repo,
+        talk_sub=talk_sub,
     )
 
 

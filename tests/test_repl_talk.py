@@ -27,6 +27,7 @@ from biff.__main__ import (
     _ReplTalkSubscription,
     _run_talk_handshake,
     _talk_handshake,
+    _wait_for_talk_accept,
     _withdraw_talk_invite,
 )
 from biff.models import UserSession
@@ -771,3 +772,131 @@ class TestReplTalkSubscriptionResilience:
         await sub.establish()  # startup call — must not raise
 
         assert sub._handle is None
+
+
+class TestModalTalkReconcile:
+    """A client swap during a modal talk path re-binds the talk SUB.
+
+    The idle-tick reconcile fires only from the REPL input loop.  During a live
+    conversation ``_repl_talk`` runs instead, and the invite-accept wait
+    ``_wait_for_talk_accept`` blocks outside the idle path.  A wedge teardown
+    that swaps the NATS client mid-talk orphans the SUB on the dead client, so
+    incoming partner messages stop silently.  Both modal loops must reconcile
+    on each poll tick so the SUB re-binds regardless of REPL mode.
+    """
+
+    @staticmethod
+    def _ctx_relay_nc() -> tuple[MagicMock, MagicMock, MagicMock]:
+        nc = MagicMock()
+        nc.subscribe = AsyncMock(side_effect=[AsyncMock(), AsyncMock()])
+        nc.publish = AsyncMock()
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.connection_generation = 1
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.kai")
+        relay.get_session = AsyncMock(return_value=None)
+        relay.update_session = AsyncMock()
+        talk = TalkState(
+            relay=cast("Relay", relay),
+            user="kai",
+            tty="kaihex01",
+            session_key="kai:kaihex01",
+            tty_name="tty1",
+        )
+        ctx = MagicMock()
+        ctx.talk = talk
+        ctx.user = "kai"
+        ctx.tty_name = "tty1"
+        ctx.session_key = "kai:kaihex01"
+        ctx.relay = relay
+        return ctx, relay, nc
+
+    @staticmethod
+    async def _bound_sub(ctx: MagicMock) -> _ReplTalkSubscription:
+        sub = _ReplTalkSubscription(ctx, asyncio.Event())
+        await sub.establish()  # binds generation 1, first subscribe
+        return sub
+
+    async def _drive_repl_talk(
+        self, ctx: MagicMock, sub: _ReplTalkSubscription
+    ) -> None:
+        ctx.talk.begin_connected(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        aqueue: asyncio.Queue[str | None] = asyncio.Queue()
+        task = asyncio.create_task(
+            _repl_talk(
+                ctx,
+                "eric",
+                "eric:tty2",
+                aqueue,
+                asyncio.Event(),
+                threading.Event(),
+                [""],
+                "kai> ",
+                ReplDisplay(),
+                to_key="eric:def456",
+                talk_sub=sub,
+            )
+        )
+        # ``_repl_talk`` sets the notify event up front, so the first tick is an
+        # idle poll where the reconcile fires; then ``end`` breaks the loop.
+        await asyncio.sleep(0.05)
+        aqueue.put_nowait("end")
+        await asyncio.wait_for(task, timeout=5.0)
+
+    async def _drive_accept_wait(
+        self, ctx: MagicMock, sub: _ReplTalkSubscription
+    ) -> None:
+        ctx.talk.begin_invite(
+            partner="eric", partner_tty="tty2", partner_key="eric:def456"
+        )
+        aqueue: asyncio.Queue[str | None] = asyncio.Queue()
+        notify_event = asyncio.Event()
+        notify_event.set()  # force an immediate idle tick
+        task = asyncio.create_task(
+            _wait_for_talk_accept(
+                ctx, aqueue, notify_event, threading.Event(), talk_sub=sub
+            )
+        )
+        await asyncio.sleep(0.05)
+        aqueue.put_nowait("end")
+        await asyncio.wait_for(task, timeout=5.0)
+
+    async def test_repl_talk_reconciles_on_client_swap(self) -> None:
+        ctx, relay, nc = self._ctx_relay_nc()
+        sub = await self._bound_sub(ctx)
+        relay.connection_generation = 2  # a mid-talk client replacement
+
+        await self._drive_repl_talk(ctx, sub)
+
+        assert nc.subscribe.await_count == 2  # establish + reconcile re-bind
+        assert sub._generation == 2  # bound to the new client's generation
+
+    async def test_repl_talk_reconcile_noop_when_generation_unchanged(self) -> None:
+        ctx, _relay, nc = self._ctx_relay_nc()
+        sub = await self._bound_sub(ctx)  # generation stays 1
+
+        await self._drive_repl_talk(ctx, sub)
+
+        assert nc.subscribe.await_count == 1  # no re-subscribe — a no-op
+        assert sub._generation == 1
+
+    async def test_accept_wait_reconciles_on_client_swap(self) -> None:
+        ctx, relay, nc = self._ctx_relay_nc()
+        sub = await self._bound_sub(ctx)
+        relay.connection_generation = 2  # a client replacement while waiting
+
+        await self._drive_accept_wait(ctx, sub)
+
+        assert nc.subscribe.await_count == 2  # establish + reconcile re-bind
+        assert sub._generation == 2
+
+    async def test_accept_wait_reconcile_noop_when_generation_unchanged(self) -> None:
+        ctx, _relay, nc = self._ctx_relay_nc()
+        sub = await self._bound_sub(ctx)  # generation stays 1
+
+        await self._drive_accept_wait(ctx, sub)
+
+        assert nc.subscribe.await_count == 1  # no re-subscribe — a no-op
+        assert sub._generation == 1
