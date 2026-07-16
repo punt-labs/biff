@@ -22,6 +22,7 @@ import nats as nats_lib
 import pytest
 from mcp.types import TextContent
 
+from biff.nats_relay import NatsRelay
 from biff.server.state import ServerState
 from biff.testing import NotificationTracker
 
@@ -232,5 +233,67 @@ class TestTalkPushNotification:
             assert kai_state.talk.queued == 0
             desc_after = await _get_talk_description(kai_client)
             assert desc_before == desc_after
+        finally:
+            await nc.close()
+
+    async def test_resubscribes_after_client_replacement(
+        self,
+        nats_server: str,
+        kai_tracked: tuple[Client[Any], NotificationTracker, ServerState],
+        eric_tracked: tuple[Client[Any], NotificationTracker, ServerState],
+    ) -> None:
+        """A forced client replacement re-establishes the orphaned talk SUB.
+
+        Closing the poller's NATS client and redialing is the biff-3hp
+        force-reconnect signature: the always-on talk SUB is orphaned on the
+        closed client, and the fresh client carries none.  The poller must
+        detect the generation bump and re-subscribe, or an unsolicited invite
+        is silently lost (biff-9la) — the destructive biff-3hp x biff-9la
+        interaction.  Since the old client is closed, a frame can only reach
+        ``TalkState`` through a SUB re-established on the new client
+        (``nats-relay.tex`` ``talkSubGen``).
+        """
+        kai_client, _kt, kai_state = kai_tracked
+        eric_client, _et, _es = eric_tracked
+        await self._register(kai_client, eric_client)
+        await asyncio.sleep(3.0)  # let the poller establish subscribe_talk
+
+        relay = kai_state.relay
+        assert isinstance(relay, NatsRelay)
+        bound_generation = relay.connection_generation
+
+        # Force the client replacement: close the live client, then redial.
+        # The next dial bumps the generation past the SUB's binding.
+        nc1 = await relay.get_nc()
+        await nc1.close()
+        await relay.get_nc()  # dial the fresh client (nc#2)
+        assert relay.connection_generation > bound_generation
+
+        nc = await nats_lib.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
+        try:
+            # The poller re-subscribes on its next tick after the generation
+            # bump; retry the publish until the fresh SUB catches a frame. A
+            # frame published before the re-subscribe lands is dropped (core
+            # NATS has no listener), so a single publish would race the tick.
+            deadline = asyncio.get_event_loop().time() + 12.0
+            desc = ""
+            while asyncio.get_event_loop().time() < deadline:
+                await _publish_talk_frame(
+                    nc,
+                    _TEST_REPO,
+                    "kai",
+                    from_user="eric",
+                    body="after reconnect",
+                    from_key="eric:tty2",
+                    to_key=kai_state.session_key,
+                )
+                await asyncio.sleep(1.0)
+                desc = await _get_talk_description(kai_client)
+                if "[TALK]" in desc:
+                    break
+            assert "[TALK]" in desc
+            assert "new message" in desc
+            read = await _talk_read(kai_client)
+            assert "after reconnect" in read
         finally:
             await nc.close()
