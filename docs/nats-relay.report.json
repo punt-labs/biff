@@ -1,15 +1,15 @@
 {
-  "timestamp": "2026-07-05T02:38:48.688061+00:00",
-  "probcli_version": "unknown",
+  "timestamp": "2026-07-15T00:00:00+00:00",
+  "probcli_version": "1.15.1-final",
   "setsize": 2,
   "ok": true,
-  "states_analysed": 18,
-  "transitions_fired": 103,
+  "states_analysed": 48,
+  "transitions_fired": 327,
   "checks": [
     {
       "name": "init",
       "status": "passed",
-      "detail": "OK"
+      "detail": "OK (1 initial state)"
     },
     {
       "name": "animate",
@@ -29,103 +29,118 @@
     {
       "name": "model_check",
       "status": "passed",
-      "detail": "18 states, 103 transitions"
+      "detail": "48 states, 327 transitions, all open states visited, invariant_violated:0, deadlocked:0"
+    },
+    {
+      "name": "ctl_talk_sub_liveness",
+      "status": "passed",
+      "detail": "AG(connState /= closed & talkSubGen < generation => EF talkSubGen = generation) TRUE"
     }
   ],
   "operations": [
     {
       "name": "EnsureConnected",
-      "times_fired": 1,
+      "times_fired": 19,
       "covered": true
     },
     {
       "name": "Disconnect",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "Close",
-      "times_fired": 1,
+      "times_fired": 38,
       "covered": true
     },
     {
       "name": "ResetInfrastructure",
-      "times_fired": 1,
+      "times_fired": 29,
       "covered": true
     },
     {
       "name": "Request",
-      "times_fired": 1,
+      "times_fired": 18,
       "covered": true
     },
     {
       "name": "WedgeDetected",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "Reconnect",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "ForceReconnect",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "StaleRequestTimeout",
-      "times_fired": 1,
+      "times_fired": 20,
+      "covered": true
+    },
+    {
+      "name": "Subscribe",
+      "times_fired": 6,
+      "covered": true
+    },
+    {
+      "name": "SubscribeRetry",
+      "times_fired": 6,
       "covered": true
     },
     {
       "name": "UpdateSession",
-      "times_fired": 1,
+      "times_fired": 36,
       "covered": true
     },
     {
       "name": "DeleteSession",
-      "times_fired": 1,
+      "times_fired": 18,
       "covered": true
     },
     {
       "name": "SetWall",
-      "times_fired": 1,
+      "times_fired": 36,
       "covered": true
     },
     {
       "name": "ClearWall",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "StartWatching",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "SnapshotDone",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "ReceiveEntry",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "HandleTimeout",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "HandleError",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     },
     {
       "name": "RequestShutdown",
-      "times_fired": 1,
+      "times_fired": 9,
       "covered": true
     }
   ]
