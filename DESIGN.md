@@ -5141,7 +5141,7 @@ one path:
 3. **Standalone `biff talk`** (`_talk_loop`) — its own one-shot subscription, also
    given the generation-tracked reconcile.
 
-A shared `TalkResubscribeLatch` (mirroring the DES-036/biff-6px onset/recovery
+A shared `TalkNotifyLatch` (mirroring the DES-036/biff-6px onset/recovery
 discipline) makes every re-subscribe best-effort: a transient failure is caught
 and retried next tick (generation left unbound so it re-attempts), and a
 *persistent* failure surfaces **once** at WARNING (transient attempts at DEBUG,
