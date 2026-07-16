@@ -56,7 +56,7 @@ from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
-from biff.talk_resubscribe import TalkResubscribeLatch
+from biff.talk_latch import TalkNotifyLatch
 from biff.talk_types import AcceptOutcome, PendingInvite, TalkNotification, TalkPhase
 
 # ---------------------------------------------------------------------------
@@ -1027,7 +1027,7 @@ class _TalkSubscription:
     _notify_event: asyncio.Event
     _handle: object | None
     _generation: int
-    _latch: TalkResubscribeLatch
+    _latch: TalkNotifyLatch
 
     def __new__(cls, relay: object, user: str, notify_event: asyncio.Event) -> Self:
         self = super().__new__(cls)
@@ -1036,7 +1036,7 @@ class _TalkSubscription:
         self._notify_event = notify_event
         self._handle = None
         self._generation = 0
-        self._latch = TalkResubscribeLatch(logging.getLogger(__name__))
+        self._latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(__name__))
         return self
 
     async def establish(self) -> None:
@@ -1779,12 +1779,15 @@ async def _talk_converse(
     The same client swap can make the per-tick durable fetch raise mid-redial.
     That call is guarded so a transient error is absorbed and the loop paces on
     through the wait below — the inbox is re-fetched next tick — rather than
-    letting the traceback exit the whole ``biff talk`` command.  The latch keeps
-    the onset discipline: DEBUG per tick, one WARNING when the failure persists.
+    letting the traceback exit the whole ``biff talk`` command.  A fetch-scoped
+    latch keeps the onset discipline: DEBUG per tick, one WARNING when the
+    failure persists.  Its wording names the inbox-read cause, not a
+    re-subscribe failure — the SUB may be healthy while the durable inbox is
+    unreadable, and conflating the two would misdirect debugging.
     """
     from biff.models import Message
 
-    fetch_latch = TalkResubscribeLatch(logging.getLogger(__name__))
+    fetch_latch = TalkNotifyLatch.for_fetch(logging.getLogger(__name__))
     while True:
         try:
             await _talk_fetch_and_print(relay, session_key, user)

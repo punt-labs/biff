@@ -27,7 +27,7 @@ from biff.formatting import terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
-from biff.talk_resubscribe import TalkResubscribeLatch
+from biff.talk_latch import TalkNotifyLatch
 from biff.talk_state import TalkState
 from biff.talk_types import TalkPhase
 
@@ -446,7 +446,7 @@ def _relay_generation(state: ServerState) -> int:
 
 
 async def subscribe_talk(
-    state: ServerState, latch: TalkResubscribeLatch
+    state: ServerState, latch: TalkNotifyLatch
 ) -> TalkSubscription | None:
     """Establish the always-on talk subscription feeding the held ``TalkState``.
 
@@ -504,7 +504,7 @@ async def subscribe_talk(
 async def _reconcile_talk_sub(
     state: ServerState,
     talk_sub: TalkSubscription | None,
-    latch: TalkResubscribeLatch,
+    latch: TalkNotifyLatch,
 ) -> TalkSubscription | None:
     """Re-establish the talk SUB when it is unbound or its client was replaced.
 
@@ -644,7 +644,7 @@ async def poll_inbox(
     last_count = -1  # Force initial refresh
     last_wall: tuple[str, str] = ("", "")  # Force initial refresh
     last_talk: tuple[tuple[str, ...], int, str] = ((), -1, "")  # Force initial refresh
-    talk_latch = TalkResubscribeLatch(logger)
+    talk_latch = TalkNotifyLatch.for_resubscribe(logger)
     talk_sub = await subscribe_talk(state, talk_latch)
 
     try:
@@ -662,17 +662,24 @@ async def poll_inbox(
             if not tracker.napping and tracker.idle_seconds() > idle_threshold:
                 tracker.enter_nap()
 
-            # Napping: reduced-frequency polling (KV watcher is primary for wall).
-            # A cheap no-op nap tick makes no relay call, so connection_generation
-            # cannot advance — skip both the tick and the reconcile below.
-            if tracker.napping and tracker.seconds_since_nap_poll() < nap_interval:
-                continue
-
-            last_count, last_wall, last_talk = await _safe_tick(
-                mcp, state, last_count, last_wall, last_talk
+            # Napping: skip only the expensive relay poll on a cheap nap tick
+            # (the KV watcher is primary for wall).  The talk-SUB reconcile below
+            # still runs — a background wedge teardown (the heartbeat loop's
+            # _tracked → _force_reconnect) can advance connection_generation
+            # *during* the nap, independent of this poller, and orphan the
+            # always-on talk SUB on the dead client.  Gating the reconcile behind
+            # this skip would drop an unsolicited invite to the idle agent until
+            # the nap ends (biff-9la).  Reconcile is a cheap no-op — a generation
+            # compare, no relay call — when nothing changed.
+            cheap_nap = (
+                tracker.napping and tracker.seconds_since_nap_poll() < nap_interval
             )
-            if tracker.napping:
-                tracker.record_nap_poll()
+            if not cheap_nap:
+                last_count, last_wall, last_talk = await _safe_tick(
+                    mcp, state, last_count, last_wall, last_talk
+                )
+                if tracker.napping:
+                    tracker.record_nap_poll()
 
             # Keep the always-on talk SUB bound to the live client — AFTER the
             # tick, not before. The tick's relay calls are what can trigger the
