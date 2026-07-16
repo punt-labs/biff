@@ -4982,3 +4982,180 @@ independently re-verified by the leader. Zero GAP on the
 (code-reviewer, silent-failure-hunter, djb wire-safety, type-design)
 clean after two fix rounds. ``make check`` (1614). Live-verified in both
 directions before merge.
+
+## DES-046: Talk Consent & DoS Boundary — Session-Key Guards on Every Talk Transition
+
+**Date:** 2026-07-15
+**Status:** SETTLED
+**Topic:** What a forged talk frame may and may not do; how the ephemeral,
+forgeable talk transport still upholds a consent boundary and a bounded footprint
+**Bead:** biff-9la (hardening cycles)
+**Related:** DES-043 (session-scoped talk), DES-044 (queue bound), DES-045,
+``docs/talk.tex`` (threat model), ``docs/notification.tex``
+
+### Context
+
+Talk rides **best-effort core-NATS pub/sub** on a per-user subject that any peer
+in the org can publish to. Every wire field — `from`, `from_tty`, and even the
+`from_key` used for identity — is attacker-controllable. The BSD-ephemeral model
+accepts *noise* injection (a forged frame can be dropped or ignored) but the
+threat model (`talk.tex`) claims two hard guarantees: **no forged frame connects
+a session to a peer or speaks in another's place** (consent), and **no publisher
+can exhaust memory** (footprint). The biff-9la review found the code did not
+uphold either at several points; each gap was closed by a session-key guard
+proven in the Z model, not a code-level patch.
+
+### Decision — the single discriminator is the ephemeral session key
+
+Only `from_key`/`to_key` (the per-session ephemeral key) distinguishes a real
+peer from an impostor; every display field is forgeable. So every talk transition
+that grants consent or mutates shared state is guarded on the session key:
+
+1. **Accept consent (biff-sqc).** The initiator flips to "accepted" only when
+   `accept.from_key == the invited target_key`; a third-party accept to
+   `to_key == initiator` is ignored.
+2. **Withdrawal (DES-045).** `ntWithdraw` removes a pending invite only when its
+   originating session-key matches the stored invite's key (`WithdrawArrive`); a
+   stale cross-session or foreign-keyed withdrawal is a no-op (`WithdrawForeign`).
+   Closes a non-adversarial reordering (invite from A, cancel, re-invite from B;
+   a late A-withdrawal must not delete the live B-invite) and a forged targeted
+   suppression at once.
+3. **Connected-frame partner binding.** While connected, a `message` is surfaced
+   and an `end` drives the hangup **only** when `from_key == partner_key`
+   (`DrainForeignMessage`/`DrainForeignEnd`); otherwise the frame is dequeued and
+   dropped. Without this, a forged `ntMessage` (`to_key == victim`) impersonated
+   the partner and a forged `end` hung up the call. Applied to **both** drain
+   paths, and the phase reset is deferred to *after* the drain loop so a partner
+   `end` mid-batch cannot disarm the guard for later frames (a mid-batch bypass
+   found in review).
+4. **Forged `end` outside the connected phase.** An `end` drives a reset only in
+   the connected phase; any `end` while inviting/idle is dropped — else a forged
+   `end` cancelled an outbound invite (the `end`-side analog of forged withdrawal).
+5. **Keyless modeled frames are dropped.** The receive filter drops any *modeled*
+   frame whose `to_key` is absent or `!= my_key` (`ReceiveNotForSession`) — a
+   keyless typed `message` must not broadcast to all of a user's sessions. The
+   **one** keyless frame that passes is the typeless `/write` mail wake-poke,
+   diverted to *wake-without-enqueue* before the filter (a missing-`type`→`message`
+   coercion had been surfacing a mail body as a phantom talk message).
+
+### Footprint bound (DoS)
+
+`MAX_TALK_QUEUE` (DES-044) bounds the queue, but drain moves invites into
+`_pending`, a dict keyed by the wire-controlled `from`. A forged-invite flood with
+distinct `from` values grew `_pending` without limit (the TTL is an eventual
+sweep, not a cap) — the `_pending`-side analog of biff-vr4. **`_pending` is bounded
+at `MAX_PENDING_INVITES` (100), drop-oldest-by-arrival on a new inviter**
+(supersession overwrites in place, never evicts; eviction picks the true oldest
+`PendingInvite.arrived`, not the oldest-inserted key). `TalkState._publish` also
+truncates every frame body to `MAX_BODY_LEN` centrally, so a user-supplied invite
+body cannot defeat the length bound. Modelled as `maxPending` +
+`TalkInviteArriveOverflow` in ``notification.tex`` (`#talkPending ≤ maxPending`
+proved across the reachable space).
+
+### Residual (accepted, documented in the threat model)
+
+Under a flood a legitimate pending invite can be evicted, and a forged frame can
+still inject *noise*. These are the same accepted availability residuals as the
+drop-oldest queue: the bounds convert unbounded memory exhaustion into bounded
+availability degradation. Forging any guarded transition now costs the victim's
+(or partner's) ephemeral session key — the same bar as forging an accept.
+
+### Outcome
+
+Every guard is a proven transition in ``talk.tex``/``notification.tex`` (consent
+invariant extended to the connected phase; the forged-frame bad-states proved
+unreachable at a three-session-key scope). The security-critical gaps (partner
+impersonation, forged-end cancel, unbounded `_pending`, keyless broadcast, phantom
+mail-as-talk) were all found in review, not production.
+
+## DES-047: Talk Subscription Survives a NATS Client Replacement — the `talkSubGen` Generation Guard
+
+**Date:** 2026-07-16
+**Status:** SETTLED
+**Topic:** Keep the always-on talk subscription alive across a wedge-driven client
+replacement — the destructive interaction between biff-3hp and biff-9la
+**Bead:** biff-9la (release-gate fix); interacts with DES-042
+**Related:** DES-041/042 (wedge detection + force-reconnect), DES-045 (always-on
+talk SUB), ``docs/nats-relay.tex`` (`talkSubGen`), biff-e9u (cross-repo follow-up)
+
+### Context — two features that shipped together and cancelled each other
+
+The pre-release **leak audit** (a release-Bar gate, run because relay code
+changed) caught a critical that `make check`, the hosted-NATS suite, and every
+review cycle had missed, because they reviewed each feature in isolation:
+
+- **biff-9la** installs an *always-on* core-NATS talk subscription bound to one
+  `nats.connect` client (DES-045).
+- **biff-3hp/DES-042** adds a proactive wedge detector that, on a half-open
+  connection, calls `_force_reconnect`: `safe_close` the client, `self._nc =
+  None`, and the next `_ensure_connected` dials a **brand-new** client.
+
+The new client carries no talk SUB. The frontends re-subscribed only when their
+handle was `None`, but the orphaned handle stays **non-`None`** (it lives on the
+dead client), so they never re-subscribed. **After a single wedge episode, talk is
+silently dead for that session for the server's lifetime.** Unread/wall polling
+recovers (it redials every tick), which hides the failure. At the 243+
+concurrent-session scale target the ~15s wedge detector fires routinely, so this
+would reintroduce the exact silent-drop biff-9la was built to eliminate — the
+connection/handle-lifecycle fragility the CLAUDE.md formal-methods note warns
+about: **the model was missing a state, so the code was patched blind.**
+
+### Decision — model the subscription-per-generation lifecycle, then conform
+
+**Model first (`nats-relay.tex`).** Add `talkSubGen : ℕ` — the connection
+generation the live talk SUB is bound to — with invariant `talkSubGen ≤
+generation`. Transitions: `ForceReconnect`/close **strand** it (`generation`
+advances, `talkSubGen` does not → `talkSubGen < generation`); the poller's
+`Subscribe` (guard `talkSubGen < generation`, effect `talkSubGen' = generation`)
+**re-establishes** it; an in-place `Reconnect` (same client, `generation`
+unchanged) **preserves** it; `SubscribeRetry` models a failed subscribe retried
+next tick. Proven: CTL liveness `AG(connState ≠ closed ∧ talkSubGen < generation
+⇒ EF talkSubGen = generation)` is **TRUE**, and **FALSE** for the buggy `is-None`
+guard (counterexample `connected ∧ generation=3 ∧ talkSubGen=2` — the biff-9la
+state). Independently re-verified (48 states, 0 violations, all ops covered).
+
+**The discriminator is the generation, not the handle.** A read-only
+`NatsRelay.connection_generation` bumps once per new dial (`_open_connection`
+where `self._nc is None or is_closed`) and **never** on nats-py's in-place
+keepalive reconnect (same client, SUBs replayed). Each frontend captures the
+generation at subscribe and re-subscribes when it advances.
+
+**Rejected alternatives:**
+
+- *`handle is None` retry* (the shipped bug): the orphaned handle is non-`None`,
+  so it never fires — the CTL counterexample.
+- *Truthiness/liveness probe of the SUB*: races the receive callback and is
+  unreliable across nats-py versions; the generation compare is race-free and is
+  the token DES-042 already maintains.
+
+### Crash-safe, all three frontends
+
+The re-subscribe (which awaits `get_nc()`/`subscribe()`) must never crash the
+caller, and there are **three** talk frontends, each initially missing at least
+one path:
+
+1. **MCP poller** (`poll_inbox`) — reconciles every tick.
+2. **REPL** — reconciles on the idle tick **and** inside the two modal loops
+   (`_repl_talk`, `_wait_for_talk_accept`); the idle-only first fix left talk dead
+   *mid-conversation*, found in review.
+3. **Standalone `biff talk`** (`_talk_loop`) — its own one-shot subscription, also
+   given the generation-tracked reconcile.
+
+A shared `TalkResubscribeLatch` (mirroring the DES-036/biff-6px onset/recovery
+discipline) makes every re-subscribe best-effort: a transient failure is caught
+and retried next tick (generation left unbound so it re-attempts), and a
+*persistent* failure surfaces **once** at WARNING (transient attempts at DEBUG,
+one INFO on recovery) rather than a per-tick traceback flood — upholding the
+invariant that transient NATS errors never dump tracebacks into the REPL.
+
+### Outcome / lessons
+
+Three independent release-Bar gates each caught a distinct real defect a v1.11.0
+shipped an hour earlier would have carried: the **leak audit** found the
+orphaned-SUB critical; the **model-first** gate turned an is-None patch into a
+proven generation guard (and reproduced the bug as a counterexample); running
+**local review early** on the fix caught a REPL-crash critical *inside the fix*.
+The recurring rule holds: when a connection-lifecycle defect class recurs, extend
+the Z model — the code conforms to the proven transition, it does not lead.
+Cross-repo `target_repo` threading for the outbound publishes is the known
+residual, tracked as biff-e9u.
