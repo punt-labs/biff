@@ -668,7 +668,9 @@ class TestSend:
         relay = MagicMock(spec=NatsRelay)
         nc = AsyncMock()
         relay.get_nc = AsyncMock(return_value=nc)
-        relay.talk_notify_subject = MagicMock(return_value="biff.test.talk.notify.eric")
+        relay.talk_notify_subject = MagicMock(
+            return_value="biff.talk.notify.eric:def67890"
+        )
         st = _make_state(relay=relay)
         return st, nc
 
@@ -683,7 +685,7 @@ class TestSend:
         st, nc = self._nats_state()
         await st.send_message(to_key=OTHER_KEY, body="hello")
         subject, payload = self._published(nc)
-        assert subject == "biff.test.talk.notify.eric"
+        assert subject == "biff.talk.notify.eric:def67890"
         assert payload["type"] == "message"
         assert payload["from"] == "kai"
         assert payload["from_tty"] == "tty1"

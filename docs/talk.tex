@@ -79,14 +79,14 @@ $session\-model.tex$, imported here through the resolver of
 Section~\ref{sec:addressing}.
 
 A \emph{subject} is the NATS topic a talk frame is published to.  Talk
-is \emph{org-scoped}, so the subject's namespace is the organization,
-and within it a frame is addressed to a globally-unique identity: the
-subject keys on $(org, identity)$, never on the repository.  The
-repository plays no part in the route --- it is a presence and
-visibility attribute of the session, nothing more.
+routes on the globally-unique identity \emph{alone}: the subject is the
+session key, and nothing else.  Neither the organization nor the
+repository appears in it --- both are visibility and presence attributes
+of the session, not coordinates of the route.  In the running system
+the subject is \texttt{\{prefix\}.talk.notify.\{user\}:\{tty\}}.
 
 \begin{zed}
-  SUBJECT == ORG \cross SESSIONKEY
+  SUBJECT == SESSIONKEY
 \end{zed}
 
 %%----------------------------------------------------------------------
@@ -121,22 +121,23 @@ The four notification types in the talk protocol.  These correspond
 to the \texttt{type} field in the NATS JSON payload.
 
 \begin{zed}
-  ROUTEMODE ::= rmOrgIdentity | rmRepoScoped
+  ROUTEMODE ::= rmIdentity | rmRepoScoped | rmOrgScoped
 \end{zed}
 
 $ROUTEMODE$ selects the routing discipline a session uses when it
-publishes a reply.  Under $rmOrgIdentity$ --- the correct design --- the
-reply is addressed to $(myOrg, peer)$: the sender's own organization,
-which the org-scoping gate makes equal to the peer's, together with the
-peer's globally-unique identity taken from the frame it is replying to.
-No repository is consulted, and nothing about the peer beyond its
-identity need be known or persisted.  Under $rmRepoScoped$ --- today's
-defect --- the subject is instead keyed on the repository and the
-responder routes on its \emph{own} repository, so a reply to a peer in
-another repository lands on the wrong subject.  The mode is fixed at
-initialization and never changes; it is a scoping parameter that lets
-one model exhibit both the defect and the correct design
-(Section~\ref{sec:routing}).
+publishes a reply.  Under $rmIdentity$ --- the correct design --- the
+reply is addressed to the peer's globally-unique identity, taken from the
+frame it is replying to; nothing about the peer beyond its identity is
+consulted, and any resolvable peer is reached whatever its organization
+or repository.  The other two modes are the over-scoped defects.  Under
+$rmRepoScoped$ the subject is keyed on the repository and the responder
+routes on its \emph{own} repository, so a reply to a peer in another
+repository lands on the wrong subject.  Under $rmOrgScoped$ the subject
+is keyed on the organization and the responder routes on its \emph{own}
+organization, so a reply to a peer in another organization lands on the
+wrong subject.  The mode is fixed at initialization and never changes; it
+is a scoping parameter that lets one model exhibit the correct design
+against \emph{both} over-scoped defects (Section~\ref{sec:routing}).
 
 %%----------------------------------------------------------------------
 \section{Addressing and Routing}
@@ -146,58 +147,62 @@ one model exhibit both the defect and the correct design
 Talk names its peer by the globally-unique session identity
 \texttt{@user:tty} (DES-035): tty names are reserved atomically across
 all repositories, so a $SESSIONKEY$ denotes one session regardless of
-which repository it runs in.  Routing is a function of that identity and
-of the organization --- both known to the sender locally --- and of
-nothing else.  The repository is an \emph{attribute} of the addressed
-session, used for presence and visibility; it is never a coordinate of
-the route.
+which repository or organization it runs in.  Routing is a function of
+that identity and of nothing else.  The organization and the repository
+are \emph{attributes} of the addressed session, used for presence and
+visibility; neither is a coordinate of the route.
 
 The resolver below is the interface to $session\-model.tex$.  That
 specification owns the entities (organizations, repositories, members,
 sessions, the $srepo$ attribute); this one owns only the fact that every
 live session key resolves to a user, a repository, and an organization,
-and that its subject is built from its organization and its identity.
-We do not restate $srepo$ here; $keyRepo$ \emph{is} $srepo$ viewed
-through the \texttt{@user:tty} address, and it is a visibility
-attribute, not a routing coordinate (see Section~\ref{sec:ownership}).
+and that its subject is its identity.  We do not restate $srepo$ here;
+$keyRepo$ and $keyOrg$ \emph{are} $srepo$ viewed through the
+\texttt{@user:tty} address, and both are visibility attributes, not
+routing coordinates (see Section~\ref{sec:ownership}).
 
 \begin{axdef}
   keyUser : SESSIONKEY \fun USER \\
   keyRepo : SESSIONKEY \surj REPO \\
-  repoOrg : REPO \fun ORG \\
+  repoOrg : REPO \surj ORG \\
   keyOrg : SESSIONKEY \fun ORG \\
   subjectOf : SESSIONKEY \fun SUBJECT
 \where
   \forall k : SESSIONKEY @ keyOrg~k = repoOrg~(keyRepo~k) \\
-  \forall k : SESSIONKEY @ subjectOf~k = (keyOrg~k, k)
+  \forall k : SESSIONKEY @ subjectOf~k = k
 \end{axdef}
 
-$keyUser~k$ and $keyRepo~k$ are the user and repository of the session
-$k$; $repoOrg$ carries each repository to its owning organization;
-$keyOrg~k$ is the organization of $k$'s repository; and $subjectOf~k =
-(keyOrg~k, k)$ is the subject that session $k$ subscribes to and that any
-correctly routed frame for $k$ must carry.  The subject keys on the
-organization and the identity: the organization is the isolation
-boundary --- two sessions may talk only when $keyOrg$ agrees on both ---
-and the identity, being globally unique, selects the one session.  The
-repository appears nowhere in $subjectOf$.  A sender routing a reply to
-peer $p$ therefore needs only its own organization $myOrg$ (equal to
-$keyOrg~p$ by the org-scoping gate) and $p$'s identity, both of which it
-holds locally; it never resolves, and never persists, $p$'s repository.
-$keyRepo$ survives in the resolver for two reasons only: to state that
-$srepo$ is a presence attribute, and to give the \emph{defective}
-routing discipline ($rmRepoScoped$) a repository to mis-route on.
+$keyUser~k$, $keyRepo~k$ and $keyOrg~k$ are the user, repository and
+organization of the session $k$; $repoOrg$ carries each repository to its
+owning organization.  $subjectOf~k = k$ is the subject that session $k$
+subscribes to and that any correctly routed frame for $k$ must carry: the
+identity is the whole of the route.  A sender routing a reply to peer $p$
+needs only $p$'s identity, taken from the frame it is replying to; it
+resolves neither $p$'s organization nor $p$'s repository, and persists
+nothing.  $keyRepo$ and $keyOrg$ survive in the resolver only to state
+that $srepo$ and its organization are presence attributes, and to give
+the two \emph{defective} disciplines a coordinate to mis-route on:
+$rmRepoScoped$ mis-routes on $keyRepo$, $rmOrgScoped$ on $keyOrg$.
 
-$keyRepo$ is surjective ($\surj$): every modelled repository holds at
-least one session.  This is not a loss of generality --- it is exactly
-the set of repositories org discovery enumerates (DES-034 lists only
-repositories \emph{with active sessions}) --- and it has a sharp
-verification purpose.  At $\#REPO = 2$ and $\#SESSIONKEY = 2$
-surjectivity forces the two keys into \emph{different} repositories, so
-the cross-repo configuration that biff-e9u mis-routes is guaranteed to
-be reachable rather than left to the constant solver's discretion; at
-$\#REPO = 1$ it degenerates to the single-repo case, in which
-$myRepo = keyRepo~k$ for every peer and no reply can be mis-routed.
+$repoOrg$ is surjective ($\surj$) as well as $keyRepo$: every modelled
+organization owns a repository, and every repository holds a session.  At
+$\#SESSIONKEY = 2$, $\#REPO = 2$, $\#ORG = 2$ this forces the two keys
+into \emph{different} repositories \emph{and} different organizations, so
+the peer a session addresses differs from it on both attributes at once
+--- the configuration under which \emph{both} over-scoped defects
+mis-route, and under which pure-identity routing must still deliver.
+
+Surjectivity is not a loss of generality --- the repositories are
+exactly those org discovery enumerates (DES-034 lists only repositories
+\emph{with active sessions}), and each organization in play owns one ---
+and it has a sharp verification purpose.  It removes the constant
+solver's discretion: at two keys, two repositories and two
+organizations the peer is guaranteed to differ from the sender in both
+repository and organization, so a single scope exercises the repo-keyed
+strand, the org-keyed strand, and cross-attribute delivery under
+pure-identity routing at once.  At $\#REPO = \#ORG = 1$ the model
+degenerates to a single repository and organization, in which no reply
+can be mis-routed by either defect.
 
 %%----------------------------------------------------------------------
 \section{Global Constants}
@@ -236,58 +241,64 @@ does not fix that number to the concrete $100$ the implementation uses
 
 The model is verified at two complementary scopes.  No single small
 scope covers every operation at once: the routing operations need two
-repositories, and the two forged connected-frame operations need a
-third session key.  Between them the two runs cover every operation,
-and each holds every invariant with no deadlock.  This replaces the
-earlier single set-size-2 run: the addressing layer adds the constant
-resolver ($keyUser$, $keyRepo$, $repoOrg$) whose valuations the
-constant solver enumerates, so a full run at $\texttt{DEFAULT\_SETSIZE}$
-2 (all carriers 2) now explores tens of thousands of states; the
-targeted scopes below are exhaustive over the behaviour that matters
-and stay small.
+repositories and two organizations, and the two forged connected-frame
+operations need a third session key.  Between them the two runs cover
+every operation, and each holds every invariant with no deadlock.  The
+addressing layer adds the constant resolver ($keyUser$, $keyRepo$,
+$repoOrg$) whose valuations the constant solver enumerates, and the
+$visible$ set adds a per-run peer configuration, so a full run at
+$\texttt{DEFAULT\_SETSIZE}$ 2 (all carriers 2) explores tens of
+thousands of states; the targeted scopes below are exhaustive over the
+behaviour that matters and stay small.  $MAX\_INITIALISATIONS$ must be
+set generously --- $Init$ leaves $routeMode$, $visible$ and the identity
+free, and a value too small silently truncates the initial states (ProB
+warns \texttt{not all transitions were computed}); $512$ suffices here.
 
-\emph{Routing and mutual-accept run} --- two session keys in two
-repositories of one organization.  Surjective $keyRepo$ puts the two
-keys in different repositories, so the cross-repo path is reachable;
-two keys and the $keyBelow$ order supply the mutual-invite tie-break:
+\emph{Routing run} --- two session keys in two repositories of two
+organizations.  Surjective $keyRepo$ and $repoOrg$ put the two keys in
+different repositories \emph{and} different organizations, so the peer a
+session addresses differs from it on both attributes at once; the two
+keys and the $keyBelow$ order supply the mutual-invite tie-break, and the
+free $visible$ set supplies the peer configurations:
 
 \begin{verbatim}
 probcli docs/talk.tex -model_check -noltl -coverage \
   -card USER 1 -card TTY 1 -card MSGBODY 1 \
-  -card SESSIONKEY 2 -card REPO 2 -card ORG 1 -card QSLOT 1 \
-  -p MAX_INITIALISATIONS 64 -p MAX_OPERATIONS 6000
+  -card SESSIONKEY 2 -card REPO 2 -card ORG 2 -card QSLOT 1 \
+  -p MAX_INITIALISATIONS 512 -p MAX_OPERATIONS 12000
 \end{verbatim}
 
-All $485$ reachable states are visited with no invariant violation and
-no deadlock, and every operation is covered save $DrainForeignMessage$
+All $2{,}089$ reachable states are visited with no invariant violation
+and no deadlock, and every operation is covered save $DrainForeignMessage$
 and $DrainForeignEnd$ (below).  In particular the delivery-soundness
-invariant $routeMode = rmOrgIdentity \implies unsoundEmit = zfalse$
-holds throughout, $ReceiveNotForSubject$ fires (a frame on a foreign
-subject is dropped), and $MutualAutoAccept$ is exercised.  The routing
-properties are checked as reachability goals against this same scope
+invariant $routeMode = rmIdentity \implies unsoundEmit = zfalse$ holds
+throughout, $ReceiveNotForSubject$ fires (a frame on a foreign subject is
+dropped), and $MutualAutoAccept$ is exercised.  The routing properties ---
+soundness, each defect's strand, and unreachability under identity
+routing --- are checked as reachability goals against this same scope
 (Section~\ref{sec:routing}).
 
-\emph{Forgery run} --- three session keys in one repository.  The two
-connected-phase foreign-frame operations, $DrainForeignMessage$ and
-$DrainForeignEnd$, guard on $phase = tpConnected$ with $(head~queue).
-nfromKey \neq partnerKey$: a three-party predicate needing $myKey$, the
-connected $partnerKey$, and a third \emph{forger} key distinct from
-both.  Two keys cannot supply the third, so these operations are
-enabled in no reachable state at the routing scope; exhausting them
-takes a third key.  Routing is irrelevant to the threat, so a single
-repository keeps the check small:
+\emph{Forgery run} --- three session keys in one repository and
+organization.  The two connected-phase foreign-frame operations,
+$DrainForeignMessage$ and $DrainForeignEnd$, guard on $phase =
+tpConnected$ with $(head~queue).nfromKey \neq partnerKey$: a three-party
+predicate needing $myKey$, the connected $partnerKey$, and a third
+\emph{forger} key distinct from both.  Two keys cannot supply the third,
+so these operations are enabled in no reachable state at the routing
+scope; exhausting them takes a third key.  Routing is irrelevant to the
+threat, so a single repository and organization keeps the check small:
 
 \begin{verbatim}
 probcli docs/talk.tex -model_check -noltl -coverage \
   -card USER 1 -card TTY 1 -card MSGBODY 1 \
   -card SESSIONKEY 3 -card REPO 1 -card ORG 1 -card QSLOT 1 \
-  -p MAX_INITIALISATIONS 128 -p MAX_OPERATIONS 8000
+  -p MAX_INITIALISATIONS 512 -p MAX_OPERATIONS 20000
 \end{verbatim}
 
-All $2{,}275$ reachable states are visited, no invariant violation and
+All $9{,}727$ reachable states are visited, no invariant violation and
 no deadlock, and \emph{every} operation is covered --- the third key
 supplies both the forger the $DrainForeign$ guards need and, since the
-subject now keys on identity, a foreign subject for $ReceiveNotForSubject$
+subject keys on identity, a foreign subject for $ReceiveNotForSubject$
 to drop even at one repository.  A forged message or end carrying the
 third key is drained by $DrainForeignMessage$ or $DrainForeignEnd$ and
 never reaches $DrainMessage$ or $DrainEnd$, so it neither speaks in the
@@ -336,7 +347,7 @@ identity and an optional body.
 
 $nto$ is the target session key.  Talk is session-scoped
 (DES-043): every notification names exactly one recipient session.
-The org-scoped NATS subject carries the notification to the addressed
+The per-identity NATS subject carries the notification to the addressed
 identity's session (Section~\ref{sec:addressing}), and $nto$ is the
 session-scoping check on top --- a session accepts a notification only
 when $nto$ matches its own key.
@@ -360,6 +371,7 @@ The talk state for a single REPL session.
   pendingInvites : USER \pfun SESSIONKEY \\
   queue : \seq Notification \\
   queueLen : \nat \\
+  visible : \power SESSIONKEY \\
   routeMode : ROUTEMODE \\
   unsoundEmit : ZBOOL
 \where
@@ -371,8 +383,9 @@ The talk state for a single REPL session.
   myUser = keyUser~myKey \\
   myRepo = keyRepo~myKey \\
   myOrg = keyOrg~myKey \\
-  (phase \neq tpIdle \implies keyOrg~partnerKey = myOrg) \\
-  routeMode = rmOrgIdentity \implies unsoundEmit = zfalse
+  myKey \notin visible \\
+  (phase \neq tpIdle \implies partnerKey \in visible) \\
+  routeMode = rmIdentity \implies unsoundEmit = zfalse
 \end{schema}
 
 When idle, $partner$, $partnerTty$, and $partnerKey$ are set to
@@ -398,26 +411,32 @@ therefore bounds the pending set by $maxPending$ ($\# PSLOT$) and evicts
 the oldest entry on overflow ($TalkInviteArriveOverflow$), the
 pending-set mirror of this queue's $maxQueueLen$ and $ReceiveOverflow$.
 
-The last four components carry the addressing layer.  $myRepo$ and
+The last five components carry the addressing layer.  $myRepo$ and
 $myOrg$ are the repository and organization of this session; they are
 not free, being pinned to the identity by $myRepo = keyRepo~myKey$ and
-$myOrg = keyOrg~myKey$.  Its subscription subject is $subjectOf~myKey =
-(myOrg, myKey)$ --- organization and identity, no repository; $myRepo$ is
-here only as the presence attribute and, under the defective discipline,
-the coordinate that discipline wrongly routes on.  The invariant
-$phase \neq tpIdle \implies keyOrg~partnerKey = myOrg$ records that a
-partner is always inside our organization, which is what makes
-$(myOrg, partnerKey)$ the partner's true subject.  $routeMode$ fixes the
-routing discipline for the whole run.  $unsoundEmit$ is a history flag:
-it is $zfalse$ initially and latches to $ztrue$ the first time this
-session publishes a reply to a subject other than its addressee's own
-($subjectOf$ of the key it is replying to).  The state invariant
-$routeMode = rmOrgIdentity \implies unsoundEmit = zfalse$ is the
-delivery-soundness guarantee: under org-and-identity routing no session
-ever mis-routes a reply, so every reply reaches the addressed
-\texttt{@user:tty} whichever repository either party is in.  That the
-same flag \emph{can} latch under $rmRepoScoped$ is today's defect,
-reproduced in Section~\ref{sec:routing}.
+$myOrg = keyOrg~myKey$, and they are here only as presence attributes and
+as the coordinates the two defective disciplines wrongly route on.  The
+subscription subject is $subjectOf~myKey = myKey$ --- the identity, and
+nothing else.  $visible$ is the set of sessions this session can resolve
+--- its \emph{peers}, as fixed by the \texttt{peers} and \texttt{orgs}
+configuration.  It excludes $myKey$ ($myKey \notin visible$) and is the
+only gate on talk: an invite or an accept may name a peer only if that
+peer is in $visible$ (Sections~\ref{sec:addressing},~\ref{sec:routing}).
+The invariant $phase \neq tpIdle \implies partnerKey \in visible$ records
+that a partner is always someone we can see, which is what makes it
+addressable at all.  Visibility spans organizations and repositories
+freely: a visible peer is reachable whatever its $keyOrg$ or $keyRepo$.
+$routeMode$ fixes the routing discipline for the whole run.  $unsoundEmit$
+is a history flag: it is $zfalse$ initially and latches to $ztrue$ the
+first time this session publishes a reply to a subject other than its
+addressee's own ($subjectOf$ of the key it is replying to).  The state
+invariant $routeMode = rmIdentity \implies unsoundEmit = zfalse$ is the
+delivery-soundness guarantee: under identity routing no session ever
+mis-routes a reply, so every reply reaches the addressed
+\texttt{@user:tty} whichever organization or repository either party is
+in.  That the same flag \emph{can} latch under $rmRepoScoped$ or
+$rmOrgScoped$ is the over-scoping defect, reproduced in
+Section~\ref{sec:routing}.
 
 %%----------------------------------------------------------------------
 \section{Initialization}
@@ -436,11 +455,12 @@ reproduced in Section~\ref{sec:routing}.
   unsoundEmit' = zfalse
 \end{schema}
 
-$routeMode'$ is left unconstrained: $Init$ admits both an $rmOrgIdentity$
-session and an $rmRepoScoped$ one, and the operations never reassign it,
-so ProB explores each discipline as a separate, constant branch.
-$myRepo'$ and $myOrg'$ are pinned by the $TalkState$ invariant to the
-initial identity.
+$routeMode'$ and $visible'$ are left unconstrained: $Init$ admits every
+routing discipline and every peer-set the invariants allow, and the
+operations never reassign either, so ProB explores each discipline and
+each visibility configuration as a separate, constant branch.  $myRepo'$
+and $myOrg'$ are pinned by the $TalkState$ invariant to the initial
+identity, and $visible'$ excludes $myKey'$.
 
 %%----------------------------------------------------------------------
 \section{Operations}
@@ -464,8 +484,7 @@ oldest queued notification is dropped to make room (ReceiveOverflow).
 \where
   notif?.nfromKey \neq myKey \\
   notif?.nto = myKey \\
-  keyOrg~(notif?.nfromKey) = myOrg \\
-  insubject? = (myOrg, myKey) \\
+  insubject? = myKey \\
   queueLen < maxQueueLen \\
   queue' = queue \cat \langle notif? \rangle \\
   queueLen' = queueLen + 1 \\
@@ -479,25 +498,23 @@ oldest queued notification is dropped to make room (ReceiveOverflow).
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
 
 The new input $insubject?$ is the NATS subject the frame arrived on.  A
-session subscribes to exactly its own subject $subjectOf~myKey =
-(myOrg, myKey)$; a frame is delivered to it only when it was published
-there.  This makes the transport explicit: routing --- organization plus
-identity --- happens before the $nto$ session-scoping filter, not after
-it.  The guard $keyOrg~(notif?.nfromKey) = myOrg$ is the organization
-isolation boundary at the receiving end: a frame from another
-organization is not ours to see, and (with the org-scoping gate on
-$SendInvite$) it keeps every queued invite --- hence every pending
-inviter, hence every partner --- inside our organization, which is what
-the state invariant $phase \neq tpIdle \implies keyOrg~partnerKey =
-myOrg$ asserts.  A frame carrying the correct $nto$ but published to a
-foreign subject never arrives --- $ReceiveNotForSubject$ below --- which
-is the receiving half of the delivery argument
-(Section~\ref{sec:routing}).
+session subscribes to exactly its own subject $subjectOf~myKey = myKey$;
+a frame is delivered to it only when it was published there.  This makes
+the transport explicit: identity routing happens before the $nto$
+session-scoping filter, not after it.  There is no organization guard on
+receipt: talk is not org-scoped, and a frame from a session in any
+organization may arrive --- this is also the honest model of the forgeable
+transport, on which a frame from any key at all may be published to our
+subject (the threat model of Section~\ref{sec:threat}).  A frame carrying
+the correct $nto$ but published to a foreign subject never arrives ---
+$ReceiveNotForSubject$ below --- which is the receiving half of the
+delivery argument (Section~\ref{sec:routing}).
 
 %%----------------------------------------------------------------------
 \subsection{ReceiveSelfEcho}
@@ -533,13 +550,13 @@ subject is shared, but only the named session accepts.
 %%----------------------------------------------------------------------
 
 A frame published to a subject other than our own never reaches us: we
-subscribe to $(myOrg, myKey)$ alone, and the transport delivers on a
-subject only to its subscribers.  This is the receiving half of the
-routing argument.  A frame may carry a correct $nto = myKey$ and still
-be lost here, if its publisher addressed the wrong subject --- which is
-exactly what a repo-scoped reply to a cross-repo peer does
-(Section~\ref{sec:routing}).  The frame is dropped with no change of
-state.
+subscribe to $myKey$ alone, and the transport delivers on a subject only
+to its subscribers.  This is the receiving half of the routing argument.
+A frame may carry a correct $nto = myKey$ and still be lost here, if its
+publisher addressed the wrong subject --- which is exactly what a
+repo-scoped or org-scoped reply to a peer in another repository or
+organization does (Section~\ref{sec:routing}).  The frame is dropped with
+no change of state.
 
 \begin{schema}{ReceiveNotForSubject}
   \Xi TalkState \\
@@ -547,7 +564,7 @@ state.
   insubject? : SUBJECT
 \where
   notif?.nfromKey \neq myKey \\
-  insubject? \neq (myOrg, myKey)
+  insubject? \neq myKey
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -566,8 +583,7 @@ retained; length stays at $maxQueueLen$.
   queueLen = maxQueueLen \\
   notif?.nfromKey \neq myKey \\
   notif?.nto = myKey \\
-  keyOrg~(notif?.nfromKey) = myOrg \\
-  insubject? = (myOrg, myKey) \\
+  insubject? = myKey \\
   queue' = tail~queue \cat \langle notif? \rangle \\
   queueLen' = queueLen \\
   phase' = phase \\
@@ -580,6 +596,7 @@ retained; length stays at $maxQueueLen$.
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -613,6 +630,7 @@ newer invite from the same user supersedes the older one.
   partner' = partner \\
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -648,6 +666,7 @@ could forge the invited peer's consent (DES-043).
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -681,6 +700,7 @@ invited peer's accept.
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -717,6 +737,7 @@ frame is drained without display by $DrainForeignMessage$.
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -752,6 +773,7 @@ speaking in the partner's place.
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -787,6 +809,7 @@ frame is drained by $DrainForeignEnd$.
   myRepo' = myRepo \\
   myOrg' = myOrg \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -822,6 +845,7 @@ of.
   partnerTty' = partnerTty \\
   partnerKey' = partnerKey \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -834,25 +858,24 @@ User types \texttt{talk @target:tty} with no pending invite from
 target.  Publishes a session-scoped invite (whose $nto$ is
 $targetKey?$) and enters the inviting phase.  Talk is session-scoped,
 so the address must name a specific session; self-talk is disallowed
-($targetKey? \neq myKey$).  The target must lie inside our own
-organization ($keyOrg~targetKey? = myOrg$): the organization is the
-routing boundary, and a session cannot address an identity its org
-cannot see.
+($targetKey? \neq myKey$).  The one gate on the address is
+\emph{visibility}: $targetKey? \in visible$.  You may invite any session
+you can see and no session you cannot; a visible peer is reachable
+whatever its organization or repository, and an invisible one is not
+addressable at all.  This is the whole of the routing precondition ---
+there is no organization or repository constraint on top of it.
 
-The invite is the \emph{sound} direction of the defect, and the model
-reflects that: the inviter addresses the target's own subject at send
-time --- under the correct design $(myOrg, targetKey?) =
-subjectOf~targetKey?$, and even under the repo-scoped defect the inviter
-resolved the target through cross-repo discovery (DES-034), so the
-invite reaches it.  The invite therefore never latches $unsoundEmit$
+The invite is the \emph{sound} direction, and the model reflects that:
+the inviter addresses the target's own identity subject $subjectOf~
+targetKey? = targetKey?$, so the invite reaches it under every
+discipline.  The invite therefore never latches $unsoundEmit$
 ($unsoundEmit' = unsoundEmit$).  The defect lives entirely in the
 \emph{reply} direction --- $RespondToInvite$, $MutualAutoAccept$,
-$SendMessage$, $LocalEnd$ --- where the repo-scoped design forces the
-responder to route on its \emph{own} repository instead of the
-organization it already shares with the peer.  The correct design has no
-such asymmetry: a reply routes to $(myOrg, peer)$ using only the local
-$myOrg$ and the peer's identity, so there is nothing to persist and
-nothing to drop.
+$SendMessage$, $LocalEnd$ --- where an over-scoped design forces the
+responder to route on its own repository or organization instead of the
+peer's identity.  The correct design has no such asymmetry: a reply
+routes to the peer's identity, held locally, so there is nothing to
+resolve and nothing to persist.
 
 \begin{schema}{SendInvite}
   \Delta TalkState \\
@@ -863,7 +886,7 @@ nothing to drop.
   phase = tpIdle \\
   target? \notin \dom pendingInvites \\
   targetKey? \neq myKey \\
-  keyOrg~targetKey? = myOrg \\
+  targetKey? \in visible \\
   phase' = tpInviting \\
   partner' = target? \\
   partnerTty' = targetTty? \\
@@ -876,6 +899,7 @@ nothing to drop.
   myRepo' = myRepo \\
   myOrg' = myOrg \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -895,6 +919,7 @@ transitions directly to connected.
 \where
   phase = tpIdle \\
   target? \in \dom pendingInvites \\
+  pendingInvites~target? \in visible \\
   phase' = tpConnected \\
   partner' = target? \\
   partnerTty' = targetTty? \\
@@ -907,31 +932,37 @@ transitions directly to connected.
   myKey' = myKey \\
   myRepo' = myRepo \\
   myOrg' = myOrg \\
+  visible' = visible \\
   routeMode' = routeMode \\
   ((unsoundEmit' = ztrue) \iff
     (unsoundEmit = ztrue \lor
-      (routeMode = rmOrgIdentity \land
-        myOrg \neq keyOrg~(pendingInvites~target?)) \lor
       (routeMode = rmRepoScoped \land
-        myRepo \neq keyRepo~(pendingInvites~target?))))
+        myRepo \neq keyRepo~(pendingInvites~target?)) \lor
+      (routeMode = rmOrgScoped \land
+        myOrg \neq keyOrg~(pendingInvites~target?))))
 \end{schema}
 
+You may accept only an inviter you can resolve: $pendingInvites~target?
+\in visible$.  This is the same visibility gate as $SendInvite$ --- an
+invite from a session you cannot see is left in $pendingInvites$
+unanswerable --- and it is what keeps the partner visible, hence the
+non-idle invariant $partnerKey \in visible$.
+
 The accept this operation publishes is addressed to the inviter, the
-session key $pendingInvites~target?$.  This is the frame biff-e9u
-mis-routes.  Under the correct design ($rmOrgIdentity$) it is stamped
-$(myOrg, pendingInvites~target?)$ --- the organization the acceptor
-already shares with the inviter (the received invite passed the
-$keyOrg$ receive gate) and the inviter's own identity --- which equals
-$subjectOf~(pendingInvites~target?)$, so the accept lands where the
-inviter listens.  The acceptor needs no knowledge of the inviter's
-repository.  Under the defect ($rmRepoScoped$) the subject is instead
-keyed on the repository and the acceptor stamps it with $(myRepo,
-\ldots)$ --- its \emph{own} repository --- so when $myRepo \neq
-keyRepo~(pendingInvites~target?)$ the accept is published to a subject
-the inviter does not subscribe to, and $unsoundEmit$ latches.  The
-$rmOrgIdentity$ disjunct of the latch is dead: the receive gate keeps
-every pending inviter in our organization, so $myOrg =
-keyOrg~(pendingInvites~target?)$ always.
+session key $pendingInvites~target?$.  This is the frame today's defect
+mis-routes.  Under the correct design ($rmIdentity$) it is stamped
+$subjectOf~(pendingInvites~target?) = pendingInvites~target?$ --- the
+inviter's own identity, taken from the invite --- so the accept lands
+where the inviter listens, and the acceptor needs no knowledge of the
+inviter's organization or repository.  Under a defect the subject is
+keyed on an attribute the acceptor reads from \emph{itself}: $rmRepoScoped$
+stamps its own $myRepo$, $rmOrgScoped$ its own $myOrg$, so when the
+inviter's $keyRepo$ (respectively $keyOrg$) differs the accept is
+published to a subject the inviter does not subscribe to, and
+$unsoundEmit$ latches.  Neither defect's mismatch is excluded by any
+gate here: the inviter is visible but may live in another repository
+\emph{and} another organization, which is exactly the case both defects
+get wrong and pure-identity routing gets right.
 
 %%----------------------------------------------------------------------
 \subsection{MutualAutoAccept}
@@ -969,11 +1000,12 @@ exactly one side auto-accepts --- the handshake always completes.
   pendingInvites' = pendingInvites \\
   queue' = queue \\
   queueLen' = queueLen \\
+  visible' = visible \\
   routeMode' = routeMode \\
   ((unsoundEmit' = ztrue) \iff
     (unsoundEmit = ztrue \lor
-      (routeMode = rmOrgIdentity \land myOrg \neq keyOrg~partnerKey) \lor
-      (routeMode = rmRepoScoped \land myRepo \neq keyRepo~partnerKey)))
+      (routeMode = rmRepoScoped \land myRepo \neq keyRepo~partnerKey) \lor
+      (routeMode = rmOrgScoped \land myOrg \neq keyOrg~partnerKey)))
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1000,24 +1032,25 @@ notification to the partner.
   pendingInvites' = pendingInvites \\
   queue' = queue \\
   queueLen' = queueLen \\
+  visible' = visible \\
   routeMode' = routeMode \\
   ((unsoundEmit' = ztrue) \iff
     (unsoundEmit = ztrue \lor
-      (routeMode = rmOrgIdentity \land myOrg \neq keyOrg~partnerKey) \lor
-      (routeMode = rmRepoScoped \land myRepo \neq keyRepo~partnerKey)))
+      (routeMode = rmRepoScoped \land myRepo \neq keyRepo~partnerKey) \lor
+      (routeMode = rmOrgScoped \land myOrg \neq keyOrg~partnerKey)))
 \end{schema}
 
 Sending a message changes no talk component other than the routing
 observation: the message is published via NATS core (fire-and-forget,
-ephemeral), and $unsoundEmit$ latches only if the repo-scoped defect
-stamps it with the sender's repository rather than the shared
-organization.  Under $rmOrgIdentity$ the message carries $(myOrg,
-partnerKey) = subjectOf~partnerKey$ and the flag is untouched --- so
-messages, like accepts, reach a cross-repo partner.  This is the
-conversation-side of the same routing guarantee that governs the
-accept: the earlier draft's $\Xi TalkState$ under-modelled the send,
-treating a message as observationally inert, which hid the very
-mis-routing today's defect exhibits.
+ephemeral), and $unsoundEmit$ latches only if an over-scoped defect
+stamps it with the sender's own repository or organization rather than
+the partner's identity.  Under $rmIdentity$ the message carries
+$subjectOf~partnerKey = partnerKey$ and the flag is untouched --- so
+messages, like accepts, reach a partner in any repository or
+organization.  This is the conversation-side of the same routing
+guarantee that governs the accept: the earlier draft's $\Xi TalkState$
+under-modelled the send, treating a message as observationally inert,
+which hid the very mis-routing today's defect exhibits.
 
 %%----------------------------------------------------------------------
 \subsection{LocalEnd}
@@ -1042,11 +1075,12 @@ notification and transitions to idle.
   myRepo' = myRepo \\
   myOrg' = myOrg \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   ((unsoundEmit' = ztrue) \iff
     (unsoundEmit = ztrue \lor
-      (routeMode = rmOrgIdentity \land myOrg \neq keyOrg~partnerKey) \lor
-      (routeMode = rmRepoScoped \land myRepo \neq keyRepo~partnerKey)))
+      (routeMode = rmRepoScoped \land myRepo \neq keyRepo~partnerKey) \lor
+      (routeMode = rmOrgScoped \land myOrg \neq keyOrg~partnerKey)))
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -1072,6 +1106,7 @@ phase).  Cancels the invitation and returns to idle.
   myRepo' = myRepo \\
   myOrg' = myOrg \\
   pendingInvites' = pendingInvites \\
+  visible' = visible \\
   routeMode' = routeMode \\
   unsoundEmit' = unsoundEmit
 \end{schema}
@@ -1148,27 +1183,28 @@ The following properties must hold in all reachable states:
   both connects to, and converses with, exactly the peer it invited or
   accepted.
 
-\item \textbf{Delivery soundness.}  $routeMode = rmOrgIdentity \implies
-  unsoundEmit = zfalse$.  Under org-and-identity routing no session ever
+\item \textbf{Delivery soundness.}  $routeMode = rmIdentity \implies
+  unsoundEmit = zfalse$.  Under identity routing no session ever
   publishes a reply to a subject other than its addressee's own, so
   every reply reaches the addressed \texttt{@user:tty} whatever
-  repository either party is in.  This is the state invariant of the
-  correct design; Section~\ref{sec:routing} sets it beside the reachable
-  strand of the repo-scoped defect it excludes.
+  organization \emph{or} repository either party is in.  This is the
+  state invariant of the correct design; Section~\ref{sec:routing} sets
+  it beside the two reachable strands --- one per over-scoped defect ---
+  it excludes.
 
-\item \textbf{Organization is the routing boundary; repository is not in
-  the route.}  $SendInvite$ requires $keyOrg~targetKey? = myOrg$, and a
-  frame enters the queue ($ReceiveNotification$, $ReceiveOverflow$) only
-  when $keyOrg~(notif?.nfromKey) = myOrg$ and it arrives on this
-  session's own subject $subjectOf~myKey = (myOrg, myKey)$.  A session
-  therefore addresses, and is addressed by, only identities inside its
-  own organization, and the subject is built from the organization and
-  the globally-unique identity alone.  The repository is a presence and
-  visibility attribute; it never enters $subjectOf$ and is never a
-  coordinate of the route.  The consequence, recorded by the invariant
-  $phase \neq tpIdle \implies keyOrg~partnerKey = myOrg$, is that a
-  reply routes to $(myOrg, partnerKey)$ from locally-held state --- no
-  repository resolution, no repository to persist.
+\item \textbf{Visibility is the only routing gate.}  $SendInvite$
+  requires $targetKey? \in visible$ and $RespondToInvite$ requires the
+  inviter $pendingInvites~target? \in visible$; there is no organization
+  or repository precondition on either.  A frame enters the queue
+  ($ReceiveNotification$, $ReceiveOverflow$) only when it arrives on this
+  session's own subject $subjectOf~myKey = myKey$ --- the identity, and
+  nothing else.  A session therefore addresses exactly the peers it can
+  see, and each is reachable whatever its organization or repository; the
+  invariant $phase \neq tpIdle \implies partnerKey \in visible$ records
+  that a partner is always visible.  Neither $keyOrg$ nor $keyRepo$
+  constrains the route: both are presence and visibility attributes, and
+  a reply routes to $partnerKey$ from locally-held state, with nothing to
+  resolve and nothing to persist.
 \end{enumerate}
 
 %%----------------------------------------------------------------------
@@ -1176,54 +1212,72 @@ The following properties must hold in all reachable states:
 \label{sec:routing}
 %%----------------------------------------------------------------------
 
-The addressing layer is verified by three machine-checked claims, all
-at the routing-and-mutual-accept scope of Section~\ref{sec:addressing}
-(two session keys, two repositories, one organization).  They are
-stated so that ProB decides each: the first as a state invariant, the
-other two as reachability goals.  The correct discipline is
-$rmOrgIdentity$ --- the subject is $(org, identity)$ and a reply routes
-to $(myOrg, peer)$; the defect is $rmRepoScoped$ --- the subject is
-repo-keyed and the responder routes on its own repository.
+The addressing layer is verified by four machine-checked claims, all at
+the routing scope of Section~\ref{sec:addressing} (two session keys, two
+repositories, two organizations, so the peer differs from the sender in
+both repository \emph{and} organization at once).  They are stated so
+that ProB decides each: the first as a state invariant, the rest as
+reachability goals.  The correct discipline is $rmIdentity$ --- the
+subject is the identity and a reply routes to $partnerKey$; the two
+defects over-scope it --- $rmRepoScoped$ keys the subject on the
+repository, $rmOrgScoped$ on the organization, and in each the responder
+routes on its \emph{own} attribute.  Model checking the scope visits all
+$2{,}089$ states with $invariant\_violated = 0$ and no deadlock, and
+covers every operation but the two connected-phase forged-frame
+operations (which need a third key, exhausted at the forgery scope).
 
 \medskip\noindent\textbf{(R1) Delivery soundness (holds).}  As a state
 invariant of $TalkState$,
 
 \begin{verbatim}
-routeMode = rmOrgIdentity  =>  unsoundEmit = zfalse
+routeMode = rmIdentity  =>  unsoundEmit = zfalse
 \end{verbatim}
 
-Model checking visits all $485$ states with $invariant\_violated = 0$.
-Under org-and-identity routing $unsoundEmit$ never latches: a reply is
-stamped $(myOrg, peer)$, and because the org-scoping gates keep the
-partner inside our organization ($keyOrg~partnerKey = myOrg$, the
-non-idle invariant), $(myOrg, peer) = (keyOrg~peer, peer) =
-subjectOf~peer$ --- the subject the peer, and only the peer, subscribes
-to.  Every reply is therefore delivered to the addressed
-\texttt{@user:tty}, independently of which repository either session
-runs in.  No repository is read on the routing path: the sender uses
-its own $myOrg$ and the peer's identity, both held locally.
+Under identity routing $unsoundEmit$ never latches: a reply is stamped
+$subjectOf~partnerKey = partnerKey$, which is the subject the partner,
+and only the partner, subscribes to.  Every reply is therefore delivered
+to the addressed \texttt{@user:tty}, independently of which organization
+\emph{or} repository either session runs in.  Nothing but the peer's
+identity --- held locally, taken from the frame being answered --- is
+read on the routing path.
 
-\medskip\noindent\textbf{(R2) The strand is reachable under repo-scoped
+\medskip\noindent\textbf{(R2a) The strand is reachable under
+repo-keyed routing (holds).}  As a reachability goal,
+
+\begin{verbatim}
+probcli ... -goal "unsoundEmit=ztrue & routeMode=rmRepoScoped"
+\end{verbatim}
+
+ProB returns a counterexample.  With $keyRepo = \{k_1 \mapsto r_2,
+k_2 \mapsto r_1\}$, $keyOrg = \{k_1 \mapsto o_2, k_2 \mapsto o_1\}$ and
+$routeMode = rmRepoScoped$, a session whose key is $k_2$ ($myRepo = r_1$)
+has $k_1$ in $visible$ and invites it; the two connect
+($MutualAutoAccept$); but when it publishes its accept to the partner
+$k_1$, the repo-keyed discipline stamps the frame with its \emph{own}
+$myRepo = r_1$ rather than $keyRepo~k_1 = r_2$.  The partner's subject
+is $(r_2, \ldots)$, so the accept is delivered to $ReceiveNotForSubject$
+and dropped: the inviter never receives it and strands until its
+transport TTL.  The peer was \emph{visible} --- routing was permitted ---
+yet the repo coordinate in the subject broke delivery.  This is
+biff-e9u.
+
+\medskip\noindent\textbf{(R2b) The strand is reachable under org-keyed
 routing (holds).}  As a reachability goal,
 
 \begin{verbatim}
-probcli ... -goal "unsoundEmit=ztrue"
+probcli ... -goal "unsoundEmit=ztrue & routeMode=rmOrgScoped"
 \end{verbatim}
 
-ProB returns a five-step counterexample.  With $keyRepo =
-\{k_1 \mapsto r_2, k_2 \mapsto r_1\}$ and $routeMode = rmRepoScoped$, a
-session whose key is $k_2$ (so $myRepo = r_1$) invites $k_1$ (in $r_2$)
-and the two connect; but when it publishes its accept to the partner
-$k_1$, the repo-keyed discipline stamps the frame with its own
-$myRepo = r_1$ rather than $keyRepo~k_1 = r_2$.  The partner's
-repo-keyed subject is $(r_2, \ldots)$, so the accept is delivered to
-$ReceiveNotForSubject$ and dropped: the inviter never receives it and
-strands until its transport TTL.  This is biff-e9u exactly --- the
-cross-repo reply the addressed session never receives, because the
-subject carried a repository and the responder used the wrong one.  The
-same latch is reached through $RespondToInvite$, $MutualAutoAccept$,
-$SendMessage$ or $LocalEnd$; every reply operation exhibits it, and all
-are covered.
+ProB returns a counterexample of the same shape with the organization in
+the place of the repository: with $keyOrg = \{k_1 \mapsto o_1,
+k_2 \mapsto o_2\}$ and $routeMode = rmOrgScoped$, a session $k_2$
+($myOrg = o_2$) invites the visible $k_1$, they connect, and its accept
+is stamped with its own $myOrg = o_2$ rather than $keyOrg~k_1 = o_1$;
+the partner's subject is $(o_1, \ldots)$, so the frame is dropped and the
+inviter strands.  Org-scoping over-scopes exactly as repo-scoping does:
+a \emph{visible} peer in another organization is unreachable.  Both
+defects are the same mistake --- a coordinate other than the identity in
+the subject --- and both are exhibited here.
 
 The two halves of ``never receives'' are each a theorem of this one
 machine and compose across two instances, exactly as
@@ -1231,38 +1285,38 @@ Section~\ref{sec:introduction}'s two-session reading intends: the
 \emph{sender} latches $unsoundEmit$ because it stamped a subject
 $\neq subjectOf(\mathrm{addressee})$, and any \emph{receiver} whose
 subject differs from a frame's arrival subject drops it by
-$ReceiveNotForSubject$.  A frame stamped for the wrong subject is
-therefore both mis-emitted (R2, sender side) and undeliverable (receiver
-side) --- the strand.
+$ReceiveNotForSubject$.
 
-\medskip\noindent\textbf{(R3) The strand is unreachable under
-org-and-identity routing (holds).}  As a reachability goal,
+\medskip\noindent\textbf{(R3) Both strands are unreachable under
+identity routing (holds).}  As a reachability goal,
 
 \begin{verbatim}
-probcli ... -goal "unsoundEmit=ztrue & routeMode=rmOrgIdentity"
+probcli ... -goal "unsoundEmit=ztrue & routeMode=rmIdentity"
 \end{verbatim}
 
-ProB reports no such state after visiting all $485$: under the correct
-routing the strand configuration does not exist.  (R1) and (R3) are the
-same fact seen twice --- as an invariant that holds and as a bad state
-that is unreachable --- which is the precise sense in which the correct
-design makes biff-e9u \emph{impossible} rather than merely
-\emph{unobserved}.
+ProB reports no such state after visiting all $2{,}089$: under
+pure-identity routing neither strand configuration exists.  (R1) and
+(R3) are the same fact seen twice --- as an invariant that holds and as
+a bad state that is unreachable --- which is the precise sense in which
+routing on the identity alone makes the strand \emph{impossible} rather
+than merely \emph{unobserved}, for a peer differing in \emph{both}
+organization and repository.
 
-A full cross-repo conversation is reachable at this scope as a
-corollary of coverage: with $routeMode = rmOrgIdentity$ and the two keys
-in different repositories, $SendInvite$, $RespondToInvite$,
-$DrainAcceptWhileInviting$, $SendMessage$, $DrainMessage$, $LocalEnd$
-and $DrainEnd$ are all covered, so a session completes
+A full cross-attribute conversation is reachable at this scope as a
+corollary of coverage: with $routeMode = rmIdentity$ and the two keys in
+different repositories and organizations, $SendInvite$,
+$RespondToInvite$, $DrainAcceptWhileInviting$, $SendMessage$,
+$DrainMessage$, $LocalEnd$ and $DrainEnd$ are all covered, so a session
+completes
 invite\,$\rightarrow$\,accept\,$\rightarrow$\,message\,$\rightarrow$\,end
 with every frame sound.  By the symmetry of the two instances the peer
-does likewise, so two sessions of one organization in different
-repositories complete a full talk with every frame reaching the correct
-identity.  Consent is untouched by any of this: the session-key guards
-($DrainAcceptWhileInviting$, $DrainMessage$, $DrainEnd$ and their
-$DrainForeign$ counterparts) decide \emph{whether} a delivered frame is
-honoured, orthogonally to the subject that decides \emph{where} it goes
-(DES-046, verified at the forgery scope).
+does likewise, so two visible sessions in different repositories
+\emph{and} different organizations complete a full talk with every frame
+reaching the correct identity.  Consent is untouched by any of this: the
+session-key guards ($DrainAcceptWhileInviting$, $DrainMessage$,
+$DrainEnd$ and their $DrainForeign$ counterparts) decide \emph{whether} a
+delivered frame is honoured, orthogonally to the subject that decides
+\emph{where} it goes (DES-046, verified at the forgery scope).
 
 %%----------------------------------------------------------------------
 \section{Ownership: this specification and the session model}
@@ -1279,58 +1333,67 @@ Addressing spans two specifications, and the split is deliberate.
   there, together with the referential invariants that keep them
   consistent.  It also owns what it currently defers: the resolution of
   the \texttt{@user:tty} address to a session (its ``Addressing
-  syntax'' extension point).  In this split $srepo$ is a
-  \emph{visibility and presence} attribute --- it says which repository
-  a session appears in for \texttt{who}, \texttt{finger} and org
-  discovery --- and it is nothing more.
+  syntax'' extension point) and the visibility relation the
+  \texttt{peers} and \texttt{orgs} configuration induces.  In this split
+  both $srepo$ \emph{and} the organization it names are \emph{visibility
+  and presence} attributes --- they say where a session appears in
+  \texttt{who}, \texttt{finger} and discovery, and which peers each
+  session can resolve --- and they are nothing more.
 
 \item $talk.tex$ \textbf{owns the routing discipline.}  It takes the
-  resolution as given, through $keyUser$, $keyOrg$ and $subjectOf$
-  (Section~\ref{sec:addressing}), and states the one fact the transport
-  must honour: a reply's subject is $subjectOf$ of the addressed
-  identity --- $(its~org, its~identity)$ --- computed by the sender from
-  its own $myOrg$ and the peer's identity, never from the repository of
-  either party.  The consent and footprint guarantees (the session-key
-  guards, the queue bound) are also its own.  $keyRepo$ appears here
-  only to state that repository is a visibility attribute and to give
-  the modelled defect a repository to mis-route on.
+  resolution and the visibility set as given, through $keyUser$,
+  $subjectOf$ and $visible$ (Section~\ref{sec:addressing}), and states
+  the one fact the transport must honour: a reply's subject is
+  $subjectOf$ of the addressed identity, which is that identity itself
+  --- computed by the sender from the peer's identity alone, never from
+  the organization or repository of either party.  The single gate on
+  the route is visibility ($targetKey? \in visible$); the consent and
+  footprint guarantees (the session-key guards, the queue bound) are also
+  its own.  $keyRepo$ and $keyOrg$ appear here only to state that
+  repository and organization are visibility attributes and to give the
+  two modelled defects a coordinate to mis-route on.
 \end{itemize}
 
 The bridge between the two is DES-035's global uniqueness: a
-\texttt{@user:tty} names exactly one session across all repositories,
-so $SESSIONKEY$ here is $session\-model.tex$'s $SESSION$ addressed by
-its \texttt{@user:tty}, and $keyOrg$ is the organization of $srepo$
-projected through that address.  We do not restate $srepo$; to do so
-would be to keep two copies of one fact, and the copies would drift.
+\texttt{@user:tty} names exactly one session across all repositories and
+organizations, so $SESSIONKEY$ here is $session\-model.tex$'s $SESSION$
+addressed by its \texttt{@user:tty}, and $keyRepo$, $keyOrg$ are $srepo$
+and its organization projected through that address.  We do not restate
+$srepo$; to do so would be to keep two copies of one fact, and the
+copies would drift.
 
 One reconciliation is owed to $session\-model.tex$, and it is a
-recommendation rather than a change made here.  That specification
-lists ``the \texttt{@user:tty} \ldots resolution rules'' as a natural
-extension it does not yet cover.  To make $keyUser$ and $keyOrg$
-derivations rather than fresh axioms, $session\-model.tex$ should expose
-an address function --- $saddr : SESSION \inj (USER \cross TTY)$,
-injective by DES-035 --- from which $keyOrg = saddr\inv \comp (\lambda
-s @ first(srepo~s))$ follows, with $keyRepo$ derived likewise for
-presence.  Until it does, the resolver axioms of
-Section~\ref{sec:addressing} are $talk.tex$'s local statement of that
-interface, consistent with $srepo$ by construction.  What routes is
-organization and identity; the repository is a presence attribute on
-both sides.  Where a would-be design choice conflicts with this ---
-namely keying the subject on the repository and routing a reply on the
-\emph{sender's} repository, today's behaviour --- the architecture
-(globally-unique, repo-independent \texttt{@user:tty}, org-scoped talk)
-is authoritative, and the model proves that choice is the one that
-strands (R2) while org-and-identity routing does not (R1, R3).
+recommendation rather than a change made here.  That specification lists
+``the \texttt{@user:tty} \ldots resolution rules'' as a natural
+extension it does not yet cover, and it does not yet model visibility.
+To make $keyUser$, $keyRepo$ and $keyOrg$ derivations rather than fresh
+axioms, $session\-model.tex$ should expose an address function ---
+$saddr : SESSION \inj (USER \cross TTY)$, injective by DES-035 --- from
+which they follow by projection of $srepo$; and it should expose the
+visibility relation $visible$ derives from.  Until it does, the resolver
+axioms and the $visible$ set of Section~\ref{sec:addressing} are
+$talk.tex$'s local statement of that interface, consistent with $srepo$
+by construction.  What routes is the identity, and the only gate is
+visibility; organization and repository are presence attributes on both
+sides.  Where a would-be design choice conflicts with this --- namely
+keying the subject on the repository \emph{or} the organization and
+routing a reply on the \emph{sender's} attribute --- the architecture
+(a globally-unique \texttt{@user:tty} that is reachable wherever it is
+visible) is authoritative, and the model proves each such choice is one
+that strands a visible peer (R2a, R2b) while identity routing does not
+(R1, R3).
 
 %%----------------------------------------------------------------------
 \section{Threat Model: forgeable frames and the withdrawal primitive}
+\label{sec:threat}
 %%----------------------------------------------------------------------
 
 Talk inherits the BSD trust model of the programs it is named for: a frame
-is trusted for what it claims to be.  Notifications travel on a shared
-org-scoped NATS subject and carry their own $nfrom$, $nfromTty$ and $nfromKey$;
-nothing in the protocol binds those fields to a verified sender.  A frame is
-therefore \emph{forgeable}, and the specification's guarantees are stated
+is trusted for what it claims to be.  Notifications travel on a per-identity
+NATS subject and carry their own $nfrom$, $nfromTty$ and $nfromKey$;
+nothing in the protocol binds those fields to a verified sender, and a frame
+from any key --- visible or not --- may be published to our subject.  A frame
+is therefore \emph{forgeable}, and the specification's guarantees are stated
 against that fact rather than against an assumption of authenticity.
 
 The consent boundary (invariant~11) is robust under forgery on the

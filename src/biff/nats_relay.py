@@ -52,7 +52,6 @@ from nats.js.errors import (
 )
 from pydantic import ValidationError
 
-from biff._stdlib import repo_org
 from biff.models import (
     Message,
     RelayAuth,
@@ -391,9 +390,6 @@ class NatsRelay:
         self._auth = auth
         self._name = name
         self._repo_name = repo_name
-        # Talk routes on (org, identity), never on repo (talk.tex subjectOf):
-        # the org is the isolation boundary, derived once from our own repo.
-        self._org = repo_org(repo_name)
         # Validate stream_prefix — must be a simple alphanumeric-dash token.
         # Dots, wildcards, or spaces would break NATS subject routing.
         if not stream_prefix or not all(c.isalnum() or c == "-" for c in stream_prefix):
@@ -1025,21 +1021,21 @@ class NatsRelay:
     def talk_notify_subject(self, session_key: str) -> str:
         """NATS core subject for talk frames addressed to *session_key*.
 
-        Keyed on ``(org, identity)`` (talk.tex ``subjectOf``): the
-        organization is the isolation boundary and the globally-unique
-        ``user:tty`` identity selects the one session, so a frame reaches
-        the addressed ``@user:tty`` whatever repository either party runs
-        in.  The repository is never a routing coordinate — a reply routes
-        to ``(myOrg, peer)`` from the sender's own org and the peer's
-        identity, both held locally (biff-e9u).  A session subscribes to
-        ``subjectOf`` of its own key; a sender publishes to ``subjectOf``
-        of the peer's key.  Core NATS (no stream) — frames are dropped if
-        nobody is listening.
+        Keyed on the identity alone (talk.tex ``subjectOf~k = k``): the
+        globally-unique ``user:tty`` identity is the whole subject, so a
+        frame reaches the addressed ``@user:tty`` whatever repository or
+        organization either party runs in.  Neither repository nor
+        organization is a routing coordinate — a reply routes to the peer's
+        identity taken from the frame, held locally (biff-e9u).  Visibility
+        is the only gate, enforced at resolution, not on the subject.  A
+        session subscribes to ``subjectOf`` of its own key; a sender
+        publishes to ``subjectOf`` of the peer's key.  Core NATS (no
+        stream) — frames are dropped if nobody is listening.
         """
         user, _, tty = session_key.partition(":")
         self._validate_user(user)
         self._validate_tty(tty)
-        return f"{self._stream_prefix}.{self._org}.talk.notify.{user}:{tty}"
+        return f"{self._stream_prefix}.talk.notify.{user}:{tty}"
 
     async def get_nc(self) -> NatsClient:
         """Return the raw NATS client, connecting if necessary.

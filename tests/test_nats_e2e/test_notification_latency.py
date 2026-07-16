@@ -94,7 +94,7 @@ async def _measure_kv_latency(
 
 
 async def _measure_core_nats_latency(
-    nc_pub: NatsClient, nc_sub: NatsClient, repo: str
+    nc_pub: NatsClient, nc_sub: NatsClient
 ) -> list[float]:
     """Measure NATS core pub/sub delivery latency.
 
@@ -102,7 +102,7 @@ async def _measure_core_nats_latency(
     another client's subscription callback receives it.  Single
     subscription for all trials (matches MCP server behaviour).
     """
-    subject = f"biff.{repo}.talk.notify.testuser:tty1"
+    subject = "biff.talk.notify.testuser:tty1"
 
     received = asyncio.Event()
     t_recv = 0.0
@@ -157,7 +157,7 @@ class TestNotificationLatency:
         nc1 = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
         nc2 = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
         try:
-            latencies = await _measure_core_nats_latency(nc1, nc2, _TEST_REPO)
+            latencies = await _measure_core_nats_latency(nc1, nc2)
             missed = [t for t in latencies if t < 0]
             assert not missed, f"Core NATS missed {len(missed)}/{_TRIALS} notifications"
             avg_ms = sum(latencies) * 1000 / len(latencies)
@@ -174,7 +174,7 @@ class TestNotificationLatency:
         nc_sub = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
         try:
             kv = await _measure_kv_latency(nc_pub, nc_sub, _TEST_REPO)
-            core = await _measure_core_nats_latency(nc_pub, nc_sub, _TEST_REPO)
+            core = await _measure_core_nats_latency(nc_pub, nc_sub)
 
             kv_missed = sum(1 for t in kv if t < 0)
             core_missed = sum(1 for t in core if t < 0)
