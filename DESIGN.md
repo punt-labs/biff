@@ -5070,7 +5070,7 @@ mail-as-talk) were all found in review, not production.
 
 ## DES-047: Talk Subscription Survives a NATS Client Replacement — the `talkSubGen` Generation Guard
 
-**Date:** 2026-07-16
+**Date:** 2026-07-15
 **Status:** SETTLED
 **Topic:** Keep the always-on talk subscription alive across a wedge-driven client
 replacement — the destructive interaction between biff-3hp and biff-9la
