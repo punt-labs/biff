@@ -275,9 +275,10 @@ class TestTalkPushNotification:
             # bump; retry the publish until the fresh SUB catches a frame. A
             # frame published before the re-subscribe lands is dropped (core
             # NATS has no listener), so a single publish would race the tick.
-            deadline = asyncio.get_event_loop().time() + 12.0
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 12.0
             desc = ""
-            while asyncio.get_event_loop().time() < deadline:
+            while loop.time() < deadline:
                 await _publish_talk_frame(
                     nc,
                     _TEST_REPO,
