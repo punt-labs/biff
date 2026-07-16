@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,6 +20,8 @@ from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
+    TalkSubscription,
+    _reconcile_talk_sub,
     _talk_description,
     _write_unread_file,
     poll_inbox,
@@ -470,10 +473,12 @@ class TestPollInbox:
         fake_sub = AsyncMock()
         calls = 0
 
-        async def flaky_subscribe(state: ServerState) -> object | None:
+        async def flaky_subscribe(state: ServerState) -> TalkSubscription | None:
             nonlocal calls
             calls += 1
-            return None if calls == 1 else fake_sub
+            # LocalRelay has no generation, so _relay_generation is 0 — bind the
+            # SUB at 0 so the reconcile leaves it alone once it succeeds.
+            return None if calls == 1 else TalkSubscription(fake_sub, 0)
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", flaky_subscribe)
         mcp = create_server(state_with_path)
@@ -560,3 +565,119 @@ class TestPollInbox:
             await task
 
         assert tool.description == WALL_BASE_DESCRIPTION
+
+
+def _fixed_generation(value: int) -> Callable[[ServerState], int]:
+    """Return a ``_relay_generation`` stand-in that always reports *value*."""
+
+    def _gen(_state: ServerState) -> int:
+        return value
+
+    return _gen
+
+
+class TestReconcileTalkSub:
+    """The generation-tracked re-subscribe: the biff-3hp x biff-9la fix.
+
+    ``nats-relay.tex`` ``talkSubGen``: the always-on talk SUB must be
+    re-established when the relay dials a new client (``_force_reconnect`` /
+    ``_on_closed`` orphan it on the closed client) but left untouched on an
+    in-place nats-py reconnect (same client replays every SUB).  The
+    discriminator is the connection generation, never a ``sub is None`` probe.
+    """
+
+    @pytest.fixture
+    def state(self, tmp_path: Path) -> ServerState:
+        return create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+        )
+
+    async def test_no_resubscribe_when_generation_unchanged(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An in-place reconnect keeps the generation, so the SUB is left as-is.
+
+        nats-py replays every SUB on the same client — re-subscribing would
+        leak a duplicate.  This is the case the is-None probe gets right by
+        accident and the generation check gets right by construction.
+        """
+        handle = AsyncMock()
+        current = TalkSubscription(handle, generation=3)
+        calls = 0
+
+        async def _sub(_state: ServerState) -> TalkSubscription | None:
+            nonlocal calls
+            calls += 1
+            return TalkSubscription(AsyncMock(), 3)
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(3))
+
+        result = await _reconcile_talk_sub(state, current)
+
+        assert result is current
+        assert calls == 0
+        handle.unsubscribe.assert_not_awaited()
+
+    async def test_resubscribes_when_client_replaced(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A new client (generation advanced) re-establishes the SUB.
+
+        This is the biff-9la failure the is-None probe misses: the orphaned
+        handle is still non-None, so only the generation comparison fires.
+        """
+        stale = AsyncMock()
+        fresh = TalkSubscription(AsyncMock(), 4)
+
+        async def _sub(_state: ServerState) -> TalkSubscription | None:
+            return fresh
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
+
+        result = await _reconcile_talk_sub(state, TalkSubscription(stale, 3))
+
+        assert result is fresh
+        stale.unsubscribe.assert_awaited_once()
+
+    async def test_subscribes_when_never_established(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A None handle (failed initial subscribe) is retried."""
+        fresh = TalkSubscription(AsyncMock(), 1)
+
+        async def _sub(_state: ServerState) -> TalkSubscription | None:
+            return fresh
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
+
+        result = await _reconcile_talk_sub(state, None)
+
+        assert result is fresh
+
+    async def test_failed_resubscribe_drops_stale(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A re-subscribe that fails still drops the orphaned SUB.
+
+        Returning None (not the stale handle) makes the next tick retry via the
+        never-established path rather than hold a handle on the dead client.
+        """
+        stale = AsyncMock()
+
+        async def _sub(_state: ServerState) -> TalkSubscription | None:
+            return None
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(5))
+
+        result = await _reconcile_talk_sub(state, TalkSubscription(stale, 2))
+
+        assert result is None
+        stale.unsubscribe.assert_awaited_once()

@@ -827,6 +827,21 @@ class NatsRelay:
         """Whether the wtmp stream was successfully provisioned."""
         return self._wtmp_available
 
+    @property
+    def connection_generation(self) -> int:
+        """Monotonic per-dial token — bumps once per *new* client.
+
+        Advances only when :meth:`_open_connection` dials a fresh
+        ``nats.connect`` (a client replacement after ``_force_reconnect``
+        or ``_on_closed``); nats-py's in-place keepalive reconnect reuses
+        the same client and leaves it unchanged.  Core-NATS subscribers
+        (the always-on talk SUB) compare against this to tell a client
+        replacement — which orphans their subscription on the closed
+        client and must be re-established — from a transparent reconnect,
+        which replays every SUB (``nats-relay.tex`` ``talkSubGen``).
+        """
+        return self._generation
+
     async def get_kv(self) -> KeyValue:
         """Return the NATS KV handle, connecting if necessary."""
         _, kv = await self._ensure_connected()

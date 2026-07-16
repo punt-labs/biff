@@ -21,7 +21,7 @@ import json
 import logging
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from biff.formatting import terminal_safe
 from biff.models import UnreadSummary, WallPost
@@ -421,7 +421,30 @@ async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
     await _sync_unread_file(state)
 
 
-async def subscribe_talk(state: ServerState) -> object | None:
+class TalkSubscription(NamedTuple):
+    """A live talk SUB paired with the connection generation it is bound to.
+
+    The core-NATS talk SUB lives on one ``nats.connect`` client.  A wedge
+    teardown (``_force_reconnect``) or a give-up close (``_on_closed``) drops
+    that client and the next dial builds a fresh one with no SUB — the held
+    handle is orphaned on the closed client.  Pairing the handle with the
+    ``connection_generation`` it bound to lets the poller detect that
+    replacement and re-subscribe (``nats-relay.tex`` ``talkSubGen``).
+    """
+
+    handle: object
+    generation: int
+
+
+def _relay_generation(state: ServerState) -> int:
+    """Return the relay's current per-dial generation, or 0 if not NATS-backed."""
+    from biff.nats_relay import NatsRelay  # noqa: PLC0415
+
+    relay = state.relay
+    return relay.connection_generation if isinstance(relay, NatsRelay) else 0
+
+
+async def subscribe_talk(state: ServerState) -> TalkSubscription | None:
     """Establish the always-on talk subscription feeding the held ``TalkState``.
 
     Started once at poller start (ungated — a fresh agent must receive an
@@ -429,6 +452,10 @@ async def subscribe_talk(state: ServerState) -> object | None:
     ``state.talk.receive`` (self-echo and session-scope filtering happen
     there) and wakes the poller so the next active tick refreshes the tool
     description and fires the list-changed push.  NATS-only.
+
+    Captures ``connection_generation`` at the point of subscribe so a later
+    client replacement is detectable: the returned pair binds the SUB to the
+    generation of the client it actually runs on.
     """
     from biff.nats_relay import NatsRelay  # noqa: PLC0415
 
@@ -436,6 +463,7 @@ async def subscribe_talk(state: ServerState) -> object | None:
         return None
     try:
         nc = await state.relay.get_nc()
+        generation = state.relay.connection_generation
         subject = state.relay.talk_notify_subject(state.config.user)
 
         async def _on_talk_msg(msg: object) -> None:
@@ -460,12 +488,39 @@ async def subscribe_talk(state: ServerState) -> object | None:
             except (json.JSONDecodeError, AttributeError, TypeError):
                 logger.debug("Failed to process talk notification", exc_info=True)
 
-        return await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+        handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
             subject, cb=_on_talk_msg
         )
+        return TalkSubscription(handle, generation)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to subscribe to talk notifications", exc_info=True)
         return None
+
+
+async def _reconcile_talk_sub(
+    state: ServerState, talk_sub: TalkSubscription | None
+) -> TalkSubscription | None:
+    """Re-establish the talk SUB when it is unbound or its client was replaced.
+
+    Re-subscribes when there is no live SUB (initial-failure retry — NATS was
+    down at startup) or when the relay dialed a new client past the generation
+    the current SUB is bound to.  The generation comparison — not a
+    ``sub is None`` liveness probe — is the discriminator the proven model
+    requires (``nats-relay.tex`` ``Subscribe`` guard ``talkSubGen <
+    generation``): a wedge teardown orphans the SUB on the closed client while
+    leaving the handle object non-``None``, so the is-None test never fires and
+    talk dies silently (the biff-9la counterexample).  An in-place nats-py
+    reconnect keeps the same generation and replays every SUB, so it is left
+    untouched.  The new generation is bound only on a successful re-subscribe.
+    """
+    if talk_sub is not None and talk_sub.generation >= _relay_generation(state):
+        return talk_sub
+    if talk_sub is not None:
+        # The superseding dial already closed the old client; unsubscribing the
+        # orphaned handle is best-effort and its failure is expected.
+        with suppress(Exception):
+            await talk_sub.handle.unsubscribe()  # type: ignore[attr-defined]
+    return await subscribe_talk(state)
 
 
 async def _active_tick(
@@ -596,13 +651,13 @@ async def poll_inbox(
             else:
                 await asyncio.sleep(interval)
 
-            # Retry the talk subscription while it is not established. The first
-            # attempt can fail (NATS down at startup, subscribe_talk returns
-            # None); without this retry the whole talk channel — invites and
-            # messages — is silently dropped for the server's lifetime even
-            # after NATS recovers. Cheap: only runs while unsubscribed.
-            if talk_sub is None:
-                talk_sub = await subscribe_talk(state)
+            # Keep the always-on talk SUB bound to the live client. This retries
+            # a failed initial subscribe (NATS down at startup) AND re-subscribes
+            # after a client replacement (_force_reconnect / _on_closed), whose
+            # new client carries no SUB — without this the talk channel is
+            # silently dead for the rest of the server's lifetime. Cheap: a
+            # generation compare when nothing changed.
+            talk_sub = await _reconcile_talk_sub(state, talk_sub)
 
             # Transition: active → napping (connection stays open)
             if not tracker.napping and tracker.idle_seconds() > idle_threshold:
@@ -624,7 +679,7 @@ async def poll_inbox(
     finally:
         if talk_sub is not None:
             with suppress(Exception):
-                await talk_sub.unsubscribe()  # type: ignore[attr-defined]
+                await talk_sub.handle.unsubscribe()  # type: ignore[attr-defined]
 
 
 def _write_unread_file(
