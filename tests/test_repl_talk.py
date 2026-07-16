@@ -996,6 +996,72 @@ class TestStandaloneTalkReconcile:
         assert sub._handle is None  # orphan dropped; nothing bound on a dead client
         assert sub._generation == 1  # generation unchanged — binds only on success
 
+    async def test_transient_fetch_error_does_not_exit_the_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fetch raising mid-swap keeps the loop alive instead of crashing.
+
+        The same client replacement the SUB reconcile survives can make the
+        per-tick durable fetch (relay.fetch / get_nc) raise.  Unguarded that
+        traceback propagates out of ``_talk_converse`` and exits ``biff talk``.
+        The guard absorbs it; the loop paces on and re-fetches next tick.
+        """
+        relay, _nc = self._relay_nc()
+        sub = await self._bound_sub(relay)
+
+        fetch = AsyncMock(side_effect=[TimeoutError("dial in progress"), None])
+        monkeypatch.setattr("biff.__main__._talk_fetch_and_print", fetch)
+        monkeypatch.setattr(
+            "biff.__main__._wait_for_input_or_notify",
+            AsyncMock(side_effect=[_NO_INPUT, None]),
+        )
+
+        await asyncio.wait_for(
+            _talk_converse(
+                relay,
+                sub,
+                asyncio.Queue(),
+                asyncio.Event(),
+                "kai:kaihex01",
+                "kai",
+                "eric",
+            ),
+            timeout=5.0,
+        )
+
+        assert fetch.await_count == 2  # survived the error and retried next tick
+
+    async def test_normal_fetch_renders_without_false_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A healthy fetch runs each tick and never trips the failure latch."""
+        relay, _nc = self._relay_nc()
+        sub = await self._bound_sub(relay)
+
+        fetch = AsyncMock(side_effect=[None, None])
+        monkeypatch.setattr("biff.__main__._talk_fetch_and_print", fetch)
+        monkeypatch.setattr(
+            "biff.__main__._wait_for_input_or_notify",
+            AsyncMock(side_effect=[_NO_INPUT, None]),
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="biff.__main__"):
+            await asyncio.wait_for(
+                _talk_converse(
+                    relay,
+                    sub,
+                    asyncio.Queue(),
+                    asyncio.Event(),
+                    "kai:kaihex01",
+                    "kai",
+                    "eric",
+                ),
+                timeout=5.0,
+            )
+
+        assert fetch.await_count == 2  # fetched every tick, as before
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
     async def test_loop_establishes_and_threads_sub_to_converse(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

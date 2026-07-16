@@ -1775,11 +1775,23 @@ async def _talk_converse(
     (sends still work — they redial through the relay).  Reconciling the SUB on
     each idle tick re-binds it regardless (nats-relay.tex talkSubGen); the call
     is crash-safe via the latch and a no-op when the generation is unchanged.
+
+    The same client swap can make the per-tick durable fetch raise mid-redial.
+    That call is guarded so a transient error is absorbed and the loop paces on
+    through the wait below — the inbox is re-fetched next tick — rather than
+    letting the traceback exit the whole ``biff talk`` command.  The latch keeps
+    the onset discipline: DEBUG per tick, one WARNING when the failure persists.
     """
     from biff.models import Message
 
+    fetch_latch = TalkResubscribeLatch(logging.getLogger(__name__))
     while True:
-        await _talk_fetch_and_print(relay, session_key, user)
+        try:
+            await _talk_fetch_and_print(relay, session_key, user)
+        except (NatsError, TimeoutError, OSError):
+            fetch_latch.record_failure()
+        else:
+            fetch_latch.record_success()
         notify_event.clear()
 
         result = await _wait_for_input_or_notify(aqueue, notify_event)
