@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-07-16
+
 ### Added
 
 - **Agents receive talk — shared ephemeral `TalkState` + `talk_read` (biff-9la, DES-045).** The MCP server now holds one ephemeral `TalkState` — the same state machine the REPL uses — fed by an always-on NATS subscription started with the poller, so a fresh agent receives an *unsolicited* talk invite or message (previously only the REPL could). The new `talk_read` tool drains the held state and returns who wants to talk plus any queued messages. The `talk` and `read_messages` tool descriptions are marked `anthropic/alwaysLoad` so their `[TALK]` / `(N unread)` markers are never deferred behind ToolSearch — a deferred MCP tool returns a cached *base* description, so the runtime-mutated marker would otherwise be invisible to the model. The MCP server `instructions` block documents the pull/receive model.
