@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.server.app import create_server
@@ -17,6 +19,11 @@ from biff.server.tools._descriptions import TALK_BASE_DESCRIPTION, _talk_descrip
 from biff.talk_state import TalkState
 
 _COMMANDS = Path(__file__).resolve().parents[2] / "commands"
+
+# The ``*-dev.md`` command files are a dev-plugin-only artifact:
+# ``scripts/release-plugin.sh`` deletes them when swapping to the prod plugin
+# for a release. Assertions on their existence are only valid in the dev state.
+_DEV_PLUGIN = (_COMMANDS / "poll-dev.md").is_file()
 
 
 def _server_instructions(tmp_path: Path) -> str:
@@ -76,8 +83,14 @@ class TestTalkDescriptionMarker:
 class TestPollCommand:
     """The unified /biff:poll: a duration starts polling; no arg checks now."""
 
-    def test_prod_and_dev_exist(self) -> None:
+    def test_prod_exists(self) -> None:
         assert (_COMMANDS / "poll.md").is_file()
+
+    @pytest.mark.skipif(
+        not _DEV_PLUGIN,
+        reason="dev commands are removed in a prod release build (release-plugin.sh)",
+    )
+    def test_dev_exists(self) -> None:
         assert (_COMMANDS / "poll-dev.md").is_file()
 
     def test_prod_check_now_references_markers_and_tools(self) -> None:
@@ -94,6 +107,10 @@ class TestPollCommand:
         # The recurring loop runs /biff:poll with NO argument (no re-schedule).
         assert "with NO" in text
 
+    @pytest.mark.skipif(
+        not _DEV_PLUGIN,
+        reason="dev commands are removed in a prod release build (release-plugin.sh)",
+    )
     def test_dev_routes_to_dev_plugin(self) -> None:
         text = (_COMMANDS / "poll-dev.md").read_text()
         assert "[TALK]" in text
