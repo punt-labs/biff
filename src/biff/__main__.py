@@ -29,7 +29,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Self, final
 
 import typer
 from nats.errors import Error as NatsError
@@ -56,6 +56,7 @@ from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
+from biff.talk_latch import TalkNotifyLatch
 from biff.talk_types import AcceptOutcome, PendingInvite, TalkNotification, TalkPhase
 
 # ---------------------------------------------------------------------------
@@ -403,6 +404,7 @@ async def _repl_talk(
     *,
     to_key: str,
     target_repo: str | None = None,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> None:
     """Modal talk sub-loop — send lines to target, show incoming messages.
 
@@ -412,6 +414,13 @@ async def _repl_talk(
 
     Messages are sent via the shared ``TalkState`` (ephemeral core-NATS
     publish, no inbox) and received by draining it each 2s tick.
+
+    The connected loop runs *instead of* the REPL idle loop, so a wedge
+    teardown that swaps the NATS client mid-conversation would orphan the talk
+    SUB on the dead client and silently stop incoming partner messages (sends
+    still work — they redial).  Reconciling the SUB on each poll tick re-binds
+    it regardless of REPL mode; the call is crash-safe via the latch and a
+    no-op when the generation is unchanged.
     """
     talk_prompt = f"{ctx.user}:{ctx.tty_name} ▶ "
     current_prompt[0] = talk_prompt
@@ -430,6 +439,8 @@ async def _repl_talk(
             result = await _wait_for_input_or_notify(aqueue, notify_event)
             if result is _NO_INPUT:
                 notify_event.clear()
+                if talk_sub is not None:
+                    await talk_sub.reconcile()
                 if _render_connected_drain(ctx, repl_display, talk_prompt):
                     break
                 continue
@@ -467,6 +478,26 @@ async def _repl_talk(
     print(f"\r\033[KTalk with {display} ended.")
 
 
+async def _repl_idle_tick(
+    ctx: CliContext,
+    notify: object,
+    prompt: str,
+    notify_event: asyncio.Event,
+    repl_display: ReplDisplay,
+    talk_sub: _ReplTalkSubscription | None,
+) -> None:
+    """Handle a REPL idle wake: poll for changes, then re-bind the talk SUB.
+
+    The reconcile runs after ``_poll_notify`` so a client replacement the poll
+    triggered (a wedge teardown redials a fresh client with no SUB) is picked
+    up on the same tick.
+    """
+    notify_event.clear()
+    await _poll_notify(ctx, notify, prompt, inline=True, display=repl_display)
+    if talk_sub is not None:
+        await talk_sub.reconcile()
+
+
 async def _repl_loop(
     ctx: CliContext,
     notify: object,
@@ -479,6 +510,7 @@ async def _repl_loop(
     # None → a fresh session-default (timestamps off).  Keeps the many
     # existing positional callers/tests working without threading state.
     display: ReplDisplay | None = None,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> None:
     """Core REPL input loop — dispatches commands and handles notifications.
 
@@ -492,14 +524,8 @@ async def _repl_loop(
     while True:
         result = await _wait_for_input_or_notify(aqueue, notify_event)
         if result is _NO_INPUT:
-            # Timeout or notification — check for changes inline.
-            notify_event.clear()
-            await _poll_notify(
-                ctx,
-                notify,
-                prompt,
-                inline=True,
-                display=repl_display,
+            await _repl_idle_tick(
+                ctx, notify, prompt, notify_event, repl_display, talk_sub
             )
             continue
 
@@ -523,6 +549,7 @@ async def _repl_loop(
                 current_prompt,
                 prompt,
                 repl_display,
+                talk_sub=talk_sub,
             )
             _release_prompt(prompt_gate)
             continue
@@ -566,12 +593,20 @@ async def _wait_for_talk_accept(
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
+    *,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> AcceptOutcome:
     """Wait for the target to accept, or for a mutual-invite auto-accept.
 
     Returns the :class:`AcceptOutcome`; ``NONE`` when the user typed
     ``end`` or EOF before any accept arrived.  Third-party notifications
     surfaced by :meth:`TalkState.poll_accept` print as banners.
+
+    The accept wait blocks outside the REPL idle loop, so a wedge teardown
+    that swaps the NATS client while we wait would orphan the talk SUB on the
+    dead client — the invitee's accept and opening line would never arrive.
+    Reconciling the SUB on each poll tick re-binds it regardless; the call is
+    crash-safe via the latch and a no-op when the generation is unchanged.
     """
     # Open the prompt gate before waiting so the stdin thread actually calls
     # ``input()`` and reads the user's line.  Without this the thread stays
@@ -582,6 +617,8 @@ async def _wait_for_talk_accept(
         result = await _wait_for_input_or_notify(aqueue, notify_event)
         if result is _NO_INPUT:
             notify_event.clear()
+            if talk_sub is not None:
+                await talk_sub.reconcile()
             outcome, others = ctx.talk.poll_accept()
             for notif in others:
                 _print_talk_banner(notif)
@@ -652,6 +689,7 @@ async def _talk_handshake(
     prompt_gate: threading_mod.Event,
     *,
     target_repo: str | None = None,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> bool:
     """Execute the talk handshake. Returns True if talk should proceed."""
     if responding:
@@ -691,7 +729,9 @@ async def _talk_handshake(
     # ``end``/``exit``/``quit`` is the graceful in-REPL cancel that returns to
     # the prompt (``AcceptOutcome.NONE`` below); Ctrl-C is a process exit.
     try:
-        outcome = await _wait_for_talk_accept(ctx, aqueue, notify_event, prompt_gate)
+        outcome = await _wait_for_talk_accept(
+            ctx, aqueue, notify_event, prompt_gate, talk_sub=talk_sub
+        )
     except (asyncio.CancelledError, KeyboardInterrupt):
         await _withdraw_talk_invite(
             ctx, target_user, target_key, target_repo=target_repo
@@ -765,6 +805,7 @@ async def _run_talk_handshake(
     prompt_gate: threading_mod.Event,
     *,
     target_repo: str | None,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> bool:
     """Set the talk plan, run the handshake, and roll back on a publish failure.
 
@@ -791,6 +832,7 @@ async def _run_talk_handshake(
             notify_event,
             prompt_gate,
             target_repo=target_repo,
+            talk_sub=talk_sub,
         )
     except (NatsError, TimeoutError, OSError):
         ctx.talk.reset()
@@ -860,6 +902,8 @@ async def _handle_repl_talk(
     current_prompt: list[str],
     repl_prompt: str,
     repl_display: ReplDisplay,
+    *,
+    talk_sub: _ReplTalkSubscription | None = None,
 ) -> None:
     """Parse talk args and enter modal talk mode."""
     from biff.server.tools._session import resolve_talk_target
@@ -939,6 +983,7 @@ async def _handle_repl_talk(
         notify_event,
         prompt_gate,
         target_repo=target_repo,
+        talk_sub=talk_sub,
     ):
         if consumed is not None:
             ctx.talk.restore_pending_invite(consumed)
@@ -956,27 +1001,122 @@ async def _handle_repl_talk(
         repl_display,
         to_key=target_key,
         target_repo=target_repo,
+        talk_sub=talk_sub,
     )
 
 
-async def _setup_nats_subscription(
-    ctx: CliContext,
-    notify_event: asyncio.Event,
-) -> object | None:
-    """Subscribe to NATS talk notifications, feeding the shared ``TalkState``.
+class _TalkSubscription:
+    """A generation-tracked, crash-safe talk-notify SUB (nats-relay.tex talkSubGen).
 
-    Always-on for the REPL lifetime: every talk frame flows into
-    ``ctx.talk.receive`` (self-echo and session-scope filtering happen
-    there).  Returns the subscription object (for cleanup) or ``None``
-    if the relay is not NATS-backed.
+    Both talk front-ends subscribe to the per-user notify subject to wake on an
+    incoming frame.  A wedge teardown (``_force_reconnect``, biff-3hp) or a
+    give-up close drops the NATS client and the next dial builds a fresh one
+    with no SUB, orphaning the held handle on the closed client.
+    :meth:`reconcile` re-subscribes when the relay dials a new client — detected
+    by a bump in ``connection_generation`` — but leaves the SUB untouched on an
+    in-place nats-py reconnect, which reuses the client and replays every SUB.
+
+    The base callback only wakes the loop; the standalone ``biff talk`` command
+    fetches messages from the durable inbox on that wake, so it needs no frame
+    routing.  :class:`_ReplTalkSubscription` overrides the callback to feed the
+    always-on REPL ``TalkState`` its ephemeral frames.
     """
-    if not isinstance(ctx.relay, NatsRelay):
-        return None
 
-    nc = await ctx.relay.get_nc()
-    subject = ctx.relay.talk_notify_subject(ctx.user)
+    _relay: object
+    _user: str
+    _notify_event: asyncio.Event
+    _handle: object | None
+    _generation: int
+    _latch: TalkNotifyLatch
 
-    async def _on_notify(msg: object) -> None:
+    def __new__(cls, relay: object, user: str, notify_event: asyncio.Event) -> Self:
+        self = super().__new__(cls)
+        self._relay = relay
+        self._user = user
+        self._notify_event = notify_event
+        self._handle = None
+        self._generation = 0
+        self._latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(__name__))
+        return self
+
+    async def establish(self) -> None:
+        """Subscribe on the live client, capturing the generation it binds to.
+
+        A dial in progress (the client mid-replacement) can make ``get_nc`` or
+        ``subscribe`` raise; a raise here must not crash the caller and kill the
+        retry loop that was meant to self-heal.  On failure, leave the handle
+        and generation unchanged so the next ``reconcile`` tick retries, and
+        let the latch log the failure once (biff-9la).  The generation binds
+        only after a successful subscribe.
+        """
+        relay = self._relay
+        if not isinstance(relay, NatsRelay):
+            return
+        try:
+            nc: NatsClient = await relay.get_nc()
+            generation = relay.connection_generation
+            subject = relay.talk_notify_subject(self._user)
+            handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+                subject, cb=self._on_notify
+            )
+        except Exception:  # noqa: BLE001
+            self._latch.record_failure()
+            return
+        self._handle = handle
+        self._generation = generation
+        self._latch.record_success()
+
+    async def reconcile(self) -> None:
+        """Re-subscribe when the relay replaced its client since we bound.
+
+        The generation comparison — not a handle-liveness probe — is the
+        discriminator the proven model requires: a wedge teardown leaves the
+        orphaned handle non-``None``, so an is-None test never fires and talk
+        dies silently.  Binds the new generation only on a successful
+        re-subscribe.
+        """
+        relay = self._relay
+        if not isinstance(relay, NatsRelay):
+            return
+        if self._handle is not None and self._generation >= relay.connection_generation:
+            return
+        await self._unsubscribe()
+        await self.establish()
+
+    async def close(self) -> None:
+        """Tear the subscription down on caller exit."""
+        await self._unsubscribe()
+
+    async def _unsubscribe(self) -> None:
+        if self._handle is not None:
+            # A superseding dial already closed the client; unsubscribing the
+            # orphaned handle is best-effort and its failure is expected.
+            with suppress(Exception):
+                await self._handle.unsubscribe()  # type: ignore[attr-defined]
+            self._handle = None
+
+    async def _on_notify(self, _msg: object) -> None:
+        """Wake the conversation loop; the durable inbox carries the message."""
+        self._notify_event.set()
+
+
+@final
+class _ReplTalkSubscription(_TalkSubscription):
+    """The REPL's always-on talk SUB — feeds ephemeral frames into ``TalkState``.
+
+    Every talk frame flows into ``ctx.talk.receive`` (self-echo and
+    session-scope filtering happen there) before the idle drain renders it,
+    then wakes the loop.
+    """
+
+    _ctx: CliContext
+
+    def __new__(cls, ctx: CliContext, notify_event: asyncio.Event) -> Self:
+        self = super().__new__(cls, ctx.relay, ctx.user, notify_event)
+        self._ctx = ctx
+        return self
+
+    async def _on_notify(self, msg: object) -> None:
         data = getattr(msg, "data", b"")
         if data and data != b"1":
             try:
@@ -986,16 +1126,12 @@ async def _setup_nats_subscription(
                         str(k): str(v)  # pyright: ignore[reportUnknownArgumentType]
                         for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
                     }
-                    ctx.talk.receive(notification)
+                    self._ctx.talk.receive(notification)
             except (json.JSONDecodeError, TypeError):
                 logging.getLogger(__name__).debug(
                     "Failed to process talk notification", exc_info=True
                 )
-        notify_event.set()
-
-    return await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
-        subject, cb=_on_notify
-    )
+        self._notify_event.set()
 
 
 async def _repl() -> None:
@@ -1067,7 +1203,8 @@ async def _repl() -> None:
             bridge_task = asyncio.create_task(_bridge_stdin(input_queue, aqueue))
 
             notify_event = asyncio.Event()
-            sub = await _setup_nats_subscription(ctx, notify_event)
+            talk_sub = _ReplTalkSubscription(ctx, notify_event)
+            await talk_sub.establish()
 
             try:
                 await _repl_loop(
@@ -1079,6 +1216,7 @@ async def _repl() -> None:
                     prompt_gate,
                     current_prompt,
                     display=display,
+                    talk_sub=talk_sub,
                 )
             finally:
                 stop_flag.set()
@@ -1089,9 +1227,7 @@ async def _repl() -> None:
                 bridge_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await bridge_task
-                if sub is not None:
-                    with suppress(Exception):
-                        await sub.unsubscribe()  # type: ignore[attr-defined]
+                await talk_sub.close()
     except KeyboardInterrupt:
         print()
     except ValueError as exc:
@@ -1577,8 +1713,6 @@ async def _bridge_stdin(
 
 async def _talk_loop(
     relay: object,
-    nc: NatsClient,
-    subject: str,
     session_key: str,
     user: str,
     target: str,
@@ -1586,9 +1720,7 @@ async def _talk_loop(
     target_repo: str | None = None,
     tty_name: str = "",
 ) -> None:
-    """Run the talk conversation loop with notification-driven message display."""
-    from biff.models import Message
-
+    """Set up the stdin bridge and notify SUB, then run the conversation loop."""
     if not isinstance(relay, NatsRelay):
         return
 
@@ -1602,40 +1734,84 @@ async def _talk_loop(
     bridge_task = asyncio.create_task(_bridge_stdin(input_queue, aqueue))
     notify_event = asyncio.Event()
 
-    async def _on_notify(_msg: object) -> None:
-        notify_event.set()
-
-    sub = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
-        subject, cb=_on_notify
-    )
+    sub = _TalkSubscription(relay, user, notify_event)
+    await sub.establish()
     try:
-        while True:
-            await _talk_fetch_and_print(relay, session_key, user)
-            notify_event.clear()
-
-            result = await _wait_for_input_or_notify(aqueue, notify_event)
-            if result is _NO_INPUT:
-                continue
-            if not isinstance(result, str):
-                break  # EOF (None) or unexpected type
-            line = result.strip()
-            if line:
-                msg = Message(
-                    from_user=user,
-                    from_tty=tty_name,
-                    to_user=target,
-                    body=line[:512],
-                )
-                await relay.deliver(
-                    msg, sender_key=session_key, target_repo=target_repo
-                )
+        await _talk_converse(
+            relay,
+            sub,
+            aqueue,
+            notify_event,
+            session_key,
+            user,
+            target,
+            target_repo=target_repo,
+            tty_name=tty_name,
+        )
     finally:
         stop_flag.set()
         bridge_task.cancel()
         with suppress(asyncio.CancelledError):
             await bridge_task
-        with suppress(Exception):
-            await sub.unsubscribe()
+        await sub.close()
+
+
+async def _talk_converse(
+    relay: NatsRelay,
+    sub: _TalkSubscription,
+    aqueue: asyncio.Queue[str | None],
+    notify_event: asyncio.Event,
+    session_key: str,
+    user: str,
+    target: str,
+    *,
+    target_repo: str | None = None,
+    tty_name: str = "",
+) -> None:
+    """Print incoming messages and send typed lines until EOF.
+
+    A wedge teardown that swaps the NATS client mid-session would orphan the
+    notify SUB on the dead client and silently stop incoming partner messages
+    (sends still work — they redial through the relay).  Reconciling the SUB on
+    each idle tick re-binds it regardless (nats-relay.tex talkSubGen); the call
+    is crash-safe via the latch and a no-op when the generation is unchanged.
+
+    The same client swap can make the per-tick durable fetch raise mid-redial.
+    That call is guarded so a transient error is absorbed and the loop paces on
+    through the wait below — the inbox is re-fetched next tick — rather than
+    letting the traceback exit the whole ``biff talk`` command.  A fetch-scoped
+    latch keeps the onset discipline: DEBUG per tick, one WARNING when the
+    failure persists.  Its wording names the inbox-read cause, not a
+    re-subscribe failure — the SUB may be healthy while the durable inbox is
+    unreadable, and conflating the two would misdirect debugging.
+    """
+    from biff.models import Message
+
+    fetch_latch = TalkNotifyLatch.for_fetch(logging.getLogger(__name__))
+    while True:
+        try:
+            await _talk_fetch_and_print(relay, session_key, user)
+        except (NatsError, TimeoutError, OSError):
+            fetch_latch.record_failure()
+        else:
+            fetch_latch.record_success()
+        notify_event.clear()
+
+        result = await _wait_for_input_or_notify(aqueue, notify_event)
+        if result is _NO_INPUT:
+            await sub.reconcile()
+            continue
+        if not isinstance(result, str):
+            break  # EOF (None) or unexpected type
+        line = result.strip()
+        if line:
+            msg = Message(
+                from_user=user,
+                from_tty=tty_name,
+                to_user=target,
+                body=line[:512],
+            )
+            await relay.deliver(msg, sender_key=session_key, target_repo=target_repo)
 
 
 async def _talk_interactive(to: str, opening: str) -> None:
@@ -1692,13 +1868,8 @@ async def _talk_interactive(to: str, opening: str) -> None:
 
             print(f"Connected to {display}. Type and press Enter. Ctrl+C to end.\n")
 
-            nc = await ctx.relay.get_nc()
-            subject = ctx.relay.talk_notify_subject(ctx.user)
-
             await _talk_loop(
                 ctx.relay,
-                nc,
-                subject,
                 ctx.session_key,
                 ctx.user,
                 target,

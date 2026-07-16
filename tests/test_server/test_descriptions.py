@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from biff.models import BiffConfig, Message, UnreadSummary, WallPost
+from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
@@ -19,13 +22,17 @@ from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
+    TalkSubscription,
+    _reconcile_talk_sub,
     _talk_description,
     _write_unread_file,
     poll_inbox,
     refresh_read_messages,
+    subscribe_talk,
     talk_signal,
 )
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
+from biff.talk_latch import TalkNotifyLatch
 from biff.talk_state import TalkState
 
 if TYPE_CHECKING:
@@ -33,6 +40,12 @@ if TYPE_CHECKING:
 
 _TEST_REPO = "_test-server"
 _KAI_SESSION = "kai:tty1"
+_TALK_LOGGER = "test.talk_latch"
+
+
+def _test_latch() -> TalkNotifyLatch:
+    """A fresh latch for reconcile tests that do not assert on its logs."""
+    return TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
 
 
 @pytest.fixture
@@ -470,10 +483,14 @@ class TestPollInbox:
         fake_sub = AsyncMock()
         calls = 0
 
-        async def flaky_subscribe(state: ServerState) -> object | None:
+        async def flaky_subscribe(
+            state: ServerState, latch: TalkNotifyLatch
+        ) -> TalkSubscription | None:
             nonlocal calls
             calls += 1
-            return None if calls == 1 else fake_sub
+            # LocalRelay has no generation, so _relay_generation is 0 — bind the
+            # SUB at 0 so the reconcile leaves it alone once it succeeds.
+            return None if calls == 1 else TalkSubscription(fake_sub, 0)
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", flaky_subscribe)
         mcp = create_server(state_with_path)
@@ -481,6 +498,126 @@ class TestPollInbox:
         assert calls >= 2  # retried past the initial None
         # Establishing the subscription is proven by its clean teardown on exit.
         fake_sub.unsubscribe.assert_awaited_once()
+
+    async def test_generation_bump_during_tick_reconciles_same_tick(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A generation bump inside ``_safe_tick`` is rebound the SAME tick.
+
+        The tick's relay calls are what trigger the wedge teardown that advances
+        ``connection_generation``.  Reconciling AFTER the tick rebinds the SUB in
+        the same iteration; reconciling before defers it a full poll interval —
+        minutes of dead talk on the agent-facing MCP path.
+
+        The tick sets the shutdown event, so the loop exits at the top of the
+        NEXT iteration.  With the reconcile after the tick the re-subscribe to
+        the bumped generation still runs before that exit; with the reconcile
+        before the tick it never runs — the discriminating observation.
+        """
+        gen = [0]
+        events: list[tuple[str, int]] = []
+        shutdown = asyncio.Event()
+
+        def _gen(_state: ServerState) -> int:
+            return gen[0]
+
+        async def fake_subscribe(
+            _state: ServerState, _latch: TalkNotifyLatch
+        ) -> TalkSubscription:
+            events.append(("subscribe", gen[0]))
+            return TalkSubscription(AsyncMock(), gen[0])
+
+        async def fake_tick(
+            _mcp: FastMCP[ServerState],
+            _state: ServerState,
+            last_count: int,
+            last_wall: tuple[str, str],
+            last_talk: tuple[tuple[str, ...], int, str],
+        ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
+            events.append(("tick", gen[0]))
+            if gen[0] == 0:
+                gen[0] = 1  # the tick's relay calls trigger _force_reconnect
+                shutdown.set()  # stop after this iteration completes
+            return last_count, last_wall, last_talk
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", fake_subscribe)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _gen)
+        monkeypatch.setattr(_descriptions, "_safe_tick", fake_tick)
+
+        mcp = create_server(state_with_path)
+        await poll_inbox(
+            mcp, state_with_path, shutdown=shutdown, interval=self._FAST_INTERVAL
+        )
+
+        assert ("subscribe", 1) in events  # rebound to the bumped generation
+        # …and rebound before any further tick — same iteration as the bump.
+        assert events == [("subscribe", 0), ("tick", 0), ("subscribe", 1)]
+
+    async def test_cheap_nap_tick_reconciles_background_generation_bump(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cheap nap tick still reconciles a background-triggered client swap.
+
+        The heartbeat loop can wedge-teardown and redial the NATS client
+        *during* a nap — advancing ``connection_generation`` with no ``_safe_tick``
+        involved.  If the reconcile were gated behind the nap-skip, the always-on
+        talk SUB would stay orphaned on the dead client until the nap ended, and
+        an unsolicited invite to the idle agent would be silently dropped
+        (biff-9la).  The reconcile must run on the cheap nap tick even though the
+        expensive relay poll is skipped.
+        """
+        events: list[tuple[str, int]] = []
+        tick_calls = [0]
+        subscribe_calls = [0]
+
+        def _gen(_state: ServerState) -> int:
+            return 1  # a background swap advanced the generation past the SUB
+
+        async def fake_subscribe(
+            _state: ServerState, _latch: TalkNotifyLatch
+        ) -> TalkSubscription:
+            subscribe_calls[0] += 1
+            # First call is the startup bind at the pre-swap generation (0, now
+            # stale); the cheap-nap reconcile rebinds to the live generation (1).
+            bound = 0 if subscribe_calls[0] == 1 else 1
+            events.append(("subscribe", bound))
+            return TalkSubscription(AsyncMock(), bound)
+
+        async def fake_tick(
+            _mcp: FastMCP[ServerState],
+            _state: ServerState,
+            last_count: int,
+            last_wall: tuple[str, str],
+            last_talk: tuple[tuple[str, ...], int, str],
+        ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
+            tick_calls[0] += 1
+            return last_count, last_wall, last_talk
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", fake_subscribe)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _gen)
+        monkeypatch.setattr(_descriptions, "_safe_tick", fake_tick)
+
+        # Force a cheap nap tick: napping, with a recent nap poll so the
+        # seconds-since-nap-poll guard holds under a large nap_interval.
+        state_with_path.activity.enter_nap()
+        state_with_path.activity.record_nap_poll()
+
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(
+            poll_inbox(
+                mcp,
+                state_with_path,
+                interval=self._FAST_INTERVAL,
+                nap_interval=1000.0,
+            )
+        )
+        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert ("subscribe", 1) in events  # rebound on the cheap nap tick
+        assert tick_calls[0] == 0  # _safe_tick skipped — the cheap nap held
 
     async def test_cancellation_is_clean(self, state_with_path: ServerState) -> None:
         """Cancelling the poller task does not raise."""
@@ -560,3 +697,177 @@ class TestPollInbox:
             await task
 
         assert tool.description == WALL_BASE_DESCRIPTION
+
+
+def _fixed_generation(value: int) -> Callable[[ServerState], int]:
+    """Return a ``_relay_generation`` stand-in that always reports *value*."""
+
+    def _gen(_state: ServerState) -> int:
+        return value
+
+    return _gen
+
+
+class TestReconcileTalkSub:
+    """The generation-tracked re-subscribe: the biff-3hp x biff-9la fix.
+
+    ``nats-relay.tex`` ``talkSubGen``: the always-on talk SUB must be
+    re-established when the relay dials a new client (``_force_reconnect`` /
+    ``_on_closed`` orphan it on the closed client) but left untouched on an
+    in-place nats-py reconnect (same client replays every SUB).  The
+    discriminator is the connection generation, never a ``sub is None`` probe.
+    """
+
+    @pytest.fixture
+    def state(self, tmp_path: Path) -> ServerState:
+        return create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+        )
+
+    async def test_no_resubscribe_when_generation_unchanged(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An in-place reconnect keeps the generation, so the SUB is left as-is.
+
+        nats-py replays every SUB on the same client — re-subscribing would
+        leak a duplicate.  This is the case the is-None probe gets right by
+        accident and the generation check gets right by construction.
+        """
+        handle = AsyncMock()
+        current = TalkSubscription(handle, generation=3)
+        calls = 0
+
+        async def _sub(
+            _state: ServerState, _latch: TalkNotifyLatch
+        ) -> TalkSubscription | None:
+            nonlocal calls
+            calls += 1
+            return TalkSubscription(AsyncMock(), 3)
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(3))
+
+        result = await _reconcile_talk_sub(state, current, _test_latch())
+
+        assert result is current
+        assert calls == 0
+        handle.unsubscribe.assert_not_awaited()
+
+    async def test_resubscribes_when_client_replaced(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A new client (generation advanced) re-establishes the SUB.
+
+        This is the biff-9la failure the is-None probe misses: the orphaned
+        handle is still non-None, so only the generation comparison fires.
+        """
+        stale = AsyncMock()
+        fresh = TalkSubscription(AsyncMock(), 4)
+
+        async def _sub(
+            _state: ServerState, _latch: TalkNotifyLatch
+        ) -> TalkSubscription | None:
+            return fresh
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
+
+        result = await _reconcile_talk_sub(
+            state, TalkSubscription(stale, 3), _test_latch()
+        )
+
+        assert result is fresh
+        stale.unsubscribe.assert_awaited_once()
+
+    async def test_subscribes_when_never_established(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A None handle (failed initial subscribe) is retried."""
+        fresh = TalkSubscription(AsyncMock(), 1)
+
+        async def _sub(
+            _state: ServerState, _latch: TalkNotifyLatch
+        ) -> TalkSubscription | None:
+            return fresh
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
+
+        result = await _reconcile_talk_sub(state, None, _test_latch())
+
+        assert result is fresh
+
+    async def test_failed_resubscribe_drops_stale(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A re-subscribe that fails still drops the orphaned SUB.
+
+        Returning None (not the stale handle) makes the next tick retry via the
+        never-established path rather than hold a handle on the dead client.
+        """
+        stale = AsyncMock()
+
+        async def _sub(
+            _state: ServerState, _latch: TalkNotifyLatch
+        ) -> TalkSubscription | None:
+            return None
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(5))
+
+        result = await _reconcile_talk_sub(
+            state, TalkSubscription(stale, 2), _test_latch()
+        )
+
+        assert result is None
+        stale.unsubscribe.assert_awaited_once()
+
+
+class TestSubscribeTalkLatch:
+    """The poller's ``subscribe_talk`` routes failures/successes through the latch.
+
+    A NATS outage fails the re-subscribe on every tick; without the latch the
+    old code logged a WARNING+traceback per tick (a flood).  The latch surfaces
+    the onset once at WARNING, keeps retries at DEBUG, and logs one INFO on
+    recovery — the same onset/recovery discipline as ``_ConnectionHealth``.
+    """
+
+    @staticmethod
+    def _nats_state(tmp_path: Path) -> tuple[ServerState, MagicMock]:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        relay.connection_generation = 1
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.kai")
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        return state, relay
+
+    async def test_failure_then_recovery_logs_once_each(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        state, relay = self._nats_state(tmp_path)
+        latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
+
+        with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
+            assert await subscribe_talk(state, latch) is None  # onset — WARNING
+            assert await subscribe_talk(state, latch) is None  # retry — DEBUG
+
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1  # not one per tick
+
+            relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
+            sub = await subscribe_talk(state, latch)
+
+        assert sub is not None
+        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(infos) == 1  # one recovery line
