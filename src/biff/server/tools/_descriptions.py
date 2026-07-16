@@ -467,7 +467,7 @@ async def subscribe_talk(
     try:
         nc = await state.relay.get_nc()
         generation = state.relay.connection_generation
-        subject = state.relay.talk_notify_subject(state.config.user)
+        subject = state.relay.talk_notify_subject(state.session_key)
 
         async def _on_talk_msg(msg: object) -> None:
             try:

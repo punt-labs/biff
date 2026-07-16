@@ -668,7 +668,9 @@ class TestSend:
         relay = MagicMock(spec=NatsRelay)
         nc = AsyncMock()
         relay.get_nc = AsyncMock(return_value=nc)
-        relay.talk_notify_subject = MagicMock(return_value="biff.test.talk.notify.eric")
+        relay.talk_notify_subject = MagicMock(
+            return_value="biff.talk.notify.eric:def67890"
+        )
         st = _make_state(relay=relay)
         return st, nc
 
@@ -681,9 +683,9 @@ class TestSend:
     @pytest.mark.anyio
     async def test_send_message(self) -> None:
         st, nc = self._nats_state()
-        await st.send_message(target_user="eric", to_key=OTHER_KEY, body="hello")
+        await st.send_message(to_key=OTHER_KEY, body="hello")
         subject, payload = self._published(nc)
-        assert subject == "biff.test.talk.notify.eric"
+        assert subject == "biff.talk.notify.eric:def67890"
         assert payload["type"] == "message"
         assert payload["from"] == "kai"
         assert payload["from_tty"] == "tty1"
@@ -694,14 +696,14 @@ class TestSend:
     @pytest.mark.anyio
     async def test_send_message_truncates_body(self) -> None:
         st, nc = self._nats_state()
-        await st.send_message(target_user="eric", to_key=OTHER_KEY, body="x" * 1000)
+        await st.send_message(to_key=OTHER_KEY, body="x" * 1000)
         _, payload = self._published(nc)
         assert len(payload["body"]) == 512
 
     @pytest.mark.anyio
     async def test_send_invite(self) -> None:
         st, nc = self._nats_state()
-        await st.send_invite(target_user="eric", to_key=OTHER_KEY, body="wants to talk")
+        await st.send_invite(to_key=OTHER_KEY, body="wants to talk")
         _, payload = self._published(nc)
         assert payload["type"] == "invite"
         assert payload["body"] == "wants to talk"
@@ -711,21 +713,21 @@ class TestSend:
         # The invite body carries user input, so an oversized invite must be
         # bounded at publish just like a message — MAX_BODY_LEN is the DoS floor.
         st, nc = self._nats_state()
-        await st.send_invite(target_user="eric", to_key=OTHER_KEY, body="x" * 1000)
+        await st.send_invite(to_key=OTHER_KEY, body="x" * 1000)
         _, payload = self._published(nc)
         assert len(payload["body"]) == MAX_BODY_LEN
 
     @pytest.mark.anyio
     async def test_send_normal_body_unchanged(self) -> None:
         st, nc = self._nats_state()
-        await st.send_invite(target_user="eric", to_key=OTHER_KEY, body="hi there")
+        await st.send_invite(to_key=OTHER_KEY, body="hi there")
         _, payload = self._published(nc)
         assert payload["body"] == "hi there"
 
     @pytest.mark.anyio
     async def test_send_accept(self) -> None:
         st, nc = self._nats_state()
-        await st.send_accept(target_user="eric", to_key=OTHER_KEY)
+        await st.send_accept(to_key=OTHER_KEY)
         _, payload = self._published(nc)
         assert payload["type"] == "accept"
         assert payload["body"] == ""
@@ -733,7 +735,7 @@ class TestSend:
     @pytest.mark.anyio
     async def test_send_end(self) -> None:
         st, nc = self._nats_state()
-        await st.send_end(target_user="eric", to_key=OTHER_KEY)
+        await st.send_end(to_key=OTHER_KEY)
         _, payload = self._published(nc)
         assert payload["type"] == "end"
 
@@ -741,7 +743,7 @@ class TestSend:
     async def test_send_tty_name_reflects_rename(self) -> None:
         st, nc = self._nats_state()
         st.set_tty_name("desktop")
-        await st.send_message(target_user="eric", to_key=OTHER_KEY, body="hi")
+        await st.send_message(to_key=OTHER_KEY, body="hi")
         _, payload = self._published(nc)
         assert payload["from_tty"] == "desktop"
 
@@ -749,12 +751,12 @@ class TestSend:
     async def test_non_nats_relay_noop(self) -> None:
         st = _make_state(relay=MagicMock(spec=LocalRelay))
         # Should not raise and should not attempt any publish.
-        await st.send_message(target_user="eric", to_key=OTHER_KEY, body="hi")
+        await st.send_message(to_key=OTHER_KEY, body="hi")
 
     @pytest.mark.anyio
     async def test_send_withdraw(self) -> None:
         st, nc = self._nats_state()
-        await st.send_withdraw(target_user="eric", to_key=OTHER_KEY)
+        await st.send_withdraw(to_key=OTHER_KEY)
         _, payload = self._published(nc)
         assert payload["type"] == "withdraw"
         assert payload["to_key"] == OTHER_KEY

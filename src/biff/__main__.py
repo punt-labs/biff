@@ -352,11 +352,9 @@ def _render_connected_drain(
 async def _send_connected_line(
     ctx: CliContext,
     line: str,
-    target_user: str,
     display: str,
     *,
     to_key: str,
-    target_repo: str | None,
 ) -> bool:
     """Publish a typed talk line; return ``True`` when the loop should break.
 
@@ -372,20 +370,13 @@ async def _send_connected_line(
     """
     if line.lower() == "end":
         try:
-            await ctx.talk.send_end(
-                target_user=target_user, to_key=to_key, target_repo=target_repo
-            )
+            await ctx.talk.send_end(to_key=to_key)
         except (NatsError, TimeoutError, OSError):
             print(f"\r\033[KCould not reach {display} — end not sent.")
         return True
     if line:
         try:
-            await ctx.talk.send_message(
-                target_user=target_user,
-                to_key=to_key,
-                body=line,
-                target_repo=target_repo,
-            )
+            await ctx.talk.send_message(to_key=to_key, body=line)
         except (NatsError, TimeoutError, OSError):
             print(f"\r\033[KCould not reach {display} — not sent; try again.")
     return False
@@ -393,7 +384,6 @@ async def _send_connected_line(
 
 async def _repl_talk(
     ctx: CliContext,
-    target_user: str,
     display: str,
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
@@ -403,7 +393,6 @@ async def _repl_talk(
     repl_display: ReplDisplay,
     *,
     to_key: str,
-    target_repo: str | None = None,
     talk_sub: _ReplTalkSubscription | None = None,
 ) -> None:
     """Modal talk sub-loop — send lines to target, show incoming messages.
@@ -453,10 +442,8 @@ async def _repl_talk(
             if await _send_connected_line(
                 ctx,
                 result.strip(),
-                target_user,
                 display,
                 to_key=to_key,
-                target_repo=target_repo,
             ):
                 break
             _release_prompt(prompt_gate)
@@ -637,8 +624,6 @@ async def _withdraw_talk_invite(
     ctx: CliContext,
     target_user: str,
     target_key: str,
-    *,
-    target_repo: str | None = None,
 ) -> None:
     """Withdraw an outstanding outgoing invite and return to idle.
 
@@ -656,9 +641,7 @@ async def _withdraw_talk_invite(
     """
     ctx.talk.reset()
     try:
-        await ctx.talk.send_withdraw(
-            target_user=target_user, to_key=target_key, target_repo=target_repo
-        )
+        await ctx.talk.send_withdraw(to_key=target_key)
     except (NatsError, TimeoutError, OSError):
         # INFO, not WARNING: the CLI raises the stderr handler to WARNING, so a
         # WARNING here would dump this best-effort-publish traceback into the
@@ -688,15 +671,12 @@ async def _talk_handshake(
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
     *,
-    target_repo: str | None = None,
     talk_sub: _ReplTalkSubscription | None = None,
 ) -> bool:
     """Execute the talk handshake. Returns True if talk should proceed."""
     if responding:
         # We're accepting an existing invite. Send accept, enter talk.
-        await ctx.talk.send_accept(
-            target_user=target_user, to_key=target_key, target_repo=target_repo
-        )
+        await ctx.talk.send_accept(to_key=target_key)
         return True
 
     # We're initiating. Send invite and wait for accept.
@@ -704,12 +684,7 @@ async def _talk_handshake(
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
 
-    await ctx.talk.send_invite(
-        target_user=target_user,
-        to_key=target_key,
-        body=invite_body,
-        target_repo=target_repo,
-    )
+    await ctx.talk.send_invite(to_key=target_key, body=invite_body)
 
     if len(args) > 1:
         print(f"you> {invite_body}")
@@ -733,18 +708,14 @@ async def _talk_handshake(
             ctx, aqueue, notify_event, prompt_gate, talk_sub=talk_sub
         )
     except (asyncio.CancelledError, KeyboardInterrupt):
-        await _withdraw_talk_invite(
-            ctx, target_user, target_key, target_repo=target_repo
-        )
+        await _withdraw_talk_invite(ctx, target_user, target_key)
         raise
     if outcome is AcceptOutcome.NONE:
         print(f"Talk with {display} cancelled.")
-        await _withdraw_talk_invite(
-            ctx, target_user, target_key, target_repo=target_repo
-        )
+        await _withdraw_talk_invite(ctx, target_user, target_key)
         return False
     if outcome is AcceptOutcome.AUTO_ACCEPT and not await _publish_auto_accept(
-        ctx, target_user, target_key, target_repo=target_repo
+        ctx, target_key
     ):
         # The lower-key partner connects ONLY on receiving this accept — there is
         # no symmetric fallback on their side (talk.tex MutualAutoAccept) — so a
@@ -757,13 +728,7 @@ async def _talk_handshake(
     return True
 
 
-async def _publish_auto_accept(
-    ctx: CliContext,
-    target_user: str,
-    target_key: str,
-    *,
-    target_repo: str | None,
-) -> bool:
+async def _publish_auto_accept(ctx: CliContext, target_key: str) -> bool:
     """Publish the higher-key side's accept on a mutual-invite glare; retry once.
 
     On simultaneous mutual invites the ``keyBelow`` tie-break makes the higher
@@ -776,15 +741,13 @@ async def _publish_auto_accept(
     logger = logging.getLogger(__name__)
     for attempt in (1, 2):
         try:
-            await ctx.talk.send_accept(
-                target_user=target_user, to_key=target_key, target_repo=target_repo
-            )
+            await ctx.talk.send_accept(to_key=target_key)
         except (NatsError, TimeoutError, OSError):
             # INFO, not WARNING: the CLI floors stderr at WARNING, so a WARNING
             # here would dump this best-effort-publish traceback into the REPL.
             logger.info(
                 "talk auto-accept to %s failed (attempt %d/2)",
-                target_user,
+                target_key,
                 attempt,
                 exc_info=True,
             )
@@ -804,7 +767,6 @@ async def _run_talk_handshake(
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
     *,
-    target_repo: str | None,
     talk_sub: _ReplTalkSubscription | None = None,
 ) -> bool:
     """Set the talk plan, run the handshake, and roll back on a publish failure.
@@ -831,7 +793,6 @@ async def _run_talk_handshake(
             aqueue,
             notify_event,
             prompt_gate,
-            target_repo=target_repo,
             talk_sub=talk_sub,
         )
     except (NatsError, TimeoutError, OSError):
@@ -941,7 +902,7 @@ async def _handle_repl_talk(
     if pending is not None:
         resolve_user, _, resolve_tty = pending.session_key.partition(":")
     try:
-        target_key, display, target_repo = resolve_talk_target(
+        target_key, display = resolve_talk_target(
             all_sessions,
             resolve_user,
             resolve_tty,
@@ -982,7 +943,6 @@ async def _handle_repl_talk(
         aqueue,
         notify_event,
         prompt_gate,
-        target_repo=target_repo,
         talk_sub=talk_sub,
     ):
         if consumed is not None:
@@ -991,7 +951,6 @@ async def _handle_repl_talk(
 
     await _repl_talk(
         ctx,
-        user_target,
         display,
         aqueue,
         notify_event,
@@ -1000,7 +959,6 @@ async def _handle_repl_talk(
         repl_prompt,
         repl_display,
         to_key=target_key,
-        target_repo=target_repo,
         talk_sub=talk_sub,
     )
 
@@ -1023,16 +981,18 @@ class _TalkSubscription:
     """
 
     _relay: object
-    _user: str
+    _session_key: str
     _notify_event: asyncio.Event
     _handle: object | None
     _generation: int
     _latch: TalkNotifyLatch
 
-    def __new__(cls, relay: object, user: str, notify_event: asyncio.Event) -> Self:
+    def __new__(
+        cls, relay: object, session_key: str, notify_event: asyncio.Event
+    ) -> Self:
         self = super().__new__(cls)
         self._relay = relay
-        self._user = user
+        self._session_key = session_key
         self._notify_event = notify_event
         self._handle = None
         self._generation = 0
@@ -1055,7 +1015,7 @@ class _TalkSubscription:
         try:
             nc: NatsClient = await relay.get_nc()
             generation = relay.connection_generation
-            subject = relay.talk_notify_subject(self._user)
+            subject = relay.talk_notify_subject(self._session_key)
             handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
                 subject, cb=self._on_notify
             )
@@ -1112,7 +1072,7 @@ class _ReplTalkSubscription(_TalkSubscription):
     _ctx: CliContext
 
     def __new__(cls, ctx: CliContext, notify_event: asyncio.Event) -> Self:
-        self = super().__new__(cls, ctx.relay, ctx.user, notify_event)
+        self = super().__new__(cls, ctx.relay, ctx.session_key, notify_event)
         self._ctx = ctx
         return self
 
@@ -1734,7 +1694,7 @@ async def _talk_loop(
     bridge_task = asyncio.create_task(_bridge_stdin(input_queue, aqueue))
     notify_event = asyncio.Event()
 
-    sub = _TalkSubscription(relay, user, notify_event)
+    sub = _TalkSubscription(relay, session_key, notify_event)
     await sub.establish()
     try:
         await _talk_converse(
@@ -1818,7 +1778,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
     """Interactive talk loop using the shared CLI session lifecycle."""
     from biff.models import Message
     from biff.server.tools._session import resolve_talk_target
-    from biff.tty import parse_address
+    from biff.tty import build_session_key, parse_address
 
     user_target, tty_target = parse_address(to)
 
@@ -1834,9 +1794,13 @@ async def _talk_interactive(to: str, opening: str) -> None:
                 print(f"{user_target} is not online.")
                 return
 
-            # Talk is session-scoped: the address must name a session.
+            # Talk is session-scoped: the address must name a session.  Talk
+            # frames route on (org, identity); this standalone command instead
+            # carries lines over the durable inbox (interactive write), whose
+            # subject is repo-keyed (DES-030), so it resolves the peer's repo
+            # for cross-repo delivery separately from talk routing.
             try:
-                target, display, target_repo = resolve_talk_target(
+                target, display = resolve_talk_target(
                     all_sessions,
                     user_target,
                     tty_target,
@@ -1846,6 +1810,15 @@ async def _talk_interactive(to: str, opening: str) -> None:
             except ValueError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 raise typer.Exit(code=1) from None
+            peer = next(
+                (s for s in all_sessions if build_session_key(s.user, s.tty) == target),
+                None,
+            )
+            target_repo = (
+                peer.repo
+                if peer and peer.repo and peer.repo != ctx.config.repo_name
+                else None
+            )
 
             # Update plan to show talk activity.
             session = await ctx.relay.get_session(ctx.session_key)

@@ -93,8 +93,8 @@ def format_agent_drain(drain: AgentDrain) -> str:
 
 async def _resolve_target(
     state: ServerState, user: str, tty: str | None
-) -> tuple[str, str, str | None]:
-    """Resolve an address to ``(relay_key, display, target_repo)`` or raise."""
+) -> tuple[str, str]:
+    """Resolve an address to ``(relay_key, display)`` or raise."""
     all_sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
     if not any(s.user == user for s in all_sessions):
         msg = f"{user} is not online."
@@ -117,7 +117,6 @@ async def _accept_invite(
     relay_key: str,
     display: str,
     resolve_tty: str,
-    target_repo: str | None,
     message: str,
 ) -> str:
     """Accept a pending invite, refusing if it would clobber a live talk.
@@ -146,16 +145,9 @@ async def _accept_invite(
         partner=user, partner_tty=partner_tty, partner_key=relay_key
     )
     try:
-        await talk_state.send_accept(
-            target_user=user, to_key=relay_key, target_repo=target_repo
-        )
+        await talk_state.send_accept(to_key=relay_key)
         if message:
-            await talk_state.send_message(
-                target_user=user,
-                to_key=relay_key,
-                body=message,
-                target_repo=target_repo,
-            )
+            await talk_state.send_message(to_key=relay_key, body=message)
     except (NatsError, TimeoutError, OSError):
         # The accept publish failed transiently; roll the phase back to idle and
         # restore the consumed invite so the session is not stranded in a phantom
@@ -191,9 +183,7 @@ async def _do_talk(
     if pending is not None:
         resolve_user, _, resolve_tty = pending.session_key.partition(":")
     try:
-        relay_key, display, target_repo = await _resolve_target(
-            state, resolve_user, resolve_tty
-        )
+        relay_key, display = await _resolve_target(state, resolve_user, resolve_tty)
     except ValueError as exc:
         return str(exc)
 
@@ -215,7 +205,6 @@ async def _do_talk(
             relay_key=relay_key,
             display=display,
             resolve_tty=resolve_tty or "",
-            target_repo=target_repo,
             message=message,
         )
 
@@ -226,7 +215,6 @@ async def _do_talk(
         relay_key=relay_key,
         display=display,
         resolve_tty=resolve_tty or "",
-        target_repo=target_repo,
         message=message,
     )
 
@@ -239,7 +227,6 @@ async def _send_or_invite(
     relay_key: str,
     display: str,
     resolve_tty: str,
-    target_repo: str | None,
     message: str,
 ) -> str:
     """Send to the connected partner, or start a new invite (no pending accept).
@@ -257,12 +244,7 @@ async def _send_or_invite(
         if not message:
             return f"Already connected to {display}. Provide a message to send."
         try:
-            await talk_state.send_message(
-                target_user=user,
-                to_key=relay_key,
-                body=message,
-                target_repo=target_repo,
-            )
+            await talk_state.send_message(to_key=relay_key, body=message)
         except (NatsError, TimeoutError, OSError):
             await refresh_talk(mcp, state)
             return f"Could not reach {display} — message not sent; try again."
@@ -282,12 +264,7 @@ async def _send_or_invite(
         f"wants to talk — reply with: talk @{state.config.user}:{get_tty_name()}"
     )
     try:
-        await talk_state.send_invite(
-            target_user=user,
-            to_key=relay_key,
-            body=invite_body,
-            target_repo=target_repo,
-        )
+        await talk_state.send_invite(to_key=relay_key, body=invite_body)
     except (NatsError, TimeoutError, OSError):
         # The invite publish failed transiently; roll the phase back to idle so
         # the session is not stranded in a phantom INVITING state with no peer.
@@ -318,9 +295,7 @@ async def _publish_agent_auto_accept(state: ServerState, drain: AgentDrain) -> b
         return True
     for attempt in (1, 2):
         try:
-            await state.talk.send_accept(
-                target_user=notif.nfrom, to_key=notif.nfrom_key
-            )
+            await state.talk.send_accept(to_key=notif.nfrom_key)
         except (NatsError, TimeoutError, OSError):
             logger.info(
                 "agent auto-accept to %s failed (attempt %d/2)",
@@ -381,9 +356,9 @@ async def _do_talk_end(mcp: FastMCP[ServerState], state: ServerState) -> str:
     if isinstance(state.relay, NatsRelay):
         try:
             if was_inviting:
-                await talk_state.send_withdraw(target_user=partner, to_key=partner_key)
+                await talk_state.send_withdraw(to_key=partner_key)
             else:
-                await talk_state.send_end(target_user=partner, to_key=partner_key)
+                await talk_state.send_end(to_key=partner_key)
         except (NatsError, TimeoutError, OSError):
             # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
             # so a WARNING here would dump this best-effort-publish traceback

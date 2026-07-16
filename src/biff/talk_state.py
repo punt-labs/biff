@@ -587,55 +587,23 @@ class TalkState:
 
     # -- Send (ephemeral core-NATS publish — talk.tex Send*/publish side effects) --
 
-    async def send_invite(
-        self,
-        *,
-        target_user: str,
-        to_key: str,
-        body: str = "",
-        target_repo: str | None = None,
-    ) -> None:
-        """Publish a session-scoped invite frame."""
-        await self._publish("invite", target_user, to_key, body, target_repo)
+    async def send_invite(self, *, to_key: str, body: str = "") -> None:
+        """Publish a session-scoped invite frame to the peer identity *to_key*."""
+        await self._publish("invite", to_key, body)
 
-    async def send_accept(
-        self,
-        *,
-        target_user: str,
-        to_key: str,
-        target_repo: str | None = None,
-    ) -> None:
-        """Publish a session-scoped accept frame."""
-        await self._publish("accept", target_user, to_key, "", target_repo)
+    async def send_accept(self, *, to_key: str) -> None:
+        """Publish a session-scoped accept frame to the peer identity *to_key*."""
+        await self._publish("accept", to_key, "")
 
-    async def send_message(
-        self,
-        *,
-        target_user: str,
-        to_key: str,
-        body: str,
-        target_repo: str | None = None,
-    ) -> None:
+    async def send_message(self, *, to_key: str, body: str) -> None:
         """Publish a session-scoped message frame (body truncated to the limit)."""
-        await self._publish("message", target_user, to_key, body, target_repo)
+        await self._publish("message", to_key, body)
 
-    async def send_end(
-        self,
-        *,
-        target_user: str,
-        to_key: str,
-        target_repo: str | None = None,
-    ) -> None:
-        """Publish a session-scoped end (hangup) frame."""
-        await self._publish("end", target_user, to_key, "", target_repo)
+    async def send_end(self, *, to_key: str) -> None:
+        """Publish a session-scoped end (hangup) frame to the peer *to_key*."""
+        await self._publish("end", to_key, "")
 
-    async def send_withdraw(
-        self,
-        *,
-        target_user: str,
-        to_key: str,
-        target_repo: str | None = None,
-    ) -> None:
+    async def send_withdraw(self, *, to_key: str) -> None:
         """Publish a session-scoped withdraw frame (ntWithdraw — cancel an invite).
 
         Sent when the inviter abandons an outstanding invite (talk_end while
@@ -643,17 +611,15 @@ class TalkState:
         (notification.tex WithdrawArrive), so the marker reverts cleanly rather
         than waiting for the time-to-live sweep.
         """
-        await self._publish("withdraw", target_user, to_key, "", target_repo)
+        await self._publish("withdraw", to_key, "")
 
-    async def _publish(
-        self,
-        ntype: str,
-        target_user: str,
-        to_key: str,
-        body: str,
-        target_repo: str | None,
-    ) -> None:
-        """Publish one ephemeral talk frame; no-op for non-NATS relays.
+    async def _publish(self, ntype: str, to_key: str, body: str) -> None:
+        """Publish one ephemeral talk frame to the peer identity *to_key*.
+
+        Routes on ``(myOrg, to_key)`` = ``subjectOf(peer)`` (talk.tex): the
+        organization is our own, and the peer's globally-unique identity is
+        the frame's ``to_key`` — no repository is consulted or persisted
+        (biff-e9u).  No-op for non-NATS relays.
 
         Every frame body is truncated to ``MAX_BODY_LEN`` here — the single
         DoS/footprint bound — so an oversized invite or accept body (both carry
@@ -674,7 +640,7 @@ class TalkState:
                 "to_key": to_key,
             }
         ).encode()
-        subject = relay.talk_notify_subject(target_user, target_repo=target_repo)
+        subject = relay.talk_notify_subject(to_key)
         await nc.publish(subject, payload)
 
     def _drain_queued(self) -> list[QueuedNotification]:

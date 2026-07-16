@@ -450,7 +450,6 @@ class TestRunTalkHandshakeRollback:
             asyncio.Queue(),
             asyncio.Event(),
             threading.Event(),
-            target_repo=None,
         )
 
         assert proceed is False
@@ -507,7 +506,6 @@ class TestReplTalkSendResilience:
         await asyncio.wait_for(
             _repl_talk(
                 ctx,
-                "eric",
                 "eric:tty2",
                 aqueue,
                 asyncio.Event(),
@@ -516,7 +514,6 @@ class TestReplTalkSendResilience:
                 "kai> ",
                 ReplDisplay(),
                 to_key="eric:def456",
-                target_repo=None,
             ),
             timeout=5.0,
         )
@@ -644,7 +641,7 @@ class TestPublishAutoAccept:
         ctx = MagicMock()
         ctx.talk = talk
 
-        ok = await _publish_auto_accept(ctx, "eric", "eric:def456", target_repo=None)
+        ok = await _publish_auto_accept(ctx, "eric:def456")
 
         assert ok is False
         assert get_nc.await_count == 2  # published once, retried once
@@ -655,7 +652,7 @@ class TestPublishAutoAccept:
         ctx = MagicMock()
         ctx.talk = talk
 
-        ok = await _publish_auto_accept(ctx, "eric", "eric:def456", target_repo=None)
+        ok = await _publish_auto_accept(ctx, "eric:def456")
 
         assert ok is True
         assert get_nc.await_count == 1  # no retry on success
@@ -698,7 +695,6 @@ class TestPublishAutoAccept:
             asyncio.Queue(),
             notify,
             threading.Event(),
-            target_repo=None,
         )
 
         out = capsys.readouterr().out.lower()
@@ -832,7 +828,6 @@ class TestModalTalkReconcile:
         task = asyncio.create_task(
             _repl_talk(
                 ctx,
-                "eric",
                 "eric:tty2",
                 aqueue,
                 asyncio.Event(),
@@ -930,7 +925,7 @@ class TestStandaloneTalkReconcile:
 
     @staticmethod
     async def _bound_sub(relay: MagicMock) -> _TalkSubscription:
-        sub = _TalkSubscription(relay, "kai", asyncio.Event())
+        sub = _TalkSubscription(relay, "kai:kaihex01", asyncio.Event())
         await sub.establish()  # binds generation 1, first subscribe
         return sub
 

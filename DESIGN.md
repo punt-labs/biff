@@ -5159,3 +5159,88 @@ The recurring rule holds: when a connection-lifecycle defect class recurs, exten
 the Z model — the code conforms to the proven transition, it does not lead.
 Cross-repo `target_repo` threading for the outbound publishes is the known
 residual, tracked as biff-e9u.
+
+## DES-048: Talk Routes on the Session Identity — Repo and Org Are Visibility, Not Routing
+
+**Date:** 2026-07-16
+**Status:** SETTLED
+**Topic:** What coordinate a talk frame is addressed by; why cross-repo (and
+cross-org) talk stranded, and why the fix is to *remove* a coordinate, not add one
+**Bead:** biff-e9u
+**Related:** DES-035 (globally-unique tty), DES-034 (cross-user/org visibility),
+DES-043/045/046 (talk state, consent boundary), ``docs/talk.tex``,
+``docs/session-model.tex``
+
+### Context
+
+Talk named its peer by the globally-unique identity ``@user:tty`` (DES-035: tty
+names are reserved atomically across all repos, so the identity denotes one
+session regardless of repo or org). But the NATS notify subject it published to
+was keyed on the **repository**: ``{prefix}.{repo}.talk.notify.{user}``. A reply
+(accept / message / end / withdraw) was published on the *sender's* repo subject
+while the peer subscribed on *theirs*, so any talk that crossed a repo boundary
+was published to a subject the peer never subscribed to — core NATS drops a
+publish with no subscriber as a silent no-op, so the send "succeeded" and the
+frame was never delivered. The invite (target repo resolved at send time) arrived;
+every reply stranded until TTL. Cross-repo talk — the primary reason biff exists
+(``prfaq``: "coordinate with agents in other repos") — never worked.
+
+### The wrong instinct, twice
+
+The first fix threaded the *partner's* repo through ``TalkState`` and routed
+replies to ``subjectOf(partnerKey)`` — keeping repo in the subject and persisting
+the peer's repo. The second narrowed the subject to ``(org, identity)``, org being
+the trust boundary. Both were **over-scoping**: they kept a partition coordinate in
+a route whose address — ``@user:tty`` — is already globally unique. The org variant
+was proven (ProB) to still strand a *visible* cross-org peer: ``peers``/``orgs``
+config puts another org's repo in ``visible_repos`` (visibility is cross-user, never
+repo- or org-scoped — DES-034), so you can *see* and *address* a peer in another
+org, but an org-keyed subject put you in different namespaces and the reply stranded
+— the identical failure class one namespace up.
+
+### Decision
+
+**The subject is the identity and nothing else:** ``subjectOf k = k`` →
+``{prefix}.talk.notify.{user}:{tty}``. Neither repository nor organization appears
+in the route. Both are **visibility/presence attributes**, not routing coordinates.
+
+- **Routing** is on the globally-unique identity. Both sides compute the same
+  subject for a given identity, independent of their own repo or org, so a reply
+  always reaches the addressed ``@user:tty`` wherever that session runs.
+- **Visibility is the only gate.** You can talk to whomever your ``peers``/``orgs``
+  settings let you *see*, across repos and orgs; you cannot talk to a peer you
+  cannot see — ``_resolve_target`` resolves only sessions in ``visible_repos`` and
+  refuses an unresolvable target. No org or repo check is layered on top; the
+  settings already decide who is reachable.
+- **Consent is unchanged (DES-046)** — it keys on the ephemeral session key,
+  orthogonal to the subject. The subject was never the security boundary; per-org
+  NATS credentials are a future concern and will design a subject namespace
+  *with* the credential ACLs when they land. Adding one now bought no isolation on
+  the shared relay (flat credentials) and broke cross-org visible-peer talk.
+
+### Why model-first mattered
+
+``docs/talk.tex`` gained the addressing layer both it and ``session-model.tex``
+had marked "not covered." The delivery invariant — a reply reaches the addressed
+identity for any *visible* peer regardless of repo **or** org — is model-checked
+(ProB), and **both** defective disciplines are reproduced as reachable
+counterexamples that strand a visible peer (repo-keyed and org-keyed alike);
+identity routing makes the strand unreachable across the state space. The org
+over-scoping was caught by the model + an adversarial silent-failure/wire review
+before it shipped, not after. ``session-model.tex`` owns the entities and the
+``@user:tty``/visibility resolution; ``talk.tex`` owns the routing discipline;
+``srepo`` and its org are visibility attributes in both.
+
+### Outcome
+
+Repo and org are removed from the talk route (a net code *deletion* — the
+``target_repo`` plumbing and the org derivation are gone). Verified: ``fuzz`` +
+ProB on the spec; ``make check`` (1738); a NATS E2E driving a full cross-repo and
+a full cross-org talk (invite → accept → message both ways → end / withdraw),
+red under both repo-keyed and org-keyed routing and green under identity; the
+hosted-NATS suite; and a live cross-org delivery on the hosted Synadia relay in
+both directions. The lesson: when a route strands a peer the caller can legitimately
+address, the fix is usually to *remove* the partition coordinate that does not
+belong in the address — not to thread it further. Cross-repo/cross-org ``/write``
+mail stays on its own repo-partitioned durable-inbox path (DES-030); only the
+ephemeral talk-notify subject changed.
