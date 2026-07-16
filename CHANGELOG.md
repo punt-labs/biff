@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Talk works across repositories and organizations — routed on the session identity, not the repo (biff-e9u, DES-048).** The talk NATS notify subject was keyed on the repository (`{prefix}.{repo}.talk.notify.{user}`), so a reply (accept / message / end / withdraw) published to the *sender's* repo while the peer subscribed on *theirs* — any talk that crossed a repo boundary silently stranded until TTL. `/talk @user:tty` now routes on the globally-unique session identity alone (`{prefix}.talk.notify.{user}:{tty}`, DES-035); neither repository nor organization is a routing coordinate — both are visibility attributes. A session reaches any peer its `peers`/`orgs` settings make visible, across repos and orgs, and cannot talk to a peer it cannot see (resolution refuses an unresolvable target — the only gate). The routing is modelled and model-checked in `docs/talk.tex`: the delivery invariant proves a reply reaches the addressed `@user:tty` regardless of repo or org, with **both** the repo-keyed and org-keyed schemes reproduced as ProB counterexamples that strand a *visible* peer. Consent is unchanged — it keys on the ephemeral session key (DES-046), orthogonal to the subject. Verified live cross-org on the hosted relay.
+
 ## [1.11.0] - 2026-07-16
 
 ### Added
