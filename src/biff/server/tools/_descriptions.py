@@ -658,31 +658,33 @@ async def poll_inbox(
             else:
                 await asyncio.sleep(interval)
 
-            # Keep the always-on talk SUB bound to the live client. This retries
-            # a failed initial subscribe (NATS down at startup) AND re-subscribes
-            # after a client replacement (_force_reconnect / _on_closed), whose
-            # new client carries no SUB — without this the talk channel is
-            # silently dead for the rest of the server's lifetime. Cheap: a
-            # generation compare when nothing changed.
-            talk_sub = await _reconcile_talk_sub(state, talk_sub, talk_latch)
-
             # Transition: active → napping (connection stays open)
             if not tracker.napping and tracker.idle_seconds() > idle_threshold:
                 tracker.enter_nap()
 
-            # Napping: reduced-frequency polling (KV watcher is primary for wall)
-            if tracker.napping:
-                if tracker.seconds_since_nap_poll() < nap_interval:
-                    continue
-                last_count, last_wall, last_talk = await _safe_tick(
-                    mcp, state, last_count, last_wall, last_talk
-                )
-                tracker.record_nap_poll()
+            # Napping: reduced-frequency polling (KV watcher is primary for wall).
+            # A cheap no-op nap tick makes no relay call, so connection_generation
+            # cannot advance — skip both the tick and the reconcile below.
+            if tracker.napping and tracker.seconds_since_nap_poll() < nap_interval:
                 continue
 
             last_count, last_wall, last_talk = await _safe_tick(
                 mcp, state, last_count, last_wall, last_talk
             )
+            if tracker.napping:
+                tracker.record_nap_poll()
+
+            # Keep the always-on talk SUB bound to the live client — AFTER the
+            # tick, not before. The tick's relay calls are what can trigger the
+            # wedge teardown (_force_reconnect / _on_closed) that advances
+            # connection_generation and orphans the SUB on the dead client.
+            # Reconciling here rebinds a same-tick client swap immediately;
+            # reconciling first would defer it a whole poll interval (minutes of
+            # dead talk on the agent-facing MCP path). Also retries a failed
+            # initial subscribe (NATS down at startup) and re-subscribes after a
+            # client replacement whose new client carries no SUB. Cheap: a
+            # generation compare when nothing changed.
+            talk_sub = await _reconcile_talk_sub(state, talk_sub, talk_latch)
     finally:
         if talk_sub is not None:
             with suppress(Exception):

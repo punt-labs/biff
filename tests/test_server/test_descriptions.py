@@ -499,6 +499,60 @@ class TestPollInbox:
         # Establishing the subscription is proven by its clean teardown on exit.
         fake_sub.unsubscribe.assert_awaited_once()
 
+    async def test_generation_bump_during_tick_reconciles_same_tick(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A generation bump inside ``_safe_tick`` is rebound the SAME tick.
+
+        The tick's relay calls are what trigger the wedge teardown that advances
+        ``connection_generation``.  Reconciling AFTER the tick rebinds the SUB in
+        the same iteration; reconciling before defers it a full poll interval —
+        minutes of dead talk on the agent-facing MCP path.
+
+        The tick sets the shutdown event, so the loop exits at the top of the
+        NEXT iteration.  With the reconcile after the tick the re-subscribe to
+        the bumped generation still runs before that exit; with the reconcile
+        before the tick it never runs — the discriminating observation.
+        """
+        gen = [0]
+        events: list[tuple[str, int]] = []
+        shutdown = asyncio.Event()
+
+        def _gen(_state: ServerState) -> int:
+            return gen[0]
+
+        async def fake_subscribe(
+            _state: ServerState, _latch: TalkResubscribeLatch
+        ) -> TalkSubscription:
+            events.append(("subscribe", gen[0]))
+            return TalkSubscription(AsyncMock(), gen[0])
+
+        async def fake_tick(
+            _mcp: FastMCP[ServerState],
+            _state: ServerState,
+            last_count: int,
+            last_wall: tuple[str, str],
+            last_talk: tuple[tuple[str, ...], int, str],
+        ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
+            events.append(("tick", gen[0]))
+            if gen[0] == 0:
+                gen[0] = 1  # the tick's relay calls trigger _force_reconnect
+                shutdown.set()  # stop after this iteration completes
+            return last_count, last_wall, last_talk
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", fake_subscribe)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _gen)
+        monkeypatch.setattr(_descriptions, "_safe_tick", fake_tick)
+
+        mcp = create_server(state_with_path)
+        await poll_inbox(
+            mcp, state_with_path, shutdown=shutdown, interval=self._FAST_INTERVAL
+        )
+
+        assert ("subscribe", 1) in events  # rebound to the bumped generation
+        # …and rebound before any further tick — same iteration as the bump.
+        assert events == [("subscribe", 0), ("tick", 0), ("subscribe", 1)]
+
     async def test_cancellation_is_clean(self, state_with_path: ServerState) -> None:
         """Cancelling the poller task does not raise."""
         mcp = create_server(state_with_path)
