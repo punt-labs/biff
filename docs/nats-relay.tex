@@ -74,6 +74,27 @@ to be a reachable terminal state, and that terminal state
 \emph{is} biff-tww.  With either recovery transition present,
 half-open is deadlock-free.
 
+A third invariant, added here, concerns a resource the earlier model
+did not track at all: the always-on core-NATS talk subscription
+(biff-9la).  The relay opens one long-lived SUB on the talk inbox and
+holds it for the life of the process.  A core-NATS subscription is
+bound to the particular client that created it and dies with that
+client, so the proactive force-reconnect ($ForceReconnect$, biff-3hp),
+which discards the client wholesale, silently orphans it: presence and
+wall recover on the fresh connection, but talk stays dead for the rest
+of the session because nothing re-opens the SUB.  This is the exact
+converse of nats-py's in-place reconnect, which keeps the client and
+replays its subscriptions, so the SUB must be \emph{preserved} there
+and \emph{re-established} after a force-reconnect --- the same
+distinction the handle-rebuild machinery already draws, but for a
+resource the earlier model omitted.  The specification adds the
+subscription's generation binding as state and proves a liveness
+property: a live connection whose talk SUB is stranded on a superseded
+generation always eventually re-binds it.  The defect is reproduced as
+a ProB counterexample against the pre-fix ``re-subscribe only when the
+handle is \texttt{None}'' guard, and the generation-tracked guard makes
+the stranded state recover.
+
 %%----------------------------------------------------------------------
 \section{Basic Types}
 %%----------------------------------------------------------------------
@@ -186,7 +207,8 @@ alongside the live one.
   streamsProvisioned : ZBOOL \\
   namesProvisioned : ZBOOL \\
   wtmpAvailable : ZBOOL \\
-  generation : \nat
+  generation : \nat \\
+  talkSubGen : \nat
   \where
   connState \neq connected \implies
   kvProvisioned = zfalse \land
@@ -198,7 +220,8 @@ alongside the live one.
   namesProvisioned = ztrue \\
   connState \in \{ connected, reconnecting, halfOpen \} \implies
   generation \geq 1 \\
-  generation \leq maxGeneration
+  generation \leq maxGeneration \\
+  talkSubGen \leq generation
 \end{schema}
 
 This is the generalised handle-validity invariant: valid
@@ -245,6 +268,34 @@ on connection state: a stale settle changes nothing, so a spurious
 $owner?$ cannot corrupt anything.  The invariant also guards against a
 future edit that reaches $connected$ without a dial.
 
+$talkSubGen$ is the generation to which the always-on core-NATS talk
+subscription is currently bound.  The relay opens one long-lived SUB on
+the talk inbox (biff-9la) and holds it for the life of the process; a
+core-NATS subscription is bound to the \emph{particular} client that
+created it, and so it dies with that client.  A value of $0$ means no
+SUB has been established on any dial --- the initial state, and the
+window between a fresh connect and the poller's first subscribe.  A
+value $g \geq 1$ means the live SUB was subscribed on the client of
+generation $g$.  The subscription is \emph{current} exactly when
+$talkSubGen = generation$ and \emph{stranded} --- bound to a client the
+rebuild has already replaced, so no talk message will ever arrive ---
+when $talkSubGen < generation$.  The invariant $talkSubGen \leq
+generation$ records the one thing that can never happen: a SUB cannot be
+bound to a client that was never dialled.  It is the exact analogue of
+the handle-provisioned flags, but where those are cleared and
+re-established on \emph{every} reconnect, the talk SUB is preserved
+across nats-py's in-place reconnect (same client, $generation$
+unchanged, SUBs replayed) and re-established only when a fresh dial
+advances $generation$ past $talkSubGen$.  This is the distinction the
+biff-9la bug missed: a force-reconnect (biff-3hp) replaces the client
+and orphans the SUB, and unless the poller re-subscribes on the new
+generation, talk dies silently for the rest of the session.  The
+stranded state $connState = connected \land talkSubGen < generation$ is
+reachable and legal --- it is the transient window before the poller
+ticks --- so the property that forbids the bug is not a state invariant
+but the liveness obligation that the stranding is always eventually
+lifted (\S\ref{sec:modelcheck}).
+
 \begin{schema}{InitConnection}
   Connection'
   \where
@@ -253,7 +304,8 @@ future edit that reaches $connected$ without a dial.
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
-  generation' = 0
+  generation' = 0 \\
+  talkSubGen' = 0
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -276,7 +328,8 @@ future edit that reaches $connected$ without a dial.
         generation' = generation + 1 ) \lor
       ( generation = maxGeneration \land
         generation' = generation ) ) ) \lor \\
-  ( connState = connected \land generation' = generation )
+  ( connState = connected \land generation' = generation ) \\
+  talkSubGen' = talkSubGen
 \end{schema}
 
 The relay's lazy connect (\texttt{\_ensure\_connected}).  It is
@@ -294,7 +347,18 @@ Nor is it enabled from $reconnecting$ (nats-py owns that window;
 provisioning would block until reconnect completes, bounded by
 \texttt{\_CONNECT\_PROVISION\_TIMEOUT}, biff-wr3) or from $closed$
 (no reconnection after close).  $wtmpAvailable$ is preserved ---
-it only changes during provisioning.
+it only changes during provisioning.  $talkSubGen$ is likewise
+preserved: dialling a fresh client bumps $generation$ but does
+\emph{not} re-open the talk SUB.  This is deliberate, and it is where
+the stranding becomes observable.  When the slow path fires from
+$disconnected$, $generation$ advances while $talkSubGen$ stays on the
+old value, so the post-connect state is $connState = connected$ with
+$talkSubGen < generation$ --- a live connection whose talk SUB is bound
+to the client that was just discarded.  Re-establishing the SUB is not
+the connect's job but the poller's, modelled by $Subscribe$ below; the
+model thus separates ``the client came back'' from ``the talk SUB was
+rebound to it,'' which is exactly the separation the biff-9la bug
+elided.
 
 \subsection{Disconnect (Reversible)}
 
@@ -307,7 +371,8 @@ it only changes during provisioning.
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
-  generation' = generation
+  generation' = generation \\
+  talkSubGen' = talkSubGen
 \end{schema}
 
 The relay's explicit, reversible \texttt{disconnect()}: it acts
@@ -334,7 +399,8 @@ afresh.
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
-  generation' = generation
+  generation' = generation \\
+  talkSubGen' = talkSubGen
 \end{schema}
 
 Permanent shutdown, reachable from any \emph{definite} transport
@@ -358,7 +424,8 @@ an idempotent self-loop, which keeps $closed$ deadlock-free.
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
-  generation' = generation
+  generation' = generation \\
+  talkSubGen' = talkSubGen
 \end{schema}
 
 Clears cached handles without changing the transport state
@@ -379,6 +446,7 @@ so it must not be modelled as an escape.
   \where
   connState = connected \\
   generation' = generation \\
+  talkSubGen' = talkSubGen \\
   ( result! = reqOk \land
     connState' = connected \land
     kvProvisioned' = ztrue \land
@@ -425,7 +493,8 @@ a round-trip never dials a new client.
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
-  generation' = generation
+  generation' = generation \\
+  talkSubGen' = talkSubGen
 \end{schema}
 
 The keepalive-driven recovery transition.
@@ -454,7 +523,8 @@ deadlock-free.
   streamsProvisioned' = ztrue \\
   namesProvisioned' = ztrue \\
   wtmpAvailable' = wtmpAvailable \\
-  generation' = generation
+  generation' = generation \\
+  talkSubGen' = talkSubGen
 \end{schema}
 
 nats-py's background reconnect succeeds and fires
@@ -464,6 +534,17 @@ handles.  $generation$ is unchanged: nats-py reconnects the
 so the per-dial token does not advance.  This closes the recovery path
 $connected \to halfOpen \to reconnecting \to connected$, so no
 reachable state is stuck in $halfOpen$.
+
+$talkSubGen$ is preserved for the same reason: the SUB was created on
+this very client, and nats-py replays it on reconnect.  Because
+$generation$ is unchanged, a SUB that was current before the wedge
+($talkSubGen = generation$) is current after it, with no re-subscribe
+required.  This is the load-bearing contrast with $ForceReconnect$:
+the keepalive path keeps the client, so the talk SUB survives; the
+force-close path discards it, so the talk SUB must be rebuilt.  The
+model must not re-subscribe here --- doing so would be a redundant SUB
+on a client that already carries one --- and, equally, must not clear
+$talkSubGen$, which would strand a SUB that is in fact still live.
 
 \subsection{Force Reconnect (Proactive Wedge Teardown)}
 
@@ -476,7 +557,8 @@ reachable state is stuck in $halfOpen$.
   streamsProvisioned' = zfalse \\
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
-  generation' = generation
+  generation' = generation \\
+  talkSubGen' = talkSubGen
 \end{schema}
 
 The proactive escape from the wedge (\texttt{\_force\_reconnect},
@@ -523,6 +605,22 @@ $WedgeDetected$ --- not a component of $Connection$.  The
 handle-validity invariant is preserved: $ForceReconnect$ lands in
 $disconnected$ with every handle cleared, so no valid handle
 survives the wedge.
+
+The talk SUB does \emph{not} survive it either, and this is the crux
+of biff-9la.  \texttt{safe\_close(nc)} tears down the client on which
+the always-on talk subscription was opened, so the SUB is dead.  Yet
+$ForceReconnect$ leaves $talkSubGen$ unchanged --- and rightly so:
+$generation$ has not advanced yet (it advances only on the subsequent
+$EnsureConnected$ dial), so $talkSubGen = generation$ still holds and
+the SUB is not yet formally stranded.  The stranding crystallises one
+step later, when $EnsureConnected$ dials the replacement client and
+bumps $generation$ past $talkSubGen$.  The full picture is thus:
+$ForceReconnect$ kills the SUB's client but not the bookkeeping;
+$EnsureConnected$ makes the now-orphaned bookkeeping visible as
+$talkSubGen < generation$; and only $Subscribe$ repairs it.  A code
+path that stops after $EnsureConnected$ --- restoring JetStream and KV
+but never re-opening the talk SUB --- is precisely the biff-9la
+defect: presence and wall recover, talk does not.
 
 \subsection{Stale Request Timeout (Superseded-Generation No-Op)}
 
@@ -584,6 +682,72 @@ $disconnected$, an unmodelled no-op.  ($reconnecting$ is nats-py's
 in-place reconnect of the \emph{same} client and generation, so
 \texttt{self.\_nc is owner} still holds; it is a current settle, not a
 dropped-client window.)
+
+\subsection{Subscribe (Talk SUB Bind / Rebind)}
+
+\begin{schema}{Subscribe}
+  \Delta Connection
+  \where
+  connState = connected \\
+  talkSubGen < generation \\
+  talkSubGen' = generation \\
+  connState' = connState \\
+  kvProvisioned' = kvProvisioned \\
+  streamsProvisioned' = streamsProvisioned \\
+  namesProvisioned' = namesProvisioned \\
+  wtmpAvailable' = wtmpAvailable \\
+  generation' = generation
+\end{schema}
+
+The poller's re-subscribe transition
+(\texttt{poll\_inbox} / \texttt{\_active\_tick}): on each tick, once
+the connection is $connected$, the poller compares the generation the
+talk SUB is bound to against the current connection generation and, if
+they differ, opens a fresh SUB on the live client and records the new
+binding.  This one operation covers three cases the code treats
+uniformly, because $talkSubGen < generation$ is their common
+signature.  The \emph{initial} subscribe: after the first dial,
+$talkSubGen = 0 < generation = 1$, and the first tick binds the SUB to
+generation $1$.  The \emph{re-subscribe} after a force-reconnect: a
+fresh dial has advanced $generation$ past the stranded $talkSubGen$,
+and the tick rebinds to the new generation.  The idempotent
+\emph{no-op}: when $talkSubGen = generation$ already, the guard fails
+and $Subscribe$ is not enabled --- the poller does not open a second,
+redundant SUB on a client that already carries one.  The
+post-condition $talkSubGen' = generation$ is the whole repair: it moves
+the connection from stranded to current in a single step, and it is the
+transition the code must implement for the biff-9la fix to hold.  Every
+other component of $Connection$ is preserved; a re-subscribe touches
+the talk SUB and nothing else.
+
+\subsection{Subscribe Retry (Transient Subscribe Failure)}
+
+\begin{schema}{SubscribeRetry}
+  \Xi Connection
+  \where
+  connState = connected \\
+  talkSubGen < generation
+\end{schema}
+
+A subscribe attempt can fail: \texttt{subscribe} returns without
+establishing a SUB (the JetStream/core request times out, or the client
+is momentarily unhealthy), so the binding is not advanced and the next
+tick tries again.  $SubscribeRetry$ is the $\Xi Connection$ no-op that
+models this outcome --- it is enabled in exactly the stranded state
+$Subscribe$ is enabled in, and leaves every component, $talkSubGen$
+included, unchanged.  It exists for two reasons.  First, without it the
+model would assert that a re-subscribe \emph{always} succeeds on the
+first attempt, which the code cannot guarantee; modelling the failure
+explicitly is what makes the talk-liveness property a genuine liveness
+claim (the SUB is \emph{eventually} rebound) rather than a one-step
+safety claim.  Second, it closes the audit: the buggy behaviour ---
+retrying forever without ever succeeding --- is now a modelled
+transition, so a test partition covers the failure branch rather than
+leaving it a $GAP$.  Because $Subscribe$ is enabled alongside it in the
+same state, $SubscribeRetry$ adds a stalling path but never removes the
+escaping one: the liveness proof ($EF\ talkSubGen = generation$) holds
+because \emph{some} path rebinds, even though this operation offers a
+path that does not.
 
 %%----------------------------------------------------------------------
 \section{Session Presence}
@@ -819,8 +983,8 @@ streaming watcher, which is consistent --- a wedge manifests to
 the watcher as a $weError$ and drives it through $HandleError$.
 
 The composed initial state is: $connState = disconnected$ with no
-handles ($InitConnection$), an empty session store, and an $idle$
-watcher.  $InitConnection$ is the sole initialisation schema so
+handles and no talk subscription ($talkSubGen = 0$, $InitConnection$),
+an empty session store, and an $idle$ watcher.  $InitConnection$ is the sole initialisation schema so
 that the model checker explores the $Connection$ lifecycle as a
 single, well-posed state machine; the session and watcher
 components are exercised as connection-gated operations rather
@@ -868,6 +1032,37 @@ verified by model checking with probcli (\texttt{z-spec test}):
     fresh dial ($EnsureConnected$ from $disconnected$), never on
     nats-py's in-place $Reconnect$, mirroring the relay's
     \texttt{\_generation} token.
+
+  \item \textbf{Talk-subscription liveness (biff-9la)}: the always-on
+    talk SUB is tracked by $talkSubGen$, the generation it is bound to,
+    with the state invariant $talkSubGen \leq generation$ (a SUB is
+    never bound to a client never dialled).  A live connection whose SUB
+    is stranded on a superseded generation always eventually re-binds it:
+
+    \begin{quote}
+      $AG\,(\,connState \neq closed \land talkSubGen < generation
+      \;\Rightarrow\; EF\;talkSubGen = generation\,)$
+    \end{quote}
+
+    probcli reports this CTL formula \textbf{TRUE} (the restriction to
+    $connState = connected$ is TRUE as well; only the terminal $closed$
+    state, in which the connection is permanently shut down and carries
+    no talk obligation, is excluded).  The escape is $Subscribe$
+    (guard $talkSubGen < generation$, effect $talkSubGen' = generation$),
+    the poller's generation-tracked re-subscribe; it is preserved
+    unchanged across nats-py's in-place $Reconnect$ (same client, same
+    generation, SUB replayed) and re-established after $ForceReconnect$
+    once the replacement dial advances $generation$ past $talkSubGen$.
+    The property is a genuine liveness claim, not a one-step safety
+    claim: $SubscribeRetry$ models a subscribe that fails and is retried
+    next tick, so the SUB is \emph{eventually}, not \emph{immediately},
+    re-bound.  The pre-fix defect is reproduced by replacing the
+    $Subscribe$ guard with the ``re-subscribe only when the handle is
+    \texttt{None}'' condition $talkSubGen = 0$: the same CTL formula
+    then goes \textbf{FALSE}, with probcli returning the counterexample
+    $connState = connected \land generation = 3 \land talkSubGen = 2$
+    --- a live client whose talk SUB is stuck on the superseded
+    generation $2$, never re-opened.  That state \emph{is} biff-9la.
 
   \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
     $streaming$, never to $idle$ or $stopped$.  The watcher
