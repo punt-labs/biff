@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -844,7 +844,7 @@ async def _register_companion(state: ServerState) -> None:
 @asynccontextmanager
 async def _active_lifespan(
     mcp: FastMCP[ServerState], state: ServerState
-) -> AsyncIterator[ServerState]:
+) -> AsyncGenerator[ServerState]:
     """Lifespan for an active (non-dormant) server.
 
     Registers signal handlers, starts background tasks, and manages
@@ -985,7 +985,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     """
 
     @asynccontextmanager
-    async def lifespan(mcp: FastMCP[ServerState]) -> AsyncIterator[ServerState]:
+    async def lifespan(mcp: FastMCP[ServerState]) -> AsyncGenerator[ServerState]:
         if state.dormant:
             try:
                 yield state

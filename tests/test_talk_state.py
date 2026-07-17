@@ -20,13 +20,12 @@ import pytest
 from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay, Relay
 from biff.talk_state import (
-    MAX_BODY_LEN,
     MAX_PENDING_INVITES,
     MAX_TALK_QUEUE,
     PENDING_INVITE_TTL,
     TalkState,
 )
-from biff.talk_types import AcceptOutcome, TalkPhase
+from biff.talk_types import MAX_BODY_LEN, AcceptOutcome, TalkPhase
 
 MY_USER = "kai"
 MY_TTY = "abc12345"

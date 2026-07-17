@@ -9,11 +9,15 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 
+from biff._formatting import TABLE_WIDTH
 from biff.formatting import (
+    _TALK_WRAP_MIN,
     format_finger,
     format_finger_multi,
     format_last,
     format_read,
+    format_talk_end,
+    format_talk_line,
     format_wall,
     format_who,
     pair_events,
@@ -310,3 +314,97 @@ class TestRenderSanitization:
         out = format_last([(login, None)], {"evil:tty9"})
         assert "\x1b[2K" not in out
         assert re.search(r"ev\[2Kil", out) is not None
+
+
+class TestFormatTalkLine:
+    """`format_talk_line` renders talk in the ▶ who/read/wall idiom (biff-7g7)."""
+
+    def test_short_message_single_prefixed_line(self) -> None:
+        assert format_talk_line("eric:tty2", "hi") == ["▶  eric:tty2  hi"]
+
+    def test_no_tty_falls_back_to_user(self) -> None:
+        assert format_talk_line("eric", "hi") == ["▶  eric  hi"]
+
+    def test_timestamp_prefix_between_arrow_and_label(self) -> None:
+        assert format_talk_line("eric:tty2", "hi", stamp="[14:32] ") == [
+            "▶  [14:32] eric:tty2  hi"
+        ]
+
+    def test_empty_body_renders_nothing(self) -> None:
+        assert format_talk_line("eric:tty2", "") == []
+
+    def test_control_only_body_renders_nothing(self) -> None:
+        # A body that is empty only AFTER neutralisation (control-only payload)
+        # must produce no line — not a bare, dangling lead (biff-7g7).
+        assert format_talk_line("eric:tty2", "\x00\x1b\x07") == []
+
+    def test_whitespace_only_body_renders_nothing(self) -> None:
+        # Spaces survive terminal_safe (they are printable), but a body with
+        # nothing but whitespace has nothing to show — it must render no line,
+        # not a bare ▶ lead (biff-7g7).
+        assert format_talk_line("eric:tty2", "   ") == []
+        assert format_talk_line("eric:tty2", "\t \n") == []
+
+    def test_internal_space_runs_preserved(self) -> None:
+        # The message is the user's content — runs of intentional spaces (aligned
+        # text) must survive verbatim.  wrap(replace_whitespace=False) keeps them;
+        # the default rewrites each whitespace char and can alter the body.
+        assert format_talk_line("eric:tty2", "a    b   c") == [
+            "▶  eric:tty2  a    b   c"
+        ]
+
+    def test_giant_label_and_body_render_bounded(self) -> None:
+        # Defense in depth for the O(label x body) amplification: even if a
+        # forged megabyte label/body slips past the boundary clamp, the render
+        # must stay bounded — no line carries the raw label or a label-sized
+        # indent, and the line count is bounded by the body, not the label.
+        label = "u" * 10_000
+        body = "word " * 2_000  # 10_000 chars
+        lines = format_talk_line(label, body)
+        longest = max(len(line) for line in lines)
+        assert longest <= 2 * TABLE_WIDTH  # no O(label) line
+        total = sum(len(line) for line in lines)
+        assert total <= 2 * TABLE_WIDTH * len(lines)  # O(lines), not O(label x body)
+        assert len(lines) <= len(body) // _TALK_WRAP_MIN + 2  # bounded by body/width
+
+    def test_long_body_wraps_within_the_table_width(self) -> None:
+        body = "word " * 40
+        lines = format_talk_line("eric:tty2", body.strip())
+        assert len(lines) > 1
+        assert all(len(line) <= TABLE_WIDTH for line in lines)
+
+    def test_continuation_aligns_under_the_body(self) -> None:
+        lines = format_talk_line("eric:tty2", "alpha " * 40)
+        # Body starts after "▶  eric:tty2  " — 14 visible columns.
+        assert lines[0].startswith("▶  eric:tty2  ")
+        assert lines[1].startswith(" " * 14)
+        assert lines[1][14] != " "
+
+    def test_escape_in_body_neutralized(self) -> None:
+        (line,) = format_talk_line("eric:tty2", "clear\x1b[2Jme")
+        assert "\x1b[2J" not in line
+        assert "clear[2Jme" in line
+
+    def test_escape_in_label_neutralized(self) -> None:
+        (line,) = format_talk_line("e\x1b[2Jvil:tty2", "hi")
+        assert "\x1b[2J" not in line
+        assert "e[2Jvil:tty2  hi" in line
+
+
+class TestFormatTalkEnd:
+    def test_hangup_line_uses_the_arrow_prefix(self) -> None:
+        expected = "▶  eric:tty2 has ended the conversation."
+        assert format_talk_end("eric:tty2") == expected
+
+    def test_escape_in_label_neutralized(self) -> None:
+        out = format_talk_end("e\x1b[2Jvil")
+        assert "\x1b[2J" not in out
+        assert out == "▶  e[2Jvil has ended the conversation."
+
+    def test_long_label_is_truncated(self) -> None:
+        # A forged label (up to the from_payload MAX_KEY_LEN clamp) must not
+        # produce an unbounded hangup line — the label is capped to the same
+        # _MAX_LABEL_WIDTH as format_talk_line's lead (biff-7g7).
+        out = format_talk_end("u" * 129)
+        assert len(out) <= TABLE_WIDTH
+        assert "…" in out

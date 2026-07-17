@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Self
 
+from biff._formatting import terminal_safe
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -23,6 +25,45 @@ _CONTROL_TYPES = frozenset({"invite", "accept", "end", "withdraw"})
 
 _KNOWN_TYPES = _CONTROL_TYPES | {"message"}
 """Every modeled talk frame type — a frame typed outside this set is a wake poke."""
+
+_MISSING_SENDER = "?"
+"""Placeholder for a sender whose ``from`` is missing or empty after neutralisation.
+
+The reply address (:attr:`TalkNotification.sender_label`) must never render a
+bare ``:tty`` — a control-only ``from`` collapses to this placeholder so the
+user half is always present, matching :meth:`TalkNotification.from_payload`'s
+default for a missing ``from``.
+"""
+
+MAX_BODY_LEN = 512
+"""Message body length cap (talk.tex ``maxBodyLen``).
+
+The single wire-boundary bound on a frame body.  ``TalkState._publish``
+truncates outbound bodies here, but a custom or malicious publisher can post a
+frame directly to the per-identity subject and bypass that path — every wire
+field is attacker-controlled (DES-046) — so the *inbound* boundary
+(:meth:`TalkNotification.from_payload`) must clamp too, before the frame is ever
+enqueued or rendered.
+"""
+
+MAX_FIELD_LEN = 64
+"""Length cap for identity wire fields (user, tty, frame type).
+
+A user handle, a display tty name, and a frame type are all short by
+construction; an inbound field longer than this is forged.  Clamping at the
+boundary stops a megabyte ``from``/``from_tty`` from being stored in the queue
+or amplified by the renderer (biff-7g7) — a giant sender label drives the
+per-line wrap indent, turning one frame into O(label x body) output.
+"""
+
+MAX_KEY_LEN = MAX_FIELD_LEN * 2 + 1
+"""Length cap for session-key wire fields (``user:tty``).
+
+A real key is ``user:tty`` with each half bounded by :data:`MAX_FIELD_LEN`.
+Routing compares keys for equality against our own bounded key, so a clamped
+forged key still never matches — the clamp only bounds what a foreign frame can
+allocate, never what it can reach.
+"""
 
 
 class TalkPhase(Enum):
@@ -149,15 +190,83 @@ class TalkNotification:
         body cannot appear as a phantom talk message.  The ``type`` is preserved
         verbatim (defaulting to the empty string) rather than coerced to
         ``message``, which would resurrect that phantom.
+
+        Every string field is length-clamped here — the inbound wire boundary.
+        A custom publisher can post any payload to the per-identity subject
+        (DES-046), bypassing the sender-side ``MAX_BODY_LEN`` truncation, so a
+        forged megabyte ``from``/``body`` would otherwise be enqueued whole and
+        amplified O(label x body) by the renderer (biff-7g7).  Clamping is
+        length-only; :func:`terminal_safe` neutralises control characters at the
+        render boundary.
+
+        Each field is also *type*-guarded via :meth:`_trusted`: only a ``str`` is
+        trusted, so a forged ``null`` (JSON None), number, or nested dict/list
+        falls back to the field's documented default rather than leaking
+        ``str(None)`` → ``"None"`` or stringifying a structure past the clamp.
+
+        Session keys clamp *each half* of ``user:tty`` to :data:`MAX_FIELD_LEN`
+        via :meth:`_key_field`, so a key's user-half is bounded identically to
+        ``nfrom`` — clamping the whole key to :data:`MAX_KEY_LEN` while ``nfrom``
+        clamped to :data:`MAX_FIELD_LEN` left a 65-char handle mismatched, and
+        :meth:`PendingInvite.__post_init__` then silently dropped the invite.
         """
         return cls(
-            ntype=str(raw.get("type", "")),
-            nfrom=str(raw.get("from", "?")),
-            nfrom_tty=str(raw.get("from_tty", "")),
-            nfrom_key=str(raw.get("from_key", "")),
-            nto=str(raw.get("to_key", "")),
-            nbody=str(raw.get("body", "")),
+            ntype=cls._field(raw, "type", "", MAX_FIELD_LEN),
+            nfrom=cls._field(raw, "from", _MISSING_SENDER, MAX_FIELD_LEN),
+            nfrom_tty=cls._field(raw, "from_tty", "", MAX_FIELD_LEN),
+            nfrom_key=cls._key_field(raw, "from_key"),
+            nto=cls._key_field(raw, "to_key"),
+            nbody=cls._field(raw, "body", "", MAX_BODY_LEN),
         )
+
+    @staticmethod
+    def _trusted(raw: Mapping[str, object], key: str, default: str) -> str:
+        """Return the raw ``str`` at *key*, or *default* when it is not a str.
+
+        The attacker-controlled ingress (DES-046) can carry any JSON type for a
+        field.  Trust only a ``str``; coerce every other type (None, number,
+        dict, list) to *default*, so no forged value is stringified — neither a
+        leaked ``"None"`` nor a giant nested structure amplified past a clamp.
+        """
+        value = raw.get(key)
+        return value if isinstance(value, str) else default
+
+    @classmethod
+    def _field(
+        cls, raw: Mapping[str, object], key: str, default: str, limit: int
+    ) -> str:
+        """Return the trusted ``str`` at *key* length-clamped to *limit*."""
+        return cls._trusted(raw, key, default)[:limit]
+
+    @classmethod
+    def _key_field(cls, raw: Mapping[str, object], key: str) -> str:
+        """Return a ``user:tty`` session key with each half clamped identically.
+
+        Bounds the user-half and tty-half to :data:`MAX_FIELD_LEN` each — the
+        same bound ``nfrom``/``nfrom_tty`` use — so a self-consistent frame keeps
+        ``key_user == nfrom`` after coercion.  A colonless (malformed) key stays
+        colonless and is rejected downstream by
+        :meth:`PendingInvite.__post_init__` — fail-closed.
+        """
+        user, sep, tty = cls._trusted(raw, key, "").partition(":")
+        if not sep:
+            return user[:MAX_FIELD_LEN]
+        return f"{user[:MAX_FIELD_LEN]}:{tty[:MAX_FIELD_LEN]}"
+
+    @property
+    def sender_label(self) -> str:
+        """Render the sender as a copy-pasteable ``user:tty`` reply address.
+
+        Neutralises both halves via :func:`terminal_safe`, then strips them:
+        spaces survive neutralisation, so a half that is empty OR whitespace-only
+        is treated as absent.  An absent tty collapses to the bare ``user`` (never
+        a dangling ``user:`` or ``user:   ``); an absent ``from`` falls back to
+        :data:`_MISSING_SENDER` so the user half is never empty or all-space — the
+        address must not begin with a bare ``:tty``.
+        """
+        user = terminal_safe(self.nfrom).strip() or _MISSING_SENDER
+        tty = terminal_safe(self.nfrom_tty).strip()
+        return f"{user}:{tty}" if tty else user
 
     @property
     def is_invite(self) -> bool:

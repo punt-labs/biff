@@ -50,7 +50,7 @@ from biff.config import (
     load_mcp_config,
     write_yaml_local_enabled,
 )
-from biff.formatting import terminal_safe
+from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
 from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
@@ -212,24 +212,24 @@ def _format_idle_banners(
 ) -> list[str]:
     """Format drained idle-mode notifications as REPL banner lines.
 
-    Invites render as a phone banner; other bodied notifications as a
-    ``▶`` line honouring the timestamp toggle.  Accepts are silent
-    (the handshake owns them).  The pending-invite bookkeeping lives in
-    :meth:`TalkState.drain_idle`; this is pure presentation.
+    Every bodied frame — invite or idle-arriving message — renders as a
+    yellow ``▶`` line in the shared who/read/wall idiom, honouring the
+    timestamp toggle.  Accepts are silent (the handshake owns them).  The
+    pending-invite bookkeeping lives in :meth:`TalkState.drain_idle`; this
+    is pure presentation.
     """
     lines: list[str] = []
     for notif in notifs:
-        if notif.is_accept:
+        # Accepts are silent (the handshake owns them); every other bodied
+        # frame — invite or idle-arriving message — renders as a yellow ▶
+        # line in the shared who/read/wall idiom (biff-7g7).
+        if notif.is_accept or not notif.nbody:
             continue
-        sender = terminal_safe(notif.nfrom)
-        body = terminal_safe(notif.nbody)
-        if notif.is_invite and body:
-            lines.append(f"  \033[1;33m📞 {sender}: {body}\033[0m")
-        elif body:
-            sender_tty = terminal_safe(notif.nfrom_tty)
-            label = f"{sender}:{sender_tty}" if sender_tty else sender
-            stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
-            lines.append(f"  \033[1;33m{stamp}{label} ▶ {body}\033[0m")
+        stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
+        lines.extend(
+            f"\033[1;33m{line}\033[0m"
+            for line in format_talk_line(notif.sender_label, notif.nbody, stamp=stamp)
+        )
     return lines
 
 
@@ -293,26 +293,23 @@ def _format_talk_lines(
 ) -> list[str]:
     """Format drained connected-mode notifications as conversation lines.
 
-    Messages render as a cyan ``user:tty ▶ message`` line honouring the
-    timestamp toggle; an end frame renders a dim hangup line.  Invites
-    and accepts are already filtered out by :meth:`TalkState.drain_connected`.
+    Messages render as a cyan ``▶`` line — the who/read/wall idiom, wrapped
+    and honouring the timestamp toggle; an end frame renders a dim hangup
+    line.  Invites and accepts are already filtered out by
+    :meth:`TalkState.drain_connected`.
     """
     lines: list[str] = []
     for notif in notifs:
         if notif.is_end:
-            sender = terminal_safe(notif.nfrom)
-            sender_tty = terminal_safe(notif.nfrom_tty)
-            label = f"{sender}:{sender_tty}" if sender_tty else sender
-            lines.append(f"\033[2m{label} has ended the conversation.\033[0m")
+            lines.append(f"\033[2m{format_talk_end(notif.sender_label)}\033[0m")
             continue
-        body = terminal_safe(notif.nbody)
-        if not body:
+        if not notif.nbody:
             continue
-        sender = terminal_safe(notif.nfrom)
-        sender_tty = terminal_safe(notif.nfrom_tty)
-        label = f"{sender}:{sender_tty}" if sender_tty else sender
         stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
-        lines.append(f"\033[36m{stamp}{label} ▶ {body}\033[0m")
+        lines.extend(
+            f"\033[36m{line}\033[0m"
+            for line in format_talk_line(notif.sender_label, notif.nbody, stamp=stamp)
+        )
     return lines
 
 
@@ -568,11 +565,16 @@ async def _repl_loop(
 
 
 def _print_talk_banner(notif: TalkNotification) -> None:
-    """Print a third-party talk notification as a terminal-safe banner."""
-    sender = terminal_safe(notif.nfrom)
-    body = terminal_safe(notif.nbody)
-    if body:
-        print(f"\r\033[K  \033[1;33m📞 {sender}: {body}\033[0m")
+    """Print a third-party talk notification in the wrapped ``▶`` idiom."""
+    # Render first: a control-only body neutralises to nothing, and clearing the
+    # prompt to then print no banner would blank the line for no reason (biff-7g7).
+    lines = format_talk_line(notif.sender_label, notif.nbody)
+    if not lines:
+        return
+    # Clear the stdin thread's prompt so the banner lands clean, then print.
+    print("\r\033[K", end="")
+    for line in lines:
+        print(f"\033[1;33m{line}\033[0m")
 
 
 async def _wait_for_talk_accept(

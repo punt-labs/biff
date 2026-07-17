@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -175,7 +175,7 @@ async def _cli_session_cleanup(
 @asynccontextmanager
 async def cli_session(
     *, interactive: bool = False, user_override: str | None = None
-) -> AsyncIterator[CliContext]:
+) -> AsyncGenerator[CliContext]:
     """Provide a NATS relay + session with proper lifecycle.
 
     On entry: connect, register session (KV), auto-assign ttyN,
