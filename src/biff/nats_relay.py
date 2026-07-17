@@ -147,6 +147,11 @@ def _scrub_validation_error(exc: ValidationError | ValueError) -> str:
     locations and error types, with input, url, and context stripped, so a
     poison-frame log line cannot leak a message body.  A plain ``ValueError``
     (no structured errors) degrades to its type name — never its message.
+
+    Safe only for models whose validation-error ``loc`` cannot contain
+    input-derived keys: no ``extra='forbid'`` and no dict-keyed fields.  On such
+    a model ``loc`` would carry attacker-controlled key names and this would
+    leak input — reuse elsewhere must re-verify that invariant.
     """
     if not isinstance(exc, ValidationError):
         return type(exc).__name__
