@@ -43,11 +43,19 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture(scope="session")
-def nats_server() -> Iterator[str]:
+def nats_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Start a nats-server with JetStream for the test session.
 
     Returns the server URL (e.g. ``nats://127.0.0.1:14222``).
     Shared across all test directories that need a NATS server.
+
+    The JetStream store lives in a per-session temp directory so every
+    run starts with an empty KV.  Without an explicit ``--store_dir`` the
+    server defaults to ``$TMPDIR/nats/jetstream`` — a fixed path that
+    survives across sessions.  There, ``biff-names`` reservations pile up
+    forever (``ttyN`` climbs into the thousands, breaking presence tests)
+    and the file store eventually corrupts, wedging connections with
+    ``Disconnected after 0s connected``.
     """
     exe = shutil.which("nats-server")
     if exe is None:
@@ -55,9 +63,10 @@ def nats_server() -> Iterator[str]:
 
     port = _find_free_port()
     url = f"nats://127.0.0.1:{port}"
+    store_dir = tmp_path_factory.mktemp("nats-jetstream")
 
     proc = subprocess.Popen(  # noqa: S603
-        [exe, "-js", "-p", str(port)],
+        [exe, "-js", "-sd", str(store_dir), "-p", str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

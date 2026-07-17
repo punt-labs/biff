@@ -16,7 +16,7 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
-from biff.server.app import create_server
+from biff.server.app import _register_companion, create_server
 from biff.server.state import CompanionSession, create_state
 
 pytestmark = pytest.mark.nats
@@ -77,6 +77,13 @@ class TestDualSessionLifespan:
             Client(FastMCPTransport(mcp_a)),
             Client(FastMCPTransport(mcp_b)),
         ):
+            # Production registers the companion from the heartbeat loop once
+            # the ethos roster resolves the human identity.  With the companion
+            # pre-set (no roster in-test) and thus never ``None``, the discovery
+            # poll is skipped — drive the same registration path directly so the
+            # four rows exist.
+            await _register_companion(state_a)
+            await _register_companion(state_b)
             sessions = await state_a.relay.get_sessions_for_repos(
                 frozenset({_TEST_REPO})
             )
