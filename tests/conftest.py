@@ -11,8 +11,27 @@ from unittest.mock import patch
 
 import pytest
 
+from biff.server.tools._descriptions import _reset_session
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+@pytest.fixture(autouse=True)
+def _reset_description_globals() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Clear ``_descriptions`` module globals around every test.
+
+    ``_SessionCaptureMiddleware`` stores the MCP session in a module
+    global on every client ``initialize``, and the ``tty``/``mesg`` tools
+    set the tty-name and biff-enabled globals.  Nothing clears them when a
+    test ends, so a stale (closed, wrong-event-loop) session leaks into the
+    next test's background poller and NATS callbacks — a later test then
+    fails only under certain orderings.  Resetting before and after each
+    test makes ordering irrelevant.
+    """
+    _reset_session()
+    yield
+    _reset_session()
 
 
 @pytest.fixture(autouse=True)

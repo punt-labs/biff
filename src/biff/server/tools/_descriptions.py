@@ -122,11 +122,20 @@ def set_biff_enabled(*, enabled: bool) -> None:
 
 
 def _reset_session() -> None:
-    """Clear stored session, tty name, biff_enabled — test isolation."""
-    global _session, _tty_name, _biff_enabled
+    """Reset every module global — test isolation.
+
+    Clears the captured session, tty name, biff_enabled flag, and the
+    last-spoken wall key.  All four are process globals set as a side
+    effect of running a server (``_SessionCaptureMiddleware`` captures
+    ``_session`` on every client ``initialize``); left unreset they leak
+    a stale, closed session into the next test's background poller and
+    NATS callbacks, so a later test fails only under certain orderings.
+    """
+    global _session, _tty_name, _biff_enabled, _spoken_wall_key
     _session = None
     _tty_name = ""
     _biff_enabled = True
+    _spoken_wall_key = ("", "")
 
 
 async def notify_tool_list_changed() -> None:
