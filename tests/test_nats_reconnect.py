@@ -318,7 +318,7 @@ class TestProactiveWedgeDetector:
         relay, nc = _wedged_relay()
 
         await relay._connect_lock.acquire()
-        task = asyncio.ensure_future(relay._force_reconnect())
+        task = asyncio.ensure_future(relay._force_reconnect(relay._reconnect_epoch))
         await asyncio.sleep(0)  # let the task capture `wedged` and block on lock
         nc.is_connected = False  # keepalive fires while we hold the lock
         relay._connect_lock.release()
@@ -327,6 +327,167 @@ class TestProactiveWedgeDetector:
         nc.close.assert_not_awaited()
         assert relay._nc is nc
         assert relay._js is not None
+
+
+class TestReconnectEpochGuard:
+    """A force-reconnect must not tear down a client that transparently
+    reconnected between the gate and the under-lock re-check (biff-xko).
+
+    The proactive gate (``_tracked``) captures ``_reconnect_epoch`` when it
+    schedules ``_force_reconnect``.  If nats-py completes an in-place reconnect
+    on the *same* client object before the teardown acquires ``_connect_lock``,
+    the epoch advances past the captured value and the wedge is already healed.
+    ``is_connected`` reads ``True`` in both the wedged and the healed state, so
+    the epoch is the only signal that distinguishes them; the under-lock guard
+    force-closes only when the epoch is unchanged since the gate observed it.
+    """
+
+    @staticmethod
+    def _dial() -> AsyncMock:
+        """Patch ``nats.connect`` to hand back a fresh fake client per call."""
+        return AsyncMock(side_effect=_fresh_nc)
+
+    @pytest.mark.anyio()
+    async def test_reconnected_cb_advances_epoch(self) -> None:
+        # nats-py's transparent same-object reconnect fires reconnected_cb,
+        # which advances the epoch that _generation deliberately does not count.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", self._dial()) as connect:
+            await relay._ensure_connected()
+            assert relay._reconnect_epoch == 0
+            assert connect.await_args is not None
+            on_reconnect = connect.await_args.kwargs["reconnected_cb"]
+
+            await on_reconnect()
+            assert relay._reconnect_epoch == 1
+            await on_reconnect()
+            assert relay._reconnect_epoch == 2
+
+    @pytest.mark.anyio()
+    async def test_transparent_reconnect_defers_teardown(self) -> None:
+        # The race: the gate captured epoch 0; a transparent reconnect completes
+        # (epoch 0 -> 1) while _force_reconnect blocks on _connect_lock.  The
+        # freshly-healed client must be preserved — no teardown, handles intact.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        js, kv, names_kv = MagicMock(), MagicMock(), MagicMock()
+        relay._provision = AsyncMock(return_value=(js, kv, names_kv))  # type: ignore[method-assign]
+        nc = _live_nc()  # socket reads healthy both wedged and healed
+        connect = AsyncMock(return_value=nc)
+        with patch("biff.nats_relay.nats.connect", connect):
+            await relay._ensure_connected()
+            assert connect.await_args is not None
+            on_reconnect = connect.await_args.kwargs["reconnected_cb"]
+            gate_epoch = relay._reconnect_epoch  # 0, captured at the gate
+
+            await relay._connect_lock.acquire()
+            task = asyncio.ensure_future(relay._force_reconnect(gate_epoch))
+            await asyncio.sleep(0)  # capture `wedged`, then block on the lock
+            await on_reconnect()  # transparent reconnect completes: epoch 0 -> 1
+            relay._connect_lock.release()
+            await task
+
+        nc.close.assert_not_awaited()
+        assert relay._nc is nc
+        assert relay._js is js
+        assert relay._reconnect_epoch == 1
+
+    @pytest.mark.anyio()
+    async def test_wedged_client_without_reconnect_is_torn_down(self) -> None:
+        # Contrast: no reconnect completes (epoch unchanged since the gate) — the
+        # genuinely-wedged client IS force-closed so the next call rebuilds it.
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        nc = _live_nc()
+        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)):
+            await relay._ensure_connected()
+            # Bind to a local so the identity narrowing stays on ``stored`` and
+            # does not leak onto ``relay._nc`` across the teardown call below,
+            # which would make the ``is None`` assert look unreachable to mypy.
+            stored = relay._nc
+            assert stored is nc
+            gate_epoch = relay._reconnect_epoch  # 0
+
+            await relay._force_reconnect(gate_epoch)
+
+        nc.close.assert_awaited_once()
+        assert relay._nc is None
+        assert relay._js is None
+        assert relay._reconnect_epoch == 0
+
+    @pytest.mark.anyio()
+    async def test_fresh_dial_resets_epoch(self) -> None:
+        # A new dial resets the epoch: the counter tracks reconnects on the
+        # *current* client, so a fresh client starts clean (spec invariant
+        # connState in {disconnected, closed} => reconnectEpoch = 0).
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        with patch("biff.nats_relay.nats.connect", self._dial()) as connect:
+            await relay._ensure_connected()
+            assert connect.await_args is not None
+            on_reconnect = connect.await_args.kwargs["reconnected_cb"]
+            await on_reconnect()
+            assert relay._reconnect_epoch == 1
+
+            # Force a teardown, then rebuild — the fresh dial resets the epoch.
+            await relay._force_reconnect(relay._reconnect_epoch)
+            await relay._ensure_connected()
+
+        assert relay._reconnect_epoch == 0
+
+    @pytest.mark.anyio()
+    async def test_flush_window_teardown_then_late_cb_heals(self) -> None:
+        # Flush-window race (djb, wire review): nats-py's transparent reconnect
+        # is not atomic — it brings the socket up (is_connected True) and only
+        # later fires reconnected_cb (the epoch bump).  A force-teardown that
+        # re-checks under the lock in that window reads is_connected True and
+        # _reconnect_epoch == gate_epoch, so it force-closes a socket-healthy
+        # client.  The deferred reconnected_cb then lands on the reset epoch,
+        # leaving _reconnect_epoch == 1 while _nc is None — the transient state
+        # the old spec invariant (connState in {disconnected, closed} =>
+        # reconnectEpoch = 0) wrongly declared impossible.  The next dial resets
+        # the epoch: bounded and self-healing (nats-relay.tex
+        # FlushWindowForceTeardown + the eventually-true recovery property).
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        nc = _live_nc()  # socket reads is_connected True throughout the window
+        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)) as c:
+            await relay._ensure_connected()
+            assert c.await_args is not None
+            on_reconnect = c.await_args.kwargs["reconnected_cb"]
+            gate_epoch = relay._reconnect_epoch  # 0, captured at the gate
+
+            # Teardown fires in the flush window: epoch unchanged since the gate
+            # and the socket still is_connected, so the guard does NOT skip.
+            await relay._connect_lock.acquire()
+            task = asyncio.ensure_future(relay._force_reconnect(gate_epoch))
+            await asyncio.sleep(0)  # capture `wedged`, then block on the lock
+            relay._connect_lock.release()  # epoch is still == gate_epoch here
+            await task
+
+            nc.close.assert_awaited_once()
+            assert relay._nc is None
+            assert relay._reconnect_epoch == 0
+
+            # The deferred reconnected_cb lands AFTER the teardown; _generation
+            # is unchanged, so it is not superseded and bumps the reset epoch.
+            await on_reconnect()
+            assert relay._reconnect_epoch == 1  # transient epoch > 0 ...
+            assert relay._nc is None  # ... while the client is gone
+
+        # Self-heal: the next dial resets the epoch and rebuilds the client.
+        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=_live_nc())):
+            await relay._ensure_connected()
+        assert relay._reconnect_epoch == 0
+        assert relay._nc is not None
 
 
 class TestTimeoutIdentityGuard:
@@ -698,7 +859,7 @@ class TestCallbackGenerationGuard:
             on_closed_a = connect.await_args.kwargs["closed_cb"]
 
             # Supersede A with a fresh client B (force reconnect + rebuild).
-            await relay._force_reconnect()
+            await relay._force_reconnect(relay._reconnect_epoch)
             js_b, kv_b, names_b = MagicMock(), MagicMock(), MagicMock()
             relay._provision = AsyncMock(return_value=(js_b, kv_b, names_b))  # type: ignore[method-assign]
             await relay._ensure_connected()  # client B, generation 2
@@ -772,7 +933,7 @@ class TestCallbackGenerationGuard:
             assert connect.await_args is not None
             on_error_a = connect.await_args.kwargs["error_cb"]
 
-            await relay._force_reconnect()
+            await relay._force_reconnect(relay._reconnect_epoch)
             relay._provision = AsyncMock(  # type: ignore[method-assign]
                 return_value=(MagicMock(), MagicMock(), MagicMock())
             )
