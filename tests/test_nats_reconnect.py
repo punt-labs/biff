@@ -405,7 +405,11 @@ class TestReconnectEpochGuard:
         nc = _live_nc()
         with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)):
             await relay._ensure_connected()
-            assert relay._nc is nc
+            # Bind to a local so the identity narrowing stays on ``stored`` and
+            # does not leak onto ``relay._nc`` across the teardown call below,
+            # which would make the ``is None`` assert look unreachable to mypy.
+            stored = relay._nc
+            assert stored is nc
             gate_epoch = relay._reconnect_epoch  # 0
 
             await relay._force_reconnect(gate_epoch)
@@ -436,6 +440,54 @@ class TestReconnectEpochGuard:
             await relay._ensure_connected()
 
         assert relay._reconnect_epoch == 0
+
+    @pytest.mark.anyio()
+    async def test_flush_window_teardown_then_late_cb_heals(self) -> None:
+        # Flush-window race (djb, wire review): nats-py's transparent reconnect
+        # is not atomic — it brings the socket up (is_connected True) and only
+        # later fires reconnected_cb (the epoch bump).  A force-teardown that
+        # re-checks under the lock in that window reads is_connected True and
+        # _reconnect_epoch == gate_epoch, so it force-closes a socket-healthy
+        # client.  The deferred reconnected_cb then lands on the reset epoch,
+        # leaving _reconnect_epoch == 1 while _nc is None — the transient state
+        # the old spec invariant (connState in {disconnected, closed} =>
+        # reconnectEpoch = 0) wrongly declared impossible.  The next dial resets
+        # the epoch: bounded and self-healing (nats-relay.tex
+        # FlushWindowForceTeardown + the eventually-true recovery property).
+        relay = NatsRelay(url="tls://fake:4222", repo_name="test")
+        relay._provision = AsyncMock(  # type: ignore[method-assign]
+            return_value=(MagicMock(), MagicMock(), MagicMock())
+        )
+        nc = _live_nc()  # socket reads is_connected True throughout the window
+        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=nc)) as c:
+            await relay._ensure_connected()
+            assert c.await_args is not None
+            on_reconnect = c.await_args.kwargs["reconnected_cb"]
+            gate_epoch = relay._reconnect_epoch  # 0, captured at the gate
+
+            # Teardown fires in the flush window: epoch unchanged since the gate
+            # and the socket still is_connected, so the guard does NOT skip.
+            await relay._connect_lock.acquire()
+            task = asyncio.ensure_future(relay._force_reconnect(gate_epoch))
+            await asyncio.sleep(0)  # capture `wedged`, then block on the lock
+            relay._connect_lock.release()  # epoch is still == gate_epoch here
+            await task
+
+            nc.close.assert_awaited_once()
+            assert relay._nc is None
+            assert relay._reconnect_epoch == 0
+
+            # The deferred reconnected_cb lands AFTER the teardown; _generation
+            # is unchanged, so it is not superseded and bumps the reset epoch.
+            await on_reconnect()
+            assert relay._reconnect_epoch == 1  # transient epoch > 0 ...
+            assert relay._nc is None  # ... while the client is gone
+
+        # Self-heal: the next dial resets the epoch and rebuilds the client.
+        with patch("biff.nats_relay.nats.connect", AsyncMock(return_value=_live_nc())):
+            await relay._ensure_connected()
+        assert relay._reconnect_epoch == 0
+        assert relay._nc is not None
 
 
 class TestTimeoutIdentityGuard:
