@@ -136,6 +136,36 @@ class TestFormatAgentDrain:
         # bare user, no dangling colon; body skipped; shared ▶ idiom prefix
         assert rendered == f"{HEADER_PREFIX}eric: hi"
 
+    def test_whitespace_only_body_dropped(self) -> None:
+        """A whitespace-only body renders nothing, matching the REPL render.
+
+        Spaces survive terminal_safe (they are printable), so an all-whitespace
+        body must be skipped here just as ``format_talk_line`` skips it — both
+        surfaces agree, and the agent's context never shows a bare ``user:``.
+        """
+        blank = TalkNotification.from_payload(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def",
+                "to_key": "kai:abc",
+                "body": "   ",
+            }
+        )
+        real = TalkNotification.from_payload(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def",
+                "to_key": "kai:abc",
+                "body": "hi",
+            }
+        )
+        rendered = format_agent_drain(AgentDrain(messages=(blank, real), pending={}))
+        assert rendered == f"{HEADER_PREFIX}eric:tty2: hi"
+
     def test_invite_uses_shared_arrow_not_phone(self) -> None:
         """The agent drain shares the ``▶`` idiom — no ``📞`` prefix (biff-7g7)."""
         invite = PendingInvite(

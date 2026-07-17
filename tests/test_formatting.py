@@ -371,7 +371,7 @@ class TestFormatTalkLine:
         body = "word " * 40
         lines = format_talk_line("eric:tty2", body.strip())
         assert len(lines) > 1
-        assert all(len(line) <= 80 for line in lines)
+        assert all(len(line) <= TABLE_WIDTH for line in lines)
 
     def test_continuation_aligns_under_the_body(self) -> None:
         lines = format_talk_line("eric:tty2", "alpha " * 40)

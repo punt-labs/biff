@@ -94,9 +94,11 @@ def format_agent_drain(drain: AgentDrain) -> str:
         if notif.is_end:
             lines.append(format_talk_end(label))
             continue
-        # Skip a body that is empty only *after* neutralisation — a control-only
-        # payload must not render a dangling ``label:`` line (biff-7g7).
-        if body := terminal_safe(notif.nbody):
+        # Skip a body that is empty or whitespace-only after neutralisation:
+        # spaces survive terminal_safe, so guard on the stripped body — matching
+        # format_talk_line, so a blank message renders nothing on both surfaces
+        # and never leaves a dangling ``label:`` line (biff-7g7).
+        if (body := terminal_safe(notif.nbody)) and body.strip():
             lines.append(f"{HEADER_PREFIX}{label}: {body}")
     return "\n".join(lines)
 
