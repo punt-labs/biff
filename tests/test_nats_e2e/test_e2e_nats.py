@@ -596,7 +596,14 @@ class TestTalkSelfEchoFilter:
             await asyncio.sleep(0.2)
 
             drain = state.talk.drain_for_agent()
-            bodies = [m.nbody for m in drain.messages]
-            assert bodies == ["hello from eric"], bodies
+            messages = drain.messages
+            assert [m.nbody for m in messages] == ["hello from eric"], messages
+            # Sender is attributed by bare identity — no leading "@".  The "@"
+            # is an input-only address prefix (``talk @eric:tty2``); presence
+            # and inbox render the sender without it (``who`` shows
+            # ``eric:tty2``, ``read`` shows ``eric``), so the accepted frame
+            # carries ``eric`` / ``eric:tty2``, not ``@eric``.
+            assert [m.nfrom for m in messages] == ["eric"], messages
+            assert [m.nfrom_key for m in messages] == ["eric:tty2"], messages
 
         _reset_session()
