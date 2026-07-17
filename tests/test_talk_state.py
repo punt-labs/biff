@@ -13,7 +13,6 @@ Z spec via ``/z-spec:partition``.
 from __future__ import annotations
 
 import json
-import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -946,28 +945,49 @@ class TestHasPendingTraffic:
 
 
 class TestExpiry:
-    def _pending_state(self) -> tuple[TalkState, float]:
+    def _pending_state(
+        self, monkeypatch: pytest.MonkeyPatch, *, arrived: float = 1000.0
+    ) -> tuple[TalkState, float]:
+        """Return a state with one pending invite stamped at ``arrived``.
+
+        The monotonic clock is pinned to a small exact value so every boundary
+        computation below is exact.  ``time.monotonic()`` on a long-uptime host
+        is ~1e5 to 1e6, where the float64 ULP is ~2e-10; at that magnitude
+        ``(arrived + PENDING_INVITE_TTL) - arrived`` no longer equals the TTL
+        exactly, and the reaper's ``clock - arrived >= PENDING_INVITE_TTL`` test
+        lands on either side of the boundary depending on the host's uptime.
+        Pinning the clock makes ``arrived`` small so the arithmetic is exact and
+        the result is independent of the monotonic magnitude.
+        """
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: arrived)
         st = _make_state()
         st.receive(_invite("eric", OTHER_KEY))
         st.drain_idle()
         return st, st.pending_invites["eric"].arrived
 
-    def test_fresh_invite_survives_a_tick(self) -> None:
+    def test_fresh_invite_survives_a_tick(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """P-EXP-boundary: an invite below the TTL is never reaped."""
-        st, arrived = self._pending_state()
+        st, arrived = self._pending_state(monkeypatch)
         assert st.expire_stale_invites(now=arrived + PENDING_INVITE_TTL - 0.001) == 0
         assert _pending_keys(st) == {"eric": OTHER_KEY}
 
-    def test_matured_invite_reaped_at_ttl(self) -> None:
+    def test_matured_invite_reaped_at_ttl(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """P-EXP-1: an invite whose age reaches the TTL is reaped."""
-        st, arrived = self._pending_state()
+        st, arrived = self._pending_state(monkeypatch)
         assert st.expire_stale_invites(now=arrived + PENDING_INVITE_TTL) == 1
         assert st.pending_invites == {}
 
-    def test_expiry_preserves_a_fresh_sibling(self) -> None:
+    def test_expiry_preserves_a_fresh_sibling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """P-EXP-2: only invites past the TTL are removed, not fresh ones."""
-        st, arrived = self._pending_state()
-        # A second, fresher invite recorded well after the first.
+        st, arrived = self._pending_state(monkeypatch)
+        # A second, fresher invite recorded one second after the first.
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: arrived + 1.0)
         st.receive(_invite("priya", "priya:xyz"))
         st.drain_idle()
         priya_arrived = st.pending_invites["priya"].arrived
@@ -977,31 +997,34 @@ class TestExpiry:
         assert st.expire_stale_invites(now=now) == 1
         assert _pending_keys(st) == {"priya": "priya:xyz"}
 
-    def test_undrained_queued_invite_reaped_at_ttl(self) -> None:
+    def test_undrained_queued_invite_reaped_at_ttl(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """P-EXP-backstop: an invite never drained into ``_pending`` still ages
         out of the queue, so a crashed inviter cannot strand the marker.
         """
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: 1000.0)
         st = _make_state()
-        before = time.monotonic()
-        st.receive(_invite("eric", OTHER_KEY))  # enqueued, never drained
+        st.receive(_invite("eric", OTHER_KEY))  # enqueued at T=1000, never drained
         assert st.queued == 1  # the queued frame lights the marker
         # Below the bound: the queued invite survives.
-        assert st.expire_stale_invites(now=before + PENDING_INVITE_TTL - 1.0) == 0
+        assert st.expire_stale_invites(now=1000.0 + PENDING_INVITE_TTL - 1.0) == 0
         assert st.queued == 1
         # Past the bound: the queued invite is dropped and the marker clears.
-        after = time.monotonic()
-        assert st.expire_stale_invites(now=after + PENDING_INVITE_TTL) == 1
+        assert st.expire_stale_invites(now=1000.0 + PENDING_INVITE_TTL) == 1
         assert st.queued == 0
         assert st.pending_invites == {}
 
-    def test_undrained_queued_message_survives_ttl(self) -> None:
+    def test_undrained_queued_message_survives_ttl(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A queued message has no time-to-live — only invites age out — so a
         stuck message is left for the agent's drain, never silently reaped.
         """
+        monkeypatch.setattr("biff.talk_state.time.monotonic", lambda: 1000.0)
         st = _make_state()
         st.receive(_message("eric", OTHER_KEY, "still here"))
-        after = time.monotonic()
-        assert st.expire_stale_invites(now=after + PENDING_INVITE_TTL) == 0
+        assert st.expire_stale_invites(now=1000.0 + PENDING_INVITE_TTL) == 0
         assert st.queued == 1
 
     def test_drain_preserves_enqueue_ttl_anchor(
