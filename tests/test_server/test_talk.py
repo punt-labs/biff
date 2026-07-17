@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import biff.server.tools.talk as talk_mod
+from biff.formatting import HEADER_PREFIX
 from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay
 from biff.server.tools._descriptions import _talk_description
@@ -132,7 +133,51 @@ class TestFormatAgentDrain:
         rendered = format_agent_drain(
             AgentDrain(messages=(ctrl_tty, ctrl_body), pending={})
         )
-        assert rendered == "eric: hi"  # bare user, no dangling colon; body skipped
+        # bare user, no dangling colon; body skipped; shared ▶ idiom prefix
+        assert rendered == f"{HEADER_PREFIX}eric: hi"
+
+    def test_invite_uses_shared_arrow_not_phone(self) -> None:
+        """The agent drain shares the ``▶`` idiom — no ``📞`` prefix (biff-7g7)."""
+        invite = PendingInvite(
+            user="jfreeman",
+            session_key="jfreeman:75abc665",
+            tty="tty6",
+            arrived=0.0,
+        )
+        drain = AgentDrain(messages=(), pending={"jfreeman": invite})
+        rendered = format_agent_drain(drain)
+        assert rendered.startswith(HEADER_PREFIX)
+        assert "📞" not in rendered
+
+    def test_end_frame_renders_arrow_hangup_line(self) -> None:
+        """An end frame renders via the shared ``format_talk_end`` idiom."""
+        end = TalkNotification.from_payload(
+            {
+                "type": "end",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def",
+                "to_key": "kai:abc",
+            }
+        )
+        rendered = format_agent_drain(AgentDrain(messages=(end,), pending={}))
+        assert rendered == f"{HEADER_PREFIX}eric:tty2 has ended the conversation."
+
+    def test_stays_single_line_no_hang_indent(self) -> None:
+        """Model-consumed output is single-line: one line per frame, no wrap indent."""
+        long_body = "word " * 60  # would wrap across many terminal lines
+        msg = TalkNotification.from_payload(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def",
+                "to_key": "kai:abc",
+                "body": long_body,
+            }
+        )
+        rendered = format_agent_drain(AgentDrain(messages=(msg,), pending={}))
+        assert rendered.count("\n") == 0
 
 
 class TestResolveTalkTarget:

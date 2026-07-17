@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from nats.errors import Error as NatsError
 
-from biff.formatting import terminal_safe
+from biff.formatting import HEADER_PREFIX, format_talk_end, terminal_safe
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.server.tools._activate import auto_enable
@@ -67,27 +67,37 @@ async def fetch_all_unread(
 
 
 def format_agent_drain(drain: AgentDrain) -> str:
-    """Render a drained agent snapshot as human-readable talk output.
+    """Render a drained agent snapshot as talk output for the model's context.
 
     Lists pending invites (who wants to talk, with a runnable accept
     command that names the inviter's session) followed by any queued
     messages and a hangup line.  Empty when there is nothing to show.
+
+    Shares the ``▶`` who/read/wall idiom with the terminal renders
+    (``_format_talk_lines``, ``_format_idle_banners``) but stays
+    single-line on purpose: this text is injected into the *model's*
+    context, not printed to an 80-column terminal, so it deliberately
+    skips ``format_talk_line``'s ``textwrap`` wrapping and hang-indent
+    continuation whitespace — alignment padding that aids a human reader
+    but is only noise in model input.  Every field is length-clamped at
+    the :meth:`TalkNotification.from_payload` ingress boundary, so a
+    single line stays bounded without a render-side cap (biff-7g7).
     """
     lines: list[str] = []
     for _user, invite in sorted(drain.pending.items()):
         lines.append(
-            f"📞 {terminal_safe(invite.user)} wants to talk — "
+            f"{HEADER_PREFIX}{terminal_safe(invite.user)} wants to talk — "
             f"{terminal_safe(invite.accept_command)} to accept"
         )
     for notif in drain.messages:
         label = notif.sender_label  # sender_label already neutralises both halves
         if notif.is_end:
-            lines.append(f"{label} ended the conversation.")
+            lines.append(format_talk_end(label))
             continue
         # Skip a body that is empty only *after* neutralisation — a control-only
         # payload must not render a dangling ``label:`` line (biff-7g7).
         if body := terminal_safe(notif.nbody):
-            lines.append(f"{label}: {body}")
+            lines.append(f"{HEADER_PREFIX}{label}: {body}")
     return "\n".join(lines)
 
 

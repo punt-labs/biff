@@ -29,6 +29,7 @@ from biff._stdlib import display_repo_name
 from biff.models import Message, SessionEvent, UserSession, WallPost
 
 __all__ = [
+    "HEADER_PREFIX",
     "LAST_SPECS",
     "READ_SPECS",
     "WHO_SPECS",
@@ -381,6 +382,12 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     copied onto every wrapped body chunk \u2014 O(label x body) allocation
     from a single frame (defense in depth behind the
     :meth:`TalkNotification.from_payload` boundary clamp).
+
+    Precondition: *body* MUST already be boundary-clamped by the caller \u2014 the
+    lead is capped here, but the body is not, so the wrap work is O(body).
+    Every current caller passes the \u2264 :data:`~biff.talk_types.MAX_BODY_LEN`
+    ``TalkNotification.nbody``; a future caller feeding an unclamped body from a
+    non-notification source would reintroduce the linear term.
     """
     safe_body = terminal_safe(body)
     if not safe_body:

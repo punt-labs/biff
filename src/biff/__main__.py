@@ -212,10 +212,11 @@ def _format_idle_banners(
 ) -> list[str]:
     """Format drained idle-mode notifications as REPL banner lines.
 
-    Invites render as a phone banner; other bodied notifications as a
-    ``▶`` line honouring the timestamp toggle.  Accepts are silent
-    (the handshake owns them).  The pending-invite bookkeeping lives in
-    :meth:`TalkState.drain_idle`; this is pure presentation.
+    Every bodied frame — invite or idle-arriving message — renders as a
+    yellow ``▶`` line in the shared who/read/wall idiom, honouring the
+    timestamp toggle.  Accepts are silent (the handshake owns them).  The
+    pending-invite bookkeeping lives in :meth:`TalkState.drain_idle`; this
+    is pure presentation.
     """
     lines: list[str] = []
     for notif in notifs:
