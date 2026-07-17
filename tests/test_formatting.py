@@ -345,6 +345,14 @@ class TestFormatTalkLine:
         assert format_talk_line("eric:tty2", "   ") == []
         assert format_talk_line("eric:tty2", "\t \n") == []
 
+    def test_internal_space_runs_preserved(self) -> None:
+        # The message is the user's content — runs of intentional spaces (aligned
+        # text) must survive verbatim.  wrap(replace_whitespace=False) keeps them;
+        # the default rewrites each whitespace char and can alter the body.
+        assert format_talk_line("eric:tty2", "a    b   c") == [
+            "▶  eric:tty2  a    b   c"
+        ]
+
     def test_giant_label_and_body_render_bounded(self) -> None:
         # Defense in depth for the O(label x body) amplification: even if a
         # forged megabyte label/body slips past the boundary clamp, the render

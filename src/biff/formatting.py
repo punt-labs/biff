@@ -398,16 +398,22 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     safe_label = _truncate(terminal_safe(label), _MAX_LABEL_WIDTH)
     lead = f"{HEADER_PREFIX}{stamp}{safe_label}  "
     width = max(_TALK_WRAP_MIN, TABLE_WIDTH - visible_width(lead))
-    chunks = textwrap.wrap(safe_body, width) or [""]
+    # replace_whitespace=False keeps the sender's message verbatim — textwrap's
+    # default would rewrite each whitespace char to a space.  terminal_safe has
+    # already stripped every control char (tabs, newlines) before this point, so
+    # only spaces remain: nothing can inject a line or skew the wrap width.
+    chunks = textwrap.wrap(safe_body, width, replace_whitespace=False) or [""]
     indent = " " * min(visible_width(lead), TABLE_WIDTH)
     return [lead + chunks[0], *(indent + chunk for chunk in chunks[1:])]
 
 
 def _truncate(text: str, width: int) -> str:
-    """Return *text* clipped to *width* display columns, ending with ``\u2026``.
+    """Return *text* clipped to *width* code points, ending with ``\u2026``.
 
-    *text* is already neutralised (no ANSI, no control characters), so its
-    length equals its display width.
+    Clips by code-point count (``len``) as an approximation of display width.
+    *text* is already neutralised (no ANSI, no control characters), so one code
+    point is usually one column \u2014 but wide glyphs (emoji, CJK) occupy more than
+    one terminal column, so the clip is not column-accurate for them.
     """
     if len(text) <= width:
         return text
