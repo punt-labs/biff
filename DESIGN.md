@@ -5244,3 +5244,81 @@ address, the fix is usually to *remove* the partition coordinate that does not
 belong in the address — not to thread it further. Cross-repo/cross-org ``/write``
 mail stays on its own repo-partitioned durable-inbox path (DES-030); only the
 ephemeral talk-notify subject changed.
+
+## DES-049: Force-Reconnect Guarded by a Reconnect Epoch — and the Non-Atomic Reconnect Flush Window
+
+**Date:** 2026-07-17
+**Status:** SETTLED
+**Topic:** Why a scheduled `_force_reconnect` could tear down a client that had
+already transparently reconnected, why `is_connected` cannot discriminate the two
+cases, and why the residual flush-window teardown is proven harmless rather than
+eliminated
+**Bead:** biff-xko
+**Related:** DES-041 (keepalive wedge liveness), DES-042 (proactive wedge detector /
+force-reconnect), DES-047 (`talkSubGen` generation guard), ``docs/nats-relay.tex``
+
+### Context
+
+DES-042's proactive detector closes a wedged half-open socket after
+`_WEDGE_FORCE_RECONNECT_THRESHOLD` consecutive runtime timeouts. But nats-py also
+recovers a half-open socket *transparently* — same client object, subscriptions
+replayed — via its own keepalive PING loop. When a `_force_reconnect` is scheduled
+off a stale timeout observation and, by the time it acquires `_connect_lock`, the
+client has already transparently reconnected, the re-check under the lock read only
+`is_connected`. But `is_connected` is `ztrue` for **both** the wedged client the
+caller observed *and* the healthy client nats-py just rebuilt — the datum cannot
+carry the distinction. So the guard tore down a healthy client, dropping its replayed
+subscriptions (the exact loss DES-047 fights) and forcing a needless redial.
+
+### Decision — the epoch is the discriminator
+
+`(generation, reconnectEpoch)` is the complete transport identity. `generation`
+bumps on a fresh dial (`_open_connection`); `reconnectEpoch` bumps in nats-py's
+`reconnected_cb` on a same-object transparent reconnect. `_tracked` captures the
+gate epoch atomically with the `owner`/generation identity (no await before the
+compare); `_force_reconnect` force-closes only when the client is still the wedged
+object AND `reconnectEpoch == gate_epoch`. A transparent reconnect that completed
+during the lock-wait advances the epoch and turns the teardown into a no-op; a
+genuinely-wedged client (epoch unchanged) is still torn down. The safety property
+`StaleForceTeardown` is model-checked in ``docs/nats-relay.tex`` and the pre-fix
+`is_connected`-only variant is preserved as a frozen ProB counterexample
+(``docs/nats-relay-xko-isconnected.tex``).
+
+### The residual: nats-py's reconnect is not atomic
+
+Wire review (djb) found that the epoch bump *lags* the socket coming up. nats-py
+sets the socket `CONNECTED`, then `await self.flush()` (a network round-trip), then
+fires `reconnected_cb` — the `reconnectEpoch += 1`. In that flush window a scheduled
+teardown re-checking under the lock sees `is_connected` true **and** `reconnectEpoch
+== gate_epoch` (both skip-conjuncts fail to skip) and force-closes a socket-healthy
+client; the deferred bump then lands on the reset epoch, producing `reconnectEpoch =
+1` while the client is `disconnected`/`_nc is None` — a state the invariant
+`connState ∈ {disconnected,closed} ⟹ reconnectEpoch = 0` declared impossible. The
+model was atomic; reality is not. Per the recurring lesson (a recurring defect class
+means the model is missing a state), the spec was extended, not the code patched.
+
+``docs/nats-relay.tex`` now models the window explicitly: an `epochPending` ghost,
+`ReconnectSocketUp` / `ReconnectEpochObserved` splitting the atomic reconnect into
+its two real steps, and `FlushWindowForceTeardown` for the teardown of an
+unobserved-but-healed client. The too-strong state invariant is reclassified as an
+**eventually-true recovery property**; option "reorder the reset to land last" was
+rejected because it does not match the code (`_force_reconnect` resets the epoch and
+the deferred `_on_reconnect` genuinely lands after it). probcli (147 states, all
+operations covered, no deadlock) proves, as CTL: `spuriousTeardown` stays false
+(the DES-042/xko guarantee holds), the biff-tww half-open→disconnected liveness
+holds, the flush-window teardown is bounded and self-healing
+(`disconnected ∧ epochPending ⟹ EF connected ∧ ¬epochPending`), and a non-vacuous
+`EF` confirms the model genuinely reaches the previously-"impossible" state.
+
+### Outcome
+
+The guard eliminates every teardown it can *observe*; the residual **unobservable**
+window (bounded to one nats-py flush, ~20 ms) is proven to cost at most one wasted
+redial and to self-heal on the next `_ensure_connected`, never a strand or a
+deadlock. The code was found to **already conform** to the extended, proven model —
+this is a spec-only correction; no code change beyond the epoch guard itself.
+Verified: ``fuzz`` + probcli on the spec, zero-GAP audit (the deferred-bump-after-
+teardown path closed by ``test_flush_window_teardown_then_late_cb_heals``), and
+``make check`` (1743). The lesson mirrors DES-041's: an unverified "it self-heals"
+is not a property until the model checks it — so the window was modeled and proven,
+not argued.
