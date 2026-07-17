@@ -444,6 +444,18 @@ class NatsRelay:
         # matches, so a superseded client's late callback cannot mutate state
         # for the live connection (Bugbot: stale-callback race).
         self._generation = 0
+        # Per-client counter of nats-py's *transparent* same-object reconnects
+        # (``reconnected_cb``).  Where ``_generation`` counts fresh dials,
+        # ``_reconnect_epoch`` counts in-place reconnects that leave the client
+        # object — and ``_generation`` — unchanged.  The pair
+        # ``(_generation, _reconnect_epoch)`` is the complete identity of the
+        # live transport: a force-reconnect whose gate observed an earlier epoch
+        # is a no-op against a client that has since healed itself in place
+        # (``nats-relay.tex`` ``reconnectEpoch`` / ``StaleForceTeardown``,
+        # biff-xko).  ``is_connected`` cannot separate a wedged socket from a
+        # reconnected one — it is true in both — so the epoch carries the datum
+        # ``is_connected`` does not.
+        self._reconnect_epoch = 0
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
@@ -532,7 +544,14 @@ class NatsRelay:
                 if is_connected and self._health.should_force_reconnect(
                     _WEDGE_FORCE_RECONNECT_THRESHOLD
                 ):
-                    await self._force_reconnect()
+                    # Capture the reconnect epoch at the gate (with the owner
+                    # identity above): if a transparent reconnect completes on
+                    # the same client before _force_reconnect re-checks under
+                    # the lock, the epoch advances and the teardown is skipped —
+                    # the wedge already healed (nats-relay.tex StaleForceTeardown,
+                    # biff-xko).  No await separates this from the gate decision,
+                    # so self._reconnect_epoch is the gate-time value.
+                    await self._force_reconnect(self._reconnect_epoch)
             raise
         except (KeyNotFoundError, BucketNotFoundError, NotFoundError):
             # A "not found" is the server answering — proof of liveness.
@@ -546,7 +565,7 @@ class NatsRelay:
             self._health.record_success()
         return result
 
-    async def _force_reconnect(self) -> None:
+    async def _force_reconnect(self, gate_epoch: int) -> None:
         """Tear down a half-open connection so the next call rebuilds it fresh.
 
         Fired by :meth:`_tracked` after ``_WEDGE_FORCE_RECONNECT_THRESHOLD``
@@ -567,12 +586,30 @@ class NatsRelay:
         stopped being connected while we waited for the lock: if nats-py's own
         keepalive flipped it to reconnecting after the ``_tracked`` gate saw it
         connected, that reconnect owns recovery — do not tear it down.
+
+        The under-lock guard has two conjuncts, the complete transport identity
+        ``(generation, reconnectEpoch)`` (``nats-relay.tex``): force-close only
+        when *(i)* the client object is unchanged (``self._nc is wedged`` — the
+        DES-042 generation guard) *and* *(ii)* the reconnect epoch is unchanged
+        since the gate observed it (``self._reconnect_epoch == gate_epoch``).
+        If *either* advanced — a full redial bumped the object, or a transparent
+        same-object reconnect bumped the epoch — the wedge already healed and
+        the teardown is skipped.  The epoch conjunct closes biff-xko: between
+        the gate and this re-check, nats-py can complete a transparent reconnect
+        on the same client, leaving ``is_connected`` true exactly as it was when
+        wedged; only the advanced epoch distinguishes the healed client from a
+        still-wedged one, so tearing it down here would kill a healthy client.
         """
         wedged = self._nc
         if wedged is None or wedged.is_closed:
             return
         async with self._connect_lock:
-            if self._nc is not wedged or wedged.is_closed or not wedged.is_connected:
+            if (
+                self._nc is not wedged
+                or wedged.is_closed
+                or not wedged.is_connected
+                or self._reconnect_epoch != gate_epoch
+            ):
                 return
             logger.info(
                 "NATS wedge confirmed after %d timed-out requests — forcing reconnect",
@@ -583,6 +620,11 @@ class NatsRelay:
             self._js = None
             self._kv = None
             self._names_kv = None
+            # Discarding the client resets the epoch: a counter of reconnects on
+            # the current client is meaningless once there is no current client
+            # (nats-relay.tex: ForceReconnect sets reconnectEpoch' = 0, and the
+            # invariant connState in {disconnected, closed} => reconnectEpoch=0).
+            self._reconnect_epoch = 0
 
     def _connection_callbacks(
         self, generation: int
@@ -613,6 +655,12 @@ class NatsRelay:
                 return  # stale callback from a superseded client
             # Health tracker owns the log line (with recovery latency).
             self._health.record_reconnected()
+            # A transparent same-object reconnect completed: advance the epoch
+            # so a force-reconnect whose gate observed the earlier value skips
+            # the now-healed client (nats-relay.tex Reconnect, biff-xko).  The
+            # client object and _generation are unchanged — nats-py reconnects
+            # in place — so the epoch is the only signal that this happened.
+            self._reconnect_epoch += 1
 
         async def _on_closed() -> None:
             if self._generation != generation:
@@ -668,6 +716,10 @@ class NatsRelay:
             # value it closed over; a superseded client's late callback finds a
             # newer generation and no-ops (Bugbot: stale-callback race).
             self._generation += 1
+            # A fresh client has undergone no in-place reconnects; reset the
+            # epoch so it counts reconnects on *this* client only (nats-relay.tex
+            # invariant connState in {disconnected, closed} => reconnectEpoch=0).
+            self._reconnect_epoch = 0
             nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
                 self._url,
                 name=self._name,
