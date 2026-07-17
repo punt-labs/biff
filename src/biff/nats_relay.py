@@ -139,6 +139,30 @@ async def safe_close(nc: NatsClient) -> None:
             raise
 
 
+def _scrub_validation_error(exc: ValidationError | ValueError) -> str:
+    """Render a validation failure without leaking the frame content.
+
+    ``ValidationError.__str__`` embeds ``input_value`` — the raw frame body,
+    which for a talk/mail frame is private plaintext.  Return only the field
+    locations and error types, with input, url, and context stripped, so a
+    poison-frame log line cannot leak a message body.  A plain ``ValueError``
+    (no structured errors) degrades to its type name — never its message.
+
+    Safe only for models whose validation-error ``loc`` cannot contain
+    input-derived keys: no ``extra='forbid'`` and no dict-keyed fields.  On such
+    a model ``loc`` would carry attacker-controlled key names and this would
+    leak input — reuse elsewhere must re-verify that invariant.
+    """
+    if not isinstance(exc, ValidationError):
+        return type(exc).__name__
+    return "; ".join(
+        f"{'.'.join(str(part) for part in err['loc'])}:{err['type']}"
+        for err in exc.errors(
+            include_input=False, include_url=False, include_context=False
+        )
+    )
+
+
 class _ConnectionHealth:
     """Single source of connection-health diagnostics for :class:`NatsRelay`.
 
@@ -1165,12 +1189,15 @@ class NatsRelay:
         subject: str,
         durable: str,
     ) -> list[Message]:
-        """Pull, ack, and delete consumer for a WORK_QUEUE subject.
+        """Pull valid frames, ack them, and delete the consumer for a subject.
 
         Shared implementation for :meth:`fetch` (TTY inbox) and
-        :meth:`fetch_user_inbox` (user broadcast inbox).  Acks are
-        fire-and-forget in nats.py, so we flush before deleting the
-        consumer to ensure the server has processed all acks.
+        :meth:`fetch_user_inbox` (user broadcast inbox).  A valid frame is
+        acked (WORK_QUEUE deletes it); a malformed frame is ``term()``ed —
+        never acked — so a wire-integrity fault is not silently destroyed as
+        if delivered (biff-cuy).  Acks are fire-and-forget in nats.py, so we
+        flush before deleting the consumer to ensure the server has processed
+        all acks.
         """
         sub = await js.pull_subscribe(
             subject,
@@ -1190,9 +1217,29 @@ class NatsRelay:
             for raw in raw_msgs:
                 try:
                     msg = Message.model_validate_json(raw.data)
-                    messages.append(msg)
-                except (ValidationError, ValueError):
-                    logger.warning("Skipping malformed NATS message on %s", subject)
+                except (ValidationError, ValueError) as exc:
+                    # A malformed frame must never be acked: ack removes it from
+                    # the WORK_QUEUE as if delivered, silently destroying the
+                    # evidence of a wire-integrity fault.  term() is JetStream's
+                    # poison-message signal — it stops redelivery (no nak DoS
+                    # loop on a persistently-bad frame) and emits a
+                    # MSG_TERMINATED advisory so the drop is observable off-box.
+                    #
+                    # Never interpolate str(exc): ValidationError.__str__ embeds
+                    # input_value == the raw frame body (private plaintext), and
+                    # term() then deletes the only other copy.  Log field
+                    # locations and error types only, with input/url/context
+                    # scrubbed (PII guard).
+                    detail = _scrub_validation_error(exc)
+                    logger.error(
+                        "Terminating malformed NATS frame on %s (%d bytes): %s",
+                        subject,
+                        len(raw.data),
+                        detail,
+                    )
+                    await raw.term()
+                    continue
+                messages.append(msg)
                 await raw.ack()
 
             # Acks are fire-and-forget publishes in nats.py.  Flush

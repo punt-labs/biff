@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A malformed message frame is no longer silently deleted from the durable inbox (biff-cuy).** `NatsRelay._fetch_from_subject` acked every fetched frame *before* checking whether it parsed as a `Message`, so a frame that failed validation was removed from the WORK_QUEUE as if delivered — permanently destroyed with only a `WARNING`. A malformed frame is now `term()`ed instead of acked: `term()` is JetStream's poison-message signal, so the frame leaves the queue without a delivery ack, redelivery stops (no nak loop on a persistently-bad frame), and the server emits a `MSG_TERMINATED` advisory that makes the drop observable off-box. The event is logged at `ERROR` (byte length and validation error only — never the raw content). Valid frames still ack normally.
+
 ## [1.11.1] - 2026-07-16
 
 ### Fixed

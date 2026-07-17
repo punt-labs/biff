@@ -33,6 +33,7 @@ MY_USER = "kai"
 MY_TTY = "abc12345"
 MY_KEY = "kai:abc12345"
 OTHER_KEY = "eric:def67890"
+_FORGED_KEY = "mallory:99999999"
 
 
 def _pending_keys(st: TalkState) -> dict[str, str]:
@@ -322,6 +323,28 @@ class TestPollAccept:
         assert others == []
         assert st.phase is TalkPhase.CONNECTED
 
+    def test_forged_invite_does_not_auto_accept(self) -> None:
+        """Consent boundary, symmetric with ``test_foreign_accept_discarded``.
+
+        The mutual-glare auto-accept tiebreak is guarded by the same session-key
+        scrutiny (#279) as the accept branch: an ``invite`` whose ``from_key`` is
+        not the invited session's key cannot trigger auto-accept, even though our
+        key is lexicographically higher.  biff-9la widened the set of legitimate
+        invite emitters, so a forged mutual-invite must be rejected here exactly
+        as a forged accept is — it becomes a third-party banner, never a connect.
+        """
+        # A forged key BELOW ours: the ``my_key > partner_key`` tiebreak alone
+        # would favour auto-accept, so only the ``from_key == partner_key``
+        # consent guard stands between the forgery and a connect.  It holds.
+        forged = "aaa:00000000"
+        assert forged < MY_KEY
+        st = self._inviting(OTHER_KEY)
+        st.receive(_invite("aaa", forged, body="talk?"))
+        outcome, others = st.poll_accept()
+        assert outcome is AcceptOutcome.NONE
+        assert st.phase is TalkPhase.INVITING  # no forged connect
+        assert [n.nfrom for n in others] == ["aaa"]  # surfaced as a banner
+
     def test_mutual_invite_lower_key_keeps_waiting(self) -> None:
         # From eric's side: OTHER_KEY < MY_KEY, so eric stays the inviter.
         st = TalkState(
@@ -415,9 +438,6 @@ class TestDrainConnected:
 # ---------------------------------------------------------------------------
 # Connected-phase partner binding (talk.tex DrainForeignMessage / DrainForeignEnd)
 # ---------------------------------------------------------------------------
-
-
-_FORGED_KEY = "mallory:99999999"
 
 
 class TestConnectedPartnerBinding:
@@ -1067,6 +1087,24 @@ class TestAgentAutoAcceptSignal:
         st.receive(_invite("eric", OTHER_KEY))  # unsolicited — merely recorded
         drain = st.drain_for_agent()
         assert drain.auto_accept is None
+
+    def test_forged_invite_does_not_auto_accept(self) -> None:
+        """Agent-path twin of ``TestPollAccept.test_forged_invite_...``.
+
+        ``_absorb_invite`` guards the auto-accept on ``nfrom_key == partner_key``
+        just as the REPL ``poll_accept`` does, so a forged mutual invite from a
+        non-partner session is recorded as a pending invite, never consumed into
+        a connection — no ``auto_accept`` signal and the phase stays INVITING.
+        """
+        forged = "aaa:00000000"  # below MY_KEY — key ordering alone would connect
+        assert forged < MY_KEY
+        st = _make_state()
+        st.begin_invite(partner="eric", partner_tty="tty2", partner_key=OTHER_KEY)
+        st.receive(_invite("aaa", forged, body="talk?"))
+        drain = st.drain_for_agent()
+        assert drain.auto_accept is None
+        assert st.phase is TalkPhase.INVITING  # no forged connect
+        assert "aaa" in drain.pending  # recorded as a plain invite, not consumed
 
     def test_received_accept_signals_no_auto_accept(self) -> None:
         """DrainAcceptWhileInviting owes no accept — we received one, not sent."""
