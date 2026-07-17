@@ -23,6 +23,8 @@ from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
 
+pytestmark = pytest.mark.nats
+
 
 @pytest.fixture
 async def kai_biff(

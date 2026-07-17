@@ -38,6 +38,9 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
     nc = await nats.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
     # Delete both production and dev-prefixed streams for full cleanup.
+    # The names bucket (TTY reservations) is global, not repo-scoped —
+    # leaving it makes ttyN climb across tests, so exact-name presence
+    # assertions (tty1, tty2) fail once a second test reserves a name.
     for prefix in ("biff", "biff-dev"):
         with suppress(Exception):
             await js.delete_stream(f"{prefix}-inbox")
@@ -45,6 +48,8 @@ async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ig
             await js.delete_stream(f"{prefix}-wtmp")
         with suppress(Exception):
             await js.delete_key_value(f"{prefix}-sessions")  # pyright: ignore[reportUnknownMemberType]
+        with suppress(Exception):
+            await js.delete_key_value(f"{prefix}-names")  # pyright: ignore[reportUnknownMemberType]
     await nc.close()
 
 

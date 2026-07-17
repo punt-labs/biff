@@ -38,9 +38,13 @@ class TestCrossUserVisibility:
         await kai.call("plan", message="refactoring the auth layer")
         result = await eric.call("who")
 
+        # /who renders a plan FLAG in the P column (second from the right,
+        # after S and before HOST), not the plan text — the full text is
+        # shown by /finger (see test_plan_visible_via_finger).  eric sees
+        # kai present with the plan flag set.
         assert "kai" in result
-        assert "refactoring" in result
-        assert "layer" in result
+        kai_row = next(line for line in result.splitlines() if "kai:" in line)
+        assert kai_row.split()[-2] == "+", f"kai should show a plan flag: {kai_row!r}"
 
     @pytest.mark.transcript
     async def test_plan_visible_via_finger(
@@ -94,11 +98,15 @@ class TestMultiUserPresence:
         kai_sees = await kai.call("who")
         eric_sees = await eric.call("who")
 
+        # Both users are present and both rows carry the plan FLAG (P
+        # column, second from the right).  /who shows the flag, not the
+        # plan text — the text is via /finger.
         for result in (kai_sees, eric_sees):
             assert "kai" in result
             assert "eric" in result
-            assert "refactoring auth" in result
-            assert "reviewing PRs" in result
+            for name in ("kai:", "eric:"):
+                row = next(line for line in result.splitlines() if name in line)
+                assert row.split()[-2] == "+", f"{name} needs a plan flag: {row!r}"
 
     @pytest.mark.transcript
     async def test_finger_each_other(
@@ -269,9 +277,12 @@ class TestTtyNameAutoAssign:
             # /who reads from KV — should show friendly names.
             result = await kai_r.call("who")
 
-            # Must show friendly names, NOT hex IDs
-            assert "tty1" in result, f"Expected 'tty1' in /who output, got: {result}"
-            assert "tty2" in result, f"Expected 'tty2' in /who output, got: {result}"
+            # Must show friendly ttyN names, NOT the raw hex.  TTY names are
+            # reserved per user, so kai and eric each get tty1 from their own
+            # namespace — the friendly name, not the hex the state was seeded
+            # with (aabbccdd / 11223344).
+            assert "kai:tty1" in result, f"Expected 'kai:tty1' in /who: {result}"
+            assert "eric:tty1" in result, f"Expected 'eric:tty1' in /who: {result}"
             # Must NOT show hex IDs
             assert "aabbccdd" not in result, (
                 f"Hex ID 'aabbccdd' should not appear in /who: {result}"

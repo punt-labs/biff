@@ -50,7 +50,10 @@ class TestPresence:
         """Both sessions get auto-assigned ttyN names."""
         assert kai.tty_name.startswith("tty")
         assert eric.tty_name.startswith("tty")
-        assert kai.tty_name != eric.tty_name
+        # TTY names are reserved per user, so kai and eric may draw the same
+        # ttyN from independent namespaces.  The session key (user + tty hex)
+        # is what makes each session globally unique.
+        assert kai.session_key != eric.session_key
 
 
 class TestMessaging:
@@ -114,7 +117,11 @@ class TestPlanVisibility:
     async def test_plan_visible_in_who(self, kai: CliContext, eric: CliContext) -> None:
         await commands.plan(kai, "fixing tests")
         result = await commands.who(eric)
-        assert "fixing tests" in result.text
+        # /who shows a plan FLAG (P column, second from the right), not the
+        # plan text — the full text is shown by /finger.
+        assert "kai" in result.text
+        kai_row = next(line for line in result.text.splitlines() if "kai:" in line)
+        assert kai_row.split()[-2] == "+", f"kai should show a plan flag: {kai_row!r}"
 
 
 class TestSessionCleanup:
