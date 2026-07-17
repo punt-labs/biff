@@ -1165,12 +1165,15 @@ class NatsRelay:
         subject: str,
         durable: str,
     ) -> list[Message]:
-        """Pull, ack, and delete consumer for a WORK_QUEUE subject.
+        """Pull valid frames, ack them, and delete the consumer for a subject.
 
         Shared implementation for :meth:`fetch` (TTY inbox) and
-        :meth:`fetch_user_inbox` (user broadcast inbox).  Acks are
-        fire-and-forget in nats.py, so we flush before deleting the
-        consumer to ensure the server has processed all acks.
+        :meth:`fetch_user_inbox` (user broadcast inbox).  A valid frame is
+        acked (WORK_QUEUE deletes it); a malformed frame is ``term()``ed —
+        never acked — so a wire-integrity fault is not silently destroyed as
+        if delivered (biff-cuy).  Acks are fire-and-forget in nats.py, so we
+        flush before deleting the consumer to ensure the server has processed
+        all acks.
         """
         sub = await js.pull_subscribe(
             subject,
@@ -1190,9 +1193,24 @@ class NatsRelay:
             for raw in raw_msgs:
                 try:
                     msg = Message.model_validate_json(raw.data)
-                    messages.append(msg)
-                except (ValidationError, ValueError):
-                    logger.warning("Skipping malformed NATS message on %s", subject)
+                except (ValidationError, ValueError) as exc:
+                    # A malformed frame must never be acked: ack removes it from
+                    # the WORK_QUEUE as if delivered, silently destroying the
+                    # evidence of a wire-integrity fault.  term() is JetStream's
+                    # poison-message signal — it stops redelivery (no nak DoS
+                    # loop on a persistently-bad frame) and emits a
+                    # MSG_TERMINATED advisory so the drop is observable off-box.
+                    # Log the byte length and error, never the raw content (it
+                    # may carry partial message data — PII guard).
+                    logger.error(
+                        "Terminating malformed NATS frame on %s (%d bytes): %s",
+                        subject,
+                        len(raw.data),
+                        exc,
+                    )
+                    await raw.term()
+                    continue
+                messages.append(msg)
                 await raw.ack()
 
             # Acks are fire-and-forget publishes in nats.py.  Flush
