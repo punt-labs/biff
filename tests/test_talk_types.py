@@ -134,6 +134,19 @@ class TestTalkNotification:
         n = TalkNotification.from_payload(_message("\x00", OTHER_KEY, "hi", tty="tty2"))
         assert n.sender_label == "?:tty2"
 
+    def test_sender_label_whitespace_only_user_falls_back_to_placeholder(self) -> None:
+        # Spaces survive terminal_safe, so a whitespace-only ``from`` must not
+        # render an all-space username — the user half falls back to "?", the
+        # same as an empty or control-only ``from``.
+        n = TalkNotification.from_payload(_message("  ", OTHER_KEY, "hi", tty="tty2"))
+        assert n.sender_label == "?:tty2"
+
+    def test_sender_label_whitespace_only_tty_collapses_to_user(self) -> None:
+        # A whitespace-only tty must not render a trailing ``:   `` — it collapses
+        # to the bare user, the same as an empty or control-only tty.
+        n = TalkNotification.from_payload(_message("eric", OTHER_KEY, "hi", tty="   "))
+        assert n.sender_label == "eric"
+
     def test_from_payload_clamps_oversized_wire_fields(self) -> None:
         # Every wire field is attacker-controlled (DES-046); a malicious
         # publisher can bypass the sender-side MAX_BODY_LEN truncation.  The
@@ -176,6 +189,42 @@ class TestTalkNotification:
         assert n.nfrom_tty == ""  # number → default, not "42"
         assert n.nbody == ""  # dict → default, not a stringified mapping
         assert n.ntype == "message"  # a real str is preserved
+
+    def test_from_payload_bounds_key_user_half_like_from(self) -> None:
+        # `from` was clamped to MAX_FIELD_LEN (64) while from_key kept up to
+        # MAX_KEY_LEN (129), so a self-consistent invite with a 65-char handle
+        # had nfrom truncated to 64 but the key user-half left at 65 — failing
+        # PendingInvite's key_user==user check and silently dropping the invite.
+        # Both halves must be bounded to MAX_FIELD_LEN identically.
+        handle = "u" * (MAX_FIELD_LEN + 1)
+        n = TalkNotification.from_payload(
+            {
+                "type": "invite",
+                "from": handle,
+                "from_tty": "tty2",
+                "from_key": f"{handle}:tty2",
+                "body": "hi",
+            }
+        )
+        assert n.nfrom == n.nfrom_key.partition(":")[0]  # halves agree after clamp
+        # The self-consistent invite is recorded, not dropped:
+        invite = PendingInvite.from_notification(n)
+        assert invite.user == invite.session_key.partition(":")[0]
+
+    def test_from_payload_colonless_key_stays_fail_closed(self) -> None:
+        # A genuinely malformed key (no colon) stays colonless and is rejected at
+        # the PendingInvite boundary — fail-closed, as before.
+        n = TalkNotification.from_payload(
+            {
+                "type": "invite",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "ericnocolon",
+                "body": "hi",
+            }
+        )
+        with pytest.raises(ValueError, match="must name a session"):
+            PendingInvite.from_notification(n)
 
 
 # ---------------------------------------------------------------------------

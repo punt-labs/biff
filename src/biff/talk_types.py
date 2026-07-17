@@ -199,45 +199,73 @@ class TalkNotification:
         length-only; :func:`terminal_safe` neutralises control characters at the
         render boundary.
 
-        Each field is also *type*-guarded via :meth:`_field`: only a ``str`` is
+        Each field is also *type*-guarded via :meth:`_trusted`: only a ``str`` is
         trusted, so a forged ``null`` (JSON None), number, or nested dict/list
         falls back to the field's documented default rather than leaking
         ``str(None)`` → ``"None"`` or stringifying a structure past the clamp.
+
+        Session keys clamp *each half* of ``user:tty`` to :data:`MAX_FIELD_LEN`
+        via :meth:`_key_field`, so a key's user-half is bounded identically to
+        ``nfrom`` — clamping the whole key to :data:`MAX_KEY_LEN` while ``nfrom``
+        clamped to :data:`MAX_FIELD_LEN` left a 65-char handle mismatched, and
+        :meth:`PendingInvite.__post_init__` then silently dropped the invite.
         """
         return cls(
             ntype=cls._field(raw, "type", "", MAX_FIELD_LEN),
             nfrom=cls._field(raw, "from", _MISSING_SENDER, MAX_FIELD_LEN),
             nfrom_tty=cls._field(raw, "from_tty", "", MAX_FIELD_LEN),
-            nfrom_key=cls._field(raw, "from_key", "", MAX_KEY_LEN),
-            nto=cls._field(raw, "to_key", "", MAX_KEY_LEN),
+            nfrom_key=cls._key_field(raw, "from_key"),
+            nto=cls._key_field(raw, "to_key"),
             nbody=cls._field(raw, "body", "", MAX_BODY_LEN),
         )
 
     @staticmethod
-    def _field(raw: Mapping[str, object], key: str, default: str, limit: int) -> str:
-        """Return the clamped ``str`` at *key*, or *default* when it is not a str.
+    def _trusted(raw: Mapping[str, object], key: str, default: str) -> str:
+        """Return the raw ``str`` at *key*, or *default* when it is not a str.
 
         The attacker-controlled ingress (DES-046) can carry any JSON type for a
         field.  Trust only a ``str``; coerce every other type (None, number,
-        dict, list) to *default* BEFORE the *limit* clamp, so no forged value is
-        stringified — neither a leaked ``"None"`` nor a giant nested structure.
+        dict, list) to *default*, so no forged value is stringified — neither a
+        leaked ``"None"`` nor a giant nested structure amplified past a clamp.
         """
         value = raw.get(key)
-        return (value if isinstance(value, str) else default)[:limit]
+        return value if isinstance(value, str) else default
+
+    @classmethod
+    def _field(
+        cls, raw: Mapping[str, object], key: str, default: str, limit: int
+    ) -> str:
+        """Return the trusted ``str`` at *key* length-clamped to *limit*."""
+        return cls._trusted(raw, key, default)[:limit]
+
+    @classmethod
+    def _key_field(cls, raw: Mapping[str, object], key: str) -> str:
+        """Return a ``user:tty`` session key with each half clamped identically.
+
+        Bounds the user-half and tty-half to :data:`MAX_FIELD_LEN` each — the
+        same bound ``nfrom``/``nfrom_tty`` use — so a self-consistent frame keeps
+        ``key_user == nfrom`` after coercion.  A colonless (malformed) key stays
+        colonless and is rejected downstream by
+        :meth:`PendingInvite.__post_init__` — fail-closed.
+        """
+        user, sep, tty = cls._trusted(raw, key, "").partition(":")
+        if not sep:
+            return user[:MAX_FIELD_LEN]
+        return f"{user[:MAX_FIELD_LEN]}:{tty[:MAX_FIELD_LEN]}"
 
     @property
     def sender_label(self) -> str:
         """Render the sender as a copy-pasteable ``user:tty`` reply address.
 
-        Neutralises both halves via :func:`terminal_safe`.  Falls back to the
-        bare user when the *sanitised* tty is empty — a control-only tty (raw
-        truthy, empty once neutralised) collapses to ``user``, never a dangling
-        ``user:``.  Symmetrically, a control-only ``from`` (empty once
-        neutralised) falls back to :data:`_MISSING_SENDER` so the user half is
-        never empty — the address must not begin with a bare ``:tty``.
+        Neutralises both halves via :func:`terminal_safe`, then strips them:
+        spaces survive neutralisation, so a half that is empty OR whitespace-only
+        is treated as absent.  An absent tty collapses to the bare ``user`` (never
+        a dangling ``user:`` or ``user:   ``); an absent ``from`` falls back to
+        :data:`_MISSING_SENDER` so the user half is never empty or all-space — the
+        address must not begin with a bare ``:tty``.
         """
-        user = terminal_safe(self.nfrom) or _MISSING_SENDER
-        tty = terminal_safe(self.nfrom_tty)
+        user = terminal_safe(self.nfrom).strip() or _MISSING_SENDER
+        tty = terminal_safe(self.nfrom_tty).strip()
         return f"{user}:{tty}" if tty else user
 
     @property
