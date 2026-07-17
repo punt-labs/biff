@@ -390,7 +390,10 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     non-notification source would reintroduce the linear term.
     """
     safe_body = terminal_safe(body)
-    if not safe_body:
+    # Whitespace survives terminal_safe (spaces are printable), so guard on the
+    # stripped body: an all-whitespace or control-only payload has nothing to
+    # show and must render no line, never a bare arrow lead.
+    if not safe_body.strip():
         return []
     safe_label = _truncate(terminal_safe(label), _MAX_LABEL_WIDTH)
     lead = f"{HEADER_PREFIX}{stamp}{safe_label}  "
@@ -412,8 +415,15 @@ def _truncate(text: str, width: int) -> str:
 
 
 def format_talk_end(label: str) -> str:
-    """Render a partner-hangup line in the ``\u25b6`` idiom."""
-    return f"{HEADER_PREFIX}{terminal_safe(label)} has ended the conversation."
+    """Render a partner-hangup line in the ``\u25b6`` idiom.
+
+    The label is capped at :data:`_MAX_LABEL_WIDTH` like the
+    :func:`format_talk_line` lead, so a forged sender label (bounded only by the
+    :meth:`TalkNotification.from_payload` ingress clamp) cannot drive the hangup
+    line past :data:`TABLE_WIDTH`.
+    """
+    safe_label = _truncate(terminal_safe(label), _MAX_LABEL_WIDTH)
+    return f"{HEADER_PREFIX}{safe_label} has ended the conversation."
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,15 @@ _CONTROL_TYPES = frozenset({"invite", "accept", "end", "withdraw"})
 _KNOWN_TYPES = _CONTROL_TYPES | {"message"}
 """Every modeled talk frame type — a frame typed outside this set is a wake poke."""
 
+_MISSING_SENDER = "?"
+"""Placeholder for a sender whose ``from`` is missing or empty after neutralisation.
+
+The reply address (:attr:`TalkNotification.sender_label`) must never render a
+bare ``:tty`` — a control-only ``from`` collapses to this placeholder so the
+user half is always present, matching :meth:`TalkNotification.from_payload`'s
+default for a missing ``from``.
+"""
+
 MAX_BODY_LEN = 512
 """Message body length cap (talk.tex ``maxBodyLen``).
 
@@ -192,7 +201,7 @@ class TalkNotification:
         """
         return cls(
             ntype=str(raw.get("type", ""))[:MAX_FIELD_LEN],
-            nfrom=str(raw.get("from", "?"))[:MAX_FIELD_LEN],
+            nfrom=str(raw.get("from", _MISSING_SENDER))[:MAX_FIELD_LEN],
             nfrom_tty=str(raw.get("from_tty", ""))[:MAX_FIELD_LEN],
             nfrom_key=str(raw.get("from_key", ""))[:MAX_KEY_LEN],
             nto=str(raw.get("to_key", ""))[:MAX_KEY_LEN],
@@ -203,12 +212,14 @@ class TalkNotification:
     def sender_label(self) -> str:
         """Render the sender as a copy-pasteable ``user:tty`` reply address.
 
-        Neutralises both halves via :func:`terminal_safe` and falls back to the
+        Neutralises both halves via :func:`terminal_safe`.  Falls back to the
         bare user when the *sanitised* tty is empty — a control-only tty (raw
-        truthy, empty once neutralised) must collapse to ``user``, never render
-        a dangling ``user:`` (biff-7g7).
+        truthy, empty once neutralised) collapses to ``user``, never a dangling
+        ``user:``.  Symmetrically, a control-only ``from`` (empty once
+        neutralised) falls back to :data:`_MISSING_SENDER` so the user half is
+        never empty — the address must not begin with a bare ``:tty``.
         """
-        user = terminal_safe(self.nfrom)
+        user = terminal_safe(self.nfrom) or _MISSING_SENDER
         tty = terminal_safe(self.nfrom_tty)
         return f"{user}:{tty}" if tty else user
 

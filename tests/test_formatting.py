@@ -338,6 +338,13 @@ class TestFormatTalkLine:
         # must produce no line — not a bare, dangling lead (biff-7g7).
         assert format_talk_line("eric:tty2", "\x00\x1b\x07") == []
 
+    def test_whitespace_only_body_renders_nothing(self) -> None:
+        # Spaces survive terminal_safe (they are printable), but a body with
+        # nothing but whitespace has nothing to show — it must render no line,
+        # not a bare ▶ lead (biff-7g7).
+        assert format_talk_line("eric:tty2", "   ") == []
+        assert format_talk_line("eric:tty2", "\t \n") == []
+
     def test_giant_label_and_body_render_bounded(self) -> None:
         # Defense in depth for the O(label x body) amplification: even if a
         # forged megabyte label/body slips past the boundary clamp, the render
@@ -385,3 +392,11 @@ class TestFormatTalkEnd:
         out = format_talk_end("e\x1b[2Jvil")
         assert "\x1b[2J" not in out
         assert out == "▶  e[2Jvil has ended the conversation."
+
+    def test_long_label_is_truncated(self) -> None:
+        # A forged label (up to the from_payload MAX_KEY_LEN clamp) must not
+        # produce an unbounded hangup line — the label is capped to the same
+        # _MAX_LABEL_WIDTH as format_talk_line's lead (biff-7g7).
+        out = format_talk_end("u" * 129)
+        assert len(out) <= TABLE_WIDTH
+        assert "…" in out
