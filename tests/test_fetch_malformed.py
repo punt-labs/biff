@@ -15,17 +15,19 @@ These tests mock JetStream at the boundary, so they run in tiers 1-2 (no
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 
-if TYPE_CHECKING:
-    import pytest
-
 _LOGGER_NAME = "biff.nats_relay"
 _SUBJECT = "biff.test.inbox.eric.tty2"
+
+# Short enough to survive pydantic's input-value truncation in a
+# ``string_too_long`` error, so any leak of the frame body shows in full.
+_SENTINEL = "LEAK_SEKRIT_body"
 
 
 def _raw(data: bytes) -> MagicMock:
@@ -98,3 +100,46 @@ class TestMalformedFrameNotSilentlyDropped:
         good.term.assert_not_awaited()
         bad.ack.assert_not_awaited()
         bad.term.assert_awaited_once()
+
+
+def _too_long_body_frame() -> bytes:
+    """A valid-JSON frame whose body starts with the sentinel and exceeds 512."""
+    body = _SENTINEL + "x" * 600  # > 512 → string_too_long ValidationError
+    payload = '{"from_user":"kai","to_user":"eric:tty2","body":"' + body + '"}'
+    return payload.encode()
+
+
+def _json_invalid_frame() -> bytes:
+    """A malformed-JSON frame carrying the sentinel in its raw bytes."""
+    return ('{"body": "' + _SENTINEL + '" not json').encode()
+
+
+class TestMalformedFrameLogDoesNotLeakContent:
+    """The ERROR log for a dropped frame must never carry frame content.
+
+    ``ValidationError.__str__`` embeds ``input_value`` — the raw frame body — so
+    interpolating the exception would leak private message plaintext.  Because
+    ``term()`` deletes the frame, that log line would be the *only* surviving
+    copy of the leaked content.  The scrub logs only field locations and error
+    types.
+    """
+
+    @pytest.mark.parametrize(
+        "payload",
+        [_too_long_body_frame(), _json_invalid_frame()],
+        ids=["too_long_body", "json_invalid"],
+    )
+    async def test_error_log_never_carries_frame_content(
+        self, payload: bytes, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        bad = _raw(payload)
+        relay, js = _relay_with([bad])
+        caplog.set_level(logging.ERROR, logger=_LOGGER_NAME)
+
+        messages = await relay._fetch_from_subject(js, subject=_SUBJECT, durable="d")
+
+        assert messages == []
+        bad.term.assert_awaited_once()  # still poison-terminated
+        bad.ack.assert_not_awaited()
+        for record in caplog.records:
+            assert _SENTINEL not in record.getMessage()

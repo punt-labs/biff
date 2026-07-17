@@ -139,6 +139,25 @@ async def safe_close(nc: NatsClient) -> None:
             raise
 
 
+def _scrub_validation_error(exc: ValidationError | ValueError) -> str:
+    """Render a validation failure without leaking the frame content.
+
+    ``ValidationError.__str__`` embeds ``input_value`` — the raw frame body,
+    which for a talk/mail frame is private plaintext.  Return only the field
+    locations and error types, with input, url, and context stripped, so a
+    poison-frame log line cannot leak a message body.  A plain ``ValueError``
+    (no structured errors) degrades to its type name — never its message.
+    """
+    if not isinstance(exc, ValidationError):
+        return type(exc).__name__
+    return "; ".join(
+        f"{'.'.join(str(part) for part in err['loc'])}:{err['type']}"
+        for err in exc.errors(
+            include_input=False, include_url=False, include_context=False
+        )
+    )
+
+
 class _ConnectionHealth:
     """Single source of connection-health diagnostics for :class:`NatsRelay`.
 
@@ -1200,13 +1219,18 @@ class NatsRelay:
                     # poison-message signal — it stops redelivery (no nak DoS
                     # loop on a persistently-bad frame) and emits a
                     # MSG_TERMINATED advisory so the drop is observable off-box.
-                    # Log the byte length and error, never the raw content (it
-                    # may carry partial message data — PII guard).
+                    #
+                    # Never interpolate str(exc): ValidationError.__str__ embeds
+                    # input_value == the raw frame body (private plaintext), and
+                    # term() then deletes the only other copy.  Log field
+                    # locations and error types only, with input/url/context
+                    # scrubbed (PII guard).
+                    detail = _scrub_validation_error(exc)
                     logger.error(
                         "Terminating malformed NATS frame on %s (%d bytes): %s",
                         subject,
                         len(raw.data),
-                        exc,
+                        detail,
                     )
                     await raw.term()
                     continue
