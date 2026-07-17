@@ -198,15 +198,32 @@ class TalkNotification:
         amplified O(label x body) by the renderer (biff-7g7).  Clamping is
         length-only; :func:`terminal_safe` neutralises control characters at the
         render boundary.
+
+        Each field is also *type*-guarded via :meth:`_field`: only a ``str`` is
+        trusted, so a forged ``null`` (JSON None), number, or nested dict/list
+        falls back to the field's documented default rather than leaking
+        ``str(None)`` → ``"None"`` or stringifying a structure past the clamp.
         """
         return cls(
-            ntype=str(raw.get("type", ""))[:MAX_FIELD_LEN],
-            nfrom=str(raw.get("from", _MISSING_SENDER))[:MAX_FIELD_LEN],
-            nfrom_tty=str(raw.get("from_tty", ""))[:MAX_FIELD_LEN],
-            nfrom_key=str(raw.get("from_key", ""))[:MAX_KEY_LEN],
-            nto=str(raw.get("to_key", ""))[:MAX_KEY_LEN],
-            nbody=str(raw.get("body", ""))[:MAX_BODY_LEN],
+            ntype=cls._field(raw, "type", "", MAX_FIELD_LEN),
+            nfrom=cls._field(raw, "from", _MISSING_SENDER, MAX_FIELD_LEN),
+            nfrom_tty=cls._field(raw, "from_tty", "", MAX_FIELD_LEN),
+            nfrom_key=cls._field(raw, "from_key", "", MAX_KEY_LEN),
+            nto=cls._field(raw, "to_key", "", MAX_KEY_LEN),
+            nbody=cls._field(raw, "body", "", MAX_BODY_LEN),
         )
+
+    @staticmethod
+    def _field(raw: Mapping[str, object], key: str, default: str, limit: int) -> str:
+        """Return the clamped ``str`` at *key*, or *default* when it is not a str.
+
+        The attacker-controlled ingress (DES-046) can carry any JSON type for a
+        field.  Trust only a ``str``; coerce every other type (None, number,
+        dict, list) to *default* BEFORE the *limit* clamp, so no forged value is
+        stringified — neither a leaked ``"None"`` nor a giant nested structure.
+        """
+        value = raw.get(key)
+        return (value if isinstance(value, str) else default)[:limit]
 
     @property
     def sender_label(self) -> str:

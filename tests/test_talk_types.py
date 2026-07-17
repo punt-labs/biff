@@ -157,6 +157,26 @@ class TestTalkNotification:
         assert len(n.nfrom_key) <= MAX_KEY_LEN
         assert len(n.nto) <= MAX_KEY_LEN
 
+    def test_from_payload_non_str_field_uses_documented_default(self) -> None:
+        # A forged payload can send JSON null (key present, value None), a number,
+        # or a nested dict/list for any field.  str(None) must not leak "None" as
+        # the sender, and a nested structure must not be stringified past the
+        # clamp — each non-str value falls back to that field's documented default
+        # (biff-7g7).
+        n = TalkNotification.from_payload(
+            {
+                "type": "message",
+                "from": None,
+                "from_tty": 42,
+                "from_key": OTHER_KEY,
+                "body": {"nested": "structure"},
+            }
+        )
+        assert n.nfrom == "?"  # documented missing-sender placeholder, not "None"
+        assert n.nfrom_tty == ""  # number → default, not "42"
+        assert n.nbody == ""  # dict → default, not a stringified mapping
+        assert n.ntype == "message"  # a real str is preserved
+
 
 # ---------------------------------------------------------------------------
 # PendingInvite — HintNamesSession value object

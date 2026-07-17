@@ -398,10 +398,14 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     safe_label = _truncate(terminal_safe(label), _MAX_LABEL_WIDTH)
     lead = f"{HEADER_PREFIX}{stamp}{safe_label}  "
     width = max(_TALK_WRAP_MIN, TABLE_WIDTH - visible_width(lead))
-    # replace_whitespace=False keeps the sender's message verbatim — textwrap's
-    # default would rewrite each whitespace char to a space.  terminal_safe has
-    # already stripped every control char (tabs, newlines) before this point, so
-    # only spaces remain: nothing can inject a line or skew the wrap width.
+    # replace_whitespace=False keeps the sender's spacing *within* a line —
+    # textwrap's default would rewrite each whitespace char to a space.
+    # terminal_safe has already stripped every control char (tabs, newlines)
+    # before this point, so only spaces remain: nothing can inject a line or skew
+    # the wrap width.  Whitespace that lands on a wrap boundary is still dropped
+    # (textwrap's drop_whitespace default) — the render is not byte-for-byte
+    # verbatim across wraps, and deliberately so: keeping boundary spaces would
+    # skew continuation lines off the hang indent for no reader benefit.
     chunks = textwrap.wrap(safe_body, width, replace_whitespace=False) or [""]
     indent = " " * min(visible_width(lead), TABLE_WIDTH)
     return [lead + chunks[0], *(indent + chunk for chunk in chunks[1:])]
