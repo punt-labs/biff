@@ -160,6 +160,16 @@ class TalkNotification:
         )
 
     @property
+    def sender_label(self) -> str:
+        """Render the sender as a copy-pasteable ``user:tty`` reply address.
+
+        Falls back to the bare user when the frame carries no tty.  The
+        render boundary neutralises the value via ``terminal_safe`` — this
+        is the raw address the REPL and MCP surfaces both display.
+        """
+        return f"{self.nfrom}:{self.nfrom_tty}" if self.nfrom_tty else self.nfrom
+
+    @property
     def is_invite(self) -> bool:
         """Whether this is an ``invite`` control frame."""
         return self.ntype == "invite"

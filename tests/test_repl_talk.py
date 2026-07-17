@@ -48,6 +48,13 @@ if TYPE_CHECKING:
 
 OTHER_KEY = "eric:def67890"
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(s: str) -> str:
+    """Drop SGR colour codes so plain layout can be asserted."""
+    return _ANSI.sub("", s)
+
 
 def _notif(
     ntype: str,
@@ -78,14 +85,23 @@ class TestFormatTalkLines:
     def test_message_conversation_style(self) -> None:
         lines = _format_talk_lines([_notif("message", body="hello there")])
         assert len(lines) == 1
-        assert "eric:tty2" in lines[0]
-        assert "hello there" in lines[0]
+        assert "▶  eric:tty2  hello there" in lines[0]
         assert "\033[36m" in lines[0]  # cyan
         assert "📞" not in lines[0]
 
     def test_message_without_tty(self) -> None:
         lines = _format_talk_lines([_notif("message", nfrom_tty="", body="hi")])
-        assert "eric ▶ hi" in lines[0]
+        assert "▶  eric  hi" in lines[0]
+
+    def test_long_message_wraps_with_aligned_continuation(self) -> None:
+        body = "word " * 30  # far wider than the 80-column table
+        lines = _format_talk_lines([_notif("message", body=body.strip())])
+        assert len(lines) > 1
+        # First line carries the ▶ prefix and the sender; continuations do not.
+        assert "▶  eric:tty2  " in lines[0]
+        assert "▶" not in _strip_ansi(lines[1])
+        # Continuation aligns under the body, not at column 0.
+        assert _strip_ansi(lines[1]).startswith("   ")
 
     def test_empty_body_message_not_formatted(self) -> None:
         assert _format_talk_lines([_notif("message", body="")]) == []
@@ -126,7 +142,7 @@ class TestFormatTalkLines:
         display = ReplDisplay()
         display.set_timestamps(on=True)
         lines = _format_talk_lines([_notif("message", body="hello")], display)
-        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hello", lines[0]) is not None
+        assert re.search(r"▶  \[\d{2}:\d{2}\] eric:tty2  hello", lines[0]) is not None
 
     def test_escape_injection_in_body_neutralized(self) -> None:
         lines = _format_talk_lines(
@@ -140,7 +156,7 @@ class TestFormatTalkLines:
     def test_escape_injection_in_sender_neutralized(self) -> None:
         lines = _format_talk_lines([_notif("message", nfrom="e\x1b[2Jvil", body="hi")])
         assert "\x1b[2J" not in lines[0]
-        assert "e[2Jvil:tty2 ▶ hi" in lines[0]
+        assert "e[2Jvil:tty2  hi" in lines[0]
 
 
 # ---------------------------------------------------------------------------
@@ -152,11 +168,12 @@ class TestFormatIdleBanners:
     def test_empty(self) -> None:
         assert _format_idle_banners([]) == []
 
-    def test_invite_renders_phone_banner(self) -> None:
+    def test_invite_renders_talk_idiom(self) -> None:
         lines = _format_idle_banners([_notif("invite", body="wants to talk")])
         assert len(lines) == 1
-        assert "📞" in lines[0]
-        assert "wants to talk" in lines[0]
+        assert "▶  eric:tty2  wants to talk" in lines[0]
+        assert "📞" not in lines[0]
+        assert "\033[1;33m" in lines[0]  # yellow
 
     def test_accept_is_silent(self) -> None:
         assert _format_idle_banners([_notif("accept")]) == []
@@ -174,7 +191,8 @@ class TestFormatIdleBanners:
         display = ReplDisplay()
         display.set_timestamps(on=True)
         lines = _format_idle_banners([_notif("message", body="hi there")], display)
-        assert re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ hi there", lines[0]) is not None
+        pattern = r"▶  \[\d{2}:\d{2}\] eric:tty2  hi there"
+        assert re.search(pattern, lines[0]) is not None
 
     def test_banner_escape_injection_neutralized(self) -> None:
         lines = _format_idle_banners([_notif("message", body="hi\x1b[2Jthere")])
@@ -191,9 +209,8 @@ class TestPrintTalkBanner:
     def test_prints_banner_with_body(self, capsys: pytest.CaptureFixture[str]) -> None:
         _print_talk_banner(_notif("invite", nfrom="priya", body="wants to talk"))
         out = capsys.readouterr().out
-        assert "priya" in out
-        assert "wants to talk" in out
-        assert "📞" in out
+        assert "▶  priya:tty2  wants to talk" in out
+        assert "📞" not in out
 
     def test_no_body_prints_nothing(self, capsys: pytest.CaptureFixture[str]) -> None:
         _print_talk_banner(_notif("invite", body=""))

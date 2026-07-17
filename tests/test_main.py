@@ -6,7 +6,7 @@ import asyncio
 import io
 import logging
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -53,7 +53,7 @@ async def _fake_session(
     *,
     interactive: bool = False,
     user_override: str | None = None,
-) -> AsyncIterator[CliContext]:
+) -> AsyncGenerator[CliContext]:
     """Drop-in replacement for ``cli_session`` that needs no NATS."""
     yield _MOCK_CTX
 

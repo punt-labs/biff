@@ -108,6 +108,14 @@ class TestTalkNotification:
         assert n.is_withdraw
         assert not n.is_invite
 
+    def test_sender_label_with_tty(self) -> None:
+        n = TalkNotification.from_payload(_message("eric", OTHER_KEY, "yo", tty="tty2"))
+        assert n.sender_label == "eric:tty2"
+
+    def test_sender_label_without_tty_falls_back_to_user(self) -> None:
+        n = TalkNotification.from_payload(_message("eric", OTHER_KEY, "yo", tty=""))
+        assert n.sender_label == "eric"
+
 
 # ---------------------------------------------------------------------------
 # PendingInvite — HintNamesSession value object

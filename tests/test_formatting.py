@@ -14,6 +14,8 @@ from biff.formatting import (
     format_finger_multi,
     format_last,
     format_read,
+    format_talk_end,
+    format_talk_line,
     format_wall,
     format_who,
     pair_events,
@@ -310,3 +312,55 @@ class TestRenderSanitization:
         out = format_last([(login, None)], {"evil:tty9"})
         assert "\x1b[2K" not in out
         assert re.search(r"ev\[2Kil", out) is not None
+
+
+class TestFormatTalkLine:
+    """`format_talk_line` renders talk in the ▶ who/read/wall idiom (biff-7g7)."""
+
+    def test_short_message_single_prefixed_line(self) -> None:
+        assert format_talk_line("eric:tty2", "hi") == ["▶  eric:tty2  hi"]
+
+    def test_no_tty_falls_back_to_user(self) -> None:
+        assert format_talk_line("eric", "hi") == ["▶  eric  hi"]
+
+    def test_timestamp_prefix_between_arrow_and_label(self) -> None:
+        assert format_talk_line("eric:tty2", "hi", stamp="[14:32] ") == [
+            "▶  [14:32] eric:tty2  hi"
+        ]
+
+    def test_empty_body_renders_the_lead_only(self) -> None:
+        assert format_talk_line("eric:tty2", "") == ["▶  eric:tty2  "]
+
+    def test_long_body_wraps_within_the_table_width(self) -> None:
+        body = "word " * 40
+        lines = format_talk_line("eric:tty2", body.strip())
+        assert len(lines) > 1
+        assert all(len(line) <= 80 for line in lines)
+
+    def test_continuation_aligns_under_the_body(self) -> None:
+        lines = format_talk_line("eric:tty2", "alpha " * 40)
+        # Body starts after "▶  eric:tty2  " — 14 visible columns.
+        assert lines[0].startswith("▶  eric:tty2  ")
+        assert lines[1].startswith(" " * 14)
+        assert lines[1][14] != " "
+
+    def test_escape_in_body_neutralized(self) -> None:
+        (line,) = format_talk_line("eric:tty2", "clear\x1b[2Jme")
+        assert "\x1b[2J" not in line
+        assert "clear[2Jme" in line
+
+    def test_escape_in_label_neutralized(self) -> None:
+        (line,) = format_talk_line("e\x1b[2Jvil:tty2", "hi")
+        assert "\x1b[2J" not in line
+        assert "e[2Jvil:tty2  hi" in line
+
+
+class TestFormatTalkEnd:
+    def test_hangup_line_uses_the_arrow_prefix(self) -> None:
+        expected = "▶  eric:tty2 has ended the conversation."
+        assert format_talk_end("eric:tty2") == expected
+
+    def test_escape_in_label_neutralized(self) -> None:
+        out = format_talk_end("e\x1b[2Jvil")
+        assert "\x1b[2J" not in out
+        assert out == "▶  e[2Jvil has ended the conversation."

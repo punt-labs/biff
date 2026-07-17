@@ -81,9 +81,7 @@ def format_agent_drain(drain: AgentDrain) -> str:
             f"{terminal_safe(invite.accept_command)} to accept"
         )
     for notif in drain.messages:
-        sender = terminal_safe(notif.nfrom)
-        sender_tty = terminal_safe(notif.nfrom_tty)
-        label = f"{sender}:{sender_tty}" if sender_tty else sender
+        label = terminal_safe(notif.sender_label)
         if notif.is_end:
             lines.append(f"{label} ended the conversation.")
         elif notif.nbody:

@@ -755,7 +755,7 @@ class TestTimestampsCommand:
         # After: the same display makes the renderer stamp the message.
         lines_after = _format_talk_lines([talk_msg], display)
         assert (
-            re.search(r"\[\d{2}:\d{2}\] eric:tty2 ▶ on it now", lines_after[0])
+            re.search(r"▶  \[\d{2}:\d{2}\] eric:tty2  on it now", lines_after[0])
             is not None
         )
 

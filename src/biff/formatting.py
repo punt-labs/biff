@@ -11,15 +11,18 @@ The primitive layer (``ColumnSpec``, ``format_table``, ``format_idle``,
 
 from __future__ import annotations
 
+import textwrap
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
     HEADER_PREFIX,
     ROW_PREFIX,
+    TABLE_WIDTH,
     ColumnSpec,
     format_idle,
     format_table,
     last_component,
+    visible_width,
 )
 from biff._stdlib import display_repo_name
 from biff.models import Message, SessionEvent, UserSession, WallPost
@@ -37,6 +40,8 @@ __all__ = [
     "format_read_dual",
     "format_remaining",
     "format_table",
+    "format_talk_end",
+    "format_talk_line",
     "format_tty_block",
     "format_user_header",
     "format_wall",
@@ -47,6 +52,10 @@ __all__ = [
     "sanitize_wall_message",
     "terminal_safe",
 ]
+
+# Never wrap a talk body narrower than this, however long the sender
+# label + timestamp lead grows.
+_TALK_WRAP_MIN = 24
 
 
 def terminal_safe(text: str) -> str:
@@ -353,6 +362,35 @@ def format_wall(wall: WallPost) -> str:
         sender += f" ({terminal_safe(wall.from_tty)})"
     text = terminal_safe(wall.text)
     return f"\u25b6  WALL from {sender} ({remaining} remaining)\n   {text}"
+
+
+# ---------------------------------------------------------------------------
+# talk \u2014 conversation lines
+# ---------------------------------------------------------------------------
+
+
+def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
+    """Render one incoming talk line in the biff ``\u25b6`` idiom, wrapped.
+
+    Matches the ``who``/``read``/``wall`` convention: a leading ``\u25b6``
+    prefix, the sender's ``user:tty`` address, then the message \u2014 wrapped
+    to :data:`TABLE_WIDTH` with continuation lines aligned under the body.
+    *stamp* is the caller's ``[HH:MM] `` prefix (empty when timestamps are
+    off).  All remote-controlled text is neutralised here via
+    :func:`terminal_safe`, the output boundary (biff-lbj).
+
+    Returns one string per rendered line so the caller can colourise each.
+    """
+    lead = f"{HEADER_PREFIX}{stamp}{terminal_safe(label)}  "
+    width = max(_TALK_WRAP_MIN, TABLE_WIDTH - visible_width(lead))
+    chunks = textwrap.wrap(terminal_safe(body), width) or [""]
+    indent = " " * visible_width(lead)
+    return [lead + chunks[0], *(indent + chunk for chunk in chunks[1:])]
+
+
+def format_talk_end(label: str) -> str:
+    """Render a partner-hangup line in the ``\u25b6`` idiom."""
+    return f"{HEADER_PREFIX}{terminal_safe(label)} has ended the conversation."
 
 
 # ---------------------------------------------------------------------------
