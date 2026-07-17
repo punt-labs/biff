@@ -1,5 +1,17 @@
 %
-% nats-relay.tex
+% nats-relay-xko-isconnected.tex
+%
+% FROZEN BIFF-XKO ARTIFACT --- DO NOT EDIT except in lockstep with
+% docs/nats-relay.tex.  This is docs/nats-relay.tex with the single
+% StaleForceTeardown operation changed from a Xi no-op (the epoch-guarded
+% re-check, the fix) into a Delta teardown (the pre-fix is_connected-only
+% re-check).  Every other schema is identical to the shipped spec.
+%
+% Running `probcli nats-relay-xko-isconnected.tex -ctlformula
+%   "AG({spuriousTeardown = zfalse})"` MUST return the formula FALSE with
+% a reachable counterexample: the force-reconnect teardown of a client
+% that nats-py had already transparently reconnected.  That counterexample
+% IS biff-xko (connection-lifecycle race, biff-3hp/DES-042 lineage).
 %
 % Z Specification for Biff NATS Relay
 % Formal model of connection lifecycle, KV watcher state machine,
@@ -94,35 +106,6 @@ generation always eventually re-binds it.  The defect is reproduced as
 a ProB counterexample against the pre-fix ``re-subscribe only when the
 handle is \texttt{None}'' guard, and the generation-tracked guard makes
 the stranded state recover.
-
-A fourth invariant, added here, closes the converse of the wedge race:
-not a failure to \emph{escape} the wedge, but an unnecessary
-\emph{teardown} of a connection that has already left it.  The proactive
-force-reconnect ($ForceReconnect$, biff-3hp) is a two-phase act --- a
-gate that decides, after three request timeouts, that the socket is
-wedged, and a scheduled coroutine that later takes the lock and
-force-closes it.  Between the two, nats-py's keepalive can complete a
-\emph{transparent} reconnect on the \emph{same} client object: the
-socket the gate condemned is healthy again, with no new dial and so no
-change to \texttt{\_generation}.  The scheduled teardown, re-checking
-under the lock, sees \texttt{is\_connected} true --- exactly as it was
-during the wedge --- and, unable to tell a healed connection from a
-still-wedged one, force-closes a freshly-healthy client (biff-xko).  The
-cost is one unnecessary reconnect-and-reprovision ($\sim$20\,ms, no data
-loss), but it recurs, and it is the same class of half-open
-indistinguishability the earlier fixes met from the other side.
-\texttt{is\_connected} cannot separate the two states because it is true
-in both; the model separates them with $reconnectEpoch$, a per-client
-counter of transparent reconnects that advances where
-\texttt{\_generation} does not.  This specification adds that counter as
-state and proves a safety property: a scheduled force-reconnect whose
-gate observed an earlier epoch is a no-op against a client that has since
-reconnected --- the live connection is invariant under the stale
-teardown.  The defect is reproduced as a ProB counterexample against the
-pre-fix \texttt{is\_connected}-only re-check (the frozen variant
-\texttt{nats-relay-xko-isconnected.tex}), and the epoch-guarded re-check
-makes the spurious teardown unreachable while leaving the force-reconnect
-of a genuinely wedged client intact.
 
 %%----------------------------------------------------------------------
 \section{Basic Types}
@@ -750,12 +733,39 @@ defect: presence and wall recover, talk does not.
 Reconnect)}
 
 \begin{schema}{StaleForceTeardown}
-  \Xi Connection \\
+  \Delta Connection \\
   gateEpoch? : \nat
   \where
   connState = connected \\
-  gateEpoch? < reconnectEpoch
+  gateEpoch? < reconnectEpoch \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = generation \\
+  talkSubGen' = talkSubGen \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = ztrue
 \end{schema}
+
+\textbf{Pre-fix variant.}  In the shipped spec this operation is a
+$\Xi Connection$ no-op --- the epoch-guarded re-check recognises the
+healed client and skips the teardown.  Here it is the pre-fix
+\texttt{is\_connected}-only re-check: enabled in exactly the same state
+($connState = connected$, a transparent reconnect having advanced
+$reconnectEpoch$ past the gate's $gateEpoch?$), it \emph{tears the
+healthy client down} --- $connState' = disconnected$, every handle
+cleared, the client dropped --- and flips the observer
+$spuriousTeardown' = ztrue$.  The guard is unchanged from the fix; only
+the effect differs, because \texttt{is\_connected} is $ztrue$ for the
+healed $connected$ client just as it was for the wedged $halfOpen$ one,
+so the pre-fix code cannot tell them apart and force-closes regardless.
+The property $AG\,(spuriousTeardown = zfalse)$, $TRUE$ in the shipped
+spec, is \textbf{FALSE} here, and probcli returns the teardown of a
+freshly-reconnected client as the counterexample.  That is biff-xko.
+The rest of this section describes the \emph{fixed} operation and is
+retained verbatim for lockstep comparison.
 
 This is the biff-xko fix, and it is the exact analogue of
 $StaleRequestTimeout$: where that guards the \emph{redial} race (a
@@ -1256,40 +1266,6 @@ verified by model checking with probcli (\texttt{z-spec test}):
     fresh dial ($EnsureConnected$ from $disconnected$), never on
     nats-py's in-place $Reconnect$, mirroring the relay's
     \texttt{\_generation} token.
-
-  \item \textbf{Epoch-guarded teardown (biff-xko)}: a scheduled
-    force-reconnect whose gate observed the epoch $gateEpoch?$ is a no-op
-    against a client that has since transparently reconnected
-    ($StaleForceTeardown$, $gateEpoch? < reconnectEpoch$) --- the live
-    $connected$ connection is invariant under it.  The safety property is
-    stated over reachable states as the observer-guarded formula
-
-    \begin{quote}
-      $AG\,(\,spuriousTeardown = zfalse\,)$
-    \end{quote}
-
-    where $spuriousTeardown$ is a ghost flipped only by a teardown of a
-    detectably-reconnected client.  probcli reports this \textbf{TRUE}
-    for the shipped spec: the epoch-guarded re-check never tears down a
-    healed connection, because $reconnectEpoch$ advances on nats-py's
-    in-place $Reconnect$ where \texttt{is\_connected} cannot distinguish
-    healed from wedged.  It advances \emph{independently} of $generation$
-    --- a transparent reconnect bumps $reconnectEpoch$ and leaves
-    $generation$ fixed, a fresh dial the reverse --- so the pair
-    $(generation, reconnectEpoch)$ is the full transport identity the
-    two guards $StaleRequestTimeout$ and $StaleForceTeardown$ compare
-    against.  The pre-fix defect is reproduced in the frozen variant
-    \texttt{nats-relay-xko-isconnected.tex}, whose re-check reads only
-    \texttt{is\_connected} and so turns $StaleForceTeardown$ into a
-    $connected \to disconnected$ teardown: the same formula then goes
-    \textbf{FALSE}, with probcli returning the eight-step trace
-    $EnsureConnected \to Subscribe \to Request(reqTimeout) \to
-    WedgeDetected \to Reconnect \to StaleForceTeardown$ --- a client
-    force-closed one step after nats-py had transparently reconnected it.
-    That trace \emph{is} biff-xko.  Liveness is not regressed: the
-    genuinely-wedged teardown $ForceReconnect$ (enabled from $halfOpen$)
-    is untouched, and probcli confirms $AG\,(connState = halfOpen
-    \Rightarrow EF\;connState = disconnected)$ remains \textbf{TRUE}.
 
   \item \textbf{Talk-subscription liveness (biff-9la)}: the always-on
     talk SUB is tracked by $talkSubGen$, the generation it is bound to,
