@@ -7,10 +7,18 @@ invariant 12, R1/R3) had never been checked against real infrastructure.
 
 Talk's NATS subject is the globally-unique ``user:tty`` identity and nothing
 else (talk.tex ``subjectOf~k = k``): neither repository nor organization is a
-routing coordinate.  These tests drive the relay directly — publishing each
-frame to ``subjectOf(peer)`` and asserting it reaches the addressed
-``@user:tty`` — rather than standing up two FastMCP servers in one event loop,
-which deadlocks the session-scoped asyncio loop the hosted suite runs on.
+routing coordinate.  These tests drive the relay directly rather than standing
+up two FastMCP servers in one event loop, which deadlocks the session-scoped
+asyncio loop the hosted suite runs on.
+
+The delivery tests bind the two endpoints to relays configured for *genuinely
+different* repositories and organizations, and — mirroring production
+``TalkState._publish`` — publish each frame on the subject the SENDER's own
+relay computes for the peer identity.  A relay that keyed that subject on its
+own repository or organization would compute a subject the peer never
+subscribes to, so the frame would be lost.  Because the subject is identity-only
+the frame instead reaches the addressed ``@user:tty`` across every boundary,
+and reverting the routing to repo- or org-keying makes these tests go red.
 
 Four properties are proven end to end on the real relay:
 
@@ -18,8 +26,13 @@ Four properties are proven end to end on the real relay:
 * Different orgs, mutually visible, complete a full talk — org over-scoped
   exactly as repo did.
 * A withdraw frame (ntWithdraw) routes on identity too, cross-org.
-* A frame published to a *foreign* subject never reaches us (ReceiveNotForSubject),
-  while one on our own subject does — the receiving half of the routing argument.
+* A frame correctly addressed to us but published on a *foreign* subject never
+  reaches us (ReceiveNotForSubject), while a correctly-subjected one does — the
+  receiving half of the routing argument.
+
+Every session identity carries a per-run salt so concurrent runs against the
+shared hosted account cannot collide on the identity-only subject and
+cross-deliver.
 
 Run:
     BIFF_TEST_NATS_URL=tls://connect.ngs.global \\
@@ -33,31 +46,111 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from biff.config import DEMO_RELAY_URL
 from biff.nats_relay import NatsRelay
 from biff.talk_types import TalkNotification
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from nats.aio.msg import Msg
     from nats.aio.subscription import Subscription
+
+    from biff.models import RelayAuth
 
 pytestmark = [pytest.mark.hosted, pytest.mark.asyncio(loop_scope="session")]
 
 _STREAM_PREFIX = "biff-dev"
 
-# Same organization (punt-labs), two repositories — the pair biff-e9u mis-routed
-# under repo keying.  The org/repo lives only in these identities' provenance;
-# it never enters the subject.
-_KAI_BIFF = "htkai:htkaibiff"
-_ERIC_VOX = "hteric:htericvox"
+# One salt per run.  Subjects are identity-only on core NATS, so two runs
+# against the shared hosted account that reused a fixed identity would subscribe
+# to the same subject and cross-deliver each other's frames.  The salt makes
+# every identity — and therefore every subject — unique per run, while staying
+# deterministic within a run (computed once at import).
+_SALT = uuid4().hex[:8]
+
+# Same organization (org-alpha), two repositories — the pair biff-e9u mis-routed
+# under repo keying.  The org/repo lives only in each relay's configuration; it
+# never enters the identity-only subject.
+_KAI_BIFF = f"htkai{_SALT}:htkaibiff{_SALT}"
+_ERIC_VOX = f"hteric{_SALT}:htericvox{_SALT}"
 
 # Two DIFFERENT organizations, mutually visible — the pair org-keyed routing
 # would still strand.
-_KAI_ALPHA = "htkai:htkaialpha"
-_ERIC_BETA = "hteric:htericbeta"
+_KAI_ALPHA = f"htkai{_SALT}:htkaialpha{_SALT}"
+_ERIC_BETA = f"hteric{_SALT}:htericbeta{_SALT}"
+
+# An identity nobody in these tests subscribes to — the foreign subject.
+_FOREIGN = f"nobody{_SALT}:htelsewhere{_SALT}"
+
+# Relay repository names, in ``org__repo`` form.  The org is the segment before
+# ``__``; two repos of org-alpha exercise the same-org/cross-repo case, and a
+# repo of org-beta exercises the cross-org case.
+_ORG_ALPHA_BIFF = "org-alpha__biff"
+_ORG_ALPHA_VOX = "org-alpha__vox"
+_ORG_BETA_VOX = "org-beta__vox"
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def alpha_biff_relay(
+    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
+) -> AsyncIterator[NatsRelay]:
+    """Relay for org-alpha's biff repo — kai's side in every talk flow."""
+    relay = NatsRelay(
+        url=hosted_nats_url,
+        auth=hosted_nats_auth,
+        name="biff-test-alpha-biff",
+        repo_name=_ORG_ALPHA_BIFF,
+        stream_prefix=_STREAM_PREFIX,
+    )
+    yield relay
+    await relay.close()
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def alpha_vox_relay(
+    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
+) -> AsyncIterator[NatsRelay]:
+    """Relay for org-alpha's vox repo — eric's side in the same-org flow.
+
+    A different repository of the *same* org as :func:`alpha_biff_relay`, so a
+    talk between the two crosses a repository boundary but not an org boundary —
+    the exact pair biff-e9u stranded under repo keying.
+    """
+    relay = NatsRelay(
+        url=hosted_nats_url,
+        auth=hosted_nats_auth,
+        name="biff-test-alpha-vox",
+        repo_name=_ORG_ALPHA_VOX,
+        stream_prefix=_STREAM_PREFIX,
+    )
+    yield relay
+    await relay.close()
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def beta_vox_relay(
+    hosted_nats_url: str, hosted_nats_auth: RelayAuth | None
+) -> AsyncIterator[NatsRelay]:
+    """Relay for org-beta's vox repo — eric's side in the cross-org flow.
+
+    A different org from :func:`alpha_biff_relay`, so a talk between the two
+    crosses an organization boundary that org-keyed routing would strand.
+    """
+    relay = NatsRelay(
+        url=hosted_nats_url,
+        auth=hosted_nats_auth,
+        name="biff-test-beta-vox",
+        repo_name=_ORG_BETA_VOX,
+        stream_prefix=_STREAM_PREFIX,
+    )
+    yield relay
+    await relay.close()
 
 
 @dataclass(slots=True)
@@ -82,7 +175,7 @@ class _Endpoint:
 
     @property
     def subject(self) -> str:
-        """The identity subject this endpoint subscribes to and is addressed on."""
+        """The subject this endpoint subscribes to, computed by its own relay."""
         return self._relay.talk_notify_subject(self._key)
 
     @property
@@ -110,10 +203,15 @@ class _Endpoint:
         await nc.flush()
 
     async def send(self, peer: _Endpoint, *, ntype: str, body: str = "") -> None:
-        """Publish one talk frame to *peer* on ``subjectOf(peer)`` — identity only.
+        """Publish one talk frame to *peer*, addressed exactly as production is.
 
-        Mirrors the production ``TalkState._publish`` payload so the wire test
-        exercises the same frame shape the REPL and MCP front-ends emit.
+        Mirrors ``TalkState._publish``: the subject is computed by the SENDER's
+        own relay from the peer's identity — ``self._relay.talk_notify_subject``
+        — never by the peer's relay.  A sender whose relay keyed the subject on
+        its own repository or organization would therefore publish to a subject
+        the peer never subscribes to, and the frame would be lost.  Because the
+        subject is identity-only the frame reaches the peer across every repo and
+        org boundary; that is exactly what the delivery tests prove.
         """
         nc = await self._relay.get_nc()
         user, _, tty = self._key.partition(":")
@@ -124,10 +222,11 @@ class _Endpoint:
                 "from_tty": tty,
                 "body": body,
                 "from_key": self._key,
-                "to_key": peer._key,
+                "to_key": peer.key,
             }
         ).encode()
-        await nc.publish(peer.subject, payload)
+        subject = self._relay.talk_notify_subject(peer.key)
+        await nc.publish(subject, payload)
 
     async def await_frame(
         self, ntype: str, *, timeout: float = 5.0
@@ -156,13 +255,12 @@ async def _drive_full_talk(inviter: _Endpoint, invitee: _Endpoint) -> None:
 
     Every assertion is a frame reaching the addressed identity: the invite, the
     accept (reply direction), a reply each way, and the hangup all cross whatever
-    repo/org boundary separates the two sessions, carried by a subject that names
-    neither.
+    repo/org boundary separates the two sessions, carried by a subject the
+    sender's relay computes from the peer identity and nothing else.  There is no
+    subject-format assertion here — the delivery itself is the proof, so reverting
+    the routing to repo- or org-keying fails at the first ``await_frame`` rather
+    than short-circuiting on a string comparison.
     """
-    # Both sides compute one subject per identity — no repo, no org in the route.
-    assert invitee.subject == f"{_STREAM_PREFIX}.talk.notify.{invitee.key}"
-    assert inviter.subject == f"{_STREAM_PREFIX}.talk.notify.{inviter.key}"
-
     await inviter.send(invitee, ntype="invite", body="cross review?")
     invite = await invitee.await_frame("invite")
     assert invite.nfrom_key == inviter.key
@@ -202,12 +300,12 @@ class TestHostedIdentitySubject:
         """
         alpha = NatsRelay(
             url=DEMO_RELAY_URL,
-            repo_name="org-alpha__biff",
+            repo_name=_ORG_ALPHA_BIFF,
             stream_prefix=_STREAM_PREFIX,
         )
         beta = NatsRelay(
             url=DEMO_RELAY_URL,
-            repo_name="org-beta__vox",
+            repo_name=_ORG_BETA_VOX,
             stream_prefix=_STREAM_PREFIX,
         )
         assert alpha.talk_notify_subject(_ERIC_BETA) == beta.talk_notify_subject(
@@ -219,15 +317,22 @@ class TestHostedIdentitySubject:
 
 
 class TestHostedSameOrgTalk:
-    """Same org, different repos complete a full talk — the biff-e9u guard."""
+    """Same org, different repos complete a full talk — the biff-e9u guard.
+
+    kai runs in org-alpha's biff repo and eric in org-alpha's vox repo: a talk
+    between them crosses a repository boundary within one org.  Because kai's
+    relay addresses eric by identity, not by its own repo, the invite reaches
+    eric — the regression repo-keyed routing caused.  Reverting
+    ``talk_notify_subject`` to repo keying makes this go red.
+    """
 
     @pytest.mark.transcript
     async def test_full_talk_flow(
-        self, kai_relay: NatsRelay, eric_relay: NatsRelay
+        self, alpha_biff_relay: NatsRelay, alpha_vox_relay: NatsRelay
     ) -> None:
-        """kai (biff) and eric (vox) of one org exchange every frame on the relay."""
-        kai = _Endpoint(kai_relay, _KAI_BIFF)
-        eric = _Endpoint(eric_relay, _ERIC_VOX)
+        """kai (org-alpha/biff) and eric (org-alpha/vox) exchange every frame."""
+        kai = _Endpoint(alpha_biff_relay, _KAI_BIFF)
+        eric = _Endpoint(alpha_vox_relay, _ERIC_VOX)
         await kai.subscribe()
         await eric.subscribe()
         try:
@@ -240,31 +345,30 @@ class TestHostedSameOrgTalk:
 class TestHostedCrossOrgTalk:
     """Different orgs, mutually visible, complete a full talk — org was over-scoped.
 
-    org-keyed routing would strand this pair: two sessions in different
-    organizations would land in different namespaces.  Identity routing ignores
-    the org entirely, so the same subject reaches both on the real relay.
+    org-keyed routing would strand this pair: kai in org-alpha and eric in
+    org-beta would land in different namespaces.  Identity routing ignores the
+    org entirely, so the sender's subject reaches the peer on the real relay.
+    Reverting ``talk_notify_subject`` to either repo- or org-keying makes this
+    go red.
     """
 
     @pytest.mark.transcript
     async def test_full_talk_flow(
-        self, kai_relay: NatsRelay, eric_relay: NatsRelay
+        self, alpha_biff_relay: NatsRelay, beta_vox_relay: NatsRelay
     ) -> None:
         """kai (org-alpha) and eric (org-beta), mutually visible, complete a talk."""
-        kai = _Endpoint(kai_relay, _KAI_ALPHA)
-        eric = _Endpoint(eric_relay, _ERIC_BETA)
+        kai = _Endpoint(alpha_biff_relay, _KAI_ALPHA)
+        eric = _Endpoint(beta_vox_relay, _ERIC_BETA)
         await kai.subscribe()
         await eric.subscribe()
         try:
-            # Both relays compute the identical subject for the peer identity.
-            assert eric_relay.talk_notify_subject(_KAI_ALPHA) == kai.subject
-            assert kai_relay.talk_notify_subject(_ERIC_BETA) == eric.subject
             await _drive_full_talk(kai, eric)
         finally:
             await kai.close()
             await eric.close()
 
     async def test_withdraw_routes_cross_org(
-        self, kai_relay: NatsRelay, eric_relay: NatsRelay
+        self, alpha_biff_relay: NatsRelay, beta_vox_relay: NatsRelay
     ) -> None:
         """A withdraw frame (ntWithdraw) reaches the cross-org peer on identity.
 
@@ -273,8 +377,8 @@ class TestHostedCrossOrgTalk:
         pending invite.  Like every reply, it routes on the peer's identity —
         no org, no repo — so a cross-org withdraw is delivered on the real relay.
         """
-        kai = _Endpoint(kai_relay, _KAI_ALPHA)
-        eric = _Endpoint(eric_relay, _ERIC_BETA)
+        kai = _Endpoint(alpha_biff_relay, _KAI_ALPHA)
+        eric = _Endpoint(beta_vox_relay, _ERIC_BETA)
         await kai.subscribe()
         await eric.subscribe()
         try:
@@ -294,37 +398,49 @@ class TestHostedForeignSubjectDropped:
     """A frame on a foreign subject never reaches us — ReceiveNotForSubject."""
 
     async def test_foreign_subject_not_delivered(
-        self, kai_relay: NatsRelay, eric_relay: NatsRelay
+        self, alpha_biff_relay: NatsRelay, beta_vox_relay: NatsRelay
     ) -> None:
-        """We subscribe to our own subject; a frame published elsewhere is lost.
+        """A frame correctly addressed to us but on a foreign subject is lost.
 
-        The receiving half of the routing argument: a frame may carry a correct
-        ``to_key`` and still never arrive if its publisher addressed the wrong
-        subject — exactly what a repo- or org-keyed reply to a cross-boundary
-        peer does.  A correctly-subjected frame is delivered in the same test to
-        prove the subscription is live, so the foreign frame's absence is a drop,
-        not a dead subscriber.
+        The receiving half of the routing argument, isolated: a frame may carry
+        our *correct* ``to_key`` and still never arrive if its publisher
+        addressed the wrong subject — exactly what a repo- or org-keyed reply to
+        a cross-boundary peer does.  We assert the drop is by subject, not by
+        address, by giving the foreign frame our own ``to_key`` and a
+        distinguishing body: it is dropped because kai never subscribed to its
+        subject, not because the address was wrong.  A correctly-subjected frame
+        with a different body is delivered in the same test to prove the
+        subscription is live, so the foreign frame's absence is a drop, not a
+        dead subscriber.
         """
-        kai = _Endpoint(kai_relay, _KAI_ALPHA)
-        eric = _Endpoint(eric_relay, _ERIC_BETA)
+        kai = _Endpoint(alpha_biff_relay, _KAI_ALPHA)
+        eric = _Endpoint(beta_vox_relay, _ERIC_BETA)
         await kai.subscribe()
         try:
-            # eric publishes a well-formed frame to a DIFFERENT identity's subject.
-            foreign_key = "nobody:htelsewhere"
-            foreign_subject = eric_relay.talk_notify_subject(foreign_key)
+            # A frame addressed to kai (correct to_key) but published on a
+            # DIFFERENT identity's subject — right address, wrong subject.
+            foreign_subject = beta_vox_relay.talk_notify_subject(_FOREIGN)
             assert foreign_subject != kai.subject
-            nc = await eric_relay.get_nc()
+            nc = await beta_vox_relay.get_nc()
             await nc.publish(
                 foreign_subject,
-                json.dumps({"type": "message", "to_key": foreign_key}).encode(),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "from_key": eric.key,
+                        "to_key": kai.key,  # correct address, wrong subject
+                        "body": "wrong subject",
+                    }
+                ).encode(),
             )
 
-            # And a correctly-subjected frame to kai, to prove the sub is live.
-            await eric.send(kai, ntype="message", body="on your subject")
+            # A correctly-subjected frame to kai, to prove the sub is live.
+            await eric.send(kai, ntype="message", body="right subject")
             got = await kai.await_frame("message")
-            assert got.nbody == "on your subject"
+            assert got.nbody == "right subject"
 
-            # The foreign-subject frame never reached kai's subscription.
-            assert all(f.nto != foreign_key for f in kai.received)
+            # The foreign-subject frame never reached kai's subscription — the
+            # drop was by subject, since the address was correct.
+            assert all(f.nbody != "wrong subject" for f in kai.received)
         finally:
             await kai.close()
