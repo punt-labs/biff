@@ -34,8 +34,7 @@ from biff.server.tools._descriptions import (
     refresh_talk,
 )
 from biff.server.tools._session import resolve_talk_target, update_current_session
-from biff.talk_state import MAX_BODY_LEN
-from biff.talk_types import TalkPhase
+from biff.talk_types import MAX_BODY_LEN, TalkPhase
 from biff.tty import parse_address
 
 if TYPE_CHECKING:
@@ -81,11 +80,14 @@ def format_agent_drain(drain: AgentDrain) -> str:
             f"{terminal_safe(invite.accept_command)} to accept"
         )
     for notif in drain.messages:
-        label = terminal_safe(notif.sender_label)
+        label = notif.sender_label  # sender_label already neutralises both halves
         if notif.is_end:
             lines.append(f"{label} ended the conversation.")
-        elif notif.nbody:
-            lines.append(f"{label}: {terminal_safe(notif.nbody)}")
+            continue
+        # Skip a body that is empty only *after* neutralisation — a control-only
+        # payload must not render a dangling ``label:`` line (biff-7g7).
+        if body := terminal_safe(notif.nbody):
+            lines.append(f"{label}: {body}")
     return "\n".join(lines)
 
 

@@ -565,12 +565,14 @@ async def _repl_loop(
 
 def _print_talk_banner(notif: TalkNotification) -> None:
     """Print a third-party talk notification in the wrapped ``▶`` idiom."""
-    if not notif.nbody:
+    # Render first: a control-only body neutralises to nothing, and clearing the
+    # prompt to then print no banner would blank the line for no reason (biff-7g7).
+    lines = format_talk_line(notif.sender_label, notif.nbody)
+    if not lines:
         return
-    # Clear the stdin thread's prompt so the banner lands clean, then render
-    # the wrapped ▶ lines (biff-7g7).
+    # Clear the stdin thread's prompt so the banner lands clean, then print.
     print("\r\033[K", end="")
-    for line in format_talk_line(notif.sender_label, notif.nbody):
+    for line in lines:
         print(f"\033[1;33m{line}\033[0m")
 
 

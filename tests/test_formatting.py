@@ -9,7 +9,9 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 
+from biff._formatting import TABLE_WIDTH
 from biff.formatting import (
+    _TALK_WRAP_MIN,
     format_finger,
     format_finger_multi,
     format_last,
@@ -328,8 +330,27 @@ class TestFormatTalkLine:
             "▶  [14:32] eric:tty2  hi"
         ]
 
-    def test_empty_body_renders_the_lead_only(self) -> None:
-        assert format_talk_line("eric:tty2", "") == ["▶  eric:tty2  "]
+    def test_empty_body_renders_nothing(self) -> None:
+        assert format_talk_line("eric:tty2", "") == []
+
+    def test_control_only_body_renders_nothing(self) -> None:
+        # A body that is empty only AFTER neutralisation (control-only payload)
+        # must produce no line — not a bare, dangling lead (biff-7g7).
+        assert format_talk_line("eric:tty2", "\x00\x1b\x07") == []
+
+    def test_giant_label_and_body_render_bounded(self) -> None:
+        # Defense in depth for the O(label x body) amplification: even if a
+        # forged megabyte label/body slips past the boundary clamp, the render
+        # must stay bounded — no line carries the raw label or a label-sized
+        # indent, and the line count is bounded by the body, not the label.
+        label = "u" * 10_000
+        body = "word " * 2_000  # 10_000 chars
+        lines = format_talk_line(label, body)
+        longest = max(len(line) for line in lines)
+        assert longest <= 2 * TABLE_WIDTH  # no O(label) line
+        total = sum(len(line) for line in lines)
+        assert total <= 2 * TABLE_WIDTH * len(lines)  # O(lines), not O(label x body)
+        assert len(lines) <= len(body) // _TALK_WRAP_MIN + 2  # bounded by body/width
 
     def test_long_body_wraps_within_the_table_width(self) -> None:
         body = "word " * 40

@@ -21,7 +21,7 @@ from biff.server.tools.talk import (
     format_talk_messages,
 )
 from biff.talk_state import TalkState
-from biff.talk_types import AgentDrain, PendingInvite, TalkPhase
+from biff.talk_types import AgentDrain, PendingInvite, TalkNotification, TalkPhase
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -101,6 +101,38 @@ class TestFormatAgentDrain:
         assert "\x1b[2J" not in result
         assert "\x1b[2K" not in result
         assert "hi[2Jthere" in result
+
+    def test_control_only_tty_and_body_collapse(self) -> None:
+        """A control-only tty renders bare user; a control-only body renders nothing.
+
+        Both fields are attacker-controlled (DES-046): a tty that is empty only
+        after neutralisation must not leave a dangling ``user:`` label, and a
+        body that neutralises to empty must produce no line at all (biff-7g7).
+        """
+        ctrl_tty = TalkNotification.from_payload(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_tty": "\x00\x1b\x07",
+                "from_key": "eric:def",
+                "to_key": "kai:abc",
+                "body": "hi",
+            }
+        )
+        ctrl_body = TalkNotification.from_payload(
+            {
+                "type": "message",
+                "from": "eric",
+                "from_tty": "tty2",
+                "from_key": "eric:def",
+                "to_key": "kai:abc",
+                "body": "\x00\x1b\x07",
+            }
+        )
+        rendered = format_agent_drain(
+            AgentDrain(messages=(ctrl_tty, ctrl_body), pending={})
+        )
+        assert rendered == "eric: hi"  # bare user, no dangling colon; body skipped
 
 
 class TestResolveTalkTarget:

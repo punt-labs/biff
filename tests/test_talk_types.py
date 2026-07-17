@@ -12,6 +12,9 @@ from __future__ import annotations
 import pytest
 
 from biff.talk_types import (
+    MAX_BODY_LEN,
+    MAX_FIELD_LEN,
+    MAX_KEY_LEN,
     AcceptOutcome,
     AgentDrain,
     PendingInvite,
@@ -115,6 +118,37 @@ class TestTalkNotification:
     def test_sender_label_without_tty_falls_back_to_user(self) -> None:
         n = TalkNotification.from_payload(_message("eric", OTHER_KEY, "yo", tty=""))
         assert n.sender_label == "eric"
+
+    def test_sender_label_control_only_tty_collapses_to_user(self) -> None:
+        # A tty that is non-empty raw but empty after neutralisation must not
+        # render a dangling ``user:`` — it collapses to the bare user (biff-7g7).
+        n = TalkNotification.from_payload(
+            _message("eric", OTHER_KEY, "hi", tty="\x00\x1b\x07")
+        )
+        assert n.sender_label == "eric"
+
+    def test_from_payload_clamps_oversized_wire_fields(self) -> None:
+        # Every wire field is attacker-controlled (DES-046); a malicious
+        # publisher can bypass the sender-side MAX_BODY_LEN truncation.  The
+        # boundary must clamp so a forged megabyte field cannot be stored or
+        # amplified downstream (biff-7g7).
+        huge = "x" * 1_000_000
+        n = TalkNotification.from_payload(
+            {
+                "type": huge,
+                "from": huge,
+                "from_tty": huge,
+                "from_key": huge,
+                "to_key": huge,
+                "body": huge,
+            }
+        )
+        assert len(n.nbody) <= MAX_BODY_LEN
+        assert len(n.nfrom) <= MAX_FIELD_LEN
+        assert len(n.nfrom_tty) <= MAX_FIELD_LEN
+        assert len(n.ntype) <= MAX_FIELD_LEN
+        assert len(n.nfrom_key) <= MAX_KEY_LEN
+        assert len(n.nto) <= MAX_KEY_LEN
 
 
 # ---------------------------------------------------------------------------

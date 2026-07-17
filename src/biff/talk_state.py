@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff.nats_relay import NatsRelay
 from biff.talk_types import (
+    MAX_BODY_LEN,
     AcceptOutcome,
     AgentDrain,
     PendingInvite,
@@ -56,9 +57,6 @@ grow ``_pending`` without limit even as the queue stays bounded.  At the cap a
 new inviter evicts the oldest-by-arrival entry; superseding an existing
 inviter overwrites in place and never evicts.
 """
-
-MAX_BODY_LEN = 512
-"""Message body truncation limit (talk.tex ``maxBodyLen``)."""
 
 PENDING_INVITE_TTL = 300.0
 """Seconds a pending talk invite survives unanswered (notification.tex

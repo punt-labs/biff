@@ -22,6 +22,7 @@ from biff._formatting import (
     format_idle,
     format_table,
     last_component,
+    terminal_safe,
     visible_width,
 )
 from biff._stdlib import display_repo_name
@@ -57,20 +58,10 @@ __all__ = [
 # label + timestamp lead grows.
 _TALK_WRAP_MIN = 24
 
-
-def terminal_safe(text: str) -> str:
-    """Strip non-printable characters from remote-controlled text (biff-lbj).
-
-    Message bodies, wall text, sender names, plans, hostnames, and dirs all
-    arrive from other users over the relay and are rendered straight to the
-    terminal.  Dropping non-printable characters removes ESC (the ANSI/OSC
-    introducer) and other C0/C1 controls, so a remote sender cannot inject
-    cursor moves, prompt spoofing, line clears, or OSC 52 clipboard writes.
-    Printable Unicode (letters, punctuation, emoji, spaces) is preserved.
-    Applied at every render site — the output boundary — because a malicious
-    client can bypass any input-side sanitization.
-    """
-    return "".join(ch for ch in text if ch.isprintable())
+# Cap the rendered sender label so a forged, boundary-slipped label can never
+# drive the per-line wrap indent (defense in depth for the O(label x body)
+# amplification — see TalkNotification.from_payload, biff-7g7).
+_MAX_LABEL_WIDTH = 40
 
 
 # ---------------------------------------------------------------------------
@@ -379,13 +370,38 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     off).  All remote-controlled text is neutralised here via
     :func:`terminal_safe`, the output boundary (biff-lbj).
 
-    Returns one string per rendered line so the caller can colourise each.
+    Returns one string per rendered line so the caller can colourise each, or
+    an empty list when the body is empty *after* neutralisation \u2014 a
+    control-only payload has nothing to show and must not render a bare lead
+    (biff-7g7).
+
+    The lead is bounded independently of the input: the label is truncated to
+    :data:`_MAX_LABEL_WIDTH` and the continuation indent never exceeds
+    :data:`TABLE_WIDTH`.  Without those caps a forged megabyte label would be
+    copied onto every wrapped body chunk \u2014 O(label x body) allocation
+    from a single frame (defense in depth behind the
+    :meth:`TalkNotification.from_payload` boundary clamp).
     """
-    lead = f"{HEADER_PREFIX}{stamp}{terminal_safe(label)}  "
+    safe_body = terminal_safe(body)
+    if not safe_body:
+        return []
+    safe_label = _truncate(terminal_safe(label), _MAX_LABEL_WIDTH)
+    lead = f"{HEADER_PREFIX}{stamp}{safe_label}  "
     width = max(_TALK_WRAP_MIN, TABLE_WIDTH - visible_width(lead))
-    chunks = textwrap.wrap(terminal_safe(body), width) or [""]
-    indent = " " * visible_width(lead)
+    chunks = textwrap.wrap(safe_body, width) or [""]
+    indent = " " * min(visible_width(lead), TABLE_WIDTH)
     return [lead + chunks[0], *(indent + chunk for chunk in chunks[1:])]
+
+
+def _truncate(text: str, width: int) -> str:
+    """Return *text* clipped to *width* display columns, ending with ``\u2026``.
+
+    *text* is already neutralised (no ANSI, no control characters), so its
+    length equals its display width.
+    """
+    if len(text) <= width:
+        return text
+    return text[: width - 1] + "\u2026"
 
 
 def format_talk_end(label: str) -> str:

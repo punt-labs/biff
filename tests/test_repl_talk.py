@@ -93,6 +93,10 @@ class TestFormatTalkLines:
         lines = _format_talk_lines([_notif("message", nfrom_tty="", body="hi")])
         assert "▶  eric  hi" in lines[0]
 
+    def test_control_only_body_not_rendered(self) -> None:
+        # A body empty only after neutralisation renders nothing (biff-7g7).
+        assert _format_talk_lines([_notif("message", body="\x00\x1b\x07")]) == []
+
     def test_long_message_wraps_with_aligned_continuation(self) -> None:
         body = "word " * 30  # far wider than the 80-column table
         lines = _format_talk_lines([_notif("message", body=body.strip())])
@@ -187,6 +191,10 @@ class TestFormatIdleBanners:
     def test_end_without_body_renders_nothing(self) -> None:
         assert _format_idle_banners([_notif("end")]) == []
 
+    def test_control_only_body_not_rendered(self) -> None:
+        # A body empty only after neutralisation renders nothing (biff-7g7).
+        assert _format_idle_banners([_notif("message", body="\x00\x1b\x07")]) == []
+
     def test_banner_stamped_when_display_on(self) -> None:
         display = ReplDisplay()
         display.set_timestamps(on=True)
@@ -214,6 +222,14 @@ class TestPrintTalkBanner:
 
     def test_no_body_prints_nothing(self, capsys: pytest.CaptureFixture[str]) -> None:
         _print_talk_banner(_notif("invite", body=""))
+        assert capsys.readouterr().out == ""
+
+    def test_control_only_body_prints_nothing(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A control-only body must print nothing at all — not even the
+        # prompt-clearing escape that would blank the line (biff-7g7).
+        _print_talk_banner(_notif("invite", body="\x00\x1b\x07"))
         assert capsys.readouterr().out == ""
 
 

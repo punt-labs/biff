@@ -69,6 +69,25 @@ def visible_width(s: str) -> int:
     return len(_ANSI_RE.sub("", s))
 
 
+def terminal_safe(text: str) -> str:
+    """Strip non-printable characters from remote-controlled text (biff-lbj).
+
+    Message bodies, wall text, sender names, plans, hostnames, and dirs all
+    arrive from other users over the relay and are rendered straight to the
+    terminal.  Dropping non-printable characters removes ESC (the ANSI/OSC
+    introducer) and other C0/C1 controls, so a remote sender cannot inject
+    cursor moves, prompt spoofing, line clears, or OSC 52 clipboard writes.
+    Printable Unicode (letters, punctuation, emoji, spaces) is preserved.
+    Applied at every render site — the output boundary — because a malicious
+    client can bypass any input-side sanitization.
+
+    Lives in the primitive layer so both the presentation helpers and the
+    dependency-free types (``TalkNotification.sender_label``) can neutralise
+    at their own boundary without importing the pydantic-backed models.
+    """
+    return "".join(ch for ch in text if ch.isprintable())
+
+
 def last_component(path: str) -> str:
     """Return the last component of a path, or the original for short values.
 

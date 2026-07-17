@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Self
 
+from biff._formatting import terminal_safe
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -23,6 +25,36 @@ _CONTROL_TYPES = frozenset({"invite", "accept", "end", "withdraw"})
 
 _KNOWN_TYPES = _CONTROL_TYPES | {"message"}
 """Every modeled talk frame type — a frame typed outside this set is a wake poke."""
+
+MAX_BODY_LEN = 512
+"""Message body length cap (talk.tex ``maxBodyLen``).
+
+The single wire-boundary bound on a frame body.  ``TalkState._publish``
+truncates outbound bodies here, but a custom or malicious publisher can post a
+frame directly to the per-identity subject and bypass that path — every wire
+field is attacker-controlled (DES-046) — so the *inbound* boundary
+(:meth:`TalkNotification.from_payload`) must clamp too, before the frame is ever
+enqueued or rendered.
+"""
+
+MAX_FIELD_LEN = 64
+"""Length cap for identity wire fields (user, tty, frame type).
+
+A user handle, a display tty name, and a frame type are all short by
+construction; an inbound field longer than this is forged.  Clamping at the
+boundary stops a megabyte ``from``/``from_tty`` from being stored in the queue
+or amplified by the renderer (biff-7g7) — a giant sender label drives the
+per-line wrap indent, turning one frame into O(label x body) output.
+"""
+
+MAX_KEY_LEN = MAX_FIELD_LEN * 2 + 1
+"""Length cap for session-key wire fields (``user:tty``).
+
+A real key is ``user:tty`` with each half bounded by :data:`MAX_FIELD_LEN`.
+Routing compares keys for equality against our own bounded key, so a clamped
+forged key still never matches — the clamp only bounds what a foreign frame can
+allocate, never what it can reach.
+"""
 
 
 class TalkPhase(Enum):
@@ -149,25 +181,36 @@ class TalkNotification:
         body cannot appear as a phantom talk message.  The ``type`` is preserved
         verbatim (defaulting to the empty string) rather than coerced to
         ``message``, which would resurrect that phantom.
+
+        Every string field is length-clamped here — the inbound wire boundary.
+        A custom publisher can post any payload to the per-identity subject
+        (DES-046), bypassing the sender-side ``MAX_BODY_LEN`` truncation, so a
+        forged megabyte ``from``/``body`` would otherwise be enqueued whole and
+        amplified O(label x body) by the renderer (biff-7g7).  Clamping is
+        length-only; :func:`terminal_safe` neutralises control characters at the
+        render boundary.
         """
         return cls(
-            ntype=str(raw.get("type", "")),
-            nfrom=str(raw.get("from", "?")),
-            nfrom_tty=str(raw.get("from_tty", "")),
-            nfrom_key=str(raw.get("from_key", "")),
-            nto=str(raw.get("to_key", "")),
-            nbody=str(raw.get("body", "")),
+            ntype=str(raw.get("type", ""))[:MAX_FIELD_LEN],
+            nfrom=str(raw.get("from", "?"))[:MAX_FIELD_LEN],
+            nfrom_tty=str(raw.get("from_tty", ""))[:MAX_FIELD_LEN],
+            nfrom_key=str(raw.get("from_key", ""))[:MAX_KEY_LEN],
+            nto=str(raw.get("to_key", ""))[:MAX_KEY_LEN],
+            nbody=str(raw.get("body", ""))[:MAX_BODY_LEN],
         )
 
     @property
     def sender_label(self) -> str:
         """Render the sender as a copy-pasteable ``user:tty`` reply address.
 
-        Falls back to the bare user when the frame carries no tty.  The
-        render boundary neutralises the value via ``terminal_safe`` — this
-        is the raw address the REPL and MCP surfaces both display.
+        Neutralises both halves via :func:`terminal_safe` and falls back to the
+        bare user when the *sanitised* tty is empty — a control-only tty (raw
+        truthy, empty once neutralised) must collapse to ``user``, never render
+        a dangling ``user:`` (biff-7g7).
         """
-        return f"{self.nfrom}:{self.nfrom_tty}" if self.nfrom_tty else self.nfrom
+        user = terminal_safe(self.nfrom)
+        tty = terminal_safe(self.nfrom_tty)
+        return f"{user}:{tty}" if tty else user
 
     @property
     def is_invite(self) -> bool:
