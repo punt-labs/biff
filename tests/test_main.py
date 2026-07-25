@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from biff import logging_config
-from biff.__main__ import _suppress_nats_noise, app
+from biff.__main__ import _register_user_scope, _suppress_nats_noise, app
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
@@ -550,3 +550,105 @@ class TestNatsErrorStaysOffTerminal:
         assert "NATS error" in file_text
         assert "Traceback" in file_text
         assert "Operation timed out" in file_text
+
+
+class TestInstallUserScope:
+    """``install`` wiring deposits the guide and registers the user import."""
+
+    def test_register_user_scope_writes_to_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+
+        _register_user_scope()
+
+        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        assert guide.is_file()
+        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
+
+
+class TestInstallCliOnly:
+    """`biff install` with no `claude` on PATH is a CLI-only SUCCESS."""
+
+    def test_no_claude_is_cli_only_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        monkeypatch.setattr("shutil.which", no_claude)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        assert guide.is_file()
+        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
+        # No plugin step ran, so no "restart Claude Code" instruction.
+        assert "Restart Claude Code" not in result.output
+
+
+class TestUninstallResilient:
+    """`biff uninstall` always removes the user-scope import (§2.6)."""
+
+    _LINE = "@~/.punt-labs/biff/CLAUDE.md"
+
+    def _preinstall(self, tmp_path: Path) -> Path:
+        from biff.user_scope import UserScope
+
+        UserScope().install()
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        assert self._LINE in host.read_text()
+        return host
+
+    def test_prunes_import_even_when_plugin_uninstall_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        def has_claude(_cmd: str) -> str | None:
+            return "/usr/bin/claude"
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        host = self._preinstall(tmp_path)
+        monkeypatch.setattr("shutil.which", has_claude)
+        failed = MagicMock(returncode=1)
+        monkeypatch.setattr("subprocess.run", MagicMock(return_value=failed))
+
+        result = runner.invoke(app, ["uninstall"])
+
+        # Plugin failure is surfaced (non-zero exit) but the import is still gone.
+        assert result.exit_code == 1
+        assert self._LINE not in host.read_text()
+
+    def test_prunes_import_when_claude_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        host = self._preinstall(tmp_path)
+        monkeypatch.setattr("shutil.which", no_claude)
+
+        result = runner.invoke(app, ["uninstall"])
+
+        assert result.exit_code == 0
+        assert self._LINE not in host.read_text()
+        # The final status must not claim the plugin was removed when it was
+        # never touched — it reflects the skipped plugin step.
+        assert "plugin was not removed" in result.output
+        assert "\nUninstalled.\n" not in result.output

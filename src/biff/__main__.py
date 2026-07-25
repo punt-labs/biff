@@ -1535,16 +1535,40 @@ def disable(
 _PLUGIN_ID = "biff@punt-labs"
 
 
+def _register_user_scope() -> None:
+    """Deposit the agent guide and register the user-scope ``@``-import.
+
+    Global-tool install (tool-enable-disable.md §2.6): guidance is universal, so
+    biff registers ``@~/.punt-labs/biff/CLAUDE.md`` in ``~/.claude/CLAUDE.md``
+    once at install rather than per repo.
+    """
+    from biff.user_scope import USER_IMPORT_LINE, UserScope
+
+    result = UserScope().install()
+    if result.guide_written:
+        print("Agent guide: ~/.punt-labs/biff/CLAUDE.md")
+    if result.import_registered:
+        print(f"Registered {USER_IMPORT_LINE} in ~/.claude/CLAUDE.md")
+
+
 @app.command("install")
 def install_cmd() -> None:
     """Install biff via the punt-labs marketplace."""
     import shutil
     import subprocess
 
+    # User-scope guidance first — it needs no marketplace and leaves no
+    # dangling import (the guide is deposited before the line is registered).
+    _register_user_scope()
+
     claude = shutil.which("claude")
     if not claude:
-        print("Error: claude CLI not found on PATH")
-        raise typer.Exit(code=1)
+        # CLI-only install is a SUCCESS, not a partial failure: the biff CLI,
+        # MCP server, and user-scope guide are all installed; only the Claude
+        # Code plugin is skipped (install-cli-only.md, matching install.sh's
+        # --no-plugin path). No "restart Claude Code" line — there's no plugin.
+        print("Installed (CLI-only). Claude Code not found; plugin step skipped.")
+        return
 
     result = subprocess.run(  # noqa: S603
         [claude, "plugin", "install", _PLUGIN_ID, "--scope", "user"],
@@ -1567,22 +1591,40 @@ def doctor() -> None:
 
 @app.command("uninstall")
 def uninstall_cmd() -> None:
-    """Uninstall biff plugin and clean up artifacts."""
+    """Uninstall biff: remove the plugin (if present) and the user-scope import."""
     import shutil
     import subprocess
 
-    claude = shutil.which("claude")
-    if not claude:
-        print("Error: claude CLI not found on PATH")
-        raise typer.Exit(code=1)
+    from biff.user_scope import USER_IMPORT_LINE, UserScope
 
-    result = subprocess.run(  # noqa: S603
-        [claude, "plugin", "uninstall", _PLUGIN_ID, "--scope", "user"],
-        check=False,
-    )
-    if result.returncode != 0:
+    plugin_failed = False
+    claude = shutil.which("claude")
+    if claude:
+        result = subprocess.run(  # noqa: S603
+            [claude, "plugin", "uninstall", _PLUGIN_ID, "--scope", "user"],
+            check=False,
+        )
+        plugin_failed = result.returncode != 0
+    else:
+        print("claude CLI not found; skipping plugin uninstall.")
+
+    # User-scope teardown (§2.6) ALWAYS runs — never gated on the plugin step.
+    # The user asked to clean up, and a dangling @-import 404s every session, so
+    # a failed or skipped plugin uninstall must not strand the import line. The
+    # deposited guide stays dormant (§2.9).
+    if UserScope().uninstall():
+        print(f"Removed {USER_IMPORT_LINE} from ~/.claude/CLAUDE.md")
+
+    if plugin_failed:
+        # Surface the plugin failure — but only after the cleanup above ran.
+        print("Warning: 'claude plugin uninstall' failed; user-scope import removed.")
         raise typer.Exit(code=1)
-    print("Uninstalled.")
+    if claude is None:
+        # Mirror install's CLI-only messaging: never imply the plugin was
+        # removed when there was no `claude` to remove it.
+        print("Uninstalled (CLI-only). Claude Code not found; plugin was not removed.")
+    else:
+        print("Uninstalled.")
 
 
 @app.command()

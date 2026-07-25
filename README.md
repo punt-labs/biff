@@ -262,13 +262,13 @@ biff talk kai "can you review?"           # Real-time conversation
 ### Admin commands
 
 ```bash
-biff install                # Install plugin via marketplace
-biff enable                 # Activate biff in current repo (creates .biff)
+biff install                # Install plugin + register user-scope agent guide
+biff enable                 # Activate biff in current repo (.punt-labs/biff/)
 biff disable                # Deactivate biff in current repo
 biff doctor                 # Check installation health
 biff mcp                    # Start MCP server (stdio, called by plugin)
 biff serve                  # Start MCP server (HTTP)
-biff uninstall              # Remove plugin and clean up
+biff uninstall              # Remove plugin, deregister the agent guide
 biff version                # Print version
 ```
 
@@ -328,7 +328,7 @@ Biff ships with a shared demo relay so your team can start immediately. When you
 
 The `[peers]` section enables cross-repo commands (`/who`, `/write`, `/finger`). `orgs` auto-discovers repos with active sessions; `repos` lists peers that are always visible. Both are optional.
 
-`biff install` registers the MCP server, installs slash commands, and enables the plugin. `biff enable` activates biff in the current repo and deploys git hooks. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
+`biff install` registers the MCP server, installs slash commands, enables the plugin, and registers a user-scope agent guide: it deposits `~/.punt-labs/biff/CLAUDE.md` and adds `@~/.punt-labs/biff/CLAUDE.md` to `~/.claude/CLAUDE.md` so the guide loads in every session. `biff enable` activates biff in the current repo and deploys git hooks. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
 
 ## Status Bar
 
