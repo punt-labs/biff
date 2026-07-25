@@ -61,7 +61,12 @@ from biff.models import (
     WallPost,
 )
 from biff.relay import SESSION_TTL_SECONDS
-from biff.tty import SID_HINT_NAMESPACE, build_session_key, validate_reclaimable_name
+from biff.tty import (
+    SID_HINT_NAMESPACE,
+    build_session_key,
+    validate_reclaimable_name,
+    validate_routing_id,
+)
 
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
@@ -1732,8 +1737,16 @@ class NatsRelay:
         return names
 
     def _sid_hint_key(self, user: str, session_id: str) -> str:
-        """Names-KV key for a session_id reclaim hint: ``{user}.sid.{sid}``."""
+        """Names-KV key for a session_id reclaim hint: ``{user}.sid.{sid}``.
+
+        Validate both segments before building the subject key — the
+        session_id is a routing token that becomes a NATS subject segment,
+        so a dotted/special value could inject extra segments.
+        """
         self._validate_user(user)
+        error = validate_routing_id(session_id)
+        if error is not None:
+            raise ValueError(error)
         return f"{user}.{SID_HINT_NAMESPACE}.{session_id}"
 
     async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
