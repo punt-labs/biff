@@ -41,7 +41,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
-from biff.tty import build_session_key, validate_reclaimable_name
+from biff.tty import build_session_key, validate_reclaimable_name, validate_routing_id
 
 logger = logging.getLogger(__name__)
 
@@ -659,10 +659,19 @@ class LocalRelay:
         return names
 
     def _sid_hint_path(self, user: str, session_id: str) -> Path:
-        """File path for a ``session_id -> tty_name`` reclaim hint."""
+        """File path for a ``session_id -> tty_name`` reclaim hint.
+
+        Validate the session_id (identical contract to
+        ``NatsRelay._sid_hint_key``) so both backends reject the same inputs
+        and an unvalidated routing id can never build an odd/oversized
+        filename under the data dir.  A validated routing id is
+        ``[0-9a-fA-F-]`` — inherently free of path separators and traversal.
+        """
         self._validate_user(user)
-        safe = session_id.replace("/", "_").replace("\\", "_").replace("..", "_")
-        return self._data_dir / f"sidmap-{user}-{safe}"
+        error = validate_routing_id(session_id)
+        if error is not None:
+            raise ValueError(error)
+        return self._data_dir / f"sidmap-{user}-{session_id}"
 
     async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
         """Return the last tty_name this session_id claimed, or ``None``."""

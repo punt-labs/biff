@@ -45,7 +45,7 @@ def primary_state_with_companion(tmp_path: Path) -> ServerState:
         user="jfreeman",
         display_name="Jim Freeman",
         kind="human",
-        tty="e5f6g7h8",
+        tty="e5f6a7b8",
     )
     return create_state(
         config,

@@ -74,7 +74,7 @@ class TestActiveMarkers:
             user="jfreeman",
             display_name="Jim Freeman",
             kind="human",
-            tty="e5f6g7h8",
+            tty="e5f6a7b8",
         )
         state = create_state(
             config,
@@ -87,7 +87,7 @@ class TestActiveMarkers:
         mcp = create_server(state)
 
         async with Client(FastMCPTransport(mcp)):
-            companion_marker = active_root / "jfreeman-e5f6g7h8"
+            companion_marker = active_root / "jfreeman-e5f6a7b8"
             assert not companion_marker.exists(), (
                 "companion marker must not be written at startup"
             )
