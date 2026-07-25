@@ -139,24 +139,37 @@ class ClaudeMdImport:
         return text.splitlines(keepends=True)
 
     @staticmethod
-    def _top_level_flags(lines: list[str]) -> list[bool]:
+    def _is_fence(line: str) -> bool:
+        """Return ``True`` when *line* is a ```` ``` ````/``~~~`` fence delimiter."""
+        return line.rstrip("\r\n").lstrip().startswith(("```", "~~~"))
+
+    @classmethod
+    def _top_level_flags(cls, lines: list[str]) -> list[bool]:
         """Flag each line ``True`` when it is top-level (not in a code block).
 
-        A line is inside a fenced block when an odd number of fence delimiters
-        precede it; it is an indented code block line when it begins with a tab
-        or four or more spaces (§2.4). Anything else is top-level.
+        Only **balanced** fence pairs delimit a code block. An odd trailing
+        fence is an *unterminated* opener in the user's prose and must not
+        swallow the rest of the file, so the last delimiter is dropped when the
+        total is odd; a line is then inside a block when an odd number of the
+        remaining (paired) delimiters precede it. A line is also non-top-level
+        when it is an indented code block line — a tab or four or more leading
+        spaces (§2.4). biff's own import line is always written at column 0 with
+        no info string, so it stays top-level by construction regardless of a
+        dangling fence above it.
         """
+        fence_idx = [i for i, line in enumerate(lines) if cls._is_fence(line)]
+        if len(fence_idx) % 2 == 1:
+            # Drop the unpaired trailing opener — it delimits nothing.
+            fence_idx = fence_idx[:-1]
+        paired = set(fence_idx)
         flags: list[bool] = []
         fences_before = 0
-        for line in lines:
-            bare = line.rstrip("\r\n")
-            lead = bare.lstrip()
-            is_fence = lead.startswith(("```", "~~~"))
+        for i, line in enumerate(lines):
             leading_spaces = len(line) - len(line.lstrip(" "))
             indented = line.startswith("\t") or leading_spaces >= 4
             top_level = (fences_before % 2 == 0) and not indented
             flags.append(top_level)
-            if is_fence:
+            if i in paired:
                 fences_before += 1
         return flags
 

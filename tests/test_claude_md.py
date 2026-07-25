@@ -178,6 +178,41 @@ class TestIsRegistered:
         assert ClaudeMdImport(host, _LINE).is_registered() is False
 
 
+class TestUnbalancedFence:
+    """An unterminated fence must not swallow biff's column-0 import line.
+
+    Only balanced ```…``` (or ~~~…~~~) pairs delimit a code block; a dangling
+    opener in the user's prose must not misclassify the import as fenced, which
+    would let register() duplicate and prune() fail to remove.
+    """
+
+    def test_unterminated_fence_above_does_not_hide_import(
+        self, tmp_path: Path
+    ) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text("```text\nunclosed fence in user prose\n\nmore prose\n")
+        imp = ClaudeMdImport(host, _LINE)
+
+        assert imp.register() is True
+        assert imp.is_registered() is True
+        # No duplicate on a second run.
+        assert imp.register() is False
+        assert host.read_text().count(_LINE) == 1
+        # And it can be removed.
+        assert imp.prune() is True
+        assert _LINE not in host.read_text()
+
+    def test_balanced_fence_still_shields_inner_line(self, tmp_path: Path) -> None:
+        # A balanced fence below the import must still shield an inner copy.
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"{_LINE}\n```text\n{_LINE}\n```\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is True
+        assert imp.prune() is True
+        # Only the top-level line goes; the balanced-fenced copy survives.
+        assert host.read_text() == f"```text\n{_LINE}\n```\n"
+
+
 class TestNonUtf8Host:
     """A non-UTF-8 host file must neither crash nor corrupt (§2.4 byte-faithful)."""
 
