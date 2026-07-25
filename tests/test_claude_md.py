@@ -186,6 +186,39 @@ class TestLockPath:
         assert imp._lock_path == tmp_path / ".CLAUDE.md.punt-import.lock"
 
 
+class TestFenceMarkerMatching:
+    """A fenced block only closes on a same-marker, equal-or-longer delimiter.
+
+    Per CommonMark a ```-block closes only on ```; a ~~~ line inside it is
+    content, and a shorter run cannot close a longer opener. A mismatched
+    delimiter must not toggle fence state and expose a shielded @-import.
+    """
+
+    def test_mismatched_marker_does_not_close_block(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        # ``` opens; the ~~~ line is content, not a close; ``` closes.
+        host.write_text(f"```text\n~~~\n{_LINE}\n```\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+        assert imp.prune() is False
+        assert host.read_text() == f"```text\n~~~\n{_LINE}\n```\n"
+
+    def test_shorter_run_does_not_close_longer_fence(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        # 4-backtick opener; an inner 3-backtick line cannot close it.
+        host.write_text(f"````text\n```\n{_LINE}\n````\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+        assert imp.prune() is False
+        assert host.read_text() == f"````text\n```\n{_LINE}\n````\n"
+
+    def test_tilde_block_shields_import(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"~~~\n{_LINE}\n~~~\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+
+
 class TestSymlink:
     """A symlinked host is followed to its real file; the link is preserved."""
 

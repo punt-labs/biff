@@ -143,50 +143,71 @@ class ClaudeMdImport:
         return text.splitlines(keepends=True)
 
     @staticmethod
-    def _is_fence(line: str) -> bool:
-        """Return ``True`` when *line* is a ```` ``` ````/``~~~`` fence delimiter.
+    def _parse_fence(line: str) -> tuple[str, int] | None:
+        """Return ``(marker_char, run_length)`` if *line* is a fence delimiter.
 
-        An **indented** line (a tab, or four or more leading spaces) is an inert
-        indented-code line, never a fence delimiter (§2.4): treating an indented
-        ``` as a fence would toggle the block state and flip the parity for the
-        rest of the file. Up to three leading spaces is still a fence (CommonMark).
+        A fence delimiter is a run of three or more of a single marker char
+        (a backtick or a tilde) after up to three leading spaces. An **indented**
+        line (a tab, or four or more leading spaces) is an inert indented-code
+        line, never a fence delimiter (§2.4). Returns ``None`` otherwise.
         """
         bare = line.rstrip("\r\n")
         if bare.startswith("\t"):
-            return False
-        leading_spaces = len(bare) - len(bare.lstrip(" "))
-        if leading_spaces >= 4:
-            return False
-        return bare.lstrip(" ").startswith(("```", "~~~"))
+            return None
+        stripped = bare.lstrip(" ")
+        if len(bare) - len(stripped) >= 4:
+            return None
+        if not stripped or stripped[0] not in "`~":
+            return None
+        marker = stripped[0]
+        run = len(stripped) - len(stripped.lstrip(marker))
+        return (marker, run) if run >= 3 else None
+
+    @classmethod
+    def _fenced_ranges(cls, lines: list[str]) -> list[tuple[int, int]]:
+        """Return ``(open_idx, close_idx)`` index pairs of matched fenced blocks.
+
+        A block opened by a run of *N* of a marker closes only on a later
+        **same-marker** delimiter of length ``>= N`` (CommonMark); a mismatched
+        marker or a shorter run is content, not a close, so an inner ``~~~`` in a
+        ```` ``` ```` block never toggles the state. An unterminated opener is
+        dropped (delimits nothing), so a dangling fence never swallows the rest
+        of the file. Blocks do not nest — once open, every line up to the
+        matching close is content.
+        """
+        ranges: list[tuple[int, int]] = []
+        open_at: int | None = None
+        open_marker = ""
+        open_len = 0
+        for i, line in enumerate(lines):
+            fence = cls._parse_fence(line)
+            if open_at is None:
+                if fence is not None:
+                    open_at, (open_marker, open_len) = i, fence
+            elif fence is not None and fence[0] == open_marker and fence[1] >= open_len:
+                ranges.append((open_at, i))
+                open_at = None
+        return ranges
 
     @classmethod
     def _top_level_flags(cls, lines: list[str]) -> list[bool]:
         """Flag each line ``True`` when it is top-level (not in a code block).
 
-        Only **balanced** fence pairs delimit a code block. An odd trailing
-        fence is an *unterminated* opener in the user's prose and must not
-        swallow the rest of the file, so the last delimiter is dropped when the
-        total is odd; a line is then inside a block when an odd number of the
-        remaining (paired) delimiters precede it. A line is also non-top-level
-        when it is an indented code block line — a tab or four or more leading
-        spaces (§2.4). biff's own import line is always written at column 0 with
-        no info string, so it stays top-level by construction regardless of a
-        dangling fence above it.
+        A line is non-top-level when it lies inside a matched fenced block
+        (:meth:`_fenced_ranges`) or is itself an indented code-block line — a
+        tab or four or more leading spaces (§2.4). biff's own import line is
+        written at column 0 with no info string, so it is top-level by
+        construction unless it sits inside a genuine fenced block.
         """
-        fence_idx = [i for i, line in enumerate(lines) if cls._is_fence(line)]
-        if len(fence_idx) % 2 == 1:
-            # Drop the unpaired trailing opener — it delimits nothing.
-            fence_idx = fence_idx[:-1]
-        paired = set(fence_idx)
+        inside: set[int] = set()
+        for open_idx, close_idx in cls._fenced_ranges(lines):
+            # Content and the closing delimiter are inside; the opener is not.
+            inside.update(range(open_idx + 1, close_idx + 1))
         flags: list[bool] = []
-        fences_before = 0
         for i, line in enumerate(lines):
             leading_spaces = len(line) - len(line.lstrip(" "))
             indented = line.startswith("\t") or leading_spaces >= 4
-            top_level = (fences_before % 2 == 0) and not indented
-            flags.append(top_level)
-            if i in paired:
-                fences_before += 1
+            flags.append(i not in inside and not indented)
         return flags
 
     @staticmethod
