@@ -135,8 +135,7 @@ class TestResolveRoutingId:
             source="resume",
         ).write()
         assert (
-            SessionHint.resolve_routing_id()
-            == "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+            SessionHint.resolve_routing_id() == "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
         )
 
     def test_recycled_pid_rejected(

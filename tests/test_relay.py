@@ -589,9 +589,7 @@ class TestSessionTtyHint:
         assert await relay.get_session_tty_hint("kai", "sid-1") == "tty1"
         assert await relay.get_session_tty_hint("kai", "sid-2") == "tty2"
 
-    async def test_hint_excluded_from_reserved_names(
-        self, relay: LocalRelay
-    ) -> None:
+    async def test_hint_excluded_from_reserved_names(self, relay: LocalRelay) -> None:
         """A reclaim hint must not surface as a reserved tty name."""
         await relay.reserve_tty_name("kai", "tty1", "kai:sid-abc")
         await relay.set_session_tty_hint("kai", "sid-abc", "tty1")

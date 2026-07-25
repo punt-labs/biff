@@ -1353,6 +1353,7 @@ def _create_mcp_server(
 ) -> FastMCP[ServerState]:
     """Shared config → state → server setup for serve/mcp."""
     from biff.config import RELAY_URL_UNSET
+    from biff.session_id import SessionHint
     from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
 
@@ -1364,12 +1365,18 @@ def _create_mcp_server(
     )
     dormant = not is_enabled(resolved.repo_root)
 
+    # Route on the Claude session_id (biff-7ak): read the SessionStart hook's
+    # hint left for this server's claude ancestor.  None outside Claude Code
+    # (headless/CI/SDK) — create_state then mints a fresh, misroute-safe hex.
+    routing_id = SessionHint.resolve_routing_id()
+
     # Companion (human) registration is deferred to the heartbeat
     # loop -- the ethos roster is not yet available at startup on
     # claude --resume (spec § 3.2, biff-8fg3).
     state = create_state(
         resolved.config,
         resolved.data_dir,
+        tty=routing_id,
         unread_path=UNREAD_DIR / f"{find_session_key()}.json",
         dormant=dormant,
         repo_root=resolved.repo_root,

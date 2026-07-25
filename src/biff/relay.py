@@ -171,9 +171,7 @@ class Relay(Protocol):
 
     # -- session_id -> last tty-name hint (resume reclaim, biff-7ak) --
 
-    async def get_session_tty_hint(
-        self, user: str, session_id: str
-    ) -> str | None: ...
+    async def get_session_tty_hint(self, user: str, session_id: str) -> str | None: ...
 
     async def set_session_tty_hint(
         self, user: str, session_id: str, name: str
@@ -674,9 +672,7 @@ class LocalRelay:
         except OSError:
             return None
 
-    async def set_session_tty_hint(
-        self, user: str, session_id: str, name: str
-    ) -> None:
+    async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
         """Record the tty_name this session_id claimed (overwrites)."""
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._sid_hint_path(user, session_id).write_text(name)

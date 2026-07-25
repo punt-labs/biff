@@ -631,6 +631,26 @@ def _detect_collisions() -> list[str]:
     return collisions
 
 
+def _capture_session_hint(data: dict[str, object]) -> None:
+    """Persist the Claude ``session_id`` for the MCP server (biff-7ak).
+
+    SessionStart is the only hook that sees ``session_id`` (on stdin); the
+    server, unable to observe it (DES-011), reads the hint back by walking
+    the shared ``claude`` process tree.  A missing/empty id is a no-op — the
+    server then routes on a fresh hex fallback.
+    """
+    session_id = data.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return
+    source = data.get("source")
+    from biff.session_id import SessionHint  # noqa: PLC0415
+
+    hint = SessionHint.capture(
+        session_id, source if isinstance(source, str) else "startup"
+    )
+    hint.write()
+
+
 def handle_session_start() -> str:
     """Build SessionStart(startup) additionalContext.
 
@@ -808,6 +828,7 @@ def cc_session_start() -> None:
     """SessionStart(startup) — auto-tty, plan from branch, check unread."""
     if not _is_biff_enabled():
         return
+    _capture_session_hint(_read_hook_input())
     result = handle_session_start()
     _emit(_hook_context("SessionStart", result))
 
@@ -817,6 +838,7 @@ def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
     if not _is_biff_enabled():
         return
+    _capture_session_hint(_read_hook_input())
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 

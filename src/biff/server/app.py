@@ -35,7 +35,8 @@ from biff.server.tools._descriptions import (
     refresh_wall,
     set_tty_name,
 )
-from biff.tty import build_session_key, claim_tty_name, generate_tty
+from biff.session_id import SessionHint
+from biff.tty import build_session_key, claim_tty_name
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,25 @@ async def register_session(
     file; the caller owns that.
     """
     session_key = build_session_key(user, tty_hex)
-    tty_name = await claim_tty_name(relay, user, session_key, preferred=preferred_name)
+    # Resume reclaim (biff-7ak): when no name is explicitly requested, prefer
+    # the ttyN this session_id last held so a resumed session keeps its alias.
+    # The routing token (tty_hex) is the session_id under identity routing.
+    from_hint = False
+    if preferred_name is None:
+        preferred_name = await relay.get_session_tty_hint(user, tty_hex)
+        from_hint = preferred_name is not None
+    try:
+        tty_name = await claim_tty_name(
+            relay, user, session_key, preferred=preferred_name
+        )
+    except ValueError:
+        # The prior ttyN was taken while this session was gone (edge case 6).
+        # Fall back to the lowest-free name — routing is unaffected because the
+        # inbox is keyed on the session_id, not the display alias; only the
+        # human-facing alias moves.  An explicitly-requested name still raises.
+        if not from_hint:
+            raise
+        tty_name = await claim_tty_name(relay, user, session_key, preferred=None)
     # Release any stale TTY name reservation left by a prior process that
     # crashed after writing the KV row but before releasing its name.  The
     # KV row itself is overwritten unconditionally below; without this
@@ -157,6 +176,9 @@ async def register_session(
         last_active=datetime.now(UTC),
     )
     await relay.update_session(session)
+    # Record the claimed alias so the next resume of this session_id reclaims
+    # it (survives clean-exit reservation release).
+    await relay.set_session_tty_hint(user, tty_hex, tty_name)
     return session, tty_name
 
 
@@ -261,11 +283,15 @@ async def _poll_companion_registration(state: ServerState) -> None:
         return
     if roster.root.handle == state.config.user:
         return  # Root IS the agent -- no human companion to register
+    # Derive the companion's routing id from the agent's session_id
+    # (``state.tty`` under identity routing) salted by the human's handle
+    # (biff-7ak amendment 3): stable across resume and distinct from the
+    # agent by construction, so the human side is not volatile.
     companion = CompanionSession(
         user=roster.root.handle,
         display_name=roster.root.display_name,
         kind=roster.root.kind,
-        tty=generate_tty(),
+        tty=SessionHint.derive_routing_id(state.tty, roster.root.handle),
     )
     object.__setattr__(state, "companion", companion)
     try:

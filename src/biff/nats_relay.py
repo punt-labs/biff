@@ -1754,9 +1754,7 @@ class NatsRelay:
         except (KeyNotFoundError, BucketNotFoundError):
             return None
 
-    async def set_session_tty_hint(
-        self, user: str, session_id: str, name: str
-    ) -> None:
+    async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
         """Record the tty_name this session_id claimed (upsert)."""
         names_kv = await self._ensure_names_kv()
         await names_kv.put(self._sid_hint_key(user, session_id), name.encode())
