@@ -185,8 +185,8 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
     This conforms the code to the ``claude-code-biff.tex`` Z model:
     ``PreToolHookAllow`` is enabled for edit tools only when
     ``planSet = ztrue`` and ``beadClaimed`` is non-empty; every other
-    state reaches file editing only through ``PreToolHookDeny``
-    (proven across 161K states, 789K transitions).
+    state reaches file editing only through ``PreToolHookDeny`` (proven
+    exhaustively with ProB — the model is the authority the code obeys).
 
     Two states allow gracefully rather than deny, because a hard block
     there would strand the agent: no active biff session (the gate has
