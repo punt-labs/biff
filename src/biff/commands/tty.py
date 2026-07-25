@@ -51,6 +51,10 @@ async def tty(ctx: CliContext, name: str) -> CommandResult:
     else:
         session = session.model_copy(update={"tty_name": claimed})
     await ctx.relay.update_session(session)
+    # Keep the resume-reclaim hint current so the next resume reclaims the
+    # RENAMED alias, not the stale one (biff-7ak). The routing token is
+    # ctx.tty (the session_id under identity routing).
+    await ctx.relay.set_session_tty_hint(ctx.user, ctx.tty, claimed)
     return CommandResult(
         text=f"TTY: {claimed}",
         json_data={"tty": claimed},
