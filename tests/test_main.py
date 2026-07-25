@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from biff import logging_config
-from biff.__main__ import _suppress_nats_noise, app
+from biff.__main__ import _register_user_scope, _suppress_nats_noise, app
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
@@ -550,3 +550,22 @@ class TestNatsErrorStaysOffTerminal:
         assert "NATS error" in file_text
         assert "Traceback" in file_text
         assert "Operation timed out" in file_text
+
+
+class TestInstallUserScope:
+    """``install`` wiring deposits the guide and registers the user import."""
+
+    def test_register_user_scope_writes_to_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+
+        _register_user_scope()
+
+        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        assert guide.is_file()
+        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")

@@ -1535,11 +1535,31 @@ def disable(
 _PLUGIN_ID = "biff@punt-labs"
 
 
+def _register_user_scope() -> None:
+    """Deposit the agent guide and register the user-scope ``@``-import.
+
+    Global-tool install (tool-enable-disable.md §2.6): guidance is universal, so
+    biff registers ``@~/.punt-labs/biff/CLAUDE.md`` in ``~/.claude/CLAUDE.md``
+    once at install rather than per repo.
+    """
+    from biff.user_scope import UserScope
+
+    result = UserScope().install()
+    if result.guide_written:
+        print("Agent guide: ~/.punt-labs/biff/CLAUDE.md")
+    if result.import_registered:
+        print("Registered @~/.punt-labs/biff/CLAUDE.md in ~/.claude/CLAUDE.md")
+
+
 @app.command("install")
 def install_cmd() -> None:
     """Install biff via the punt-labs marketplace."""
     import shutil
     import subprocess
+
+    # User-scope guidance first — it needs no marketplace and leaves no
+    # dangling import (the guide is deposited before the line is registered).
+    _register_user_scope()
 
     claude = shutil.which("claude")
     if not claude:
@@ -1582,6 +1602,13 @@ def uninstall_cmd() -> None:
     )
     if result.returncode != 0:
         raise typer.Exit(code=1)
+
+    # User-scope teardown (§2.6): remove the import line so no dangling
+    # @-import 404s at read time. The deposited guide stays dormant (§2.9).
+    from biff.user_scope import UserScope
+
+    if UserScope().uninstall():
+        print("Removed @~/.punt-labs/biff/CLAUDE.md from ~/.claude/CLAUDE.md")
     print("Uninstalled.")
 
 
