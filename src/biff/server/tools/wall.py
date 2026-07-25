@@ -26,7 +26,7 @@ from biff.formatting import (
 from biff.models import WallPost
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
-from biff.server.tools._activate import auto_enable
+from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_wall
 from biff.server.tools._session import update_current_session
 from biff.server.tools._tasks import fire_and_forget
@@ -50,7 +50,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register the wall tool."""
 
     @mcp.tool(name="wall", description=WALL_BASE_DESCRIPTION)
-    @auto_enable(state)
+    @track_activity(state)
     async def wall(
         message: str = "", duration: str = "", clear: bool = False, repo: str = ""
     ) -> str:

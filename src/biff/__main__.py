@@ -44,11 +44,11 @@ from biff import commands
 from biff.cli_session import CliContext, cli_session
 from biff.commands import CommandResult
 from biff.config import (
-    ensure_gitignore_yaml,
     find_git_root,
     is_enabled,
     load_mcp_config,
-    write_yaml_local_enabled,
+    remove_enabled_marker,
+    write_enabled_marker,
 )
 from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
@@ -1476,17 +1476,17 @@ def enable(
 ) -> None:
     """Enable biff in the current git repo.
 
-    Writes ``config.local.yaml`` with ``enabled: true``, ensures it
-    is gitignored, deploys git hooks and CI workflow.  Matches the
-    MCP ``/biff y`` toggle — no interactive prompts, no
-    ``config.yaml`` creation.  Idempotent.
+    Writes the committed marker ``.punt-labs/biff/enabled`` (repo
+    policy, tool-enable-disable.md §2.7), deploys git hooks and the CI
+    workflow.  Matches the MCP ``/biff enable`` toggle — no interactive
+    prompts.  Idempotent.  The marker is a tracked file: commit it via
+    a PR so every contributor participates.  This never runs git.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
-    write_yaml_local_enabled(repo_root, enabled=True)
-    ensure_gitignore_yaml(repo_root)
+    write_enabled_marker(repo_root)
 
     from biff.ci_workflow import deploy_ci_workflow
     from biff.git_hooks import deploy_git_hooks
@@ -1498,7 +1498,10 @@ def enable(
     if deploy_ci_workflow(repo_root):
         print("CI workflow: .github/workflows/biff-notify.yml")
 
-    print("biff enabled. Restart Claude Code for changes to take effect.")
+    print(
+        "biff enabled. Commit .punt-labs/biff/enabled and restart "
+        "Claude Code for changes to take effect."
+    )
 
 
 @app.command()
@@ -1510,14 +1513,15 @@ def disable(
 ) -> None:
     """Disable biff in the current git repo.
 
-    Writes ``config.local.yaml`` with ``enabled: false``.  Idempotent.
+    Removes the committed marker ``.punt-labs/biff/enabled``, git hooks,
+    and CI workflow.  Idempotent.  Commit the removal via a PR for it to
+    take effect for every contributor.  This never runs git.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
-    write_yaml_local_enabled(repo_root, enabled=False)
-    ensure_gitignore_yaml(repo_root)
+    remove_enabled_marker(repo_root)
 
     from biff.ci_workflow import remove_ci_workflow
     from biff.git_hooks import remove_git_hooks
@@ -1529,7 +1533,10 @@ def disable(
     if remove_ci_workflow(repo_root):
         print("CI workflow removed: biff-notify.yml")
 
-    print("biff disabled. Restart Claude Code for changes to take effect.")
+    print(
+        "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
+        "restart Claude Code for changes to take effect."
+    )
 
 
 _PLUGIN_ID = "biff@punt-labs"

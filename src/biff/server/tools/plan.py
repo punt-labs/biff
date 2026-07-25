@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from biff._stdlib import expand_bead_id
-from biff.server.tools._activate import auto_enable
+from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import get_or_create_session, update_current_session
 
@@ -29,7 +29,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Visible to teammates via /finger and /who."
         ),
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def plan(
         message: str,
         source: Literal["manual", "auto"] = "manual",

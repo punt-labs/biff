@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -129,45 +130,61 @@ def get_repo_owner(repo_root: Path) -> str | None:
 # ── Config helpers ───────────────────────────────────────────────────
 
 
-def _parse_yaml_enabled(path: Path) -> bool | None:
-    """Parse ``enabled:`` from a simple YAML file using only stdlib.
-
-    Returns ``True``, ``False``, or ``None`` if the file is missing
-    or the key is absent.  Only handles the trivial case where
-    ``enabled: true`` or ``enabled: false`` appears on its own line.
-    """
-    if not path.exists():
-        return None
-    try:
-        for line in path.read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("enabled:"):
-                value = stripped.split(":", 1)[1].strip().lower()
-                if value in {"true", "yes", "on"}:
-                    return True
-                if value in {"false", "no", "off"}:
-                    return False
-    except OSError:
-        pass
-    return None
-
-
 def yaml_config_dir(repo_root: Path) -> Path:
     """Return ``.punt-labs/biff/`` inside *repo_root*."""
     return repo_root / ".punt-labs" / "biff"
 
 
+def enabled_marker_path(repo_root: Path) -> Path:
+    """Path to the committed enablement marker ``.punt-labs/biff/enabled``.
+
+    Enablement is repo policy (tool-enable-disable.md §2.7): the marker
+    is a git-tracked file that travels with the repo, not a per-user
+    setting.  Its presence is the single source of truth for "biff is
+    on for this repo."
+    """
+    return yaml_config_dir(repo_root) / "enabled"
+
+
+def biff_on_path() -> bool:
+    """True when the ``biff`` CLI is installed and resolvable on ``PATH``.
+
+    Guards the "no stale enabled tools" invariant (§2.11): a contributor
+    who clones a marker-enabled repo without biff installed must get a
+    graceful no-op, never a hook error or traceback.
+    """
+    return shutil.which("biff") is not None
+
+
 def is_enabled(repo_root: Path | None) -> bool:
     """True when biff is enabled for the repo.
 
-    Checks ``.punt-labs/biff/config.local.yaml`` for ``enabled: true``.
-    Returns ``False`` if *repo_root* is ``None`` or the file is absent.
+    Enabled ⟺ the committed marker ``.punt-labs/biff/enabled`` exists
+    AND the ``biff`` CLI is on ``PATH``.  Returns ``False`` if
+    *repo_root* is ``None``, the marker is absent, or biff is not
+    installed.
     """
     if repo_root is None:
         return False
-    local = yaml_config_dir(repo_root) / "config.local.yaml"
-    result = _parse_yaml_enabled(local)
-    return result is True
+    return enabled_marker_path(repo_root).exists() and biff_on_path()
+
+
+def write_enabled_marker(repo_root: Path) -> Path:
+    """Create the committed enablement marker, returning its path.
+
+    Writes an empty file at ``.punt-labs/biff/enabled`` (creating the
+    directory if needed).  The caller commits it via a PR like any
+    other repo change -- this never runs git.
+    """
+    marker = enabled_marker_path(repo_root)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    return marker
+
+
+def remove_enabled_marker(repo_root: Path) -> None:
+    """Delete the enablement marker if present (idempotent)."""
+    enabled_marker_path(repo_root).unlink(missing_ok=True)
 
 
 # ── Bead helpers ─────────────────────────────────────────────────────

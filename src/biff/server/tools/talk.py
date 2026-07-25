@@ -27,7 +27,7 @@ from nats.errors import Error as NatsError
 from biff.formatting import HEADER_PREFIX, format_talk_end, terminal_safe
 from biff.models import Message
 from biff.nats_relay import NatsRelay
-from biff.server.tools._activate import auto_enable
+from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import (
     TALK_BASE_DESCRIPTION,
     get_tty_name,
@@ -409,7 +409,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description=TALK_BASE_DESCRIPTION,
         meta={"anthropic/alwaysLoad": True},
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def talk(to: str, message: str = "") -> str:
         """Accept an invite, send a message, or invite a teammate to talk.
 
@@ -428,7 +428,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "server, and mark them read. Call this after a talk notification."
         ),
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def talk_read() -> str:
         """Drain and return the held ephemeral talk state.
 
@@ -452,7 +452,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "sessions are prompted to call talk_read by the tool list instead."
         ),
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def talk_listen(timeout: int = 30) -> str:
         """Block until the held talk state has activity or *timeout* expires."""
         if not isinstance(state.relay, NatsRelay):
@@ -472,7 +472,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         return _agent_drain_output(drain, accept_published=published)
 
     @mcp.tool(name="talk_end", description="End the current talk session.")
-    @auto_enable(state)
+    @track_activity(state)
     async def talk_end() -> str:
         """Close the active talk session, sending an end frame if connected."""
         return await _do_talk_end(mcp, state)

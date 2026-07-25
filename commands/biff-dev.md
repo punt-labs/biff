@@ -1,6 +1,6 @@
 ---
 description: Enable or disable biff for this repo
-argument-hint: "y | n"
+argument-hint: "enable | disable"
 allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__biff"]
 ---
 <!-- markdownlint-disable MD041 -->
@@ -9,8 +9,8 @@ allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__biff"]
 
 Arguments: $ARGUMENTS
 
-Parse the argument as `y` or `n`. Map `y` to `enabled=true`, `n` to `enabled=false`.
+Parse the argument as `enable` or `disable`.
 
 ## Task
 
-Call `mcp__plugin_biff-dev_tty__biff` with `enabled` set to the parsed value. The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.
+Call `mcp__plugin_biff-dev_tty__biff` with `action` set to the parsed value (`"enable"` or `"disable"`). The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

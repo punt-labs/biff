@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from biff.formatting import format_finger, format_finger_multi
 from biff.relay import live_sessions
-from biff.server.tools._activate import auto_enable
+from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import resolve_tty_name, update_current_session
 from biff.tty import parse_address
@@ -29,7 +29,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="finger",
         description="Check what a user is working on and their availability.",
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def finger(user: str) -> str:
         """Query session and presence info for one or more users.
 
