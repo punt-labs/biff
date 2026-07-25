@@ -56,7 +56,11 @@ class ClaudeMdImport:
         self._import_line = import_line
         # Sibling lock file — a lock on the target itself would race the atomic
         # rename that replaces it, so serialize on a stable neighbour instead.
-        self._lock_path = host_path.parent / f".{host_path.name}.biff-import.lock"
+        # The name is tool-AGNOSTIC (``punt-import``, not ``biff-import``): vox,
+        # quarry, and biff all mutate the same ~/.claude/CLAUDE.md (§2.6), so a
+        # biff-specific lock would only exclude biff-vs-biff and a concurrent
+        # `vox install` would clobber it. All punt CLIs must take this same lock.
+        self._lock_path = host_path.parent / f".{host_path.name}.punt-import.lock"
         return self
 
     def is_registered(self) -> bool:

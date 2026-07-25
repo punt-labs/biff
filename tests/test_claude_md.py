@@ -112,6 +112,47 @@ class TestBytePreservation:
         ClaudeMdImport(host, _LINE).register()
         assert stat.S_IMODE(host.stat().st_mode) == 0o600
 
+    def test_lone_cr_preserved_and_appended_line_uses_cr(self, tmp_path: Path) -> None:
+        # Old-Mac lone-CR endings must survive and the appended line matches.
+        host = tmp_path / "CLAUDE.md"
+        host.write_bytes(b"a\rb\r")
+        ClaudeMdImport(host, _LINE).register()
+        assert host.read_bytes() == f"a\rb\r{_LINE}\r".encode()
+
+
+class TestIndentedCodeBlock:
+    """An indented (tab / 4-space) code block line is not a top-level import."""
+
+    def test_indented_copy_is_not_registered(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"    {_LINE}\n")  # 4-space indent → code block
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+        # register appends a real top-level line; the indented copy survives.
+        assert imp.register() is True
+        assert host.read_text() == f"    {_LINE}\n{_LINE}\n"
+
+    def test_prune_keeps_indented_copy(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"\t{_LINE}\n{_LINE}\n")  # tab-indented + top-level
+        assert ClaudeMdImport(host, _LINE).prune() is True
+        assert host.read_text() == f"\t{_LINE}\n"
+
+
+class TestLockPath:
+    """The write lock must serialize ACROSS punt CLIs, not just biff-vs-biff.
+
+    vox, quarry, and biff all write user-scope @-imports into the same
+    ~/.claude/CLAUDE.md (§2.6). A tool-specific lock name buys no cross-writer
+    exclusion — the lost-update race §2.4's lock exists to prevent. The name
+    must be shared and tool-agnostic.
+    """
+
+    def test_lock_name_is_tool_agnostic(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp._lock_path == tmp_path / ".CLAUDE.md.punt-import.lock"
+
 
 class TestSymlink:
     """A symlinked host is followed to its real file; the link is preserved."""
