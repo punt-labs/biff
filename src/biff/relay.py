@@ -169,6 +169,16 @@ class Relay(Protocol):
 
     async def list_reserved_names(self, user: str) -> list[str]: ...
 
+    # -- session_id -> last tty-name hint (resume reclaim, biff-7ak) --
+
+    async def get_session_tty_hint(
+        self, user: str, session_id: str
+    ) -> str | None: ...
+
+    async def set_session_tty_hint(
+        self, user: str, session_id: str, name: str
+    ) -> None: ...
+
     # -- Lifecycle --
 
     async def disconnect(self) -> None:
@@ -279,6 +289,16 @@ class DormantRelay:
 
     async def list_reserved_names(self, user: str) -> list[str]:  # noqa: ARG002
         return []
+
+    async def get_session_tty_hint(
+        self,
+        user: str,  # noqa: ARG002
+        session_id: str,  # noqa: ARG002
+    ) -> str | None:
+        return None
+
+    async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
+        pass
 
     async def disconnect(self) -> None:
         pass
@@ -622,7 +642,11 @@ class LocalRelay:
         return None
 
     async def list_reserved_names(self, user: str) -> list[str]:
-        """List reserved TTY names for a user via glob on lockfiles."""
+        """List reserved TTY names for a user via glob on lockfiles.
+
+        The ``sidmap-`` session-id hint files use a distinct prefix, so they
+        are naturally excluded from the ``ttyname-`` glob.
+        """
         self._validate_user(user)
         if not self._data_dir.exists():
             return []
@@ -635,6 +659,27 @@ class LocalRelay:
             if name:
                 names.append(name)
         return names
+
+    def _sid_hint_path(self, user: str, session_id: str) -> Path:
+        """File path for a ``session_id -> tty_name`` reclaim hint."""
+        self._validate_user(user)
+        safe = session_id.replace("/", "_").replace("\\", "_").replace("..", "_")
+        return self._data_dir / f"sidmap-{user}-{safe}"
+
+    async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
+        """Return the last tty_name this session_id claimed, or ``None``."""
+        path = self._sid_hint_path(user, session_id)
+        try:
+            return path.read_text().strip() or None
+        except OSError:
+            return None
+
+    async def set_session_tty_hint(
+        self, user: str, session_id: str, name: str
+    ) -> None:
+        """Record the tty_name this session_id claimed (overwrites)."""
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._sid_hint_path(user, session_id).write_text(name)
 
     async def disconnect(self) -> None:
         """No-op — filesystem relay has no connection to release."""

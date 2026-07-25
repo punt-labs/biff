@@ -566,3 +566,33 @@ class TestMalformedSessions:
         result = relay._read_sessions()
         assert "kai:tty1" in result
         assert result["kai:tty1"].plan == "testing"
+
+
+class TestSessionTtyHint:
+    """session_id -> last tty_name reclaim hint (biff-7ak)."""
+
+    async def test_absent_returns_none(self, relay: LocalRelay) -> None:
+        assert await relay.get_session_tty_hint("kai", "sid-abc") is None
+
+    async def test_set_then_get(self, relay: LocalRelay) -> None:
+        await relay.set_session_tty_hint("kai", "sid-abc", "tty3")
+        assert await relay.get_session_tty_hint("kai", "sid-abc") == "tty3"
+
+    async def test_overwrites(self, relay: LocalRelay) -> None:
+        await relay.set_session_tty_hint("kai", "sid-abc", "tty3")
+        await relay.set_session_tty_hint("kai", "sid-abc", "tty7")
+        assert await relay.get_session_tty_hint("kai", "sid-abc") == "tty7"
+
+    async def test_distinct_per_session(self, relay: LocalRelay) -> None:
+        await relay.set_session_tty_hint("kai", "sid-1", "tty1")
+        await relay.set_session_tty_hint("kai", "sid-2", "tty2")
+        assert await relay.get_session_tty_hint("kai", "sid-1") == "tty1"
+        assert await relay.get_session_tty_hint("kai", "sid-2") == "tty2"
+
+    async def test_hint_excluded_from_reserved_names(
+        self, relay: LocalRelay
+    ) -> None:
+        """A reclaim hint must not surface as a reserved tty name."""
+        await relay.reserve_tty_name("kai", "tty1", "kai:sid-abc")
+        await relay.set_session_tty_hint("kai", "sid-abc", "tty1")
+        assert await relay.list_reserved_names("kai") == ["tty1"]

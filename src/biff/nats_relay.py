@@ -124,6 +124,10 @@ _DEFAULT_STREAM_PREFIX = "biff"
 # does not belong here — it would silently block a user named "name".
 RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
 
+# Names-KV discriminator for session_id->tty reclaim hints (biff-7ak).
+# Keys are {user}.sid.{session_id}; kept out of the tty-name enumeration.
+_SID_HINT_NAMESPACE = "sid"
+
 
 async def safe_close(nc: NatsClient) -> None:
     """Close a NATS connection, suppressing Python 3.14+ SSL teardown errors.
@@ -1723,8 +1727,39 @@ class NatsRelay:
             key = subject.removeprefix(kv_prefix)
             parts = key.split(".", maxsplit=1)
             if len(parts) == 2 and parts[0] == user:
-                names.append(parts[1])
+                name = parts[1]
+                # Skip the session_id->tty reclaim namespace (biff-7ak):
+                # {user}.sid.{session_id} is a hint, not a reserved tty name.
+                if name.startswith(f"{_SID_HINT_NAMESPACE}."):
+                    continue
+                names.append(name)
         return names
+
+    def _sid_hint_key(self, user: str, session_id: str) -> str:
+        """Names-KV key for a session_id reclaim hint: ``{user}.sid.{sid}``."""
+        self._validate_user(user)
+        return f"{user}.{_SID_HINT_NAMESPACE}.{session_id}"
+
+    async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
+        """Return the last tty_name this session_id claimed, or ``None``.
+
+        Survives clean-exit reservation release (the tty reservation is
+        gone, this hint is not), so a resumed session reclaims its prior
+        ``ttyN``.  Shares the names bucket's 3-day TTL.
+        """
+        names_kv = await self._ensure_names_kv()
+        try:
+            entry = await names_kv.get(self._sid_hint_key(user, session_id))
+            return entry.value.decode() if entry.value else None
+        except (KeyNotFoundError, BucketNotFoundError):
+            return None
+
+    async def set_session_tty_hint(
+        self, user: str, session_id: str, name: str
+    ) -> None:
+        """Record the tty_name this session_id claimed (upsert)."""
+        names_kv = await self._ensure_names_kv()
+        await names_kv.put(self._sid_hint_key(user, session_id), name.encode())
 
     # -- Session history (wtmp) --
 
