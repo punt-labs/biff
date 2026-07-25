@@ -595,3 +595,56 @@ class TestInstallCliOnly:
         assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
         # No plugin step ran, so no "restart Claude Code" instruction.
         assert "Restart Claude Code" not in result.output
+
+
+class TestUninstallResilient:
+    """`biff uninstall` always removes the user-scope import (§2.6)."""
+
+    _LINE = "@~/.punt-labs/biff/CLAUDE.md"
+
+    def _preinstall(self, tmp_path: Path) -> Path:
+        from biff.user_scope import UserScope
+
+        UserScope().install()
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        assert self._LINE in host.read_text()
+        return host
+
+    def test_prunes_import_even_when_plugin_uninstall_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        def has_claude(_cmd: str) -> str | None:
+            return "/usr/bin/claude"
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        host = self._preinstall(tmp_path)
+        monkeypatch.setattr("shutil.which", has_claude)
+        failed = MagicMock(returncode=1)
+        monkeypatch.setattr("subprocess.run", MagicMock(return_value=failed))
+
+        result = runner.invoke(app, ["uninstall"])
+
+        # Plugin failure is surfaced (non-zero exit) but the import is still gone.
+        assert result.exit_code == 1
+        assert self._LINE not in host.read_text()
+
+    def test_prunes_import_when_claude_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        host = self._preinstall(tmp_path)
+        monkeypatch.setattr("shutil.which", no_claude)
+
+        result = runner.invoke(app, ["uninstall"])
+
+        assert result.exit_code == 0
+        assert self._LINE not in host.read_text()

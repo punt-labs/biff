@@ -1591,28 +1591,34 @@ def doctor() -> None:
 
 @app.command("uninstall")
 def uninstall_cmd() -> None:
-    """Uninstall biff plugin and clean up artifacts."""
+    """Uninstall biff: remove the plugin (if present) and the user-scope import."""
     import shutil
     import subprocess
 
-    claude = shutil.which("claude")
-    if not claude:
-        print("Error: claude CLI not found on PATH")
-        raise typer.Exit(code=1)
-
-    result = subprocess.run(  # noqa: S603
-        [claude, "plugin", "uninstall", _PLUGIN_ID, "--scope", "user"],
-        check=False,
-    )
-    if result.returncode != 0:
-        raise typer.Exit(code=1)
-
-    # User-scope teardown (§2.6): remove the import line so no dangling
-    # @-import 404s at read time. The deposited guide stays dormant (§2.9).
     from biff.user_scope import UserScope
 
+    plugin_failed = False
+    claude = shutil.which("claude")
+    if claude:
+        result = subprocess.run(  # noqa: S603
+            [claude, "plugin", "uninstall", _PLUGIN_ID, "--scope", "user"],
+            check=False,
+        )
+        plugin_failed = result.returncode != 0
+    else:
+        print("claude CLI not found; skipping plugin uninstall.")
+
+    # User-scope teardown (§2.6) ALWAYS runs — never gated on the plugin step.
+    # The user asked to clean up, and a dangling @-import 404s every session, so
+    # a failed or skipped plugin uninstall must not strand the import line. The
+    # deposited guide stays dormant (§2.9).
     if UserScope().uninstall():
         print("Removed @~/.punt-labs/biff/CLAUDE.md from ~/.claude/CLAUDE.md")
+
+    if plugin_failed:
+        # Surface the plugin failure — but only after the cleanup above ran.
+        print("Warning: 'claude plugin uninstall' failed; user-scope import removed.")
+        raise typer.Exit(code=1)
     print("Uninstalled.")
 
 
