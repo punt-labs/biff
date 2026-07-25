@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Enablement is committed repo policy — the `.punt-labs/biff/enabled` marker replaces the per-user `config.local.yaml` `enabled:` key (biff-qmd).** Biff is a whole-team tool, so whether it is on for a repo is a property of the repo, not of each contributor's machine. A single git-tracked marker file `.punt-labs/biff/enabled` is now the one source of truth (punt-kit `tool-enable-disable.md` §2.7): `is_enabled()` and all ten shell hook gates test the marker's presence **and** that `biff` is on `PATH`, so a fresh clone of a marker-enabled repo on a machine without biff installed is a graceful no-op, never a hook error (§2.11). The command surface standardizes on `enable | disable` verbs — `biff enable` / `biff disable` at the CLI and `/biff enable` / `/biff disable` in Claude Code, both writing/removing the same marker. The verbs never run git; commit the marker via a PR like any repo change so every contributor participates. The retired gitignored `enabled:` yaml key no longer turns biff on; `config.local.yaml` remains for other per-user overrides (relay auth, poll interval). `mesg y|n` is unchanged — it is the separate per-user "do I receive messages right now" layer, not repo enablement. See DES-052.
+
+### Removed
+
+- **Auto-activation is gone — biff no longer turns itself on at first tool use (biff-qmd).** The `lazy_activate` / `auto_enable` path (which wrote enablement config and returned a restart prompt the first time any tool ran in a dormant repo) is removed. Enablement is explicit only, via the `enable`/`disable` verbs above. A tool call in a disabled repo is a harmless no-op against the dormant relay. The activity-tracking that `auto_enable` also performed (keeping the poller responsive) is preserved by a dedicated internal decorator.
+
 ### Added
 
 - `install.sh` accepts `--no-plugin` (and `BIFF_NO_PLUGIN=1`) to install the

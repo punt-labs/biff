@@ -3914,9 +3914,11 @@ relay:
     credentials: "/path/to/private.creds"
 ```
 
-Note: `enabled` is a per-user state that lives exclusively in
-`config.local.yaml`. It is not a shared config key — team members
-independently toggle biff for their own machines.
+Note: `enabled` as a per-user `config.local.yaml` key is **superseded by
+DES-052** — enablement is now committed repo policy expressed by the
+`.punt-labs/biff/enabled` marker, not a gitignored per-user flag. The
+`config.local.yaml` file remains for other per-user overrides (relay
+auth, poll interval); it no longer carries an `enabled` key.
 
 `config.local.yaml` overrides `config.yaml` at the key level. A local
 `relay.url` overrides the shared `relay.url` without clobbering
@@ -5477,3 +5479,85 @@ the code no longer honored.
    model.
 3. A gate whose docstring cites a proof must actually implement the proven
    transition, or the citation is a lie that rots.
+
+---
+
+## DES-052: Enablement Is Committed Repo Policy — the `.punt-labs/biff/enabled` Marker
+
+**Date:** 2026-07-25
+**Status:** Settled
+**Supersedes:** the DES-037 "enabled is a per-user `config.local.yaml` key" note
+**Related:** DES-037 (zero-config), tool-enable-disable.md §2.7/§2.11, biff-qmd
+
+### Problem
+
+Enablement lived in `.punt-labs/biff/config.local.yaml` as a gitignored,
+per-user `enabled: true|false` flag, toggled by `/biff y` / `/biff n`. Three
+things were wrong with that shape for a collaboration tool:
+
+1. **Wrong scope.** Biff is a whole-team communication tool. Whether it is on
+   for a repo is a property of the repo, not of each contributor's machine. A
+   gitignored per-user flag means every contributor re-enables independently,
+   and a fresh clone is silently off for everyone.
+2. **Two sources of truth in two vocabularies.** The Python `is_enabled()` read
+   the yaml key; ten shell hooks re-parsed the same key with a `grep -qiE`
+   regex. `y|n` in the command surface, `true|yes|on` in the file.
+3. **Auto-enable papered over the friction.** Because enabling was per-user
+   friction, biff auto-enabled itself on first tool use (`lazy_activate`). A
+   communication tool that turns itself on without being asked is the opposite
+   of the explicit, human-in-the-loop model biff otherwise upholds.
+
+### Decision
+
+Enablement is **committed repo policy**, expressed by one git-tracked marker
+file `.punt-labs/biff/enabled` (tool-enable-disable.md §2.7). Its presence is
+the single source of truth. `is_enabled(repo) ⟺ marker exists AND biff is on
+PATH`. The biff-on-PATH conjunct makes a cloned marker-enabled repo a graceful
+no-op on a machine without biff installed, rather than a hook error (§2.11 "no
+stale enabled tools").
+
+Two explicit front-ends, standardized on `enable | disable` verbs, write and
+remove the marker — never a `y|n` boolean:
+
+- CLI: `biff enable` / `biff disable` create/remove the marker in the working
+  tree. They never run git — the user commits the marker via a PR like any
+  repo change.
+- MCP: the `biff` tool takes `action="enable"|"disable"` (was `enabled: bool`);
+  `/biff enable` and `/biff disable` route to it and write the same marker.
+
+Auto-activation is **dropped**. `lazy_activate` / `auto_enable` are removed.
+Enablement is explicit only. A dormant server (marker absent) still registers
+its tools against the `DormantRelay`, so a call in a disabled repo is a harmless
+no-op; it no longer writes config or auto-enables. The activity-tracking side
+effect that `auto_enable` also carried (`ActivityTracker.touch()` on every tool
+call, keeping the poller out of napping) is preserved by a dedicated
+`track_activity` decorator with no enable logic.
+
+### `mesg` is a separate layer — not enablement
+
+`mesg y|n` stays as-is. It is the per-user, per-session "do I receive messages
+right now" control (the `biff_enabled` flag in the unread JSON, DES-013). That
+is a legitimate per-user preference and is distinct from repo enablement: repo
+policy (committed marker) decides whether biff runs for the project at all;
+`mesg` decides whether a given user's session accepts delivery while it does.
+Retiring `y|n` for *enablement* deliberately does not touch `mesg`.
+
+### Rejected alternative — keep the gitignored per-user flag
+
+Considered: keep `enabled` in `config.local.yaml` and just standardize the verbs.
+Rejected because it preserves the wrong scope. A collaboration tool needs
+whole-repo enablement that travels with a clone; per-user opt-out already has a
+home in `mesg`. A committed marker gives every contributor who clones and has
+biff installed the same on/off state, reviewable in a PR, with no hidden
+per-machine divergence. The per-user layer is not lost — it is `mesg`.
+
+### Rules
+
+1. `.punt-labs/biff/enabled` is committed (never gitignored). Its presence is the
+   only enablement signal; no code reads a yaml `enabled` key.
+2. Every enablement front-end uses `enable | disable`, writes/removes the marker,
+   and never runs git — the user commits it.
+3. Hooks gate on marker-present AND `command -v biff-hook`; a marker-enabled repo
+   without biff installed no-ops, never errors.
+4. Enablement is explicit — biff never turns itself on. Per-user delivery
+   preference lives in `mesg`, a separate layer.
