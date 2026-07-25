@@ -79,14 +79,26 @@ class TestHintRoundTrip:
     def test_write_permissions_are_owner_only(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """A durable routing id is never world-readable (security review P3)."""
+        """A durable routing id is never world-readable, whatever the umask.
+
+        A permissive umask (0o000) would let a plain ``write_text`` create the
+        file 0o644 and ``mkdir(mode=...)`` yield 0o777; the explicit chmod and
+        the ``os.open(..., 0o600)`` create close that window (security review
+        P3 completeness).
+        """
+        import os
+
         _use_tmp_data_dir(monkeypatch, tmp_path)
-        SessionHint(
-            session_id="2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b",
-            claude_pid=57369,
-            claude_start_time=1.0,
-            source="startup",
-        ).write()
+        old_umask = os.umask(0o000)
+        try:
+            SessionHint(
+                session_id="2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b",
+                claude_pid=57369,
+                claude_start_time=1.0,
+                source="startup",
+            ).write()
+        finally:
+            os.umask(old_umask)
 
         sessions_dir = tmp_path / "sessions"
         assert sessions_dir.stat().st_mode & 0o777 == 0o700

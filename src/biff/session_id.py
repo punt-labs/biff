@@ -155,14 +155,18 @@ class SessionHint:
     def write(self) -> None:
         """Persist this hint to ``sessions/{claude_pid}.json`` (best-effort).
 
-        The durable routing id is owner-private: the directory is created
-        ``0o700`` and the file ``0o600`` (mirroring ``logging_config``), so a
-        routing id is never world-readable on a multi-user host.  The write
-        is atomic (temp-then-replace), with the mode set before the replace
-        so the final path is never briefly world-readable.
+        The durable routing id is owner-private: the directory is chmod'd
+        ``0o700`` and the file is created ``0o600`` from its first byte, so a
+        routing id is never world-readable on a multi-user host — not even
+        transiently.  The temp file is opened with ``O_CREAT|O_WRONLY|O_TRUNC``
+        at mode ``0o600`` (a plain ``write_text`` would create it ``0o644``
+        under the default umask) and ``O_NOFOLLOW`` refuses a symlink at the
+        path.  The atomic temp-then-replace is preserved.
         """
         path = _hint_path(self.claude_pid)
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        sessions_dir = path.parent
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        sessions_dir.chmod(0o700)  # umask-independent
         payload = json.dumps(
             {
                 "session_id": self.session_id,
@@ -172,8 +176,13 @@ class SessionHint:
             }
         )
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(payload)
-        tmp.chmod(0o600)
+        flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(tmp, flags, 0o600)
+        try:
+            os.write(fd, payload.encode())
+        finally:
+            os.close(fd)
+        tmp.chmod(0o600)  # umask-independent, in case the create mode was masked
         tmp.replace(path)
 
     def matches_running(self) -> bool:
