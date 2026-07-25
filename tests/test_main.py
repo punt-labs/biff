@@ -569,3 +569,29 @@ class TestInstallUserScope:
         host = tmp_path / ".claude" / "CLAUDE.md"
         assert guide.is_file()
         assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
+
+
+class TestInstallCliOnly:
+    """`biff install` with no `claude` on PATH is a CLI-only SUCCESS."""
+
+    def test_no_claude_is_cli_only_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_home() -> Path:
+            return tmp_path
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        monkeypatch.setattr("shutil.which", no_claude)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        assert guide.is_file()
+        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
+        # No plugin step ran, so no "restart Claude Code" instruction.
+        assert "Restart Claude Code" not in result.output

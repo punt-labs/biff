@@ -1563,8 +1563,12 @@ def install_cmd() -> None:
 
     claude = shutil.which("claude")
     if not claude:
-        print("Error: claude CLI not found on PATH")
-        raise typer.Exit(code=1)
+        # CLI-only install is a SUCCESS, not a partial failure: the biff CLI,
+        # MCP server, and user-scope guide are all installed; only the Claude
+        # Code plugin is skipped (install-cli-only.md, matching install.sh's
+        # --no-plugin path). No "restart Claude Code" line — there's no plugin.
+        print("Installed (CLI-only). Claude Code not found; plugin step skipped.")
+        return
 
     result = subprocess.run(  # noqa: S603
         [claude, "plugin", "install", _PLUGIN_ID, "--scope", "user"],
