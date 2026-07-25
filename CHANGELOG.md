@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Addresses are bare `user:ttyN` — the `@` sigil is dropped (biff-5gb).** The canonical biff address is now `user:ttyN` (and bare `user`), rendered everywhere without a leading `@`: `/who`, `/finger`, `/last`, talk invite/connected hints, the wall attribution line, and every usage/error string. The input parser still tolerates a single leading `@` for muscle memory, but strips exactly one (via `removeprefix`, not `lstrip`), so `@@user` stays malformed rather than silently normalizing to a valid address. A single `tty.format_address` formatter is the one source of truth for how an address renders. Validation splits into `validate_tty_name` (the tight display-alias allowlist, `[A-Za-z0-9_-]{1,20}`, keeping the terminal-escape guard) and `validate_routing_id` (the routing token, `[0-9a-fA-F-]{1,64}`, admitting the session_id UUID shape).
+
+### Fixed
+
+- **`claude --resume` no longer strands or misroutes messages — biff routes on the Claude `session_id` (biff-7ak, P1).** The routing coordinate was `ttyN`, a name unique only among concurrently-live sessions and recycled lowest-free over time. On resume a session re-claimed a `ttyN` from scratch, so a teammate's earlier `/write user:oldtty` or `/talk user:oldtty` **stranded** (LOST) in an inbox no live session drained, and a recycled `ttyN` could deliver a prior occupant's messages to a different session (MISROUTED). Biff now routes on the Claude Code `session_id`, which is stable across `claude --resume`/`--continue` and fresh on `--fork-session`. The `session_id` — visible only to the SessionStart hook — is bridged to the MCP server (which cannot observe it) via a per-`claude`-PID hint file the server reads back by walking the shared process tree; the recycle guard is `(pid, process-start-time)` via `psutil.create_time`, with no time-freshness window. `ttyN` becomes a pure display alias, resolved to the current session at send time and reclaimed across resume via a `session_id → ttyN` mapping in the names KV (3-day TTL). The companion (human) session's id is a deterministic per-role derivation of the same `session_id`, so it too is stable across resume and never volatile. The soundness of identity routing — LOST and MISROUTED unreachable, delivery keyed on identity with send-time alias resolution — is proven exhaustively in `docs/session-model.tex` (ProB).
+
 ## [1.11.2] - 2026-07-18
 
 ### Changed
