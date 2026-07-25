@@ -76,6 +76,22 @@ class TestHintRoundTrip:
         loaded = SessionHint.load(57369)
         assert loaded == hint
 
+    def test_write_permissions_are_owner_only(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A durable routing id is never world-readable (security review P3)."""
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        SessionHint(
+            session_id="2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b",
+            claude_pid=57369,
+            claude_start_time=1.0,
+            source="startup",
+        ).write()
+
+        sessions_dir = tmp_path / "sessions"
+        assert sessions_dir.stat().st_mode & 0o777 == 0o700
+        assert (sessions_dir / "57369.json").stat().st_mode & 0o777 == 0o600
+
     def test_load_absent_returns_none(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

@@ -153,9 +153,16 @@ class SessionHint:
         return digest.hexdigest()
 
     def write(self) -> None:
-        """Persist this hint to ``sessions/{claude_pid}.json`` (best-effort)."""
+        """Persist this hint to ``sessions/{claude_pid}.json`` (best-effort).
+
+        The durable routing id is owner-private: the directory is created
+        ``0o700`` and the file ``0o600`` (mirroring ``logging_config``), so a
+        routing id is never world-readable on a multi-user host.  The write
+        is atomic (temp-then-replace), with the mode set before the replace
+        so the final path is never briefly world-readable.
+        """
         path = _hint_path(self.claude_pid)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         payload = json.dumps(
             {
                 "session_id": self.session_id,
@@ -166,6 +173,7 @@ class SessionHint:
         )
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(payload)
+        tmp.chmod(0o600)
         tmp.replace(path)
 
     def matches_running(self) -> bool:
