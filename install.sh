@@ -10,9 +10,9 @@ usage() {
 install.sh — install biff (CLI + Claude Code plugin)
 
 Usage:
-  curl -fsSL .../install.sh | sh                    install CLI and plugin
-  curl -fsSL .../install.sh | sh -s -- --no-plugin  install CLI only
-  curl -fsSL .../install.sh | BIFF_NO_PLUGIN=1 sh   install CLI only (env)
+  curl -fsSL .../install.sh | sh                    # install CLI and plugin
+  curl -fsSL .../install.sh | sh -s -- --no-plugin  # install CLI only
+  curl -fsSL .../install.sh | BIFF_NO_PLUGIN=1 sh   # install CLI only (env)
 
 Options:
   --no-plugin   Install the biff CLI but skip the Claude Code plugin.
@@ -213,9 +213,9 @@ printf '\n'
 if [ "$SKIP_PLUGIN" = "1" ]; then
   printf '%b%bbiff CLI is ready!%b\n\n' "$GREEN" "$BOLD" "$NC"
   printf 'The biff CLI and MCP server are installed. Next steps:\n'
-  printf '  biff doctor   → re-check installation health\n'
-  printf '  biff enable   → enable biff in a git repo (installs audit hooks)\n'
-  printf '  biff mcp      → stdio MCP server to register with your harness\n\n'
+  printf '  biff doctor   # re-check installation health\n'
+  printf '  biff enable   # enable biff in a git repo (installs audit hooks)\n'
+  printf '  biff mcp      # stdio MCP server to register with your harness\n\n'
   printf 'To add the Claude Code plugin later:\n'
   printf '  claude plugin marketplace add %s\n' "$MARKETPLACE_REPO"
   printf '  claude plugin install %s@%s\n\n' "$PLUGIN_NAME" "$MARKETPLACE_NAME"
