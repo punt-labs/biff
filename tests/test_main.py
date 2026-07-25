@@ -648,3 +648,7 @@ class TestUninstallResilient:
 
         assert result.exit_code == 0
         assert self._LINE not in host.read_text()
+        # The final status must not claim the plugin was removed when it was
+        # never touched — it reflects the skipped plugin step.
+        assert "plugin was not removed" in result.output
+        assert "\nUninstalled.\n" not in result.output

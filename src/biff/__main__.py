@@ -1619,7 +1619,12 @@ def uninstall_cmd() -> None:
         # Surface the plugin failure — but only after the cleanup above ran.
         print("Warning: 'claude plugin uninstall' failed; user-scope import removed.")
         raise typer.Exit(code=1)
-    print("Uninstalled.")
+    if claude is None:
+        # Mirror install's CLI-only messaging: never imply the plugin was
+        # removed when there was no `claude` to remove it.
+        print("Uninstalled (CLI-only). Claude Code not found; plugin was not removed.")
+    else:
+        print("Uninstalled.")
 
 
 @app.command()
