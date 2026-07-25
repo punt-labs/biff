@@ -226,7 +226,17 @@ def _check_user_import() -> CheckResult:
 
     host = Path.home() / ".claude" / "CLAUDE.md"
     line = "@~/.punt-labs/biff/CLAUDE.md"
-    if ClaudeMdImport(host, line).is_registered():
+    try:
+        registered = ClaudeMdImport(host, line).is_registered()
+    except OSError:
+        # A diagnostic must never crash on an unreadable host file.
+        return CheckResult(
+            "Agent guide",
+            False,
+            "could not read ~/.claude/CLAUDE.md",
+            required=False,
+        )
+    if registered:
         return CheckResult(
             "Agent guide", True, "imported in ~/.claude/CLAUDE.md", required=False
         )
