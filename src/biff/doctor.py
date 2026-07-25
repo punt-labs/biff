@@ -228,9 +228,10 @@ def _check_user_import() -> CheckResult:
     line = "@~/.punt-labs/biff/CLAUDE.md"
     try:
         registered = ClaudeMdImport(host, line).is_registered()
-    except (OSError, UnicodeDecodeError):
-        # A diagnostic must never crash: OSError (permissions) or a decode
-        # error on a non-UTF-8 host must both degrade to a clean report.
+    except OSError:
+        # A diagnostic must never crash. Only OSError is possible: the read is
+        # byte-faithful (surrogateescape), so a non-UTF-8 host never raises
+        # UnicodeDecodeError — catching it would be unreachable dead code.
         return CheckResult(
             "Agent guide",
             False,
