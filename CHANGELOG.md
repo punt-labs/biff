@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `install.sh` accepts `--no-plugin` (and `BIFF_NO_PLUGIN=1`) to install the
+  biff CLI and MCP server while skipping the Claude Code plugin, for non-Claude
+  harnesses and plugin-blocked orgs. Missing `claude`/`git` auto-skips the
+  plugin instead of aborting; the CLI still installs. Unknown flags exit 2 with
+  usage. Per punt-kit `install-cli-only.md`.
+
 ## [1.11.3] - 2026-07-25
 
 ### Changed
