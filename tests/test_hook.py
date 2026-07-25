@@ -18,6 +18,7 @@ from biff.hook import (
     _expand_branch_plan,
     _has_active_session,
     _read_hook_input,
+    cc_pre_tool_use,
     check_plan_hint,
     check_wall_hint,
     handle_post_bash,
@@ -1189,14 +1190,23 @@ def _gate_mocks(*, plan: bool, bead: bool | str):
     )
 
 
-def _suggest_reason(result: dict[str, object]) -> str:
-    """Extract the suggestion string from a PreToolUse hook response."""
+def _deny_reason(result: dict[str, object]) -> str:
+    """Extract the deny reason from a PreToolUse hard-gate response.
+
+    The gate is a hard deny (DES-051): ``permissionDecision`` must be
+    ``"deny"`` and the actionable instructions travel in
+    ``permissionDecisionReason`` (DES-026), never a non-blocking
+    ``additionalContext`` nudge.
+    """
     output = cast("dict[str, object]", result["hookSpecificOutput"])
     assert output["hookEventName"] == "PreToolUse"
-    assert "permissionDecision" not in output, (
-        "PreToolUse gate should use additionalContext, not permissionDecision"
+    assert output["permissionDecision"] == "deny", (
+        "PreToolUse gate must hard-deny, not nudge via additionalContext"
     )
-    return str(output["additionalContext"])
+    assert "additionalContext" not in output, (
+        "deny response carries its reason in permissionDecisionReason"
+    )
+    return str(output["permissionDecisionReason"])
 
 
 class TestHasActiveSession:
@@ -1228,24 +1238,30 @@ class TestHasActiveSession:
         assert result is None
 
     def test_pre_tool_use_still_gates_with_active_session(self) -> None:
-        """handle_pre_tool_use fires warning when server IS running and plan not set."""
+        """handle_pre_tool_use hard-denies when server IS running and plan not set."""
         m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "/plan" in reason
 
 
 class TestHandlePreToolUse:
-    """PreToolUse gate: deny Edit/Write without plan + bead."""
+    """PreToolUse gate: hard-deny Edit/Write without plan + bead.
+
+    Conforms to the ``claude-code-biff.tex`` Z model: ``PreToolHookAllow``
+    is enabled for edit tools only when ``planSet = ztrue`` and
+    ``beadClaimed`` is non-empty; otherwise only ``PreToolHookDeny``
+    (``pdDeny``) is reachable.
+    """
 
     def test_both_missing_denies_with_both_instructions(self) -> None:
         m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "/plan" in reason
         assert "bd update" in reason
 
@@ -1254,7 +1270,7 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "/plan" in reason
         assert "bd update" not in reason
 
@@ -1263,7 +1279,7 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "bd update" in reason
         assert "/plan" not in reason
 
@@ -1278,7 +1294,7 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "unavailable" in reason
         assert "/plan" in reason
 
@@ -1288,6 +1304,31 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is None
+
+
+class TestPreToolUseFailsClosed:
+    """The gate entrypoint denies when it cannot evaluate its condition.
+
+    A hard control that silently grants access on an unexpected error is
+    the same bug as no control at all (DES-051). If reading the markers
+    raises, ``cc_pre_tool_use`` must emit a deny, not let the edit through.
+    """
+
+    def test_marker_read_error_emits_deny(self) -> None:
+        emitted: list[dict[str, object]] = []
+        with (
+            patch("biff.hook._is_biff_enabled", return_value=True),
+            patch("biff.hook._read_hook_input", return_value={}),
+            patch("biff.hook._has_active_session", return_value=True),
+            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+            patch("biff.markers.has_plan_marker", side_effect=OSError("boom")),
+            patch("biff.hook._emit", side_effect=emitted.append),
+        ):
+            cc_pre_tool_use()
+        assert len(emitted) == 1
+        reason = _deny_reason(emitted[0])
+        assert "/plan" in reason
+        assert "bd update" in reason
 
 
 # ── Z spec invariant coverage (biff-g9b) ─────────────────────────────

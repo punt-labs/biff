@@ -10,6 +10,10 @@
   plugin instead of aborting; the CLI still installs. Unknown flags exit 2 with
   usage. Per punt-kit `install-cli-only.md`.
 
+### Fixed
+
+- **The PreToolUse plan/bead gate hard-denies again instead of whispering a reminder (biff-9n5).** `handle_pre_tool_use` was documented as a hard gate — and the `claude-code-biff.tex` Z model proves file editing is reachable only when `planSet = ztrue` and a bead is claimed — but the code had regressed (DES-031) to a non-blocking `additionalContext` nudge: the Edit/Write proceeded regardless and agents ignored the whisper across whole sessions. The gate now returns `permissionDecision: "deny"` with an actionable `permissionDecisionReason` (run `/plan <what you're working on>`, claim a bead with `bd update <bead-id> --status=in_progress`, then retry), conforming the code to the model it always cited. A `deny` blocks the edit and feeds the reason back to the model without raising a user-facing permission prompt — unlike the `ask` mechanism that DES-031 rightly removed. Two states still allow gracefully rather than strand the agent: no active biff session, and plan-set with `bd` unavailable. See DES-051.
+
 ## [1.11.3] - 2026-07-25
 
 ### Changed
