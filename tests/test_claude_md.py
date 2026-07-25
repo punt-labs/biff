@@ -176,3 +176,27 @@ class TestIsRegistered:
     def test_false_when_missing(self, tmp_path: Path) -> None:
         host = tmp_path / "CLAUDE.md"
         assert ClaudeMdImport(host, _LINE).is_registered() is False
+
+
+class TestNonUtf8Host:
+    """A non-UTF-8 host file must neither crash nor corrupt (§2.4 byte-faithful)."""
+
+    def test_register_preserves_invalid_utf8_bytes(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        # 0xE9 is 'é' in latin-1 — invalid as standalone UTF-8.
+        host.write_bytes(b"caf\xe9 rules\n")
+        imp = ClaudeMdImport(host, _LINE)
+
+        assert imp.register() is True
+        raw = host.read_bytes()
+        assert raw.startswith(b"caf\xe9 rules\n")
+        assert raw.endswith(_LINE.encode() + b"\n")
+        assert imp.is_registered() is True
+
+    def test_prune_preserves_invalid_utf8_bytes(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_bytes(b"caf\xe9\n" + _LINE.encode() + b"\ntail\xff\n")
+        imp = ClaudeMdImport(host, _LINE)
+
+        assert imp.prune() is True
+        assert host.read_bytes() == b"caf\xe9\ntail\xff\n"

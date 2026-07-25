@@ -119,6 +119,17 @@ class TestCheckUserImport:
         assert not result.passed
         assert "could not read" in result.message
 
+    def test_non_utf8_host_does_not_crash(self, tmp_path: Path) -> None:
+        # A hand-authored CLAUDE.md with non-UTF-8 bytes must not traceback;
+        # the import is simply absent from the (byte-faithfully read) content.
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        host.parent.mkdir(parents=True)
+        host.write_bytes(b"caf\xe9 rules\n")
+        with patch("biff.doctor.Path.home", return_value=tmp_path):
+            result = _check_user_import()
+        assert not result.passed
+        assert "not imported" in result.message
+
 
 class TestCheckBiffFile:
     @patch("biff.doctor.find_git_root", return_value=None)

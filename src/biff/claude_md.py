@@ -192,10 +192,18 @@ class ClaudeMdImport:
 
         ``newline=""`` disables universal-newline translation so a read/write
         round-trip keeps LF, CRLF, and lone-CR endings byte-identical.
+        ``errors="surrogateescape"`` makes the read byte-faithful for a host
+        that is *not* valid UTF-8 (a hand-authored ``CLAUDE.md`` may hold
+        latin-1 or mixed bytes): invalid bytes decode to lone surrogates and
+        :meth:`_write` restores them, so a non-UTF-8 host neither crashes the
+        read (``UnicodeDecodeError`` is a ``ValueError``, not ``OSError``) nor
+        is corrupted on write-back.
         """
         if not self._host.is_file():
             return ""
-        return self._host.read_text(encoding="utf-8", newline="")
+        return self._host.read_text(
+            encoding="utf-8", newline="", errors="surrogateescape"
+        )
 
     def _write(self, text: str) -> None:
         """Replace the host file's contents with *text* atomically.
@@ -216,7 +224,11 @@ class ClaudeMdImport:
         )
         tmp = Path(tmp_name)
         try:
-            handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
+            # surrogateescape mirrors _read: a lone surrogate produced by
+            # decoding an invalid host byte is written back as that exact byte.
+            handle = os.fdopen(
+                fd, "w", encoding="utf-8", newline="", errors="surrogateescape"
+            )
         except BaseException:
             os.close(fd)
             with contextlib.suppress(OSError):

@@ -228,8 +228,9 @@ def _check_user_import() -> CheckResult:
     line = "@~/.punt-labs/biff/CLAUDE.md"
     try:
         registered = ClaudeMdImport(host, line).is_registered()
-    except OSError:
-        # A diagnostic must never crash on an unreadable host file.
+    except (OSError, UnicodeDecodeError):
+        # A diagnostic must never crash: OSError (permissions) or a decode
+        # error on a non-UTF-8 host must both degrade to a clean report.
         return CheckResult(
             "Agent guide",
             False,

@@ -55,6 +55,18 @@ class TestInstall:
         assert text.startswith("# My global rules\n\nAlways use uv.\n")
         assert text.rstrip("\n").endswith(_LINE)
 
+    def test_non_utf8_guide_on_disk_is_overwritten(self, tmp_path: Path) -> None:
+        # A tampered, non-UTF-8 guide must be overwritten, not crash the
+        # byte-compare with UnicodeDecodeError.
+        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        guide.parent.mkdir(parents=True)
+        guide.write_bytes(b"\xff\xfe garbage\n")
+
+        result = _scope(tmp_path).install()
+
+        assert result.guide_written is True
+        assert "Biff (team messaging)" in guide.read_text()
+
 
 class TestUninstall:
     def test_prunes_import_leaves_guide(self, tmp_path: Path) -> None:

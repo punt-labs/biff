@@ -80,12 +80,16 @@ class UserScope:
 
         Overwrites wholesale (§2.2 vendored zone); a no-op when the deposited
         bytes already match, so re-running ``install`` never churns the file.
+        The freshness check compares *bytes* (not decoded text) so a tampered,
+        non-UTF-8 guide on disk is simply overwritten rather than crashing the
+        compare with ``UnicodeDecodeError``.
         """
         content = self._bundled_guide()
-        if self._guide.is_file() and self._guide.read_text(encoding="utf-8") == content:
+        want = content.encode("utf-8")
+        if self._guide.is_file() and self._guide.read_bytes() == want:
             return False
         self._guide.parent.mkdir(parents=True, exist_ok=True)
-        self._guide.write_text(content, encoding="utf-8")
+        self._guide.write_bytes(want)
         return True
 
     @staticmethod
