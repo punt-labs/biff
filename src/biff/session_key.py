@@ -27,9 +27,41 @@ def find_session_key() -> int:
     if cached is not None:
         return cached
 
-    key = _walk_to_topmost_claude()
+    key = topmost_claude_pid()
+    if key is None:
+        key = os.getppid()
     _set_cached(key)
     return key
+
+
+def topmost_claude_pid() -> int | None:
+    """Return the topmost ``claude`` ancestor PID, or ``None`` if none.
+
+    Distinct from :func:`find_session_key`: this returns ``None`` when no
+    ``claude`` ancestor is in the process tree (or ``ps`` fails), rather
+    than falling back to ``os.getppid()``.  A ``None`` result is the
+    signal that the caller is *not* running under Claude Code — used by
+    session-id routing to skip the hint lookup entirely in headless,
+    CI, and SDK environments where no hint can exist.
+    """
+    try:
+        table = _read_process_table()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    topmost_claude: int | None = None
+    pid = os.getpid()
+    for _ in range(10):  # safety bound — process trees are shallow
+        entry = table.get(pid)
+        if entry is None:
+            break
+        ppid, comm = entry
+        if _is_claude(comm):
+            topmost_claude = pid
+        if ppid == pid or ppid == 0:
+            break  # reached init / root
+        pid = ppid
+    return topmost_claude
 
 
 # Cache (module-level, set once per process lifetime) -------------------------
@@ -47,35 +79,6 @@ def _set_cached(value: int) -> None:
 
 
 # Core algorithm --------------------------------------------------------------
-
-
-def _walk_to_topmost_claude() -> int:
-    """Walk the process tree upward, return topmost ``claude`` PID.
-
-    Falls back to ``os.getppid()`` when ``ps`` fails or no ``claude``
-    ancestor exists.
-    """
-    fallback = os.getppid()
-    try:
-        table = _read_process_table()
-    except (OSError, subprocess.SubprocessError):
-        return fallback
-
-    topmost_claude: int | None = None
-    pid = os.getpid()
-
-    for _ in range(10):  # safety bound — process trees are shallow
-        entry = table.get(pid)
-        if entry is None:
-            break
-        ppid, comm = entry
-        if _is_claude(comm):
-            topmost_claude = pid
-        if ppid == pid or ppid == 0:
-            break  # reached init / root
-        pid = ppid
-
-    return topmost_claude if topmost_claude is not None else fallback
 
 
 def _read_process_table() -> dict[int, tuple[int, str]]:
