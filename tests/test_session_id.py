@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -154,6 +155,29 @@ class TestResolveRoutingId:
         ).write()
         assert SessionHint.resolve_routing_id() is None
 
+    def test_unknown_start_time_never_matches(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A 0.0 stored start-time must not bind a dead id to a recycled PID.
+
+        If capture hit a psutil fault it stored 0.0, and if the live process
+        also reads 0.0, a naive ``==`` would compare 0.0 == 0.0 -> True and
+        reopen MISROUTE.  The guard rejects 0.0 outright: resolve yields None
+        (fresh-hex fallback), never the stale id.
+        """
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(sid_mod, "topmost_claude_pid", lambda: 57369)
+        monkeypatch.setattr(sid_mod, "_process_start_time", _fixed_start_time(0.0))
+        # A *valid* hex id, so only the recycle guard can reject it — not the
+        # routing-id validator (which would mask the guard hole).
+        SessionHint(
+            session_id="dead0000-0000-0000-0000-000000000000",
+            claude_pid=57369,
+            claude_start_time=0.0,
+            source="startup",
+        ).write()
+        assert SessionHint.resolve_routing_id() is None
+
     def test_malformed_session_id_rejected(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -176,3 +200,31 @@ class TestResolveRoutingId:
         # attempts=1 → single lookup, no retry sleep.
         monkeypatch.setattr(sid_mod, "_RESOLVE_ATTEMPTS", 1)
         assert SessionHint.resolve_routing_id() is None
+
+    def test_under_claude_without_hint_warns(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A broken resume must be observable: under Claude + no hint -> WARNING."""
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(sid_mod, "topmost_claude_pid", lambda: 42)
+        monkeypatch.setattr(sid_mod, "_RESOLVE_ATTEMPTS", 1)
+        with caplog.at_level(logging.WARNING, logger="biff.session_id"):
+            assert SessionHint.resolve_routing_id() is None
+        assert any(
+            "resume-reclaim disabled" in r.message and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
+
+    def test_headless_does_not_warn(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The legitimate headless case (no claude ancestor) stays silent."""
+        monkeypatch.setattr(sid_mod, "topmost_claude_pid", lambda: None)
+        with caplog.at_level(logging.WARNING, logger="biff.session_id"):
+            assert SessionHint.resolve_routing_id() is None
+        assert caplog.records == []

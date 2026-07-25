@@ -22,11 +22,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from hashlib import blake2b
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast
+
+import psutil
 
 from biff._stdlib import biff_data_dir
 from biff.session_key import topmost_claude_pid
@@ -76,11 +79,17 @@ class SessionHint:
 
     @classmethod
     def load(cls, pid: int) -> Self | None:
-        """Read the hint for *pid*, or ``None`` if absent or malformed."""
+        """Read the hint for *pid*, or ``None`` if absent or malformed.
+
+        Logging is symmetric so "no hint" (a readable absence, at DEBUG) is
+        distinguishable from "hint exists but unusable" (malformed JSON,
+        wrong top-level type, or wrong shape — each at WARNING).
+        """
         path = _hint_path(pid)
         try:
             raw = path.read_text()
         except OSError:
+            logger.debug("No readable session hint at %s", path)
             return None
         try:
             data = json.loads(raw)
@@ -88,8 +97,12 @@ class SessionHint:
             logger.warning("Malformed session hint at %s", path)
             return None
         if not isinstance(data, dict):
+            logger.warning("Session hint at %s is not a JSON object", path)
             return None
-        return cls._from_mapping(cast("dict[str, object]", data))
+        hint = cls._from_mapping(cast("dict[str, object]", data))
+        if hint is None:
+            logger.warning("Session hint at %s has an unexpected shape", path)
+        return hint
 
     @classmethod
     def resolve_routing_id(cls) -> str | None:
@@ -105,13 +118,21 @@ class SessionHint:
         """
         pid = topmost_claude_pid()
         if pid is None:
-            return None  # not under Claude Code — no hint can exist
+            return None  # not under Claude Code — headless/CI/SDK, no warning
         for attempt in range(_RESOLVE_ATTEMPTS):
             hint = cls.load(pid)
             if hint is not None:
-                return hint._validated_routing_id(pid)
+                routing_id = hint._validated_routing_id(pid)
+                if routing_id is not None:
+                    return routing_id
+                break  # hint present but invalid — retrying cannot help
             if attempt < _RESOLVE_ATTEMPTS - 1:
                 time.sleep(_RESOLVE_DELAY_S)
+        logger.warning(
+            "under Claude Code (pid %d) but no valid session hint; routing on "
+            "a volatile id — resume-reclaim disabled",
+            pid,
+        )
         return None
 
     @staticmethod
@@ -152,13 +173,22 @@ class SessionHint:
 
         The recycle guard: a hint left by a dead session whose PID was
         reused by a different process has a different start time and is
-        rejected.  A vanished process (start time unreadable) also fails.
+        rejected.  ``0.0`` means "unknown" — an unreadable live process *or*
+        a capture-time psutil fault — and never matches, so an unknown start
+        time can never bind a stale id to a recycled PID.
         """
-        return _process_start_time(self.claude_pid) == self.claude_start_time
+        live = _process_start_time(self.claude_pid)
+        return live != 0.0 and live == self.claude_start_time
 
     def _validated_routing_id(self, pid: int) -> str | None:
         """Return ``session_id`` if the hint is bound to the live *pid*."""
         if self.claude_pid != pid:
+            logger.warning(
+                "Session hint pid %d does not match walked pid %d; "
+                "ignoring stale leftover",
+                self.claude_pid,
+                pid,
+            )
             return None  # hint filename/PID cross-check (stale leftover)
         if not self.matches_running():
             logger.info("Session hint for pid %d failed recycle guard", pid)
@@ -208,8 +238,6 @@ def _resolve_claude_pid() -> int:
     hint is still written under *some* stable key — the server's recycle
     guard rejects a mismatch, so a wrong key only forfeits reclaim.
     """
-    import os  # noqa: PLC0415
-
     return topmost_claude_pid() or os.getppid()
 
 
@@ -221,8 +249,6 @@ def _process_start_time(pid: int) -> float:
     ``ps`` parsing is needed (biff-7ak amendment 4a).  ``0.0`` (a value no
     real process reports) means "unknown", which fails the recycle guard.
     """
-    import psutil  # noqa: PLC0415
-
     try:
         return psutil.Process(pid).create_time()
     except (psutil.Error, OSError):
