@@ -616,10 +616,34 @@ class TestResumeReclaim:
 
         assert name == "tty5", "resume must reclaim the hinted alias, not tty1"
 
-    async def test_resume_falls_back_when_prior_tty_taken(self, tmp_path: Path) -> None:
-        """Edge case 6: prior ttyN taken while gone -> lowest-free fallback.
+    async def test_resume_reclaims_alias_still_held_by_same_session(
+        self, tmp_path: Path
+    ) -> None:
+        """The exit->resume overlap must still reclaim the SAME alias.
 
-        Routing is unaffected (the inbox keys on the session_id); only the
+        Live-verify caught this: on resume our own just-exited session still
+        holds its ttyN (the reservation has not released/expired yet), so a
+        naive claim treated 'taken' as a foreign collision and reassigned a
+        fresh tty. Same-identity takeover reclaims tty16 -> tty16 (biff-7ak).
+        """
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        session_key = f"kai:{sid}"
+        # Prior incarnation still holds tty16 AND the hint points at it.
+        assert await relay.reserve_tty_name("kai", "tty16", session_key)
+        await relay.set_session_tty_hint("kai", sid, "tty16")
+
+        _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty16", "resume must reclaim its own still-held alias"
+
+    async def test_resume_falls_back_when_prior_tty_taken(self, tmp_path: Path) -> None:
+        """Edge case 6: prior ttyN taken by a DIFFERENT session -> lowest-free.
+
+        Uniqueness is preserved — a foreign live holder is never overridden;
+        routing is unaffected (the inbox keys on the session_id), only the
         human-facing alias moves.
         """
         from biff.server.app import register_session
@@ -627,8 +651,8 @@ class TestResumeReclaim:
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
         await relay.set_session_tty_hint("kai", sid, "tty1")
-        # Someone else holds tty1 now.
-        assert await relay.reserve_tty_name("kai", "tty1", "kai:other")
+        # A DIFFERENT session_id holds tty1 now.
+        assert await relay.reserve_tty_name("kai", "tty1", "kai:other-session-id")
 
         _, name = await register_session(relay, "kai", sid, **self._KW)
 

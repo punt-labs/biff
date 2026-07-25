@@ -137,9 +137,11 @@ async def claim_tty_name(
     ``create()`` — a server-side CAS operation that succeeds only if
     the key does not already exist.
 
-    If *preferred* is given, attempts to reserve that exact name.
-    On collision, raises ``ValueError`` (the caller should show an
-    error to the user).
+    If *preferred* is given, attempts to reserve that exact name.  On
+    collision, if the held reservation is already ours (same
+    *session_key* — our own prior incarnation resuming before its
+    reservation released), reclaim it in place; otherwise raise
+    ``ValueError`` (the caller should show an error to the user).
 
     If *preferred* is ``None``, computes the lowest available ``ttyN``
     from existing reservations and retries on collision up to
@@ -152,6 +154,18 @@ async def claim_tty_name(
         candidate = preferred
         ok = await relay.reserve_tty_name(user, candidate, session_key)
         if ok:
+            return candidate
+        # Same-identity takeover (biff-7ak): our own just-exited session may
+        # still hold this alias in the exit->resume overlap — its reservation
+        # has not released or TTL-expired yet.  Under identity routing the
+        # reservation value is our session key ({user}:{session_id}, stable
+        # across resume), so the held alias is already ours; reclaim it in
+        # place and refresh its TTL.  DES-035 uniqueness holds: only a
+        # reservation owned by THIS session_key is taken over, never a
+        # different live session's.
+        owner = await relay.get_tty_reservation_owner(user, candidate)
+        if owner == session_key:
+            await relay.refresh_tty_reservation(user, candidate, session_key)
             return candidate
         msg = f"name {candidate!r} already in use"
         raise ValueError(msg)

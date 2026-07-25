@@ -216,8 +216,8 @@ class TestClaimTtyName:
         assert name2 == "tty2"
         assert name1 != name2
 
-    async def test_preferred_when_taken_raises(self, tmp_path: object) -> None:
-        """claim_tty_name(preferred='deploy') when taken raises ValueError."""
+    async def test_preferred_when_taken_by_other_raises(self, tmp_path: object) -> None:
+        """A preferred name held by a DIFFERENT session raises ValueError."""
         from pathlib import Path
 
         relay = LocalRelay(Path(str(tmp_path)))
@@ -225,6 +225,26 @@ class TestClaimTtyName:
         assert name == "deploy"
         with pytest.raises(ValueError, match="already in use"):
             await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
+
+    async def test_same_identity_takeover_reclaims_alias(
+        self, tmp_path: object
+    ) -> None:
+        """Our own prior incarnation's held alias is reclaimed, not rejected.
+
+        On resume the session key is identical ({user}:{session_id} is stable),
+        so a reservation still held by our just-exited session is ours to take
+        back — the exit->resume overlap must not force a fresh alias (biff-7ak).
+        """
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        session_key = "kai:2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        # Prior incarnation holds tty16; it has not released yet.
+        assert await relay.reserve_tty_name("kai", "tty16", session_key)
+        # Resume as the SAME session_key reclaims the SAME alias.
+        name = await claim_tty_name(relay, "kai", session_key, preferred="tty16")
+        assert name == "tty16"
+        assert await relay.get_tty_reservation_owner("kai", "tty16") == session_key
 
     async def test_fills_gaps(self, tmp_path: object) -> None:
         """Reserve tty1, tty3 → next claim gets tty2."""
