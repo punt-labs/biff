@@ -5338,9 +5338,13 @@ structural: the routing coordinate was a recyclable *name*, not a durable identi
 becomes the value of the existing session-key token (`{user}:{session_id}` — the
 key *structure* is unchanged); `ttyN` demotes to a display *alias* resolved to the
 routing id at send time. Per-role derived ids keep the agent and its human
-companion both stable and distinct: `derive_routing_id = blake2b(f"{session_id}:{role}")`,
-a hex digest inside the routing charset (the raw `session_id:role` composite is
-never used — its `:` would collide with the session-key separator).
+companion both stable and distinct: `derive_routing_id(session_id, role)` returns
+`blake2b(f"{session_id}:{role}", digest_size=8).hexdigest()` — a 16-char hex digest
+inside the routing charset. The companion entry passes the roster *handle* as
+`role` (`roster.root.handle`, not a literal "agent"/"human"), so its id is a stable
+function of `(session_id, handle)`. Hashing to hex is what keeps the raw
+`session_id:role` composite — whose `:` would collide with the session-key
+separator — from ever being used as a token.
 
 **Plumbing.** The MCP server never observes `session_id` — only the SessionStart
 hook sees it, on stdin (DES-011). The hook writes
