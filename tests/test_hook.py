@@ -442,6 +442,23 @@ class TestCaptureSessionHint:
 
         assert not (tmp_path / "sessions").exists()
 
+    def test_write_failure_is_swallowed(self, tmp_path: Path) -> None:
+        """A hint-write OSError must not break session startup (best-effort)."""
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_session_hint
+
+        def _boom(_self: object) -> None:
+            raise OSError("disk full")
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+            patch.object(sid_mod.SessionHint, "write", _boom),
+        ):
+            # Must not raise.
+            _capture_session_hint({"session_id": "sid", "source": "startup"})
+
 
 # ── handle_pre_compact ─────────────────────────────────────────────
 

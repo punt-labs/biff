@@ -648,7 +648,10 @@ def _capture_session_hint(data: dict[str, object]) -> None:
     hint = SessionHint.capture(
         session_id, source if isinstance(source, str) else "startup"
     )
-    hint.write()
+    # Best-effort: a hint-write failure forfeits resume-reclaim (the server
+    # falls back to a fresh hex) but must never break session startup.
+    with suppress(OSError):
+        hint.write()
 
 
 def handle_session_start() -> str:
