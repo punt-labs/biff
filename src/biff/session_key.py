@@ -9,8 +9,11 @@ See DESIGN.md DES-011a for the full rationale.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
+
+logger = logging.getLogger(__name__)
 
 
 def find_session_key() -> int:
@@ -47,6 +50,10 @@ def topmost_claude_pid() -> int | None:
     try:
         table = _read_process_table()
     except (OSError, subprocess.SubprocessError):
+        logger.warning(
+            "Could not read the process table; treating as not under Claude Code",
+            exc_info=True,
+        )
         return None
 
     topmost_claude: int | None = None

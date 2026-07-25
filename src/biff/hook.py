@@ -11,6 +11,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
 import re
@@ -21,6 +22,8 @@ from contextlib import suppress
 from typing import cast
 
 import typer
+
+logger = logging.getLogger(__name__)
 
 # ── CLI structure ────────────────────────────────────────────────────
 
@@ -649,9 +652,15 @@ def _capture_session_hint(data: dict[str, object]) -> None:
         session_id, source if isinstance(source, str) else "startup"
     )
     # Best-effort: a hint-write failure forfeits resume-reclaim (the server
-    # falls back to a fresh hex) but must never break session startup.
-    with suppress(OSError):
+    # falls back to a fresh hex) but must never break session startup.  Log
+    # so a broken resume is observable, then swallow.
+    try:
         hint.write()
+    except OSError:
+        logger.warning(
+            "Failed to persist session hint; resume-reclaim disabled this session",
+            exc_info=True,
+        )
 
 
 def handle_session_start() -> str:

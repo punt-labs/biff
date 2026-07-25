@@ -132,13 +132,20 @@ async def register_session(
             relay, user, session_key, preferred=preferred_name
         )
     except ValueError:
-        # The prior ttyN was taken while this session was gone (edge case 6).
-        # Fall back to the lowest-free name — routing is unaffected because the
-        # inbox is keyed on the session_id, not the display alias; only the
-        # human-facing alias moves.  An explicitly-requested name still raises.
+        # The fallback fires ONLY for a name that came from the resume hint
+        # (from_hint) — the prior ttyN was taken while this session was gone
+        # (edge case 6), so reassign the lowest-free alias.  Routing is
+        # unaffected: the inbox keys on the session_id, not the display alias;
+        # only the human-facing alias moves.  An explicitly-requested name
+        # (from_hint is False) still raises to its caller.
         if not from_hint:
             raise
         tty_name = await claim_tty_name(relay, user, session_key, preferred=None)
+        logger.info(
+            "prior alias %s taken on resume; reassigned %s",
+            preferred_name,
+            tty_name,
+        )
     # Release any stale TTY name reservation left by a prior process that
     # crashed after writing the KV row but before releasing its name.  The
     # KV row itself is overwritten unconditionally below; without this
