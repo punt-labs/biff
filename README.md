@@ -22,6 +22,28 @@ curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/0dfe5e3/install.sh |
 
 Restart Claude Code twice. Type `/who` to see your team.
 
+### CLI only (no Claude Code plugin)
+
+To install the biff CLI and MCP server without the Claude Code plugin --- for a
+non-Claude harness (Codex, Cursor, a plain terminal) or an org that blocks
+plugin installation --- pass `--no-plugin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/0dfe5e3/install.sh | sh -s -- --no-plugin
+```
+
+The `BIFF_NO_PLUGIN=1` environment variable does the same, for contexts that
+cannot pass arguments through the pipe:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/0dfe5e3/install.sh | BIFF_NO_PLUGIN=1 sh
+```
+
+Missing `claude` or `git` auto-skips the plugin the same way. In CLI-only mode
+the plugin steps are skipped; everything else --- binary, PATH, and health
+check --- still runs. Add the plugin later with `claude plugin marketplace add
+punt-labs/claude-plugins` and `claude plugin install biff@punt-labs`.
+
 <details>
 <summary>Manual install (if you already have uv)</summary>
 
