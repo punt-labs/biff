@@ -10,6 +10,10 @@
 
 - **`claude --resume` no longer strands or misroutes messages — biff routes on the Claude `session_id` (biff-7ak, P1).** The routing coordinate was `ttyN`, a name unique only among concurrently-live sessions and recycled lowest-free over time. On resume a session re-claimed a `ttyN` from scratch, so a teammate's earlier `/write user:oldtty` or `/talk user:oldtty` **stranded** (LOST) in an inbox no live session drained, and a recycled `ttyN` could deliver a prior occupant's messages to a different session (MISROUTED). Biff now routes on the Claude Code `session_id`, which is stable across `claude --resume`/`--continue` and fresh on `--fork-session`. The `session_id` — visible only to the SessionStart hook — is bridged to the MCP server (which cannot observe it) via a per-`claude`-PID hint file the server reads back by walking the shared process tree; the recycle guard is `(pid, process-start-time)` via `psutil.create_time`, with no time-freshness window. `ttyN` becomes a pure display alias, resolved to the current session at send time and reclaimed across resume via a `session_id → ttyN` mapping in the names KV (3-day TTL). The companion (human) session's id is a deterministic per-role derivation of the same `session_id`, so it too is stable across resume and never volatile. The soundness of identity routing — LOST and MISROUTED unreachable, delivery keyed on identity with send-time alias resolution — is proven exhaustively in `docs/session-model.tex` (ProB).
 
+### Security
+
+- **Bumped `mcp` 1.26.0 → 1.28.1 to patch three high-severity advisories** (GHSA-vj7q-gjh5-988w, GHSA-jpw9-pfvf-9f58, GHSA-hvrp-rf83-w775). `mcp` is a transitive dependency (via `fastmcp`); the lockfile now resolves to the patched release. No biff API change.
+
 ## [1.11.2] - 2026-07-18
 
 ### Changed
