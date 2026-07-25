@@ -5381,3 +5381,90 @@ misroute. Also lands biff-5gb: canonical addresses drop the `@` sigil (bare
 `psutil`. Shipped in PR #304; `make check` 1851. Companion-id derivability from
 public fields is a noted residual (`biff-muj`, optional per-install-secret
 hardening).
+
+## DES-051: PreToolUse Plan/Bead Gate Is a Hard Deny — Reversing the DES-031 Soft Nudge
+
+**Date:** 2026-07-25
+**Status:** Settled
+**Supersedes:** DES-031 (the `additionalContext` nudge; the DES-031 rejection
+of `ask` remains valid)
+
+### Problem
+
+`handle_pre_tool_use` is documented as a hard gate — "gate Edit/Write on
+plan-set AND bead-claimed" — and cites the `claude-code-biff.tex` Z model, which
+proves file editing is reachable only through `PreToolHookAllow`, an operation
+guarded by `planSet = ztrue` and `beadClaimed ≠ ∅` for edit tools. Every other
+state reaches editing only via `PreToolHookDeny` (`hookDecision? = pdDeny`).
+
+The code did not do this. DES-031 had downgraded the gate to a non-blocking
+`additionalContext` reminder ("Reminder: /plan not set…"). The Edit/Write
+executed regardless. Observed in production: an agent ignored the whisper across
+an entire session. The feature that was supposed to *drive* plan-setting had
+decayed to an advisory the model routinely overrode. The code and the model it
+cited had diverged silently.
+
+### Decision
+
+Conform the code to the model. The gate returns a hard deny:
+
+```json
+{"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Blocked: editing files requires a plan and a
+        claimed bead. Run /plan <what you're working on> and claim a bead with
+        bd update <bead-id> --status=in_progress, then retry the edit."
+}}
+```
+
+The reason is actionable: it names both prerequisites and the exact commands to
+satisfy them, so the block *drives* the workflow rather than bricking the agent.
+
+### Why `deny` now, when DES-031 removed `ask`
+
+DES-031's problem was specific to `ask`: `permissionDecision: "ask"` raises a
+user-facing permission dialog on every Edit/Write, overriding `acceptEdits` mode
+— 30–40 prompts per session. DES-031's own trade-off table records that `deny`
+is different: it hard-blocks and returns the reason to the *model*, with **no**
+user prompt. DES-031 explicitly reserved `deny` for "hard gates where the tool
+must not execute" and only forbade `ask` for workflow nudges.
+
+What changed is the *intent*, not the mechanism analysis. DES-031 assumed the
+gate should be a soft nudge. The operator (biff-9n5) has re-decided: the gate
+must actually drive plan-setting. Given that intent, `deny` is the mechanism
+DES-031 itself points to — it achieves "drive the behavior" without reintroducing
+the `ask` prompt storm. The field name is `permissionDecisionReason` (DES-026),
+the only name Claude Code reads.
+
+### Graceful-allow escape hatches
+
+Two states allow (`return None`) rather than deny, because a hard block there
+would strand the agent with no way forward:
+
+1. **No active biff session** — the existing `_has_active_session()` guard. With
+   no session state the gate has nothing to reason about (matches the Z model's
+   `spInactive ⇒ planSet = zfalse ∧ beadClaimed = ∅` precondition, where the
+   edit-gate operations are not enabled).
+2. **Plan set, `bd` unavailable** — the plan (the primary driver) is present; the
+   tracker simply cannot be queried. Denying here would block all editing
+   whenever `bd` is down. Plan-missing still denies regardless of `bd`, since a
+   missing plan is unambiguous without consulting the tracker.
+
+### Model ⇄ code reconciliation
+
+The model was the authority and was already correct; only the code had regressed.
+No spec change was required. `fuzz` type-check passes; ProB model-check confirms
+editing is unreachable without plan + bead. The regression is exactly the class
+of silent drift the design logs exist to catch: a docstring that promised a proof
+the code no longer honored.
+
+### Rules
+
+1. A subsystem governed by a Z model conforms to the model; when they disagree
+   and the model is right, fix the code, not the invariant.
+2. `permissionDecision: "deny"` (never `"ask"`) is the mechanism for a hard
+   workflow gate — it blocks without a user prompt and feeds the reason to the
+   model.
+3. A gate whose docstring cites a proof must actually implement the proven
+   transition, or the citation is a lie that rots.
