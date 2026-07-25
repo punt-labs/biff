@@ -139,6 +139,38 @@ class TestIndentedCodeBlock:
         assert host.read_text() == f"\t{_LINE}\n"
 
 
+class TestIndentedFenceIsNotDelimiter:
+    """An indented (tab / 4+ space) ```/~~~ is inert code, not a fence.
+
+    Per §2.4 an indented line is an indented-code line — it must NOT open or
+    close a fenced block. Toggling fence state on it flips the parity for the
+    rest of the file.
+    """
+
+    def test_indented_fence_inside_block_keeps_import_shielded(
+        self, tmp_path: Path
+    ) -> None:
+        # @-import sits inside a real ```…``` block; an indented ``` inside must
+        # not toggle fence state and wrongly expose the shielded copy.
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"```text\n    ```\n{_LINE}\n```\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+        assert imp.prune() is False
+        assert host.read_text() == f"```text\n    ```\n{_LINE}\n```\n"
+
+    def test_indented_fence_above_column0_import_stays_top_level(
+        self, tmp_path: Path
+    ) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text("    ```text\nan indented code line\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.register() is True
+        assert imp.is_registered() is True
+        assert imp.register() is False
+        assert host.read_text().count(_LINE) == 1
+
+
 class TestLockPath:
     """The write lock must serialize ACROSS punt CLIs, not just biff-vs-biff.
 

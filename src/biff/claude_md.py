@@ -144,8 +144,20 @@ class ClaudeMdImport:
 
     @staticmethod
     def _is_fence(line: str) -> bool:
-        """Return ``True`` when *line* is a ```` ``` ````/``~~~`` fence delimiter."""
-        return line.rstrip("\r\n").lstrip().startswith(("```", "~~~"))
+        """Return ``True`` when *line* is a ```` ``` ````/``~~~`` fence delimiter.
+
+        An **indented** line (a tab, or four or more leading spaces) is an inert
+        indented-code line, never a fence delimiter (§2.4): treating an indented
+        ``` as a fence would toggle the block state and flip the parity for the
+        rest of the file. Up to three leading spaces is still a fence (CommonMark).
+        """
+        bare = line.rstrip("\r\n")
+        if bare.startswith("\t"):
+            return False
+        leading_spaces = len(bare) - len(bare.lstrip(" "))
+        if leading_spaces >= 4:
+            return False
+        return bare.lstrip(" ").startswith(("```", "~~~"))
 
     @classmethod
     def _top_level_flags(cls, lines: list[str]) -> list[bool]:
