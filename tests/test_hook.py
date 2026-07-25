@@ -1192,7 +1192,7 @@ def _gate_mocks(*, plan: bool, bead: bool | str):
 def _deny_reason(result: dict[str, object]) -> str:
     """Extract the deny reason from a PreToolUse hard-gate response.
 
-    The gate is a hard deny (DES-035): ``permissionDecision`` must be
+    The gate is a hard deny (DES-051): ``permissionDecision`` must be
     ``"deny"`` and the actionable instructions travel in
     ``permissionDecisionReason`` (DES-026), never a non-blocking
     ``additionalContext`` nudge.

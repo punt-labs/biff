@@ -5406,9 +5406,11 @@ cited had diverged silently.
 
 ### Decision
 
-Conform the code to the model. The gate returns a hard deny:
+Conform the code to the model. The gate returns a hard deny (the
+``permissionDecisionReason`` is one line in the emitted JSON — wrapped here
+only for readability):
 
-```json
+```text
 {"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
