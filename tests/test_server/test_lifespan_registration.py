@@ -789,3 +789,88 @@ class TestResumeReclaim:
         assert await relay.fetch(f"kai:{new_sid}") == []
         # It is still parked on the old key (stranded, not misrouted).
         assert [m.body for m in await relay.fetch(f"kai:{old_sid}")] == ["old"]
+
+
+class TestReapSentinels:
+    """The reaper must not log out the LIVE session under identity routing."""
+
+    _KW: ClassVar[dict[str, str]] = {
+        "display_name": "Kai",
+        "kind": "agent",
+        "hostname": "h",
+        "pwd": "/",
+        "repo": "_test-reap",
+    }
+
+    async def test_reap_skips_our_own_live_sentinel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A leftover sentinel for our own key is consumed, not reaped.
+
+        Under identity routing a resumed session carries the SAME key as its
+        just-exited incarnation, so reaping the prior sentinel would wipe the
+        live session's presence: log it out, release the reclaimed alias, and
+        delete its KV row (biff-7ak).
+        """
+        from biff.server import app as app_mod
+        from biff.server.app import _write_sentinel, register_session
+
+        config = BiffConfig(
+            user="kai", display_name="Kai", kind="agent", repo_name="_test-reap"
+        )
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        state = create_state(config, tmp_path, tty=sid, hostname="h", pwd="/")
+
+        # Live registration under our own key (KV row + alias reservation).
+        _, tty_name = await register_session(state.relay, "kai", sid, **self._KW)
+
+        # Prior incarnation left a sentinel for the SAME key.
+        def _sentinels(_repo: str) -> Path:
+            return tmp_path / "sentinels"
+
+        monkeypatch.setattr(app_mod, "sentinel_dir", _sentinels)
+        _write_sentinel("_test-reap", state.session_key)
+
+        await app_mod._reap_sentinels(state)
+
+        # Presence survives: KV row intact, alias retained.
+        sessions = await state.relay.get_sessions()
+        assert any(s.tty == sid for s in sessions), "live session must survive reap"
+        assert tty_name in await state.relay.list_reserved_names("kai")
+        # Sentinel consumed (no re-processing).
+        safe = state.session_key.replace(":", "-")
+        assert not (tmp_path / "sentinels" / safe).exists()
+
+    async def test_reap_still_reaps_a_foreign_sentinel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sentinel for a DIFFERENT (dead) key is still reaped normally."""
+        from biff.models import UserSession
+        from biff.server import app as app_mod
+        from biff.server.app import _write_sentinel, register_session
+
+        config = BiffConfig(
+            user="kai", display_name="Kai", kind="agent", repo_name="_test-reap"
+        )
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        state = create_state(config, tmp_path, tty=sid, hostname="h", pwd="/")
+        await register_session(state.relay, "kai", sid, **self._KW)
+
+        # A dead prior session under a DIFFERENT key.
+        dead_sid = "dead0000-0000-0000-0000-000000000000"
+        await state.relay.update_session(
+            UserSession(user="kai", tty=dead_sid, tty_name="tty9", repo="_test-reap")
+        )
+
+        def _sentinels(_repo: str) -> Path:
+            return tmp_path / "sentinels"
+
+        monkeypatch.setattr(app_mod, "sentinel_dir", _sentinels)
+        _write_sentinel("_test-reap", f"kai:{dead_sid}")
+
+        await app_mod._reap_sentinels(state)
+
+        sessions = await state.relay.get_sessions()
+        assert all(s.tty != dead_sid for s in sessions), "dead session must be reaped"
+        # Our live session is untouched.
+        assert any(s.tty == sid for s in sessions)

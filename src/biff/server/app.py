@@ -235,6 +235,14 @@ async def _reap_sentinels(state: ServerState) -> None:
     d = sentinel_dir(state.config.repo_name)
     if not d.exists():
         return
+    # Under identity routing a resumed session carries the SAME key as its
+    # just-exited incarnation ({user}:{session_id} is stable across resume),
+    # so a leftover sentinel for our own key must NOT be reaped — we are
+    # already registered live under it, and reaping would log us out, release
+    # the alias we just reclaimed, and delete our own KV row (biff-7ak).
+    live_keys = {state.session_key}
+    if state.companion_session_key:
+        live_keys.add(state.companion_session_key)
     for sentinel in d.iterdir():
         if not sentinel.is_file():
             continue
@@ -242,33 +250,48 @@ async def _reap_sentinels(state: ServerState) -> None:
             session_key = sentinel.read_text().strip()
         except OSError:
             continue
-        # Write logout event before deleting the session.  The KV entry
-        # is still present (3-day TTL), so we can fetch session data for
-        # an accurate last-seen timestamp.
-        session: UserSession | None = None
-        try:
-            session = await state.relay.get_session(session_key)
-            if session is not None:
-                await state.relay.append_wtmp(_build_logout_event(session_key, session))
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to write sentinel logout for %s", session_key)
-        # Release TTY name reservation before deleting session (DES-035).
-        # Separate try block so a wtmp failure doesn't leak the name reservation.
-        if session is not None and session.tty_name:
-            try:
-                await state.relay.release_tty_name(session.user, session.tty_name)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to release TTY name %s during sentinel reap",
-                    session.tty_name,
-                    exc_info=True,
-                )
-        try:
-            await state.relay.delete_session(session_key)
-        except Exception:  # noqa: BLE001 — relay errors vary by backend
-            logger.warning("Failed to reap sentinel for %s", session_key, exc_info=True)
+        if session_key in live_keys:
+            # Our own prior incarnation — consume the sentinel without a
+            # logout, reservation release, or KV delete.
+            sentinel.unlink(missing_ok=True)
             continue
-        sentinel.unlink(missing_ok=True)
+        if await _reap_dead_session(state, session_key):
+            sentinel.unlink(missing_ok=True)
+
+
+async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
+    """Log out, release the alias, and delete the KV row for a dead session.
+
+    Returns ``True`` when the KV row was deleted (the caller should remove the
+    sentinel), ``False`` when the delete failed (keep the sentinel to retry).
+    """
+    # Write logout event before deleting the session.  The KV entry is still
+    # present (3-day TTL), so we can fetch session data for an accurate
+    # last-seen timestamp.
+    session: UserSession | None = None
+    try:
+        session = await state.relay.get_session(session_key)
+        if session is not None:
+            await state.relay.append_wtmp(_build_logout_event(session_key, session))
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to write sentinel logout for %s", session_key)
+    # Release TTY name reservation before deleting session (DES-035).
+    # Separate try block so a wtmp failure doesn't leak the name reservation.
+    if session is not None and session.tty_name:
+        try:
+            await state.relay.release_tty_name(session.user, session.tty_name)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to release TTY name %s during sentinel reap",
+                session.tty_name,
+                exc_info=True,
+            )
+    try:
+        await state.relay.delete_session(session_key)
+    except Exception:  # noqa: BLE001 — relay errors vary by backend
+        logger.warning("Failed to reap sentinel for %s", session_key, exc_info=True)
+        return False
+    return True
 
 
 async def _reap_loop(
