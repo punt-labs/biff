@@ -35,7 +35,7 @@ from biff.server.tools._descriptions import (
 )
 from biff.server.tools._session import resolve_talk_target, update_current_session
 from biff.talk_types import MAX_BODY_LEN, TalkPhase
-from biff.tty import parse_address
+from biff.tty import format_address, parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -272,9 +272,8 @@ async def _send_or_invite(
     talk_state.begin_invite(
         partner=user, partner_tty=resolve_tty, partner_key=relay_key
     )
-    invite_body = message or (
-        f"wants to talk — reply with: talk @{state.config.user}:{get_tty_name()}"
-    )
+    reply_to = format_address(state.config.user, get_tty_name())
+    invite_body = message or f"wants to talk — reply with: talk {reply_to}"
     try:
         await talk_state.send_invite(to_key=relay_key, body=invite_body)
     except (NatsError, TimeoutError, OSError):
@@ -414,7 +413,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def talk(to: str, message: str = "") -> str:
         """Accept an invite, send a message, or invite a teammate to talk.
 
-        ``to`` is an address like ``@user`` or ``@user:tty``.  If that user
+        ``to`` is an address like ``user`` or ``user:tty``.  If that user
         already invited you, this accepts (completing their handshake) and
         sends *message* as the opening line.  If you are already connected,
         *message* is sent.  Otherwise this sends an invite.  All frames are

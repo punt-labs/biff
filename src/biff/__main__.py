@@ -682,7 +682,10 @@ async def _talk_handshake(
         return True
 
     # We're initiating. Send invite and wait for accept.
-    invite_body = f"wants to talk — reply with: talk @{ctx.user}:{ctx.tty_name}"
+    from biff.tty import format_address
+
+    reply_to = format_address(ctx.user, ctx.tty_name)
+    invite_body = f"wants to talk — reply with: talk {reply_to}"
     if len(args) > 1:
         invite_body = " ".join(args[1:])[:512]
 
@@ -873,7 +876,7 @@ async def _handle_repl_talk(
     from biff.tty import parse_address
 
     if not args:
-        print("Usage: talk @user:ttyN [message]")
+        print("Usage: talk user:ttyN [message]")
         return
 
     try:
@@ -1246,7 +1249,7 @@ def who() -> None:
 
 @app.command()
 def finger(
-    user: Annotated[str, typer.Argument(help="User to query, e.g. @kai or @kai:tty1")],
+    user: Annotated[str, typer.Argument(help="User to query, e.g. kai or kai:tty1")],
 ) -> None:
     """Check what a user is working on and their availability."""
     _run(lambda ctx: commands.finger(ctx, user))
@@ -1254,7 +1257,7 @@ def finger(
 
 @app.command("write")
 def write_cmd(
-    to: Annotated[str, typer.Argument(help="Recipient, e.g. @kai or @kai:tty1")],
+    to: Annotated[str, typer.Argument(help="Recipient, e.g. kai or kai:tty1")],
     message: Annotated[str, typer.Argument(help="Message to send (auto-splits)")],
 ) -> None:
     """Send a message to a teammate's inbox."""
@@ -1350,6 +1353,7 @@ def _create_mcp_server(
 ) -> FastMCP[ServerState]:
     """Shared config → state → server setup for serve/mcp."""
     from biff.config import RELAY_URL_UNSET
+    from biff.session_id import SessionHint
     from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
 
@@ -1361,12 +1365,18 @@ def _create_mcp_server(
     )
     dormant = not is_enabled(resolved.repo_root)
 
+    # Route on the Claude session_id (biff-7ak): read the SessionStart hook's
+    # hint left for this server's claude ancestor.  None outside Claude Code
+    # (headless/CI/SDK) — create_state then mints a fresh, misroute-safe hex.
+    routing_id = SessionHint.resolve_routing_id()
+
     # Companion (human) registration is deferred to the heartbeat
     # loop -- the ethos roster is not yet available at startup on
     # claude --resume (spec § 3.2, biff-8fg3).
     state = create_state(
         resolved.config,
         resolved.data_dir,
+        tty=routing_id,
         unread_path=UNREAD_DIR / f"{find_session_key()}.json",
         dormant=dormant,
         repo_root=resolved.repo_root,

@@ -240,13 +240,13 @@ class TestPendingInvite:
         recipient types and what ``resolve_talk_target`` matches.
         """
         inv = PendingInvite(user="eric", session_key=OTHER_KEY, tty="tty2", arrived=0.0)
-        assert inv.accept_command == "talk @eric:tty2"
+        assert inv.accept_command == "talk eric:tty2"
         assert ":" in inv.accept_command  # never a bare @user
 
     def test_accept_command_falls_back_to_key_without_tty(self) -> None:
         """A frame with no display tty still renders a runnable session hint."""
         inv = PendingInvite(user="eric", session_key=OTHER_KEY, tty="", arrived=0.0)
-        assert inv.accept_command == "talk @eric:def67890"
+        assert inv.accept_command == "talk eric:def67890"
 
     def test_colonless_key_rejected(self) -> None:
         """HintNamesSession: a key with no ``:`` cannot name a session."""
@@ -298,7 +298,7 @@ class TestPendingInvite:
         assert inv.user == "eric"
         assert inv.session_key == OTHER_KEY
         assert inv.tty == "tty2"
-        assert inv.accept_command == "talk @eric:tty2"
+        assert inv.accept_command == "talk eric:tty2"
 
     def test_from_notification_rejects_keyless_frame(self) -> None:
         """A keyless invite frame is rejected at the wire boundary, not recorded."""

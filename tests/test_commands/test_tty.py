@@ -86,3 +86,12 @@ class TestTty:
         assert not result.error
         # Whitespace-only should be treated as empty → auto-naming
         assert "tty" in result.text
+
+    async def test_rename_updates_reclaim_hint(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        """A rename refreshes the session_id->ttyN hint so the next resume
+        reclaims the RENAMED alias, not the stale one (biff-7ak)."""
+        result = await tty(ctx, "deploy")
+        assert not result.error
+        assert await relay.get_session_tty_hint(ctx.user, ctx.tty) == "deploy"

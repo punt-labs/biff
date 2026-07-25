@@ -1,8 +1,8 @@
-"""User status query tool — ``/finger @user``.
+"""User status query tool — ``/finger user``.
 
 Shows what a user is working on, when they were last active,
-and whether they're accepting messages.  Supports ``@user``
-(shows all sessions) and ``@user:tty`` (shows one session).
+and whether they're accepting messages.  Supports ``user``
+(shows all sessions) and ``user:tty`` (shows one session).
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def finger(user: str) -> str:
         """Query session and presence info for one or more users.
 
-        Accepts space-separated addresses: ``@user1 @user2 @user3``.
-        Each address can be ``@user`` (all sessions) or ``@user:tty``
+        Accepts space-separated addresses: ``user1 user2 user3``.
+        Each address can be ``user`` (all sessions) or ``user:tty``
         (specific session).
         """
         await update_current_session(state)

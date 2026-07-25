@@ -35,7 +35,8 @@ from biff.server.tools._descriptions import (
     refresh_wall,
     set_tty_name,
 )
-from biff.tty import build_session_key, claim_tty_name, generate_tty
+from biff.session_id import SessionHint
+from biff.tty import build_session_key, claim_tty_name, validate_reclaimable_name
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,46 @@ async def register_session(
     file; the caller owns that.
     """
     session_key = build_session_key(user, tty_hex)
-    tty_name = await claim_tty_name(relay, user, session_key, preferred=preferred_name)
+    # Resume reclaim (biff-7ak): when no name is explicitly requested, prefer
+    # the ttyN this session_id last held so a resumed session keeps its alias.
+    # The routing token (tty_hex) is the session_id under identity routing.
+    from_hint = False
+    if preferred_name is None:
+        # The reclaim hint value is team-writable and flows into a KV key /
+        # NATS subject via claim_tty_name — validate at this trust boundary.
+        # A malformed or namespace-colliding value is ignored (fall back to a
+        # fresh alias), never fed to claim_tty_name.
+        candidate = await relay.get_session_tty_hint(user, tty_hex)
+        if candidate is not None and validate_reclaimable_name(candidate) is None:
+            preferred_name = candidate
+            from_hint = True
+        elif candidate is not None:
+            logger.warning(
+                "ignoring malformed reclaim hint %r for %s; using a fresh alias",
+                candidate,
+                user,
+            )
+    try:
+        tty_name = await claim_tty_name(
+            relay, user, session_key, preferred=preferred_name
+        )
+        if from_hint:
+            logger.info("reclaimed prior alias %s on resume", tty_name)
+    except ValueError:
+        # The fallback fires ONLY for a name that came from the resume hint
+        # (from_hint) — the prior ttyN was taken while this session was gone
+        # (edge case 6), so reassign the lowest-free alias.  Routing is
+        # unaffected: the inbox keys on the session_id, not the display alias;
+        # only the human-facing alias moves.  An explicitly-requested name
+        # (from_hint is False) still raises to its caller.
+        if not from_hint:
+            raise
+        tty_name = await claim_tty_name(relay, user, session_key, preferred=None)
+        logger.info(
+            "prior alias %s taken on resume; reassigned %s",
+            preferred_name,
+            tty_name,
+        )
     # Release any stale TTY name reservation left by a prior process that
     # crashed after writing the KV row but before releasing its name.  The
     # KV row itself is overwritten unconditionally below; without this
@@ -157,6 +197,9 @@ async def register_session(
         last_active=datetime.now(UTC),
     )
     await relay.update_session(session)
+    # Record the claimed alias so the next resume of this session_id reclaims
+    # it (survives clean-exit reservation release).
+    await relay.set_session_tty_hint(user, tty_hex, tty_name)
     return session, tty_name
 
 
@@ -192,6 +235,14 @@ async def _reap_sentinels(state: ServerState) -> None:
     d = sentinel_dir(state.config.repo_name)
     if not d.exists():
         return
+    # Under identity routing a resumed session carries the SAME key as its
+    # just-exited incarnation ({user}:{session_id} is stable across resume),
+    # so a leftover sentinel for our own key must NOT be reaped — we are
+    # already registered live under it, and reaping would log us out, release
+    # the alias we just reclaimed, and delete our own KV row (biff-7ak).
+    live_keys = {state.session_key}
+    if state.companion_session_key:
+        live_keys.add(state.companion_session_key)
     for sentinel in d.iterdir():
         if not sentinel.is_file():
             continue
@@ -199,33 +250,48 @@ async def _reap_sentinels(state: ServerState) -> None:
             session_key = sentinel.read_text().strip()
         except OSError:
             continue
-        # Write logout event before deleting the session.  The KV entry
-        # is still present (3-day TTL), so we can fetch session data for
-        # an accurate last-seen timestamp.
-        session: UserSession | None = None
-        try:
-            session = await state.relay.get_session(session_key)
-            if session is not None:
-                await state.relay.append_wtmp(_build_logout_event(session_key, session))
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to write sentinel logout for %s", session_key)
-        # Release TTY name reservation before deleting session (DES-035).
-        # Separate try block so a wtmp failure doesn't leak the name reservation.
-        if session is not None and session.tty_name:
-            try:
-                await state.relay.release_tty_name(session.user, session.tty_name)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to release TTY name %s during sentinel reap",
-                    session.tty_name,
-                    exc_info=True,
-                )
-        try:
-            await state.relay.delete_session(session_key)
-        except Exception:  # noqa: BLE001 — relay errors vary by backend
-            logger.warning("Failed to reap sentinel for %s", session_key, exc_info=True)
+        if session_key in live_keys:
+            # Our own prior incarnation — consume the sentinel without a
+            # logout, reservation release, or KV delete.
+            sentinel.unlink(missing_ok=True)
             continue
-        sentinel.unlink(missing_ok=True)
+        if await _reap_dead_session(state, session_key):
+            sentinel.unlink(missing_ok=True)
+
+
+async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
+    """Log out, release the alias, and delete the KV row for a dead session.
+
+    Returns ``True`` when the KV row was deleted (the caller should remove the
+    sentinel), ``False`` when the delete failed (keep the sentinel to retry).
+    """
+    # Write logout event before deleting the session.  The KV entry is still
+    # present (3-day TTL), so we can fetch session data for an accurate
+    # last-seen timestamp.
+    session: UserSession | None = None
+    try:
+        session = await state.relay.get_session(session_key)
+        if session is not None:
+            await state.relay.append_wtmp(_build_logout_event(session_key, session))
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to write sentinel logout for %s", session_key)
+    # Release TTY name reservation before deleting session (DES-035).
+    # Separate try block so a wtmp failure doesn't leak the name reservation.
+    if session is not None and session.tty_name:
+        try:
+            await state.relay.release_tty_name(session.user, session.tty_name)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to release TTY name %s during sentinel reap",
+                session.tty_name,
+                exc_info=True,
+            )
+    try:
+        await state.relay.delete_session(session_key)
+    except Exception:  # noqa: BLE001 — relay errors vary by backend
+        logger.warning("Failed to reap sentinel for %s", session_key, exc_info=True)
+        return False
+    return True
 
 
 async def _reap_loop(
@@ -261,11 +327,15 @@ async def _poll_companion_registration(state: ServerState) -> None:
         return
     if roster.root.handle == state.config.user:
         return  # Root IS the agent -- no human companion to register
+    # Derive the companion's routing id from the agent's session_id
+    # (``state.tty`` under identity routing) salted by the human's handle
+    # (biff-7ak amendment 3): stable across resume and distinct from the
+    # agent by construction, so the human side is not volatile.
     companion = CompanionSession(
         user=roster.root.handle,
         display_name=roster.root.display_name,
         kind=roster.root.kind,
-        tty=generate_tty(),
+        tty=SessionHint.derive_routing_id(state.tty, roster.root.handle),
     )
     object.__setattr__(state, "companion", companion)
     try:

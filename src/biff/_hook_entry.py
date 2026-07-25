@@ -48,15 +48,29 @@ def main() -> None:
 
 
 def _cc_session_start() -> None:
-    from biff.hook import _emit, _hook_context, handle_session_start  # noqa: PLC0415
+    from biff.hook import (  # noqa: PLC0415
+        _capture_session_hint,
+        _emit,
+        _hook_context,
+        _read_hook_input,
+        handle_session_start,
+    )
 
+    _capture_session_hint(_read_hook_input())
     result = handle_session_start()
     _emit(_hook_context("SessionStart", result))
 
 
 def _cc_session_resume() -> None:
-    from biff.hook import _emit, _hook_context, handle_session_resume  # noqa: PLC0415
+    from biff.hook import (  # noqa: PLC0415
+        _capture_session_hint,
+        _emit,
+        _hook_context,
+        _read_hook_input,
+        handle_session_resume,
+    )
 
+    _capture_session_hint(_read_hook_input())
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 

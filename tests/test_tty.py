@@ -8,11 +8,14 @@ from biff.relay import LocalRelay
 from biff.tty import (
     build_session_key,
     claim_tty_name,
+    format_address,
     generate_tty,
     is_notification_for_session,
     next_tty_name,
     parse_address,
     rename_tty,
+    validate_reclaimable_name,
+    validate_routing_id,
     validate_tty_name,
 )
 
@@ -65,6 +68,112 @@ class TestParseAddress:
     def test_multiple_colons_keeps_rest_in_tty(self) -> None:
         """Colons after the first are part of the TTY — rejected by relay validation."""
         assert parse_address("kai:tty1:extra") == ("kai", "tty1:extra")
+
+    def test_strips_exactly_one_at(self) -> None:
+        """A single leading ``@`` is tolerated; a second is kept literally.
+
+        ``lstrip('@')`` stripped *all* leading ``@`` — ``@@kai`` became a
+        valid ``kai``.  ``removeprefix`` strips exactly one, so a malformed
+        ``@@kai`` stays malformed (``@kai``) instead of being silently
+        normalized into a valid address (biff-5gb).
+        """
+        assert parse_address("@@kai") == ("@kai", None)
+
+    def test_strips_one_at_on_targeted(self) -> None:
+        assert parse_address("@@kai:tty1") == ("@kai", "tty1")
+
+    def test_bare_is_canonical(self) -> None:
+        """Bare ``user:tty`` (no sigil) is the canonical input form."""
+        assert parse_address("kai:tty1") == ("kai", "tty1")
+
+
+class TestFormatAddress:
+    """Canonical address rendering is bare — no ``@`` sigil (biff-5gb)."""
+
+    def test_user_and_tty(self) -> None:
+        assert format_address("kai", "tty1") == "kai:tty1"
+
+    def test_bare_user(self) -> None:
+        assert format_address("kai") == "kai"
+
+    def test_none_tty_is_bare_user(self) -> None:
+        assert format_address("kai", None) == "kai"
+
+    def test_no_at_sigil(self) -> None:
+        assert not format_address("kai", "tty1").startswith("@")
+
+    def test_round_trips_through_parse(self) -> None:
+        """Formatting then parsing recovers the original address."""
+        assert parse_address(format_address("kai", "tty1")) == ("kai", "tty1")
+        assert parse_address(format_address("kai")) == ("kai", None)
+
+
+class TestValidateRoutingId:
+    """Routing-token validator admits the session_id (UUID) shape."""
+
+    def test_accepts_uuid(self) -> None:
+        assert validate_routing_id("2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b") is None
+
+    def test_accepts_hex_fallback(self) -> None:
+        assert validate_routing_id("a1b2c3d4") is None
+
+    def test_accepts_derived_hex(self) -> None:
+        assert validate_routing_id("0123456789abcdef") is None
+
+    def test_rejects_dots(self) -> None:
+        """Dots would split a single NATS subject token."""
+        assert validate_routing_id("a.b") is not None
+
+    def test_rejects_non_hex_letters(self) -> None:
+        assert validate_routing_id("tty1") is not None
+
+    def test_rejects_empty(self) -> None:
+        assert validate_routing_id("") is not None
+
+    def test_rejects_over_64(self) -> None:
+        assert validate_routing_id("a" * 65) is not None
+
+    def test_rejects_escape(self) -> None:
+        assert validate_routing_id("\033[31m") is not None
+
+    def test_rejects_all_hyphens(self) -> None:
+        """An id needs at least one hex digit — '----' is not a routing id."""
+        assert validate_routing_id("----") is not None
+
+    def test_rejects_single_hyphen(self) -> None:
+        assert validate_routing_id("-") is not None
+
+
+class TestValidateReclaimableName:
+    """The team-writable reclaim hint value must pass a tight guard (biff-7ak)."""
+
+    def test_accepts_ttyn(self) -> None:
+        assert validate_reclaimable_name("tty16") is None
+
+    def test_accepts_human_alias(self) -> None:
+        assert validate_reclaimable_name("deploy") is None
+
+    def test_rejects_dotted(self) -> None:
+        """A dotted value could inject a NATS subject / KV key segment."""
+        assert validate_reclaimable_name("evil.name") is not None
+
+    def test_rejects_sid_namespace_exact(self) -> None:
+        assert validate_reclaimable_name("sid") is not None
+
+    def test_rejects_sid_namespace_prefix(self) -> None:
+        assert validate_reclaimable_name("sid.deadbeef") is not None
+
+    def test_rejects_wildcard(self) -> None:
+        assert validate_reclaimable_name("tty*") is not None
+
+    def test_rejects_escape(self) -> None:
+        assert validate_reclaimable_name("\033[31m") is not None
+
+    def test_rejects_too_long(self) -> None:
+        assert validate_reclaimable_name("a" * 21) is not None
+
+    def test_rejects_empty(self) -> None:
+        assert validate_reclaimable_name("") is not None
 
 
 class TestIsNotificationForSession:
@@ -147,8 +256,8 @@ class TestClaimTtyName:
         assert name2 == "tty2"
         assert name1 != name2
 
-    async def test_preferred_when_taken_raises(self, tmp_path: object) -> None:
-        """claim_tty_name(preferred='deploy') when taken raises ValueError."""
+    async def test_preferred_when_taken_by_other_raises(self, tmp_path: object) -> None:
+        """A preferred name held by a DIFFERENT session raises ValueError."""
         from pathlib import Path
 
         relay = LocalRelay(Path(str(tmp_path)))
@@ -156,6 +265,52 @@ class TestClaimTtyName:
         assert name == "deploy"
         with pytest.raises(ValueError, match="already in use"):
             await claim_tty_name(relay, "kai", "kai:bbb2", preferred="deploy")
+
+    async def test_same_identity_takeover_reclaims_alias(
+        self, tmp_path: object
+    ) -> None:
+        """Our own prior incarnation's held alias is reclaimed, not rejected.
+
+        On resume the session key is identical ({user}:{session_id} is stable),
+        so a reservation still held by our just-exited session is ours to take
+        back — the exit->resume overlap must not force a fresh alias (biff-7ak).
+        """
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        session_key = "kai:2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        # Prior incarnation holds tty16; it has not released yet.
+        assert await relay.reserve_tty_name("kai", "tty16", session_key)
+        # Resume as the SAME session_key reclaims the SAME alias.
+        name = await claim_tty_name(relay, "kai", session_key, preferred="tty16")
+        assert name == "tty16"
+        assert await relay.get_tty_reservation_owner("kai", "tty16") == session_key
+
+    async def test_takeover_reacquires_when_reservation_vanishes(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TOCTOU: if the reservation vanishes mid-takeover, re-acquire it.
+
+        The owner check sees our key, but the reservation is released before
+        the refresh (a no-op then).  claim must re-reserve atomically so it
+        never returns an alias it does not actually hold (DES-035).
+        """
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        session_key = "kai:2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        assert await relay.reserve_tty_name("kai", "tty16", session_key)
+
+        async def _vanish(user: str, name: str, _sk: str) -> None:
+            # Simulate the reservation being released in the TOCTOU window.
+            await relay.release_tty_name(user, name)
+
+        monkeypatch.setattr(relay, "refresh_tty_reservation", _vanish)
+
+        name = await claim_tty_name(relay, "kai", session_key, preferred="tty16")
+        assert name == "tty16"
+        # The alias is actually held — not returned unheld.
+        assert await relay.get_tty_reservation_owner("kai", "tty16") == session_key
 
     async def test_fills_gaps(self, tmp_path: object) -> None:
         """Reserve tty1, tty3 → next claim gets tty2."""

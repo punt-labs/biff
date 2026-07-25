@@ -63,9 +63,9 @@ sh install.sh
 > /who
 
 ▶  NAME    TTY   IDLE  S  HOST       DIR                        PLAN
-   @kai    tty1  0:03  +  m2-mb-air  /Users/kai/code/myapp      refactoring auth module
-   @eric   tty2  1:22  +  m2-mb-air  /Users/eric/code/myapp     reviewing PR #47
-   @priya  tty1  0:00  +  priya-mbp  /Users/priya/code/myapp    writing integration tests
+   kai     tty1  0:03  +  m2-mb-air  /Users/kai/code/myapp      refactoring auth module
+   eric    tty2  1:22  +  m2-mb-air  /Users/eric/code/myapp     reviewing PR #47
+   priya   tty1  0:00  +  priya-mbp  /Users/priya/code/myapp    writing integration tests
 ```
 
 `S` is message status: `+` means accepting messages, `-` means do not disturb.
@@ -73,9 +73,9 @@ sh install.sh
 ### Send a message
 
 ```text
-> /write @kai "auth module looks good, just one nit on the error handling"
+> /write kai "auth module looks good, just one nit on the error handling"
 
-Message sent to @kai.
+Message sent to kai.
 ```
 
 ### Check your inbox
@@ -95,7 +95,7 @@ Message sent to @kai.
 ### Check what someone is working on
 
 ```text
-> /finger @kai
+> /finger kai
 
 ▶  Login: kai                              Messages: on
    On since Sat Feb 15 14:01 (UTC) on tty1, idle 0:03
@@ -126,9 +126,9 @@ Plan: biff-ka4: post-checkout hook: update plan from branch
 > /last
 
 ▶  NAME    TTY   HOST       LOGIN             LOGOUT            DURATION
-   @kai    tty3  m2-mb-air  Sat Feb 22 14:01  still logged in   -
-   @kai    tty2  m2-mb-air  Sat Feb 22 11:30  Sat Feb 22 13:58  2:28
-   @eric   tty1  m2-mb-air  Sat Feb 22 09:15  Sat Feb 22 12:45  3:30
+   kai     tty3  m2-mb-air  Sat Feb 22 14:01  still logged in   -
+   kai     tty2  m2-mb-air  Sat Feb 22 11:30  Sat Feb 22 13:58  2:28
+   eric    tty1  m2-mb-air  Sat Feb 22 09:15  Sat Feb 22 12:45  3:30
 ```
 
 ### Broadcast to the team
@@ -144,15 +144,15 @@ Every teammate's status bar shows `WALL: release freeze` in bold red. Expires au
 ### Talk in real time
 
 ```text
-> /talk @kai "can you review PR #42?"
+> /talk kai "can you review PR #42?"
 
-Waiting for @kai to respond...
-Connected to @kai. Type 'end' to return.
+Waiting for kai to respond...
+Connected to kai. Type 'end' to return.
 ```
 
 BSD-style two-phase handshake: the inviter waits, the target accepts. Messages are ephemeral (NATS core pub/sub, no durable inbox). Either side types `end` to hang up.
 
-**Agents receive talk too.** A Claude Code agent's session holds the same ephemeral talk state as the REPL, so you can `/talk @agent:ttyN` and it will see your invite. Because biff is pull-based, an incoming invite or message surfaces by adding a `[TALK]` marker to the agent's `talk` tool description (unread mail adds `(N unread)` to `read_messages`); the agent notices the marker on its next turn and calls `talk_read` to see it. Run `/biff:poll 1m` in the agent session to check on a cadence, or `/biff:poll` to check now. Ending or cancelling an invite clears the other side's marker immediately; a stranded marker self-heals after 5 minutes.
+**Agents receive talk too.** A Claude Code agent's session holds the same ephemeral talk state as the REPL, so you can `/talk agent:ttyN` and it will see your invite. Because biff is pull-based, an incoming invite or message surfaces by adding a `[TALK]` marker to the agent's `talk` tool description (unread mail adds `(N unread)` to `read_messages`); the agent notices the marker on its next turn and calls `talk_read` to see it. Run `/biff:poll 1m` in the agent session to check on a cadence, or `/biff:poll` to check now. Ending or cancelling an invite clears the other side's marker immediately; a stranded marker self-heals after 5 minutes.
 
 ### Go do-not-disturb
 
@@ -170,14 +170,14 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 
 | Command | Origin | Purpose |
 |---------|--------|---------|
-| `/write @user "text"` | BSD `write` | Send a message |
+| `/write user "text"` | BSD `write` | Send a message |
 | `/read` | BSD `from` | Check your inbox |
-| `/finger @user` | BSD `finger` | Check what someone is working on |
+| `/finger user` | BSD `finger` | Check what someone is working on |
 | `/who` | BSD `who` | List active sessions |
 | `/last` | BSD `last` | Show session login/logout history |
 | `/plan "text"` | BSD `.plan` | Set your status |
 | `/tty "name"` | BSD `tty` | Name the current session |
-| `/talk @user "msg"` | BSD `talk` | Start a real-time conversation |
+| `/talk user "msg"` | BSD `talk` | Start a real-time conversation |
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 | `/biff:poll [duration]` | — | Poll for talk/mail: `<duration>` sets the cadence, no-arg checks now |
@@ -198,18 +198,18 @@ Commands: finger, last, mesg, plan, read, status, tty, wall, who, write, talk, t
 
 kai:tty1 ▶ who
 ▶  NAME    TTY   IDLE  S  HOST       DIR              PLAN
-   @kai    tty1  0:00  +  m2-mb-air  /code/myapp      debugging auth
-   @eric   tty2  1:22  +  m2-mb-air  /code/myapp      reviewing PR #47
+   kai     tty1  0:00  +  m2-mb-air  /code/myapp      debugging auth
+   eric    tty2  1:22  +  m2-mb-air  /code/myapp      reviewing PR #47
 kai:tty1 ▶ timestamps on
 Timestamps on.
-kai:tty1 ▶ talk @eric
-Waiting for @eric:tty2 to respond... (type 'end' to cancel)
-Connected to @eric:tty2. Type 'end' to return to REPL.
+kai:tty1 ▶ talk eric
+Waiting for eric:tty2 to respond... (type 'end' to cancel)
+Connected to eric:tty2. Type 'end' to return to REPL.
 
 kai:tty1 ▶ can you look at the auth fix?
 [14:32] eric:tty2 ▶ on it now
 kai:tty1 ▶ end
-Talk with @eric:tty2 ended.
+Talk with eric:tty2 ended.
 kai:tty1 ▶ exit
 ```
 
@@ -221,12 +221,12 @@ The REPL provides a proper session lifecycle (login/logout events, heartbeat, KV
 
 ```bash
 biff who                                   # List active sessions
-biff finger @kai                           # Check what someone is working on
-biff write @kai "review the PR"            # Send a message
+biff finger kai                           # Check what someone is working on
+biff write kai "review the PR"            # Send a message
 biff read                                  # Check your inbox
 biff plan "debugging websocket reconnect"  # Set your status
 biff last                                  # Session login/logout history
-biff last @kai --count 10                  # Filter by user, limit results
+biff last kai --count 10                  # Filter by user, limit results
 biff wall "deploy freeze" --duration 2h    # Broadcast to the team
 biff wall                                  # Read active wall
 biff wall --clear                          # Remove active wall
@@ -234,7 +234,7 @@ biff mesg off                              # Go do-not-disturb
 biff mesg on                               # Accept messages again
 biff tty dev                               # Name this session "dev"
 biff status                                # Connection state + unread count
-biff talk @kai "can you review?"           # Real-time conversation
+biff talk kai "can you review?"           # Real-time conversation
 ```
 
 ### Admin commands
@@ -257,7 +257,7 @@ biff --json who             # JSON array of sessions
 biff --json status          # JSON object with version, unread, wall
 biff --json read            # JSON array of messages
 biff --verbose who          # Debug logging to stderr
-biff --quiet write @kai "msg"  # Suppress non-JSON output
+biff --quiet write kai "msg"  # Suppress non-JSON output
 biff --user github-actions wall "CI failed"  # Identity override for bots
 ```
 

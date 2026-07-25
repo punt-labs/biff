@@ -45,7 +45,7 @@ def kai_tty1_state(shared_dir: Path) -> ServerState:
     return create_state(
         BiffConfig(user="kai", repo_name=_TEST_REPO),
         shared_dir,
-        tty="tty1",
+        tty="11111111",
         hostname="host-a",
         pwd="/project/a",
     )
@@ -56,7 +56,7 @@ def kai_tty2_state(shared_dir: Path) -> ServerState:
     return create_state(
         BiffConfig(user="kai", repo_name=_TEST_REPO),
         shared_dir,
-        tty="tty2",
+        tty="22222222",
         hostname="host-a",
         pwd="/project/b",
     )
@@ -67,7 +67,7 @@ def eric_state(shared_dir: Path) -> ServerState:
     return create_state(
         BiffConfig(user="eric", repo_name=_TEST_REPO),
         shared_dir,
-        tty="tty3",
+        tty="33333333",
         hostname="host-b",
         pwd="/project/c",
     )
@@ -257,7 +257,7 @@ class TestOfflineDelivery:
         eric_state = create_state(
             BiffConfig(user="eric", repo_name=_TEST_REPO),
             shared_dir,
-            tty="tty3",
+            tty="33333333",
             hostname="host-b",
             pwd="/project/c",
         )
@@ -269,7 +269,7 @@ class TestOfflineDelivery:
         kai_state = create_state(
             BiffConfig(user="kai", repo_name=_TEST_REPO),
             shared_dir,
-            tty="tty1",
+            tty="11111111",
             hostname="host-a",
             pwd="/project/a",
         )

@@ -13,7 +13,7 @@ from biff.tty import parse_address
 async def finger(ctx: CliContext, user: str) -> CommandResult:
     """Check what one or more users are working on.
 
-    Accepts space-separated addresses: ``@user1 @user2 @user3``.
+    Accepts space-separated addresses: ``user1 user2 user3``.
     """
     addresses = user.split()
     # Availability check: only consider sessions that are actually live

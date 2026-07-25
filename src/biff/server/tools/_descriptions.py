@@ -30,6 +30,7 @@ from biff.server.display_queue import DisplayItem
 from biff.talk_latch import TalkNotifyLatch
 from biff.talk_state import TalkState
 from biff.talk_types import TalkPhase
+from biff.tty import format_address
 
 
 class _Sentinel:
@@ -390,7 +391,7 @@ def _talk_description(talk: TalkState) -> str:
     if talk.phase is TalkPhase.CONNECTED:
         partner = terminal_safe(talk.partner)
         tty = terminal_safe(talk.partner_tty)
-        address = f"@{partner}:{tty}" if tty else f"@{partner}"
+        address = format_address(partner, tty or None)
         return (
             f"[TALK] connected to {partner} — talk {address} <message> "
             "to reply, talk_end to close."

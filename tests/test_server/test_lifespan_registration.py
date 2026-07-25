@@ -18,7 +18,9 @@ real NATS I/O can fail between writes.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from fastmcp import Client
@@ -43,7 +45,7 @@ def primary_state_with_companion(tmp_path: Path) -> ServerState:
         user="jfreeman",
         display_name="Jim Freeman",
         kind="human",
-        tty="e5f6g7h8",
+        tty="e5f6a7b8",
     )
     return create_state(
         config,
@@ -423,6 +425,46 @@ class TestPollCompanionRegistration:
         assert companion.user == "jfreeman"
         assert companion.kind == "human"
 
+    async def test_companion_id_is_derived_and_non_volatile(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Companion routing id is a stable derivation, not a random hex.
+
+        The human side must not reproduce the bug (biff-7ak amendment 3):
+        the companion id derives deterministically from the agent's
+        session_id salted by the human handle — stable across resume and
+        distinct from the agent's own id.
+        """
+        from unittest.mock import MagicMock
+
+        from biff.config import EthosIdentity, EthosRoster
+        from biff.server.app import _poll_companion_registration
+        from biff.session_id import SessionHint
+
+        config = BiffConfig(
+            user="claude",
+            display_name="Claude Agento",
+            kind="agent",
+            repo_name="_test-companion-derive",
+        )
+        session_id = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        state = create_state(config, tmp_path, tty=session_id, hostname="h", pwd="/")
+        roster = EthosRoster(
+            root=EthosIdentity(handle="jfreeman", display_name="Jim", kind="human"),
+            primary=EthosIdentity(handle="claude", display_name="Claude", kind="agent"),
+        )
+        monkeypatch.setattr(
+            "biff.config.get_ethos_roster", MagicMock(return_value=roster)
+        )
+
+        await _poll_companion_registration(state)
+
+        companion = getattr(state, "companion")  # noqa: B009
+        assert companion is not None
+        expected = SessionHint.derive_routing_id(session_id, "jfreeman")
+        assert companion.tty == expected  # deterministic — non-volatile
+        assert companion.tty != session_id  # distinct from the agent id
+
     async def test_get_ethos_roster_runs_on_worker_thread(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -542,3 +584,293 @@ class TestOrgReposRefresh:
         await _refresh_org_repos(state)
 
         assert state.org_repos == frozenset()
+
+
+class TestResumeReclaim:
+    """Routing on the Claude session_id cures LOST and MISROUTED (biff-7ak).
+
+    ``register_session`` is invoked with the session_id as the routing token
+    (``tty_hex``).  The session key ``{user}:{session_id}`` is stable across
+    resume; the display alias ``ttyN`` is reclaimed via the sid hint.
+    """
+
+    _KW: ClassVar[dict[str, str]] = {
+        "display_name": "Kai",
+        "kind": "agent",
+        "hostname": "h",
+        "pwd": "/",
+        "repo": "_test-resume",
+    }
+
+    async def test_resume_reclaims_prior_tty_over_lowest_free(
+        self, tmp_path: Path
+    ) -> None:
+        """A resumed session_id reclaims its prior ttyN, not the lowest free."""
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        # Prior life: this session_id last held tty5 (tty1 is the lowest free).
+        await relay.set_session_tty_hint("kai", sid, "tty5")
+
+        _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty5", "resume must reclaim the hinted alias, not tty1"
+
+    async def test_resume_reclaims_alias_still_held_by_same_session(
+        self, tmp_path: Path
+    ) -> None:
+        """The exit->resume overlap must still reclaim the SAME alias.
+
+        Live-verify caught this: on resume our own just-exited session still
+        holds its ttyN (the reservation has not released/expired yet), so a
+        naive claim treated 'taken' as a foreign collision and reassigned a
+        fresh tty. Same-identity takeover reclaims tty16 -> tty16 (biff-7ak).
+        """
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        session_key = f"kai:{sid}"
+        # Prior incarnation still holds tty16 AND the hint points at it.
+        assert await relay.reserve_tty_name("kai", "tty16", session_key)
+        await relay.set_session_tty_hint("kai", sid, "tty16")
+
+        _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty16", "resume must reclaim its own still-held alias"
+
+    async def test_resume_falls_back_when_prior_tty_taken(self, tmp_path: Path) -> None:
+        """Edge case 6: prior ttyN taken by a DIFFERENT session -> lowest-free.
+
+        Uniqueness is preserved — a foreign live holder is never overridden;
+        routing is unaffected (the inbox keys on the session_id), only the
+        human-facing alias moves.
+        """
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        await relay.set_session_tty_hint("kai", sid, "tty1")
+        # A DIFFERENT session_id holds tty1 now.
+        assert await relay.reserve_tty_name("kai", "tty1", "kai:other-session-id")
+
+        _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name != "tty1"
+        assert name == "tty2"
+
+    async def test_poisoned_reclaim_hint_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A team-writable hint with an unsafe value never reaches claim.
+
+        The value flows into a KV key / NATS subject via claim_tty_name, so a
+        dotted / namespace-colliding value is validated at the trust boundary
+        and the resume falls back to a fresh lowest-free alias — never the
+        poisoned name (biff-7ak security review P2).
+        """
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+
+        async def _poison(_user: str, _session_id: str) -> str:
+            return "evil.name"  # dotted — would inject a subject/KV segment
+
+        monkeypatch.setattr(relay, "get_session_tty_hint", _poison)
+
+        _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty1", "poisoned hint must be ignored, not reclaimed"
+        assert "evil.name" not in await relay.list_reserved_names("kai")
+
+    async def test_reclaim_success_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The SUCCESS path is observable, symmetric with the fallback log."""
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        await relay.set_session_tty_hint("kai", sid, "tty5")
+
+        with caplog.at_level(logging.INFO, logger="biff.server.app"):
+            _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty5"
+        assert any(
+            f"reclaimed prior alias {name} on resume" in r.message
+            and r.levelno == logging.INFO
+            for r in caplog.records
+        )
+
+    async def test_reclaim_fallback_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fallback path logs the reassignment — the matched pair."""
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        await relay.set_session_tty_hint("kai", sid, "tty1")
+        assert await relay.reserve_tty_name("kai", "tty1", "kai:other-session-id")
+
+        with caplog.at_level(logging.INFO, logger="biff.server.app"):
+            _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty2"
+        assert any(
+            "prior alias tty1 taken on resume; reassigned tty2" in r.message
+            and r.levelno == logging.INFO
+            for r in caplog.records
+        )
+
+    async def test_resume_same_session_id_drains_own_inbox(
+        self, tmp_path: Path
+    ) -> None:
+        """No loss: a message addressed before resume is drained after resume.
+
+        The routing coordinate is the session_id, so the inbox key is
+        identical across the exit+resume boundary.
+        """
+        from biff.models import Message
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        key = f"kai:{sid}"
+
+        # First life.
+        _, first_name = await register_session(relay, "kai", sid, **self._KW)
+        # A teammate writes to the session while it is alive.
+        await relay.deliver(Message(from_user="eric", to_user=key, body="hi"))
+        # Clean exit releases the display-alias reservation.
+        await relay.release_tty_name("kai", first_name)
+
+        # Resume: same session_id -> same key -> same inbox.
+        _, second_name = await register_session(relay, "kai", sid, **self._KW)
+        assert second_name == first_name  # reclaimed the alias too
+
+        msgs = await relay.fetch(key)
+        assert [m.body for m in msgs] == ["hi"], "resumed session lost its inbox"
+
+    async def test_recycled_tty_n_never_delivers_to_stale_inbox(
+        self, tmp_path: Path
+    ) -> None:
+        """MISROUTED cured: a recycled ttyN resolves to its current holder.
+
+        An old session and a new session reuse the display alias ``tty1``
+        over time.  A message sent to the OLD session's inbox must not reach
+        the NEW occupant — send-time resolution keys on the session_id.
+        """
+        from biff.models import Message, UserSession
+        from biff.server.tools._session import resolve_tty_name
+
+        relay = LocalRelay(data_dir=tmp_path)
+        old_sid = "aaaaaaaa-0000-0000-0000-000000000000"
+        new_sid = "bbbbbbbb-1111-1111-1111-111111111111"
+
+        # A message was delivered to the OLD occupant of tty1.
+        old_msg = Message(from_user="eric", to_user=f"kai:{old_sid}", body="old")
+        await relay.deliver(old_msg)
+
+        # The old session is gone; only the NEW session now carries tty1.
+        new_session = UserSession(
+            user="kai", tty=new_sid, tty_name="tty1", repo="_test-resume"
+        )
+
+        # Send-time resolution of "kai:tty1" yields the current holder.
+        resolved = resolve_tty_name([new_session], "kai", "tty1")
+        assert resolved is not None
+        assert resolved.tty == new_sid
+
+        # The new session's inbox does NOT contain the old message.
+        assert await relay.fetch(f"kai:{new_sid}") == []
+        # It is still parked on the old key (stranded, not misrouted).
+        assert [m.body for m in await relay.fetch(f"kai:{old_sid}")] == ["old"]
+
+
+class TestReapSentinels:
+    """The reaper must not log out the LIVE session under identity routing."""
+
+    _KW: ClassVar[dict[str, str]] = {
+        "display_name": "Kai",
+        "kind": "agent",
+        "hostname": "h",
+        "pwd": "/",
+        "repo": "_test-reap",
+    }
+
+    async def test_reap_skips_our_own_live_sentinel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A leftover sentinel for our own key is consumed, not reaped.
+
+        Under identity routing a resumed session carries the SAME key as its
+        just-exited incarnation, so reaping the prior sentinel would wipe the
+        live session's presence: log it out, release the reclaimed alias, and
+        delete its KV row (biff-7ak).
+        """
+        from biff.server import app as app_mod
+        from biff.server.app import _write_sentinel, register_session
+
+        config = BiffConfig(
+            user="kai", display_name="Kai", kind="agent", repo_name="_test-reap"
+        )
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        state = create_state(config, tmp_path, tty=sid, hostname="h", pwd="/")
+
+        # Live registration under our own key (KV row + alias reservation).
+        _, tty_name = await register_session(state.relay, "kai", sid, **self._KW)
+
+        # Prior incarnation left a sentinel for the SAME key.
+        def _sentinels(_repo: str) -> Path:
+            return tmp_path / "sentinels"
+
+        monkeypatch.setattr(app_mod, "sentinel_dir", _sentinels)
+        _write_sentinel("_test-reap", state.session_key)
+
+        await app_mod._reap_sentinels(state)
+
+        # Presence survives: KV row intact, alias retained.
+        sessions = await state.relay.get_sessions()
+        assert any(s.tty == sid for s in sessions), "live session must survive reap"
+        assert tty_name in await state.relay.list_reserved_names("kai")
+        # Sentinel consumed (no re-processing).
+        safe = state.session_key.replace(":", "-")
+        assert not (tmp_path / "sentinels" / safe).exists()
+
+    async def test_reap_still_reaps_a_foreign_sentinel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sentinel for a DIFFERENT (dead) key is still reaped normally."""
+        from biff.models import UserSession
+        from biff.server import app as app_mod
+        from biff.server.app import _write_sentinel, register_session
+
+        config = BiffConfig(
+            user="kai", display_name="Kai", kind="agent", repo_name="_test-reap"
+        )
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        state = create_state(config, tmp_path, tty=sid, hostname="h", pwd="/")
+        await register_session(state.relay, "kai", sid, **self._KW)
+
+        # A dead prior session under a DIFFERENT key.
+        dead_sid = "dead0000-0000-0000-0000-000000000000"
+        await state.relay.update_session(
+            UserSession(user="kai", tty=dead_sid, tty_name="tty9", repo="_test-reap")
+        )
+
+        def _sentinels(_repo: str) -> Path:
+            return tmp_path / "sentinels"
+
+        monkeypatch.setattr(app_mod, "sentinel_dir", _sentinels)
+        _write_sentinel("_test-reap", f"kai:{dead_sid}")
+
+        await app_mod._reap_sentinels(state)
+
+        sessions = await state.relay.get_sessions()
+        assert all(s.tty != dead_sid for s in sessions), "dead session must be reaped"
+        # Our live session is untouched.
+        assert any(s.tty == sid for s in sessions)

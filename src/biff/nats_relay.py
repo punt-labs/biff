@@ -61,7 +61,12 @@ from biff.models import (
     WallPost,
 )
 from biff.relay import SESSION_TTL_SECONDS
-from biff.tty import build_session_key
+from biff.tty import (
+    SID_HINT_NAMESPACE,
+    build_session_key,
+    validate_reclaimable_name,
+    validate_routing_id,
+)
 
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
@@ -1723,8 +1728,53 @@ class NatsRelay:
             key = subject.removeprefix(kv_prefix)
             parts = key.split(".", maxsplit=1)
             if len(parts) == 2 and parts[0] == user:
-                names.append(parts[1])
+                name = parts[1]
+                # Skip the session_id->tty reclaim namespace (biff-7ak):
+                # {user}.sid.{session_id} is a hint, not a reserved tty name.
+                if name.startswith(f"{SID_HINT_NAMESPACE}."):
+                    continue
+                names.append(name)
         return names
+
+    def _sid_hint_key(self, user: str, session_id: str) -> str:
+        """Names-KV key for a session_id reclaim hint: ``{user}.sid.{sid}``.
+
+        Validate both segments before building the subject key — the
+        session_id is a routing token that becomes a NATS subject segment,
+        so a dotted/special value could inject extra segments.
+        """
+        self._validate_user(user)
+        error = validate_routing_id(session_id)
+        if error is not None:
+            raise ValueError(error)
+        return f"{user}.{SID_HINT_NAMESPACE}.{session_id}"
+
+    async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
+        """Return the last tty_name this session_id claimed, or ``None``.
+
+        Survives clean-exit reservation release (the tty reservation is
+        gone, this hint is not), so a resumed session reclaims its prior
+        ``ttyN``.  Shares the names bucket's 3-day TTL.
+        """
+        names_kv = await self._ensure_names_kv()
+        try:
+            entry = await names_kv.get(self._sid_hint_key(user, session_id))
+            return entry.value.decode() if entry.value else None
+        except (KeyNotFoundError, BucketNotFoundError):
+            return None
+
+    async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
+        """Record the tty_name this session_id claimed (upsert).
+
+        Validate the name before writing (defense in depth): the value is
+        read back as a reclaim candidate and reserved as a KV key, so a
+        malformed or namespace-colliding name must never be persisted.
+        """
+        error = validate_reclaimable_name(name)
+        if error is not None:
+            raise ValueError(error)
+        names_kv = await self._ensure_names_kv()
+        await names_kv.put(self._sid_hint_key(user, session_id), name.encode())
 
     # -- Session history (wtmp) --
 

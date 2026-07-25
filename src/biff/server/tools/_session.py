@@ -12,7 +12,7 @@ from biff.server.tools._descriptions import get_tty_name
 from biff.tty import build_session_key
 
 _NO_SESSION_HINT = (
-    "Talk needs a specific session — use talk @user:ttyN (run /who to see ttys)."
+    "Talk needs a specific session — use talk user:ttyN (run /who to see ttys)."
 )
 _SELF_TALK = "You can't talk to your own session."
 

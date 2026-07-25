@@ -36,7 +36,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         # Normalize user arg — strip @ prefix
         filter_user: str | None = None
         if user:
-            filter_user = user.strip().lstrip("@")
+            filter_user = user.strip().removeprefix("@")
 
         events = await state.relay.get_wtmp(user=filter_user, count=count * 2)
         if not events:

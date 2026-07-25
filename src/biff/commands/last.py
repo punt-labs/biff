@@ -13,7 +13,7 @@ async def last(ctx: CliContext, user: str, count: int) -> CommandResult:
     count = max(1, min(count, 100))
     filter_user: str | None = None
     if user:
-        filter_user = user.strip().lstrip("@")
+        filter_user = user.strip().removeprefix("@")
 
     events = await ctx.relay.get_wtmp(user=filter_user, count=count * 2)
     if not events:

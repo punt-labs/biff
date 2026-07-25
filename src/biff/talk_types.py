@@ -16,6 +16,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Self
 
 from biff._formatting import terminal_safe
+from biff.tty import format_address
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -164,8 +165,8 @@ class PendingInvite:
         ``talk @user:tty`` by the ``HintNamesSession`` invariant).
         """
         if self.tty:
-            return f"talk @{self.user}:{self.tty}"
-        return f"talk @{self.session_key}"
+            return f"talk {format_address(self.user, self.tty)}"
+        return f"talk {self.session_key}"
 
 
 @dataclass(frozen=True, slots=True)

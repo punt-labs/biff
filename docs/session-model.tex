@@ -78,11 +78,96 @@ $HOST$, $SESSION$, and $PROCESS$ are opaque identifiers for their
 respective entity types: machine hostnames, terminal session IDs, and
 process IDs.
 
+\medskip\noindent
+$SESSION$ is the Claude Code \texttt{session\_id}.  It is opaque, it is
+durable, and --- the fact the routing layer below is built on --- it is
+\emph{stable across} \texttt{claude --resume} and \texttt{--continue},
+and \emph{fresh on} \texttt{--fork-session}.  A resumed session recovers
+the same \texttt{session\_id} (the recovered identifier is reused, not
+minted afresh); a forked session is a genuinely new node with a new
+identifier.  It is not, in general, observable by the biff server, which
+sees only \texttt{CLAUDE\_PROJECT\_DIR} and the \texttt{initialize}
+client name; a \texttt{SessionStart} hook captures it and correlates to
+the server through the shared topmost-\texttt{claude} PID (biff-7ak).
+The mechanism is code; the model takes as given only that a $SESSION$ is
+a stable, non-recycled identity for the life of the Claude session,
+surviving resume and distinct on fork.
+
 \begin{zed}
   KIND ::= human | agent
 \end{zed}
 
-Every process is either a human operator or an AI agent.
+Every process is either a human operator or an AI agent.  The same two
+tags name the two \emph{roles} a session's routing entries may take: its
+human companion ($human$) and its agent ($agent$).  One Claude session
+hosts up to two routing entries, one per role.
+
+%%--------------------------------------------------------------------
+\subsection{The routing layer}
+%%--------------------------------------------------------------------
+
+Routing needs two further notions: a display alias and a choice of
+routing discipline.
+
+\begin{zed}
+  [ALIAS]
+\end{zed}
+
+$ALIAS$ is the recyclable display name a teammate types --- the
+\texttt{ttyN} of \texttt{@user:ttyN} (DES-035).  It is reserved
+atomically and assigned lowest-free, so it is unique among the
+concurrently-live entries but \emph{recycled} over time.  A message
+payload is deliberately \emph{not} a type of this model: routing is about
+\emph{where} a send goes, and, following DES-048, delivery correctness is
+judged at the send rather than through a modelled recipient queue.
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  ROUTEMODE ::= rmIdentity | rmAlias
+\end{zed}
+
+$ROUTEMODE$ selects the routing discipline, fixed at initialization and
+never changed --- a scoping parameter, as in $talk.tex$'s $routeMode$
+(DES-048).  Under $rmIdentity$ --- the ratified design (biff-7ak,
+Option~B) --- a send addressed to a display alias is resolved to the
+entry that \emph{currently} holds that alias, \emph{at send time}, and
+delivered to that entry's stable identity-keyed inbox.  Under $rmAlias$
+--- the defect --- the send routes on a binding cached when the alias was
+learned and never refreshed, so a resume or a recycle that has moved the
+alias since strands the message (LOST) or lands it on the wrong live
+entry (MISROUTED).
+
+The routing identity of an entry is \emph{derived} from its session and
+its role.
+
+\begin{zed}
+  RID == SESSION \cross KIND
+\end{zed}
+
+\begin{zed}
+  derive == (\lambda s : SESSION; k : KIND @ (s, k))
+\end{zed}
+
+$derive~(s, k)$ is the routing identity of the entry for role $k$ of
+session $s$.  In the implementation it is a hex hash of the
+\texttt{session\_id} salted by the role
+(\texttt{blake2b(session\_id + role)}); the hash is code and is not
+modelled.  What the model keeps is the whole of what the hash is
+\emph{for}: derivation is a \emph{function} (deterministic --- the same
+session and role always yield the same identity), it is \emph{injective}
+(distinct $(s, k)$ yield distinct identities --- the two roles of one
+session, $derive~(s, human)$ and $derive~(s, agent)$, are distinct by
+construction, so the companion is no more volatile than the agent), and
+it depends on nothing but $s$ and $k$, both of which survive
+\texttt{--resume} unchanged (so the identity is stable across resume).
+Modelling $derive$ as the pairing makes all three properties hold by
+construction; the injectivity is checked as an invariant of
+$RouteWorld$ below.  This is the operator amendment to biff-7ak: the
+companion entry carries a \emph{derived per-role} identity, not a
+volatile fresh hex, so neither role reproduces the bug.
 
 %%--------------------------------------------------------------------
 \section{State}
@@ -164,14 +249,93 @@ Invariants enforce referential integrity across layers.
 \end{schema}
 
 %%--------------------------------------------------------------------
+\section{Routing State}
+%%--------------------------------------------------------------------
+
+$RouteWorld$ extends $BiffWorld$ with the routing layer: the live
+per-$(session, role)$ entries, their recyclable display aliases, the
+identity-keyed inboxes, and the discipline-selecting bookkeeping.  The
+structural state is unchanged; the extension is where addressing and
+delivery live.  Keeping it a distinct schema, included rather than
+merged, lets the sixteen structural operations remain framed on
+$BiffWorld$ alone: they leave the routing components fixed, which the
+animator supplies automatically.
+
+\begin{schema}{RouteWorld}
+  BiffWorld \\
+  entries : SESSION \rel KIND \\
+  ttyalias : (SESSION \cross KIND) \pinj ALIAS \\
+  savedalias : (SESSION \cross KIND) \pfun ALIAS \\
+  abind : ALIAS \pfun (SESSION \cross KIND) \\
+  routeMode : ROUTEMODE \\
+  lostF : ZBOOL \\
+  misF : ZBOOL
+  \where
+  %%
+  %% Every live entry belongs to a live session
+  %%
+  \dom entries \subseteq sessions \\
+  %%
+  %% Every live entry has exactly one display alias, and --- the alias
+  %% map being an injection --- no alias names two live entries at once
+  %% (DES-035 uniqueness, lifted to entries)
+  %%
+  \dom ttyalias = entries \\
+  %%
+  %% Delivery soundness: under identity routing no message is ever
+  %% stranded or misrouted (the biff-7ak guarantee)
+  %%
+  routeMode = rmIdentity \implies lostF = zfalse \\
+  routeMode = rmIdentity \implies misF = zfalse
+\end{schema}
+
+$entries$ is the set of live routing endpoints, each a $(session, role)$
+pair; $\dom entries \subseteq sessions$ ties every endpoint to a live
+session.  $ttyalias$ carries each live entry to the display alias a
+teammate types; declaring it an \emph{injection} ($\pinj$) is exactly
+DES-035's global uniqueness lifted to entries --- a recycled alias
+cannot name two live entries at once --- and $\dom ttyalias = entries$
+says every live entry is displayable and every displayable name is live.
+$savedalias$ remembers an entry's last alias across a suspension, so a
+resume can reclaim it; unlike $ttyalias$ it is not cleared when the entry
+goes, and it may name an entry that is no longer live.  $abind$ is the
+cached ``alias~$\mapsto$~entry'' binding a route-on-alias send consults;
+it is deliberately \emph{unconstrained} against $entries$, because its
+staleness --- pointing at an entry that has since moved or gone --- is
+the whole of the defect.  Message stores are not modelled: as in DES-048,
+where $talk.tex$ proves routing soundness through the $unsoundEmit$ latch
+rather than through recipient queues, delivery here is judged at the send
+by comparing the coordinate a send resolves to against the entry that
+holds the alias now.  $routeMode$ fixes the discipline for the run;
+$lostF$ and $misF$ are history flags that latch when a send strands or
+misroutes.  Because delivery under $rmIdentity$ resolves the alias at
+send time (the entry that holds it \emph{now}), the identity-keyed inbox
+it would file to is by construction the current holder's own; the latch,
+not a stored queue, is what records whether that holds.  The last two
+invariants are the delivery-soundness guarantee, stated so ProB decides
+it as a state invariant: under $rmIdentity$ neither flag can ever latch.
+
+Two facts the amendment turns on are here \emph{by construction} rather
+than as invariants to be checked.  Routing identities are distinct by
+construction because $derive~(s, k) = (s, k)$ and $entries$ is a set of
+distinct pairs: the agent and the companion of one session,
+$derive~(s, agent)$ and $derive~(s, human)$, differ in their role and so
+have distinct identities and distinct inboxes, and no re-derivation can
+collide them.  Stability across resume is likewise structural:
+$ResumeSession$ re-mints the \emph{same} $(s?, k?)$, so the identity is
+literally unchanged.  What \emph{is} checked, and is the property a
+recycled alias could otherwise break, is that $ttyalias$ is an injection
+--- no display alias names two live entries at once.
+
+%%--------------------------------------------------------------------
 \section{Initial State}
 %%--------------------------------------------------------------------
 
-The system starts empty: no organizations, machines, sessions, or
-processes.
+The system starts empty: no organizations, machines, sessions,
+processes, entries, aliases, or messages.
 
 \begin{schema}{Init}
-  BiffWorld'
+  RouteWorld'
   \where
   orgs' = \emptyset \\
   repos' = \emptyset \\
@@ -187,8 +351,23 @@ processes.
   psess' = \emptyset \\
   pkind' = \emptyset \\
   pname' = \emptyset \\
-  ppar' = \emptyset
+  ppar' = \emptyset \\
+  %%
+  %% Routing layer starts empty; routeMode is left free, so ProB
+  %% explores rmIdentity and rmAlias as two separate constant branches
+  %%
+  entries' = \emptyset \\
+  ttyalias' = \emptyset \\
+  savedalias' = \emptyset \\
+  abind' = \emptyset \\
+  lostF' = zfalse \\
+  misF' = zfalse
 \end{schema}
+
+$routeMode'$ is left unconstrained: $Init$ admits both disciplines and no
+operation reassigns it, so each discipline is a separate branch of the
+state space.  Every latch starts $zfalse$, so the delivery-soundness
+invariant holds at initialization under either discipline.
 
 %%--------------------------------------------------------------------
 \section{Organization Operations}
@@ -765,6 +944,456 @@ Remove a process.  Precondition: no child processes remain.
 \end{schema}
 
 %%--------------------------------------------------------------------
+\section{Routing and Delivery Operations}
+%%--------------------------------------------------------------------
+
+These operations change the routing layer and leave the structural state
+alone.  Each is a $\Delta RouteWorld$ conjoined with $\Xi BiffWorld$:
+the $\Xi$ pins all sixteen structural components unchanged in a single
+line and brings the session set into scope for the preconditions, so
+each schema below manages only the eight routing components.  The one
+exception is $ForkSession$, which \emph{creates} a session and so frames
+the structural components explicitly, in the manner of $OpenSession$.
+
+Throughout, an entry's routing identity is $derive~(s, k) = (s, k)$, so
+minting a fresh entry for a session and role it held before recovers the
+\emph{same} identity automatically --- this is what makes resume lose
+nothing.
+
+%%--------------------------------------------------------------------
+\subsection{RegisterEntry}
+%%--------------------------------------------------------------------
+
+Mint a routing entry for a role of a live session, assigning it a fresh
+display alias --- the lowest-free \texttt{ttyN}, modelled as any alias
+not currently in use.  This is a first launch, or a \emph{recycle} when
+the chosen alias is one a departed entry released.
+
+\begin{schema}{RegisterEntry}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  s? : SESSION \\
+  k? : KIND \\
+  n? : ALIAS
+  \where
+  s? \in sessions \\
+  (s?, k?) \notin entries \\
+  n? \notin \ran ttyalias \\
+  %%
+  entries' = entries \cup \{ (s?, k?) \} \\
+  ttyalias' = ttyalias \cup \{ (s?, k?) \mapsto n? \} \\
+  savedalias' = savedalias \oplus \{ (s?, k?) \mapsto n? \} \\
+  %%
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{SuspendEntry}
+%%--------------------------------------------------------------------
+
+The hosting process exits cleanly.  The entry leaves $entries$ and its
+alias is released for recycling, but its identity is durable: messages
+addressed to $derive~(s?, k?)$ still name it, and wait for the session to
+resume.  $savedalias$ remembers the released alias.
+
+\begin{schema}{SuspendEntry}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  s? : SESSION \\
+  k? : KIND
+  \where
+  (s?, k?) \in entries \\
+  %%
+  entries' = entries \setminus \{ (s?, k?) \} \\
+  ttyalias' = \{ (s?, k?) \} \ndres ttyalias \\
+  %%
+  savedalias' = savedalias \\
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{ResumeSession}
+%%--------------------------------------------------------------------
+
+A suspended entry comes back.  Because $derive~(s?, k?)$ depends only on
+the session and the role, the re-minted entry has the \emph{same}
+routing identity --- so every message addressed to it before the
+suspension is still addressed to it after, and nothing is stranded.  The
+display alias is reclaimed when it is still free
+($n? = savedalias~(s?, k?)$), and otherwise a fresh free alias is taken.
+Resume is per $(session, role)$: a full session resume fires this once
+for each live role, and the identity persists in every case.
+
+\begin{schema}{ResumeSession}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  s? : SESSION \\
+  k? : KIND \\
+  n? : ALIAS
+  \where
+  s? \in sessions \\
+  (s?, k?) \notin entries \\
+  (s?, k?) \in \dom savedalias \\
+  n? \notin \ran ttyalias \\
+  ( savedalias~(s?, k?) \notin \ran ttyalias \implies
+    n? = savedalias~(s?, k?) ) \\
+  %%
+  entries' = entries \cup \{ (s?, k?) \} \\
+  ttyalias' = ttyalias \cup \{ (s?, k?) \mapsto n? \} \\
+  savedalias' = savedalias \oplus \{ (s?, k?) \mapsto n? \} \\
+  %%
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{ForkSession}
+%%--------------------------------------------------------------------
+
+A fork mints a \emph{new} session identity, distinct from its parent, in
+the same clone, and gives it a fresh agent entry with a fresh alias.
+Because the session is new, $derive~(s?, ka?)$ is a routing identity no
+entry has ever held --- a fork inherits none of the parent's mail.  This
+is the one routing operation that changes the structural state, so it
+frames the structural components in full.
+
+\begin{schema}{ForkSession}
+  \Delta RouteWorld \\
+  sp? : SESSION \\
+  s? : SESSION \\
+  m? : HOST \\
+  org? : NAME \\
+  repo? : NAME \\
+  branch? : NAME \\
+  ka? : KIND \\
+  na? : ALIAS
+  \where
+  sp? \in sessions \\
+  s? \notin sessions \\
+  s? \neq sp? \\
+  smach~sp? = m? \\
+  srepo~sp? = (org?, repo?) \\
+  na? \notin \ran ttyalias \\
+  %%
+  sessions' = sessions \cup \{ s? \} \\
+  smach' = smach \cup \{ s? \mapsto m? \} \\
+  srepo' = srepo \cup \{ s? \mapsto (org?, repo?) \} \\
+  sbranch' = sbranch \cup \{ s? \mapsto branch? \} \\
+  soper' = soper \\
+  %%
+  entries' = entries \cup \{ (s?, ka?) \} \\
+  ttyalias' = ttyalias \cup \{ (s?, ka?) \mapsto na? \} \\
+  savedalias' = savedalias \oplus \{ (s?, ka?) \mapsto na? \} \\
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF \\
+  %%
+  orgs' = orgs \\
+  repos' = repos \\
+  members' = members \\
+  machines' = machines \\
+  clones' = clones \\
+  processes' = processes \\
+  psess' = psess \\
+  pkind' = pkind \\
+  pname' = pname \\
+  ppar' = ppar
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{Learn}
+%%--------------------------------------------------------------------
+
+A teammate resolves a display alias to an entry --- the \texttt{who} that
+populates the binding a route-on-alias send will later consult.  It
+records the \emph{current} holder; nothing refreshes it afterwards, so a
+subsequent resume or recycle leaves it stale.
+
+\begin{schema}{Learn}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  n? : ALIAS
+  \where
+  n? \in \ran ttyalias \\
+  %%
+  abind' = abind \oplus \{ n? \mapsto (ttyalias\inv)~n? \} \\
+  %%
+  entries' = entries \\
+  ttyalias' = ttyalias \\
+  savedalias' = savedalias \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{DeliverIdentity}
+%%--------------------------------------------------------------------
+
+The ratified discipline.  A send addressed to alias $to?$ resolves it to
+the entry that holds $to?$ \emph{now} --- $(ttyalias\inv)~to?$, well
+defined because $to? \in \ran ttyalias$ --- and delivers to that entry's
+identity-keyed inbox.  The predicate $(ttyalias\inv)~to? \in entries$
+records that the resolution, re-evaluated at send time, always names a
+\emph{live} current holder (it is a theorem of the $RouteWorld$
+invariant $\dom ttyalias = entries$, not an added assumption); so the
+send reaches the current holder and neither latch can fire.  No payload
+is modelled --- routing is about \emph{where} a send goes.
+
+\begin{schema}{DeliverIdentity}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  to? : ALIAS
+  \where
+  routeMode = rmIdentity \\
+  to? \in \ran ttyalias \\
+  (ttyalias\inv)~to? \in entries \\
+  %%
+  entries' = entries \\
+  ttyalias' = ttyalias \\
+  savedalias' = savedalias \\
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{DeliverAliasHit}
+%%--------------------------------------------------------------------
+
+The defective discipline, in the case where the cached binding happens
+still to be right.  A route-on-alias send routes to $abind~to?$; when
+that entry is live and still holds $to?$, the send reaches the intended
+holder, correct by luck.  It is the first of three cases that partition
+the route-on-alias send.
+
+\begin{schema}{DeliverAliasHit}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  to? : ALIAS
+  \where
+  routeMode = rmAlias \\
+  to? \in \dom abind \\
+  abind~to? \in entries \\
+  ttyalias~(abind~to?) = to? \\
+  %%
+  entries' = entries \\
+  ttyalias' = ttyalias \\
+  savedalias' = savedalias \\
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{DeliverAliasLost}
+%%--------------------------------------------------------------------
+
+The LOST case.  The cached binding names an entry that is no longer live
+--- the session was resumed under a new coordinate, or has gone --- so a
+route-on-alias send routed by that binding reaches no live entry and
+strands; $lostF$ latches.  This is reachable only under $rmAlias$:
+identity routing would re-resolve $to?$ and either reach the current
+holder or, if none, decline to send.
+
+\begin{schema}{DeliverAliasLost}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  to? : ALIAS
+  \where
+  routeMode = rmAlias \\
+  to? \in \dom abind \\
+  abind~to? \notin entries \\
+  %%
+  lostF' = ztrue \\
+  %%
+  entries' = entries \\
+  ttyalias' = ttyalias \\
+  savedalias' = savedalias \\
+  abind' = abind \\
+  routeMode' = routeMode \\
+  misF' = misF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\subsection{DeliverAliasMis}
+%%--------------------------------------------------------------------
+
+The MISROUTED case.  The cached binding names an entry that is still live
+but has since moved off the alias --- the alias was recycled to a
+different session, or reassigned on resume --- so a route-on-alias send
+lands on a live but \emph{wrong} entry.  $ttyalias~(abind~to?) \neq to?$
+is well defined because $abind~to? \in entries = \dom ttyalias$, and says
+exactly that the cached target no longer holds the alias it was addressed
+by.  The send reaches the wrong entry; $misF$ latches.  Reachable only
+under $rmAlias$.
+
+\begin{schema}{DeliverAliasMis}
+  \Delta RouteWorld \\
+  \Xi BiffWorld \\
+  to? : ALIAS
+  \where
+  routeMode = rmAlias \\
+  to? \in \dom abind \\
+  abind~to? \in entries \\
+  ttyalias~(abind~to?) \neq to? \\
+  %%
+  misF' = ztrue \\
+  %%
+  entries' = entries \\
+  ttyalias' = ttyalias \\
+  savedalias' = savedalias \\
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF
+\end{schema}
+
+%%--------------------------------------------------------------------
+\section{Delivery Properties and Verification}
+\label{sec:delivery}
+%%--------------------------------------------------------------------
+
+Three properties are owed to biff-7ak.  Each is stated so that ProB
+decides it, the first as a state invariant and the bugs as reachability
+goals, exactly as DES-048 verifies $talk.tex$.
+
+\begin{enumerate}
+\item \textbf{Identity delivery.}  A send to a live alias under
+  $rmIdentity$ resolves to the entry that holds the alias at send time,
+  $(ttyalias\inv)~to?$, and to no other coordinate; and that entry is
+  live ($DeliverIdentity$ asserts $(ttyalias\inv)~to? \in entries$).
+  Delivery is a function of the identity, never of the alias string.
+
+\item \textbf{Resume loses nothing.}  $ResumeSession$ re-mints the entry
+  at the same routing identity $derive~(s?, k?) = (s?, k?)$, so every send
+  addressed to $(s?, k?)$ before the suspension resolves to it after the
+  resume.  No send is stranded by a resume --- $lostF$ cannot latch under
+  identity routing.
+
+\item \textbf{Recycled alias never delivers to a stale entry.}  If
+  $ttyalias$ carried alias $n$ to entry $e_1$, $e_1$ released it, and a
+  later entry $e_2$ claimed $n$ (recycle), then under $rmIdentity$ a send
+  to $n$ resolves $(ttyalias\inv)~n = e_2$ at send time and reaches $e_2$,
+  never the stale $e_1$.
+\end{enumerate}
+
+All three are consequences of one state invariant of $RouteWorld$,
+$$routeMode = rmIdentity \implies (lostF = zfalse \land misF = zfalse),$$
+together with the definition of $DeliverIdentity$: under identity routing
+every send resolves to the current, live holder, so none strands
+(property~2 and the liveness half of property~3) and none misroutes
+(property~1 and the correctness half of property~3).  The two defects are
+the two ways a flag latches under $rmAlias$: $DeliverAliasLost$ is LOST
+(property~2 violated --- a send to a resumed or departed session strands)
+and $DeliverAliasMis$ is MISROUTED (properties~1 and~3 violated --- a send
+reaches a live but wrong entry).  That no two live entries ever share a
+routing identity --- in particular no agent and companion of one session,
+and no old and new occupant of a recycled alias --- follows by
+construction, identities being distinct pairs; and that no display alias
+names two live entries at once is the injection
+$ttyalias : (SESSION \cross KIND) \pinj ALIAS$, checked by ProB in every
+reachable state.
+
+\subsection{Model-checking scope}
+
+The structural layer explodes at a uniform set size (two names alone put
+the organization, repository, member and branch combinatorics past a
+hundred and forty thousand states), so, as $talk.tex$ does, the routing
+properties are checked at an explicit mixed scope that collapses the
+structural carriers and keeps the routing carriers just large enough to
+exhibit the defect.  The primary run is exhaustive at one session and two
+aliases: one session already carries \emph{two} routing entries (its
+agent and its companion), and one alias suffices to recycle while the
+other is the one an entry moves to on resume, so a single session
+exercises both a stranded send and a misrouted one --- the recycle
+happens between the two roles, or when one role resumes onto a fresh
+alias.
+
+\begin{verbatim}
+probcli docs/session-model.tex -model_check -noass -nodead \
+  -card NAME 1 -card HOST 1 -card PROCESS 1 \
+  -card SESSION 1 -card ALIAS 2 \
+  -p MAX_OPERATIONS 20000 -p TIME_OUT 90000 -coverage
+\end{verbatim}
+
+This visits all $15{,}247$ reachable states with
+$invariant\_violated = 0$ and no deadlock, so every reachable state holds
+the $RouteWorld$ invariant --- in particular $routeMode = rmIdentity
+\implies lostF = zfalse \land misF = zfalse$, and the injectivity of
+$ttyalias$ over live entries.  Every routing operation is covered except
+$ForkSession$, which mints a second session and so needs a second
+$SESSION$; a second run at $\texttt{-card SESSION 2}$ covers it and holds
+the same invariant across the fork transition (it is not exhaustive at
+that scope, but $ForkSession$ only ever adds a fresh session with a fresh
+identity, so it can set no latch).  The lone structural operation left
+uncovered, $SpawnChild$, needs a second $PROCESS$ and is orthogonal to
+routing.
+
+\medskip\noindent\textbf{(D1) Soundness holds --- as a state invariant.}
+Under $rmIdentity$ neither latch is ever set: the exhaustive run above
+finds no counterexample to the $RouteWorld$ invariant across all
+$15{,}247$ states.
+
+\medskip\noindent\textbf{(D2) LOST is reachable under alias routing.}
+As a reachability goal,
+
+\begin{verbatim}
+probcli ... -card SESSION 1 -card ALIAS 2 -goal "lostF=ztrue & routeMode=rmAlias"
+\end{verbatim}
+
+ProB finds the goal.  The trace: $OpenHeadlessSession(s_1)$;
+$RegisterEntry(s_1, human, n_2)$ mints the companion entry on $n_2$;
+$Learn(n_2)$ caches $abind~n_2 = (s_1, human)$; $SuspendEntry(s_1, human)$
+takes the entry out of $entries$; a route-on-alias send to $n_2$ then
+matches $DeliverAliasLost$ ($abind~n_2 \notin entries$) and strands.  This
+is the biff-7ak LOST bug: mail sent to the address a teammate holds lands
+where no live session now drains.
+
+\medskip\noindent\textbf{(D3) MISROUTED is reachable under alias
+routing.}  As a reachability goal,
+
+\begin{verbatim}
+probcli ... -card SESSION 1 -card ALIAS 2 -goal "misF=ztrue & routeMode=rmAlias"
+\end{verbatim}
+
+ProB finds the goal.  The trace: $OpenHeadlessSession(s_1)$;
+$RegisterEntry(s_1, agent, n_2)$; $Learn(n_2)$ caches $abind~n_2 =
+(s_1, agent)$; $SuspendEntry(s_1, agent)$ frees $n_2$;
+$RegisterEntry(s_1, agent, n_1)$ brings the agent entry back on a
+\emph{different} alias (a resume that did not reclaim its old name).  A
+route-on-alias send to $n_2$ then matches $DeliverAliasMis$
+($abind~n_2 = (s_1, agent) \in entries$ but $ttyalias~(s_1, agent) = n_1
+\neq n_2$) and lands on the live but wrong entry.  This is the biff-7ak
+MISROUTED bug: a stale \texttt{ttyN} carries mail to a session that is
+not its addressee.
+
+\medskip\noindent\textbf{(D4) Both bugs are unreachable under identity
+routing.}  As a reachability goal,
+
+\begin{verbatim}
+probcli ... -card SESSION 1 -card ALIAS 2 \
+  -goal "(lostF=ztrue or misF=ztrue) & routeMode=rmIdentity"
+\end{verbatim}
+
+ProB reports no such state after visiting all $15{,}247$: under identity
+routing neither latch can be set.  (D1) and (D4) are the same fact seen
+twice --- as an invariant that holds and as a bad state that is
+unreachable --- which is the precise sense in which routing on the
+derived per-role identity makes the strand and the misroute
+\emph{impossible} rather than merely unobserved.
+
+%%--------------------------------------------------------------------
 \section{Discussion}
 %%--------------------------------------------------------------------
 
@@ -825,23 +1454,29 @@ properties enforced by the invariants:
 
 \subsection{What This Model Does Not Cover}
 
-This specification focuses on the structural containment hierarchy.
-It deliberately omits:
+This specification covers the structural containment hierarchy and the
+routing layer --- the identity-keyed addressing and delivery of
+biff-7ak.  It deliberately omits:
 
 \begin{itemize}
-  \item \textbf{Messaging} --- how messages are addressed, routed, and
-    delivered between processes and sessions.
   \item \textbf{Presence} --- idle times, plans, active status, and the
     display pipeline (\texttt{who}, \texttt{finger}, \texttt{ps}).
-  \item \textbf{Addressing syntax} --- the \texttt{@user:tty} and
-    \texttt{@tty/process} resolution rules.
   \item \textbf{Permissions} --- who can message whom, who can steer
     whose session, \texttt{mesg y/n}.
   \item \textbf{Process lifecycle details} --- heartbeats, TTLs, orphan
     detection, crash recovery.
+  \item \textbf{Implementation of derivation and correlation} --- the
+    \texttt{blake2b} hex hash that realizes $derive$, the
+    \texttt{SessionStart}-hook-to-server correlation over the shared
+    \texttt{claude} PID, the \texttt{(pid, start-time)} recycle guard,
+    and the KV storage of the resume-reclaim mapping.  These are code;
+    the model keeps only the properties they must satisfy --- a
+    deterministic, injective, resume-stable routing identity per
+    $(session, role)$, and an alias that a send resolves at send time.
 \end{itemize}
 
-These are natural extensions: messaging and addressing can be specified
-as operations on this state, and presence as derived views.
+These remaining omissions are natural extensions: presence is a derived
+view over the same state, and permissions a gate on the delivery
+operations.
 
 \end{document}

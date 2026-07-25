@@ -8,8 +8,8 @@ from unittest.mock import patch
 import biff.session_key as session_key_mod
 from biff.session_key import (
     _is_claude,
-    _walk_to_topmost_claude,
     find_session_key,
+    topmost_claude_pid,
 )
 
 
@@ -39,8 +39,8 @@ class TestIsClaude:
         assert _is_claude("not-claude") is False
 
 
-class TestWalkToTopmostClaude:
-    """Test _walk_to_topmost_claude with mocked process tables."""
+class TestTopmostClaudePid:
+    """``topmost_claude_pid`` returns the claude PID or ``None`` (no fallback)."""
 
     def test_direct_parent_is_claude(self) -> None:
         """MCP server is direct child of claude (original DES-011 model)."""
@@ -54,7 +54,7 @@ class TestWalkToTopmostClaude:
             }
         )
         with patch("biff.session_key._read_process_table", return_value=table):
-            assert _walk_to_topmost_claude() == claude_pid
+            assert topmost_claude_pid() == claude_pid
 
     def test_intermediate_child_process(self) -> None:
         """MCP server under intermediate claude child (DES-011a scenario)."""
@@ -70,7 +70,7 @@ class TestWalkToTopmostClaude:
             }
         )
         with patch("biff.session_key._read_process_table", return_value=table):
-            assert _walk_to_topmost_claude() == main_claude
+            assert topmost_claude_pid() == main_claude
 
     def test_single_claude_with_intermediate_zsh(self) -> None:
         """Claude spawned from a shell — only one claude in the chain."""
@@ -86,10 +86,10 @@ class TestWalkToTopmostClaude:
             }
         )
         with patch("biff.session_key._read_process_table", return_value=table):
-            assert _walk_to_topmost_claude() == claude_pid
+            assert topmost_claude_pid() == claude_pid
 
-    def test_no_claude_ancestor(self) -> None:
-        """No claude in the tree — falls back to os.getppid()."""
+    def test_no_claude_ancestor_returns_none(self) -> None:
+        """No claude in the tree — returns None (no getppid fallback)."""
         my_pid = os.getpid()
         table = _make_table(
             {
@@ -98,21 +98,21 @@ class TestWalkToTopmostClaude:
             }
         )
         with patch("biff.session_key._read_process_table", return_value=table):
-            assert _walk_to_topmost_claude() == os.getppid()
+            assert topmost_claude_pid() is None
 
-    def test_ps_failure(self) -> None:
-        """ps command fails — falls back to os.getppid()."""
+    def test_ps_failure_returns_none(self) -> None:
+        """ps command fails — returns None."""
         with patch(
             "biff.session_key._read_process_table",
             side_effect=OSError("ps not found"),
         ):
-            assert _walk_to_topmost_claude() == os.getppid()
+            assert topmost_claude_pid() is None
 
-    def test_current_process_not_in_table(self) -> None:
-        """Current PID missing from table — falls back."""
+    def test_current_process_not_in_table_returns_none(self) -> None:
+        """Current PID missing from table — returns None."""
         table = _make_table({999: (1, "init")})
         with patch("biff.session_key._read_process_table", return_value=table):
-            assert _walk_to_topmost_claude() == os.getppid()
+            assert topmost_claude_pid() is None
 
     def test_safety_bound_prevents_infinite_loop(self) -> None:
         """Circular parent chain doesn't hang — bounded to 10 levels."""
@@ -124,7 +124,7 @@ class TestWalkToTopmostClaude:
             table[pid] = (pids[i + 1], "python3")
         table[pids[-1]] = (pids[-1], "python3")  # self-referential root
         with patch("biff.session_key._read_process_table", return_value=table):
-            assert _walk_to_topmost_claude() == os.getppid()
+            assert topmost_claude_pid() is None
 
 
 class TestFindSessionKey:

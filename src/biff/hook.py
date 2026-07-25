@@ -11,6 +11,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
 import re
@@ -21,6 +22,8 @@ from contextlib import suppress
 from typing import cast
 
 import typer
+
+logger = logging.getLogger(__name__)
 
 # ── CLI structure ────────────────────────────────────────────────────
 
@@ -631,6 +634,35 @@ def _detect_collisions() -> list[str]:
     return collisions
 
 
+def _capture_session_hint(data: dict[str, object]) -> None:
+    """Persist the Claude ``session_id`` for the MCP server (biff-7ak).
+
+    SessionStart is the only hook that sees ``session_id`` (on stdin); the
+    server, unable to observe it (DES-011), reads the hint back by walking
+    the shared ``claude`` process tree.  A missing/empty id is a no-op — the
+    server then routes on a fresh hex fallback.
+    """
+    session_id = data.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return
+    source = data.get("source")
+    from biff.session_id import SessionHint  # noqa: PLC0415
+
+    hint = SessionHint.capture(
+        session_id, source if isinstance(source, str) else "startup"
+    )
+    # Best-effort: a hint-write failure forfeits resume-reclaim (the server
+    # falls back to a fresh hex) but must never break session startup.  Log
+    # so a broken resume is observable, then swallow.
+    try:
+        hint.write()
+    except OSError:
+        logger.warning(
+            "Failed to persist session hint; resume-reclaim disabled this session",
+            exc_info=True,
+        )
+
+
 def handle_session_start() -> str:
     """Build SessionStart(startup) additionalContext.
 
@@ -676,7 +708,7 @@ def handle_session_start() -> str:
             f"\u26a0 {n} other session(s) active in this worktree ({keys}). "
             "Run /who to check what others are working on before claiming work. "
             "Set /plan before beginning to avoid duplicate effort. "
-            "Consider /write @other to negotiate file ownership, "
+            "Consider /write to negotiate file ownership, "
             "or use a git worktree for isolation."
         )
 
@@ -808,6 +840,7 @@ def cc_session_start() -> None:
     """SessionStart(startup) — auto-tty, plan from branch, check unread."""
     if not _is_biff_enabled():
         return
+    _capture_session_hint(_read_hook_input())
     result = handle_session_start()
     _emit(_hook_context("SessionStart", result))
 
@@ -817,6 +850,7 @@ def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
     if not _is_biff_enabled():
         return
+    _capture_session_hint(_read_hook_input())
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 

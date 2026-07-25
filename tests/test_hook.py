@@ -413,6 +413,53 @@ class TestHandleSessionResume:
         assert "resumed" in result
 
 
+class TestCaptureSessionHint:
+    """SessionStart persists the Claude session_id for the server (biff-7ak)."""
+
+    def test_writes_hint_from_payload(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_session_hint
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+        ):
+            _capture_session_hint({"session_id": "sid-from-hook", "source": "resume"})
+            loaded = sid_mod.SessionHint.load(4321)
+
+        assert loaded is not None
+        assert loaded.session_id == "sid-from-hook"
+        assert loaded.source == "resume"
+        assert loaded.claude_pid == 4321
+
+    def test_no_session_id_is_noop(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_session_hint
+
+        with patch.object(sid_mod, "biff_data_dir", return_value=tmp_path):
+            _capture_session_hint({"source": "startup"})
+
+        assert not (tmp_path / "sessions").exists()
+
+    def test_write_failure_is_swallowed(self, tmp_path: Path) -> None:
+        """A hint-write OSError must not break session startup (best-effort)."""
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_session_hint
+
+        def _boom(_self: object) -> None:
+            raise OSError("disk full")
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+            patch.object(sid_mod.SessionHint, "write", _boom),
+        ):
+            # Must not raise.
+            _capture_session_hint({"session_id": "sid", "source": "startup"})
+
+
 # ── handle_pre_compact ─────────────────────────────────────────────
 
 
@@ -1102,7 +1149,7 @@ class TestDetectCollisions:
         assert "kai:abc" in result
         assert "/who" in result
         assert "/plan" in result
-        assert "/write @other" in result
+        assert "/write" in result
         assert "worktree" in result
 
     def test_session_start_no_collision_no_advisory(self, tmp_path: Path) -> None:

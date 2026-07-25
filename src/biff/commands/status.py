@@ -42,7 +42,7 @@ async def status(ctx: CliContext) -> CommandResult:
         remaining = format_remaining(wall_post.expires_at)
         wall_from = terminal_safe(wall_post.from_user)
         wall_text = terminal_safe(wall_post.text)
-        lines.append(f"wall: @{wall_from}: {wall_text} ({remaining})")
+        lines.append(f"wall: {wall_from}: {wall_text} ({remaining})")
     else:
         lines.append("wall: (none)")
 

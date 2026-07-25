@@ -566,3 +566,61 @@ class TestMalformedSessions:
         result = relay._read_sessions()
         assert "kai:tty1" in result
         assert result["kai:tty1"].plan == "testing"
+
+
+class TestSessionTtyHint:
+    """session_id -> last tty_name reclaim hint (biff-7ak).
+
+    Session ids are realistic routing tokens (UUID / hex) matching
+    ``validate_routing_id``'s charset — the value a live session actually
+    carries under identity routing.
+    """
+
+    _SID = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+    _SID2 = "aaaaaaaa-1111-2222-3333-444444444444"
+
+    async def test_absent_returns_none(self, relay: LocalRelay) -> None:
+        assert await relay.get_session_tty_hint("kai", self._SID) is None
+
+    async def test_set_then_get(self, relay: LocalRelay) -> None:
+        await relay.set_session_tty_hint("kai", self._SID, "tty3")
+        assert await relay.get_session_tty_hint("kai", self._SID) == "tty3"
+
+    async def test_overwrites(self, relay: LocalRelay) -> None:
+        await relay.set_session_tty_hint("kai", self._SID, "tty3")
+        await relay.set_session_tty_hint("kai", self._SID, "tty7")
+        assert await relay.get_session_tty_hint("kai", self._SID) == "tty7"
+
+    async def test_distinct_per_session(self, relay: LocalRelay) -> None:
+        await relay.set_session_tty_hint("kai", self._SID, "tty1")
+        await relay.set_session_tty_hint("kai", self._SID2, "tty2")
+        assert await relay.get_session_tty_hint("kai", self._SID) == "tty1"
+        assert await relay.get_session_tty_hint("kai", self._SID2) == "tty2"
+
+    async def test_hint_excluded_from_reserved_names(self, relay: LocalRelay) -> None:
+        """A reclaim hint must not surface as a reserved tty name."""
+        await relay.reserve_tty_name("kai", "tty1", f"kai:{self._SID}")
+        await relay.set_session_tty_hint("kai", self._SID, "tty1")
+        assert await relay.list_reserved_names("kai") == ["tty1"]
+
+    async def test_set_rejects_malformed_name(self, relay: LocalRelay) -> None:
+        """A poisoned name is refused at write time (defense in depth)."""
+        with pytest.raises(ValueError, match="Invalid tty name"):
+            await relay.set_session_tty_hint("kai", self._SID, "evil.name")
+
+    async def test_set_rejects_sid_namespace_name(self, relay: LocalRelay) -> None:
+        with pytest.raises(ValueError, match="namespace"):
+            await relay.set_session_tty_hint("kai", self._SID, "sid")
+
+    async def test_rejects_invalid_session_id_on_set(self, relay: LocalRelay) -> None:
+        """LocalRelay rejects a non-routing-id session_id exactly as NatsRelay.
+
+        A dotted session_id would build an odd filename and diverge from the
+        NatsRelay contract (which validates the session_id KV segment).
+        """
+        with pytest.raises(ValueError, match="Invalid routing id"):
+            await relay.set_session_tty_hint("kai", "evil.injected", "tty1")
+
+    async def test_rejects_invalid_session_id_on_get(self, relay: LocalRelay) -> None:
+        with pytest.raises(ValueError, match="Invalid routing id"):
+            await relay.get_session_tty_hint("kai", "evil.injected")

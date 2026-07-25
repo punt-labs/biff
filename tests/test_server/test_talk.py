@@ -87,7 +87,7 @@ class TestFormatAgentDrain:
 
         rendered = format_agent_drain(drain)
 
-        assert "talk @jfreeman:tty6" in rendered
+        assert "talk jfreeman:tty6" in rendered
         assert "75abc665" not in rendered
 
     def test_escapes_neutralized(self) -> None:
@@ -482,8 +482,8 @@ class TestDoTalk:
             "to_key": "kai:kaihex01",
         }
 
-    async def test_invite_hint_carries_at_prefix(self) -> None:
-        """A fresh invite body suggests a runnable ``talk @user:tty`` accept."""
+    async def test_invite_hint_carries_bare_address(self) -> None:
+        """A fresh invite body suggests a runnable bare ``talk user:tty`` accept."""
         sessions = [
             UserSession(user="jfreeman", tty="75abc665", tty_name="tty6", repo="myrepo")
         ]
@@ -497,7 +497,7 @@ class TestDoTalk:
             state_ = cast("ServerState", state)
             await talk_mod._do_talk(mcp, state_, "@jfreeman:tty6", "")
         body: str = json.loads(nc.publish.call_args[0][1])["body"]
-        assert "talk @kai:tty1" in body
+        assert "talk kai:tty1" in body
 
     async def test_accept_connected_hint_uses_display_tty_not_hex(self) -> None:
         """Accepting a pending invite names the partner by ``ttyN``, not the key hex."""
@@ -515,7 +515,7 @@ class TestDoTalk:
             await talk_mod._do_talk(mcp, cast("ServerState", state), "@jfreeman", "")
         assert state.talk.partner_tty == "tty6"
         hint = _talk_description(state.talk)
-        assert "talk @jfreeman:tty6" in hint
+        assert "talk jfreeman:tty6" in hint
         assert "75abc665" not in hint
 
     async def test_invite_publish_failure_rolls_back_phase(self) -> None:
