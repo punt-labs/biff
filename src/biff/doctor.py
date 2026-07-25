@@ -223,11 +223,11 @@ def _check_biff_file() -> CheckResult:
 def _check_user_import() -> CheckResult:
     """Check the user-scope ``@``-import is registered (informational)."""
     from biff.claude_md import ClaudeMdImport
+    from biff.user_scope import USER_IMPORT_LINE
 
     host = Path.home() / ".claude" / "CLAUDE.md"
-    line = "@~/.punt-labs/biff/CLAUDE.md"
     try:
-        registered = ClaudeMdImport(host, line).is_registered()
+        registered = ClaudeMdImport(host, USER_IMPORT_LINE).is_registered()
     except OSError:
         # A diagnostic must never crash. Only OSError is possible: the read is
         # byte-faithful (surrogateescape), so a non-UTF-8 host never raises

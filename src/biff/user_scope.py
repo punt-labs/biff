@@ -17,12 +17,13 @@ from typing import Self, final
 
 from biff.claude_md import ClaudeMdImport
 
-__all__ = ["UserScope", "UserScopeResult"]
+__all__ = ["USER_IMPORT_LINE", "UserScope", "UserScopeResult"]
 
-# The canonical import string every punt CLI must produce byte-identically
-# (§2.4). Points at the deposited guide via a literal ``~``; Claude Code expands
-# it at read time.
-_IMPORT_LINE = "@~/.punt-labs/biff/CLAUDE.md"
+# The canonical user-scope import string, the ONE source of truth for every
+# module that registers, prunes, reports, or prints it (§2.4 requires
+# byte-identical output across writers). Points at the deposited guide via a
+# literal ``~``; Claude Code expands it at read time.
+USER_IMPORT_LINE = "@~/.punt-labs/biff/CLAUDE.md"
 _GUIDE_RESOURCE = "user-claude.md"
 
 
@@ -61,7 +62,7 @@ class UserScope:
     def install(self) -> UserScopeResult:
         """Deposit the guide and register the import line. Idempotent."""
         guide_written = self._deposit_guide()
-        import_registered = ClaudeMdImport(self._host, _IMPORT_LINE).register()
+        import_registered = ClaudeMdImport(self._host, USER_IMPORT_LINE).register()
         return UserScopeResult(
             guide_written=guide_written,
             import_registered=import_registered,
@@ -73,7 +74,7 @@ class UserScope:
         The deposited guide is left in place (§2.9): removal is deliberate, not
         a side effect of uninstall.
         """
-        return ClaudeMdImport(self._host, _IMPORT_LINE).prune()
+        return ClaudeMdImport(self._host, USER_IMPORT_LINE).prune()
 
     def _deposit_guide(self) -> bool:
         """Write the bundled guide to the guide path. Return ``True`` if changed.

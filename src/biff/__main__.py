@@ -1542,13 +1542,13 @@ def _register_user_scope() -> None:
     biff registers ``@~/.punt-labs/biff/CLAUDE.md`` in ``~/.claude/CLAUDE.md``
     once at install rather than per repo.
     """
-    from biff.user_scope import UserScope
+    from biff.user_scope import USER_IMPORT_LINE, UserScope
 
     result = UserScope().install()
     if result.guide_written:
         print("Agent guide: ~/.punt-labs/biff/CLAUDE.md")
     if result.import_registered:
-        print("Registered @~/.punt-labs/biff/CLAUDE.md in ~/.claude/CLAUDE.md")
+        print(f"Registered {USER_IMPORT_LINE} in ~/.claude/CLAUDE.md")
 
 
 @app.command("install")
@@ -1595,7 +1595,7 @@ def uninstall_cmd() -> None:
     import shutil
     import subprocess
 
-    from biff.user_scope import UserScope
+    from biff.user_scope import USER_IMPORT_LINE, UserScope
 
     plugin_failed = False
     claude = shutil.which("claude")
@@ -1613,7 +1613,7 @@ def uninstall_cmd() -> None:
     # a failed or skipped plugin uninstall must not strand the import line. The
     # deposited guide stays dormant (§2.9).
     if UserScope().uninstall():
-        print("Removed @~/.punt-labs/biff/CLAUDE.md from ~/.claude/CLAUDE.md")
+        print(f"Removed {USER_IMPORT_LINE} from ~/.claude/CLAUDE.md")
 
     if plugin_failed:
         # Surface the plugin failure — but only after the cleanup above ran.

@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.user_scope import UserScope
+from biff.user_scope import USER_IMPORT_LINE, UserScope
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 _LINE = "@~/.punt-labs/biff/CLAUDE.md"
+
+
+def test_canonical_import_line_is_the_shared_constant() -> None:
+    # One source of truth for the §2.4 canonical string; doctor and the CLI
+    # import this same constant rather than re-spelling the literal.
+    assert USER_IMPORT_LINE == _LINE
 
 
 def _scope(tmp_path: Path) -> UserScope:
