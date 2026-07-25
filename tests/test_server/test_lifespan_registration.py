@@ -18,6 +18,7 @@ real NATS I/O can fail between writes.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import ClassVar
 
@@ -658,6 +659,47 @@ class TestResumeReclaim:
 
         assert name != "tty1"
         assert name == "tty2"
+
+    async def test_reclaim_success_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The SUCCESS path is observable, symmetric with the fallback log."""
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        await relay.set_session_tty_hint("kai", sid, "tty5")
+
+        with caplog.at_level(logging.INFO, logger="biff.server.app"):
+            _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty5"
+        assert any(
+            f"reclaimed prior alias {name} on resume" in r.message
+            and r.levelno == logging.INFO
+            for r in caplog.records
+        )
+
+    async def test_reclaim_fallback_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fallback path logs the reassignment — the matched pair."""
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        await relay.set_session_tty_hint("kai", sid, "tty1")
+        assert await relay.reserve_tty_name("kai", "tty1", "kai:other-session-id")
+
+        with caplog.at_level(logging.INFO, logger="biff.server.app"):
+            _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty2"
+        assert any(
+            "prior alias tty1 taken on resume; reassigned tty2" in r.message
+            and r.levelno == logging.INFO
+            for r in caplog.records
+        )
 
     async def test_resume_same_session_id_drains_own_inbox(
         self, tmp_path: Path

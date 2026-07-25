@@ -131,6 +131,8 @@ async def register_session(
         tty_name = await claim_tty_name(
             relay, user, session_key, preferred=preferred_name
         )
+        if from_hint:
+            logger.info("reclaimed prior alias %s on resume", tty_name)
     except ValueError:
         # The fallback fires ONLY for a name that came from the resume hint
         # (from_hint) — the prior ttyN was taken while this session was gone
