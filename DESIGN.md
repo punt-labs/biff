@@ -5322,3 +5322,58 @@ teardown path closed by ``test_flush_window_teardown_then_late_cb_heals``), and
 ``make check`` (1743). The lesson mirrors DES-041's: an unverified "it self-heals"
 is not a property until the model checks it — so the window was modeled and proven,
 not argued.
+
+### DES-050: Route Directed Messages on the Claude session_id (2026-07-25)
+
+**Context.** The session key `{user}:{tty}` used `ttyN` — a display name minted
+fresh (`generate_tty()`, random hex) on every server start — as the *routing*
+token. On `claude --resume` the resumed session came up under a new tty, so
+directed mail and talk invites addressed to the prior `{user}:{tty}` were **lost**
+(stranded in an inbox no live session drains) or, once a recycled tty number was
+later claimed by a different session, **misrouted** to a stranger. The bug was
+structural: the routing coordinate was a recyclable *name*, not a durable identity.
+
+**Decision.** Route on the Claude Code `session_id`, which is stable across
+`--resume`/`--continue` and fresh on `--fork-session`/`/branch`. The `session_id`
+becomes the value of the existing session-key token (`{user}:{session_id}` — the
+key *structure* is unchanged); `ttyN` demotes to a display *alias* resolved to the
+routing id at send time. Per-role derived ids keep the agent and its human
+companion both stable and distinct: `derive_routing_id = blake2b(f"{session_id}:{role}")`,
+a hex digest inside the routing charset (the raw `session_id:role` composite is
+never used — its `:` would collide with the session-key separator).
+
+**Plumbing.** The MCP server never observes `session_id` — only the SessionStart
+hook sees it, on stdin (DES-011). The hook writes
+`~/.punt-labs/biff/sessions/{claude_pid}.json`; the server, a descendant of that
+`claude`, walks the process tree to the PID and reads the hint back. The recycle
+guard is `(pid, process-start-time)` via `psutil.Process(pid).create_time()`
+(uniform on Linux/macOS/WSL) — a leftover hint whose PID was reused by a different
+process has a different start time and is rejected. There is deliberately **no**
+time-based freshness window: `session_id` is Claude-delivered on every resume, so a
+long gap is a *normal* resume, not a stale hint. On resume the session reclaims its
+prior `ttyN` from a `session_id → ttyN` mapping (names KV, 3-day TTL), taking over
+its *own* still-held reservation (same-identity only — DES-035 uniqueness
+preserved); no valid hint (headless/CI/SDK) falls back to a fresh, non-recycled id.
+The reclaim hint is a team-writable value, so it is validated (`validate_reclaimable_name`
+plus a `sid`-namespace guard) on both the read and write boundary before it can reach a
+NATS subject/KV key; the hint file is created `0o600` under an `0o700` dir.
+
+**Rejected.** (a) *Keep `{user}:{tty}` and add a time-freshness window to tell
+resume from recycle* — defeats long-gap resume, which is the whole point; a resume
+hours later is legitimate. (b) *A stable random id minted once and persisted by
+biff* — that is biff's identity, not Claude's; a fork would inherit it and
+mis-share one inbox. Deriving from the Claude `session_id` makes fork-vs-resume
+fall out for free (fork gets a new `session_id`, resume keeps it). (c) *Expose
+`session_id` to the MCP server directly* — the server has no access to it
+(DES-011); the SessionStart-hook → PPID-walk bridge is the only channel.
+
+**Evidence.** `docs/session-model.tex` was extended (`ResumeSession`/`ForkSession`,
+injective `ttyalias`, identity-keyed send-time `Deliver`) and model-checked with
+ProB: the **LOST** and **MISROUTED** states are reachable under alias-routing and
+**unreachable** under identity-routing (`fuzz`-clean). Verified live on a real
+`claude` exit → `--resume` — the agent held its tty across the resume, no loss or
+misroute. Also lands biff-5gb: canonical addresses drop the `@` sigil (bare
+`user:ttyN`; the parser strips one optional leading `@` via `removeprefix`). Adds
+`psutil`. Shipped in PR #304; `make check` 1851. Companion-id derivability from
+public fields is a noted residual (`biff-muj`, optional per-install-secret
+hardening).
