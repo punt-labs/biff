@@ -21,21 +21,48 @@ logger = logging.getLogger(__name__)
 
 _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
 _TTY_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
+_ROUTING_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
 
 def validate_tty_name(name: str) -> str | None:
-    """Validate a tty name against the safe character allowlist.
+    """Validate a display tty name against the safe character allowlist.
 
     Returns ``None`` on success, or an error message string on failure.
-    TTY names may only contain ASCII alphanumeric characters, hyphens,
-    and underscores (1-20 chars).  This prevents terminal escape
-    injection when tty names are displayed in notifications and
-    ``/read`` output.
+    Display tty names (``ttyN`` and human-chosen aliases) may only
+    contain ASCII alphanumeric characters, hyphens, and underscores
+    (1-20 chars).  This prevents terminal escape injection when tty
+    names are displayed in notifications and ``/read`` output.
+
+    This is the *display alias* validator — kept tight for the names a
+    human types and sees.  The routing token carried in the session key
+    (a Claude ``session_id`` or hex fallback) is validated separately by
+    :func:`validate_routing_id`, which admits the 36-char UUID shape.
     """
     if not _TTY_NAME_RE.match(name):
         return (
             f"Invalid tty name {name!r}: "
             "only letters, digits, hyphens, and underscores are allowed."
+        )
+    return None
+
+
+def validate_routing_id(routing_id: str) -> str | None:
+    """Validate a routing token (the value half of the session key).
+
+    Returns ``None`` on success, or an error message string on failure.
+    The routing token is a Claude ``session_id`` (a hyphenated UUID) or
+    the 8-char hex fallback from :func:`generate_tty`.  Both fit
+    ``[0-9a-fA-F-]`` with no dots, so a single subject token stays
+    NATS-safe.  The 64-char cap admits a UUID (36 chars) with headroom
+    while still bounding the token.
+
+    Distinct from :func:`validate_tty_name`: routing tokens may be long
+    and hyphen-rich, display aliases must be short and escape-safe.
+    """
+    if not _ROUTING_ID_RE.match(routing_id):
+        return (
+            f"Invalid routing id {routing_id!r}: "
+            "only hex digits and hyphens are allowed (max 64 chars)."
         )
     return None
 
@@ -58,6 +85,17 @@ def get_pwd() -> str:
 def build_session_key(user: str, tty: str) -> str:
     """Build a session key from user and tty: ``{user}:{tty}``."""
     return f"{user}:{tty}"
+
+
+def format_address(user: str, tty: str | None = None) -> str:
+    """Render a canonical biff address: bare ``user:ttyN`` (or bare ``user``).
+
+    The single source of truth for how an address is *shown*.  Biff dropped
+    the ``@`` sigil (biff-5gb): the canonical form carries no prefix.  The
+    input parser (:func:`parse_address`) still tolerates one leading ``@``
+    for muscle memory, but everything biff renders is bare.
+    """
+    return f"{user}:{tty}" if tty else user
 
 
 def is_notification_for_session(data: dict[str, str], session_key: str) -> bool:
@@ -177,12 +215,16 @@ async def rename_tty(
 
 
 def parse_address(address: str) -> tuple[str, str | None]:
-    """Parse a ``@user`` or ``@user:tty`` address string.
+    """Parse a ``user`` or ``user:tty`` address string.
 
     Returns ``(user, tty)`` where *tty* is ``None`` when not specified.
-    Strips leading ``@`` and surrounding whitespace.
+    The canonical form is bare (biff-5gb); a single leading ``@`` is
+    tolerated and stripped for muscle memory.  Exactly one ``@`` is
+    removed — ``@@user`` keeps a literal ``@user`` so a malformed address
+    is not silently normalized into a valid one.  Surrounding whitespace
+    is stripped.
     """
-    bare = address.strip().lstrip("@")
+    bare = address.strip().removeprefix("@")
     if ":" in bare:
         user, tty = bare.split(":", maxsplit=1)
         user = user.strip()

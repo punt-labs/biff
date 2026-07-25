@@ -281,7 +281,7 @@ class TestTalkDescriptionAcceptHint:
 
         desc = _talk_description(talk)
 
-        assert "talk @jfreeman:tty6" in desc
+        assert "talk jfreeman:tty6" in desc
         assert "75abc665" not in desc
 
 
@@ -356,8 +356,8 @@ class TestTalkDescriptionConnectedHint:
 
         desc = _talk_description(talk)
 
-        assert "talk @jfreeman:tty6" in desc
-        assert "talk @jfreeman <" not in desc
+        assert "talk jfreeman:tty6" in desc
+        assert "talk jfreeman <" not in desc
 
     def test_connected_hint_falls_back_to_bare_without_tty(
         self, tmp_path: Path
@@ -371,7 +371,7 @@ class TestTalkDescriptionConnectedHint:
 
         desc = _talk_description(talk)
 
-        assert "talk @jfreeman <message>" in desc
+        assert "talk jfreeman <message>" in desc
 
 
 class TestPollInbox:

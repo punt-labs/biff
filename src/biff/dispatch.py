@@ -2,7 +2,7 @@
 
 Parses a command line string into a command function call::
 
-    result = await dispatch("write @kai 'ready for review'", ctx)
+    result = await dispatch("write kai 'ready for review'", ctx)
     print(result.text)
 
 Uses :mod:`shlex` for shell-style argument splitting so quoted
@@ -33,13 +33,13 @@ async def _who(ctx: CliContext, args: list[str]) -> CommandResult:
 
 async def _finger(ctx: CliContext, args: list[str]) -> CommandResult:
     if len(args) != 1:
-        return CommandResult(text="Usage: finger @user", error=True)
+        return CommandResult(text="Usage: finger user", error=True)
     return await commands.finger(ctx, args[0])
 
 
 async def _write(ctx: CliContext, args: list[str]) -> CommandResult:
     if len(args) < 2:
-        return CommandResult(text="Usage: write @user message", error=True)
+        return CommandResult(text="Usage: write user message", error=True)
     to = args[0]
     message = " ".join(args[1:])
     return await commands.write(ctx, to, message)
@@ -69,17 +69,17 @@ async def _last(ctx: CliContext, args: list[str]) -> CommandResult:
         arg = args[i]
         if arg == "--count":
             if i + 1 >= len(args):
-                return CommandResult(text="Usage: last [--count N] [@user]", error=True)
+                return CommandResult(text="Usage: last [--count N] [user]", error=True)
             try:
                 count = int(args[i + 1])
             except ValueError:
                 return CommandResult(text="--count must be a number", error=True)
             i += 2
         elif arg.startswith("-"):
-            return CommandResult(text="Usage: last [--count N] [@user]", error=True)
+            return CommandResult(text="Usage: last [--count N] [user]", error=True)
         else:
             if seen_user:
-                return CommandResult(text="Usage: last [--count N] [@user]", error=True)
+                return CommandResult(text="Usage: last [--count N] [user]", error=True)
             user = arg
             seen_user = True
             i += 1

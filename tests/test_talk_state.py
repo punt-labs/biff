@@ -800,8 +800,9 @@ class TestHintNamesSession:
         st.drain_for_agent()
         for invite in st.pending_invites.values():
             assert ":" in invite.session_key
-            assert invite.accept_command.startswith("talk @")
-            assert invite.accept_command != f"talk @{invite.user}"
+            assert invite.accept_command.startswith("talk ")
+            assert ":" in invite.accept_command.removeprefix("talk ")
+            assert invite.accept_command != f"talk {invite.user}"
 
 
 # ---------------------------------------------------------------------------

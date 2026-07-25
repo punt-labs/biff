@@ -8,11 +8,13 @@ from biff.relay import LocalRelay
 from biff.tty import (
     build_session_key,
     claim_tty_name,
+    format_address,
     generate_tty,
     is_notification_for_session,
     next_tty_name,
     parse_address,
     rename_tty,
+    validate_routing_id,
     validate_tty_name,
 )
 
@@ -65,6 +67,73 @@ class TestParseAddress:
     def test_multiple_colons_keeps_rest_in_tty(self) -> None:
         """Colons after the first are part of the TTY — rejected by relay validation."""
         assert parse_address("kai:tty1:extra") == ("kai", "tty1:extra")
+
+    def test_strips_exactly_one_at(self) -> None:
+        """A single leading ``@`` is tolerated; a second is kept literally.
+
+        ``lstrip('@')`` stripped *all* leading ``@`` — ``@@kai`` became a
+        valid ``kai``.  ``removeprefix`` strips exactly one, so a malformed
+        ``@@kai`` stays malformed (``@kai``) instead of being silently
+        normalized into a valid address (biff-5gb).
+        """
+        assert parse_address("@@kai") == ("@kai", None)
+
+    def test_strips_one_at_on_targeted(self) -> None:
+        assert parse_address("@@kai:tty1") == ("@kai", "tty1")
+
+    def test_bare_is_canonical(self) -> None:
+        """Bare ``user:tty`` (no sigil) is the canonical input form."""
+        assert parse_address("kai:tty1") == ("kai", "tty1")
+
+
+class TestFormatAddress:
+    """Canonical address rendering is bare — no ``@`` sigil (biff-5gb)."""
+
+    def test_user_and_tty(self) -> None:
+        assert format_address("kai", "tty1") == "kai:tty1"
+
+    def test_bare_user(self) -> None:
+        assert format_address("kai") == "kai"
+
+    def test_none_tty_is_bare_user(self) -> None:
+        assert format_address("kai", None) == "kai"
+
+    def test_no_at_sigil(self) -> None:
+        assert not format_address("kai", "tty1").startswith("@")
+
+    def test_round_trips_through_parse(self) -> None:
+        """Formatting then parsing recovers the original address."""
+        assert parse_address(format_address("kai", "tty1")) == ("kai", "tty1")
+        assert parse_address(format_address("kai")) == ("kai", None)
+
+
+class TestValidateRoutingId:
+    """Routing-token validator admits the session_id (UUID) shape."""
+
+    def test_accepts_uuid(self) -> None:
+        assert validate_routing_id("2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b") is None
+
+    def test_accepts_hex_fallback(self) -> None:
+        assert validate_routing_id("a1b2c3d4") is None
+
+    def test_accepts_derived_hex(self) -> None:
+        assert validate_routing_id("0123456789abcdef") is None
+
+    def test_rejects_dots(self) -> None:
+        """Dots would split a single NATS subject token."""
+        assert validate_routing_id("a.b") is not None
+
+    def test_rejects_non_hex_letters(self) -> None:
+        assert validate_routing_id("tty1") is not None
+
+    def test_rejects_empty(self) -> None:
+        assert validate_routing_id("") is not None
+
+    def test_rejects_over_64(self) -> None:
+        assert validate_routing_id("a" * 65) is not None
+
+    def test_rejects_escape(self) -> None:
+        assert validate_routing_id("\033[31m") is not None
 
 
 class TestIsNotificationForSession:

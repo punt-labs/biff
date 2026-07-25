@@ -1,7 +1,7 @@
 """Async messaging tools — ``write`` and ``read_messages``.
 
 ``write`` delivers a message to another user's inbox, like BSD ``write(1)``.
-Supports ``@user`` (broadcast to all sessions) and ``@user:tty`` (targeted).
+Supports ``user`` (broadcast to all sessions) and ``user:tty`` (targeted).
 ``read_messages`` retrieves all unread messages for this session and marks
 them read.
 """
@@ -31,9 +31,9 @@ async def _resolve_recipient(
 ) -> tuple[str, str, str | None]:
     """Resolve an address to ``(relay_key, display_name, target_repo)``.
 
-    For targeted addresses (``@user:tty``), searches sessions across all
+    For targeted addresses (``user:tty``), searches sessions across all
     visible repos.  When the resolved session is in a different repo,
-    *target_repo* is set for cross-repo delivery.  Bare ``@user``
+    *target_repo* is set for cross-repo delivery.  Bare ``user``
     addresses stay repo-local (``target_repo=None``).
     """
     user, tty = parse_address(to)
@@ -123,8 +123,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def write(to: str, message: str) -> str:
         """Send a message to another user's inbox, like BSD ``write(1)``.
 
-        ``@user`` broadcasts to all sessions of that user.
-        ``@user:tty`` targets a specific session.
+        ``user`` broadcasts to all sessions of that user.
+        ``user:tty`` targets a specific session.
         """
         await update_current_session(state)
         try:

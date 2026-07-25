@@ -676,7 +676,7 @@ def handle_session_start() -> str:
             f"\u26a0 {n} other session(s) active in this worktree ({keys}). "
             "Run /who to check what others are working on before claiming work. "
             "Set /plan before beginning to avoid duplicate effort. "
-            "Consider /write @other to negotiate file ownership, "
+            "Consider /write to negotiate file ownership, "
             "or use a git worktree for isolation."
         )
 

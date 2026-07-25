@@ -46,7 +46,7 @@ class NotifyState:
             from_user = terminal_safe(wall.from_user) if wall else ""
             wall_text = terminal_safe(wall.text) if wall else ""
             lines.append(
-                f"  \033[1;31m📢 WALL @{from_user}: {wall_text} ({remaining})\033[0m"
+                f"  \033[1;31m📢 WALL {from_user}: {wall_text} ({remaining})\033[0m"
             )
         elif not wall_key and self.last_wall_key:
             lines.append("  \033[2m📢 Wall cleared\033[0m")

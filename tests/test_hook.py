@@ -1102,7 +1102,7 @@ class TestDetectCollisions:
         assert "kai:abc" in result
         assert "/who" in result
         assert "/plan" in result
-        assert "/write @other" in result
+        assert "/write" in result
         assert "worktree" in result
 
     def test_session_start_no_collision_no_advisory(self, tmp_path: Path) -> None:
