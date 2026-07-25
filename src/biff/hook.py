@@ -144,16 +144,23 @@ def _parse_tool_response(raw: object) -> dict[str, object]:
 # ── Handlers (pure functions, testable without I/O) ──────────────────
 
 
-def _pre_tool_use_suggest(reason: str) -> dict[str, object]:
-    """Build PreToolUse hook output that nudges without prompting.
+def _pre_tool_use_deny(reason: str) -> dict[str, object]:
+    """Build a PreToolUse hard-deny response carrying *reason*.
 
-    Uses ``additionalContext`` instead of ``permissionDecision: ask``
-    so the suggestion reaches the model without triggering a user-facing
-    permission prompt.  ``ask`` was the original choice (biff-nxtb) but
-    it hijacks the permission system and overrides ``acceptEdits`` mode,
-    causing every Edit/Write to prompt the user (punt-kit DES-017).
+    ``permissionDecision: "deny"`` blocks the Edit/Write outright and
+    feeds *reason* back to the model via ``permissionDecisionReason``
+    (DES-026) — the field name Claude Code actually reads.  Unlike
+    ``ask`` (DES-031) a deny never raises a user-facing permission
+    prompt; the block is silent to the operator and the model
+    self-corrects by following the instructions in *reason*.
     """
-    return _hook_context("PreToolUse", reason)
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
 
 
 def _has_active_session() -> bool:
@@ -167,13 +174,25 @@ def _has_active_session() -> bool:
 
 
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  # noqa: ARG001
-    """Gate Edit/Write on plan-set AND bead-claimed.
+    """Hard-gate Edit/Write on plan-set AND bead-claimed.
 
-    Returns a deny response if either condition is missing, or ``None``
-    to allow (exit 0, no output).
+    Returns a ``permissionDecision: "deny"`` response that blocks the
+    edit when either prerequisite is missing, or ``None`` to allow
+    (exit 0, no output).  The deny reason instructs the agent how to
+    unblock — set a plan, claim a bead — so the gate *drives* the
+    workflow rather than merely whispering a reminder.
 
-    The Z spec proves no path reaches file editing without both
-    conditions met (161K states, 789K transitions verified).
+    This conforms the code to the ``claude-code-biff.tex`` Z model:
+    ``PreToolHookAllow`` is enabled for edit tools only when
+    ``planSet = ztrue`` and ``beadClaimed`` is non-empty; every other
+    state reaches file editing only through ``PreToolHookDeny``
+    (proven across 161K states, 789K transitions).
+
+    Two states allow gracefully rather than deny, because a hard block
+    there would strand the agent: no active biff session (the gate has
+    no session state to reason about), and plan-set with ``bd``
+    unavailable (the plan — the primary driver — is present; the tracker
+    simply cannot be queried).
     """
     if not _has_active_session():
         return None
@@ -186,32 +205,28 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
 
     if not plan_set and bead_status != "yes":
         if bead_status == "unavailable":
-            return _pre_tool_use_suggest(
-                "Reminder: /plan not set. "
-                "Run /plan <what you're working on>. "
-                "Bead status could not be checked (bd unavailable). "
-                "Address at your next natural pause."
+            return _pre_tool_use_deny(
+                "Blocked: editing files requires a plan. "
+                "Run /plan <what you're working on>, then retry the edit. "
+                "Bead status could not be checked (bd unavailable)."
             )
-        return _pre_tool_use_suggest(
-            "Reminder: /plan not set and no bead claimed. "
-            "Run /plan <what you're working on> and "
-            "bd update <bead-id> --status=in_progress "
-            "at your next natural pause."
+        return _pre_tool_use_deny(
+            "Blocked: editing files requires a plan and a claimed bead. "
+            "Run /plan <what you're working on> and claim a bead with "
+            "bd update <bead-id> --status=in_progress, then retry the edit."
         )
     if not plan_set:
-        return _pre_tool_use_suggest(
-            "Reminder: /plan not set. "
-            "Run /plan <what you're working on> "
-            "at your next natural pause."
+        return _pre_tool_use_deny(
+            "Blocked: editing files requires a plan. "
+            "Run /plan <what you're working on>, then retry the edit."
         )
     if bead_status == "unavailable":
         # Plan is set but bd is unavailable — allow gracefully.
         return None
     if bead_status == "no":
-        return _pre_tool_use_suggest(
-            "Reminder: no bead claimed. "
-            "Run bd update <bead-id> --status=in_progress "
-            "at your next natural pause."
+        return _pre_tool_use_deny(
+            "Blocked: editing files requires a claimed bead. "
+            "Run bd update <bead-id> --status=in_progress, then retry the edit."
         )
     return None
 

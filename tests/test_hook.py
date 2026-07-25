@@ -1189,14 +1189,23 @@ def _gate_mocks(*, plan: bool, bead: bool | str):
     )
 
 
-def _suggest_reason(result: dict[str, object]) -> str:
-    """Extract the suggestion string from a PreToolUse hook response."""
+def _deny_reason(result: dict[str, object]) -> str:
+    """Extract the deny reason from a PreToolUse hard-gate response.
+
+    The gate is a hard deny (DES-035): ``permissionDecision`` must be
+    ``"deny"`` and the actionable instructions travel in
+    ``permissionDecisionReason`` (DES-026), never a non-blocking
+    ``additionalContext`` nudge.
+    """
     output = cast("dict[str, object]", result["hookSpecificOutput"])
     assert output["hookEventName"] == "PreToolUse"
-    assert "permissionDecision" not in output, (
-        "PreToolUse gate should use additionalContext, not permissionDecision"
+    assert output["permissionDecision"] == "deny", (
+        "PreToolUse gate must hard-deny, not nudge via additionalContext"
     )
-    return str(output["additionalContext"])
+    assert "additionalContext" not in output, (
+        "deny response carries its reason in permissionDecisionReason"
+    )
+    return str(output["permissionDecisionReason"])
 
 
 class TestHasActiveSession:
@@ -1228,24 +1237,30 @@ class TestHasActiveSession:
         assert result is None
 
     def test_pre_tool_use_still_gates_with_active_session(self) -> None:
-        """handle_pre_tool_use fires warning when server IS running and plan not set."""
+        """handle_pre_tool_use hard-denies when server IS running and plan not set."""
         m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "/plan" in reason
 
 
 class TestHandlePreToolUse:
-    """PreToolUse gate: deny Edit/Write without plan + bead."""
+    """PreToolUse gate: hard-deny Edit/Write without plan + bead.
+
+    Conforms to the ``claude-code-biff.tex`` Z model: ``PreToolHookAllow``
+    is enabled for edit tools only when ``planSet = ztrue`` and
+    ``beadClaimed`` is non-empty; otherwise only ``PreToolHookDeny``
+    (``pdDeny``) is reachable.
+    """
 
     def test_both_missing_denies_with_both_instructions(self) -> None:
         m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "/plan" in reason
         assert "bd update" in reason
 
@@ -1254,7 +1269,7 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "/plan" in reason
         assert "bd update" not in reason
 
@@ -1263,7 +1278,7 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "bd update" in reason
         assert "/plan" not in reason
 
@@ -1278,7 +1293,7 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is not None
-        reason = _suggest_reason(result)
+        reason = _deny_reason(result)
         assert "unavailable" in reason
         assert "/plan" in reason
 
