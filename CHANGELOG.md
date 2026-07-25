@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.11.3] - 2026-07-25
+
 ### Changed
 
 - **Addresses are bare `user:ttyN` — the `@` sigil is dropped (biff-5gb).** The canonical biff address is now `user:ttyN` (and bare `user`), rendered everywhere without a leading `@`: `/who`, `/finger`, `/last`, talk invite/connected hints, the wall attribution line, and every usage/error string. The input parser still tolerates a single leading `@` for muscle memory, but strips exactly one (via `removeprefix`, not `lstrip`), so `@@user` stays malformed rather than silently normalizing to a valid address. A single `tty.format_address` formatter is the one source of truth for how an address renders. Validation splits into `validate_tty_name` (the tight display-alias allowlist, `[A-Za-z0-9_-]{1,20}`, keeping the terminal-escape guard) and `validate_routing_id` (the routing token, `[0-9a-fA-F-]{1,64}`, admitting the session_id UUID shape).

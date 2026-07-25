@@ -1,0 +1,2 @@
+{"ts":"2026-07-25T04:56:37.800004Z","event":"create","actor":"claude","details":{"evaluator":"jra","ticket":"biff-7ak","worker":"jms"}}
+{"ts":"2026-07-25T06:02:47.328975Z","event":"close","actor":"claude","details":{"round":1,"status":"closed","verdict":"escalate"}}
