@@ -594,3 +594,12 @@ class TestSessionTtyHint:
         await relay.reserve_tty_name("kai", "tty1", "kai:sid-abc")
         await relay.set_session_tty_hint("kai", "sid-abc", "tty1")
         assert await relay.list_reserved_names("kai") == ["tty1"]
+
+    async def test_set_rejects_malformed_name(self, relay: LocalRelay) -> None:
+        """A poisoned name is refused at write time (defense in depth)."""
+        with pytest.raises(ValueError, match="Invalid tty name"):
+            await relay.set_session_tty_hint("kai", "sid-abc", "evil.name")
+
+    async def test_set_rejects_sid_namespace_name(self, relay: LocalRelay) -> None:
+        with pytest.raises(ValueError, match="namespace"):
+            await relay.set_session_tty_hint("kai", "sid-abc", "sid")

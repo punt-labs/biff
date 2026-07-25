@@ -36,7 +36,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.session_id import SessionHint
-from biff.tty import build_session_key, claim_tty_name
+from biff.tty import build_session_key, claim_tty_name, validate_reclaimable_name
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +125,20 @@ async def register_session(
     # The routing token (tty_hex) is the session_id under identity routing.
     from_hint = False
     if preferred_name is None:
-        preferred_name = await relay.get_session_tty_hint(user, tty_hex)
-        from_hint = preferred_name is not None
+        # The reclaim hint value is team-writable and flows into a KV key /
+        # NATS subject via claim_tty_name — validate at this trust boundary.
+        # A malformed or namespace-colliding value is ignored (fall back to a
+        # fresh alias), never fed to claim_tty_name.
+        candidate = await relay.get_session_tty_hint(user, tty_hex)
+        if candidate is not None and validate_reclaimable_name(candidate) is None:
+            preferred_name = candidate
+            from_hint = True
+        elif candidate is not None:
+            logger.warning(
+                "ignoring malformed reclaim hint %r for %s; using a fresh alias",
+                candidate,
+                user,
+            )
     try:
         tty_name = await claim_tty_name(
             relay, user, session_key, preferred=preferred_name

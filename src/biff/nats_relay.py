@@ -61,7 +61,7 @@ from biff.models import (
     WallPost,
 )
 from biff.relay import SESSION_TTL_SECONDS
-from biff.tty import build_session_key
+from biff.tty import SID_HINT_NAMESPACE, build_session_key, validate_reclaimable_name
 
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
@@ -123,10 +123,6 @@ _DEFAULT_STREAM_PREFIX = "biff"
 # Name reservations live in a separate ``biff-names`` bucket, so "name"
 # does not belong here — it would silently block a user named "name".
 RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
-
-# Names-KV discriminator for session_id->tty reclaim hints (biff-7ak).
-# Keys are {user}.sid.{session_id}; kept out of the tty-name enumeration.
-_SID_HINT_NAMESPACE = "sid"
 
 
 async def safe_close(nc: NatsClient) -> None:
@@ -1730,7 +1726,7 @@ class NatsRelay:
                 name = parts[1]
                 # Skip the session_id->tty reclaim namespace (biff-7ak):
                 # {user}.sid.{session_id} is a hint, not a reserved tty name.
-                if name.startswith(f"{_SID_HINT_NAMESPACE}."):
+                if name.startswith(f"{SID_HINT_NAMESPACE}."):
                     continue
                 names.append(name)
         return names
@@ -1738,7 +1734,7 @@ class NatsRelay:
     def _sid_hint_key(self, user: str, session_id: str) -> str:
         """Names-KV key for a session_id reclaim hint: ``{user}.sid.{sid}``."""
         self._validate_user(user)
-        return f"{user}.{_SID_HINT_NAMESPACE}.{session_id}"
+        return f"{user}.{SID_HINT_NAMESPACE}.{session_id}"
 
     async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
         """Return the last tty_name this session_id claimed, or ``None``.
@@ -1755,7 +1751,15 @@ class NatsRelay:
             return None
 
     async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
-        """Record the tty_name this session_id claimed (upsert)."""
+        """Record the tty_name this session_id claimed (upsert).
+
+        Validate the name before writing (defense in depth): the value is
+        read back as a reclaim candidate and reserved as a KV key, so a
+        malformed or namespace-colliding name must never be persisted.
+        """
+        error = validate_reclaimable_name(name)
+        if error is not None:
+            raise ValueError(error)
         names_kv = await self._ensure_names_kv()
         await names_kv.put(self._sid_hint_key(user, session_id), name.encode())
 

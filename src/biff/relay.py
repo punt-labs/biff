@@ -41,7 +41,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
-from biff.tty import build_session_key
+from biff.tty import build_session_key, validate_reclaimable_name
 
 logger = logging.getLogger(__name__)
 
@@ -673,7 +673,14 @@ class LocalRelay:
             return None
 
     async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
-        """Record the tty_name this session_id claimed (overwrites)."""
+        """Record the tty_name this session_id claimed (overwrites).
+
+        Validate the name before writing (defense in depth) — the value is
+        read back as a reclaim candidate and reserved as a KV key.
+        """
+        error = validate_reclaimable_name(name)
+        if error is not None:
+            raise ValueError(error)
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._sid_hint_path(user, session_id).write_text(name)
 

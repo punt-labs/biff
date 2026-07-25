@@ -660,6 +660,31 @@ class TestResumeReclaim:
         assert name != "tty1"
         assert name == "tty2"
 
+    async def test_poisoned_reclaim_hint_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A team-writable hint with an unsafe value never reaches claim.
+
+        The value flows into a KV key / NATS subject via claim_tty_name, so a
+        dotted / namespace-colliding value is validated at the trust boundary
+        and the resume falls back to a fresh lowest-free alias — never the
+        poisoned name (biff-7ak security review P2).
+        """
+        from biff.server.app import register_session
+
+        relay = LocalRelay(data_dir=tmp_path)
+        sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+
+        async def _poison(_user: str, _session_id: str) -> str:
+            return "evil.name"  # dotted — would inject a subject/KV segment
+
+        monkeypatch.setattr(relay, "get_session_tty_hint", _poison)
+
+        _, name = await register_session(relay, "kai", sid, **self._KW)
+
+        assert name == "tty1", "poisoned hint must be ignored, not reclaimed"
+        assert "evil.name" not in await relay.list_reserved_names("kai")
+
     async def test_reclaim_success_is_logged(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

@@ -23,6 +23,12 @@ _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
 _TTY_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 _ROUTING_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
+# Names-KV discriminator for session_id->tty reclaim hints (biff-7ak).
+# Reservation keys are {user}.{name}; the reclaim mapping is
+# {user}.sid.{session_id}.  A reclaimed display name must never fall in this
+# namespace, or it would collide with a hint key.
+SID_HINT_NAMESPACE = "sid"
+
 
 def validate_tty_name(name: str) -> str | None:
     """Validate a display tty name against the safe character allowlist.
@@ -63,6 +69,27 @@ def validate_routing_id(routing_id: str) -> str | None:
         return (
             f"Invalid routing id {routing_id!r}: "
             "only hex digits and hyphens are allowed (max 64 chars)."
+        )
+    return None
+
+
+def validate_reclaimable_name(name: str) -> str | None:
+    """Validate a tty name read from the team-writable reclaim hint.
+
+    Returns ``None`` when the name is safe to reserve, else an error message.
+    The reclaim hint (the ``{user}.sid.{session_id}`` mapping value) is
+    written by any team member, yet it flows into ``claim_tty_name`` and then
+    into ``{user}.{name}`` KV keys and NATS subjects.  A poisoned value must
+    not reach that path: it must pass the tight display-alias allowlist AND
+    must not land in the reclaim-hint namespace (which would collide with a
+    real hint key).
+    """
+    error = validate_tty_name(name)
+    if error is not None:
+        return error
+    if name == SID_HINT_NAMESPACE or name.startswith(f"{SID_HINT_NAMESPACE}."):
+        return (
+            f"reclaim name {name!r} collides with the {SID_HINT_NAMESPACE!r} namespace"
         )
     return None
 

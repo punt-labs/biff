@@ -14,6 +14,7 @@ from biff.tty import (
     next_tty_name,
     parse_address,
     rename_tty,
+    validate_reclaimable_name,
     validate_routing_id,
     validate_tty_name,
 )
@@ -134,6 +135,38 @@ class TestValidateRoutingId:
 
     def test_rejects_escape(self) -> None:
         assert validate_routing_id("\033[31m") is not None
+
+
+class TestValidateReclaimableName:
+    """The team-writable reclaim hint value must pass a tight guard (biff-7ak)."""
+
+    def test_accepts_ttyn(self) -> None:
+        assert validate_reclaimable_name("tty16") is None
+
+    def test_accepts_human_alias(self) -> None:
+        assert validate_reclaimable_name("deploy") is None
+
+    def test_rejects_dotted(self) -> None:
+        """A dotted value could inject a NATS subject / KV key segment."""
+        assert validate_reclaimable_name("evil.name") is not None
+
+    def test_rejects_sid_namespace_exact(self) -> None:
+        assert validate_reclaimable_name("sid") is not None
+
+    def test_rejects_sid_namespace_prefix(self) -> None:
+        assert validate_reclaimable_name("sid.deadbeef") is not None
+
+    def test_rejects_wildcard(self) -> None:
+        assert validate_reclaimable_name("tty*") is not None
+
+    def test_rejects_escape(self) -> None:
+        assert validate_reclaimable_name("\033[31m") is not None
+
+    def test_rejects_too_long(self) -> None:
+        assert validate_reclaimable_name("a" * 21) is not None
+
+    def test_rejects_empty(self) -> None:
+        assert validate_reclaimable_name("") is not None
 
 
 class TestIsNotificationForSession:
