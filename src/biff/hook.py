@@ -819,11 +819,24 @@ def handle_session_end() -> int:
 
 @_cc_app.command("pre-tool-use")
 def cc_pre_tool_use() -> None:
-    """PreToolUse Edit|Write — gate on plan-set AND bead-claimed."""
+    """PreToolUse Edit|Write — gate on plan-set AND bead-claimed.
+
+    Fails *closed*: if the gate cannot evaluate its condition (an
+    unexpected error reading the markers), it denies rather than lets
+    the edit through.  A hard control that silently grants access on
+    error is the same bug as no control at all (DES-051).
+    """
     if not _is_biff_enabled():
         return
     data = _read_hook_input()
-    result = handle_pre_tool_use(data)
+    try:
+        result = handle_pre_tool_use(data)
+    except Exception:  # noqa: BLE001 — hook boundary (PY-EH-6): a gate that cannot evaluate must fail closed
+        logger.warning("Plan/bead gate evaluation failed; denying", exc_info=True)
+        result = _pre_tool_use_deny(
+            "Blocked: could not verify plan/bead state. Set /plan and claim a bead "
+            "(bd update <bead-id> --status=in_progress), then retry."
+        )
     if result is not None:
         _emit(result)
 

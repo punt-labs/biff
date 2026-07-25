@@ -5453,6 +5453,13 @@ would strand the agent with no way forward:
    whenever `bd` is down. Plan-missing still denies regardless of `bd`, since a
    missing plan is unambiguous without consulting the tracker.
 
+These two are *deliberate* allows on a known condition. The error path is the
+opposite: `cc_pre_tool_use` wraps `handle_pre_tool_use` in an authorized
+boundary broad-except (PY-EH-6) and **fails closed** — if the gate cannot
+evaluate its condition (an unexpected error reading the markers), it denies. A
+hard control that silently grants access on error is the same bug as no control
+at all.
+
 ### Model ⇄ code reconciliation
 
 The model was the authority and was already correct; only the code had regressed.

@@ -18,6 +18,7 @@ from biff.hook import (
     _expand_branch_plan,
     _has_active_session,
     _read_hook_input,
+    cc_pre_tool_use,
     check_plan_hint,
     check_wall_hint,
     handle_post_bash,
@@ -1303,6 +1304,31 @@ class TestHandlePreToolUse:
         with m_active, m_wt, m_plan, m_bead:
             result = handle_pre_tool_use({})
         assert result is None
+
+
+class TestPreToolUseFailsClosed:
+    """The gate entrypoint denies when it cannot evaluate its condition.
+
+    A hard control that silently grants access on an unexpected error is
+    the same bug as no control at all (DES-051). If reading the markers
+    raises, ``cc_pre_tool_use`` must emit a deny, not let the edit through.
+    """
+
+    def test_marker_read_error_emits_deny(self) -> None:
+        emitted: list[dict[str, object]] = []
+        with (
+            patch("biff.hook._is_biff_enabled", return_value=True),
+            patch("biff.hook._read_hook_input", return_value={}),
+            patch("biff.hook._has_active_session", return_value=True),
+            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+            patch("biff.markers.has_plan_marker", side_effect=OSError("boom")),
+            patch("biff.hook._emit", side_effect=emitted.append),
+        ):
+            cc_pre_tool_use()
+        assert len(emitted) == 1
+        reason = _deny_reason(emitted[0])
+        assert "/plan" in reason
+        assert "bd update" in reason
 
 
 # ── Z spec invariant coverage (biff-g9b) ─────────────────────────────
