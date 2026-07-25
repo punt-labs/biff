@@ -40,6 +40,6 @@ saw it.
 
 ## Output
 
-All biff tool output is pre-formatted plain text aligned with unicode
+All biff tool output is pre-formatted plain text aligned with Unicode
 characters. Emit it **verbatim** — never reformat, never convert to markdown
 tables, never wrap in code fences or boxes.
