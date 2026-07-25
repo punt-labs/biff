@@ -496,3 +496,36 @@ Claude Code resolves commands from two paths: per-plugin (`plugins/<name>/comman
 ### Doctor
 
 `_check_user_commands()` is informational (`required=False`). Missing user commands are not a hard failure — the namespaced plugin commands still work.
+
+## INS-010: User-Scope Agent Guide — Bare `@`-Import, Not a Managed Section
+
+**Date:** 2026-07-25
+**Status:** SETTLED
+**Topic:** How biff's agent-facing guidance reaches every session, per punt-kit `tool-enable-disable.md` §2.4–2.6 (biff-qmd)
+**Related:** INS-009 (user commands), the `tool-enable-disable.md` + `integration.md` standards
+
+### Design
+
+Biff is a global tool: its guidance is universal, so `install` registers it once at user scope rather than per repo. `install` does two things beyond the marketplace plugin:
+
+1. **Deposit the guide.** Write the bundled `src/biff/data/user-claude.md` (agent-facing: how to *drive* biff — slash commands, the passive/pull receive model, poll cadence, verbatim-output rule) to `~/.punt-labs/biff/CLAUDE.md`, overwriting wholesale (§2.2 vendored zone). This is the same `importlib.resources` deposit pattern as the CI workflow template.
+2. **Register the import.** Add the single bare line `@~/.punt-labs/biff/CLAUDE.md` to `~/.claude/CLAUDE.md`. Claude Code resolves the `@`-import at read time, so the guide loads in every session with no per-repo edit.
+
+`uninstall` prunes the import line and leaves the deposited guide dormant (§2.9 — removal is deliberate, never a toggle side effect). `doctor` reports whether the import is registered (informational).
+
+### Why a Bare Line, Not a Managed Section
+
+The user's `CLAUDE.md` is user-owned prose (§2.1). The only mutation biff makes is adding or removing one `@`-import line pointing at a file biff owns entirely — no marker block, no managed section, no merge algorithm. vox's `GlobalClaudeImports` still carries a marker-delimited managed section; §2.1/§2.11 retire that model, so biff ports only the **write correctness** (`ClaudeMdImport`, from vox's `AtomicFile`), not the markers.
+
+### The §2.4 Write Contract
+
+`ClaudeMdImport` (`src/biff/claude_md.py`) implements the load-bearing details so all 15 punt CLIs produce byte-identical results:
+
+- **Exclusive lock.** `flock` on a sibling lock file for the whole read-modify-write — two parallel `install` runs cannot lose an update to a last-writer-wins race.
+- **Atomic + byte-preserving.** Temp file in the target's directory, `fsync`, `os.replace`; read/write with `newline=""` so LF, CRLF, and lone-CR survive verbatim. The appended line uses the host file's own EOL.
+- **Symlink-resolving, mode-preserving.** A dotfile-managed symlink is followed to its real target; an existing file's mode is kept, a new file gets `0644`.
+- **Idempotent, terminator-insensitive.** Presence is decided net of the line's terminator, so a CRLF host never gets a duplicate. The scan is code-block-aware: a matching line inside a fenced (```` ``` ````/`~~~`) or indented block is inert markdown and is skipped for both append and removal.
+
+### Not in Scope Here
+
+The `.punt-labs/biff/enabled` presence marker (§2.7 + `integration.md` L0) is intentionally deferred: biff's enablement is a per-user, gitignored `config.local.yaml` decision, which conflicts with the standard's committed, repo-level marker model. Reconciling that (marker existence, committed-vs-gitignored, and whether the marker becomes the authoritative signal that `is_enabled()` and the hook gates read) changes the presence/trust contract and is ruled separately before it lands.

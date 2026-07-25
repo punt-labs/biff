@@ -9,6 +9,7 @@
   harnesses and plugin-blocked orgs. Missing `claude`/`git` auto-skips the
   plugin instead of aborting; the CLI still installs. Unknown flags exit 2 with
   usage. Per punt-kit `install-cli-only.md`.
+- **`biff install` registers a user-scope agent guide and imports it into `~/.claude/CLAUDE.md` (biff-qmd).** As a global tool, biff now conforms to punt-kit `tool-enable-disable.md` §2.5/§2.6: `install` deposits `~/.punt-labs/biff/CLAUDE.md` (a static agent-facing guide — how to drive biff: slash commands, the passive/pull receive model, poll cadence, verbatim output) and adds the single bare import line `@~/.punt-labs/biff/CLAUDE.md` to `~/.claude/CLAUDE.md`, so the guide loads in every session without a per-repo edit. The import write follows the §2.4 contract — exclusive `flock`, atomic temp-file+rename, byte-preserving of the user's existing content and line endings (LF/CRLF/lone-CR), symlink-resolving, mode-preserving — and matches idempotently net of the line terminator while skipping any occurrence inside a fenced or indented code block. `biff uninstall` removes the import line and leaves the deposited guide dormant (§2.9); `biff doctor` reports whether the import is registered.
 
 ## [1.11.3] - 2026-07-25
 
