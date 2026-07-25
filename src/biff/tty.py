@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 _TTY_SEQ_RE = re.compile(r"^tty(\d+)$")
 _TTY_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
-_ROUTING_ID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
+# Routing token: hex digits and hyphens, at least one hex digit (a bare
+# "----" is not a valid id), max 64 chars (a UUID is 36).
+_ROUTING_ID_RE = re.compile(r"^(?=.*[0-9a-fA-F])[0-9a-fA-F-]{1,64}$")
 
 # Names-KV discriminator for session_id->tty reclaim hints (biff-7ak).
 # Reservation keys are {user}.{name}; the reclaim mapping is
@@ -186,14 +188,21 @@ async def claim_tty_name(
         # still hold this alias in the exit->resume overlap — its reservation
         # has not released or TTL-expired yet.  Under identity routing the
         # reservation value is our session key ({user}:{session_id}, stable
-        # across resume), so the held alias is already ours; reclaim it in
-        # place and refresh its TTL.  DES-035 uniqueness holds: only a
-        # reservation owned by THIS session_key is taken over, never a
-        # different live session's.
+        # across resume), so the held alias is already ours; reclaim it.
+        # DES-035 uniqueness holds: only a reservation owned by THIS
+        # session_key is taken over, never a different live session's.
         owner = await relay.get_tty_reservation_owner(user, candidate)
         if owner == session_key:
+            # Guarantee we actually hold it before returning: refresh is a
+            # no-op if the reservation vanished (release/TTL) between the
+            # owner check and here (TOCTOU), so re-acquire atomically when it
+            # is gone.  If another session grabbed it in the window the
+            # atomic create fails and we fall through to the error.
             await relay.refresh_tty_reservation(user, candidate, session_key)
-            return candidate
+            if await relay.get_tty_reservation_owner(user, candidate) == session_key:
+                return candidate
+            if await relay.reserve_tty_name(user, candidate, session_key):
+                return candidate
         msg = f"name {candidate!r} already in use"
         raise ValueError(msg)
 

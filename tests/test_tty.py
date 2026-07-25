@@ -136,6 +136,13 @@ class TestValidateRoutingId:
     def test_rejects_escape(self) -> None:
         assert validate_routing_id("\033[31m") is not None
 
+    def test_rejects_all_hyphens(self) -> None:
+        """An id needs at least one hex digit — '----' is not a routing id."""
+        assert validate_routing_id("----") is not None
+
+    def test_rejects_single_hyphen(self) -> None:
+        assert validate_routing_id("-") is not None
+
 
 class TestValidateReclaimableName:
     """The team-writable reclaim hint value must pass a tight guard (biff-7ak)."""
@@ -277,6 +284,32 @@ class TestClaimTtyName:
         # Resume as the SAME session_key reclaims the SAME alias.
         name = await claim_tty_name(relay, "kai", session_key, preferred="tty16")
         assert name == "tty16"
+        assert await relay.get_tty_reservation_owner("kai", "tty16") == session_key
+
+    async def test_takeover_reacquires_when_reservation_vanishes(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TOCTOU: if the reservation vanishes mid-takeover, re-acquire it.
+
+        The owner check sees our key, but the reservation is released before
+        the refresh (a no-op then).  claim must re-reserve atomically so it
+        never returns an alias it does not actually hold (DES-035).
+        """
+        from pathlib import Path
+
+        relay = LocalRelay(Path(str(tmp_path)))
+        session_key = "kai:2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+        assert await relay.reserve_tty_name("kai", "tty16", session_key)
+
+        async def _vanish(user: str, name: str, _sk: str) -> None:
+            # Simulate the reservation being released in the TOCTOU window.
+            await relay.release_tty_name(user, name)
+
+        monkeypatch.setattr(relay, "refresh_tty_reservation", _vanish)
+
+        name = await claim_tty_name(relay, "kai", session_key, preferred="tty16")
+        assert name == "tty16"
+        # The alias is actually held — not returned unheld.
         assert await relay.get_tty_reservation_owner("kai", "tty16") == session_key
 
     async def test_fills_gaps(self, tmp_path: object) -> None:
