@@ -8,7 +8,7 @@
 
 ### Removed
 
-- **Auto-activation is gone — biff no longer turns itself on at first tool use (biff-qmd).** The `lazy_activate` / `auto_enable` path (which wrote enablement config and returned a restart prompt the first time any tool ran in a dormant repo) is removed. Enablement is explicit only, via the `enable`/`disable` verbs above. A tool call in a disabled repo is a harmless no-op against the dormant relay. The activity-tracking that `auto_enable` also performed (keeping the poller responsive) is preserved by a dedicated internal decorator.
+- **Auto-activation is gone — biff no longer turns itself on at first tool use (biff-qmd).** The `lazy_activate` / `auto_enable` path (which wrote enablement config and returned a restart prompt the first time any tool ran in a dormant repo) is removed. Enablement is explicit only, via the `enable`/`disable` verbs above. Calling a tool in a disabled repo now returns a concise, actionable notice — "biff is disabled in this repo. Run `biff enable` (or /biff enable), then restart Claude Code." — instead of a silent no-op, so the agent learns why nothing happened and how to fix it (the `enable`/`disable` and relay/poll-config tools stay usable while disabled so you can turn biff on). The activity-tracking that `auto_enable` also performed (keeping the poller responsive) is preserved by a dedicated internal decorator.
 
 ### Added
 

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from biff._stdlib import enabled_marker_path
 from biff.models import BiffConfig
 from biff.server.state import create_state
-from biff.server.tools._activity import track_activity
+from biff.server.tools._activity import _DISABLED_NOTICE, track_activity
 
 
 class TestTrackActivity:
@@ -37,8 +38,26 @@ class TestTrackActivity:
 
         assert await tool(message="hi") == "got hi"
 
-    async def test_runs_when_dormant(self, tmp_path: Path) -> None:
-        """A dormant server still runs the tool -- no auto-enable."""
+    async def test_dormant_returns_notice_without_running(
+        self, tmp_path: Path
+    ) -> None:
+        """A disabled repo returns the actionable notice, not the body."""
+        config = BiffConfig(user="kai", repo_name="test")
+        state = create_state(config, tmp_path, dormant=True, repo_root=tmp_path)
+        ran = False
+
+        @track_activity(state)
+        async def tool() -> str:
+            nonlocal ran
+            ran = True
+            return "ran"
+
+        result = await tool()
+        assert result == _DISABLED_NOTICE
+        assert ran is False
+
+    async def test_dormant_writes_no_marker(self, tmp_path: Path) -> None:
+        """The notice never enables biff -- no marker is written."""
         config = BiffConfig(user="kai", repo_name="test")
         state = create_state(config, tmp_path, dormant=True, repo_root=tmp_path)
 
@@ -46,4 +65,5 @@ class TestTrackActivity:
         async def tool() -> str:
             return "ran"
 
-        assert await tool() == "ran"
+        await tool()
+        assert not enabled_marker_path(tmp_path).exists()

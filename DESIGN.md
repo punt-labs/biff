@@ -5527,11 +5527,17 @@ remove the marker — never a `y|n` boolean:
 
 Auto-activation is **dropped**. `lazy_activate` / `auto_enable` are removed.
 Enablement is explicit only. A dormant server (marker absent) still registers
-its tools against the `DormantRelay`, so a call in a disabled repo is a harmless
-no-op; it no longer writes config or auto-enables. The activity-tracking side
-effect that `auto_enable` also carried (`ActivityTracker.touch()` on every tool
-call, keeping the poller out of napping) is preserved by a dedicated
-`track_activity` decorator with no enable logic.
+its tools; calling a decorated tool in a disabled repo returns a concise,
+actionable notice — "biff is disabled in this repo. Run `biff enable` (or
+`/biff enable`), then restart Claude Code." — instead of running the body or
+writing anything. A silent no-op there would be a silent failure and poor agent
+UX: the agent gets no signal that biff is off or how to turn it on. The notice
+is the response to one explicit tool call, emitted once per call, not on a loop.
+The `enable`/`disable`, relay, and poll-config tools are deliberately *not*
+guarded, so `/biff enable` can turn biff on while dormant. The activity-tracking
+side effect that `auto_enable` also carried (`ActivityTracker.touch()` on every
+tool call, keeping the poller out of napping) is preserved by the same
+`track_activity` decorator on the enabled path, with no enable logic.
 
 ### `mesg` is a separate layer — not enablement
 

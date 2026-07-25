@@ -1,4 +1,4 @@
-"""Activity tracking for tool calls.
+"""Activity tracking and the dormant-repo guard for tool calls.
 
 Every user-facing tool records a tool call on the shared
 :class:`~biff.server.activity.ActivityTracker` so the background poller
@@ -6,10 +6,16 @@ stays out of napping while the agent is actively using biff.
 
 This replaces the retired lazy-activation decorator: enablement is now
 explicit repo policy (the committed ``.punt-labs/biff/enabled`` marker),
-never auto-triggered on first tool use.  A dormant server registers its
-tools against a :class:`~biff.relay.DormantRelay`, so a call in a
-disabled repo is a harmless no-op -- it touches activity and returns
-whatever the dormant relay yields.
+never auto-triggered on first tool use.  When the server is dormant (the
+marker is absent), a decorated tool does NOT run its body and does NOT
+write anything -- it returns :data:`_DISABLED_NOTICE`, a concise,
+actionable line telling the agent how to turn biff on.  A silent no-op
+would be a silent failure; the notice is the response to one explicit
+tool call, so it is emitted once per call, not on a loop.
+
+The enable/disable, relay, and poll-config tools are deliberately NOT
+decorated with :func:`track_activity` -- they must work while dormant so
+``/biff enable`` can turn biff on in the first place.
 """
 
 from __future__ import annotations
@@ -23,6 +29,11 @@ if TYPE_CHECKING:
 
 _P = ParamSpec("_P")
 
+_DISABLED_NOTICE = (
+    "biff is disabled in this repo. Run `biff enable` (or /biff enable), "
+    "then restart Claude Code."
+)
+
 
 def track_activity(
     state: ServerState,
@@ -30,7 +41,12 @@ def track_activity(
     [Callable[_P, Awaitable[str]]],
     Callable[_P, Awaitable[str]],
 ]:
-    """Decorator: record a tool call on the activity tracker, then run.
+    """Decorator: guard on enablement, then record the call and run.
+
+    When *state* is dormant (biff disabled for this repo), the wrapped
+    tool returns :data:`_DISABLED_NOTICE` without running its body or
+    writing anything.  Otherwise it records the call on the activity
+    tracker and runs the body.
 
     Usage inside a ``register()`` function::
 
@@ -45,6 +61,8 @@ def track_activity(
     ) -> Callable[_P, Awaitable[str]]:
         @wraps(fn)
         async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> str:
+            if state.dormant:
+                return _DISABLED_NOTICE
             state.activity.touch()
             return await fn(*args, **kwargs)
 
