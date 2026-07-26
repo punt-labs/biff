@@ -47,8 +47,6 @@ from biff.config import (
     find_git_root,
     is_enabled,
     load_mcp_config,
-    remove_enabled_marker,
-    write_enabled_marker,
 )
 from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
@@ -1476,31 +1474,38 @@ def enable(
 ) -> None:
     """Enable biff in the current git repo.
 
-    Writes the committed marker ``.punt-labs/biff/enabled`` (repo
-    policy, tool-enable-disable.md §2.7), deploys git hooks and the CI
-    workflow.  Matches the MCP ``/biff enable`` toggle — no interactive
-    prompts.  Idempotent.  The marker is a tracked file: commit it via
+    Writes the two committed artifacts that constitute repo enablement
+    policy (DES-052): the marker ``.punt-labs/biff/enabled`` and the CI
+    notify workflow ``.github/workflows/biff-notify.yml``.  Equivalent
+    to the MCP ``/biff enable`` toggle — both write exactly this set and
+    nothing else.  Idempotent.  These are tracked files: commit them via
     a PR so every contributor participates.  This never runs git.
+
+    Per-clone git hooks are NOT written here — they live in ``.git/hooks``
+    (local, never committed) and are deployed by ``biff install``.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
-    write_enabled_marker(repo_root)
+    from biff.enablement import RepoEnablement
 
-    from biff.ci_workflow import deploy_ci_workflow
-    from biff.git_hooks import deploy_git_hooks
-
-    hooks = deploy_git_hooks(repo_root)
-    if hooks:
-        print(f"Git hooks: {', '.join(hooks)}")
-
-    if deploy_ci_workflow(repo_root):
+    change = RepoEnablement(repo_root).enable()
+    if change.ci_workflow_changed:
         print("CI workflow: .github/workflows/biff-notify.yml")
 
+    # Hint (not action): hooks are per-clone machinery. If this clone has none,
+    # point at `biff install` rather than deploying them from the policy toggle
+    # — that keeps `biff enable` and `/biff enable` equivalent (biff-j5u).
+    from biff.git_hooks import check_git_hooks
+
+    if check_git_hooks(repo_root):
+        print("Git hooks not deployed for this clone. Run `biff install` to add them.")
+
     print(
-        "biff enabled. Commit .punt-labs/biff/enabled and restart "
-        "Claude Code for changes to take effect."
+        "biff enabled. Commit .punt-labs/biff/enabled and "
+        ".github/workflows/biff-notify.yml, then restart Claude Code "
+        "for changes to take effect."
     )
 
 
@@ -1513,29 +1518,29 @@ def disable(
 ) -> None:
     """Disable biff in the current git repo.
 
-    Removes the committed marker ``.punt-labs/biff/enabled``, git hooks,
-    and CI workflow.  Idempotent.  Commit the removal via a PR for it to
-    take effect for every contributor.  This never runs git.
+    Removes the two committed enablement artifacts: the marker
+    ``.punt-labs/biff/enabled`` and ``.github/workflows/biff-notify.yml``.
+    Equivalent to the MCP ``/biff disable`` toggle.  Idempotent.  Commit
+    the removal via a PR for it to take effect for every contributor.
+    This never runs git.
+
+    Per-clone git hooks are left in place — they gate on the (now absent)
+    marker and no-op.  ``biff uninstall`` removes them from a clone.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
-    remove_enabled_marker(repo_root)
+    from biff.enablement import RepoEnablement
 
-    from biff.ci_workflow import remove_ci_workflow
-    from biff.git_hooks import remove_git_hooks
-
-    hooks = remove_git_hooks(repo_root)
-    if hooks:
-        print(f"Git hooks removed: {', '.join(hooks)}")
-
-    if remove_ci_workflow(repo_root):
+    change = RepoEnablement(repo_root).disable()
+    if change.ci_workflow_changed:
         print("CI workflow removed: biff-notify.yml")
 
     print(
         "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
-        "restart Claude Code for changes to take effect."
+        ".github/workflows/biff-notify.yml, then restart Claude Code "
+        "for changes to take effect."
     )
 
 
@@ -1558,15 +1563,54 @@ def _register_user_scope() -> None:
         print(f"Registered {USER_IMPORT_LINE} in ~/.claude/CLAUDE.md")
 
 
+def _deploy_repo_git_hooks() -> None:
+    """Deploy biff's git hooks into the current clone's ``.git/hooks/``.
+
+    Hooks are per-clone, local machinery — never committed (DES-052 rule 3).
+    Every clone deploys its own, so hook deployment lives at ``install`` (a
+    local, per-clone action), not at the committed-policy ``enable`` toggle.
+    They gate on the enablement marker at runtime, so deploying them in a
+    not-yet-enabled repo is a safe no-op until ``enable`` writes the marker.
+    Skips silently outside a git repo — ``install`` is also a global action.
+    """
+    from biff.git_hooks import deploy_git_hooks
+
+    repo_root = find_git_root()
+    if repo_root is None:
+        return
+    hooks = deploy_git_hooks(repo_root)
+    if hooks:
+        print(f"Git hooks: {', '.join(hooks)}")
+
+
+def _remove_repo_git_hooks() -> None:
+    """Remove biff's git hooks from the current clone's ``.git/hooks/``.
+
+    The per-clone counterpart to :func:`_deploy_repo_git_hooks`.  Skips
+    silently outside a git repo.
+    """
+    from biff.git_hooks import remove_git_hooks
+
+    repo_root = find_git_root()
+    if repo_root is None:
+        return
+    hooks = remove_git_hooks(repo_root)
+    if hooks:
+        print(f"Git hooks removed: {', '.join(hooks)}")
+
+
 @app.command("install")
 def install_cmd() -> None:
-    """Install biff via the punt-labs marketplace."""
+    """Install biff via the punt-labs marketplace and this clone's git hooks."""
     import shutil
     import subprocess
 
     # User-scope guidance first — it needs no marketplace and leaves no
     # dangling import (the guide is deposited before the line is registered).
     _register_user_scope()
+
+    # Per-clone git hooks (local, never committed). Safe no-op outside a repo.
+    _deploy_repo_git_hooks()
 
     claude = shutil.which("claude")
     if not claude:
@@ -1598,7 +1642,7 @@ def doctor() -> None:
 
 @app.command("uninstall")
 def uninstall_cmd() -> None:
-    """Uninstall biff: remove the plugin (if present) and the user-scope import."""
+    """Uninstall biff: remove the plugin, this clone's git hooks, and the import."""
     import shutil
     import subprocess
 
@@ -1614,6 +1658,11 @@ def uninstall_cmd() -> None:
         plugin_failed = result.returncode != 0
     else:
         print("claude CLI not found; skipping plugin uninstall.")
+
+    # Per-clone git hooks (deployed by `biff install`) are local machinery, so
+    # uninstall removes them for this clone. The committed marker/CI workflow
+    # are repo policy — left untouched; `biff disable` owns those.
+    _remove_repo_git_hooks()
 
     # User-scope teardown (§2.6) ALWAYS runs — never gated on the plugin step.
     # The user asked to clean up, and a dangling @-import 404s every session, so

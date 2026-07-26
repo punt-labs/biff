@@ -1,22 +1,24 @@
 """Activation toggle -- ``biff(action="enable"|"disable")``.
 
 Lets an agent turn biff on or off for the current repo from within a
-Claude Code session.  ``action="enable"`` writes the committed
-enablement marker ``.punt-labs/biff/enabled`` and ``action="disable"``
-removes it (tool-enable-disable.md §2.7) -- the single source of truth
-shared with the ``biff enable`` / ``biff disable`` CLI verbs.  The marker
-is a tracked repo file; the user commits it via a PR like any other
-change, so this tool never runs git.
+Claude Code session.  Both actions route through
+:class:`~biff.enablement.RepoEnablement`, the same definition the
+``biff enable`` / ``biff disable`` CLI verbs use, so the two front-ends
+produce an identical committed result (DES-052, biff-j5u).
+
+``action="enable"`` writes the committed marker ``.punt-labs/biff/enabled``
+and the CI notify workflow ``.github/workflows/biff-notify.yml``;
+``action="disable"`` removes both.  These are tracked repo files; the
+user commits them via a PR like any other change, so this tool never
+runs git.  Per-clone git hooks are not touched here -- ``biff install``
+deploys those locally.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from biff.config import (
-    remove_enabled_marker,
-    write_enabled_marker,
-)
+from biff.enablement import RepoEnablement
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -37,23 +39,26 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def biff(action: Literal["enable", "disable"]) -> str:
         """Enable or disable biff for the current repository.
 
-        Creates (enable) or removes (disable) the committed marker
-        ``.punt-labs/biff/enabled``.  The marker is a tracked repo file
-        -- commit it via a PR for the change to take effect for every
-        contributor.  Returns guidance to restart Claude Code.
+        Writes (enable) or removes (disable) the two committed enablement
+        artifacts: the marker ``.punt-labs/biff/enabled`` and the CI notify
+        workflow ``.github/workflows/biff-notify.yml``.  These are tracked
+        repo files -- commit them via a PR for the change to take effect for
+        every contributor.  Returns guidance to restart Claude Code.
         """
         repo_root = state.repo_root
         if repo_root is None:
             return "Error: not in a git repository."
 
         if action == "enable":
-            write_enabled_marker(repo_root)
+            RepoEnablement(repo_root).enable()
             return (
-                "biff enabled. Commit .punt-labs/biff/enabled and restart "
-                "Claude Code for changes to take effect."
+                "biff enabled. Commit .punt-labs/biff/enabled and "
+                ".github/workflows/biff-notify.yml, then restart Claude Code "
+                "for changes to take effect."
             )
-        remove_enabled_marker(repo_root)
+        RepoEnablement(repo_root).disable()
         return (
             "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
-            "restart Claude Code for changes to take effect."
+            ".github/workflows/biff-notify.yml, then restart Claude Code "
+            "for changes to take effect."
         )
