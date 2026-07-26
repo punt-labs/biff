@@ -5386,12 +5386,15 @@ misroute. Also lands biff-5gb: canonical addresses drop the `@` sigil (bare
 public fields is a noted residual (`biff-muj`, optional per-install-secret
 hardening).
 
-## DES-051: PreToolUse Plan/Bead Gate Is a Hard Deny — Reversing the DES-031 Soft Nudge
+## DES-051: PreToolUse Gate Is a Plan-Only Hard Deny
 
 **Date:** 2026-07-25
 **Status:** Settled
 **Supersedes:** DES-031 (the `additionalContext` nudge; the DES-031 rejection
 of `ask` remains valid)
+**Amended:** 2026-07-25 (biff-84a) — the gate is now **plan-only**; the bead
+coupling described below has been removed. See "Amendment" at the end of this
+entry.
 
 ### Problem
 
@@ -5481,6 +5484,39 @@ the code no longer honored.
    model.
 3. A gate whose docstring cites a proof must actually implement the proven
    transition, or the citation is a lie that rots.
+
+### Amendment (2026-07-25, biff-84a): the gate is plan-only
+
+The bead half of the gate is removed. The gate now depends on the plan marker
+alone: no active session allows; plan not set denies (reason names only
+`/plan <what you're working on>`); plan set allows. The fail-closed guard
+(biff-9n5) is preserved but now concerns the plan marker only.
+
+**History of the bead coupling.** It was introduced in `cb3d13b` as a
+non-blocking reminder — a soft nudge to claim a bead. biff-9n5 hardened the
+whole gate (plan and bead) into a `deny`. Neither step questioned whether the
+gate *should* consult beads at all.
+
+**Why it is removed.** Biff is a communication tool. Coupling its edit gate to
+beads made every edit in every biff-enabled repo depend on `bd` being installed,
+reachable, and consistent — and introduced a phantom-claim staleness problem
+(biff-84a) that a TTL-cached bead marker only papered over. Bead tracking is an
+orthogonal concern; the communication tool's workflow gate must not depend on
+it. Removing the coupling deletes the staleness problem by construction: with no
+bead marker there is nothing to go stale.
+
+The graceful-allow "plan set, `bd` unavailable" escape hatch is gone with the
+rest of the bead apparatus — the gate never consults `bd`, so `bd` availability
+is irrelevant. The `claude-code-biff.tex` Z model was amended to match: the
+`beadClaimed` state variable and the `ClaimBead`/`CloseBead` operations are
+removed, and `PreToolHookAllow` gates edit/bash tools on `planSet = ztrue`
+alone. `fuzz` type-checks clean and ProB confirms editing is unreachable without
+a set plan.
+
+The `_lux_beads_nudge` PostToolUse consumer (refreshes a lux beads board when a
+`bd` command runs) and `expand_bead_id` (expands a bare bead-id label in a
+`/plan` message) are unaffected — they are soft, optional integrations, not gate
+dependencies.
 
 ---
 
