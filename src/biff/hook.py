@@ -174,68 +174,38 @@ def _has_active_session() -> bool:
 
 
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  # noqa: ARG001
-    """Hard-gate Edit/Write on plan-set AND bead-claimed.
+    """Hard-gate Edit/Write on a set plan.
 
     Returns a ``permissionDecision: "deny"`` response that blocks the
-    edit when either prerequisite is missing, or ``None`` to allow
-    (exit 0, no output).  The deny reason instructs the agent how to
-    unblock — set a plan, claim a bead — so the gate *drives* the
-    workflow rather than merely whispering a reminder.
+    edit when no plan is set, or ``None`` to allow (exit 0, no output).
+    The deny reason instructs the agent how to unblock — set a plan — so
+    the gate *drives* the workflow rather than merely whispering a
+    reminder.
 
     This conforms the code to the ``claude-code-biff.tex`` Z model:
     ``PreToolHookAllow`` is enabled for edit tools only when
-    ``planSet = ztrue`` and ``beadClaimed`` is non-empty; every other
-    state yields ``PreToolHookDeny``, which blocks the edit (proven
-    exhaustively with ProB — the model is the authority the code obeys).
+    ``planSet = ztrue``; every other state yields ``PreToolHookDeny``,
+    which blocks the edit (proven exhaustively with ProB — the model is
+    the authority the code obeys).
 
-    Two states allow gracefully rather than deny, because a hard block
-    there would strand the agent: no active biff session (the gate has
-    no session state to reason about), and plan-set with ``bd``
-    unavailable (the plan — the primary driver — is present; the tracker
-    simply cannot be queried).
+    One state allows gracefully rather than deny, because a hard block
+    there would strand the agent: no active biff session, where the gate
+    has no session state to reason about.
     """
     if not _has_active_session():
         return None
 
-    from biff.markers import check_bead_in_progress, has_plan_marker  # noqa: PLC0415
+    from biff.markers import has_plan_marker  # noqa: PLC0415
 
-    worktree = _get_worktree_root()
-    plan_set = has_plan_marker(worktree)
-    bead_status = check_bead_in_progress(worktree)
-
-    if not plan_set and bead_status != "yes":
-        if bead_status == "unavailable":
-            return _pre_tool_use_deny(
-                "Blocked: editing files requires a plan. "
-                "Run /plan <what you're working on>, then retry the edit. "
-                "Bead status could not be checked (bd unavailable)."
-            )
-        return _pre_tool_use_deny(
-            "Blocked: editing files requires a plan and a claimed bead. "
-            "Run /plan <what you're working on> and claim a bead with "
-            "bd update <bead-id> --status=in_progress, then retry the edit."
-        )
-    if not plan_set:
+    if not has_plan_marker(_get_worktree_root()):
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
             "Run /plan <what you're working on>, then retry the edit."
-        )
-    if bead_status == "unavailable":
-        # Plan is set but bd is unavailable — allow gracefully.
-        return None
-    if bead_status == "no":
-        return _pre_tool_use_deny(
-            "Blocked: editing files requires a claimed bead. "
-            "Run bd update <bead-id> --status=in_progress, then retry the edit."
         )
     return None
 
 
 _BEAD_CLAIM_RE = re.compile(r"\bbd\s+update.*--status[=\s]in_progress")
-_BEAD_CLOSE_RE = re.compile(r"\bbd\s+close\b")
-_BEAD_STATUS_CHANGE_RE = re.compile(
-    r"\bbd\s+update.*--status[=\s](?!in_progress)\w+",
-)
 _BEAD_MUTATE_RE = re.compile(r"\bbd\s+(create|update|close|dep)\b")
 
 _LUX_BEADS_REFRESH = (
@@ -245,19 +215,15 @@ _LUX_BEADS_REFRESH = (
 
 
 def handle_post_bash(data: dict[str, object]) -> str | None:
-    """Process PostToolUse Bash — detect bead claims, closes, and mutations.
+    """Process PostToolUse Bash — nudge on bead claims and mutations.
 
-    Manages the bead-active marker file for the PreToolUse cache:
-    - On successful ``bd update --status=in_progress``: write marker.
-    - On successful ``bd close``: clear marker (forces re-check on next gate).
-
-    When lux is enabled and beads state changes, nudges Claude to
-    refresh the beads board (biff-og4p consumer integration).
+    Biff does not depend on beads: the gate is plan-only (DES-051) and
+    this handler holds no gate state.  It only emits soft nudges — a
+    dotplan reminder on a bead claim, and a lux beads-board refresh when
+    lux is showing (biff-og4p consumer integration).
 
     Returns an ``additionalContext`` string, or ``None`` to stay silent.
     """
-    from biff.markers import clear_bead_marker, write_bead_marker  # noqa: PLC0415
-
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         return None
@@ -270,18 +236,8 @@ def handle_post_bash(data: dict[str, object]) -> str | None:
     is_error = data.get("is_error", False)
     is_success = not is_error and isinstance(response, str) and "\u2713" in response
 
-    worktree = _get_worktree_root()
-
-    # Bead close — clear marker so next PreToolUse re-checks via subprocess.
-    if _BEAD_CLOSE_RE.search(command) and is_success:
-        if worktree:
-            clear_bead_marker(worktree)
-        return _lux_beads_nudge()
-
-    # Bead claim — write marker for fast PreToolUse gate.
+    # Bead claim — nudge Claude to set its dotplan.
     if _BEAD_CLAIM_RE.search(command) and is_success:
-        if worktree:
-            write_bead_marker(worktree)
         nudge = (
             "You just claimed a bead. Set your dotplan so teammates can see "
             "what you are working on: /plan <bead-id>: <short description>. "
@@ -290,13 +246,8 @@ def handle_post_bash(data: dict[str, object]) -> str | None:
         lux = _lux_beads_nudge()
         return f"{nudge} {lux}" if lux else nudge
 
-    # Status transition away from in_progress — clear marker.
-    if _BEAD_STATUS_CHANGE_RE.search(command) and is_success:
-        if worktree:
-            clear_bead_marker(worktree)
-        return _lux_beads_nudge()
-
-    # Other bead mutations (create, dep add, generic update).
+    # Any other bead state change (close, status transition, create, dep) —
+    # refresh the lux beads board if it is showing.
     if _BEAD_MUTATE_RE.search(command) and is_success:
         return _lux_beads_nudge()
 
@@ -683,7 +634,9 @@ def handle_session_start() -> str:
 
     Always returns context — at minimum, a /tty nudge.
     Reads the git branch and suggests /plan with auto source.
-    Clears stale plan marker so the PreToolUse gate starts fresh.
+    Clears the stale plan marker so the PreToolUse gate starts fresh —
+    a new session inherits no plan (Z ``StartSession``:
+    ``planSet' = zfalse``).
     """
     from biff.markers import clear_plan_marker, read_wall_marker  # noqa: PLC0415
 
@@ -819,10 +772,10 @@ def handle_session_end() -> int:
 
 @_cc_app.command("pre-tool-use")
 def cc_pre_tool_use() -> None:
-    """PreToolUse Edit|Write — gate on plan-set AND bead-claimed.
+    """PreToolUse Edit|Write — gate on a set plan.
 
     Fails *closed*: if the gate cannot evaluate its condition (an
-    unexpected error reading the markers), it denies rather than lets
+    unexpected error reading the plan marker), it denies rather than lets
     the edit through.  A hard control that silently grants access on
     error is the same bug as no control at all (DES-051).
     """
@@ -832,10 +785,10 @@ def cc_pre_tool_use() -> None:
     try:
         result = handle_pre_tool_use(data)
     except Exception:  # noqa: BLE001 — hook boundary (PY-EH-6): a gate that cannot evaluate must fail closed
-        logger.warning("Plan/bead gate evaluation failed; denying", exc_info=True)
+        logger.warning("Plan gate evaluation failed; denying", exc_info=True)
         result = _pre_tool_use_deny(
-            "Blocked: could not verify plan/bead state. Set /plan and claim a bead "
-            "(bd update <bead-id> --status=in_progress), then retry."
+            "Blocked: could not verify plan state. "
+            "Run /plan <what you're working on>, then retry the edit."
         )
     if result is not None:
         _emit(result)

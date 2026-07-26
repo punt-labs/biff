@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from biff.markers import (
-    check_bead_in_progress,
     clear_plan_marker,
     clear_wall_marker,
     has_plan_marker,
@@ -58,36 +56,6 @@ class TestPlanMarker:
     def test_clear_missing_marker_is_noop(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
             clear_plan_marker("/test/root")  # should not raise
-
-
-class TestCheckBeadInProgress:
-    """Bead-active check via bd subprocess."""
-
-    def test_returns_yes_when_beads_exist(self) -> None:
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = '[{"id": "biff-vq5"}]'
-            assert check_bead_in_progress() == "yes"
-
-    def test_returns_no_on_empty_list(self) -> None:
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "[]"
-            assert check_bead_in_progress() == "no"
-
-    def test_returns_unavailable_on_nonzero_exit(self) -> None:
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 1
-            mock_run.return_value.stdout = ""
-            assert check_bead_in_progress() == "unavailable"
-
-    def test_returns_unavailable_when_bd_not_found(self) -> None:
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            assert check_bead_in_progress() == "unavailable"
-
-    def test_returns_unavailable_on_timeout(self) -> None:
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("bd", 5)):
-            assert check_bead_in_progress() == "unavailable"
 
 
 class TestWallMarker:

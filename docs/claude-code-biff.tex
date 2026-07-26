@@ -44,16 +44,19 @@ and \texttt{/talk}.
 The key workflow invariants enforced by this model:
 
 \begin{enumerate}
-  \item \textbf{Plan before work}: Claude must set a plan (via
+  \item \textbf{Plan before editing}: Claude must set a plan (via
     \texttt{/plan} or auto-detect from git branch) before editing
-    files or running commands.
+    files. The \texttt{PreToolUse} hook matches \texttt{Edit|Write}
+    only; \texttt{Bash} is not gated.
   \item \textbf{Message awareness}: unread messages are surfaced
     before Claude declares ``done'' (Stop hook).
   \item \textbf{Wall awareness}: active wall broadcasts are injected
     into session context at startup.
-  \item \textbf{Bead claim before work}: Claude must claim a bead
-    (\texttt{bd update --status=in\_progress}) before editing files.
 \end{enumerate}
+
+The gate depends on the plan alone. Biff is a communication tool and
+does not depend on beads or \texttt{bd}: bead tracking is an orthogonal
+concern the workflow gate never consults.
 
 % ============================================================
 \section{Base Types (from claude-code.tex)}
@@ -100,12 +103,12 @@ The key workflow invariants enforced by this model:
 % ============================================================
 
 \begin{zed}
-  [BEADID, USERID, MSGID, WALLTEXT]
+  [USERID, MSGID, WALLTEXT]
 \end{zed}
 
-\texttt{BEADID} identifies a tracked work item. \texttt{USERID}
-identifies a team member. \texttt{MSGID} uniquely identifies a
-message. \texttt{WALLTEXT} is the content of a wall broadcast.
+\texttt{USERID} identifies a team member. \texttt{MSGID} uniquely
+identifies a message. \texttt{WALLTEXT} is the content of a wall
+broadcast.
 
 \begin{zed}
   PlanSource ::= psManual | psAuto
@@ -168,7 +171,6 @@ biff invariants are added.
   %
   planSet : ZBOOL \\
   planSource : \finset PlanSource \\
-  beadClaimed : \finset BEADID \\
   unreadCount : \nat \\
   talkActive : ZBOOL \\
   wallActive : ZBOOL \\
@@ -208,10 +210,6 @@ biff invariants are added.
   planSet = zfalse \implies planSource = \emptyset \\
   planSet = ztrue \implies \# planSource = 1 \\
   %
-  % Bead claim: at most one active bead
-  %
-  \# beadClaimed \leq 1 \\
-  %
   % Unread bounded for animation
   %
   unreadCount \leq maxUnread \\
@@ -225,7 +223,6 @@ biff invariants are added.
   % No biff state when session is inactive
   %
   sessionPhase = spInactive \implies planSet = zfalse \\
-  sessionPhase = spInactive \implies beadClaimed = \emptyset \\
   sessionPhase = spInactive \implies unreadCount = 0 \\
   sessionPhase = spInactive \implies talkActive = zfalse \\
   sessionPhase = spInactive \implies wallActive = zfalse
@@ -252,7 +249,6 @@ biff invariants are added.
   %
   planSet' = zfalse \\
   planSource' = \emptyset \\
-  beadClaimed' = \emptyset \\
   unreadCount' = 0 \\
   talkActive' = zfalse \\
   wallActive' = zfalse \\
@@ -271,7 +267,6 @@ schema captures ``biff state unchanged'' to reduce repetition.
   \where
   planSet' = planSet \\
   planSource' = planSource \\
-  beadClaimed' = beadClaimed \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
@@ -315,7 +310,6 @@ context.
   %
   planSet' = zfalse \\
   planSource' = \emptyset \\
-  beadClaimed' = \emptyset \\
   unreadCount' = 0 \\
   talkActive' = zfalse \\
   wallActive' = hasWall? \\
@@ -388,9 +382,10 @@ Claude decides to invoke a tool. The tool category is classified.
 \subsection{PreToolHookAllow --- with workflow gate}
 
 The \texttt{PreToolUse} hook checks workflow prerequisites for
-edit and bash tools. The hook allows only if the plan is set and
-a bead is claimed (for edit/bash tools), or unconditionally for
-other tools.
+edit tools (the shipped hook matches \texttt{Edit|Write} only). The
+hook allows only if the plan is set (for edit tools), or
+unconditionally for other tools --- including \texttt{Bash}, which
+is not gated.
 
 \begin{schema}{PreToolHookAllow}
   BiffFrame \\
@@ -401,10 +396,9 @@ other tools.
   toolPhase = tpPreHook \\
   hookDecision? = pdAllow \\
   %
-  % WORKFLOW GATE: edit/bash tools require plan + bead
+  % WORKFLOW GATE: edit tools require a set plan (Bash is not gated)
   %
-  toolCategory \in \{ tcEdit, tcBash \} \implies planSet = ztrue \\
-  toolCategory \in \{ tcEdit, tcBash \} \implies beadClaimed \neq \emptyset \\
+  toolCategory = tcEdit \implies planSet = ztrue \\
   %
   toolPhase' = \IF needsPermission? = ztrue \THEN tpPermission \ELSE tpExecuting \\
   %
@@ -588,7 +582,6 @@ plan and blocks auto-overwrite.
   context' = context \\
   pendingPrompt' = pendingPrompt \\
   pendingResponse' = pendingResponse \\
-  beadClaimed' = beadClaimed \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
@@ -621,72 +614,6 @@ auto-sets the plan. Only succeeds if no manual plan is set.
   context' = context \\
   pendingPrompt' = pendingPrompt \\
   pendingResponse' = pendingResponse \\
-  beadClaimed' = beadClaimed \\
-  unreadCount' = unreadCount \\
-  talkActive' = talkActive \\
-  wallActive' = wallActive \\
-  wallText' = wallText
-\end{schema}
-
-\subsection{ClaimBead}
-
-Claude runs \texttt{bd update <id> --status=in\_progress}.
-
-\begin{schema}{ClaimBead}
-  \Delta State \\
-  bead? : BEADID
-  \where
-  sessionPhase = spProcessing \\
-  toolPhase = tpNone \\
-  %
-  beadClaimed' = \{ bead? \} \\
-  %
-  sessionPhase' = sessionPhase \\
-  sessionId' = sessionId \\
-  permMode' = permMode \\
-  toolPhase' = toolPhase \\
-  currentTool' = currentTool \\
-  toolCategory' = toolCategory \\
-  toolsThisTurn' = toolsThisTurn \\
-  activeSubagents' = activeSubagents \\
-  context' = context \\
-  pendingPrompt' = pendingPrompt \\
-  pendingResponse' = pendingResponse \\
-  planSet' = planSet \\
-  planSource' = planSource \\
-  unreadCount' = unreadCount \\
-  talkActive' = talkActive \\
-  wallActive' = wallActive \\
-  wallText' = wallText
-\end{schema}
-
-\subsection{CloseBead}
-
-Claude runs \texttt{bd close <id>}.
-
-\begin{schema}{CloseBead}
-  \Delta State \\
-  bead? : BEADID
-  \where
-  sessionPhase = spProcessing \\
-  toolPhase = tpNone \\
-  bead? \in beadClaimed \\
-  %
-  beadClaimed' = beadClaimed \setminus \{ bead? \} \\
-  %
-  sessionPhase' = sessionPhase \\
-  sessionId' = sessionId \\
-  permMode' = permMode \\
-  toolPhase' = toolPhase \\
-  currentTool' = currentTool \\
-  toolCategory' = toolCategory \\
-  toolsThisTurn' = toolsThisTurn \\
-  activeSubagents' = activeSubagents \\
-  context' = context \\
-  pendingPrompt' = pendingPrompt \\
-  pendingResponse' = pendingResponse \\
-  planSet' = planSet \\
-  planSource' = planSource \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
@@ -720,7 +647,6 @@ increments unread count.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
-  beadClaimed' = beadClaimed \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -751,7 +677,6 @@ Claude calls \texttt{/read}. Clears unread count.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
-  beadClaimed' = beadClaimed \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -783,7 +708,6 @@ Claude calls \texttt{/talk @user}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
-  beadClaimed' = beadClaimed \\
   unreadCount' = unreadCount \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -815,7 +739,6 @@ Claude calls \texttt{/talk\_end}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
-  beadClaimed' = beadClaimed \\
   unreadCount' = unreadCount \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -848,7 +771,6 @@ Claude calls \texttt{/wall <message>}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
-  beadClaimed' = beadClaimed \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive
 \end{schema}
@@ -880,7 +802,6 @@ Claude calls \texttt{/wall --clear}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
-  beadClaimed' = beadClaimed \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive
 \end{schema}
@@ -1065,7 +986,6 @@ read messages but is not forced to).
   %
   planSet' = zfalse \\
   planSource' = \emptyset \\
-  beadClaimed' = \emptyset \\
   unreadCount' = 0 \\
   talkActive' = zfalse \\
   wallActive' = zfalse \\
@@ -1081,9 +1001,11 @@ The specification enforces these properties across all reachable states:
 \begin{enumerate}
   \item \textbf{Plan before editing} (workflow gate): the
     \texttt{PreToolHookAllow} operation requires \texttt{planSet = ztrue}
-    and \texttt{beadClaimed $\neq \emptyset$} for edit and bash tools.
-    No path through the state machine can reach tool execution for
-    file-modifying tools without these prerequisites.
+    for edit tools (\texttt{tcEdit}). No path through the state machine
+    can reach tool execution for file-modifying tools without a set
+    plan. \texttt{Bash} is not gated (the shipped hook matches
+    \texttt{Edit|Write} only). The gate consults the plan alone ---
+    never beads.
 
   \item \textbf{Manual plan blocks auto}: \texttt{SetPlanAuto} has
     precondition \texttt{planSource $\neq$ \{psManual\}}, preventing
@@ -1117,8 +1039,7 @@ The specification enforces these properties across all reachable states:
 \hline
 SessionStart & * & StartSession & Load wall & No \\
 PostToolUse & Bash & SetPlanAuto & Auto plan from branch & No \\
-PreToolUse & Edit|Write & PreToolHookAllow/Deny & Require plan+bead & Yes \\
-PreToolUse & Bash & PreToolHookAllow/Deny & Require plan+bead & Yes \\
+PreToolUse & Edit|Write & PreToolHookAllow/Deny & Require plan & Yes \\
 PostToolUse & biff\_\_plan & SetPlanManual & Set manual plan & No \\
 PostToolUse & biff\_\_write & (side effect) & Message sent & No \\
 PostToolUse & biff\_\_read & ReadMessages & Clear unread & No \\
@@ -1196,9 +1117,10 @@ add \texttt{mesgMode : ZBOOL} to the state schema.
   \item \textbf{Manual blocks auto}: \texttt{SetPlanAuto} has precondition
     \texttt{planSource $\neq$ \{psManual\}}. The model checker verified
     across 161K states that no auto-plan overwrites a manual plan.
-  \item \textbf{Plan is prerequisite for work}: Once the plan-before-work
-    gate is active, the model proves that no file edit or bash command
-    executes without \texttt{planSet = ztrue}. This validates the use
+  \item \textbf{Plan is prerequisite for editing}: Once the
+    plan-before-editing gate is active, the model proves that no file
+    edit (\texttt{tcEdit}) executes without \texttt{planSet = ztrue}
+    (\texttt{Bash} is not gated). This validates the use
     case's claim that plan declaration is meaningful --- it is enforced,
     not advisory.
 \end{enumerate}
@@ -1483,12 +1405,12 @@ declare intent before acting, the declarations are observable, and
 conflicts are detectable.
 
 \textbf{Gap:} The model does not verify that the agent actually checks
-\texttt{/who} before claiming work. This is a behavioral directive
+\texttt{/who} before starting work. This is a behavioral directive
 (injected via SessionStart hook), not a state machine constraint. To
 formalize it, you would need a \texttt{whoChecked : ZBOOL} variable
 set by a \texttt{/who} query and required as a precondition on
-\texttt{ClaimBead}. This is feasible but may be over-constraining ---
-the agent might legitimately claim a bead without checking \texttt{/who}
+\texttt{SetPlanManual}. This is feasible but may be over-constraining ---
+the agent might legitimately set a plan without checking \texttt{/who}
 if it knows no other agents are active.
 
 % ------------------------------------------------------------
