@@ -58,6 +58,30 @@ class TestDeployCiWorkflow:
     def test_no_repo_root_returns_false(self) -> None:
         assert deploy_ci_workflow(Path("/nonexistent")) is False
 
+    def test_replaces_symlinked_target(self, tmp_path: Path) -> None:
+        """A symlink at the workflow path is replaced, never followed.
+
+        Mirrors ``write_enabled_marker``'s symlink guard: an untrusted checkout
+        could commit ``biff-notify.yml`` as a symlink pointing outside the repo;
+        enabling must overwrite the link with a real file, not clobber the
+        link's target.  Both surfaces (`biff enable`, `/biff enable`) reach this
+        path, so the guard closes a symlink-follow write.
+        """
+        repo = _make_repo(tmp_path)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("do not touch")
+
+        workflows = repo / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        link = workflows / _WORKFLOW_NAME
+        link.symlink_to(outside)
+
+        assert deploy_ci_workflow(repo) is True
+        assert not link.is_symlink()
+        assert link.read_text() == _template_content()
+        # The symlink target is untouched.
+        assert outside.read_text() == "do not touch"
+
 
 # ── remove_ci_workflow ─────────────────────────────────────────────
 

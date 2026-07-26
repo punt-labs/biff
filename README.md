@@ -263,7 +263,7 @@ biff talk kai "can you review?"           # Real-time conversation
 ### Admin commands
 
 ```bash
-biff install                # Install plugin + user-scope guide + this clone's git hooks
+biff install                # Install user-scope guide + this clone's git hooks (+ plugin if Claude Code is present)
 biff enable                 # Enable biff for this repo (writes the committed marker + CI workflow)
 biff disable                # Disable biff for this repo (removes the marker + CI workflow)
 biff doctor                 # Check installation health

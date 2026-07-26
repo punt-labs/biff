@@ -1494,13 +1494,17 @@ def enable(
     if change.ci_workflow_changed:
         print("CI workflow: .github/workflows/biff-notify.yml")
 
-    # Hint (not action): hooks are per-clone machinery. If this clone has none,
-    # point at `biff install` rather than deploying them from the policy toggle
-    # — that keeps `biff enable` and `/biff enable` equivalent (biff-j5u).
+    # Hint (not action): hooks are per-clone machinery. When this clone is
+    # missing any biff hook dispatcher, point at `biff install` rather than
+    # deploying them from the policy toggle — that keeps `biff enable` and
+    # `/biff enable` equivalent (biff-j5u). check_git_hooks() returns the list
+    # of missing hooks, so a non-empty result means at least one is absent.
     from biff.git_hooks import check_git_hooks
 
     if check_git_hooks(repo_root):
-        print("Git hooks not deployed for this clone. Run `biff install` to add them.")
+        print(
+            "Some git hooks are missing for this clone. Run `biff install` to add them."
+        )
 
     print(
         "biff enabled. Commit .punt-labs/biff/enabled and "

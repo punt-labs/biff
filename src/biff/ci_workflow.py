@@ -39,7 +39,14 @@ def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
     target = workflows_dir / _WORKFLOW_NAME
     template = _template_content()
 
-    if target.exists() and target.read_text(encoding="utf-8") == template:
+    # Symlink guard (mirrors write_enabled_marker): an untrusted checkout could
+    # commit biff-notify.yml as a symlink; replace it with a real file rather
+    # than following it and clobbering the link's target. Done before the
+    # freshness read so a symlink is never left in place as "up to date".
+    if target.is_symlink():
+        target.unlink()
+
+    if target.is_file() and target.read_text(encoding="utf-8") == template:
         return False  # Already up to date
 
     target.write_text(template, encoding="utf-8")
@@ -56,7 +63,9 @@ def remove_ci_workflow(repo_root: Path | None = None) -> bool:
         return False
 
     target = root / ".github" / "workflows" / _WORKFLOW_NAME
-    if not target.exists():
+    # is_symlink() catches a broken symlink that exists() would miss, so disable
+    # cleans up a symlinked workflow rather than leaving it behind.
+    if not target.is_file() and not target.is_symlink():
         return False
 
     target.unlink()
