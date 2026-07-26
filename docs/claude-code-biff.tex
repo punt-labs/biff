@@ -44,9 +44,10 @@ and \texttt{/talk}.
 The key workflow invariants enforced by this model:
 
 \begin{enumerate}
-  \item \textbf{Plan before work}: Claude must set a plan (via
+  \item \textbf{Plan before editing}: Claude must set a plan (via
     \texttt{/plan} or auto-detect from git branch) before editing
-    files or running commands.
+    files. The \texttt{PreToolUse} hook matches \texttt{Edit|Write}
+    only; \texttt{Bash} is not gated.
   \item \textbf{Message awareness}: unread messages are surfaced
     before Claude declares ``done'' (Stop hook).
   \item \textbf{Wall awareness}: active wall broadcasts are injected
@@ -381,8 +382,10 @@ Claude decides to invoke a tool. The tool category is classified.
 \subsection{PreToolHookAllow --- with workflow gate}
 
 The \texttt{PreToolUse} hook checks workflow prerequisites for
-edit and bash tools. The hook allows only if the plan is set
-(for edit/bash tools), or unconditionally for other tools.
+edit tools (the shipped hook matches \texttt{Edit|Write} only). The
+hook allows only if the plan is set (for edit tools), or
+unconditionally for other tools --- including \texttt{Bash}, which
+is not gated.
 
 \begin{schema}{PreToolHookAllow}
   BiffFrame \\
@@ -393,9 +396,9 @@ edit and bash tools. The hook allows only if the plan is set
   toolPhase = tpPreHook \\
   hookDecision? = pdAllow \\
   %
-  % WORKFLOW GATE: edit/bash tools require a set plan
+  % WORKFLOW GATE: edit tools require a set plan (Bash is not gated)
   %
-  toolCategory \in \{ tcEdit, tcBash \} \implies planSet = ztrue \\
+  toolCategory = tcEdit \implies planSet = ztrue \\
   %
   toolPhase' = \IF needsPermission? = ztrue \THEN tpPermission \ELSE tpExecuting \\
   %
@@ -998,9 +1001,11 @@ The specification enforces these properties across all reachable states:
 \begin{enumerate}
   \item \textbf{Plan before editing} (workflow gate): the
     \texttt{PreToolHookAllow} operation requires \texttt{planSet = ztrue}
-    for edit and bash tools. No path through the state machine can reach
-    tool execution for file-modifying tools without a set plan. The gate
-    consults the plan alone --- never beads.
+    for edit tools (\texttt{tcEdit}). No path through the state machine
+    can reach tool execution for file-modifying tools without a set
+    plan. \texttt{Bash} is not gated (the shipped hook matches
+    \texttt{Edit|Write} only). The gate consults the plan alone ---
+    never beads.
 
   \item \textbf{Manual plan blocks auto}: \texttt{SetPlanAuto} has
     precondition \texttt{planSource $\neq$ \{psManual\}}, preventing
@@ -1035,7 +1040,6 @@ The specification enforces these properties across all reachable states:
 SessionStart & * & StartSession & Load wall & No \\
 PostToolUse & Bash & SetPlanAuto & Auto plan from branch & No \\
 PreToolUse & Edit|Write & PreToolHookAllow/Deny & Require plan & Yes \\
-PreToolUse & Bash & PreToolHookAllow/Deny & Require plan & Yes \\
 PostToolUse & biff\_\_plan & SetPlanManual & Set manual plan & No \\
 PostToolUse & biff\_\_write & (side effect) & Message sent & No \\
 PostToolUse & biff\_\_read & ReadMessages & Clear unread & No \\
@@ -1113,9 +1117,10 @@ add \texttt{mesgMode : ZBOOL} to the state schema.
   \item \textbf{Manual blocks auto}: \texttt{SetPlanAuto} has precondition
     \texttt{planSource $\neq$ \{psManual\}}. The model checker verified
     across 161K states that no auto-plan overwrites a manual plan.
-  \item \textbf{Plan is prerequisite for work}: Once the plan-before-work
-    gate is active, the model proves that no file edit or bash command
-    executes without \texttt{planSet = ztrue}. This validates the use
+  \item \textbf{Plan is prerequisite for editing}: Once the
+    plan-before-editing gate is active, the model proves that no file
+    edit (\texttt{tcEdit}) executes without \texttt{planSet = ztrue}
+    (\texttt{Bash} is not gated). This validates the use
     case's claim that plan declaration is meaningful --- it is enforced,
     not advisory.
 \end{enumerate}

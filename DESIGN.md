@@ -5509,9 +5509,11 @@ The graceful-allow "plan set, `bd` unavailable" escape hatch is gone with the
 rest of the bead apparatus — the gate never consults `bd`, so `bd` availability
 is irrelevant. The `claude-code-biff.tex` Z model was amended to match: the
 `beadClaimed` state variable and the `ClaimBead`/`CloseBead` operations are
-removed, and `PreToolHookAllow` gates edit/bash tools on `planSet = ztrue`
-alone. `fuzz` type-checks clean and ProB confirms editing is unreachable without
-a set plan.
+removed, and `PreToolHookAllow` gates edit tools (`tcEdit`) on
+`planSet = ztrue` alone. The gate matches `Edit|Write` only, mirroring the
+shipped `hooks/hooks.json` — `Bash` is not gated (its only hook is a
+PostToolUse nudge). `fuzz` type-checks clean and ProB confirms editing is
+unreachable without a set plan.
 
 The `_lux_beads_nudge` PostToolUse consumer (refreshes a lux beads board when a
 `bd` command runs) and `expand_bead_id` (expands a bare bead-id label in a
