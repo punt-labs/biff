@@ -159,25 +159,33 @@ def biff_on_path() -> bool:
 def is_enabled(repo_root: Path | None) -> bool:
     """True when biff is enabled for the repo.
 
-    Enabled ⟺ the committed marker ``.punt-labs/biff/enabled`` exists
-    AND the ``biff`` CLI is on ``PATH``.  Returns ``False`` if
-    *repo_root* is ``None``, the marker is absent, or biff is not
-    installed.
+    Enabled ⟺ the committed marker ``.punt-labs/biff/enabled`` is a
+    **regular file** (not a symlink) AND the ``biff`` CLI is on
+    ``PATH``.  Returns ``False`` if *repo_root* is ``None``, the marker
+    is absent or a symlink, or biff is not installed.  Requiring a
+    regular file closes the symlinked-marker / symlinked-parent class:
+    a committed symlink at the marker path cannot silently redirect the
+    enablement signal.
     """
     if repo_root is None:
         return False
-    return enabled_marker_path(repo_root).exists() and biff_on_path()
+    marker = enabled_marker_path(repo_root)
+    return marker.is_file() and not marker.is_symlink() and biff_on_path()
 
 
 def write_enabled_marker(repo_root: Path) -> Path:
     """Create the committed enablement marker, returning its path.
 
-    Writes an empty file at ``.punt-labs/biff/enabled`` (creating the
-    directory if needed).  The caller commits it via a PR like any
-    other repo change -- this never runs git.
+    Writes an empty regular file at ``.punt-labs/biff/enabled``
+    (creating the directory if needed).  If a symlink already occupies
+    the path it is removed first, so the result is always a regular
+    file that :func:`is_enabled` recognizes.  The caller commits it via
+    a PR like any other repo change -- this never runs git.
     """
     marker = enabled_marker_path(repo_root)
     marker.parent.mkdir(parents=True, exist_ok=True)
+    if marker.is_symlink():
+        marker.unlink()
     marker.touch()
     return marker
 

@@ -97,6 +97,29 @@ class TestIsEnabled:
         with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
             assert is_enabled(tmp_path) is False
 
+    def test_symlinked_marker_does_not_enable(self, tmp_path: Path) -> None:
+        """A symlink at the marker path is not a valid enablement signal."""
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        target = tmp_path / "elsewhere"
+        target.touch()
+        enabled_marker_path(tmp_path).symlink_to(target)
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            assert is_enabled(tmp_path) is False
+
+    def test_write_replaces_symlinked_marker(self, tmp_path: Path) -> None:
+        """write_enabled_marker replaces a symlink with a real file."""
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        target = tmp_path / "elsewhere"
+        target.touch()
+        marker = enabled_marker_path(tmp_path)
+        marker.symlink_to(target)
+        write_enabled_marker(tmp_path)
+        assert marker.is_file() and not marker.is_symlink()
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            assert is_enabled(tmp_path) is True
+
 
 class TestEnabledMarker:
     """write/remove marker helpers round-trip with is_enabled."""
