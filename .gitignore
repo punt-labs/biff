@@ -79,6 +79,7 @@ docs/*.synctex.gz
 .punt-labs/vox/
 .punt-labs/quarry/captures/
 .punt-labs/lux.md
+.punt-labs/local/
 
 # Dev scratch files
 *.tmp
