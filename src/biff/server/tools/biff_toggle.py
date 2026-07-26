@@ -1,11 +1,12 @@
 """Activation toggle -- ``biff(action="enable"|"disable")``.
 
 Lets an agent turn biff on or off for the current repo from within a
-Claude Code session.  Both actions write the committed enablement
-marker ``.punt-labs/biff/enabled`` (tool-enable-disable.md §2.7) -- the
-single source of truth shared with the ``biff enable`` / ``biff disable``
-CLI verbs.  The marker is a tracked repo file; the user commits it via a
-PR like any other change, so this tool never runs git.
+Claude Code session.  ``action="enable"`` writes the committed
+enablement marker ``.punt-labs/biff/enabled`` and ``action="disable"``
+removes it (tool-enable-disable.md §2.7) -- the single source of truth
+shared with the ``biff enable`` / ``biff disable`` CLI verbs.  The marker
+is a tracked repo file; the user commits it via a PR like any other
+change, so this tool never runs git.
 """
 
 from __future__ import annotations

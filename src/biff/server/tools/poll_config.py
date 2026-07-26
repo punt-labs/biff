@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from biff.config import load_yaml_local, write_yaml_config
+from biff.config import ensure_gitignore_yaml, load_yaml_local, write_yaml_config
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -68,6 +68,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             else:
                 existing["poll_interval"] = parsed
             write_yaml_config(repo_root, existing, local=True)
+            # config.local.yaml is per-user; keep it out of git even when a
+            # user only ever ran `biff enable` (which no longer touches the
+            # gitignore) and then set a poll interval.
+            ensure_gitignore_yaml(repo_root)
 
         if parsed is None:
             return (
