@@ -1577,10 +1577,16 @@ def _deploy_repo_git_hooks() -> None:
     not-yet-enabled repo is a safe no-op until ``enable`` writes the marker.
     Skips silently outside a git repo — ``install`` is also a global action.
     """
-    from biff.git_hooks import deploy_git_hooks
+    from biff.git_hooks import deploy_git_hooks, resolve_hooks_dir
 
     repo_root = find_git_root()
     if repo_root is None:
+        return
+    if resolve_hooks_dir(repo_root) is None:
+        # Never a silent skip: a worktree/submodule or a missing git binary can
+        # leave no hooks dir to write to. Tell the user rather than reporting
+        # success while deploying nothing.
+        print("NOTICE: could not resolve a git hooks directory; no git hooks deployed.")
         return
     hooks = deploy_git_hooks(repo_root)
     if hooks:

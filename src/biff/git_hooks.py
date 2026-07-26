@@ -7,14 +7,51 @@ appending/removing a marked block rather than overwriting.
 
 from __future__ import annotations
 
+import logging
+import subprocess
 from pathlib import Path
 
 from biff.config import find_git_root
+
+logger = logging.getLogger(__name__)
 
 # Marker comments bracket the biff dispatch line so we can
 # identify and remove our additions without touching other hooks.
 _MARKER_START = "# >>> biff hook dispatcher (DES-017)"
 _MARKER_END = "# <<< biff hook dispatcher"
+
+
+def resolve_hooks_dir(repo_root: Path) -> Path | None:
+    """Resolve the git hooks directory for *repo_root*.
+
+    ``<root>/.git/hooks`` is wrong for two common layouts: in a linked
+    worktree ``.git`` is a *file* (so that dir does not exist and hooks
+    live under the main repository's common git dir), and ``core.hooksPath``
+    can relocate hooks anywhere.  ``git rev-parse --git-path hooks`` is the
+    one lookup that honors worktree/submodule redirection AND
+    ``core.hooksPath`` -- asking git avoids reimplementing its rules.
+
+    Git prints an absolute path for worktrees and an absolute
+    ``core.hooksPath``; otherwise it prints a path relative to *repo_root*
+    (``.git/hooks`` or a relative ``core.hooksPath``), which we anchor to
+    *repo_root*.  Returns ``None`` when *repo_root* is not a git repository
+    or ``git`` is not on ``PATH``.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "-C", str(repo_root), "rev-parse", "--git-path", "hooks"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    hooks = Path(result.stdout.strip())
+    return hooks if hooks.is_absolute() else repo_root / hooks
+
 
 # Map of hook name → dispatch command.
 # Each entry becomes a block appended to .git/hooks/<name>.
@@ -66,9 +103,14 @@ def deploy_git_hooks(repo_root: Path | None = None) -> list[str]:
     if root is None:
         return []
 
-    hooks_dir = root / ".git" / "hooks"
-    if not hooks_dir.is_dir():
+    hooks_dir = resolve_hooks_dir(root)
+    if hooks_dir is None:
+        # Never a silent skip: surface that git could not resolve a hooks
+        # directory (not a git repo, or git missing) so the install path can
+        # tell the user rather than deploying nothing without a word.
+        logger.warning("no git hooks directory resolved for %s; deployed nothing", root)
         return []
+    hooks_dir.mkdir(parents=True, exist_ok=True)
 
     updated: list[str] = []
     for name, command in GIT_HOOKS.items():
@@ -113,8 +155,8 @@ def remove_git_hooks(repo_root: Path | None = None) -> list[str]:
     if root is None:
         return []
 
-    hooks_dir = root / ".git" / "hooks"
-    if not hooks_dir.is_dir():
+    hooks_dir = resolve_hooks_dir(root)
+    if hooks_dir is None or not hooks_dir.is_dir():
         return []
 
     removed: list[str] = []
@@ -148,8 +190,8 @@ def check_git_hooks(repo_root: Path | None = None) -> list[str]:
     if root is None:
         return list(GIT_HOOKS)
 
-    hooks_dir = root / ".git" / "hooks"
-    if not hooks_dir.is_dir():
+    hooks_dir = resolve_hooks_dir(root)
+    if hooks_dir is None or not hooks_dir.is_dir():
         return list(GIT_HOOKS)
 
     missing: list[str] = []

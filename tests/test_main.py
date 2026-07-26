@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import subprocess
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -27,6 +28,22 @@ if TYPE_CHECKING:
     import pytest
 
 runner = CliRunner()
+
+
+def _git_init_repo(repo: Path) -> Path:
+    """Initialise a real git repo so the hooks-dir resolver recognises it.
+
+    ``deploy_git_hooks`` resolves its target with ``git rev-parse``, which
+    rejects a bare ``.git/hooks`` directory that is not a real repository.
+    """
+    repo.mkdir(parents=True, exist_ok=True)
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), "init", "-q"],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+    return repo
+
 
 _RESOLVED = ResolvedConfig(
     config=BiffConfig(user="kai", repo_name="myrepo"),
@@ -609,8 +626,7 @@ class TestInstallDeploysGitHooks:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         home = tmp_path / "home"
-        repo = tmp_path / "repo"
-        (repo / ".git" / "hooks").mkdir(parents=True)
+        repo = _git_init_repo(tmp_path / "repo")
 
         def no_claude(_cmd: str) -> str | None:
             return None  # CLI-only install path
@@ -642,8 +658,7 @@ class TestInstallDeploysGitHooks:
         from biff._stdlib import is_enabled, write_enabled_marker
 
         home = tmp_path / "home"
-        repo = tmp_path / "repo"
-        (repo / ".git" / "hooks").mkdir(parents=True)
+        repo = _git_init_repo(tmp_path / "repo")
 
         # biff is on PATH (so the marker gate is decisive), claude is not
         # (CLI-only install path).
@@ -676,8 +691,7 @@ class TestUninstallRemovesGitHooks:
         from biff.git_hooks import deploy_git_hooks
 
         home = tmp_path / "home"
-        repo = tmp_path / "repo"
-        (repo / ".git" / "hooks").mkdir(parents=True)
+        repo = _git_init_repo(tmp_path / "repo")
         deploy_git_hooks(repo)
         assert (repo / ".git" / "hooks" / "post-commit").is_file()
 
