@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib.resources
 from pathlib import Path
 
-from biff._stdlib import ensure_real_dir
+from biff._stdlib import ensure_real_dir, is_regular_file
 from biff.config import find_git_root
 
 _WORKFLOW_NAME = "biff-notify.yml"
@@ -58,7 +58,7 @@ def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
     if target.is_symlink():
         target.unlink()
 
-    if target.is_file() and target.read_text(encoding="utf-8") == template:
+    if is_regular_file(target) and target.read_text(encoding="utf-8") == template:
         return False  # Already up to date
 
     target.write_text(template, encoding="utf-8")
@@ -75,13 +75,15 @@ def remove_ci_workflow(repo_root: Path | None = None) -> bool:
         return False
 
     target = root / ".github" / "workflows" / _WORKFLOW_NAME
-    # is_symlink() catches a broken symlink that exists() would miss, so disable
-    # cleans up a symlinked workflow rather than leaving it behind.
-    if not target.is_file() and not target.is_symlink():
-        return False
-
-    target.unlink()
-    return True
+    # Regular file OR symlink → remove it. unlink() removes a symlink without
+    # following it, so a committed symlinked workflow is cleaned up rather than
+    # its target being touched. Anything else at the path (absent, or a
+    # directory we don't own) → nothing of ours to remove; leave it, report
+    # False, and never misreport a directory as removed.
+    if target.is_symlink() or is_regular_file(target):
+        target.unlink()
+        return True
+    return False
 
 
 def check_ci_workflow(repo_root: Path | None = None) -> bool:
@@ -94,7 +96,9 @@ def check_ci_workflow(repo_root: Path | None = None) -> bool:
         return False
 
     target = root / ".github" / "workflows" / _WORKFLOW_NAME
-    if not target.exists():
+    # Regular file only: a symlinked (or otherwise non-regular) workflow path is
+    # not ours — don't follow it to read an arbitrary target; report not-current.
+    if not is_regular_file(target):
         return False
 
     return target.read_text(encoding="utf-8") == _template_content()

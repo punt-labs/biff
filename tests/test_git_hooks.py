@@ -274,6 +274,20 @@ class TestRemoveGitHooks:
         for name in GIT_HOOKS:
             assert not (main / ".git" / "hooks" / name).exists()
 
+    def test_symlinked_hook_is_not_followed(self, tmp_path: Path) -> None:
+        """A symlinked hook path is not ours — never followed, read, or removed."""
+        repo = _make_repo(tmp_path / "repo")
+        outside = tmp_path / "secret.txt"
+        outside.write_text("do not touch")
+        link = _hooks_dir(repo) / "post-commit"
+        link.symlink_to(outside)
+
+        removed = remove_git_hooks(repo)
+
+        assert "post-commit" not in removed
+        assert link.is_symlink()  # left as-is; not ours to remove
+        assert outside.read_text() == "do not touch"  # target untouched
+
 
 # ── check_git_hooks ───────────────────────────────────────────────
 
@@ -297,6 +311,19 @@ class TestCheckGitHooks:
         (_hooks_dir(repo) / "pre-push").unlink()
         missing = check_git_hooks(repo)
         assert missing == ["pre-push"]
+
+    def test_symlinked_hook_reported_missing(self, tmp_path: Path) -> None:
+        """A symlinked hook path is not ours — reported missing, never followed.
+
+        The link's target even contains our marker, yet check must not follow
+        the symlink to read it; it treats the symlinked path as not deployed.
+        """
+        repo = _make_repo(tmp_path / "repo")
+        outside = tmp_path / "evil"
+        outside.write_text(f"{_MARKER_START}\ncmd\n{_MARKER_END}\n")
+        (_hooks_dir(repo) / "post-commit").symlink_to(outside)
+
+        assert "post-commit" in check_git_hooks(repo)
 
     def test_reads_worktree_common_dir(self, tmp_path: Path) -> None:
         """check() reads the same resolved dir deploy() wrote to."""

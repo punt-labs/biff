@@ -207,6 +207,18 @@ def ensure_real_dir(base: Path, target: Path) -> None:
             base.mkdir()
 
 
+def is_regular_file(path: Path) -> bool:
+    """True only for a real regular file -- never a symlink or a directory.
+
+    ``Path.is_file()`` follows symlinks, so a symlinked hook or workflow path
+    would report ``True`` and any read/write/remove would operate on the link's
+    target. Guarding every such operation with this predicate keeps biff from
+    following a committed symlink to an arbitrary file: a symlinked artifact is
+    treated as "not ours" (absent) rather than read, overwritten, or deleted.
+    """
+    return path.is_file() and not path.is_symlink()
+
+
 def write_enabled_marker(repo_root: Path) -> Path:
     """Create the committed enablement marker, returning its path.
 

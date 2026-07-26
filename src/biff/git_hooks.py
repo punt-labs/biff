@@ -11,7 +11,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from biff._stdlib import ensure_real_dir
+from biff._stdlib import ensure_real_dir, is_regular_file
 from biff.config import find_git_root
 
 logger = logging.getLogger(__name__)
@@ -134,39 +134,54 @@ def deploy_git_hooks(repo_root: Path | None = None) -> list[str]:
     else:
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    updated: list[str] = []
-    for name, command in GIT_HOOKS.items():
-        hook_path = hooks_dir / name
-        block = _biff_block(command)
+    return [
+        name
+        for name, command in GIT_HOOKS.items()
+        if _deploy_one_hook(hooks_dir / name, _biff_block(command))
+    ]
 
-        # Symlink guard (mirrors ci_workflow / write_enabled_marker): a hostile
-        # or accidental symlink at a hook path must not be followed and its
-        # target clobbered. Replace it with a real file we own.
-        if hook_path.is_symlink():
-            hook_path.unlink()
 
-        if hook_path.exists():
-            content = hook_path.read_text()
-            if _has_biff_block(content):
-                # Replace existing block (idempotent update).
-                new_content = _remove_biff_block(content) + block
-                if new_content != content:
-                    hook_path.write_text(new_content)
-                    updated.append(name)
-            else:
-                # Append to existing hook (coexistence).
-                hook_path.write_text(content.rstrip("\n") + "\n\n" + block)
-                updated.append(name)
-            # Ensure executable even for existing files.
-            if not hook_path.stat().st_mode & 0o111:
-                hook_path.chmod(hook_path.stat().st_mode | 0o755)
-        else:
-            # Create new hook file.
-            hook_path.write_text(f"#!/usr/bin/env bash\n{block}")
-            hook_path.chmod(0o755)
-            updated.append(name)
+def _ensure_executable(hook_path: Path) -> None:
+    """Add the user/group/other execute bits if the file is not executable."""
+    if not hook_path.stat().st_mode & 0o111:
+        hook_path.chmod(hook_path.stat().st_mode | 0o755)
 
-    return updated
+
+def _refresh_existing_hook(hook_path: Path, block: str) -> bool:
+    """Update a regular hook file in place; return True if its content changed.
+
+    Replaces an existing biff block idempotently, or appends one to a foreign
+    hook (coexistence). Always ensures the file stays executable.
+    """
+    content = hook_path.read_text()
+    if _has_biff_block(content):
+        new_content = _remove_biff_block(content) + block
+        changed = new_content != content
+        if changed:
+            hook_path.write_text(new_content)
+    else:
+        hook_path.write_text(content.rstrip("\n") + "\n\n" + block)
+        changed = True
+    _ensure_executable(hook_path)
+    return changed
+
+
+def _deploy_one_hook(hook_path: Path, block: str) -> bool:
+    """Deploy/refresh one hook file; return True if created or updated.
+
+    Regular files only: a symlink at the path is replaced (never followed, so
+    its target is never clobbered); a non-regular, non-symlink entry (e.g. a
+    directory) is not ours and is left untouched.
+    """
+    if hook_path.is_symlink():
+        hook_path.unlink()
+    if is_regular_file(hook_path):
+        return _refresh_existing_hook(hook_path, block)
+    if hook_path.exists():
+        return False  # non-regular entry (e.g. a directory) — not ours, skip
+    hook_path.write_text(f"#!/usr/bin/env bash\n{block}")
+    hook_path.chmod(0o755)
+    return True
 
 
 def remove_git_hooks(repo_root: Path | None = None) -> list[str]:
@@ -190,7 +205,10 @@ def remove_git_hooks(repo_root: Path | None = None) -> list[str]:
     removed: list[str] = []
     for name in GIT_HOOKS:
         hook_path = hooks_dir / name
-        if not hook_path.exists():
+        # Regular files only: a symlinked hook path is not ours — never follow
+        # it to read/rewrite/delete its target; a missing or non-file path has
+        # nothing of ours to remove.
+        if not is_regular_file(hook_path):
             continue
 
         content = hook_path.read_text()
@@ -225,7 +243,10 @@ def check_git_hooks(repo_root: Path | None = None) -> list[str]:
     missing: list[str] = []
     for name in GIT_HOOKS:
         hook_path = hooks_dir / name
-        if not hook_path.exists() or not _has_biff_block(hook_path.read_text()):
+        # Regular files only: a symlinked hook path is not ours and must not be
+        # followed to read an arbitrary target, so treat it (and any missing or
+        # non-file path) as "not deployed".
+        if not is_regular_file(hook_path) or not _has_biff_block(hook_path.read_text()):
             missing.append(name)
 
     return missing

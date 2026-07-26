@@ -166,6 +166,30 @@ class TestRemoveCiWorkflow:
     def test_no_repo_root_returns_false(self) -> None:
         assert remove_ci_workflow(Path("/nonexistent")) is False
 
+    def test_directory_at_workflow_path_left_alone(self, tmp_path: Path) -> None:
+        """A directory (not ours) at the workflow path: report False, don't touch."""
+        repo = tmp_path / "repo"
+        wf = repo / ".github" / "workflows" / _WORKFLOW_NAME
+        wf.mkdir(parents=True)  # a directory occupies the workflow path
+
+        assert remove_ci_workflow(repo) is False
+        assert wf.is_dir()  # left untouched, not misreported as removed
+
+    def test_symlinked_workflow_removed_without_touching_target(
+        self, tmp_path: Path
+    ) -> None:
+        """A committed symlinked workflow: remove the link, never its target."""
+        repo = tmp_path / "repo"
+        outside = tmp_path / "secret.txt"
+        outside.write_text("keep me")
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / _WORKFLOW_NAME).symlink_to(outside)
+
+        assert remove_ci_workflow(repo) is True
+        assert not (wf / _WORKFLOW_NAME).exists()  # the link is gone
+        assert outside.read_text() == "keep me"  # target untouched
+
 
 # ── check_ci_workflow ──────────────────────────────────────────────
 
@@ -191,3 +215,18 @@ class TestCheckCiWorkflow:
 
     def test_no_repo_root_returns_false(self) -> None:
         assert check_ci_workflow(Path("/nonexistent")) is False
+
+    def test_symlinked_workflow_not_current(self, tmp_path: Path) -> None:
+        """A symlinked workflow path is not ours — not-current, never followed.
+
+        The link's target matches the template, yet check must not follow the
+        symlink to read it; it reports the workflow as not deployed/current.
+        """
+        repo = tmp_path / "repo"
+        outside = tmp_path / "tpl.yml"
+        outside.write_text(_template_content())
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / _WORKFLOW_NAME).symlink_to(outside)
+
+        assert check_ci_workflow(repo) is False
