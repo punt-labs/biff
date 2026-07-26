@@ -1172,21 +1172,16 @@ class TestDetectCollisions:
 # ── handle_pre_tool_use ──────────────────────────────────────────────
 
 
-def _gate_mocks(*, plan: bool, bead: bool | str):
-    """Return patches for the two PreToolUse gate conditions.
+def _gate_mocks(*, plan: bool):
+    """Return patches for the PreToolUse plan gate.
 
-    *bead* can be True/False (mapped to "yes"/"no") or a literal
-    string ("yes", "no", "unavailable").
-
-    Also patches ``_has_active_session`` to ``True`` so the gate
-    logic is exercised (liveness check is tested separately).
+    Patches ``_has_active_session`` to ``True`` so the gate logic is
+    exercised (the liveness check is tested separately).
     """
-    bead_val = ("yes" if bead else "no") if isinstance(bead, bool) else bead
     return (
         patch("biff.hook._has_active_session", return_value=True),
         patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
         patch("biff.markers.has_plan_marker", return_value=plan),
-        patch("biff.markers.check_bead_in_progress", return_value=bead_val),
     )
 
 
@@ -1239,8 +1234,8 @@ class TestHasActiveSession:
 
     def test_pre_tool_use_still_gates_with_active_session(self) -> None:
         """handle_pre_tool_use hard-denies when server IS running and plan not set."""
-        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
-        with m_active, m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan = _gate_mocks(plan=False)
+        with m_active, m_wt, m_plan:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _deny_reason(result)
@@ -1248,70 +1243,49 @@ class TestHasActiveSession:
 
 
 class TestHandlePreToolUse:
-    """PreToolUse gate: hard-deny Edit/Write without plan + bead.
+    """PreToolUse gate: hard-deny Edit/Write without a set plan.
 
     Conforms to the ``claude-code-biff.tex`` Z model: ``PreToolHookAllow``
-    is enabled for edit tools only when ``planSet = ztrue`` and
-    ``beadClaimed`` is non-empty; otherwise only ``PreToolHookDeny``
-    (``pdDeny``) is reachable.
+    is enabled for edit tools only when ``planSet = ztrue``; otherwise
+    only ``PreToolHookDeny`` (``pdDeny``) is reachable.  The gate depends
+    on the plan marker alone — never on beads or ``bd`` (DES-051).
     """
 
-    def test_both_missing_denies_with_both_instructions(self) -> None:
-        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=False)
-        with m_active, m_wt, m_plan, m_bead:
-            result = handle_pre_tool_use({})
-        assert result is not None
-        reason = _deny_reason(result)
-        assert "/plan" in reason
-        assert "bd update" in reason
-
     def test_plan_missing_denies_with_plan_instruction(self) -> None:
-        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead=True)
-        with m_active, m_wt, m_plan, m_bead:
+        m_active, m_wt, m_plan = _gate_mocks(plan=False)
+        with m_active, m_wt, m_plan:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _deny_reason(result)
         assert "/plan" in reason
-        assert "bd update" not in reason
+        assert "bd" not in reason
 
-    def test_bead_missing_denies_with_bead_instruction(self) -> None:
-        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead=False)
-        with m_active, m_wt, m_plan, m_bead:
-            result = handle_pre_tool_use({})
-        assert result is not None
-        reason = _deny_reason(result)
-        assert "bd update" in reason
-        assert "/plan" not in reason
-
-    def test_both_present_allows(self) -> None:
-        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead=True)
-        with m_active, m_wt, m_plan, m_bead:
+    def test_plan_present_allows(self) -> None:
+        m_active, m_wt, m_plan = _gate_mocks(plan=True)
+        with m_active, m_wt, m_plan:
             result = handle_pre_tool_use({})
         assert result is None
 
-    def test_bd_unavailable_no_plan_denies_with_explanation(self) -> None:
-        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=False, bead="unavailable")
-        with m_active, m_wt, m_plan, m_bead:
-            result = handle_pre_tool_use({})
-        assert result is not None
-        reason = _deny_reason(result)
-        assert "unavailable" in reason
-        assert "/plan" in reason
-
-    def test_bd_unavailable_with_plan_allows(self) -> None:
-        """When plan is set but bd is unavailable, allow gracefully."""
-        m_active, m_wt, m_plan, m_bead = _gate_mocks(plan=True, bead="unavailable")
-        with m_active, m_wt, m_plan, m_bead:
-            result = handle_pre_tool_use({})
-        assert result is None
+    def test_gate_never_invokes_bd(self) -> None:
+        """The gate path must not shell out to ``bd`` (biff-84a)."""
+        m_active, m_wt, m_plan = _gate_mocks(plan=False)
+        with (
+            m_active,
+            m_wt,
+            m_plan,
+            patch("subprocess.run") as mock_run,
+        ):
+            handle_pre_tool_use({})
+        mock_run.assert_not_called()
 
 
 class TestPreToolUseFailsClosed:
     """The gate entrypoint denies when it cannot evaluate its condition.
 
     A hard control that silently grants access on an unexpected error is
-    the same bug as no control at all (DES-051). If reading the markers
-    raises, ``cc_pre_tool_use`` must emit a deny, not let the edit through.
+    the same bug as no control at all (DES-051). If reading the plan
+    marker raises, ``cc_pre_tool_use`` must emit a deny, not let the edit
+    through.
     """
 
     def test_marker_read_error_emits_deny(self) -> None:
@@ -1328,7 +1302,7 @@ class TestPreToolUseFailsClosed:
         assert len(emitted) == 1
         reason = _deny_reason(emitted[0])
         assert "/plan" in reason
-        assert "bd update" in reason
+        assert "bd" not in reason
 
 
 # ── Z spec invariant coverage (biff-g9b) ─────────────────────────────
@@ -1425,264 +1399,6 @@ class TestZSpecSessionEndCleanup:
         assert count == 0
         # Other repo's session untouched
         assert (active_dir / "kai-xyz99999").exists()
-
-
-class TestZSpecBeadClose:
-    """Z spec §8.4 constraints 36, 50: CloseBead.
-
-    CloseBead requires bead? in beadClaimed (precondition 36),
-    and sets beadClaimed' = beadClaimed \\ {bead?} (effect 50).
-
-    In the implementation, bead close is detected via PostToolUse
-    Bash regex matching.  On close, the bead-active marker is
-    cleared so the PreToolUse gate re-checks via subprocess.
-    Bead claim writes the marker for fast-path caching.
-    """
-
-    def test_bd_close_not_detected_as_claim(self, tmp_path: Path) -> None:
-        """bd close should NOT trigger the bead claim nudge."""
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {"command": "bd close biff-abc"},
-            "tool_response": "\u2713 Closed biff-abc",
-        }
-        m_home, m_wt = _hint_mocks(tmp_path)
-        with m_home, m_wt, patch("biff.hook._has_beads", return_value=False):
-            result = handle_post_bash(data)
-        assert result is None
-
-    def test_bd_close_multiple_not_detected(self, tmp_path: Path) -> None:
-        """bd close with multiple IDs should not trigger claim."""
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {"command": "bd close biff-abc biff-def"},
-            "tool_response": "\u2713 Closed biff-abc\n\u2713 Closed biff-def",
-        }
-        m_home, m_wt = _hint_mocks(tmp_path)
-        with m_home, m_wt, patch("biff.hook._has_beads", return_value=False):
-            result = handle_post_bash(data)
-        assert result is None
-
-    def test_bead_check_reflects_claimed_state(self) -> None:
-        """check_bead_in_progress reflects claimed vs unclaimed (slow path)."""
-        from biff.markers import check_bead_in_progress
-
-        # After bd close all, the list should be empty — no marker, falls through
-        with patch("biff.markers._check_bead_subprocess", return_value="no"):
-            assert check_bead_in_progress("") == "no"
-
-        # With one claimed bead — no marker, falls through
-        with patch("biff.markers._check_bead_subprocess", return_value="yes"):
-            assert check_bead_in_progress("") == "yes"
-
-
-def _write_stale_bead_marker(tmp_path: Path) -> Path:
-    """Write a bead-active marker stamped older than the TTL.
-
-    Simulates a claim validated long ago \u2014 a bead that may since have
-    been closed out-of-band (direct Dolt, another session).  The gate
-    must re-query bd rather than trust the stale stamp (biff-84a).
-    """
-    from datetime import UTC, datetime, timedelta
-
-    from biff.markers import _BEAD_MARKER_TTL
-
-    marker = _hint_path(tmp_path, "bead-active")
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    stale = datetime.now(UTC) - _BEAD_MARKER_TTL - timedelta(seconds=1)
-    marker.write_text(stale.isoformat())
-    return marker
-
-
-def _bead_marker_is_fresh(tmp_path: Path) -> bool:
-    """True if the bead-active marker is stamped within the TTL."""
-    from datetime import UTC, datetime
-
-    from biff.markers import _BEAD_MARKER_TTL
-
-    marker = _hint_path(tmp_path, "bead-active")
-    stamped = datetime.fromisoformat(marker.read_text().strip())
-    return datetime.now(UTC) - stamped < _BEAD_MARKER_TTL
-
-
-class TestBeadMarkerCache:
-    """Bead-active marker file cache for PreToolUse gate performance.
-
-    The marker is a *timestamped* perf cache, not ground truth: the
-    gate trusts it only within a short TTL, then re-validates against
-    ``bd``.  A bead closed out-of-band goes stale within the TTL and
-    forces a re-check, so a hard-deny gate never allows on a phantom
-    claim (biff-84a).
-    """
-
-    def test_claim_writes_fresh_marker(self, tmp_path: Path) -> None:
-        """bd update --status=in_progress writes a freshly-stamped marker."""
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {"command": "bd update biff-7vp --status=in_progress"},
-            "tool_response": "\u2713 Updated issue: biff-7vp",
-        }
-        m_home, m_wt = _hint_mocks(tmp_path)
-        with m_home, m_wt:
-            result = handle_post_bash(data)
-        assert result is not None
-        assert _hint_path(tmp_path, "bead-active").exists()
-        assert _bead_marker_is_fresh(tmp_path)
-
-    def test_close_clears_marker(self, tmp_path: Path) -> None:
-        """bd close removes bead-active marker."""
-        from biff.markers import write_bead_marker
-
-        m_home, m_wt = _hint_mocks(tmp_path)
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {"command": "bd close biff-abc"},
-            "tool_response": "\u2713 Closed biff-abc",
-        }
-        with m_home, m_wt:
-            write_bead_marker(_FAKE_WORKTREE)
-            handle_post_bash(data)
-        assert not _hint_path(tmp_path, "bead-active").exists()
-
-    def test_failed_close_does_not_clear_marker(self, tmp_path: Path) -> None:
-        """Failed bd close leaves marker intact."""
-        from biff.markers import write_bead_marker
-
-        m_home, m_wt = _hint_mocks(tmp_path)
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {"command": "bd close biff-abc"},
-            "tool_response": "Error: issue not found",
-        }
-        with m_home, m_wt:
-            write_bead_marker(_FAKE_WORKTREE)
-            handle_post_bash(data)
-        assert _hint_path(tmp_path, "bead-active").exists()
-
-    def test_fresh_marker_fast_path_skips_subprocess(self, tmp_path: Path) -> None:
-        """A fresh marker returns 'yes' WITHOUT querying bd (perf fast path)."""
-        from biff.markers import check_bead_in_progress, write_bead_marker
-
-        m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with (
-            m_home,
-            patch("biff.markers._check_bead_subprocess") as mock_sub,
-        ):
-            write_bead_marker(_FAKE_WORKTREE)
-            result = check_bead_in_progress(_FAKE_WORKTREE)
-        assert result == "yes"
-        mock_sub.assert_not_called()
-
-    def test_stale_marker_revalidates_and_denies_when_closed(
-        self, tmp_path: Path
-    ) -> None:
-        """The bypass: a stale marker for a bead closed out-of-band re-checks.
-
-        Before the fix, ``check_bead_in_progress`` trusted any marker
-        file and returned 'yes', so the hard-deny gate allowed the edit
-        on a phantom claim.  A stale stamp must force a bd re-query; when
-        bd reports no claim, the result is 'no' (gate denies).
-        """
-        from biff.markers import check_bead_in_progress
-
-        _write_stale_bead_marker(tmp_path)
-        m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with (
-            m_home,
-            patch("biff.markers._check_bead_subprocess", return_value="no"),
-        ):
-            result = check_bead_in_progress(_FAKE_WORKTREE)
-        assert result == "no"
-
-    def test_stale_marker_dropped_when_bead_closed(self, tmp_path: Path) -> None:
-        """Re-validating a phantom claim deletes the stale marker."""
-        from biff.markers import check_bead_in_progress
-
-        marker = _write_stale_bead_marker(tmp_path)
-        m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with (
-            m_home,
-            patch("biff.markers._check_bead_subprocess", return_value="no"),
-        ):
-            check_bead_in_progress(_FAKE_WORKTREE)
-        assert not marker.exists()
-
-    def test_stale_marker_refreshed_when_still_claimed(self, tmp_path: Path) -> None:
-        """A stale marker for a still-claimed bead is refreshed, not dropped."""
-        from biff.markers import check_bead_in_progress
-
-        _write_stale_bead_marker(tmp_path)
-        m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with (
-            m_home,
-            patch("biff.markers._check_bead_subprocess", return_value="yes"),
-        ):
-            result = check_bead_in_progress(_FAKE_WORKTREE)
-        assert result == "yes"
-        assert _bead_marker_is_fresh(tmp_path)
-
-    def test_stale_marker_kept_when_bd_unavailable(self, tmp_path: Path) -> None:
-        """A transient bd outage does not drop the marker (re-check next time)."""
-        from biff.markers import check_bead_in_progress
-
-        marker = _write_stale_bead_marker(tmp_path)
-        m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with (
-            m_home,
-            patch("biff.markers._check_bead_subprocess", return_value="unavailable"),
-        ):
-            result = check_bead_in_progress(_FAKE_WORKTREE)
-        assert result == "unavailable"
-        assert marker.exists()
-
-    def test_check_slow_path_caches_yes(self, tmp_path: Path) -> None:
-        """check_bead_in_progress writes marker on subprocess 'yes'."""
-        from biff.markers import check_bead_in_progress
-
-        marker = _hint_path(tmp_path, "bead-active")
-        assert not marker.exists()
-
-        m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with (
-            m_home,
-            patch("biff.markers._check_bead_subprocess", return_value="yes"),
-        ):
-            result = check_bead_in_progress(_FAKE_WORKTREE)
-        assert result == "yes"
-        assert marker.exists()
-        assert _bead_marker_is_fresh(tmp_path)
-
-    def test_check_slow_path_no_does_not_cache(self, tmp_path: Path) -> None:
-        """check_bead_in_progress does NOT write marker on subprocess 'no'."""
-        from biff.markers import check_bead_in_progress
-
-        m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with (
-            m_home,
-            patch("biff.markers._check_bead_subprocess", return_value="no"),
-        ):
-            result = check_bead_in_progress(_FAKE_WORKTREE)
-        assert result == "no"
-        assert not _hint_path(tmp_path, "bead-active").exists()
-
-    def test_session_start_clears_stale_bead_marker(self, tmp_path: Path) -> None:
-        """Session start clears the bead marker (Z StartSession: beadClaimed'=empty).
-
-        A claim never carries across sessions unvalidated: dropping the
-        marker at session start bounds cross-session staleness to zero,
-        forcing the first edit of a new session to re-query bd.
-        """
-        from biff.markers import write_bead_marker
-
-        m_home, m_wt = _hint_mocks(tmp_path)
-        with (
-            m_home,
-            m_wt,
-            patch("biff.hook._get_git_branch", return_value="main"),
-        ):
-            write_bead_marker(_FAKE_WORKTREE)
-            handle_session_start()
-        assert not _hint_path(tmp_path, "bead-active").exists()
 
 
 # ── Lux consumer hooks (biff-og4p, biff-g75a) ─────────────────────────
@@ -1921,67 +1637,11 @@ class TestIsLuxEnabled:
             assert _is_lux_enabled() is False
 
 
-class TestBeadStatusTransition:
-    """Marker is cleared when bd update changes status away from in_progress."""
-
-    def test_status_done_clears_marker(self, tmp_path: Path) -> None:
-        """bd update --status=done clears bead-active marker."""
-        marker = _hint_path(tmp_path, "bead-active")
-        marker.parent.mkdir(parents=True)
-        marker.write_text("yes")
-
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {
-                "command": "bd update biff-abc --status=done",
-            },
-            "tool_response": "\u2713 Updated issue: biff-abc",
-        }
-        m_home, m_wt = _hint_mocks(tmp_path)
-        m_beads, m_lux = _lux_mocks(lux=False)
-        with m_home, m_wt, m_beads, m_lux:
-            handle_post_bash(data)
-        assert not marker.exists()
-
-    def test_status_open_clears_marker(self, tmp_path: Path) -> None:
-        """bd update --status=open clears bead-active marker."""
-        marker = _hint_path(tmp_path, "bead-active")
-        marker.parent.mkdir(parents=True)
-        marker.write_text("yes")
-
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {
-                "command": "bd update biff-abc --status=open",
-            },
-            "tool_response": "\u2713 Updated issue: biff-abc",
-        }
-        m_home, m_wt = _hint_mocks(tmp_path)
-        m_beads, m_lux = _lux_mocks(lux=False)
-        with m_home, m_wt, m_beads, m_lux:
-            handle_post_bash(data)
-        assert not marker.exists()
-
-    def test_status_in_progress_does_not_clear(self, tmp_path: Path) -> None:
-        """bd update --status=in_progress should write, not clear."""
-        data: dict[str, object] = {
-            "tool_name": "Bash",
-            "tool_input": {
-                "command": "bd update biff-abc --status=in_progress",
-            },
-            "tool_response": "\u2713 Updated issue: biff-abc",
-        }
-        m_home, m_wt = _hint_mocks(tmp_path)
-        with m_home, m_wt:
-            handle_post_bash(data)
-        assert _hint_path(tmp_path, "bead-active").exists()
-
-
 class TestIsErrorFlag:
-    """is_error flag prevents marker writes on failed commands."""
+    """is_error flag suppresses nudges on failed commands."""
 
-    def test_is_error_prevents_claim(self, tmp_path: Path) -> None:
-        """Bash tool with is_error=True should not write marker."""
+    def test_is_error_prevents_claim_nudge(self, tmp_path: Path) -> None:
+        """Bash tool with is_error=True should not nudge on a bead claim."""
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {
@@ -1994,7 +1654,6 @@ class TestIsErrorFlag:
         with m_home, m_wt:
             result = handle_post_bash(data)
         assert result is None
-        assert not _hint_path(tmp_path, "bead-active").exists()
 
 
 # ── _read_hook_input (non-blocking stdin) ───────────────────────────
