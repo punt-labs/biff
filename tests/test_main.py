@@ -252,17 +252,19 @@ class TestEnableCommand:
         assert workflow.is_file()
 
     @patch("biff.__main__.find_git_root")
-    def test_does_not_deploy_git_hooks(
-        self, mock_root: MagicMock, tmp_path: Path
-    ) -> None:
-        """Enable is a committed-policy toggle — hooks are per-clone (install)."""
-        (tmp_path / ".git" / "hooks").mkdir(parents=True)
-        mock_root.return_value = tmp_path
+    def test_deploys_git_hooks(self, mock_root: MagicMock, tmp_path: Path) -> None:
+        """Enable fully activates the clone — the local git hooks land too."""
+        from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
+
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
-        assert list((tmp_path / ".git" / "hooks").iterdir()) == []
-        # It points the user at `biff install` for the per-clone machinery.
-        assert "biff install" in result.output
+        hooks_dir = resolve_hooks_dir(repo)
+        assert hooks_dir is not None
+        for name in GIT_HOOKS:
+            assert (hooks_dir / name).is_file()
+        assert "Git hooks:" in result.output
 
     @patch("biff.__main__.find_git_root")
     def test_reports_enabled(self, mock_root: MagicMock, tmp_path: Path) -> None:
@@ -309,6 +311,24 @@ class TestDisableCommand:
         result = runner.invoke(app, ["disable"])
         assert result.exit_code == 0
         assert not workflow.exists()
+
+    @patch("biff.__main__.find_git_root")
+    def test_removes_git_hooks(self, mock_root: MagicMock, tmp_path: Path) -> None:
+        """Disable removes exactly what enable added, including the git hooks."""
+        from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
+
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
+        runner.invoke(app, ["enable"])
+        hooks_dir = resolve_hooks_dir(repo)
+        assert hooks_dir is not None
+        assert (hooks_dir / "post-commit").is_file()
+
+        result = runner.invoke(app, ["disable"])
+        assert result.exit_code == 0
+        for name in GIT_HOOKS:
+            assert not (hooks_dir / name).exists()
+        assert "Git hooks removed:" in result.output
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:

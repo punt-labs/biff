@@ -6,12 +6,13 @@ Claude Code session.  Both actions route through
 ``biff enable`` / ``biff disable`` CLI verbs use, so the two front-ends
 produce an identical committed result (DES-052, biff-j5u).
 
-``action="enable"`` writes the committed marker ``.punt-labs/biff/enabled``
-and the CI notify workflow ``.github/workflows/biff-notify.yml``;
-``action="disable"`` removes both.  These are tracked repo files; the
-user commits them via a PR like any other change, so this tool never
-runs git.  Per-clone git hooks are not touched here -- ``biff install``
-deploys those locally.
+``action="enable"`` fully activates this clone: it writes the committed
+marker ``.punt-labs/biff/enabled`` and CI notify workflow
+``.github/workflows/biff-notify.yml`` AND deploys this clone's local
+``.git/hooks`` biff dispatchers; ``action="disable"`` removes all three.
+The committed files are tracked repo files the user commits via a PR like
+any other change; the git hooks are per-clone and never committed.  This
+tool never runs git.
 """
 
 from __future__ import annotations
@@ -39,11 +40,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def biff(action: Literal["enable", "disable"]) -> str:
         """Enable or disable biff for the current repository.
 
-        Writes (enable) or removes (disable) the two committed enablement
-        artifacts: the marker ``.punt-labs/biff/enabled`` and the CI notify
-        workflow ``.github/workflows/biff-notify.yml``.  These are tracked
-        repo files -- commit them via a PR for the change to take effect for
-        every contributor.  Returns guidance to restart Claude Code.
+        Enable fully activates this clone; disable deactivates it.  Writes
+        (enable) or removes (disable) the two committed enablement artifacts
+        -- the marker ``.punt-labs/biff/enabled`` and the CI notify workflow
+        ``.github/workflows/biff-notify.yml`` -- plus this clone's local
+        ``.git/hooks`` biff dispatchers.  Commit the tracked files via a PR
+        for the change to take effect for every contributor.  Returns
+        guidance to restart Claude Code.
         """
         repo_root = state.repo_root
         if repo_root is None:

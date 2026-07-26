@@ -12,8 +12,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from biff.git_hooks import (
     _MARKER_END,
     _MARKER_START,
@@ -26,20 +24,8 @@ from biff.git_hooks import (
     resolve_hooks_dir,
 )
 
-
-@pytest.fixture(autouse=True)
-def _confine_git_walk(  # pyright: ignore[reportUnusedFunction]
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Stop ``git rev-parse`` from climbing out of the test's tmp_path.
-
-    ``TMPDIR`` points inside the real biff repo, so without a ceiling the
-    resolver would walk up and resolve a bare tmp_path to the project's own
-    ``.git`` -- reading (or worse, writing) the real hooks. The ceiling must
-    be tmp_path's parent, not tmp_path: git deliberately does not exclude the
-    starting directory itself, so a ceiling equal to the cwd is ignored.
-    """
-    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+# Git-walk confinement (so the resolver never climbs into the real repo) is
+# provided suite-wide by the autouse ``_confine_git_walk`` fixture in conftest.
 
 
 def _git(repo: Path, *args: str) -> None:

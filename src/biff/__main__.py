@@ -1472,17 +1472,16 @@ def enable(
         typer.Option(help="Repo root (default: auto-detect)."),
     ] = None,
 ) -> None:
-    """Enable biff in the current git repo.
+    """Enable biff in the current git repo — fully activates this clone.
 
-    Writes the two committed artifacts that constitute repo enablement
-    policy (DES-052): the marker ``.punt-labs/biff/enabled`` and the CI
-    notify workflow ``.github/workflows/biff-notify.yml``.  Equivalent
-    to the MCP ``/biff enable`` toggle — both write exactly this set and
-    nothing else.  Idempotent.  These are tracked files: commit them via
-    a PR so every contributor participates.  This never runs git.
-
-    Per-clone git hooks are NOT written here — they live in ``.git/hooks``
-    (local, never committed) and are deployed by ``biff install``.
+    Writes the two committed enablement artifacts (DES-052): the marker
+    ``.punt-labs/biff/enabled`` and the CI notify workflow
+    ``.github/workflows/biff-notify.yml``, AND deploys this clone's local
+    ``.git/hooks`` biff dispatchers so the repo is active here in one verb
+    (the beads ``bd setup`` model).  Equivalent to the MCP ``/biff enable``
+    toggle — both do exactly this.  Idempotent.  The committed files are
+    tracked: commit them via a PR so every contributor participates; the git
+    hooks are per-clone and never committed.  This never runs git.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
@@ -1493,18 +1492,8 @@ def enable(
     change = RepoEnablement(repo_root).enable()
     if change.ci_workflow_changed:
         print("CI workflow: .github/workflows/biff-notify.yml")
-
-    # Hint (not action): hooks are per-clone machinery. When this clone is
-    # missing any biff hook dispatcher, point at `biff install` rather than
-    # deploying them from the policy toggle — that keeps `biff enable` and
-    # `/biff enable` equivalent (biff-j5u). check_git_hooks() returns the list
-    # of missing hooks, so a non-empty result means at least one is absent.
-    from biff.git_hooks import check_git_hooks
-
-    if check_git_hooks(repo_root):
-        print(
-            "Some git hooks are missing for this clone. Run `biff install` to add them."
-        )
+    if change.git_hooks_changed:
+        print(f"Git hooks: {', '.join(change.git_hooks_changed)}")
 
     print(
         "biff enabled. Commit .punt-labs/biff/enabled and "
@@ -1520,16 +1509,14 @@ def disable(
         typer.Option(help="Repo root (default: auto-detect)."),
     ] = None,
 ) -> None:
-    """Disable biff in the current git repo.
+    """Disable biff in the current git repo — deactivates this clone.
 
-    Removes the two committed enablement artifacts: the marker
-    ``.punt-labs/biff/enabled`` and ``.github/workflows/biff-notify.yml``.
-    Equivalent to the MCP ``/biff disable`` toggle.  Idempotent.  Commit
-    the removal via a PR for it to take effect for every contributor.
-    This never runs git.
-
-    Per-clone git hooks are left in place — they gate on the (now absent)
-    marker and no-op.  ``biff uninstall`` removes them from a clone.
+    Removes exactly what ``enable`` added: the committed marker
+    ``.punt-labs/biff/enabled`` and CI workflow
+    ``.github/workflows/biff-notify.yml``, AND this clone's local
+    ``.git/hooks`` biff dispatchers.  Equivalent to the MCP ``/biff disable``
+    toggle.  Idempotent.  Commit the removal of the tracked files via a PR
+    for it to take effect for every contributor.  This never runs git.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
@@ -1540,6 +1527,8 @@ def disable(
     change = RepoEnablement(repo_root).disable()
     if change.ci_workflow_changed:
         print("CI workflow removed: biff-notify.yml")
+    if change.git_hooks_changed:
+        print(f"Git hooks removed: {', '.join(change.git_hooks_changed)}")
 
     print(
         "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
