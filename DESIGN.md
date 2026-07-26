@@ -3856,7 +3856,8 @@ and org list before it can function. With 30 repos in an org, this is
 antithetical friction. The team roster is a social hint that provides
 no access control — NATS subject scoping (DES-007a) and org discovery
 (DES-034) handle the actual visibility. The only user action to enable
-biff should be `/biff y`.
+biff should be `/biff enable` (see DES-052 for the committed-marker
+enablement model that superseded the original per-user toggle).
 
 ### Design
 
@@ -3876,7 +3877,7 @@ the repo root. YAML, not TOML — consistent with the ethos ecosystem
 its values are honored as-is. If absent, everything is derived (demo
 relay, owner from remote). Two intentional fallbacks exist in explicit
 mode: (a) when `config.yaml` omits `relay`, the demo relay + bundled
-creds apply so `/biff y` alone works; (b) when `config.yaml` omits
+creds apply so `/biff enable` alone works; (b) when `config.yaml` omits
 `peers.orgs`, the owner is derived from the git remote so writing a
 relay-only config via `/biff:relay` doesn't silently break org
 discovery. Explicit values in `config.yaml` always win; fallbacks fill
@@ -3889,9 +3890,10 @@ When no remote exists or the URL doesn't parse to `owner/repo`, the
 owner is `None` and the repo operates in isolation.
 
 **4. All config writes through MCP tools.** Config changes go through
-biff MCP tools — never Claude Code's `Write()` tool directly. `/biff y`
-writes enabled state via MCP tool. New `/biff:relay` command writes
-relay URL (restart required for the change to take effect).
+biff MCP tools — never Claude Code's `Write()` tool directly. `/biff
+enable` writes the committed enablement marker via MCP tool (DES-052).
+New `/biff:relay` command writes relay URL (restart required for the
+change to take effect).
 
 ### Config Schema
 
@@ -3957,10 +3959,10 @@ token verification at connect, then E2E encryption (DES-016).
 
 No legacy users exist. The implementation has no `.biff` TOML parsing,
 no migration path, and no fallback. Repos with leftover `.biff` files
-must delete them manually and run `/biff y`.
+must delete them manually and run `/biff enable`.
 
-- **New repos:** `/biff y` writes `config.local.yaml` only. No
-  `config.yaml` needed — zero-config mode.
+- **New repos:** `/biff enable` writes the committed `.punt-labs/biff/enabled`
+  marker only (DES-052). No `config.yaml` needed — zero-config mode.
 - **Detection order:** `config.yaml` (explicit mode with local
   overrides) > neither (zero-config, derive everything).
 

@@ -16,7 +16,7 @@ This checks: Python version, uv installation, Claude Code CLI, MCP server regist
 
 **Cause:** Biff is not enabled in the current repo.
 
-**Fix:** Run `/biff y` to activate, or `biff enable` from the CLI. You need a `.biff` file committed to the repo root.
+**Fix:** Run `/biff enable` (or `biff enable` from the CLI). This writes the committed `.punt-labs/biff/enabled` marker — commit it so biff is on for everyone who clones the repo.
 
 ### Commands not available after install
 
@@ -44,7 +44,7 @@ cat ~/.punt-labs/biff/statusline-original.json
 
 **Possible causes:**
 
-1. **Recipient is dormant.** Biff is not enabled in their repo (`/biff y`).
+1. **Recipient is dormant.** Biff is not enabled in their repo (`/biff enable`).
 2. **Recipient is in do-not-disturb.** Check `/who` --- `S` column shows `-` for DND. Messages still accumulate; they'll see them when they `/read` or `/mesg y`.
 3. **NATS connection issue.** The relay may be unreachable. Check:
 
@@ -52,19 +52,19 @@ cat ~/.punt-labs/biff/statusline-original.json
    biff doctor
    ```
 
-4. **Different relay.** Both sides must use the same NATS relay URL in their `.biff` file.
+4. **Different relay.** Both sides must use the same NATS relay URL in their `.punt-labs/biff/config.yaml`.
 
 ### "Talk requires a NATS relay connection"
 
 **Cause:** `/talk` only works with the NATS relay, not in local-only mode.
 
-**Fix:** Ensure your `.biff` file has a `[relay]` section with a valid URL, and that biff is enabled (`/biff y`).
+**Fix:** Ensure your `.punt-labs/biff/config.yaml` has a `relay` section with a valid URL, and that biff is enabled (`/biff enable`).
 
 ### Status bar shows `biff` instead of username
 
 **Cause:** The MCP server hasn't connected to the relay yet (dormant mode), or the unread file hasn't been written.
 
-**Fix:** Enable biff (`/biff y`) and run any command (`/who`) to trigger the first connection. The status bar updates within 2 seconds.
+**Fix:** Enable biff (`/biff enable`) and run any command (`/who`) to trigger the first connection. The status bar updates within 2 seconds.
 
 ### Git hooks not firing
 
