@@ -38,9 +38,7 @@ class TestTrackActivity:
 
         assert await tool(message="hi") == "got hi"
 
-    async def test_dormant_returns_notice_without_running(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_dormant_returns_notice_without_running(self, tmp_path: Path) -> None:
         """A disabled repo returns the actionable notice, not the body."""
         config = BiffConfig(user="kai", repo_name="test")
         state = create_state(config, tmp_path, dormant=True, repo_root=tmp_path)
