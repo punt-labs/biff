@@ -53,7 +53,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "Error: not in a git repository."
 
         if action == "enable":
-            RepoEnablement(repo_root).enable()
+            change = RepoEnablement(repo_root).enable()
+            if not change.git_hooks_resolved:
+                # Fail loud, identical to the CLI `biff enable` surface: enable
+                # wrote nothing (marker included), so never claim success.
+                from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE  # noqa: PLC0415
+
+                return HOOKS_DIR_UNRESOLVED_NOTICE
             return (
                 "biff enabled. Commit .punt-labs/biff/enabled and "
                 ".github/workflows/biff-notify.yml, then restart Claude Code "

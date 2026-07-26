@@ -5679,6 +5679,18 @@ hooks, and writes the marker **last**. The marker is what `is_enabled` reads, so
 if either earlier step raises, the marker is never written and the repo stays
 cleanly OFF rather than half-activated.
 
+**Fail loud, never silent (biff-j5u sfh).** Two silent-success paths were
+closed. (1) When the git hooks directory cannot be resolved at all
+(`resolve_hooks_dir → None`: not a git repo, or `git` off `PATH`), `enable`
+writes *nothing* — not even the marker — and reports `git_hooks_resolved =
+False`; both the CLI and MCP surfaces then emit the one shared
+`HOOKS_DIR_UNRESOLVED_NOTICE` (the same notice `biff install` uses) and do not
+claim success. `git_hooks_resolved` on `EnablementChange` disambiguates an empty
+`git_hooks_changed` — "already current" vs "deployed nothing." (2) The helpers
+now distinguish a real failure from a no-op: `deploy_ci_workflow` **raises** on
+an unusable root and returns `False` only for the "already current" no-op, so
+the fail-safe ordering holds on the boolean paths too, not just on exceptions.
+
 **Claude Code hooks need no `enable` action.** The session/tool hooks
 (`SessionStart`, `PreToolUse`, `PostToolUse`, …) are registered **globally** by
 the marketplace plugin (`hooks/hooks.json`, `${CLAUDE_PLUGIN_ROOT}`), active in

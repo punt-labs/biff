@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from biff.ci_workflow import (
     _WORKFLOW_NAME,
     _template_content,
@@ -55,8 +57,10 @@ class TestDeployCiWorkflow:
         assert deploy_ci_workflow(repo) is True
         assert target.read_text() == _template_content()
 
-    def test_no_repo_root_returns_false(self) -> None:
-        assert deploy_ci_workflow(Path("/nonexistent")) is False
+    def test_unusable_root_raises(self) -> None:
+        """A non-directory root is a real failure, not a silent ``False`` no-op."""
+        with pytest.raises(ValueError, match="no usable repo root"):
+            deploy_ci_workflow(Path("/nonexistent"))
 
     def test_replaces_symlinked_target(self, tmp_path: Path) -> None:
         """A symlink at the workflow path is replaced, never followed.

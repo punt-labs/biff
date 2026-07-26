@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff._stdlib import remove_enabled_marker, write_enabled_marker
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
-from biff.git_hooks import deploy_git_hooks, remove_git_hooks
+from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -44,10 +44,18 @@ __all__ = ["EnablementChange", "RepoEnablement"]
 
 @dataclass(frozen=True, slots=True)
 class EnablementChange:
-    """What an ``enable``/``disable`` run wrote or removed, for the caller to report."""
+    """What an ``enable``/``disable`` run wrote or removed, for the caller to report.
+
+    ``git_hooks_resolved`` is ``False`` when the git hooks directory could not
+    be resolved (not a git repo, or ``git`` not on ``PATH``).  It disambiguates
+    an *empty* ``git_hooks_changed`` -- "already current" (resolved, nothing to
+    do) from "could not deploy anything" -- so ``enable`` never reports success
+    while silently deploying zero hooks.
+    """
 
     ci_workflow_changed: bool
     git_hooks_changed: tuple[str, ...]
+    git_hooks_resolved: bool
 
 
 @final
@@ -72,17 +80,31 @@ class RepoEnablement:
     def enable(self) -> EnablementChange:
         """Fully activate this clone: CI workflow, git hooks, then marker.
 
-        Order is load-bearing: the marker (which ``is_enabled`` reads) is
-        written LAST, so if either the CI-workflow write or the git-hook
-        deploy fails the marker is never written and the repo stays OFF --
-        fail-safe rather than half-enabled.
+        Fails safe two ways, so a half-activated repo is never left behind:
+
+        1. **Unresolvable hooks dir.** If the git hooks directory cannot be
+           resolved (not a git repo, or ``git`` not on ``PATH``), enable writes
+           *nothing* and returns ``git_hooks_resolved=False``; the caller emits
+           the shared NOTICE instead of claiming success.
+        2. **Write failure.** On the happy path the marker (which
+           ``is_enabled`` reads) is written LAST, so any exception raised while
+           deploying the CI workflow or the git hooks leaves the marker absent
+           and the repo cleanly OFF. (``deploy_ci_workflow`` returning ``False``
+           is a no-op "already current", not a failure -- real failures raise.)
         """
+        if resolve_hooks_dir(self._root) is None:
+            return EnablementChange(
+                ci_workflow_changed=False,
+                git_hooks_changed=(),
+                git_hooks_resolved=False,
+            )
         ci_changed = deploy_ci_workflow(self._root)
         hooks_changed = tuple(deploy_git_hooks(self._root))
         write_enabled_marker(self._root)
         return EnablementChange(
             ci_workflow_changed=ci_changed,
             git_hooks_changed=hooks_changed,
+            git_hooks_resolved=True,
         )
 
     def disable(self) -> EnablementChange:
@@ -90,12 +112,16 @@ class RepoEnablement:
 
         Removes exactly what :meth:`enable` added.  The marker is removed
         first, so the repo reads OFF immediately even if a later step fails.
-        Idempotent.
+        Idempotent.  Proceeds even when the hooks dir is unresolvable (there is
+        simply nothing local to remove); ``git_hooks_resolved`` still reports
+        whether it resolved, for symmetry with :meth:`enable`.
         """
+        resolved = resolve_hooks_dir(self._root) is not None
         remove_enabled_marker(self._root)
         hooks_changed = tuple(remove_git_hooks(self._root))
         ci_changed = remove_ci_workflow(self._root)
         return EnablementChange(
             ci_workflow_changed=ci_changed,
             git_hooks_changed=hooks_changed,
+            git_hooks_resolved=resolved,
         )

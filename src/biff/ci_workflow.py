@@ -27,11 +27,18 @@ def _template_content() -> str:
 def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
     """Deploy biff-notify.yml to ``.github/workflows/``.
 
-    Returns ``True`` if the file was created or updated.
+    Returns ``True`` if the file was created or updated, ``False`` if it was
+    already current (a no-op).  Raises ``ValueError`` when no usable repo root
+    can be determined -- a real failure, distinct from the ``False`` no-op, so
+    callers (e.g. ``enable``) can fail safe on it rather than mistaking it for
+    "already deployed".
     """
     root = repo_root or find_git_root()
     if root is None or not root.is_dir():
-        return False
+        raise ValueError(
+            "cannot deploy the CI workflow: no usable repo root "
+            f"(got {root!r}); run inside a git repository."
+        )
 
     workflows_dir = root / ".github" / "workflows"
     workflows_dir.mkdir(parents=True, exist_ok=True)

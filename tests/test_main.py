@@ -232,23 +232,25 @@ class TestMcpCommand:
 class TestEnableCommand:
     @patch("biff.__main__.find_git_root")
     def test_writes_marker(self, mock_root: MagicMock, tmp_path: Path) -> None:
-        mock_root.return_value = tmp_path
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
-        marker = tmp_path / ".punt-labs" / "biff" / "enabled"
+        marker = repo / ".punt-labs" / "biff" / "enabled"
         assert marker.exists()
         # No config.yaml created — enable no longer runs interactive init
-        config_yaml = tmp_path / ".punt-labs" / "biff" / "config.yaml"
+        config_yaml = repo / ".punt-labs" / "biff" / "config.yaml"
         assert not config_yaml.exists()
 
     @patch("biff.__main__.find_git_root")
     def test_writes_committed_ci_workflow(
         self, mock_root: MagicMock, tmp_path: Path
     ) -> None:
-        mock_root.return_value = tmp_path
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
-        workflow = tmp_path / ".github" / "workflows" / "biff-notify.yml"
+        workflow = repo / ".github" / "workflows" / "biff-notify.yml"
         assert workflow.is_file()
 
     @patch("biff.__main__.find_git_root")
@@ -268,7 +270,8 @@ class TestEnableCommand:
 
     @patch("biff.__main__.find_git_root")
     def test_reports_enabled(self, mock_root: MagicMock, tmp_path: Path) -> None:
-        mock_root.return_value = tmp_path
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
         assert "enabled" in result.output
@@ -280,11 +283,32 @@ class TestEnableCommand:
         assert "Not in a git repository" in result.output
 
     @patch("biff.__main__.find_git_root")
-    def test_idempotent(self, mock_root: MagicMock, tmp_path: Path) -> None:
+    def test_unresolvable_hooks_emits_notice_no_success(
+        self, mock_root: MagicMock, tmp_path: Path
+    ) -> None:
+        """A non-git dir → hooks unresolvable → NOTICE, non-zero exit, no marker.
+
+        ``find_git_root`` is patched to a bare dir (as if a `.git` file existed
+        but git could not resolve hooks); the conftest git-ceiling stops the
+        walk into the real repo, so ``resolve_hooks_dir`` returns ``None``.
+        Enable must NOT claim success or write the marker.
+        """
+        from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE
+
         mock_root.return_value = tmp_path
+        result = runner.invoke(app, ["enable"])
+        assert result.exit_code != 0
+        assert HOOKS_DIR_UNRESOLVED_NOTICE in result.output
+        assert "biff enabled" not in result.output
+        assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
+
+    @patch("biff.__main__.find_git_root")
+    def test_idempotent(self, mock_root: MagicMock, tmp_path: Path) -> None:
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
         runner.invoke(app, ["enable"])
         runner.invoke(app, ["enable"])
-        marker = tmp_path / ".punt-labs" / "biff" / "enabled"
+        marker = repo / ".punt-labs" / "biff" / "enabled"
         assert marker.exists()
 
 
@@ -304,9 +328,10 @@ class TestDisableCommand:
     def test_removes_committed_ci_workflow(
         self, mock_root: MagicMock, tmp_path: Path
     ) -> None:
-        mock_root.return_value = tmp_path
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
         runner.invoke(app, ["enable"])
-        workflow = tmp_path / ".github" / "workflows" / "biff-notify.yml"
+        workflow = repo / ".github" / "workflows" / "biff-notify.yml"
         assert workflow.is_file()
         result = runner.invoke(app, ["disable"])
         assert result.exit_code == 0

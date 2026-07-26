@@ -154,6 +154,48 @@ class TestBiffEnableToggleTool:
         result = await fn(action="enable")
         assert "not in a git repository" in result.lower()
 
+    async def test_enable_unresolvable_hooks_returns_notice_not_success(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        """A non-git repo_root → hooks unresolvable → NOTICE, no marker, no success."""
+        from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE
+
+        repo = tmp_path / "not-a-repo"  # exists in state but never `git init`ed
+        repo.mkdir()
+        state = create_state(config, tmp_path / "data", repo_root=repo)
+        fn = await _get_tool_fn(state, "biff")
+
+        result = await fn(action="enable")
+
+        assert result == HOOKS_DIR_UNRESOLVED_NOTICE
+        assert "enabled" not in result
+        assert not (repo / ".punt-labs" / "biff" / "enabled").exists()
+
+    async def test_enable_unresolvable_output_matches_cli(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        """CLI and MCP emit the identical NOTICE on the unresolvable-hooks path."""
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        from biff.__main__ import app
+
+        mcp_repo = tmp_path / "mcp"  # not a git repo
+        cli_repo = tmp_path / "cli"  # not a git repo
+        mcp_repo.mkdir()
+        cli_repo.mkdir()
+
+        state = create_state(config, tmp_path / "data", repo_root=mcp_repo)
+        fn = await _get_tool_fn(state, "biff")
+        mcp_result = await fn(action="enable")
+
+        with patch("biff.__main__.find_git_root", return_value=cli_repo):
+            cli_result = CliRunner().invoke(app, ["enable"])
+
+        assert cli_result.exit_code != 0
+        assert mcp_result in cli_result.output  # identical NOTICE text
+
     async def test_mcp_and_cli_enable_are_equivalent(
         self, config: BiffConfig, tmp_path: Path
     ) -> None:

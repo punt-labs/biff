@@ -117,6 +117,23 @@ class TestEnable:
 
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
 
+    def test_unresolvable_hooks_writes_nothing(self, tmp_path: Path) -> None:
+        """When the hooks dir can't be resolved, enable is a no-op — no marker.
+
+        ``tmp_path`` is NOT a git repo (and the conftest git-ceiling stops the
+        walk into the real repo), so ``resolve_hooks_dir`` returns ``None``.
+        Enable must write nothing and report ``git_hooks_resolved=False`` rather
+        than silently succeeding with zero hooks deployed.
+        """
+        change = RepoEnablement(tmp_path).enable()
+
+        assert change.git_hooks_resolved is False
+        assert change.git_hooks_changed == ()
+        assert change.ci_workflow_changed is False
+        # Nothing written: neither the marker, the CI workflow, nor hooks.
+        assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
+        assert not (tmp_path / ".github" / "workflows" / "biff-notify.yml").exists()
+
 
 class TestDisable:
     def test_removes_marker(self, tmp_path: Path) -> None:

@@ -15,6 +15,14 @@ from biff.config import find_git_root
 
 logger = logging.getLogger(__name__)
 
+# One notice, emitted verbatim by every caller that cannot resolve a hooks
+# directory (``biff install`` and both ``enable`` surfaces), so the failure
+# never manifests as a silent "success with zero hooks".
+HOOKS_DIR_UNRESOLVED_NOTICE = (
+    "NOTICE: could not resolve a git hooks directory "
+    "(not a git repository, or git is not on PATH); no git hooks were deployed."
+)
+
 # Marker comments bracket the biff dispatch line so we can
 # identify and remove our additions without touching other hooks.
 _MARKER_START = "# >>> biff hook dispatcher (DES-017)"
@@ -55,6 +63,10 @@ def resolve_hooks_dir(repo_root: Path) -> Path | None:
 
 # Map of hook name → dispatch command.
 # Each entry becomes a block appended to .git/hooks/<name>.
+# ``2>/dev/null || true`` is a deliberate total suppression: a git hook must
+# never break the developer's git command. If ``biff hook`` is missing, errors,
+# or the repo is not biff-enabled, the dispatcher stays silent and exits 0 so
+# the commit/checkout/push proceeds unimpeded (biff gates on the marker inside).
 GIT_HOOKS: dict[str, str] = {
     "post-checkout": 'biff hook git post-checkout "$1" "$2" "$3" 2>/dev/null || true',
     "post-commit": "biff hook git post-commit 2>/dev/null || true",
@@ -116,6 +128,12 @@ def deploy_git_hooks(repo_root: Path | None = None) -> list[str]:
     for name, command in GIT_HOOKS.items():
         hook_path = hooks_dir / name
         block = _biff_block(command)
+
+        # Symlink guard (mirrors ci_workflow / write_enabled_marker): a hostile
+        # or accidental symlink at a hook path must not be followed and its
+        # target clobbered. Replace it with a real file we own.
+        if hook_path.is_symlink():
+            hook_path.unlink()
 
         if hook_path.exists():
             content = hook_path.read_text()

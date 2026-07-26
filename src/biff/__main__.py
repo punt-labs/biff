@@ -1488,8 +1488,15 @@ def enable(
         raise SystemExit("Not in a git repository. Run this from inside a repo.")
 
     from biff.enablement import RepoEnablement
+    from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE
 
     change = RepoEnablement(repo_root).enable()
+    if not change.git_hooks_resolved:
+        # Fail loud, not silent: enable wrote nothing (the marker included), so
+        # do NOT claim success. Emit the same NOTICE the install path uses and
+        # exit non-zero. Mirrors the MCP `/biff enable` surface verbatim.
+        print(HOOKS_DIR_UNRESOLVED_NOTICE)
+        raise typer.Exit(code=1)
     if change.ci_workflow_changed:
         print("CI workflow: .github/workflows/biff-notify.yml")
     if change.git_hooks_changed:
@@ -1566,16 +1573,20 @@ def _deploy_repo_git_hooks() -> None:
     not-yet-enabled repo is a safe no-op until ``enable`` writes the marker.
     Skips silently outside a git repo — ``install`` is also a global action.
     """
-    from biff.git_hooks import deploy_git_hooks, resolve_hooks_dir
+    from biff.git_hooks import (
+        HOOKS_DIR_UNRESOLVED_NOTICE,
+        deploy_git_hooks,
+        resolve_hooks_dir,
+    )
 
     repo_root = find_git_root()
     if repo_root is None:
         return
     if resolve_hooks_dir(repo_root) is None:
         # Never a silent skip: a worktree/submodule or a missing git binary can
-        # leave no hooks dir to write to. Tell the user rather than reporting
-        # success while deploying nothing.
-        print("NOTICE: could not resolve a git hooks directory; no git hooks deployed.")
+        # leave no hooks dir to write to. Emit the shared NOTICE rather than
+        # reporting success while deploying nothing.
+        print(HOOKS_DIR_UNRESOLVED_NOTICE)
         return
     hooks = deploy_git_hooks(repo_root)
     if hooks:
