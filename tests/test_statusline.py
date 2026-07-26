@@ -424,7 +424,7 @@ class TestBaseSegments:
 class TestBiffSegment:
     def test_none_shows_enable_hint(self) -> None:
         result = _biff_segment(None)
-        assert "/biff y" in result
+        assert "/biff enable" in result
         assert "enable" in result
         assert "\033[2m" in result
         assert "\033[0m" in result
@@ -773,7 +773,7 @@ class TestRunStatusline:
         with patch("biff.statusline.sys.stdin") as mock_stdin:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
-        assert "/biff y" in result
+        assert "/biff enable" in result
         assert _LINE2_IDLE in result
 
     def test_no_original_with_unreads(self, _mock_key: object, tmp_path: Path) -> None:
@@ -806,7 +806,7 @@ class TestRunStatusline:
             mock_stdin.read.return_value = "{}"
             result = run_statusline(stash_path, unread_dir)
         assert "42%" in result
-        assert "/biff y" in result
+        assert "/biff enable" in result
         assert "(0)" not in result
         assert " | " in result
 

@@ -381,13 +381,13 @@ def _resolve_original_command(stash_path: Path) -> str | None:
 def _biff_segment(unread: SessionUnread | None) -> str:
     """Format the biff status segment for a single session.
 
-    No file → dim enable hint (``/biff y to enable team communication``).
+    No file → dim enable hint (``/biff enable to turn on team communication``).
     Mesg off → ``user:tty(n)`` plain (regardless of actual count).
     Zero count → ``user:tty(0)`` plain.
     Nonzero → ``user:tty(N)`` bold yellow.
     """
     if unread is None:
-        return "\033[2m/biff y to enable team communication\033[0m"
+        return "\033[2m/biff enable to turn on team communication\033[0m"
     name = unread.user or "biff"
     if not unread.biff_enabled:
         if unread.tty_name:

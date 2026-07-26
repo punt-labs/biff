@@ -1,18 +1,21 @@
-"""Activation toggle -- ``biff(enabled=True|False)``.
+"""Activation toggle -- ``biff(action="enable"|"disable")``.
 
-Allows users to enable or disable biff for the current repo from within
-a Claude Code session.  Writes ``.punt-labs/biff/config.local.yaml``
-(gitignored, per-user) and advises a restart for changes to take effect.
+Lets an agent turn biff on or off for the current repo from within a
+Claude Code session.  ``action="enable"`` writes the committed
+enablement marker ``.punt-labs/biff/enabled`` and ``action="disable"``
+removes it (tool-enable-disable.md §2.7) -- the single source of truth
+shared with the ``biff enable`` / ``biff disable`` CLI verbs.  The marker
+is a tracked repo file; the user commits it via a PR like any other
+change, so this tool never runs git.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from biff._stdlib import is_enabled
 from biff.config import (
-    ensure_gitignore_yaml,
-    write_yaml_local_enabled,
+    remove_enabled_marker,
+    write_enabled_marker,
 )
 
 if TYPE_CHECKING:
@@ -22,31 +25,35 @@ if TYPE_CHECKING:
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
-    """Register the biff toggle tool."""
+    """Register the biff enable/disable tool."""
 
     @mcp.tool(
         name="biff",
         description=(
             "Enable or disable biff for this repo. "
-            "Use enabled=true to activate, enabled=false to deactivate."
+            "Use action='enable' to activate, action='disable' to deactivate."
         ),
     )
-    async def biff(enabled: bool) -> str:  # noqa: FBT001
-        """Toggle biff activation for the current repository.
+    async def biff(action: Literal["enable", "disable"]) -> str:
+        """Enable or disable biff for the current repository.
 
-        Writes ``.punt-labs/biff/config.local.yaml`` with the
-        ``enabled`` flag.  No ``config.yaml`` is created -- zero-config
-        mode uses derived defaults.
-
-        Returns guidance to restart Claude Code for changes to take effect.
+        Creates (enable) or removes (disable) the committed marker
+        ``.punt-labs/biff/enabled``.  The marker is a tracked repo file
+        -- commit it via a PR for the change to take effect for every
+        contributor.  Returns guidance to restart Claude Code.
         """
         repo_root = state.repo_root
         if repo_root is None:
             return "Error: not in a git repository."
 
-        write_yaml_local_enabled(repo_root, enabled=enabled)
-        ensure_gitignore_yaml(repo_root)
-
-        currently = is_enabled(repo_root)
-        verb = "enabled" if currently else "disabled"
-        return f"biff {verb}. Restart Claude Code for changes to take effect."
+        if action == "enable":
+            write_enabled_marker(repo_root)
+            return (
+                "biff enabled. Commit .punt-labs/biff/enabled and restart "
+                "Claude Code for changes to take effect."
+            )
+        remove_enabled_marker(repo_root)
+        return (
+            "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
+            "restart Claude Code for changes to take effect."
+        )

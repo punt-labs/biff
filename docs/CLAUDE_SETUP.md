@@ -85,16 +85,16 @@ Runs when a Claude Code session closes. Cleans up the presence entry immediately
 
 ## Per-Repo Activation
 
-Biff starts dormant in every repo. No NATS connection, no consumers, no status bar updates. To activate:
+Biff starts dormant in every repo. No NATS connection, no consumers, no status bar updates. To enable it:
 
 ```text
-> /biff y
+> /biff enable
 ```
 
-This creates `.biff.local` (automatically gitignored). To deactivate:
+This writes the committed `.punt-labs/biff/enabled` marker — commit it so biff is on for everyone who clones the repo. To disable:
 
 ```text
-> /biff n
+> /biff disable
 ```
 
 ## Git Hooks

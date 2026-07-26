@@ -75,7 +75,7 @@ sh install.sh
 - **NATS relay** --- cross-machine presence and messaging over encrypted connections
 - **Agent-first** --- agents show up in `/who` alongside humans, coordinate via `/plan` and `/write`
 - **Status bar** --- live unread count, wall broadcasts, talk messages --- wraps your existing status line
-- **Zero config** --- installs in one command, activates per-repo with `/biff y`
+- **Zero config** --- installs in one command, enables per-repo with `/biff enable` (a committed marker, on for the whole team)
 
 ## What It Looks Like
 
@@ -202,6 +202,7 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 | `/talk user "msg"` | BSD `talk` | Start a real-time conversation |
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
+| `/biff enable` \| `/biff disable` | — | Turn biff on/off for this repo (writes the committed `.punt-labs/biff/enabled` marker) |
 | `/biff:poll [duration]` | — | Poll for talk/mail: `<duration>` sets the cadence, no-arg checks now |
 
 ## CLI
@@ -263,8 +264,8 @@ biff talk kai "can you review?"           # Real-time conversation
 
 ```bash
 biff install                # Install plugin + register user-scope agent guide
-biff enable                 # Activate biff in current repo (.punt-labs/biff/)
-biff disable                # Deactivate biff in current repo
+biff enable                 # Enable biff for this repo (writes the committed .punt-labs/biff/enabled marker)
+biff disable                # Disable biff for this repo (removes the marker)
 biff doctor                 # Check installation health
 biff mcp                    # Start MCP server (stdio, called by plugin)
 biff serve                  # Start MCP server (HTTP)
@@ -365,7 +366,7 @@ Biff assumes the terminal is where you're already working — so that's where yo
 - Broadcast: `/wall` with duration-based expiry
 - Real-time: `/talk` with two-phase handshake and mutual hangup
 - NATS relay for cross-machine communication
-- Per-project activation (`/biff y`) with lazy connection management
+- Per-repo enablement (`/biff enable`, a committed marker) with lazy connection management
 - Status bar with live unread count, wall, and talk display
 - Workflow hooks: plan auto-expand, session lifecycle, git integration
 - CLI parity: every MCP tool available as `biff <command>` with `--json` output

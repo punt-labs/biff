@@ -75,6 +75,15 @@ class TestSetPollInterval:
         data = yaml.safe_load(local_yaml.read_text())
         assert data["poll_interval"] == 10.0
 
+    async def test_ensures_gitignore(self, tmp_path: Path) -> None:
+        """Persisting a poll interval keeps config.local.yaml out of git."""
+        state = _make_state(tmp_path)
+        fn = await _get_tool_fn(state, "set_poll_interval")
+        await fn(interval="10s")
+        gitignore = tmp_path / ".punt-labs" / "biff" / ".gitignore"
+        assert gitignore.exists()
+        assert "config.local.yaml" in gitignore.read_text()
+
 
 class TestGetPollStatus:
     async def test_default_interval(self, tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.server.tools._activate import auto_enable
+from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import (
     get_tty_name,
     refresh_read_messages,
@@ -32,7 +32,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Name the current session. Visible in /who and /finger TTY column."
         ),
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def tty(name: str = "") -> str:
         """Set a human-readable name for this session.
 

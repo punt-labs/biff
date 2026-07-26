@@ -60,10 +60,10 @@ All files are deployed to `~/.claude/plugins/biff/`. The MCP server runs automat
 
 ## Enabling Biff in a Repo
 
-Biff starts dormant in every repo. To activate:
+Biff starts dormant in every repo. To enable it:
 
 ```text
-> /biff y
+> /biff enable
 ```
 
 Or from the CLI:
@@ -72,7 +72,7 @@ Or from the CLI:
 biff enable
 ```
 
-This creates a `.biff.local` file (gitignored) and deploys git hooks:
+This writes the committed `.punt-labs/biff/enabled` marker (commit it so biff is on for everyone who clones the repo) and deploys git hooks:
 
 - **post-checkout** --- updates your plan when you switch branches
 - **post-commit** --- updates your plan with the latest commit message

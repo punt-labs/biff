@@ -528,4 +528,4 @@ The user's `CLAUDE.md` is user-owned prose (§2.1). The only mutation biff makes
 
 ### Not in Scope Here
 
-The `.punt-labs/biff/enabled` presence marker (§2.7 + `integration.md` L0) is intentionally deferred: biff's enablement is a per-user, gitignored `config.local.yaml` decision, which conflicts with the standard's committed, repo-level marker model. Reconciling that (marker existence, committed-vs-gitignored, and whether the marker becomes the authoritative signal that `is_enabled()` and the hook gates read) changes the presence/trust contract and is ruled separately before it lands.
+The `.punt-labs/biff/enabled` presence marker (§2.7 + `integration.md` L0) has since **landed** — see DES-052 (runtime `DESIGN.md`). Biff's enablement is now committed, repo-level policy: the git-tracked marker is the single authoritative signal that `is_enabled()` and all ten hook gates read, replacing the old per-user, gitignored `config.local.yaml` `enabled:` key. The `enable` / `disable` verbs (CLI and `/biff`) write and remove it; the per-user preference layer lives separately in `mesg`.

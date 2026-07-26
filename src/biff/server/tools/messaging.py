@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from biff.chunking import chunk_message
 from biff.formatting import format_read, format_read_dual
 from biff.models import Message
-from biff.server.tools._activate import auto_enable
+from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
 from biff.server.tools._session import resolve_tty_name, update_current_session
 from biff.server.tools._tasks import fire_and_forget
@@ -119,7 +119,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             "Messages are delivered to their inbox asynchronously."
         ),
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def write(to: str, message: str) -> str:
         """Send a message to another user's inbox, like BSD ``write(1)``.
 
@@ -160,7 +160,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description="Check your inbox for new messages. Marks all as read.",
         meta={"anthropic/alwaysLoad": True},
     )
-    @auto_enable(state)
+    @track_activity(state)
     async def read_messages() -> str:
         """Retrieve unread messages and mark them as read.
 

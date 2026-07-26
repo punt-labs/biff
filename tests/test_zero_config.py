@@ -9,7 +9,14 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from biff._stdlib import get_repo_owner, is_enabled, yaml_config_dir
+from biff._stdlib import (
+    enabled_marker_path,
+    get_repo_owner,
+    is_enabled,
+    remove_enabled_marker,
+    write_enabled_marker,
+    yaml_config_dir,
+)
 from biff.config import (
     DEMO_RELAY_URL,
     GitHubIdentity,
@@ -21,7 +28,6 @@ from biff.config import (
     load_yaml_local,
     merge_config,
     write_yaml_config,
-    write_yaml_local_enabled,
 )
 from biff.models import RelayAuth
 
@@ -59,51 +65,94 @@ class TestYamlConfigDir:
         assert yaml_config_dir(tmp_path) == tmp_path / ".punt-labs" / "biff"
 
 
-# ── is_enabled (new path) ──────────────────────────────────────────
+# ── is_enabled (committed marker) ──────────────────────────────────
 
 
-class TestIsEnabledYaml:
-    def test_new_path_enabled_true(self, tmp_path: Path) -> None:
-        biff_dir = tmp_path / ".punt-labs" / "biff"
-        biff_dir.mkdir(parents=True)
-        (biff_dir / "config.local.yaml").write_text("enabled: true\n")
-        assert is_enabled(tmp_path) is True
+class TestIsEnabled:
+    """Enabled ⟺ marker present AND biff on PATH (tool-enable-disable §2.7)."""
 
-    def test_new_path_enabled_false(self, tmp_path: Path) -> None:
-        biff_dir = tmp_path / ".punt-labs" / "biff"
-        biff_dir.mkdir(parents=True)
-        (biff_dir / "config.local.yaml").write_text("enabled: false\n")
-        assert is_enabled(tmp_path) is False
+    def test_marker_present_and_biff_installed(self, tmp_path: Path) -> None:
+        write_enabled_marker(tmp_path)
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            assert is_enabled(tmp_path) is True
+
+    def test_marker_absent(self, tmp_path: Path) -> None:
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            assert is_enabled(tmp_path) is False
 
     def test_none_repo_root(self) -> None:
         assert is_enabled(None) is False
 
-    def test_no_config_files(self, tmp_path: Path) -> None:
-        assert is_enabled(tmp_path) is False
+    def test_marker_present_but_biff_not_installed(self, tmp_path: Path) -> None:
+        """A cloned marker-enabled repo without biff is a graceful no-op."""
+        write_enabled_marker(tmp_path)
+        with patch("biff._stdlib.shutil.which", return_value=None):
+            assert is_enabled(tmp_path) is False
 
-    def test_yaml_with_extra_whitespace(self, tmp_path: Path) -> None:
+    def test_legacy_yaml_key_does_not_enable(self, tmp_path: Path) -> None:
+        """The retired ``enabled:`` yaml key no longer turns biff on."""
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
-        (biff_dir / "config.local.yaml").write_text("  enabled:   true  \n")
-        assert is_enabled(tmp_path) is True
+        (biff_dir / "config.local.yaml").write_text("enabled: true\n")
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            assert is_enabled(tmp_path) is False
 
-    def test_yaml_boolean_capital_true(self, tmp_path: Path) -> None:
+    def test_symlinked_marker_does_not_enable(self, tmp_path: Path) -> None:
+        """A symlink at the marker path is not a valid enablement signal."""
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
-        (biff_dir / "config.local.yaml").write_text("enabled: True\n")
-        assert is_enabled(tmp_path) is True
+        target = tmp_path / "elsewhere"
+        target.touch()
+        enabled_marker_path(tmp_path).symlink_to(target)
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            assert is_enabled(tmp_path) is False
 
-    def test_yaml_boolean_yes(self, tmp_path: Path) -> None:
+    def test_write_replaces_symlinked_marker(self, tmp_path: Path) -> None:
+        """write_enabled_marker replaces a symlink with a real file."""
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
-        (biff_dir / "config.local.yaml").write_text("enabled: yes\n")
-        assert is_enabled(tmp_path) is True
+        target = tmp_path / "elsewhere"
+        target.touch()
+        marker = enabled_marker_path(tmp_path)
+        marker.symlink_to(target)
+        write_enabled_marker(tmp_path)
+        assert marker.is_file() and not marker.is_symlink()
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            assert is_enabled(tmp_path) is True
 
-    def test_yaml_boolean_on(self, tmp_path: Path) -> None:
-        biff_dir = tmp_path / ".punt-labs" / "biff"
-        biff_dir.mkdir(parents=True)
-        (biff_dir / "config.local.yaml").write_text("enabled: on\n")
-        assert is_enabled(tmp_path) is True
+
+class TestEnabledMarker:
+    """write/remove marker helpers round-trip with is_enabled."""
+
+    def test_write_creates_marker(self, tmp_path: Path) -> None:
+        path = write_enabled_marker(tmp_path)
+        assert path == enabled_marker_path(tmp_path)
+        assert path.exists()
+
+    def test_write_creates_directory(self, tmp_path: Path) -> None:
+        write_enabled_marker(tmp_path)
+        assert (tmp_path / ".punt-labs" / "biff").is_dir()
+
+    def test_write_is_idempotent(self, tmp_path: Path) -> None:
+        write_enabled_marker(tmp_path)
+        write_enabled_marker(tmp_path)
+        assert enabled_marker_path(tmp_path).exists()
+
+    def test_remove_deletes_marker(self, tmp_path: Path) -> None:
+        write_enabled_marker(tmp_path)
+        remove_enabled_marker(tmp_path)
+        assert not enabled_marker_path(tmp_path).exists()
+
+    def test_remove_missing_is_idempotent(self, tmp_path: Path) -> None:
+        remove_enabled_marker(tmp_path)  # no error when absent
+        assert not enabled_marker_path(tmp_path).exists()
+
+    def test_roundtrip_with_is_enabled(self, tmp_path: Path) -> None:
+        with patch("biff._stdlib.shutil.which", return_value="/usr/bin/biff"):
+            write_enabled_marker(tmp_path)
+            assert is_enabled(tmp_path) is True
+            remove_enabled_marker(tmp_path)
+            assert is_enabled(tmp_path) is False
 
 
 # ── load_yaml_config / load_yaml_local ─────────────────────────────
@@ -225,7 +274,7 @@ class TestDeepMerge:
         assert inner["b"]["d"] == 2
 
 
-# ── write_yaml_config / write_yaml_local_enabled ───────────────────
+# ── write_yaml_config ──────────────────────────────────────────────
 
 
 class TestWriteYamlConfig:
@@ -248,24 +297,6 @@ class TestWriteYamlConfig:
         data: dict[str, object] = {"enabled": True}
         path = write_yaml_config(tmp_path, data)
         assert path.parent.exists()
-
-
-class TestWriteYamlLocalEnabled:
-    def test_writes_enabled_true(self, tmp_path: Path) -> None:
-        path = write_yaml_local_enabled(tmp_path, enabled=True)
-        loaded = yaml.safe_load(path.read_text())
-        assert loaded["enabled"] is True
-
-    def test_writes_enabled_false(self, tmp_path: Path) -> None:
-        path = write_yaml_local_enabled(tmp_path, enabled=False)
-        loaded = yaml.safe_load(path.read_text())
-        assert loaded["enabled"] is False
-
-    def test_roundtrip_with_is_enabled(self, tmp_path: Path) -> None:
-        write_yaml_local_enabled(tmp_path, enabled=True)
-        assert is_enabled(tmp_path) is True
-        write_yaml_local_enabled(tmp_path, enabled=False)
-        assert is_enabled(tmp_path) is False
 
 
 # ── ensure_gitignore_yaml ──────────────────────────────────────────

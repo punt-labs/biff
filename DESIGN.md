@@ -3856,7 +3856,8 @@ and org list before it can function. With 30 repos in an org, this is
 antithetical friction. The team roster is a social hint that provides
 no access control — NATS subject scoping (DES-007a) and org discovery
 (DES-034) handle the actual visibility. The only user action to enable
-biff should be `/biff y`.
+biff should be `/biff enable` (see DES-052 for the committed-marker
+enablement model that superseded the original per-user toggle).
 
 ### Design
 
@@ -3876,7 +3877,7 @@ the repo root. YAML, not TOML — consistent with the ethos ecosystem
 its values are honored as-is. If absent, everything is derived (demo
 relay, owner from remote). Two intentional fallbacks exist in explicit
 mode: (a) when `config.yaml` omits `relay`, the demo relay + bundled
-creds apply so `/biff y` alone works; (b) when `config.yaml` omits
+creds apply so `/biff enable` alone works; (b) when `config.yaml` omits
 `peers.orgs`, the owner is derived from the git remote so writing a
 relay-only config via `/biff:relay` doesn't silently break org
 discovery. Explicit values in `config.yaml` always win; fallbacks fill
@@ -3889,9 +3890,10 @@ When no remote exists or the URL doesn't parse to `owner/repo`, the
 owner is `None` and the repo operates in isolation.
 
 **4. All config writes through MCP tools.** Config changes go through
-biff MCP tools — never Claude Code's `Write()` tool directly. `/biff y`
-writes enabled state via MCP tool. New `/biff:relay` command writes
-relay URL (restart required for the change to take effect).
+biff MCP tools — never Claude Code's `Write()` tool directly. `/biff
+enable` writes the committed enablement marker via MCP tool (DES-052).
+New `/biff:relay` command writes relay URL (restart required for the
+change to take effect).
 
 ### Config Schema
 
@@ -3914,9 +3916,11 @@ relay:
     credentials: "/path/to/private.creds"
 ```
 
-Note: `enabled` is a per-user state that lives exclusively in
-`config.local.yaml`. It is not a shared config key — team members
-independently toggle biff for their own machines.
+Note: `enabled` as a per-user `config.local.yaml` key is **superseded by
+DES-052** — enablement is now committed repo policy expressed by the
+`.punt-labs/biff/enabled` marker, not a gitignored per-user flag. The
+`config.local.yaml` file remains for other per-user overrides (relay
+auth, poll interval); it no longer carries an `enabled` key.
 
 `config.local.yaml` overrides `config.yaml` at the key level. A local
 `relay.url` overrides the shared `relay.url` without clobbering
@@ -3955,10 +3959,10 @@ token verification at connect, then E2E encryption (DES-016).
 
 No legacy users exist. The implementation has no `.biff` TOML parsing,
 no migration path, and no fallback. Repos with leftover `.biff` files
-must delete them manually and run `/biff y`.
+must delete them manually and run `/biff enable`.
 
-- **New repos:** `/biff y` writes `config.local.yaml` only. No
-  `config.yaml` needed — zero-config mode.
+- **New repos:** `/biff enable` writes the committed `.punt-labs/biff/enabled`
+  marker only (DES-052). No `config.yaml` needed — zero-config mode.
 - **Detection order:** `config.yaml` (explicit mode with local
   overrides) > neither (zero-config, derive everything).
 
@@ -5477,3 +5481,91 @@ the code no longer honored.
    model.
 3. A gate whose docstring cites a proof must actually implement the proven
    transition, or the citation is a lie that rots.
+
+---
+
+## DES-052: Enablement Is Committed Repo Policy — the `.punt-labs/biff/enabled` Marker
+
+**Date:** 2026-07-25
+**Status:** Settled
+**Supersedes:** the DES-037 "enabled is a per-user `config.local.yaml` key" note
+**Related:** DES-037 (zero-config), tool-enable-disable.md §2.7/§2.11, biff-qmd
+
+### Problem
+
+Enablement lived in `.punt-labs/biff/config.local.yaml` as a gitignored,
+per-user `enabled: true|false` flag, toggled by `/biff y` / `/biff n`. Three
+things were wrong with that shape for a collaboration tool:
+
+1. **Wrong scope.** Biff is a whole-team communication tool. Whether it is on
+   for a repo is a property of the repo, not of each contributor's machine. A
+   gitignored per-user flag means every contributor re-enables independently,
+   and a fresh clone is silently off for everyone.
+2. **Two sources of truth in two vocabularies.** The Python `is_enabled()` read
+   the yaml key; ten shell hooks re-parsed the same key with a `grep -qiE`
+   regex. `y|n` in the command surface, `true|yes|on` in the file.
+3. **Auto-enable papered over the friction.** Because enabling was per-user
+   friction, biff auto-enabled itself on first tool use (`lazy_activate`). A
+   communication tool that turns itself on without being asked is the opposite
+   of the explicit, human-in-the-loop model biff otherwise upholds.
+
+### Decision
+
+Enablement is **committed repo policy**, expressed by one git-tracked marker
+file `.punt-labs/biff/enabled` (tool-enable-disable.md §2.7). Its presence is
+the single source of truth. `is_enabled(repo) ⟺ marker exists AND biff is on
+PATH`. The biff-on-PATH conjunct makes a cloned marker-enabled repo a graceful
+no-op on a machine without biff installed, rather than a hook error (§2.11 "no
+stale enabled tools").
+
+Two explicit front-ends, standardized on `enable | disable` verbs, write and
+remove the marker — never a `y|n` boolean:
+
+- CLI: `biff enable` / `biff disable` create/remove the marker in the working
+  tree. They never run git — the user commits the marker via a PR like any
+  repo change.
+- MCP: the `biff` tool takes `action="enable"|"disable"` (was `enabled: bool`);
+  `/biff enable` and `/biff disable` route to it and write the same marker.
+
+Auto-activation is **dropped**. `lazy_activate` / `auto_enable` are removed.
+Enablement is explicit only. A dormant server (marker absent) still registers
+its tools; calling a decorated tool in a disabled repo returns a concise,
+actionable notice — "biff is disabled in this repo. Run `biff enable` (or
+`/biff enable`), then restart Claude Code." — instead of running the body or
+writing anything. A silent no-op there would be a silent failure and poor agent
+UX: the agent gets no signal that biff is off or how to turn it on. The notice
+is the response to one explicit tool call, emitted once per call, not on a loop.
+The `enable`/`disable`, relay, and poll-config tools are deliberately *not*
+guarded, so `/biff enable` can turn biff on while dormant. The activity-tracking
+side effect that `auto_enable` also carried (`ActivityTracker.touch()` on every
+tool call, keeping the poller out of napping) is preserved by the same
+`track_activity` decorator on the enabled path, with no enable logic.
+
+### `mesg` is a separate layer — not enablement
+
+`mesg y|n` stays as-is. It is the per-user, per-session "do I receive messages
+right now" control (the `biff_enabled` flag in the unread JSON, DES-013). That
+is a legitimate per-user preference and is distinct from repo enablement: repo
+policy (committed marker) decides whether biff runs for the project at all;
+`mesg` decides whether a given user's session accepts delivery while it does.
+Retiring `y|n` for *enablement* deliberately does not touch `mesg`.
+
+### Rejected alternative — keep the gitignored per-user flag
+
+Considered: keep `enabled` in `config.local.yaml` and just standardize the verbs.
+Rejected because it preserves the wrong scope. A collaboration tool needs
+whole-repo enablement that travels with a clone; per-user opt-out already has a
+home in `mesg`. A committed marker gives every contributor who clones and has
+biff installed the same on/off state, reviewable in a PR, with no hidden
+per-machine divergence. The per-user layer is not lost — it is `mesg`.
+
+### Rules
+
+1. `.punt-labs/biff/enabled` is committed (never gitignored). Its presence is the
+   only enablement signal; no code reads a yaml `enabled` key.
+2. Every enablement front-end uses `enable | disable`, writes/removes the marker,
+   and never runs git — the user commits it.
+3. Hooks gate on marker-present AND `command -v biff-hook`; a marker-enabled repo
+   without biff installed no-ops, never errors.
+4. Enablement is explicit — biff never turns itself on. Per-user delivery
+   preference lives in `mesg`, a separate layer.

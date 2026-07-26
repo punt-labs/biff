@@ -28,21 +28,27 @@ from typing import cast
 import yaml
 
 from biff._stdlib import (
+    enabled_marker_path,
     find_git_root,
     get_repo_owner,
     get_repo_slug,
     is_enabled,
+    remove_enabled_marker,
     sanitize_repo_name,
+    write_enabled_marker,
     yaml_config_dir,
 )
 from biff.models import BiffConfig, RelayAuth
 
 # Re-export stdlib functions so existing callers of biff.config still work.
 __all__ = [
+    "enabled_marker_path",
     "find_git_root",
     "get_repo_slug",
     "is_enabled",
+    "remove_enabled_marker",
     "sanitize_repo_name",
+    "write_enabled_marker",
 ]
 
 logger = logging.getLogger(__name__)
@@ -496,18 +502,6 @@ def write_yaml_config(
     content = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
     atomic_write(path, content)
     return path
-
-
-def write_yaml_local_enabled(repo_root: Path, *, enabled: bool) -> Path:
-    """Set the ``enabled`` flag in ``config.local.yaml``.
-
-    Reads existing local config first to preserve other keys (e.g.
-    relay overrides set via ``biff_relay --local``).  Creates
-    ``.punt-labs/biff/`` directory if needed.
-    """
-    existing = load_yaml_local(repo_root)
-    existing["enabled"] = enabled
-    return write_yaml_config(repo_root, existing, local=True)
 
 
 def ensure_gitignore_yaml(repo_root: Path) -> None:
