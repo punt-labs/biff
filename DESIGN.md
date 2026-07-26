@@ -5608,7 +5608,13 @@ per-machine divergence. The per-user layer is not lost — it is `mesg`.
 4. Enablement is explicit — biff never turns itself on. Per-user delivery
    preference lives in `mesg`, a separate layer.
 
-### Amendment (biff-j5u): enable == committed policy; install == per-clone machinery
+### Amendment 1 (biff-j5u): enable == committed policy; install == per-clone machinery
+
+> **SUPERSEDED by Amendment 2 (below).** Its partition — "`enable`
+> deliberately never touches `.git/hooks/`; hooks are `biff install`'s job" —
+> no longer holds: under the operator's model-B ruling, `enable`/`disable` also
+> deploy/remove this clone's local git hooks. Read Amendment 1 only as history;
+> Amendment 2 is current.
 
 The initial implementation left the two `enable` front-ends non-equivalent: the
 CLI `biff enable` wrote the marker **and** deployed the CI workflow **and** the
@@ -5705,7 +5711,8 @@ Revised rules 2 and 6:
   and routes through one `RepoEnablement` definition. `enable` writes the two
   **committed** artifacts (marker + CI workflow) **and** deploys this clone's
   local `.git/hooks/` dispatchers; `disable` removes exactly those three. The
-  marker is written last (fail-safe). Neither runs git — the user commits the
+  marker is written last (fail-safe). Both invoke git read-only (`rev-parse`)
+  to resolve the hooks dir but never create commits — the user commits the
   tracked files via a PR; the hooks are per-clone and never committed.
 - **Rule 6 (revised).** `biff install` remains the superset entry point (plugin +
   CLI + hooks) and deploys the same per-clone git hooks via the same code path;

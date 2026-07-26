@@ -173,41 +173,52 @@ def is_enabled(repo_root: Path | None) -> bool:
     return marker.is_file() and not marker.is_symlink() and biff_on_path()
 
 
-def ensure_real_dir(path: Path) -> None:
-    """Create *path* as a real directory without following symlinked parents.
+def ensure_real_dir(base: Path, target: Path) -> None:
+    """Create *target* under *base*, refusing to follow symlinked components.
 
     ``Path.mkdir(parents=True)`` follows a symlink at any intermediate
     component, so a committed symlinked parent (e.g. a hostile ``.github`` or
     ``.punt-labs``) would redirect the subsequent write *outside* the repo.
-    This walks up to the first existing real directory and, on the way back
-    down, unlinks any symlink occupying a component name and replaces it with a
-    real directory -- so every level we create is a genuine directory and the
-    write can never escape.  A non-directory, non-symlink file at a component
-    raises (via ``mkdir``), which is the correct loud failure.
+    This validates and creates every component strictly **below** *base*: each
+    one must be a real directory; a symlink occupying a component name is
+    unlinked and replaced with a real directory, and a non-directory file
+    raises ``NotADirectoryError``.
+
+    *base* must already exist and is trusted as-is -- its own path may
+    legitimately traverse symlinks outside our control (e.g. macOS
+    ``/tmp`` -> ``/private/tmp``, a symlinked home), so those are neither
+    inspected nor replaced. Only committed, in-repo components are policed.
+
+    Each component is checked with a real parent chain (base is real, every
+    prior component was just made real), so the guard is **not** defeated by a
+    symlinked ancestor that already resolves to an existing path -- unlike an
+    ``exists()`` short-circuit, which follows symlinks and would let the write
+    escape. *target* must be *base* or a descendant of it.
     """
-    if path.is_symlink():
-        path.unlink()  # never follow a symlinked component
-    if path.exists():
-        if not path.is_dir():
-            raise NotADirectoryError(f"{path} exists and is not a directory")
-        return
-    parent = path.parent
-    if parent != path:  # stop at the filesystem root
-        ensure_real_dir(parent)
-    path.mkdir()
+    for part in target.relative_to(base).parts:
+        base = base / part
+        if base.is_symlink():
+            base.unlink()  # replace a symlinked component; never follow it
+            base.mkdir()
+        elif base.exists():
+            if not base.is_dir():
+                raise NotADirectoryError(f"{base} exists and is not a directory")
+        else:
+            base.mkdir()
 
 
 def write_enabled_marker(repo_root: Path) -> Path:
     """Create the committed enablement marker, returning its path.
 
     Writes an empty regular file at ``.punt-labs/biff/enabled``.  Parent
-    directories are created via :func:`ensure_real_dir` so a committed
-    symlinked parent cannot redirect the write outside the repo, and if a
-    symlink already occupies the marker path it is removed first, so the
-    result is always a regular file that :func:`is_enabled` recognizes.
+    directories are created via :func:`ensure_real_dir` (rooted at
+    *repo_root*) so a committed symlinked parent cannot redirect the write
+    outside the repo, and if a symlink already occupies the marker path it is
+    removed first, so the result is always a regular file that
+    :func:`is_enabled` recognizes.
     """
     marker = enabled_marker_path(repo_root)
-    ensure_real_dir(marker.parent)
+    ensure_real_dir(repo_root, marker.parent)
     if marker.is_symlink():
         marker.unlink()
     marker.touch()

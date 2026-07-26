@@ -44,9 +44,9 @@ def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
     workflows_dir = root / ".github" / "workflows"
     # Parent-dir symlink guard: a committed symlinked `.github` (or
     # `.github/workflows`) would let `mkdir -p` + the write escape the repo.
-    # ensure_real_dir replaces any symlinked component with a real directory so
-    # the write always lands inside the repo.
-    ensure_real_dir(workflows_dir)
+    # ensure_real_dir validates every component below `root` and replaces any
+    # symlinked one with a real directory, so the write stays inside the repo.
+    ensure_real_dir(root, workflows_dir)
 
     target = workflows_dir / _WORKFLOW_NAME
     template = _template_content()

@@ -123,9 +123,16 @@ def deploy_git_hooks(repo_root: Path | None = None) -> list[str]:
         # tell the user rather than deploying nothing without a word.
         logger.warning("no git hooks directory resolved for %s; deployed nothing", root)
         return []
-    # Parent-dir symlink guard (parity with ci_workflow / write_enabled_marker):
-    # never let a symlinked component redirect a hook write outside its dir.
-    ensure_real_dir(hooks_dir)
+    # Parent-dir symlink guard (parity with ci_workflow / write_enabled_marker).
+    # Only components *inside* the repo can be committed and thus attacker-set,
+    # so we police those with ensure_real_dir. A hooks dir OUTSIDE the repo
+    # (a linked worktree's common git dir, or an absolute core.hooksPath) is
+    # git-managed, not committed, and lives above/beside the repo — trust it and
+    # just mkdir, never treating its ancestors (which we do not own) as suspect.
+    if hooks_dir == root or root in hooks_dir.parents:
+        ensure_real_dir(root, hooks_dir)
+    else:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
 
     updated: list[str] = []
     for name, command in GIT_HOOKS.items():

@@ -120,6 +120,32 @@ class TestDeployCiWorkflow:
         assert (repo / ".github" / "workflows" / _WORKFLOW_NAME).is_file()
         assert not (outside / _WORKFLOW_NAME).exists()
 
+    def test_symlinked_github_no_fail_open_when_target_resolves(
+        self, tmp_path: Path
+    ) -> None:
+        """Fail-open regression: ``.github`` is a symlink AND the full nested
+        path already resolves through it.
+
+        An ``exists()`` short-circuit would see ``.github/workflows`` resolve
+        and skip the guard, letting the write follow the link out of the repo.
+        The guard must still replace the symlinked ``.github`` and keep the
+        write inside.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside"
+        (outside / "workflows").mkdir(parents=True)  # nested path pre-exists
+        (repo / ".github").symlink_to(outside, target_is_directory=True)
+        # repo/.github/workflows resolves (through the link) to an existing dir.
+        assert (repo / ".github" / "workflows").is_dir()
+
+        assert deploy_ci_workflow(repo) is True
+
+        assert not (repo / ".github").is_symlink()
+        assert (repo / ".github" / "workflows" / _WORKFLOW_NAME).is_file()
+        # The workflow never landed in the symlink target.
+        assert not (outside / "workflows" / _WORKFLOW_NAME).exists()
+
 
 # ── remove_ci_workflow ─────────────────────────────────────────────
 

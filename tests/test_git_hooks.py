@@ -340,19 +340,24 @@ class TestBlockHelpers:
 
 
 class TestEnsureRealDir:
-    """The shared guard that stops symlinked parents redirecting writes."""
+    """The shared guard that stops symlinked parents redirecting writes.
+
+    Takes a trusted ``base`` (existing, possibly symlink-traversing — outside
+    our control) and only validates/creates components strictly below it.
+    """
 
     def test_creates_nested_dirs(self, tmp_path: Path) -> None:
         from biff._stdlib import ensure_real_dir
 
         target = tmp_path / "a" / "b" / "c"
-        ensure_real_dir(target)
+        ensure_real_dir(tmp_path, target)
         assert target.is_dir()
 
     def test_idempotent_on_existing_dir(self, tmp_path: Path) -> None:
         from biff._stdlib import ensure_real_dir
 
-        ensure_real_dir(tmp_path)  # already a real dir — no error, no change
+        # base == target: no components below base, so a no-op.
+        ensure_real_dir(tmp_path, tmp_path)
         assert tmp_path.is_dir()
 
     def test_replaces_symlinked_component_no_escape(self, tmp_path: Path) -> None:
@@ -364,12 +369,44 @@ class TestEnsureRealDir:
         base.mkdir()
         (base / "link").symlink_to(outside, target_is_directory=True)
 
-        ensure_real_dir(base / "link" / "inner")
+        ensure_real_dir(base, base / "link" / "inner")
 
         assert not (base / "link").is_symlink()
         assert (base / "link" / "inner").is_dir()
         # The symlink target never received the new child.
         assert not (outside / "inner").exists()
+
+    def test_no_fail_open_when_symlinked_path_already_resolves(
+        self, tmp_path: Path
+    ) -> None:
+        """The fail-open regression: an intermediate symlink whose target
+        ALREADY contains the remaining path must still be replaced.
+
+        An ``exists()`` short-circuit would follow the symlink (the full nested
+        path resolves) and never inspect it, letting a later write escape. The
+        guard walks every component below base with a real parent chain, so it
+        catches and replaces the symlinked component regardless.
+        """
+        from biff._stdlib import ensure_real_dir
+
+        base = tmp_path / "base"
+        base.mkdir()
+        outside = tmp_path / "outside"
+        (outside / "inner").mkdir(parents=True)  # target already has the child
+        (base / "link").symlink_to(outside, target_is_directory=True)
+
+        # base/link/inner resolves (through the symlink) to an existing dir.
+        assert (base / "link" / "inner").is_dir()
+
+        ensure_real_dir(base, base / "link" / "inner")
+
+        # The symlink was replaced with a real, empty dir chain inside base.
+        assert not (base / "link").is_symlink()
+        assert (base / "link" / "inner").is_dir()
+        # The escape target is untouched (its pre-existing child stays put,
+        # and nothing new was written through the link).
+        assert (outside / "inner").is_dir()
+        assert not (base / "link" / "inner").is_symlink()
 
     def test_raises_on_non_directory_component(self, tmp_path: Path) -> None:
         import pytest
@@ -378,4 +415,4 @@ class TestEnsureRealDir:
 
         (tmp_path / "afile").write_text("x")
         with pytest.raises((NotADirectoryError, FileExistsError)):
-            ensure_real_dir(tmp_path / "afile" / "child")
+            ensure_real_dir(tmp_path, tmp_path / "afile" / "child")
