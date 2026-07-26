@@ -68,16 +68,16 @@ cat ~/.punt-labs/biff/statusline-original.json
 
 ### Git hooks not firing
 
-**Cause:** `biff enable` deploys hooks to `.git/hooks/`. If the hooks directory doesn't exist or permissions are wrong, hooks won't fire.
+**Cause:** `biff install` deploys hooks to this clone's `.git/hooks/` (they are per-clone, never committed). If you cloned an already-enabled repo but never ran `biff install`, the hooks are absent. If the hooks directory doesn't exist or permissions are wrong, hooks won't fire either.
 
 **Fix:**
 
 ```bash
-biff enable    # Redeploy hooks
+biff install    # Redeploy this clone's hooks
 ls -la .git/hooks/post-checkout .git/hooks/post-commit .git/hooks/pre-push
 ```
 
-Hooks gate on `.biff.local` --- they are silent when biff is not enabled in the repo.
+Hooks gate on the committed `.punt-labs/biff/enabled` marker (and `biff` being on `PATH`) --- they are silent when biff is not enabled in the repo.
 
 ### Identity shows wrong username
 

@@ -99,7 +99,7 @@ This writes the committed `.punt-labs/biff/enabled` marker — commit it so biff
 
 ## Git Hooks
 
-`biff enable` deploys git hooks into `.git/hooks/`:
+`biff install` deploys git hooks into this clone's `.git/hooks/` (they are per-clone and never committed, so each clone deploys its own):
 
 - **post-checkout** --- updates your `/plan` when you switch branches
 - **post-commit** --- updates your `/plan` with the commit message
@@ -108,7 +108,7 @@ This writes the committed `.punt-labs/biff/enabled` marker — commit it so biff
 All hooks:
 
 - Coexist with existing git hooks (including beads)
-- Gate on `.biff.local` --- silent when biff is not enabled
+- Gate on the committed `.punt-labs/biff/enabled` marker --- silent when biff is not enabled
 - Are lightweight shell scripts that call `biff` CLI commands
 
 ## Identity

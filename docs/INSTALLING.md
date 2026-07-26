@@ -72,13 +72,15 @@ Or from the CLI:
 biff enable
 ```
 
-This writes the committed `.punt-labs/biff/enabled` marker (commit it so biff is on for everyone who clones the repo) and deploys git hooks:
+This writes the two committed enablement artifacts (commit them so biff is on for everyone who clones the repo): the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow. It is exactly equivalent to `/biff enable` in Claude Code.
+
+The per-clone git hooks are deployed separately by `biff install` (they live in `.git/hooks/`, are never committed, and each clone deploys its own):
 
 - **post-checkout** --- updates your plan when you switch branches
 - **post-commit** --- updates your plan with the latest commit message
 - **pre-push** --- suggests a `/wall` announcement when pushing to main
 
-All hooks coexist with existing git hooks and are silent when biff is not enabled.
+All hooks coexist with existing git hooks, gate on the committed marker, and are silent when biff is not enabled.
 
 ## Team Configuration
 
