@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from biff.enablement import RepoEnablement
 
 if TYPE_CHECKING:
@@ -54,6 +56,27 @@ class TestEnable:
         assert first.ci_workflow_changed is True
         second = RepoEnablement(tmp_path).enable()
         assert second.ci_workflow_changed is False  # already up to date
+
+    def test_ci_failure_leaves_repo_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed CI-workflow write must not leave the marker behind.
+
+        The marker is written last, so if deploying the CI workflow raises,
+        ``is_enabled`` still reads absent and the repo stays OFF (fail-safe)
+        rather than half-enabled with a marker but no notify workflow.
+        """
+        _make_repo(tmp_path)
+
+        def boom(_root: Path) -> bool:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("biff.enablement.deploy_ci_workflow", boom)
+
+        with pytest.raises(OSError, match="disk full"):
+            RepoEnablement(tmp_path).enable()
+
+        assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
 
 
 class TestDisable:

@@ -64,9 +64,15 @@ class RepoEnablement:
         return self
 
     def enable(self) -> EnablementChange:
-        """Write the committed marker and CI workflow. Idempotent."""
-        marker = write_enabled_marker(self._root)
+        """Write the committed CI workflow and marker. Idempotent.
+
+        Order is load-bearing: the CI workflow is deployed FIRST and the
+        marker (which ``is_enabled`` reads) is written LAST, so if the CI
+        write fails the marker is never written and the repo stays OFF --
+        fail-safe rather than half-enabled with a marker but no workflow.
+        """
         ci_changed = deploy_ci_workflow(self._root)
+        marker = write_enabled_marker(self._root)
         return EnablementChange(marker=marker, ci_workflow_changed=ci_changed)
 
     def disable(self) -> EnablementChange:
