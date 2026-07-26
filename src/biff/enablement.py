@@ -23,11 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
-from biff._stdlib import (
-    enabled_marker_path,
-    remove_enabled_marker,
-    write_enabled_marker,
-)
+from biff._stdlib import remove_enabled_marker, write_enabled_marker
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
 
 if TYPE_CHECKING:
@@ -40,7 +36,6 @@ __all__ = ["EnablementChange", "RepoEnablement"]
 class EnablementChange:
     """What an ``enable``/``disable`` run wrote or removed, for the caller to report."""
 
-    marker: Path
     ci_workflow_changed: bool
 
 
@@ -72,14 +67,11 @@ class RepoEnablement:
         fail-safe rather than half-enabled with a marker but no workflow.
         """
         ci_changed = deploy_ci_workflow(self._root)
-        marker = write_enabled_marker(self._root)
-        return EnablementChange(marker=marker, ci_workflow_changed=ci_changed)
+        write_enabled_marker(self._root)
+        return EnablementChange(ci_workflow_changed=ci_changed)
 
     def disable(self) -> EnablementChange:
         """Remove the committed marker and CI workflow. Idempotent."""
         remove_enabled_marker(self._root)
         ci_changed = remove_ci_workflow(self._root)
-        return EnablementChange(
-            marker=enabled_marker_path(self._root),
-            ci_workflow_changed=ci_changed,
-        )
+        return EnablementChange(ci_workflow_changed=ci_changed)
