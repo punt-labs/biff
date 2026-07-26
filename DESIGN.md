@@ -5607,3 +5607,43 @@ per-machine divergence. The per-user layer is not lost — it is `mesg`.
    without biff installed no-ops, never errors.
 4. Enablement is explicit — biff never turns itself on. Per-user delivery
    preference lives in `mesg`, a separate layer.
+
+### Amendment (biff-j5u): enable == committed policy; install == per-clone machinery
+
+The initial implementation left the two `enable` front-ends non-equivalent: the
+CLI `biff enable` wrote the marker **and** deployed the CI workflow **and** the
+per-clone `.git/hooks/` dispatchers, while the MCP `biff` tool wrote **only** the
+marker. A repo enabled via `/biff enable` was therefore missing its CI workflow
+and hooks. That contradicts the "two equivalent ways to one state" premise.
+
+The fix partitions biff's per-repo artifacts by **who owns them**, which follows
+from whether they are committed:
+
+| Artifact | Path | Committed? | Owner |
+|----------|------|-----------|-------|
+| Enablement marker | `.punt-labs/biff/enabled` | committed | `enable` / `disable` |
+| CI notify workflow | `.github/workflows/biff-notify.yml` | committed | `enable` / `disable` |
+| Git hook dispatchers | `.git/hooks/{post-checkout,post-commit,pre-push}` | **never** — per-clone, local | `install` / `uninstall` |
+
+The CI workflow is decisive: it executes on a GitHub Actions runner, which only
+ever does a fresh `git checkout` and never runs `biff install`. It must be a
+tracked file, so it is written by the actor that flips the committed policy
+(`enable`) and committed in the same PR as the marker. The git hooks are the
+opposite — `.git/hooks/` is per-clone and never committed, so a contributor who
+clones an already-enabled repo (marker + workflow already present, `enable`
+never run) can only obtain hooks from a local, per-clone action: `biff install`.
+Because hooks *must* be install-deployable regardless, coupling them into
+`enable` would be redundant and would reintroduce the surface asymmetry.
+
+Revised rule 2, and new rules 5–6:
+
+- **Rule 2 (revised).** Every enablement front-end uses `enable | disable`,
+  writes/removes the two **committed** artifacts (marker + CI workflow), never
+  touches `.git/hooks/`, and never runs git — the user commits the changed files.
+- **Rule 5.** Both front-ends route through one definition (`RepoEnablement`), so
+  `biff enable` and `/biff enable` produce byte-identical committed results.
+- **Rule 6.** `biff install` deploys the per-clone git hooks (removed by
+  `biff uninstall`). Hooks gate on the marker at runtime (rule 3), so deploying
+  them in a not-yet-enabled clone is a safe no-op until `enable` writes the
+  marker. `biff enable` prints a hint pointing at `biff install` when the current
+  clone has no hooks — a nudge, not a coupling.
