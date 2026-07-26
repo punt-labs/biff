@@ -173,17 +173,41 @@ def is_enabled(repo_root: Path | None) -> bool:
     return marker.is_file() and not marker.is_symlink() and biff_on_path()
 
 
+def ensure_real_dir(path: Path) -> None:
+    """Create *path* as a real directory without following symlinked parents.
+
+    ``Path.mkdir(parents=True)`` follows a symlink at any intermediate
+    component, so a committed symlinked parent (e.g. a hostile ``.github`` or
+    ``.punt-labs``) would redirect the subsequent write *outside* the repo.
+    This walks up to the first existing real directory and, on the way back
+    down, unlinks any symlink occupying a component name and replaces it with a
+    real directory -- so every level we create is a genuine directory and the
+    write can never escape.  A non-directory, non-symlink file at a component
+    raises (via ``mkdir``), which is the correct loud failure.
+    """
+    if path.is_symlink():
+        path.unlink()  # never follow a symlinked component
+    if path.exists():
+        if not path.is_dir():
+            raise NotADirectoryError(f"{path} exists and is not a directory")
+        return
+    parent = path.parent
+    if parent != path:  # stop at the filesystem root
+        ensure_real_dir(parent)
+    path.mkdir()
+
+
 def write_enabled_marker(repo_root: Path) -> Path:
     """Create the committed enablement marker, returning its path.
 
-    Writes an empty regular file at ``.punt-labs/biff/enabled``
-    (creating the directory if needed).  If a symlink already occupies
-    the path it is removed first, so the result is always a regular
-    file that :func:`is_enabled` recognizes.  The caller commits it via
-    a PR like any other repo change -- this never runs git.
+    Writes an empty regular file at ``.punt-labs/biff/enabled``.  Parent
+    directories are created via :func:`ensure_real_dir` so a committed
+    symlinked parent cannot redirect the write outside the repo, and if a
+    symlink already occupies the marker path it is removed first, so the
+    result is always a regular file that :func:`is_enabled` recognizes.
     """
     marker = enabled_marker_path(repo_root)
-    marker.parent.mkdir(parents=True, exist_ok=True)
+    ensure_real_dir(marker.parent)
     if marker.is_symlink():
         marker.unlink()
     marker.touch()

@@ -91,7 +91,7 @@ Biff starts dormant in every repo. No NATS connection, no consumers, no status b
 > /biff enable
 ```
 
-This writes the committed `.punt-labs/biff/enabled` marker — commit it so biff is on for everyone who clones the repo. To disable:
+This fully activates biff in one verb: it writes the committed `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow (commit both so biff is on for everyone who clones the repo) **and** deploys this clone's local git hooks. To disable (removes all three):
 
 ```text
 > /biff disable
@@ -99,7 +99,7 @@ This writes the committed `.punt-labs/biff/enabled` marker — commit it so biff
 
 ## Git Hooks
 
-`biff install` deploys git hooks into this clone's `.git/hooks/` (they are per-clone and never committed, so each clone deploys its own):
+`biff enable` (or the superset `biff install`) deploys git hooks into this clone's `.git/hooks/` (they are per-clone and never committed, so each clone deploys its own):
 
 - **post-checkout** --- updates your `/plan` when you switch branches
 - **post-commit** --- updates your `/plan` with the commit message

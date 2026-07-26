@@ -19,12 +19,14 @@ model), writing three artifacts:
   deploying them in a not-yet-enabled clone is a safe no-op until the marker
   lands (§2.11).
 
-``disable`` removes exactly those three.  ``enable``/``disable`` never run git
-themselves; the committed files are committed via a PR like any repo change,
-while the local hooks are activated per-clone (each contributor runs ``biff
-enable`` or the superset ``biff install`` once in their clone).  Claude Code's
-session/tool hooks are registered globally by the marketplace plugin and gate
-on the marker at runtime, so ``enable`` never has to touch them.
+``disable`` removes exactly those three.  ``enable``/``disable`` invoke git only
+read-only (``git rev-parse`` to resolve the hooks directory); they never create
+commits or stage files -- the user commits the tracked marker + CI workflow via
+a PR like any repo change, while the local hooks are activated per-clone (each
+contributor runs ``biff enable`` or the superset ``biff install`` once in their
+clone).  Claude Code's session/tool hooks are registered globally by the
+marketplace plugin and gate on the marker at runtime, so ``enable`` never has to
+touch them.
 """
 
 from __future__ import annotations
@@ -63,9 +65,10 @@ class RepoEnablement:
     """Owns the enablement artifacts for one repository.
 
     The single source of truth for what ``enable``/``disable`` do, so the CLI
-    verbs and the MCP ``biff`` tool stay byte-for-byte equivalent.  Neither
-    operation runs git -- the user commits the changed files via a PR like any
-    other repo change; the local git hooks are per-clone machinery.
+    verbs and the MCP ``biff`` tool stay byte-for-byte equivalent.  They invoke
+    git only read-only (to resolve the hooks directory) and never create
+    commits -- the user commits the tracked marker + CI workflow via a PR like
+    any other repo change; the local git hooks are per-clone machinery.
     """
 
     __slots__ = ("_root",)

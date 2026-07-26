@@ -202,6 +202,30 @@ class TestDeployGitHooks:
                 default_hook.read_text()
             )
 
+    def test_symlinked_hooks_dir_cannot_escape(self, tmp_path: Path) -> None:
+        """A symlinked hooks dir is replaced, so writes can't land outside it.
+
+        Parity with the ci_workflow parent-dir guard: even when the resolved
+        hooks directory is a symlink (here via a symlinked ``core.hooksPath``
+        target), deploy replaces it with a real directory rather than following
+        it into the link's target.
+        """
+        repo = _make_repo(tmp_path / "repo")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (repo / "linkhooks").symlink_to(outside, target_is_directory=True)
+        _git(repo, "config", "core.hooksPath", "linkhooks")
+
+        updated = deploy_git_hooks(repo)
+
+        assert set(updated) == set(GIT_HOOKS)
+        assert not (repo / "linkhooks").is_symlink()
+        for name in GIT_HOOKS:
+            assert (repo / "linkhooks" / name).is_file()
+        # Nothing escaped into the symlink target.
+        for name in GIT_HOOKS:
+            assert not (outside / name).exists()
+
 
 # ── remove_git_hooks ──────────────────────────────────────────────
 
@@ -310,3 +334,48 @@ class TestBlockHelpers:
     def test_remove_no_block(self) -> None:
         content = "#!/bin/sh\necho hello\n"
         assert _remove_biff_block(content) == content
+
+
+# ── ensure_real_dir (shared parent-symlink guard) ─────────────────
+
+
+class TestEnsureRealDir:
+    """The shared guard that stops symlinked parents redirecting writes."""
+
+    def test_creates_nested_dirs(self, tmp_path: Path) -> None:
+        from biff._stdlib import ensure_real_dir
+
+        target = tmp_path / "a" / "b" / "c"
+        ensure_real_dir(target)
+        assert target.is_dir()
+
+    def test_idempotent_on_existing_dir(self, tmp_path: Path) -> None:
+        from biff._stdlib import ensure_real_dir
+
+        ensure_real_dir(tmp_path)  # already a real dir — no error, no change
+        assert tmp_path.is_dir()
+
+    def test_replaces_symlinked_component_no_escape(self, tmp_path: Path) -> None:
+        from biff._stdlib import ensure_real_dir
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        base = tmp_path / "base"
+        base.mkdir()
+        (base / "link").symlink_to(outside, target_is_directory=True)
+
+        ensure_real_dir(base / "link" / "inner")
+
+        assert not (base / "link").is_symlink()
+        assert (base / "link" / "inner").is_dir()
+        # The symlink target never received the new child.
+        assert not (outside / "inner").exists()
+
+    def test_raises_on_non_directory_component(self, tmp_path: Path) -> None:
+        import pytest
+
+        from biff._stdlib import ensure_real_dir
+
+        (tmp_path / "afile").write_text("x")
+        with pytest.raises((NotADirectoryError, FileExistsError)):
+            ensure_real_dir(tmp_path / "afile" / "child")

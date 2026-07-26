@@ -11,6 +11,7 @@ import logging
 import subprocess
 from pathlib import Path
 
+from biff._stdlib import ensure_real_dir
 from biff.config import find_git_root
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,9 @@ def deploy_git_hooks(repo_root: Path | None = None) -> list[str]:
         # tell the user rather than deploying nothing without a word.
         logger.warning("no git hooks directory resolved for %s; deployed nothing", root)
         return []
-    hooks_dir.mkdir(parents=True, exist_ok=True)
+    # Parent-dir symlink guard (parity with ci_workflow / write_enabled_marker):
+    # never let a symlinked component redirect a hook write outside its dir.
+    ensure_real_dir(hooks_dir)
 
     updated: list[str] = []
     for name, command in GIT_HOOKS.items():

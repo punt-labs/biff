@@ -12,7 +12,8 @@ marker ``.punt-labs/biff/enabled`` and CI notify workflow
 ``.git/hooks`` biff dispatchers; ``action="disable"`` removes all three.
 The committed files are tracked repo files the user commits via a PR like
 any other change; the git hooks are per-clone and never committed.  This
-tool never runs git.
+tool invokes git only read-only (to resolve the hooks directory) and never
+creates commits.
 """
 
 from __future__ import annotations

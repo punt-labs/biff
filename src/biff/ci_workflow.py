@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.resources
 from pathlib import Path
 
+from biff._stdlib import ensure_real_dir
 from biff.config import find_git_root
 
 _WORKFLOW_NAME = "biff-notify.yml"
@@ -41,7 +42,11 @@ def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
         )
 
     workflows_dir = root / ".github" / "workflows"
-    workflows_dir.mkdir(parents=True, exist_ok=True)
+    # Parent-dir symlink guard: a committed symlinked `.github` (or
+    # `.github/workflows`) would let `mkdir -p` + the write escape the repo.
+    # ensure_real_dir replaces any symlinked component with a real directory so
+    # the write always lands inside the repo.
+    ensure_real_dir(workflows_dir)
 
     target = workflows_dir / _WORKFLOW_NAME
     template = _template_content()

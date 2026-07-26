@@ -1481,7 +1481,8 @@ def enable(
     (the beads ``bd setup`` model).  Equivalent to the MCP ``/biff enable``
     toggle — both do exactly this.  Idempotent.  The committed files are
     tracked: commit them via a PR so every contributor participates; the git
-    hooks are per-clone and never committed.  This never runs git.
+    hooks are per-clone and never committed.  Invokes git only read-only (to
+    resolve the hooks directory) and never creates commits.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
@@ -1523,7 +1524,8 @@ def disable(
     ``.github/workflows/biff-notify.yml``, AND this clone's local
     ``.git/hooks`` biff dispatchers.  Equivalent to the MCP ``/biff disable``
     toggle.  Idempotent.  Commit the removal of the tracked files via a PR
-    for it to take effect for every contributor.  This never runs git.
+    for it to take effect for every contributor.  Invokes git only read-only
+    (to resolve the hooks directory) and never creates commits.
     """
     repo_root = find_git_root(start)
     if repo_root is None:
@@ -1669,9 +1671,10 @@ def uninstall_cmd() -> None:
     else:
         print("claude CLI not found; skipping plugin uninstall.")
 
-    # Per-clone git hooks (deployed by `biff install`) are local machinery, so
-    # uninstall removes them for this clone. The committed marker/CI workflow
-    # are repo policy — left untouched; `biff disable` owns those.
+    # Per-clone git hooks (deployed by `biff install` or `biff enable`) are
+    # local machinery, so uninstall removes them for this clone. The committed
+    # marker/CI workflow are repo policy — left untouched; `biff disable` owns
+    # those (it also removes this clone's hooks).
     _remove_repo_git_hooks()
 
     # User-scope teardown (§2.6) ALWAYS runs — never gated on the plugin step.

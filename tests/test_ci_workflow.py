@@ -86,6 +86,40 @@ class TestDeployCiWorkflow:
         # The symlink target is untouched.
         assert outside.read_text() == "do not touch"
 
+    def test_symlinked_github_parent_cannot_escape(self, tmp_path: Path) -> None:
+        """A committed symlinked ``.github`` must not redirect the write out of repo.
+
+        ``mkdir(parents=True)`` follows a symlinked parent; the parent-dir guard
+        replaces the symlinked ``.github`` with a real directory so the workflow
+        lands inside the repo and never in the link's target.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (repo / ".github").symlink_to(outside, target_is_directory=True)
+
+        assert deploy_ci_workflow(repo) is True
+
+        assert not (repo / ".github").is_symlink()
+        assert (repo / ".github" / "workflows" / _WORKFLOW_NAME).is_file()
+        # Nothing escaped into the symlink target.
+        assert not (outside / "workflows").exists()
+
+    def test_symlinked_workflows_parent_cannot_escape(self, tmp_path: Path) -> None:
+        """Same guard one level deeper: a symlinked ``.github/workflows``."""
+        repo = tmp_path / "repo"
+        (repo / ".github").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (repo / ".github" / "workflows").symlink_to(outside, target_is_directory=True)
+
+        assert deploy_ci_workflow(repo) is True
+
+        assert not (repo / ".github" / "workflows").is_symlink()
+        assert (repo / ".github" / "workflows" / _WORKFLOW_NAME).is_file()
+        assert not (outside / _WORKFLOW_NAME).exists()
+
 
 # ── remove_ci_workflow ─────────────────────────────────────────────
 

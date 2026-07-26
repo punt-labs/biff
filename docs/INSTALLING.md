@@ -72,9 +72,9 @@ Or from the CLI:
 biff enable
 ```
 
-This writes the two committed enablement artifacts (commit them so biff is on for everyone who clones the repo): the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow. It is exactly equivalent to `/biff enable` in Claude Code.
+This fully activates biff in one verb: it writes the two committed enablement artifacts (commit them so biff is on for everyone who clones the repo) — the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow — **and** deploys this clone's local git hooks. It is exactly equivalent to `/biff enable` in Claude Code; `biff disable` / `/biff disable` remove all three.
 
-The per-clone git hooks are deployed separately by `biff install` (they live in `.git/hooks/`, are never committed, and each clone deploys its own):
+The per-clone git hooks (deployed by `biff enable`, or by the superset `biff install`) live in `.git/hooks/`, are never committed, and each clone deploys its own. They are resolved worktree/`core.hooksPath`-aware:
 
 - **post-checkout** --- updates your plan when you switch branches
 - **post-commit** --- updates your plan with the latest commit message
