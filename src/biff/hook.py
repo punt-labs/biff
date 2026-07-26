@@ -683,12 +683,19 @@ def handle_session_start() -> str:
 
     Always returns context — at minimum, a /tty nudge.
     Reads the git branch and suggests /plan with auto source.
-    Clears stale plan marker so the PreToolUse gate starts fresh.
+    Clears the stale plan and bead markers so the PreToolUse gate
+    starts fresh — a new session inherits no unvalidated claim
+    (Z ``StartSession``: ``planSet' = zfalse``, ``beadClaimed' = {}``).
     """
-    from biff.markers import clear_plan_marker, read_wall_marker  # noqa: PLC0415
+    from biff.markers import (  # noqa: PLC0415
+        clear_bead_marker,
+        clear_plan_marker,
+        read_wall_marker,
+    )
 
     worktree = _get_worktree_root()
     clear_plan_marker(worktree)
+    clear_bead_marker(worktree)
 
     parts: list[str] = [
         "Biff session starting.",

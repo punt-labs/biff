@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
@@ -60,16 +60,44 @@ def read_plan_marker(worktree_root: str) -> str | None:
         return None
 
 
+# How long a validated bead claim is trusted before the gate re-queries
+# ``bd``.  The marker is a perf cache, not ground truth: a bead closed
+# out-of-band (direct Dolt, another session) leaves a stale marker, so
+# the gate must re-validate once the stamp ages past this bound.  Short
+# enough to bound the phantom-claim window; long enough that a burst of
+# edits after a claim never pays for a subprocess (biff-84a).
+_BEAD_MARKER_TTL = timedelta(seconds=60)
+
+
 def write_bead_marker(worktree_root: str) -> None:
-    """Write bead-active marker (a bead was claimed)."""
+    """Write bead-active marker stamped with the current validation time.
+
+    The timestamp bounds how long the PreToolUse gate trusts the marker
+    without re-querying ``bd`` (see ``_BEAD_MARKER_TTL``).
+    """
     d = hint_dir(worktree_root)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "bead-active").write_text("yes")
+    (d / "bead-active").write_text(datetime.now(UTC).isoformat())
 
 
 def clear_bead_marker(worktree_root: str) -> None:
     """Remove bead-active marker (bead closed — force re-check on next gate)."""
     (hint_dir(worktree_root) / "bead-active").unlink(missing_ok=True)
+
+
+def _bead_marker_fresh(marker: Path) -> bool:
+    """True if *marker* holds a timestamp validated within the TTL.
+
+    A missing, unparseable, naive, or expired stamp is not fresh, so the
+    caller re-validates against ``bd`` rather than trusting the cache.
+    """
+    try:
+        stamped = datetime.fromisoformat(marker.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    if stamped.tzinfo is None:
+        return False
+    return datetime.now(UTC) - stamped < _BEAD_MARKER_TTL
 
 
 type BeadStatus = Literal["yes", "no", "unavailable"]
@@ -78,26 +106,31 @@ type BeadStatus = Literal["yes", "no", "unavailable"]
 def check_bead_in_progress(worktree_root: str = "") -> BeadStatus:
     """Check whether any bead is in_progress.
 
-    Fast path: reads the ``bead-active`` marker file (<1ms).
-    Slow path: falls back to ``bd list`` subprocess if no marker exists.
-    Only the ``"yes"`` result is cached as a marker; ``"no"`` and
-    ``"unavailable"`` are not cached (marker is written on claim,
-    cleared on close or status transition).
+    Fast path: a ``bead-active`` marker stamped within ``_BEAD_MARKER_TTL``
+    is trusted without touching ``bd`` (<1ms).  Slow path: an absent or
+    stale marker triggers a ``bd list`` subprocess, then the marker is
+    reconciled with the truth — refreshed on ``"yes"``, dropped on
+    ``"no"`` (a phantom claim closed out-of-band), left untouched on
+    ``"unavailable"`` (a transient outage re-checks next time).
 
-    Returns ``"yes"`` if at least one bead is claimed, ``"no"`` if
-    the list is empty, or ``"unavailable"`` if ``bd`` is not installed,
+    Returns ``"yes"`` if at least one bead is claimed, ``"no"`` if the
+    list is empty, or ``"unavailable"`` if ``bd`` is not installed,
     times out, or otherwise fails.
     """
-    # Fast path: marker file exists from a prior bd update/close cycle.
     marker = hint_dir(worktree_root) / "bead-active" if worktree_root else None
-    if marker is not None and marker.is_file():
+
+    # Fast path: a recently-validated claim is trusted without querying bd.
+    if marker is not None and _bead_marker_fresh(marker):
         return "yes"
 
-    # Slow path: subprocess fallback + cache write.
+    # Slow path: marker absent or stale — query bd and reconcile the cache.
     status = _check_bead_subprocess()
-    if marker is not None and status == "yes":
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("yes")
+    if marker is not None:
+        if status == "yes":
+            write_bead_marker(worktree_root)  # refresh the stamp
+        elif status == "no":
+            marker.unlink(missing_ok=True)  # drop the phantom claim
+        # "unavailable": leave the marker; the outage is transient.
     return status
 
 

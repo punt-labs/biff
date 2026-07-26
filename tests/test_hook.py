@@ -1476,11 +1476,47 @@ class TestZSpecBeadClose:
             assert check_bead_in_progress("") == "yes"
 
 
-class TestBeadMarkerCache:
-    """Bead-active marker file cache for PreToolUse gate performance."""
+def _write_stale_bead_marker(tmp_path: Path) -> Path:
+    """Write a bead-active marker stamped older than the TTL.
 
-    def test_claim_writes_marker(self, tmp_path: Path) -> None:
-        """bd update --status=in_progress writes bead-active marker."""
+    Simulates a claim validated long ago \u2014 a bead that may since have
+    been closed out-of-band (direct Dolt, another session).  The gate
+    must re-query bd rather than trust the stale stamp (biff-84a).
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from biff.markers import _BEAD_MARKER_TTL
+
+    marker = _hint_path(tmp_path, "bead-active")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    stale = datetime.now(UTC) - _BEAD_MARKER_TTL - timedelta(seconds=1)
+    marker.write_text(stale.isoformat())
+    return marker
+
+
+def _bead_marker_is_fresh(tmp_path: Path) -> bool:
+    """True if the bead-active marker is stamped within the TTL."""
+    from datetime import UTC, datetime
+
+    from biff.markers import _BEAD_MARKER_TTL
+
+    marker = _hint_path(tmp_path, "bead-active")
+    stamped = datetime.fromisoformat(marker.read_text().strip())
+    return datetime.now(UTC) - stamped < _BEAD_MARKER_TTL
+
+
+class TestBeadMarkerCache:
+    """Bead-active marker file cache for PreToolUse gate performance.
+
+    The marker is a *timestamped* perf cache, not ground truth: the
+    gate trusts it only within a short TTL, then re-validates against
+    ``bd``.  A bead closed out-of-band goes stale within the TTL and
+    forces a re-check, so a hard-deny gate never allows on a phantom
+    claim (biff-84a).
+    """
+
+    def test_claim_writes_fresh_marker(self, tmp_path: Path) -> None:
+        """bd update --status=in_progress writes a freshly-stamped marker."""
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {"command": "bd update biff-7vp --status=in_progress"},
@@ -1491,52 +1527,113 @@ class TestBeadMarkerCache:
             result = handle_post_bash(data)
         assert result is not None
         assert _hint_path(tmp_path, "bead-active").exists()
-        assert _hint_path(tmp_path, "bead-active").read_text() == "yes"
+        assert _bead_marker_is_fresh(tmp_path)
 
     def test_close_clears_marker(self, tmp_path: Path) -> None:
         """bd close removes bead-active marker."""
-        marker = _hint_path(tmp_path, "bead-active")
-        marker.parent.mkdir(parents=True)
-        marker.write_text("yes")
+        from biff.markers import write_bead_marker
 
+        m_home, m_wt = _hint_mocks(tmp_path)
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {"command": "bd close biff-abc"},
             "tool_response": "\u2713 Closed biff-abc",
         }
-        m_home, m_wt = _hint_mocks(tmp_path)
         with m_home, m_wt:
+            write_bead_marker(_FAKE_WORKTREE)
             handle_post_bash(data)
-        assert not marker.exists()
+        assert not _hint_path(tmp_path, "bead-active").exists()
 
     def test_failed_close_does_not_clear_marker(self, tmp_path: Path) -> None:
         """Failed bd close leaves marker intact."""
-        marker = _hint_path(tmp_path, "bead-active")
-        marker.parent.mkdir(parents=True)
-        marker.write_text("yes")
+        from biff.markers import write_bead_marker
 
+        m_home, m_wt = _hint_mocks(tmp_path)
         data: dict[str, object] = {
             "tool_name": "Bash",
             "tool_input": {"command": "bd close biff-abc"},
             "tool_response": "Error: issue not found",
         }
-        m_home, m_wt = _hint_mocks(tmp_path)
         with m_home, m_wt:
+            write_bead_marker(_FAKE_WORKTREE)
             handle_post_bash(data)
-        assert marker.exists()
+        assert _hint_path(tmp_path, "bead-active").exists()
 
-    def test_check_fast_path_reads_marker(self, tmp_path: Path) -> None:
-        """check_bead_in_progress returns 'yes' from marker without subprocess."""
-        from biff.markers import check_bead_in_progress
-
-        marker = _hint_path(tmp_path, "bead-active")
-        marker.parent.mkdir(parents=True)
-        marker.write_text("yes")
+    def test_fresh_marker_fast_path_skips_subprocess(self, tmp_path: Path) -> None:
+        """A fresh marker returns 'yes' WITHOUT querying bd (perf fast path)."""
+        from biff.markers import check_bead_in_progress, write_bead_marker
 
         m_home = patch("pathlib.Path.home", return_value=tmp_path)
-        with m_home:
+        with (
+            m_home,
+            patch("biff.markers._check_bead_subprocess") as mock_sub,
+        ):
+            write_bead_marker(_FAKE_WORKTREE)
             result = check_bead_in_progress(_FAKE_WORKTREE)
         assert result == "yes"
+        mock_sub.assert_not_called()
+
+    def test_stale_marker_revalidates_and_denies_when_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """The bypass: a stale marker for a bead closed out-of-band re-checks.
+
+        Before the fix, ``check_bead_in_progress`` trusted any marker
+        file and returned 'yes', so the hard-deny gate allowed the edit
+        on a phantom claim.  A stale stamp must force a bd re-query; when
+        bd reports no claim, the result is 'no' (gate denies).
+        """
+        from biff.markers import check_bead_in_progress
+
+        _write_stale_bead_marker(tmp_path)
+        m_home = patch("pathlib.Path.home", return_value=tmp_path)
+        with (
+            m_home,
+            patch("biff.markers._check_bead_subprocess", return_value="no"),
+        ):
+            result = check_bead_in_progress(_FAKE_WORKTREE)
+        assert result == "no"
+
+    def test_stale_marker_dropped_when_bead_closed(self, tmp_path: Path) -> None:
+        """Re-validating a phantom claim deletes the stale marker."""
+        from biff.markers import check_bead_in_progress
+
+        marker = _write_stale_bead_marker(tmp_path)
+        m_home = patch("pathlib.Path.home", return_value=tmp_path)
+        with (
+            m_home,
+            patch("biff.markers._check_bead_subprocess", return_value="no"),
+        ):
+            check_bead_in_progress(_FAKE_WORKTREE)
+        assert not marker.exists()
+
+    def test_stale_marker_refreshed_when_still_claimed(self, tmp_path: Path) -> None:
+        """A stale marker for a still-claimed bead is refreshed, not dropped."""
+        from biff.markers import check_bead_in_progress
+
+        _write_stale_bead_marker(tmp_path)
+        m_home = patch("pathlib.Path.home", return_value=tmp_path)
+        with (
+            m_home,
+            patch("biff.markers._check_bead_subprocess", return_value="yes"),
+        ):
+            result = check_bead_in_progress(_FAKE_WORKTREE)
+        assert result == "yes"
+        assert _bead_marker_is_fresh(tmp_path)
+
+    def test_stale_marker_kept_when_bd_unavailable(self, tmp_path: Path) -> None:
+        """A transient bd outage does not drop the marker (re-check next time)."""
+        from biff.markers import check_bead_in_progress
+
+        marker = _write_stale_bead_marker(tmp_path)
+        m_home = patch("pathlib.Path.home", return_value=tmp_path)
+        with (
+            m_home,
+            patch("biff.markers._check_bead_subprocess", return_value="unavailable"),
+        ):
+            result = check_bead_in_progress(_FAKE_WORKTREE)
+        assert result == "unavailable"
+        assert marker.exists()
 
     def test_check_slow_path_caches_yes(self, tmp_path: Path) -> None:
         """check_bead_in_progress writes marker on subprocess 'yes'."""
@@ -1553,6 +1650,7 @@ class TestBeadMarkerCache:
             result = check_bead_in_progress(_FAKE_WORKTREE)
         assert result == "yes"
         assert marker.exists()
+        assert _bead_marker_is_fresh(tmp_path)
 
     def test_check_slow_path_no_does_not_cache(self, tmp_path: Path) -> None:
         """check_bead_in_progress does NOT write marker on subprocess 'no'."""
@@ -1567,11 +1665,14 @@ class TestBeadMarkerCache:
         assert result == "no"
         assert not _hint_path(tmp_path, "bead-active").exists()
 
-    def test_session_start_does_not_clear_bead_marker(self, tmp_path: Path) -> None:
-        """Session start must NOT clear bead marker — beads persist across sessions."""
-        marker = _hint_path(tmp_path, "bead-active")
-        marker.parent.mkdir(parents=True)
-        marker.write_text("yes")
+    def test_session_start_clears_stale_bead_marker(self, tmp_path: Path) -> None:
+        """Session start clears the bead marker (Z StartSession: beadClaimed'=empty).
+
+        A claim never carries across sessions unvalidated: dropping the
+        marker at session start bounds cross-session staleness to zero,
+        forcing the first edit of a new session to re-query bd.
+        """
+        from biff.markers import write_bead_marker
 
         m_home, m_wt = _hint_mocks(tmp_path)
         with (
@@ -1579,8 +1680,9 @@ class TestBeadMarkerCache:
             m_wt,
             patch("biff.hook._get_git_branch", return_value="main"),
         ):
+            write_bead_marker(_FAKE_WORKTREE)
             handle_session_start()
-        assert marker.exists()
+        assert not _hint_path(tmp_path, "bead-active").exists()
 
 
 # ── Lux consumer hooks (biff-og4p, biff-g75a) ─────────────────────────
