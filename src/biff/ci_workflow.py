@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.resources
 from pathlib import Path
 
+from biff._stdlib import ensure_real_dir, is_regular_file
 from biff.config import find_git_root
 
 _WORKFLOW_NAME = "biff-notify.yml"
@@ -27,19 +28,37 @@ def _template_content() -> str:
 def deploy_ci_workflow(repo_root: Path | None = None) -> bool:
     """Deploy biff-notify.yml to ``.github/workflows/``.
 
-    Returns ``True`` if the file was created or updated.
+    Returns ``True`` if the file was created or updated, ``False`` if it was
+    already current (a no-op).  Raises ``ValueError`` when no usable repo root
+    can be determined -- a real failure, distinct from the ``False`` no-op, so
+    callers (e.g. ``enable``) can fail safe on it rather than mistaking it for
+    "already deployed".
     """
     root = repo_root or find_git_root()
     if root is None or not root.is_dir():
-        return False
+        raise ValueError(
+            "cannot deploy the CI workflow: no usable repo root "
+            f"(got {root!r}); run inside a git repository."
+        )
 
     workflows_dir = root / ".github" / "workflows"
-    workflows_dir.mkdir(parents=True, exist_ok=True)
+    # Parent-dir symlink guard: a committed symlinked `.github` (or
+    # `.github/workflows`) would let `mkdir -p` + the write escape the repo.
+    # ensure_real_dir validates every component below `root` and replaces any
+    # symlinked one with a real directory, so the write stays inside the repo.
+    ensure_real_dir(root, workflows_dir)
 
     target = workflows_dir / _WORKFLOW_NAME
     template = _template_content()
 
-    if target.exists() and target.read_text(encoding="utf-8") == template:
+    # Symlink guard (mirrors write_enabled_marker): an untrusted checkout could
+    # commit biff-notify.yml as a symlink; replace it with a real file rather
+    # than following it and clobbering the link's target. Done before the
+    # freshness read so a symlink is never left in place as "up to date".
+    if target.is_symlink():
+        target.unlink()
+
+    if is_regular_file(target) and target.read_text(encoding="utf-8") == template:
         return False  # Already up to date
 
     target.write_text(template, encoding="utf-8")
@@ -56,11 +75,15 @@ def remove_ci_workflow(repo_root: Path | None = None) -> bool:
         return False
 
     target = root / ".github" / "workflows" / _WORKFLOW_NAME
-    if not target.exists():
-        return False
-
-    target.unlink()
-    return True
+    # Regular file OR symlink → remove it. unlink() removes a symlink without
+    # following it, so a committed symlinked workflow is cleaned up rather than
+    # its target being touched. Anything else at the path (absent, or a
+    # directory we don't own) → nothing of ours to remove; leave it, report
+    # False, and never misreport a directory as removed.
+    if target.is_symlink() or is_regular_file(target):
+        target.unlink()
+        return True
+    return False
 
 
 def check_ci_workflow(repo_root: Path | None = None) -> bool:
@@ -73,7 +96,9 @@ def check_ci_workflow(repo_root: Path | None = None) -> bool:
         return False
 
     target = root / ".github" / "workflows" / _WORKFLOW_NAME
-    if not target.exists():
+    # Regular file only: a symlinked (or otherwise non-regular) workflow path is
+    # not ours — don't follow it to read an arbitrary target; report not-current.
+    if not is_regular_file(target):
         return False
 
     return target.read_text(encoding="utf-8") == _template_content()

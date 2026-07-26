@@ -15,6 +15,23 @@ from biff.server.tools._descriptions import _reset_session
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _confine_git_walk(  # pyright: ignore[reportUnusedFunction]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stop ``git`` from climbing out of the test's tmp_path into the real repo.
+
+    ``TMPDIR`` points inside the biff repo, so any code that shells out to git
+    (e.g. ``git_hooks.resolve_hooks_dir`` via ``enable``/``install``) would
+    otherwise walk up and resolve a bare tmp_path to the project's own
+    ``.git`` -- reading or even writing the real hooks. The ceiling must be
+    tmp_path's *parent*, not tmp_path: git deliberately does not exclude the
+    starting directory itself, so a ceiling equal to the cwd is ignored.
+    """
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
 
 
 @pytest.fixture(autouse=True)

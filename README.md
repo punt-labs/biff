@@ -202,7 +202,7 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 | `/talk user "msg"` | BSD `talk` | Start a real-time conversation |
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
-| `/biff enable` \| `/biff disable` | — | Turn biff on/off for this repo (writes the committed `.punt-labs/biff/enabled` marker) |
+| `/biff enable` \| `/biff disable` | — | Turn biff on/off for this repo (writes the committed `.punt-labs/biff/enabled` marker + CI workflow; equivalent to the `biff enable` CLI) |
 | `/biff:poll [duration]` | — | Poll for talk/mail: `<duration>` sets the cadence, no-arg checks now |
 
 ## CLI
@@ -263,9 +263,9 @@ biff talk kai "can you review?"           # Real-time conversation
 ### Admin commands
 
 ```bash
-biff install                # Install plugin + register user-scope agent guide
-biff enable                 # Enable biff for this repo (writes the committed .punt-labs/biff/enabled marker)
-biff disable                # Disable biff for this repo (removes the marker)
+biff install                # Install user-scope guide + this clone's git hooks (+ plugin if Claude Code is present)
+biff enable                 # Enable biff for this repo (writes the committed marker + CI workflow)
+biff disable                # Disable biff for this repo (removes the marker + CI workflow)
 biff doctor                 # Check installation health
 biff mcp                    # Start MCP server (stdio, called by plugin)
 biff serve                  # Start MCP server (HTTP)
@@ -329,7 +329,7 @@ Biff ships with a shared demo relay so your team can start immediately. When you
 
 The `[peers]` section enables cross-repo commands (`/who`, `/write`, `/finger`). `orgs` auto-discovers repos with active sessions; `repos` lists peers that are always visible. Both are optional.
 
-`biff install` registers the MCP server, installs slash commands, enables the plugin, and registers a user-scope agent guide: it deposits `~/.punt-labs/biff/CLAUDE.md` and adds `@~/.punt-labs/biff/CLAUDE.md` to `~/.claude/CLAUDE.md` so the guide loads in every session. `biff enable` activates biff in the current repo and deploys git hooks. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
+`biff install` is the superset entry point: it registers the MCP server, installs slash commands, enables the plugin, registers a user-scope agent guide (deposits `~/.punt-labs/biff/CLAUDE.md` and adds `@~/.punt-labs/biff/CLAUDE.md` to `~/.claude/CLAUDE.md` so the guide loads in every session), and deploys this clone's per-clone git hooks into `.git/hooks/` (local, never committed). `biff enable` fully activates biff in the current repo in one verb — it writes the two committed artifacts that constitute enablement policy (the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow) **and** deploys this clone's local git hooks, so no separate `biff install` is needed to start; it is exactly equivalent to `/biff enable` in Claude Code (`biff disable` / `/biff disable` remove all three). The hooks are resolved worktree/`core.hooksPath`-aware and gate on the marker at runtime. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
 
 ## Status Bar
 

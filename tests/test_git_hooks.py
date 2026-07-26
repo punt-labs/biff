@@ -1,11 +1,15 @@
 """Tests for git hook deployment (DES-017, biff-9z2).
 
-Unit tests for deploy/remove/check operations on ``.git/hooks/``.
-Uses ``tmp_path`` to simulate a git repo without touching the real one.
+Unit tests for deploy/remove/check operations on the resolved git hooks
+directory.  Uses a real ``git init`` under ``tmp_path`` so the hooks-dir
+resolver (``git rev-parse --git-path hooks``) sees a genuine repository --
+the same lookup git itself performs, which honors linked worktrees,
+submodules, and ``core.hooksPath``.
 """
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from biff.git_hooks import (
@@ -17,14 +21,83 @@ from biff.git_hooks import (
     check_git_hooks,
     deploy_git_hooks,
     remove_git_hooks,
+    resolve_hooks_dir,
 )
+
+# Git-walk confinement (so the resolver never climbs into the real repo) is
+# provided suite-wide by the autouse ``_confine_git_walk`` fixture in conftest.
+
+
+def _git(repo: Path, *args: str) -> None:
+    """Run a git command in *repo*, raising on failure."""
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), *args],  # noqa: S607
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _make_repo(tmp_path: Path) -> Path:
-    """Create a minimal git repo structure in tmp_path."""
-    hooks_dir = tmp_path / ".git" / "hooks"
-    hooks_dir.mkdir(parents=True)
+    """Initialise a real git repo with one commit under tmp_path.
+
+    A commit is required so ``git worktree add`` (used by the worktree
+    tests) has a HEAD to check out.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    _git(tmp_path, "commit", "-q", "--allow-empty", "-m", "init")
     return tmp_path
+
+
+def _hooks_dir(repo: Path) -> Path:
+    """The resolved hooks dir for a plain (non-worktree) repo."""
+    return repo / ".git" / "hooks"
+
+
+# ── resolve_hooks_dir ──────────────────────────────────────────────
+
+
+class TestResolveHooksDir:
+    """The resolver asks git, so it honors worktrees and core.hooksPath."""
+
+    def test_plain_repo(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        assert resolve_hooks_dir(repo) == _hooks_dir(repo)
+
+    def test_not_a_git_repo(self, tmp_path: Path) -> None:
+        assert resolve_hooks_dir(tmp_path) is None
+
+    def test_nonexistent_path(self) -> None:
+        assert resolve_hooks_dir(Path("/nonexistent")) is None
+
+    def test_core_hooks_path_relative(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _git(repo, "config", "core.hooksPath", "myhooks")
+        assert resolve_hooks_dir(repo) == repo / "myhooks"
+
+    def test_core_hooks_path_absolute(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        abs_hooks = tmp_path / "shared-hooks"
+        _git(repo, "config", "core.hooksPath", str(abs_hooks))
+        assert resolve_hooks_dir(repo) == abs_hooks
+
+    def test_linked_worktree_resolves_to_common_dir(self, tmp_path: Path) -> None:
+        """In a linked worktree ``.git`` is a file; hooks live in the main repo."""
+        main = _make_repo(tmp_path / "main")
+        wt = tmp_path / "wt"
+        _git(main, "worktree", "add", "--detach", "-q", str(wt))
+
+        # The linked worktree's ``.git`` is a FILE, not a directory.
+        assert (wt / ".git").is_file()
+
+        resolved = resolve_hooks_dir(wt)
+        assert resolved is not None
+        # Compare resolved forms: git records an absolute path that may use a
+        # different symlink spelling than tmp_path (e.g. /private on macOS).
+        assert resolved.resolve() == (main / ".git" / "hooks").resolve()
 
 
 # ── deploy_git_hooks ───────────────────────────────────────────────
@@ -39,7 +112,7 @@ class TestDeployGitHooks:
 
         assert set(updated) == set(GIT_HOOKS)
         for name in GIT_HOOKS:
-            hook = repo / ".git" / "hooks" / name
+            hook = _hooks_dir(repo) / name
             assert hook.exists()
             content = hook.read_text()
             assert "#!/usr/bin/env bash" in content
@@ -49,7 +122,7 @@ class TestDeployGitHooks:
 
     def test_appends_to_existing_hook(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
-        existing = repo / ".git" / "hooks" / "post-commit"
+        existing = _hooks_dir(repo) / "post-commit"
         existing.write_text("#!/bin/sh\necho 'existing hook'\n")
 
         deploy_git_hooks(repo)
@@ -60,7 +133,7 @@ class TestDeployGitHooks:
 
     def test_ensures_executable_on_existing(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
-        hook = repo / ".git" / "hooks" / "post-commit"
+        hook = _hooks_dir(repo) / "post-commit"
         hook.write_text("#!/bin/sh\necho 'hello'\n")
         hook.chmod(0o644)  # Not executable
 
@@ -70,7 +143,7 @@ class TestDeployGitHooks:
 
     def test_preserves_existing_content(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
-        beads_hook = repo / ".git" / "hooks" / "post-checkout"
+        beads_hook = _hooks_dir(repo) / "post-checkout"
         beads_content = "#!/bin/sh\n# beads post-checkout\nbd import\n"
         beads_hook.write_text(beads_content)
 
@@ -84,21 +157,74 @@ class TestDeployGitHooks:
     def test_idempotent(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         deploy_git_hooks(repo)
-        first = {
-            name: (repo / ".git" / "hooks" / name).read_text() for name in GIT_HOOKS
-        }
+        first = {name: (_hooks_dir(repo) / name).read_text() for name in GIT_HOOKS}
 
         updated = deploy_git_hooks(repo)
         assert updated == []  # Nothing changed
 
         for name in GIT_HOOKS:
-            assert (repo / ".git" / "hooks" / name).read_text() == first[name]
+            assert (_hooks_dir(repo) / name).read_text() == first[name]
 
     def test_no_git_dir_returns_empty(self, tmp_path: Path) -> None:
         assert deploy_git_hooks(tmp_path) == []
 
     def test_no_repo_root_returns_empty(self) -> None:
         assert deploy_git_hooks(Path("/nonexistent")) == []
+
+    def test_deploys_into_worktree_common_dir(self, tmp_path: Path) -> None:
+        """A linked worktree deploys hooks to the main repo, never <wt>/.git/hooks."""
+        main = _make_repo(tmp_path / "main")
+        wt = tmp_path / "wt"
+        _git(main, "worktree", "add", "--detach", "-q", str(wt))
+
+        updated = deploy_git_hooks(wt)
+
+        assert set(updated) == set(GIT_HOOKS)
+        for name in GIT_HOOKS:
+            assert (main / ".git" / "hooks" / name).exists()
+        # Nothing must be written to the worktree's literal .git/hooks path.
+        assert (wt / ".git").is_file()
+        assert not (wt / ".git" / "hooks").exists()
+
+    def test_deploys_into_core_hooks_path(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _git(repo, "config", "core.hooksPath", "custom")
+
+        updated = deploy_git_hooks(repo)
+
+        assert set(updated) == set(GIT_HOOKS)
+        for name in GIT_HOOKS:
+            assert (repo / "custom" / name).exists()
+        # The default .git/hooks must not receive the biff block.
+        for name in GIT_HOOKS:
+            default_hook = repo / ".git" / "hooks" / name
+            assert not default_hook.exists() or _MARKER_START not in (
+                default_hook.read_text()
+            )
+
+    def test_symlinked_hooks_dir_cannot_escape(self, tmp_path: Path) -> None:
+        """A symlinked hooks dir is replaced, so writes can't land outside it.
+
+        Parity with the ci_workflow parent-dir guard: even when the resolved
+        hooks directory is a symlink (here via a symlinked ``core.hooksPath``
+        target), deploy replaces it with a real directory rather than following
+        it into the link's target.
+        """
+        repo = _make_repo(tmp_path / "repo")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (repo / "linkhooks").symlink_to(outside, target_is_directory=True)
+        _git(repo, "config", "core.hooksPath", "linkhooks")
+
+        updated = deploy_git_hooks(repo)
+
+        assert set(updated) == set(GIT_HOOKS)
+        assert not (repo / "linkhooks").is_symlink()
+        for name in GIT_HOOKS:
+            assert (repo / "linkhooks" / name).is_file()
+        # Nothing escaped into the symlink target.
+        for name in GIT_HOOKS:
+            assert not (outside / name).exists()
 
 
 # ── remove_git_hooks ──────────────────────────────────────────────
@@ -115,11 +241,11 @@ class TestRemoveGitHooks:
         assert set(removed) == set(GIT_HOOKS)
 
         for name in GIT_HOOKS:
-            assert not (repo / ".git" / "hooks" / name).exists()
+            assert not (_hooks_dir(repo) / name).exists()
 
     def test_preserves_other_content(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
-        hook = repo / ".git" / "hooks" / "post-commit"
+        hook = _hooks_dir(repo) / "post-commit"
         hook.write_text("#!/bin/sh\necho 'keep me'\n")
 
         deploy_git_hooks(repo)
@@ -136,6 +262,31 @@ class TestRemoveGitHooks:
 
     def test_no_git_dir_returns_empty(self, tmp_path: Path) -> None:
         assert remove_git_hooks(tmp_path) == []
+
+    def test_removes_from_worktree_common_dir(self, tmp_path: Path) -> None:
+        main = _make_repo(tmp_path / "main")
+        wt = tmp_path / "wt"
+        _git(main, "worktree", "add", "--detach", "-q", str(wt))
+        deploy_git_hooks(wt)
+
+        removed = remove_git_hooks(wt)
+        assert set(removed) == set(GIT_HOOKS)
+        for name in GIT_HOOKS:
+            assert not (main / ".git" / "hooks" / name).exists()
+
+    def test_symlinked_hook_is_not_followed(self, tmp_path: Path) -> None:
+        """A symlinked hook path is not ours — never followed, read, or removed."""
+        repo = _make_repo(tmp_path / "repo")
+        outside = tmp_path / "secret.txt"
+        outside.write_text("do not touch")
+        link = _hooks_dir(repo) / "post-commit"
+        link.symlink_to(outside)
+
+        removed = remove_git_hooks(repo)
+
+        assert "post-commit" not in removed
+        assert link.is_symlink()  # left as-is; not ours to remove
+        assert outside.read_text() == "do not touch"  # target untouched
 
 
 # ── check_git_hooks ───────────────────────────────────────────────
@@ -157,9 +308,31 @@ class TestCheckGitHooks:
     def test_partial_missing(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         deploy_git_hooks(repo)
-        (repo / ".git" / "hooks" / "pre-push").unlink()
+        (_hooks_dir(repo) / "pre-push").unlink()
         missing = check_git_hooks(repo)
         assert missing == ["pre-push"]
+
+    def test_symlinked_hook_reported_missing(self, tmp_path: Path) -> None:
+        """A symlinked hook path is not ours — reported missing, never followed.
+
+        The link's target even contains our marker, yet check must not follow
+        the symlink to read it; it treats the symlinked path as not deployed.
+        """
+        repo = _make_repo(tmp_path / "repo")
+        outside = tmp_path / "evil"
+        outside.write_text(f"{_MARKER_START}\ncmd\n{_MARKER_END}\n")
+        (_hooks_dir(repo) / "post-commit").symlink_to(outside)
+
+        assert "post-commit" in check_git_hooks(repo)
+
+    def test_reads_worktree_common_dir(self, tmp_path: Path) -> None:
+        """check() reads the same resolved dir deploy() wrote to."""
+        main = _make_repo(tmp_path / "main")
+        wt = tmp_path / "wt"
+        _git(main, "worktree", "add", "--detach", "-q", str(wt))
+        deploy_git_hooks(wt)
+
+        assert check_git_hooks(wt) == []
 
 
 # ── _has_biff_block / _remove_biff_block ──────────────────────────
@@ -188,3 +361,85 @@ class TestBlockHelpers:
     def test_remove_no_block(self) -> None:
         content = "#!/bin/sh\necho hello\n"
         assert _remove_biff_block(content) == content
+
+
+# ── ensure_real_dir (shared parent-symlink guard) ─────────────────
+
+
+class TestEnsureRealDir:
+    """The shared guard that stops symlinked parents redirecting writes.
+
+    Takes a trusted ``base`` (existing, possibly symlink-traversing — outside
+    our control) and only validates/creates components strictly below it.
+    """
+
+    def test_creates_nested_dirs(self, tmp_path: Path) -> None:
+        from biff._stdlib import ensure_real_dir
+
+        target = tmp_path / "a" / "b" / "c"
+        ensure_real_dir(tmp_path, target)
+        assert target.is_dir()
+
+    def test_idempotent_on_existing_dir(self, tmp_path: Path) -> None:
+        from biff._stdlib import ensure_real_dir
+
+        # base == target: no components below base, so a no-op.
+        ensure_real_dir(tmp_path, tmp_path)
+        assert tmp_path.is_dir()
+
+    def test_replaces_symlinked_component_no_escape(self, tmp_path: Path) -> None:
+        from biff._stdlib import ensure_real_dir
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        base = tmp_path / "base"
+        base.mkdir()
+        (base / "link").symlink_to(outside, target_is_directory=True)
+
+        ensure_real_dir(base, base / "link" / "inner")
+
+        assert not (base / "link").is_symlink()
+        assert (base / "link" / "inner").is_dir()
+        # The symlink target never received the new child.
+        assert not (outside / "inner").exists()
+
+    def test_no_fail_open_when_symlinked_path_already_resolves(
+        self, tmp_path: Path
+    ) -> None:
+        """The fail-open regression: an intermediate symlink whose target
+        ALREADY contains the remaining path must still be replaced.
+
+        An ``exists()`` short-circuit would follow the symlink (the full nested
+        path resolves) and never inspect it, letting a later write escape. The
+        guard walks every component below base with a real parent chain, so it
+        catches and replaces the symlinked component regardless.
+        """
+        from biff._stdlib import ensure_real_dir
+
+        base = tmp_path / "base"
+        base.mkdir()
+        outside = tmp_path / "outside"
+        (outside / "inner").mkdir(parents=True)  # target already has the child
+        (base / "link").symlink_to(outside, target_is_directory=True)
+
+        # base/link/inner resolves (through the symlink) to an existing dir.
+        assert (base / "link" / "inner").is_dir()
+
+        ensure_real_dir(base, base / "link" / "inner")
+
+        # The symlink was replaced with a real, empty dir chain inside base.
+        assert not (base / "link").is_symlink()
+        assert (base / "link" / "inner").is_dir()
+        # The escape target is untouched (its pre-existing child stays put,
+        # and nothing new was written through the link).
+        assert (outside / "inner").is_dir()
+        assert not (base / "link" / "inner").is_symlink()
+
+    def test_raises_on_non_directory_component(self, tmp_path: Path) -> None:
+        import pytest
+
+        from biff._stdlib import ensure_real_dir
+
+        (tmp_path / "afile").write_text("x")
+        with pytest.raises((NotADirectoryError, FileExistsError)):
+            ensure_real_dir(tmp_path, tmp_path / "afile" / "child")

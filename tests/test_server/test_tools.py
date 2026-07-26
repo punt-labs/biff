@@ -7,6 +7,7 @@ the registered closure, verifying it reads/writes state correctly.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -77,6 +78,157 @@ class TestBiffToggleTool:
         session = await state.relay.get_session(state.session_key)
         assert session is not None
         assert session.last_active > old_time
+
+
+def _committed_files(root: Path) -> set[str]:
+    """Files under *root* relative to it, excluding git internals (``.git``)."""
+    return {
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if p.is_file() and ".git" not in p.relative_to(root).parts
+    }
+
+
+def _git_init(root: Path) -> Path:
+    """Initialise a real git repo so ``enable`` can resolve/deploy git hooks."""
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(root), "init", "-q"],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+    return root
+
+
+def _deployed_hooks(root: Path) -> set[str]:
+    """Names of biff git hooks currently present in *root*'s resolved hooks dir."""
+    from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
+
+    hooks_dir = resolve_hooks_dir(root)
+    assert hooks_dir is not None
+    return {name for name in GIT_HOOKS if (hooks_dir / name).is_file()}
+
+
+class TestBiffEnableToggleTool:
+    """The ``biff`` enable/disable tool writes the committed artifacts.
+
+    Distinct from ``mesg`` (per-user delivery): this is the repo-policy
+    toggle that DES-052 keeps equivalent across the CLI and MCP surfaces.
+    """
+
+    async def test_enable_writes_marker_ci_and_hooks(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        from biff.git_hooks import GIT_HOOKS
+
+        repo = _git_init(tmp_path / "repo")
+        state = create_state(config, tmp_path / "data", repo_root=repo)
+        fn = await _get_tool_fn(state, "biff")
+
+        result = await fn(action="enable")
+
+        assert "enabled" in result
+        assert (repo / ".punt-labs" / "biff" / "enabled").is_file()
+        assert (repo / ".github" / "workflows" / "biff-notify.yml").is_file()
+        # Enable fully activates the clone: the local git hooks land too.
+        assert _deployed_hooks(repo) == set(GIT_HOOKS)
+
+    async def test_disable_removes_marker_ci_and_hooks(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        repo = _git_init(tmp_path / "repo")
+        state = create_state(config, tmp_path / "data", repo_root=repo)
+        fn = await _get_tool_fn(state, "biff")
+
+        await fn(action="enable")
+        result = await fn(action="disable")
+
+        assert "disabled" in result
+        assert not (repo / ".punt-labs" / "biff" / "enabled").exists()
+        assert not (repo / ".github" / "workflows" / "biff-notify.yml").exists()
+        assert _deployed_hooks(repo) == set()
+
+    async def test_no_repo(self, config: BiffConfig, tmp_path: Path) -> None:
+        state = create_state(config, tmp_path / "data", repo_root=None)
+        fn = await _get_tool_fn(state, "biff")
+        result = await fn(action="enable")
+        assert "not in a git repository" in result.lower()
+
+    async def test_enable_unresolvable_hooks_returns_notice_not_success(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        """A non-git repo_root → hooks unresolvable → NOTICE, no marker, no success."""
+        from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE
+
+        repo = tmp_path / "not-a-repo"  # exists in state but never `git init`ed
+        repo.mkdir()
+        state = create_state(config, tmp_path / "data", repo_root=repo)
+        fn = await _get_tool_fn(state, "biff")
+
+        result = await fn(action="enable")
+
+        assert result == HOOKS_DIR_UNRESOLVED_NOTICE
+        assert "enabled" not in result
+        assert not (repo / ".punt-labs" / "biff" / "enabled").exists()
+
+    async def test_enable_unresolvable_output_matches_cli(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        """CLI and MCP emit the identical NOTICE on the unresolvable-hooks path."""
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        from biff.__main__ import app
+
+        mcp_repo = tmp_path / "mcp"  # not a git repo
+        cli_repo = tmp_path / "cli"  # not a git repo
+        mcp_repo.mkdir()
+        cli_repo.mkdir()
+
+        state = create_state(config, tmp_path / "data", repo_root=mcp_repo)
+        fn = await _get_tool_fn(state, "biff")
+        mcp_result = await fn(action="enable")
+
+        with patch("biff.__main__.find_git_root", return_value=cli_repo):
+            cli_result = CliRunner().invoke(app, ["enable"])
+
+        assert cli_result.exit_code != 0
+        assert mcp_result in cli_result.output  # identical NOTICE text
+
+    async def test_mcp_and_cli_enable_are_equivalent(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        """`/biff enable` (MCP) and `biff enable` (CLI) produce the same result."""
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        from biff.__main__ import app
+        from biff.git_hooks import GIT_HOOKS
+
+        mcp_repo = _git_init(tmp_path / "mcp_repo")
+        cli_repo = _git_init(tmp_path / "cli_repo")
+
+        # MCP surface.
+        state = create_state(config, tmp_path / "data", repo_root=mcp_repo)
+        fn = await _get_tool_fn(state, "biff")
+        await fn(action="enable")
+
+        # CLI surface.
+        with patch("biff.__main__.find_git_root", return_value=cli_repo):
+            result = CliRunner().invoke(app, ["enable"])
+        assert result.exit_code == 0
+
+        # Same committed files on both surfaces...
+        assert _committed_files(mcp_repo) == _committed_files(cli_repo)
+        assert _committed_files(mcp_repo) == {
+            ".punt-labs/biff/enabled",
+            ".github/workflows/biff-notify.yml",
+        }
+        # ...and the same fully-active local git hooks on both.
+        assert _deployed_hooks(mcp_repo) == _deployed_hooks(cli_repo)
+        assert _deployed_hooks(mcp_repo) == set(GIT_HOOKS)
 
 
 class TestFingerTool:
