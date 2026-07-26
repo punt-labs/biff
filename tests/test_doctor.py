@@ -11,6 +11,7 @@ from biff.doctor import (
     CheckResult,
     _check_biff_file,
     _check_gh_cli,
+    _check_git_hooks,
     _check_plugin_installed,
     _check_relay,
     _check_statusline,
@@ -152,6 +153,31 @@ class TestCheckBiffFile:
             result = _check_biff_file()
         assert result.passed
         assert "zero-config" in result.message
+
+
+class TestCheckGitHooks:
+    """Doctor's git-hooks guidance points at ``biff install`` (hooks are per-clone)."""
+
+    def test_missing_hooks_directs_to_install(self, tmp_path: Path) -> None:
+        # Enabled repo (marker present) but no hooks deployed for this clone.
+        with (
+            patch("biff.doctor.find_git_root", return_value=tmp_path),
+            patch("biff.doctor.is_enabled", return_value=True),
+        ):
+            result = _check_git_hooks()
+        assert result.passed is False
+        assert "biff install" in result.message
+        # Hooks come from install, not from the committed-policy enable toggle.
+        assert "biff enable" not in result.message
+
+    def test_skipped_when_not_enabled(self, tmp_path: Path) -> None:
+        with (
+            patch("biff.doctor.find_git_root", return_value=tmp_path),
+            patch("biff.doctor.is_enabled", return_value=False),
+        ):
+            result = _check_git_hooks()
+        assert result.passed is True
+        assert "skipped" in result.message
 
 
 class TestCheckStatusline:
