@@ -225,6 +225,29 @@ class TestEnableCommand:
         assert not config_yaml.exists()
 
     @patch("biff.__main__.find_git_root")
+    def test_writes_committed_ci_workflow(
+        self, mock_root: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_root.return_value = tmp_path
+        result = runner.invoke(app, ["enable"])
+        assert result.exit_code == 0
+        workflow = tmp_path / ".github" / "workflows" / "biff-notify.yml"
+        assert workflow.is_file()
+
+    @patch("biff.__main__.find_git_root")
+    def test_does_not_deploy_git_hooks(
+        self, mock_root: MagicMock, tmp_path: Path
+    ) -> None:
+        """Enable is a committed-policy toggle — hooks are per-clone (install)."""
+        (tmp_path / ".git" / "hooks").mkdir(parents=True)
+        mock_root.return_value = tmp_path
+        result = runner.invoke(app, ["enable"])
+        assert result.exit_code == 0
+        assert list((tmp_path / ".git" / "hooks").iterdir()) == []
+        # It points the user at `biff install` for the per-clone machinery.
+        assert "biff install" in result.output
+
+    @patch("biff.__main__.find_git_root")
     def test_reports_enabled(self, mock_root: MagicMock, tmp_path: Path) -> None:
         mock_root.return_value = tmp_path
         result = runner.invoke(app, ["enable"])
@@ -257,6 +280,18 @@ class TestDisableCommand:
         assert result.exit_code == 0
         assert "disabled" in result.output
         assert not marker.exists()
+
+    @patch("biff.__main__.find_git_root")
+    def test_removes_committed_ci_workflow(
+        self, mock_root: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_root.return_value = tmp_path
+        runner.invoke(app, ["enable"])
+        workflow = tmp_path / ".github" / "workflows" / "biff-notify.yml"
+        assert workflow.is_file()
+        result = runner.invoke(app, ["disable"])
+        assert result.exit_code == 0
+        assert not workflow.exists()
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:
@@ -565,6 +600,101 @@ class TestInstallCliOnly:
         assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
         # No plugin step ran, so no "restart Claude Code" instruction.
         assert "Restart Claude Code" not in result.output
+
+
+class TestInstallDeploysGitHooks:
+    """`biff install` deploys the per-clone git hooks (local, never committed)."""
+
+    def test_deploys_hooks_for_current_clone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        repo = tmp_path / "repo"
+        (repo / ".git" / "hooks").mkdir(parents=True)
+
+        def no_claude(_cmd: str) -> str | None:
+            return None  # CLI-only install path
+
+        def repo_root(_start: Path | None = None) -> Path:
+            return repo
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr("shutil.which", no_claude)
+        monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        for name in ("post-checkout", "post-commit", "pre-push"):
+            hook = repo / ".git" / "hooks" / name
+            assert hook.is_file()
+            assert "biff hook git" in hook.read_text()
+
+    def test_deployed_hooks_gate_on_marker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh clone's installed hooks fire biff only once the marker exists.
+
+        The dispatch line is guarded (``2>/dev/null || true``) and the biff
+        hook command itself gates on ``is_enabled`` (marker + biff on PATH), so
+        the deployed hook is inert until ``enable`` writes the committed marker.
+        """
+        from biff._stdlib import is_enabled, write_enabled_marker
+
+        home = tmp_path / "home"
+        repo = tmp_path / "repo"
+        (repo / ".git" / "hooks").mkdir(parents=True)
+
+        # biff is on PATH (so the marker gate is decisive), claude is not
+        # (CLI-only install path).
+        def which(cmd: str) -> str | None:
+            return "/usr/bin/biff" if cmd == "biff" else None
+
+        def repo_root(_start: Path | None = None) -> Path:
+            return repo
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr("shutil.which", which)
+        monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
+
+        runner.invoke(app, ["install"])
+        # Hooks exist but the repo is not enabled yet (no marker).
+        assert (repo / ".git" / "hooks" / "post-commit").is_file()
+        assert is_enabled(repo) is False
+
+        # Enabling writes the marker; is_enabled flips on (biff is on PATH here).
+        write_enabled_marker(repo)
+        assert is_enabled(repo) is True
+
+
+class TestUninstallRemovesGitHooks:
+    """`biff uninstall` removes the per-clone git hooks it installed."""
+
+    def test_removes_hooks_for_current_clone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.git_hooks import deploy_git_hooks
+
+        home = tmp_path / "home"
+        repo = tmp_path / "repo"
+        (repo / ".git" / "hooks").mkdir(parents=True)
+        deploy_git_hooks(repo)
+        assert (repo / ".git" / "hooks" / "post-commit").is_file()
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        def repo_root(_start: Path | None = None) -> Path:
+            return repo
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr("shutil.which", no_claude)
+        monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
+
+        result = runner.invoke(app, ["uninstall"])
+
+        assert result.exit_code == 0
+        assert not (repo / ".git" / "hooks" / "post-commit").exists()
 
 
 class TestUninstallResilient:

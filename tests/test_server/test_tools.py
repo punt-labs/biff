@@ -79,6 +79,94 @@ class TestBiffToggleTool:
         assert session.last_active > old_time
 
 
+def _committed_files(root: Path) -> set[str]:
+    """Files under *root* relative to it, excluding git internals (``.git``)."""
+    return {
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if p.is_file() and ".git" not in p.relative_to(root).parts
+    }
+
+
+class TestBiffEnableToggleTool:
+    """The ``biff`` enable/disable tool writes the committed artifacts.
+
+    Distinct from ``mesg`` (per-user delivery): this is the repo-policy
+    toggle that DES-052 keeps equivalent across the CLI and MCP surfaces.
+    """
+
+    async def test_enable_writes_marker_and_ci_workflow(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        (repo / ".git" / "hooks").mkdir(parents=True)
+        state = create_state(config, tmp_path / "data", repo_root=repo)
+        fn = await _get_tool_fn(state, "biff")
+
+        result = await fn(action="enable")
+
+        assert "enabled" in result
+        assert (repo / ".punt-labs" / "biff" / "enabled").is_file()
+        assert (repo / ".github" / "workflows" / "biff-notify.yml").is_file()
+        # The policy toggle never touches per-clone hooks.
+        assert list((repo / ".git" / "hooks").iterdir()) == []
+
+    async def test_disable_removes_marker_and_ci_workflow(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        (repo / ".git" / "hooks").mkdir(parents=True)
+        state = create_state(config, tmp_path / "data", repo_root=repo)
+        fn = await _get_tool_fn(state, "biff")
+
+        await fn(action="enable")
+        result = await fn(action="disable")
+
+        assert "disabled" in result
+        assert not (repo / ".punt-labs" / "biff" / "enabled").exists()
+        assert not (repo / ".github" / "workflows" / "biff-notify.yml").exists()
+
+    async def test_no_repo(self, config: BiffConfig, tmp_path: Path) -> None:
+        state = create_state(config, tmp_path / "data", repo_root=None)
+        fn = await _get_tool_fn(state, "biff")
+        result = await fn(action="enable")
+        assert "not in a git repository" in result.lower()
+
+    async def test_mcp_and_cli_enable_are_equivalent(
+        self, config: BiffConfig, tmp_path: Path
+    ) -> None:
+        """`/biff enable` (MCP) and `biff enable` (CLI) produce the same result."""
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        from biff.__main__ import app
+
+        mcp_repo = tmp_path / "mcp_repo"
+        cli_repo = tmp_path / "cli_repo"
+        (mcp_repo / ".git" / "hooks").mkdir(parents=True)
+        (cli_repo / ".git" / "hooks").mkdir(parents=True)
+
+        # MCP surface.
+        state = create_state(config, tmp_path / "data", repo_root=mcp_repo)
+        fn = await _get_tool_fn(state, "biff")
+        await fn(action="enable")
+
+        # CLI surface.
+        with patch("biff.__main__.find_git_root", return_value=cli_repo):
+            result = CliRunner().invoke(app, ["enable"])
+        assert result.exit_code == 0
+
+        assert _committed_files(mcp_repo) == _committed_files(cli_repo)
+        assert _committed_files(mcp_repo) == {
+            ".punt-labs/biff/enabled",
+            ".github/workflows/biff-notify.yml",
+        }
+        # Neither surface deployed per-clone git hooks.
+        assert list((mcp_repo / ".git" / "hooks").iterdir()) == []
+        assert list((cli_repo / ".git" / "hooks").iterdir()) == []
+
+
 class TestFingerTool:
     async def test_unknown_user(self, state: ServerState) -> None:
         fn = await _get_tool_fn(state, "finger")
