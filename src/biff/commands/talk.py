@@ -24,7 +24,6 @@ from nats.errors import Error as NatsError
 
 from biff.commands._result import CommandResult
 from biff.formatting import terminal_safe
-from biff.nats_relay import NatsRelay
 from biff.server.tools._session import resolve_talk_target
 from biff.talk_types import MAX_BODY_LEN, TalkPhase
 from biff.tty import format_address, parse_address
@@ -241,28 +240,29 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
     was_inviting = talk_state.phase is TalkPhase.INVITING
     talk_state.reset()
     transient = False
-    if isinstance(ctx.relay, NatsRelay):
-        try:
-            if was_inviting:
-                await talk_state.send_withdraw(to_key=partner_key)
-            else:
-                await talk_state.send_end(to_key=partner_key)
-        except (NatsError, TimeoutError, OSError):
-            # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
-            # so a WARNING here would dump this best-effort-publish traceback
-            # into the interactive REPL.
-            recovery = (
-                "invitee falls back to the pending-invite TTL sweep"
-                if was_inviting
-                else "no TTL sweep for a connected session; peer may stay connected"
-            )
-            logger.info(
-                "talk_end publish to %s failed; %s",
-                partner,
-                recovery,
-                exc_info=True,
-            )
-            transient = True
+    # The publish is a no-op on a non-NATS relay (``TalkState._publish`` guards
+    # the transport), so it is issued unconditionally — no relay-type gate here.
+    try:
+        if was_inviting:
+            await talk_state.send_withdraw(to_key=partner_key)
+        else:
+            await talk_state.send_end(to_key=partner_key)
+    except (NatsError, TimeoutError, OSError):
+        # INFO, not WARNING: the CLI raises the stderr handler to WARNING,
+        # so a WARNING here would dump this best-effort-publish traceback
+        # into the interactive REPL.
+        recovery = (
+            "invitee falls back to the pending-invite TTL sweep"
+            if was_inviting
+            else "no TTL sweep for a connected session; peer may stay connected"
+        )
+        logger.info(
+            "talk_end publish to %s failed; %s",
+            partner,
+            recovery,
+            exc_info=True,
+        )
+        transient = True
     if transient:
         if was_inviting:
             return CommandResult(

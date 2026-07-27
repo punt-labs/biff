@@ -17,19 +17,17 @@ import threading
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import biff.commands.talk as talk_commands
 from biff.__main__ import (
     _NO_INPUT,
-    _enter_talk_phase,
     _format_idle_banners,
     _format_talk_lines,
     _handle_repl_talk,
+    _initiate_talk,
     _print_talk_banner,
-    _publish_auto_accept,
     _repl_talk,
     _ReplTalkSubscription,
-    _run_talk_handshake,
     _talk_converse,
-    _talk_handshake,
     _talk_loop,
     _TalkSubscription,
     _wait_for_talk_accept,
@@ -39,7 +37,7 @@ from biff.models import UserSession
 from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
 from biff.talk_state import TalkState
-from biff.talk_types import PendingInvite, TalkNotification, TalkPhase
+from biff.talk_types import TalkNotification, TalkPhase
 
 if TYPE_CHECKING:
     import pytest
@@ -251,6 +249,7 @@ class TestWithdrawTalkInviteResilience:
     ) -> None:
         relay = MagicMock(spec=NatsRelay)
         relay.get_nc = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        relay.get_session = AsyncMock(return_value=None)
         talk = TalkState(
             relay=cast("Relay", relay),
             user="kai",
@@ -260,203 +259,47 @@ class TestWithdrawTalkInviteResilience:
         talk.begin_invite(partner="eric", partner_tty="def", partner_key="eric:def")
         ctx = MagicMock()
         ctx.talk = talk
-        ctx.relay = MagicMock()
-        ctx.relay.get_session = AsyncMock(return_value=None)
+        ctx.relay = relay
         ctx.session_key = "kai:abc"
 
-        with caplog.at_level(logging.INFO, logger="biff.__main__"):
-            await _withdraw_talk_invite(ctx, "eric", "eric:def")
+        # The withdraw delegates to the shared end_or_cancel kernel, so the
+        # best-effort publish failure is logged under biff.commands.talk.
+        with caplog.at_level(logging.INFO, logger="biff.commands.talk"):
+            await _withdraw_talk_invite(ctx)
 
         assert talk.phase is TalkPhase.IDLE  # local state reset despite the failure
-        records = [r for r in caplog.records if r.name == "biff.__main__"]
+        records = [r for r in caplog.records if r.name == "biff.commands.talk"]
         assert records  # the failure was logged
         assert all(r.levelno == logging.INFO for r in records)
 
 
 # ---------------------------------------------------------------------------
-# _enter_talk_phase — refuse to clobber a live talk on the initiator path
+# _handle_repl_talk initiator — invite publish rollback (biff-9la, H)
 # ---------------------------------------------------------------------------
 
 
-class TestEnterTalkPhase:
-    """Setting the handshake phase must never clobber a live talk.
-
-    A ``talk @B`` (no pending invite from B) while CONNECTED to A — or while
-    inviting a third party — must be refused, leaving the live partner intact
-    and sending no frame, rather than overwriting it with a fresh invite.
-    """
-
-    def _ctx(self) -> MagicMock:
-        relay = MagicMock(spec=NatsRelay)
-        talk = TalkState(
-            relay=cast("Relay", relay),
-            user="kai",
-            tty="kaihex01",
-            session_key="kai:kaihex01",
-            tty_name="tty1",
-        )
-        ctx = MagicMock()
-        ctx.talk = talk
-        return ctx
-
-    def test_idle_initiator_begins_invite(self) -> None:
-        ctx = self._ctx()
-        proceed = _enter_talk_phase(
-            ctx,
-            user_target="eric",
-            resolve_tty="tty2",
-            target_key="eric:def456",
-            pending=None,
-        )
-        assert proceed is True
-        assert ctx.talk.phase is TalkPhase.INVITING
-        assert ctx.talk.partner_key == "eric:def456"
-
-    def test_pending_responder_begins_connected(self) -> None:
-        ctx = self._ctx()
-        pending = PendingInvite(
-            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
-        )
-        proceed = _enter_talk_phase(
-            ctx,
-            user_target="eric",
-            resolve_tty="tty2",
-            target_key="eric:def456",
-            pending=pending,
-        )
-        assert proceed is True
-        assert ctx.talk.phase is TalkPhase.CONNECTED
-        assert ctx.talk.partner_key == "eric:def456"
-
-    def test_connected_to_a_initiator_to_b_refuses(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        ctx = self._ctx()
-        ctx.talk.begin_connected(
-            partner="alice", partner_tty="tty7", partner_key="alice:aaa111"
-        )
-        proceed = _enter_talk_phase(
-            ctx,
-            user_target="eric",
-            resolve_tty="tty2",
-            target_key="eric:def456",
-            pending=None,
-        )
-        assert proceed is False
-        assert ctx.talk.phase is TalkPhase.CONNECTED  # A not abandoned
-        assert ctx.talk.partner_key == "alice:aaa111"  # still A
-        out = capsys.readouterr().out
-        assert "already in a talk" in out.lower()
-        assert "alice:tty7" in out  # names the live partner
-
-    def test_inviting_b_initiator_to_c_refuses(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        ctx = self._ctx()
-        ctx.talk.begin_invite(
-            partner="eric", partner_tty="tty2", partner_key="eric:def456"
-        )
-        proceed = _enter_talk_phase(
-            ctx,
-            user_target="priya",
-            resolve_tty="tty3",
-            target_key="priya:ccc333",
-            pending=None,
-        )
-        assert proceed is False
-        assert ctx.talk.phase is TalkPhase.INVITING  # invite to B untouched
-        assert ctx.talk.partner_key == "eric:def456"
-        assert "already in a talk" in capsys.readouterr().out.lower()
-
-    def test_connected_to_a_accept_b_refuses(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Accepting B's invite while connected to A blocks, keeps A intact."""
-        ctx = self._ctx()
-        ctx.talk.begin_connected(
-            partner="alice", partner_tty="tty7", partner_key="alice:aaa111"
-        )
-        pending = PendingInvite(
-            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
-        )
-        proceed = _enter_talk_phase(
-            ctx,
-            user_target="eric",
-            resolve_tty="tty2",
-            target_key="eric:def456",
-            pending=pending,
-        )
-        assert proceed is False
-        assert ctx.talk.phase is TalkPhase.CONNECTED  # A not abandoned
-        assert ctx.talk.partner_key == "alice:aaa111"  # still A
-        out = capsys.readouterr().out
-        assert "already in a talk" in out.lower()
-        assert "alice:tty7" in out  # names the live partner A
-
-    def test_inviting_b_accept_b_completes_mutual(self) -> None:
-        """Accepting B's invite while INVITING B (glare) connects, not refuses."""
-        ctx = self._ctx()
-        ctx.talk.begin_invite(
-            partner="eric", partner_tty="tty2", partner_key="eric:def456"
-        )
-        pending = PendingInvite(
-            user="eric", session_key="eric:def456", tty="tty2", arrived=0.0
-        )
-        proceed = _enter_talk_phase(
-            ctx,
-            user_target="eric",
-            resolve_tty="tty2",
-            target_key="eric:def456",
-            pending=pending,
-        )
-        assert proceed is True  # same partner → completes the handshake
-        assert ctx.talk.phase is TalkPhase.CONNECTED
-        assert ctx.talk.partner_key == "eric:def456"
-
-    def test_inviting_b_accept_c_refuses(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Accepting C's invite while INVITING B blocks, keeps the B invite."""
-        ctx = self._ctx()
-        ctx.talk.begin_invite(
-            partner="eric", partner_tty="tty2", partner_key="eric:def456"
-        )
-        pending = PendingInvite(
-            user="priya", session_key="priya:ccc333", tty="tty3", arrived=0.0
-        )
-        proceed = _enter_talk_phase(
-            ctx,
-            user_target="priya",
-            resolve_tty="tty3",
-            target_key="priya:ccc333",
-            pending=pending,
-        )
-        assert proceed is False
-        assert ctx.talk.phase is TalkPhase.INVITING  # invite to B untouched
-        assert ctx.talk.partner_key == "eric:def456"
-        assert "already in a talk" in capsys.readouterr().out.lower()
-
-
-# ---------------------------------------------------------------------------
-# _run_talk_handshake — invite/accept publish rollback (biff-9la, H)
-# ---------------------------------------------------------------------------
-
-
-class TestRunTalkHandshakeRollback:
+class TestReplInviteRollback:
     """A transient invite publish must not strand the REPL session.
 
-    The plan is set and the phase advanced *before* the handshake publishes; a
-    failed ``send_invite`` rolls both back so the session is not left INVITING
-    with a phantom ``talking to …`` plan and no peer.
+    The initiator delegates the invite to the shared ``invite`` kernel, which
+    resets the phase on a failed ``send_invite``.  The REPL sets the ``talking
+    to …`` plan only *after* a successful publish, so a failed invite leaves the
+    phase idle and never writes a phantom ``talking to …`` presence.
     """
 
-    async def test_invite_publish_failure_rolls_back_phase_and_plan(self) -> None:
+    async def test_invite_publish_failure_leaves_phase_idle_no_plan(self) -> None:
         relay = MagicMock(spec=NatsRelay)
         relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
-        session = UserSession(
-            user="kai", tty="kaihex01", tty_name="tty1", plan="idle", repo="myrepo"
+        relay.get_sessions_for_repos = AsyncMock(
+            return_value=[
+                UserSession(user="eric", tty="def456", tty_name="tty2", repo="myrepo")
+            ]
         )
-        relay.get_session = AsyncMock(return_value=session)
+        relay.get_session = AsyncMock(
+            return_value=UserSession(
+                user="kai", tty="kaihex01", tty_name="tty1", plan="idle", repo="myrepo"
+            )
+        )
         relay.update_session = AsyncMock()
         talk = TalkState(
             relay=cast("Relay", relay),
@@ -465,30 +308,31 @@ class TestRunTalkHandshakeRollback:
             session_key="kai:kaihex01",
             tty_name="tty1",
         )
-        talk.begin_invite(partner="eric", partner_tty="tty2", partner_key="eric:def456")
         ctx = MagicMock()
         ctx.talk = talk
         ctx.relay = relay
         ctx.session_key = "kai:kaihex01"
         ctx.user = "kai"
         ctx.tty_name = "tty1"
+        ctx.config.repo_name = "myrepo"
+        ctx.visible_repos = frozenset({"myrepo"})
 
-        proceed = await _run_talk_handshake(
+        await _handle_repl_talk(
             ctx,
-            "eric",
-            "eric:def456",
-            "eric:tty2",
             ["@eric:tty2"],
-            False,  # not responding — this is an outgoing invite
             asyncio.Queue(),
             asyncio.Event(),
             threading.Event(),
+            [""],
+            "kai> ",
+            ReplDisplay(),
         )
 
-        assert proceed is False
-        assert talk.phase is TalkPhase.IDLE  # phase rolled back, not stuck INVITING
-        restored = relay.update_session.await_args_list[-1].args[0]
-        assert restored.plan == "idle"  # plan restored to its prior value
+        assert talk.phase is TalkPhase.IDLE  # kernel rolled the invite back
+        # The plan is written only after a successful publish — a failed invite
+        # must never leave a phantom ``talking to …`` presence.
+        planned = [c.args[0].plan for c in relay.update_session.await_args_list]
+        assert all("talking to" not in p for p in planned)
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +487,7 @@ class TestReplAcceptRestoresPendingInvite:
 
 
 # ---------------------------------------------------------------------------
-# _publish_auto_accept / mutual-glare auto-accept publish (F2)
+# publish_auto_accept / mutual-glare auto-accept publish (F2)
 # ---------------------------------------------------------------------------
 
 
@@ -674,7 +518,7 @@ class TestPublishAutoAccept:
         ctx = MagicMock()
         ctx.talk = talk
 
-        ok = await _publish_auto_accept(ctx, "eric:def456")
+        ok = await talk_commands.publish_auto_accept(ctx, to_key="eric:def456")
 
         assert ok is False
         assert get_nc.await_count == 2  # published once, retried once
@@ -685,22 +529,29 @@ class TestPublishAutoAccept:
         ctx = MagicMock()
         ctx.talk = talk
 
-        ok = await _publish_auto_accept(ctx, "eric:def456")
+        ok = await talk_commands.publish_auto_accept(ctx, to_key="eric:def456")
 
         assert ok is True
         assert get_nc.await_count == 1  # no retry on success
 
-    async def test_handshake_warns_when_auto_accept_never_reaches_partner(
+    async def test_initiator_warns_when_auto_accept_never_reaches_partner(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """The REPL initiator warns when the owed auto-accept never publishes.
+
+        Drives ``_initiate_talk`` end to end: the invite publishes (get_nc call
+        1), the queued mutual-glare invite makes ``poll_accept`` auto-accept, and
+        both owed-accept attempts fail (calls 2, 3) — so the user is warned the
+        partner may be stranded, and the flow still proceeds to the loop.
+        """
         # send_invite succeeds (get_nc call 1), both accept attempts fail (2, 3).
         nc = AsyncMock()
         get_nc = AsyncMock(
             side_effect=[nc, TimeoutError("wedged"), TimeoutError("wedged")]
         )
         talk = self._talk(get_nc=get_nc)
-        # We are the higher key ('kai' > 'eric') — the auto-accepting side.
-        talk.begin_invite(partner="eric", partner_tty="tty2", partner_key="eric:def456")
+        # A mutual-glare invite from the partner is already queued; we are the
+        # higher key ('kai' > 'eric') — the auto-accepting side.
         talk.receive(
             {
                 "type": "invite",
@@ -713,21 +564,25 @@ class TestPublishAutoAccept:
         )
         ctx = MagicMock()
         ctx.talk = talk
-        ctx.user = "kai"
-        ctx.tty_name = "tty1"
+        # _set_talk_plan reads/writes the session via ctx.relay (a distinct path
+        # from talk's publish relay); a None session makes it a clean no-op.
+        ctx.relay = MagicMock(spec=NatsRelay)
+        ctx.relay.get_session = AsyncMock(return_value=None)
+        ctx.session_key = "kai:kaihex01"
+        ctx.config.user = "kai"
         notify = asyncio.Event()
         notify.set()  # wake the accept poll immediately
 
-        proceed = await _talk_handshake(
+        proceed = await _initiate_talk(
             ctx,
-            "eric",
-            "eric:def456",
-            "eric:tty2",
-            ["@eric"],
-            False,  # initiating — glare completes via MutualAutoAccept
-            asyncio.Queue(),
-            notify,
-            threading.Event(),
+            user_target="eric",
+            target_key="eric:def456",
+            display="eric:tty2",
+            resolve_tty="tty2",
+            opening="",
+            aqueue=asyncio.Queue(),
+            notify_event=notify,
+            prompt_gate=threading.Event(),
         )
 
         out = capsys.readouterr().out.lower()
@@ -1131,9 +986,8 @@ class TestModalTalkReconcileWiring:
     ``TestModalTalkReconcile`` proves the leaf loops reconcile when handed a
     sub; these drive ``_handle_repl_talk`` — the ``_repl_loop`` entry point —
     end to end, so a dropped ``talk_sub`` kwarg at any hop (``_handle_repl_talk``
-    → ``_run_talk_handshake`` → ``_talk_handshake`` → ``_wait_for_talk_accept``,
-    and → ``_repl_talk``) fails a test instead of silently reverting the live
-    REPL to the orphaned-SUB bug.
+    → ``_initiate_talk`` → ``_wait_for_talk_accept``, and → ``_repl_talk``) fails
+    a test instead of silently reverting the live REPL to the orphaned-SUB bug.
     """
 
     @staticmethod

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 
     from biff.server.state import ServerState
 
+import biff.commands.talk as talk_commands
 from biff import commands
 from biff.cli_session import CliContext, cli_session
 from biff.commands import CommandResult
@@ -55,7 +56,7 @@ from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.talk_latch import TalkNotifyLatch
-from biff.talk_types import AcceptOutcome, PendingInvite, TalkNotification, TalkPhase
+from biff.talk_types import AcceptOutcome, TalkNotification
 
 # ---------------------------------------------------------------------------
 # Global flags
@@ -370,10 +371,13 @@ async def _send_connected_line(
             print(f"\r\033[KCould not reach {display} — end not sent.")
         return True
     if line:
-        try:
-            await ctx.talk.send_message(to_key=to_key, body=line)
-        except (NatsError, TimeoutError, OSError):
-            print(f"\r\033[KCould not reach {display} — not sent; try again.")
+        # Delegate the connected send to the shared kernel; a transient publish
+        # failure surfaces as an actionable notice and keeps the loop alive.
+        result = await talk_commands.send_line(
+            ctx, to_key=to_key, display=display, message=line
+        )
+        if result.error:
+            print(f"\r\033[K{result.text}")
     return False
 
 
@@ -620,77 +624,81 @@ async def _wait_for_talk_accept(
         _release_prompt(prompt_gate)
 
 
-async def _withdraw_talk_invite(
-    ctx: CliContext,
-    target_user: str,
-    target_key: str,
-) -> None:
-    """Withdraw an outstanding outgoing invite and return to idle.
+async def _set_talk_plan(ctx: CliContext, display: str) -> None:
+    """Best-effort set the session plan to ``talking to {display}`` (presence).
 
-    Abandoning an invite publishes ``ntWithdraw`` so the invitee's ``[TALK]``
-    marker clears at once (notification.tex ``WithdrawArrive``) instead of
-    lingering until the TTL sweep, then resets to idle and clears the talk
-    plan.  A connected hangup is a distinct path (``send_end`` / ``DrainEnd``).
-
-    The local reset and plan-clear happen *regardless of* the publish: the
-    withdraw is a best-effort core-NATS publish, so a wedged or reconnecting
-    relay (including the Ctrl-C cancel path) must never strand the session in a
-    phantom inviting state or leak a terminal traceback.  On a publish failure
-    the invitee still clears via the pending-invite TTL sweep
-    (notification.tex ``ExpirePendingInvite``).
+    A wedged relay must never crash the REPL over a cosmetic presence update, so
+    the get/update pair is guarded and logged at DEBUG.
     """
-    ctx.talk.reset()
     try:
-        await ctx.talk.send_withdraw(to_key=target_key)
-    except (NatsError, TimeoutError, OSError):
-        # INFO, not WARNING: the CLI raises the stderr handler to WARNING, so a
-        # WARNING here would dump this best-effort-publish traceback into the
-        # interactive REPL. The invitee still clears via the pending-invite TTL
-        # sweep (notification.tex ExpirePendingInvite); the log stays in biff.log.
-        logging.getLogger(__name__).info(
-            "talk withdraw to %s failed; invitee falls back to the TTL sweep",
-            target_user,
-            exc_info=True,
-        )
-    try:
-        s = await ctx.relay.get_session(ctx.session_key)
-        if s is not None:
-            await ctx.relay.update_session(s.model_copy(update={"plan": ""}))
+        session = await ctx.relay.get_session(ctx.session_key)
+        if session is not None:
+            await ctx.relay.update_session(
+                session.model_copy(update={"plan": f"talking to {display}"})
+            )
     except Exception:  # noqa: BLE001
-        logging.getLogger(__name__).debug("Failed to clear plan")
+        logging.getLogger(__name__).debug("Failed to set talk plan")
 
 
-async def _talk_handshake(
+async def _clear_talk_plan(ctx: CliContext) -> None:
+    """Best-effort clear the talk plan when a talk cancels or withdraws."""
+    try:
+        session = await ctx.relay.get_session(ctx.session_key)
+        if session is not None:
+            await ctx.relay.update_session(session.model_copy(update={"plan": ""}))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).debug("Failed to clear talk plan")
+
+
+async def _withdraw_talk_invite(ctx: CliContext) -> None:
+    """Withdraw an outstanding invite and clear the talk plan.
+
+    Delegates the reset + ``ntWithdraw`` publish to the shared ``end_or_cancel``
+    kernel (best-effort: on a publish failure the invitee still clears via the
+    pending-invite TTL sweep, notification.tex ``ExpirePendingInvite``), then
+    clears the local ``talking to …`` plan.  Used by the graceful ``end`` cancel
+    and the Ctrl-C process-exit path during an outstanding invite.
+    """
+    await talk_commands.end_or_cancel(ctx)
+    await _clear_talk_plan(ctx)
+
+
+async def _initiate_talk(
     ctx: CliContext,
-    target_user: str,
+    *,
+    user_target: str,
     target_key: str,
     display: str,
-    args: list[str],
-    responding: bool,
+    resolve_tty: str,
+    opening: str,
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
     prompt_gate: threading_mod.Event,
-    *,
     talk_sub: _ReplTalkSubscription | None = None,
 ) -> bool:
-    """Execute the talk handshake. Returns True if talk should proceed."""
-    if responding:
-        # We're accepting an existing invite. Send accept, enter talk.
-        await ctx.talk.send_accept(to_key=target_key)
-        return True
+    """Send an invite and wait for the accept; return ``True`` to enter the loop.
 
-    # We're initiating. Send invite and wait for accept.
-    from biff.tty import format_address
+    Delegates the phase transition + invite publish (and its rollback on a
+    transient publish failure) to the shared ``invite`` kernel, then runs the
+    REPL-only interactive wait: a graceful ``end`` cancels (withdraw), a Ctrl-C
+    withdraws and re-raises, and a mutual-glare auto-accept publishes the owed
+    accept and warns if it never reaches the partner (talk.tex MutualAutoAccept).
+    """
+    result = await talk_commands.invite(
+        ctx,
+        user=user_target,
+        relay_key=target_key,
+        display=display,
+        resolve_tty=resolve_tty,
+        message=opening,
+    )
+    if result.error:
+        print(result.text)
+        return False
+    await _set_talk_plan(ctx, display)
 
-    reply_to = format_address(ctx.user, ctx.tty_name)
-    invite_body = f"wants to talk — reply with: talk {reply_to}"
-    if len(args) > 1:
-        invite_body = " ".join(args[1:])[:512]
-
-    await ctx.talk.send_invite(to_key=target_key, body=invite_body)
-
-    if len(args) > 1:
-        print(f"you> {invite_body}")
+    if opening:
+        print(f"you> {opening}")
 
     # Clear the stdin thread's prompt first so the line lands clean, not
     # appended to a stale ``user:tty ▶`` prompt (same pattern as :303/:311).
@@ -700,25 +708,25 @@ async def _talk_handshake(
     # A Ctrl-C during the invite fires the withdraw, then exits the REPL to
     # the shell.  ``asyncio.run`` cancels the main task on SIGINT, so the wait
     # raises ``CancelledError`` — not ``KeyboardInterrupt``, which the runner
-    # re-raises only after the task has unwound.  Catch the cancel, publish
-    # ``ntWithdraw`` (notification.tex WithdrawArrive) so the invitee's
-    # ``[TALK]`` marker clears at once rather than at the TTL sweep, then
-    # re-raise so the cancellation propagates and the process exits normally.
-    # ``end``/``exit``/``quit`` is the graceful in-REPL cancel that returns to
-    # the prompt (``AcceptOutcome.NONE`` below); Ctrl-C is a process exit.
+    # re-raises only after the task has unwound.  Catch the cancel, withdraw so
+    # the invitee's ``[TALK]`` marker clears at once rather than at the TTL
+    # sweep, then re-raise so the cancellation propagates and the process exits
+    # normally.  ``end``/``exit``/``quit`` is the graceful in-REPL cancel that
+    # returns to the prompt (``AcceptOutcome.NONE`` below); Ctrl-C is an exit.
     try:
         outcome = await _wait_for_talk_accept(
             ctx, aqueue, notify_event, prompt_gate, talk_sub=talk_sub
         )
     except (asyncio.CancelledError, KeyboardInterrupt):
-        await _withdraw_talk_invite(ctx, target_user, target_key)
+        await _withdraw_talk_invite(ctx)
         raise
     if outcome is AcceptOutcome.NONE:
         print(f"Talk with {display} cancelled.")
-        await _withdraw_talk_invite(ctx, target_user, target_key)
+        await _withdraw_talk_invite(ctx)
         return False
-    if outcome is AcceptOutcome.AUTO_ACCEPT and not await _publish_auto_accept(
-        ctx, target_key
+    auto_accept_owed = outcome is AcceptOutcome.AUTO_ACCEPT
+    if auto_accept_owed and not await talk_commands.publish_auto_accept(
+        ctx, to_key=target_key
     ):
         # The lower-key partner connects ONLY on receiving this accept — there is
         # no symmetric fallback on their side (talk.tex MutualAutoAccept) — so a
@@ -728,132 +736,6 @@ async def _talk_handshake(
             f"Warning: couldn't confirm {display} joined — they may not have "
             "connected. Send a message or type 'end' and retry."
         )
-    return True
-
-
-async def _publish_auto_accept(ctx: CliContext, target_key: str) -> bool:
-    """Publish the higher-key side's accept on a mutual-invite glare; retry once.
-
-    On simultaneous mutual invites the ``keyBelow`` tie-break makes the higher
-    key auto-accept and publish an accept; the lower-key partner connects ONLY
-    on receiving that frame (talk.tex ``MutualAutoAccept`` — the lower side has
-    no auto-accept of its own).  A dropped accept therefore strands the partner
-    and silently discards our subsequent messages on their side, so retry once
-    before giving up.  Returns whether the accept was published.
-    """
-    logger = logging.getLogger(__name__)
-    for attempt in (1, 2):
-        try:
-            await ctx.talk.send_accept(to_key=target_key)
-        except (NatsError, TimeoutError, OSError):
-            # INFO, not WARNING: the CLI floors stderr at WARNING, so a WARNING
-            # here would dump this best-effort-publish traceback into the REPL.
-            logger.info(
-                "talk auto-accept to %s failed (attempt %d/2)",
-                target_key,
-                attempt,
-                exc_info=True,
-            )
-        else:
-            return True
-    return False
-
-
-async def _run_talk_handshake(
-    ctx: CliContext,
-    user_target: str,
-    target_key: str,
-    display: str,
-    args: list[str],
-    responding: bool,
-    aqueue: asyncio.Queue[str | None],
-    notify_event: asyncio.Event,
-    prompt_gate: threading_mod.Event,
-    *,
-    talk_sub: _ReplTalkSubscription | None = None,
-) -> bool:
-    """Set the talk plan, run the handshake, and roll back on a publish failure.
-
-    Returns ``True`` when talk should proceed.  On a transient invite/accept
-    publish failure the phase and plan are reset so the session is not stranded
-    in a phantom inviting/connected state with no peer (mirrors the reset-first
-    best-effort pattern in ``_withdraw_talk_invite`` / ``_do_talk_end``).
-    """
-    session = await ctx.relay.get_session(ctx.session_key)
-    prior_plan = session.plan if session is not None else ""
-    if session is not None:
-        await ctx.relay.update_session(
-            session.model_copy(update={"plan": f"talking to {display}"})
-        )
-    try:
-        return await _talk_handshake(
-            ctx,
-            user_target,
-            target_key,
-            display,
-            args,
-            responding,
-            aqueue,
-            notify_event,
-            prompt_gate,
-            talk_sub=talk_sub,
-        )
-    except (NatsError, TimeoutError, OSError):
-        ctx.talk.reset()
-        if session is not None:
-            await ctx.relay.update_session(
-                session.model_copy(update={"plan": prior_plan})
-            )
-        print(f"Could not reach {display} — talk not started.")
-        return False
-
-
-def _enter_talk_phase(
-    ctx: CliContext,
-    *,
-    user_target: str,
-    resolve_tty: str | None,
-    target_key: str,
-    pending: PendingInvite | None,
-) -> bool:
-    """Set the talk phase for the handshake; refuse to clobber a live talk.
-
-    A responder enters CONNECTED against the inviter's session (talk.tex
-    RespondToInvite); an initiator enters INVITING (SendInvite).  A responder
-    prefers the invite's DISPLAY tty (``ttyN``) so the connected prompt reads
-    the address ``/who`` shows, not the session-key hex; an initiator names the
-    partner by the address tty.
-
-    Both paths abandon the live partner with no end frame if allowed to proceed
-    while busy: the initiator would overwrite it with a fresh invite, and the
-    responder would overwrite it with a connection to the inviter.  A responder
-    is refused only when CONNECTED/INVITING to a *different* peer — the invited
-    session's key is *target_key*, so the same-partner cases (a mutual glare
-    completing, an idempotent re-accept) share that key and pass.  An initiator
-    is refused whenever the phase is not idle.  Returns ``False`` (and prints
-    why) when refused.
-    """
-    if pending is not None:
-        if ctx.talk.phase is not TalkPhase.IDLE and ctx.talk.partner_key != target_key:
-            print(
-                f"Already in a talk with {ctx.talk.partner_display} — "
-                "use talk_end (or 'end') first."
-            )
-            return False
-        partner_tty = pending.tty or resolve_tty or ""
-        ctx.talk.begin_connected(
-            partner=user_target, partner_tty=partner_tty, partner_key=target_key
-        )
-        return True
-    if ctx.talk.phase is not TalkPhase.IDLE:
-        print(
-            f"Already in a talk with {ctx.talk.partner_display} — "
-            "use talk_end (or 'end') first."
-        )
-        return False
-    ctx.talk.begin_invite(
-        partner=user_target, partner_tty=resolve_tty or "", partner_key=target_key
-    )
     return True
 
 
@@ -869,7 +751,14 @@ async def _handle_repl_talk(
     *,
     talk_sub: _ReplTalkSubscription | None = None,
 ) -> None:
-    """Parse talk args and enter modal talk mode."""
+    """Parse talk args and enter modal talk mode.
+
+    The REPL's interactive shell around the shared talk kernel: it resolves the
+    session-scoped target, then delegates the accept (responder) or invite +
+    accept-wait (initiator) to ``biff.commands.talk``.  On a delegated refusal or
+    publish failure it prints the kernel's message and returns; on success it
+    sets the presence plan and enters the modal ``_repl_talk`` loop.
+    """
     from biff.server.tools._session import resolve_talk_target
     from biff.tty import parse_address
 
@@ -896,11 +785,7 @@ async def _handle_repl_talk(
     # Responding to a pending invite targets the exact inviting session;
     # otherwise the address itself must name the session (talk is
     # session-scoped — DES-043).
-    # Peek, do not consume yet: resolving the target can fail (offline,
-    # ambiguous tty), and consuming before resolution would strand an invite
-    # that could no longer be accepted.  Consume only once resolution succeeds.
     pending = ctx.talk.pending_invites.get(user_target)
-    responding = pending is not None
     resolve_user, resolve_tty = (user_target, tty_target)
     if pending is not None:
         resolve_user, _, resolve_tty = pending.session_key.partition(":")
@@ -916,41 +801,38 @@ async def _handle_repl_talk(
         print(f"Error: {exc}")
         return
 
-    # Enter the appropriate phase before the handshake so the accept poll and
-    # connected drain see the partner key; the helper refuses to clobber a live
-    # talk on either the initiator or the accept path.  Consume the pending
-    # invite only after the guard passes, so a refused accept leaves it intact.
-    if not _enter_talk_phase(
-        ctx,
-        user_target=user_target,
-        resolve_tty=resolve_tty,
-        target_key=target_key,
-        pending=pending,
-    ):
-        return
-    # Consume, but keep the popped invite: a responder whose accept publish fails
-    # must restore it so a retry re-accepts rather than sending a fresh outbound
-    # invite (CR-2).  For a responder, a False handshake result is always a
-    # publish failure (the accept path has no graceful cancel).
-    consumed = (
-        ctx.talk.consume_pending_invite(user_target) if pending is not None else None
-    )
-
-    if not await _run_talk_handshake(
-        ctx,
-        user_target,
-        target_key,
-        display,
-        args,
-        responding,
-        aqueue,
-        notify_event,
-        prompt_gate,
-        talk_sub=talk_sub,
-    ):
-        if consumed is not None:
-            ctx.talk.restore_pending_invite(consumed)
-        return
+    if pending is not None:
+        # Responder: the kernel guards against clobbering a live talk, consumes
+        # the invite, publishes the accept, and restores the invite on a transient
+        # publish failure (CR-2) — so a refused/failed accept leaves state intact.
+        result = await talk_commands.accept_invite(
+            ctx,
+            user=user_target,
+            pending=pending,
+            relay_key=target_key,
+            display=display,
+            resolve_tty=resolve_tty or "",
+            message="",
+        )
+        if result.error:
+            print(result.text)
+            return
+        await _set_talk_plan(ctx, display)
+    else:
+        opening = " ".join(args[1:]) if len(args) > 1 else ""
+        if not await _initiate_talk(
+            ctx,
+            user_target=user_target,
+            target_key=target_key,
+            display=display,
+            resolve_tty=resolve_tty or "",
+            opening=opening,
+            aqueue=aqueue,
+            notify_event=notify_event,
+            prompt_gate=prompt_gate,
+            talk_sub=talk_sub,
+        ):
+            return
 
     await _repl_talk(
         ctx,

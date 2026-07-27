@@ -867,14 +867,11 @@ class TestInviteCancelWithdraw:
 
     @pytest.mark.anyio()
     async def test_cancel_while_inviting_withdraws(self, tmp_path: object) -> None:
-        from biff.__main__ import _talk_handshake
+        from biff.__main__ import _initiate_talk
         from biff.talk_state import TalkState
         from biff.talk_types import AcceptOutcome, TalkPhase
 
         ctx = _make_ctx(tmp_path)
-        ctx.talk.begin_invite(
-            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
-        )
         gate = threading_mod.Event()
         with (
             patch(
@@ -887,13 +884,13 @@ class TestInviteCancelWithdraw:
             ) as spy_withdraw,
             patch.object(TalkState, "send_end", new_callable=AsyncMock) as spy_end,
         ):
-            proceed = await _talk_handshake(
+            proceed = await _initiate_talk(
                 ctx,
-                "eric",
-                "eric:def67890",
-                "eric:tty2",
-                ["talk", "@eric"],
-                responding=False,
+                user_target="eric",
+                target_key="eric:def67890",
+                display="eric:tty2",
+                resolve_tty="tty2",
+                opening="",
                 aqueue=_make_aqueue([]),
                 notify_event=asyncio.Event(),
                 prompt_gate=gate,
@@ -910,18 +907,15 @@ class TestInviteCancelWithdraw:
         """A Ctrl-C during the inviting-wait fires the withdraw, then exits.
 
         ``asyncio.run`` cancels the main task on SIGINT, so the accept-wait
-        raises ``CancelledError`` (not ``KeyboardInterrupt``). The handshake
+        raises ``CancelledError`` (not ``KeyboardInterrupt``). The initiator
         clears the invitee's marker on the fast path (ntWithdraw) and re-raises
         so the cancellation propagates and the process exits to the shell.
         """
-        from biff.__main__ import _talk_handshake
+        from biff.__main__ import _initiate_talk
         from biff.talk_state import TalkState
         from biff.talk_types import TalkPhase
 
         ctx = _make_ctx(tmp_path)
-        ctx.talk.begin_invite(
-            partner="eric", partner_tty="tty2", partner_key="eric:def67890"
-        )
         gate = threading_mod.Event()
         with (
             patch(
@@ -935,13 +929,13 @@ class TestInviteCancelWithdraw:
             patch.object(TalkState, "send_end", new_callable=AsyncMock) as spy_end,
             pytest.raises(asyncio.CancelledError),
         ):
-            await _talk_handshake(
+            await _initiate_talk(
                 ctx,
-                "eric",
-                "eric:def67890",
-                "eric:tty2",
-                ["talk", "@eric"],
-                responding=False,
+                user_target="eric",
+                target_key="eric:def67890",
+                display="eric:tty2",
+                resolve_tty="tty2",
+                opening="",
                 aqueue=_make_aqueue([]),
                 notify_event=asyncio.Event(),
                 prompt_gate=gate,
@@ -976,7 +970,7 @@ class TestInviteCancelWithdraw:
             new_callable=AsyncMock,
             side_effect=TimeoutError("relay wedged"),
         ):
-            await _withdraw_talk_invite(ctx, "eric", "eric:def67890")
+            await _withdraw_talk_invite(ctx)
 
         # No exception escaped; local state reset despite the failed publish.
         assert ctx.talk.phase is TalkPhase.IDLE
