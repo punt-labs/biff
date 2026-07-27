@@ -66,6 +66,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return "Error: failed to claim TTY name after retries."
 
         set_tty_name(claimed)
+        # Keep the shared TalkState in sync with the rename: talk invite reply
+        # hints render from state.talk.my_tty_name, so a stale name here would
+        # embed the old tty in the hint and the partner's suggested address would
+        # no longer resolve (matches app.py registration and commands/tty.py).
+        state.talk.set_tty_name(claimed)
         await update_current_session(state, tty_name=claimed)
         # Keep the resume-reclaim hint current so the next resume reclaims
         # the RENAMED alias, not the stale one (biff-7ak). The routing token

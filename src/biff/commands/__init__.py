@@ -26,6 +26,12 @@ from biff.commands.wall import wall
 from biff.commands.who import who
 from biff.commands.write import write
 
+# ``biff.commands.talk`` is a multi-function orchestration module (accept /
+# invite / send / end), not a single command function — both front-ends import
+# the module directly (``import biff.commands.talk as ...``).  Re-exporting a
+# ``talk`` symbol here would shadow the submodule and break that import, so it
+# is deliberately left out of the package namespace (PL-MD-3 narrow interface).
+
 __all__ = [
     "CommandResult",
     "finger",

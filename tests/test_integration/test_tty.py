@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
+    from biff.server.state import ServerState
     from biff.testing import RecordingClient
 
 
@@ -64,6 +65,19 @@ class TestTtyNaming:
         """Tool returns confirmation message."""
         result = await kai.call("tty", name="my-session")
         assert result == "TTY: my-session"
+
+    async def test_rename_syncs_shared_talkstate(
+        self, recorder: RecordingClient, state: ServerState
+    ) -> None:
+        """The tty tool keeps state.talk in sync so talk reply hints stay valid.
+
+        Talk invite reply hints render from ``state.talk.my_tty_name`` (biff-uin);
+        if the rename tool updated only the description global and not the shared
+        TalkState, a later invite would embed the stale tty and the partner's
+        suggested ``talk user:tty`` address would no longer resolve.
+        """
+        await recorder.call("tty", name="renamed-here")
+        assert state.talk.my_tty_name == "renamed-here"
 
 
 class TestTtyAtomicReservation:
