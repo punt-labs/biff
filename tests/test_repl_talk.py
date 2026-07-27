@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import biff.commands.talk as talk_commands
 from biff.__main__ import (
     _NO_INPUT,
+    _clear_talk_plan,
     _format_idle_banners,
     _format_talk_lines,
     _handle_repl_talk,
@@ -27,6 +28,7 @@ from biff.__main__ import (
     _print_talk_banner,
     _repl_talk,
     _ReplTalkSubscription,
+    _set_talk_plan,
     _talk_converse,
     _talk_loop,
     _TalkSubscription,
@@ -1095,3 +1097,46 @@ class TestModalTalkReconcileWiring:
 
         assert nc.subscribe.await_count == 2  # establish + reconcile re-bind
         assert sub._generation == 2
+
+
+# ---------------------------------------------------------------------------
+# _set_talk_plan / _clear_talk_plan — swallowed failures stay diagnosable
+# ---------------------------------------------------------------------------
+
+
+class TestTalkPlanBestEffortLogging:
+    """Presence plan updates are best-effort but must not swallow the cause.
+
+    A wedged relay must never crash the REPL over a cosmetic ``talking to …``
+    update, so the get/update pair is guarded — but the DEBUG log carries
+    ``exc_info`` so the underlying relay failure is recoverable from biff.log
+    (it stays below the WARNING stderr floor, off the interactive terminal).
+    """
+
+    @staticmethod
+    def _wedged_ctx() -> MagicMock:
+        ctx = MagicMock()
+        ctx.session_key = "kai:kaihex01"
+        ctx.relay = MagicMock(spec=NatsRelay)
+        ctx.relay.get_session = AsyncMock(side_effect=TimeoutError("relay wedged"))
+        return ctx
+
+    async def test_set_plan_failure_logs_with_exc_info(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ctx = self._wedged_ctx()
+        with caplog.at_level(logging.DEBUG, logger="biff.__main__"):
+            await _set_talk_plan(ctx, "eric:tty2")  # must not raise
+        records = [r for r in caplog.records if "talk plan" in r.getMessage()]
+        assert records
+        assert all(r.exc_info is not None for r in records)
+
+    async def test_clear_plan_failure_logs_with_exc_info(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ctx = self._wedged_ctx()
+        with caplog.at_level(logging.DEBUG, logger="biff.__main__"):
+            await _clear_talk_plan(ctx)  # must not raise
+        records = [r for r in caplog.records if "talk plan" in r.getMessage()]
+        assert records
+        assert all(r.exc_info is not None for r in records)

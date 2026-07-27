@@ -458,7 +458,9 @@ async def _repl_talk(
                 updated = session.model_copy(update={"plan": ""})
                 await ctx.relay.update_session(updated)
         except Exception:  # noqa: BLE001
-            logging.getLogger(__name__).debug("Failed to clear talk plan")
+            logging.getLogger(__name__).debug(
+                "Failed to clear talk plan", exc_info=True
+            )
 
     # Clear any stale prompt the stdin thread may have printed.
     print(f"\r\033[KTalk with {display} ended.")
@@ -637,7 +639,7 @@ async def _set_talk_plan(ctx: CliContext, display: str) -> None:
                 session.model_copy(update={"plan": f"talking to {display}"})
             )
     except Exception:  # noqa: BLE001
-        logging.getLogger(__name__).debug("Failed to set talk plan")
+        logging.getLogger(__name__).debug("Failed to set talk plan", exc_info=True)
 
 
 async def _clear_talk_plan(ctx: CliContext) -> None:
@@ -647,7 +649,7 @@ async def _clear_talk_plan(ctx: CliContext) -> None:
         if session is not None:
             await ctx.relay.update_session(session.model_copy(update={"plan": ""}))
     except Exception:  # noqa: BLE001
-        logging.getLogger(__name__).debug("Failed to clear talk plan")
+        logging.getLogger(__name__).debug("Failed to clear talk plan", exc_info=True)
 
 
 async def _withdraw_talk_invite(ctx: CliContext) -> None:
