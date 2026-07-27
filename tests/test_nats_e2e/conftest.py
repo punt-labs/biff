@@ -26,6 +26,15 @@ from biff.testing import NotificationTracker, RecordingClient, Transcript
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 _TEST_REPO = "_test-nats-e2e"
 
+# Routing ids (the session-key value half) must be hex: registration feeds the
+# session_id through validate_routing_id ([0-9a-fA-F-]).  These are 8-char hex,
+# the shape generate_tty() produces, but fixed rather than random because the
+# talk tests address the peer by this exact token (@user:<tty>) and assert on
+# the resulting session key and frame keys — the value must be known at author
+# time.  Distinct per user so a shared-KV test never confuses the two.
+_KAI_TTY = "aaaa0001"
+_ERIC_TTY = "eeee0002"
+
 
 @pytest.fixture(autouse=True)
 async def _cleanup_nats(nats_server: str) -> AsyncIterator[None]:  # pyright: ignore[reportUnusedFunction]
@@ -79,7 +88,7 @@ async def kai_client(
     """MCP client for kai backed by NatsRelay."""
     config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(
-        config, shared_data_dir / "kai", tty="tty1", hostname="test-host", pwd="/test"
+        config, shared_data_dir / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
@@ -93,7 +102,11 @@ async def eric_client(
     """MCP client for eric backed by NatsRelay."""
     config = BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(
-        config, shared_data_dir / "eric", tty="tty2", hostname="test-host", pwd="/test"
+        config,
+        shared_data_dir / "eric",
+        tty=_ERIC_TTY,
+        hostname="test-host",
+        pwd="/test",
     )
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp)) as client:
@@ -127,7 +140,7 @@ async def kai_tracked(
     tracker = NotificationTracker()
     config = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(
-        config, shared_data_dir / "kai", tty="tty1", hostname="test-host", pwd="/test"
+        config, shared_data_dir / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
@@ -143,7 +156,11 @@ async def eric_tracked(
     tracker = NotificationTracker()
     config = BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server)
     state = create_state(
-        config, shared_data_dir / "eric", tty="tty2", hostname="test-host", pwd="/test"
+        config,
+        shared_data_dir / "eric",
+        tty=_ERIC_TTY,
+        hostname="test-host",
+        pwd="/test",
     )
     mcp = create_server(state)
     async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:

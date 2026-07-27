@@ -18,6 +18,8 @@ from biff.models import SessionEvent
 from biff.nats_relay import NatsRelay
 from biff.testing import RecordingClient
 
+from .conftest import _KAI_TTY
+
 pytestmark = pytest.mark.nats
 
 _TEST_REPO = "_test-nats-e2e"
@@ -54,7 +56,7 @@ class TestWtmpLoginEvent:
             login = next((e for e in events if e.event == "login"), None)
             assert login is not None
             assert login.user == "kai"
-            assert login.session_key == "kai:tty1"
+            assert login.session_key == f"kai:{_KAI_TTY}"
         finally:
             await relay.close()
 
