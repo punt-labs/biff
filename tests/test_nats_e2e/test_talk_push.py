@@ -114,7 +114,7 @@ class TestTalkPushNotification:
                 nc,
                 from_user="eric",
                 body="PR looks good",
-                from_key="eric:tty2",
+                from_key="eric:eeee0002",
                 to_key=kai_state.session_key,
             )
             desc = await _wait_for_talk_description(kai_client, "[TALK]")
@@ -153,7 +153,7 @@ class TestTalkPushNotification:
                 nc,
                 from_user="eric",
                 body="notification test",
-                from_key="eric:tty2",
+                from_key="eric:eeee0002",
                 to_key=kai_state.session_key,
             )
             await _wait_for_talk_description(kai_client, "[TALK]")
@@ -185,7 +185,7 @@ class TestTalkPushNotification:
                     nc,
                     from_user="eric",
                     body=f"rapid message {i}",
-                    from_key="eric:tty2",
+                    from_key="eric:eeee0002",
                     to_key=kai_state.session_key,
                 )
             await _wait_for_talk_description(kai_client, "[TALK]")
@@ -271,7 +271,7 @@ class TestTalkPushNotification:
                     nc,
                     from_user="eric",
                     body="after reconnect",
-                    from_key="eric:tty2",
+                    from_key="eric:eeee0002",
                     to_key=kai_state.session_key,
                 )
                 await asyncio.sleep(1.0)

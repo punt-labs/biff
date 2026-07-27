@@ -36,7 +36,9 @@ class TestTalkInitiation:
     ) -> None:
         """kai inviting eric returns an invite confirmation."""
         await eric.call("plan", message="available")
-        result = await kai.call("talk", to="@eric:tty2", message="hey, review my PR?")
+        result = await kai.call(
+            "talk", to="@eric:eeee0002", message="hey, review my PR?"
+        )
         assert "Invite sent" in result
         assert "eric" in result
 
@@ -58,7 +60,7 @@ class TestTalkInitiation:
     async def test_self_talk_rejected(self, kai: RecordingClient) -> None:
         """Talking to your own session is refused."""
         await kai.call("plan", message="available")
-        result = await kai.call("talk", to="@kai:tty1")
+        result = await kai.call("talk", to="@kai:aaaa0001")
         assert "your own session" in result
 
 
@@ -70,7 +72,7 @@ class TestTalkReceive:
     ) -> None:
         """After kai invites eric, eric's talk_read shows who wants to talk."""
         await eric.call("plan", message="available")
-        await kai.call("talk", to="@eric:tty2", message="are you there?")
+        await kai.call("talk", to="@eric:eeee0002", message="are you there?")
         await asyncio.sleep(0.3)  # let eric's subscription receive the frame
 
         result = await eric.call("talk_read")
@@ -94,7 +96,7 @@ class TestTalkReceive:
 
         listen_task = asyncio.create_task(eric.call("talk_listen", timeout=10))
         await asyncio.sleep(0.3)
-        await kai.call("talk", to="@eric:tty2", message="urgent: deploy broken")
+        await kai.call("talk", to="@eric:eeee0002", message="urgent: deploy broken")
 
         result = await asyncio.wait_for(listen_task, timeout=5.0)
         assert "kai" in result
@@ -117,7 +119,7 @@ class TestTalkEnd:
     ) -> None:
         """talk_end closes an outstanding invite (inviting phase)."""
         await eric.call("plan", message="available")
-        await kai.call("talk", to="@eric:tty2")
+        await kai.call("talk", to="@eric:eeee0002")
         result = await kai.call("talk_end")
         assert "Talk session with eric ended" in result
 
@@ -144,22 +146,24 @@ class TestTalkConversation:
         await eric.call("plan", message="reviewing PRs")
 
         # kai invites eric.
-        result = await kai.call("talk", to="@eric:tty2", message="review PR #42?")
+        result = await kai.call("talk", to="@eric:eeee0002", message="review PR #42?")
         assert "Invite sent" in result
 
         # eric sees the invite and accepts by talking back.
         await asyncio.sleep(0.3)
         read = await eric.call("talk_read")
         assert "kai" in read
-        result = await eric.call("talk", to="@kai:tty1", message="sure, looking now")
+        result = await eric.call(
+            "talk", to="@kai:aaaa0001", message="sure, looking now"
+        )
         assert "accepted their invite" in result
 
         # kai sees the acceptance/opening message and replies.
         await asyncio.sleep(0.3)
         read = await kai.call("talk_read")
         assert "sure, looking now" in read
-        result = await kai.call("talk", to="@eric:tty2", message="thanks!")
-        assert "Sent to eric:tty2" in result
+        result = await kai.call("talk", to="@eric:eeee0002", message="thanks!")
+        assert "Sent to eric:eeee0002" in result
 
         # eric sees the reply.
         await asyncio.sleep(0.3)
@@ -246,7 +250,7 @@ class TestTalkInviteFrame:
         )
         kai_cfg = BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server)
         kai_state = create_state(
-            kai_cfg, shared_data_dir / "kai", tty="kkkk1111", hostname="t", pwd="/t"
+            kai_cfg, shared_data_dir / "kai", tty="dddd1111", hostname="t", pwd="/t"
         )
 
         eric_mcp = create_server(eric_state)
@@ -282,7 +286,7 @@ class TestTalkInviteFrame:
                 invite = next(f for f in frames if f.get("type") == "invite")
                 assert invite["from"] == "kai"
                 assert invite["body"] == "hello"
-                assert invite["from_key"] == "kai:kkkk1111"
+                assert invite["from_key"] == "kai:dddd1111"
                 assert invite["to_key"] == "eric:eeee1111"
         finally:
             await sub.unsubscribe()  # pyright: ignore[reportUnknownMemberType]

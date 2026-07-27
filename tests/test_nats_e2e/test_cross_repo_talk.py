@@ -80,7 +80,7 @@ async def kai_biff(
         transcript,
         user="kai",
         repo=_KAI_REPO,
-        tty="kai11111",
+        tty="aaaa0011",
         peers=(_ERIC_REPO,),
     ):
         yield client
@@ -97,7 +97,7 @@ async def eric_vox(
         transcript,
         user="eric",
         repo=_ERIC_REPO,
-        tty="eric2222",
+        tty="eeee0022",
         peers=(_KAI_REPO,),
     ):
         yield client
@@ -114,7 +114,7 @@ async def kai_alpha(
         transcript,
         user="kai",
         repo=_ALPHA_REPO,
-        tty="kaialpha",
+        tty="aaaa0a1f",
         peers=(_BETA_REPO,),
     ):
         yield client
@@ -131,7 +131,7 @@ async def eric_beta(
         transcript,
         user="eric",
         repo=_BETA_REPO,
-        tty="ericbeta",
+        tty="eeee0b7a",
         peers=(_ALPHA_REPO,),
     ):
         yield client
@@ -198,8 +198,8 @@ class TestSameOrgDifferentRepoTalk:
         await _drive_full_talk(
             kai_biff,
             eric_vox,
-            invitee_addr="@eric:eric2222",
-            inviter_addr="@kai:kai11111",
+            invitee_addr="@eric:eeee0022",
+            inviter_addr="@kai:aaaa0011",
         )
 
     async def test_invite_withdraw_clears_pending(
@@ -209,7 +209,7 @@ class TestSameOrgDifferentRepoTalk:
         await kai_biff.call("plan", message="on biff")
         await eric_vox.call("plan", message="on vox")
 
-        result = await eric_vox.call("talk", to="@kai:kai11111", message="ping?")
+        result = await eric_vox.call("talk", to="@kai:aaaa0011", message="ping?")
         assert "Invite sent" in result
 
         await asyncio.sleep(0.3)
@@ -247,8 +247,8 @@ class TestCrossOrgVisibleTalk:
         await _drive_full_talk(
             kai_alpha,
             eric_beta,
-            invitee_addr="@eric:ericbeta",
-            inviter_addr="@kai:kaialpha",
+            invitee_addr="@eric:eeee0b7a",
+            inviter_addr="@kai:aaaa0a1f",
         )
 
 
@@ -270,11 +270,11 @@ class TestVisibilityGate:
         """
         kai_cfg = BiffConfig(user="kai", repo_name=_KAI_REPO, relay_url=nats_server)
         kai_state = create_state(
-            kai_cfg, shared_data_dir / "kai", tty="kai11111", hostname="h", pwd="/w"
+            kai_cfg, shared_data_dir / "kai", tty="aaaa0011", hostname="h", pwd="/w"
         )
         eric_cfg = BiffConfig(user="eric", repo_name=_ERIC_REPO, relay_url=nats_server)
         eric_state = create_state(
-            eric_cfg, shared_data_dir / "eric", tty="eric2222", hostname="h", pwd="/w"
+            eric_cfg, shared_data_dir / "eric", tty="eeee0022", hostname="h", pwd="/w"
         )
         kai_mcp = create_server(kai_state)
         eric_mcp = create_server(eric_state)
@@ -301,7 +301,7 @@ class TestVisibilityGate:
                     client=eric_raw, transcript=transcript, user="eric"
                 )
                 await eric_r.call("plan", message="on vox")
-                result = await kai_r.call("talk", to="@eric:eric2222", message="hi")
+                result = await kai_r.call("talk", to="@eric:eeee0022", message="hi")
                 assert "not online" in result
 
                 await asyncio.sleep(0.3)
@@ -328,22 +328,22 @@ class TestIdentitySubjectCounterexamples:
         beta = NatsRelay(
             url="nats://localhost", repo_name=_BETA_REPO, stream_prefix="biff-test"
         )
-        assert alpha.talk_notify_subject("eric:ericbeta") == beta.talk_notify_subject(
-            "eric:ericbeta"
+        assert alpha.talk_notify_subject("eric:eeee0b7a") == beta.talk_notify_subject(
+            "eric:eeee0b7a"
         )
-        assert alpha.talk_notify_subject("eric:ericbeta") == (
-            "biff-test.talk.notify.eric:ericbeta"
+        assert alpha.talk_notify_subject("eric:eeee0b7a") == (
+            "biff-test.talk.notify.eric:eeee0b7a"
         )
 
     def test_repo_keyed_subject_strands_cross_repo(self) -> None:
         """A repo-keyed subject: same-org peers in different repos never meet."""
-        kai_repo_subject = f"biff-test.{_KAI_REPO}.talk.notify.eric:eric2222"
-        eric_repo_subject = f"biff-test.{_ERIC_REPO}.talk.notify.eric:eric2222"
+        kai_repo_subject = f"biff-test.{_KAI_REPO}.talk.notify.eric:eeee0022"
+        eric_repo_subject = f"biff-test.{_ERIC_REPO}.talk.notify.eric:eeee0022"
         assert kai_repo_subject != eric_repo_subject
 
     def test_org_keyed_subject_strands_cross_org(self) -> None:
         """An org-keyed subject: cross-org peers land in different namespaces."""
         # org = the ``owner`` before ``__`` in a sanitized repo name.
-        alpha_org_subject = "biff-test.org-alpha.talk.notify.eric:ericbeta"
-        beta_org_subject = "biff-test.org-beta.talk.notify.eric:ericbeta"
+        alpha_org_subject = "biff-test.org-alpha.talk.notify.eric:eeee0b7a"
+        beta_org_subject = "biff-test.org-beta.talk.notify.eric:eeee0b7a"
         assert alpha_org_subject != beta_org_subject
