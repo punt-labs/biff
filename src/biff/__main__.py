@@ -56,7 +56,7 @@ from biff.repl_display import ReplDisplay
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.talk_latch import TalkNotifyLatch
-from biff.talk_types import AcceptOutcome, TalkNotification
+from biff.talk_types import MAX_BODY_LEN, AcceptOutcome, TalkNotification
 
 # ---------------------------------------------------------------------------
 # Global flags
@@ -700,7 +700,9 @@ async def _initiate_talk(
     await _set_talk_plan(ctx, display)
 
     if opening:
-        print(f"you> {opening}")
+        # Echo exactly what was sent: TalkState._publish truncates the invite
+        # body to MAX_BODY_LEN, so a long opening's local echo must match.
+        print(f"you> {opening[:MAX_BODY_LEN]}")
 
     # Clear the stdin thread's prompt first so the line lands clean, not
     # appended to a stale ``user:tty ▶`` prompt (same pattern as :303/:311).

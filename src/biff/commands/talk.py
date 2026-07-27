@@ -200,7 +200,19 @@ async def send_line(
     A failed publish leaves the connection intact — core NATS is best-effort, not
     a teardown — and returns an actionable "not sent" notice rather than raising.
     An empty *message* is a caller error: there is nothing to send.
+
+    Enforces its own precondition (PY-EH-1): the state must be CONNECTED to
+    *to_key*.  Both callers already only reach here while connected (the MCP
+    dispatcher's ``connected_here`` branch, the REPL modal loop), but making the
+    contract self-checking stops a future caller from silently publishing a
+    stray frame while idle or inviting.
     """
+    talk_state = ctx.talk
+    if talk_state.phase is not TalkPhase.CONNECTED or talk_state.partner_key != to_key:
+        return CommandResult(
+            text=f"Not connected to {display} — nothing sent.",
+            error=True,
+        )
     if not message:
         return CommandResult(
             text=f"Already connected to {display}. Provide a message to send.",

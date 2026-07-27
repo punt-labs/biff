@@ -180,6 +180,29 @@ class TestSendLine:
         assert result.error
         assert "provide a message" in result.text.lower()
 
+    async def test_refuses_when_not_connected(self, kai: CliContext) -> None:
+        """send_line enforces its connected-partner precondition (PY-EH-1)."""
+        # Idle: never became connected to anyone.
+        result = await talk_commands.send_line(
+            kai, to_key=_ERIC_KEY, display="eric:tty2", message="hi"
+        )
+        assert result.error
+        assert "not connected" in result.text.lower()
+        assert kai.talk.phase is TalkPhase.IDLE
+
+    async def test_refuses_when_connected_to_a_different_partner(
+        self, kai: CliContext
+    ) -> None:
+        kai.talk.begin_connected(
+            partner="jo", partner_tty="tty9", partner_key="jo:johex001"
+        )
+        result = await talk_commands.send_line(
+            kai, to_key=_ERIC_KEY, display="eric:tty2", message="hi"
+        )
+        assert result.error
+        assert "not connected" in result.text.lower()
+        assert kai.talk.partner_key == "jo:johex001"  # live partner untouched
+
 
 class TestEndOrCancel:
     async def test_no_active_session(self, kai: CliContext) -> None:
