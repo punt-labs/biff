@@ -145,9 +145,9 @@ class TalkState:
         """This session's display tty name, as stamped on outgoing frames.
 
         The single source for the ``reply_to`` address an invite body carries,
-        so both front-ends render the same ``talk @user:ttyN`` hint without one
-        reaching for the server-global ``get_tty_name`` and the other for
-        ``CliContext.tty_name``.
+        so both front-ends render the same ``talk user:ttyN`` hint (canonical
+        bare address, no ``@`` — biff-5gb) without one reaching for the
+        server-global ``get_tty_name`` and the other for ``CliContext.tty_name``.
         """
         return self._my_tty_name
 

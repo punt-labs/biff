@@ -160,8 +160,8 @@ async def invite(
 
     An idle session publishes an invite; a non-idle phase to a *different* peer
     refuses rather than abandon the live talk with no end frame.  The invite body
-    carries a runnable ``talk @me:ttyN`` reply hint unless *message* supplies an
-    opening line.
+    carries a runnable ``talk me:ttyN`` reply hint (canonical bare address, no
+    ``@`` — biff-5gb) unless *message* supplies an opening line.
     """
     talk_state = ctx.talk
     if talk_state.phase is not TalkPhase.IDLE:
