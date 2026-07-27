@@ -787,6 +787,14 @@ async def _handle_repl_talk(
     # Responding to a pending invite targets the exact inviting session;
     # otherwise the address itself must name the session (talk is
     # session-scoped — DES-043).
+    #
+    # This peek is taken AFTER the sole await (get_sessions_for_repos above);
+    # resolve_talk_target is synchronous and accept_invite consumes the invite
+    # before its first await, so no await separates this peek from the consume.
+    # The always-on talk subscription therefore cannot interleave a supersession
+    # here (single-threaded asyncio), and the REPL needs no re-peek — unlike the
+    # MCP dispatcher (commands.talk.talk), whose peek precedes its resolve await
+    # and so guards the CR-3 TOCTOU window explicitly.
     pending = ctx.talk.pending_invites.get(user_target)
     resolve_user, resolve_tty = (user_target, tty_target)
     if pending is not None:

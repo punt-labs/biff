@@ -264,12 +264,16 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
         )
         transient = True
     if transient:
+        # The local session ended, but the peer was not notified — signal it as
+        # an error so library/CLI callers see a non-zero outcome, consistent with
+        # the publish-failure returns of invite/accept_invite/send_line.
         if was_inviting:
             return CommandResult(
                 text=(
                     f"Talk invite to {partner} withdrawn locally; "
                     "their pending invite times out in ~5 min."
                 ),
+                error=True,
             )
         return CommandResult(
             text=(
@@ -277,6 +281,7 @@ async def end_or_cancel(ctx: TalkContext) -> CommandResult:
                 "failed — they may not know the talk ended; send nothing further "
                 "or ask them to run talk_end."
             ),
+            error=True,
         )
     return CommandResult(text=f"Talk session with {partner} ended.")
 

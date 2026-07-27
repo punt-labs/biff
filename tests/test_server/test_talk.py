@@ -378,6 +378,7 @@ class TestTalkEndResilience:
         result = await talk_commands.end_or_cancel(cast("TalkContext", state))
         assert talk.phase is TalkPhase.IDLE  # reset despite the publish failure
         assert "~5 min" in result.text  # the accurate pending-invite TTL promise
+        assert result.error  # transient publish failure signals a non-zero outcome
 
     async def test_connected_hangup_failure_names_real_outcome_not_ttl(self) -> None:
         """A failed connected hangup must not promise a TTL/auto-timeout recovery.
@@ -407,6 +408,7 @@ class TestTalkEndResilience:
         assert "time out" not in lowered  # no false auto-timeout claim
         assert "eric" in result.text  # names the partner
         assert "may not" in lowered  # states the peer might not know
+        assert result.error  # transient publish failure signals a non-zero outcome
 
     async def test_publish_failure_logs_at_info_not_warning(
         self, caplog: pytest.LogCaptureFixture
@@ -436,10 +438,11 @@ class TestTalkEndResilience:
 
 
 class TestDoTalk:
-    """commands.talk.talk: the invite hint carries ``@`` and accept names tty.
+    """commands.talk.talk: the invite hint is a runnable address; accept names tty.
 
-    Uses a mock NatsRelay so publish-failure paths can be injected; the state
-    object structurally satisfies ``TalkContext``.
+    Addresses render without an ``@`` sigil (biff-5gb); the invite body carries a
+    bare ``talk user:tty`` hint.  Uses a mock NatsRelay so publish-failure paths
+    can be injected; the state object structurally satisfies ``TalkContext``.
     """
 
     def _state(self, sessions: list[UserSession]) -> tuple[MagicMock, AsyncMock]:
