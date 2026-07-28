@@ -146,6 +146,22 @@ class TestNotifyWorkflowRender:
         rendered = NotifyWorkflow(repo).render()
         assert 'workflows: ["Tests"]' in rendered
 
+    def test_skips_symlinked_workflow(self, tmp_path: Path) -> None:
+        """A symlinked *.yml is not ours — never followed, never parsed.
+
+        Mirrors the write-path guard (ensure_real_dir, is_regular_file): a
+        committed ``evil.yml -> /outside`` must not be opened and read during
+        enable/check. The read path enforces the same regular-file discipline.
+        """
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        outside = tmp_path / "outside.yml"
+        outside.write_text("name: Sneaky\non: [push]\n")
+        (repo / ".github" / "workflows" / "evil.yml").symlink_to(outside)
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Tests"]' in rendered
+        assert "Sneaky" not in rendered
+
     def test_skips_non_yaml_files(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         _write_workflow(repo, "ci.yml", "Tests")

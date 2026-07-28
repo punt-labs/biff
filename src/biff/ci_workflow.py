@@ -100,7 +100,14 @@ class NotifyWorkflow:
         workflows_dir = self._root / ".github" / "workflows"
         names: set[str] = set()
         for path in workflows_dir.glob("*"):
-            if path.name == _WORKFLOW_NAME or path.suffix not in _WORKFLOW_SUFFIXES:
+            # Regular files only: a symlinked workflow is not ours -- never
+            # follow it to read (and parse) an arbitrary target, matching the
+            # write path's ensure_real_dir / is_regular_file discipline.
+            if (
+                path.name == _WORKFLOW_NAME
+                or path.suffix not in _WORKFLOW_SUFFIXES
+                or not is_regular_file(path)
+            ):
                 continue
             name = self._workflow_name(path)
             if name is not None and name != _NOTIFY_WORKFLOW_NAME:

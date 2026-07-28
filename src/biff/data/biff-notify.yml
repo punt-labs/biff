@@ -3,8 +3,8 @@ on:
   workflow_run:
     # workflow_run matches a workflow's `name:` field, not the job id or the
     # filename. `biff enable` renders this list from the target repo's own
-    # .github/workflows/*.yml name: fields, so a fixed list can't watch the
-    # wrong workflows in a repo whose names differ from biff's.
+    # .github/workflows/*.yml and *.yaml name: fields, so a fixed list can't
+    # watch the wrong workflows in a repo whose names differ from biff's.
     workflows: []  # BIFF_RENDER
     types: [completed]
 
