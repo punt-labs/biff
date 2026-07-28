@@ -2313,9 +2313,54 @@ workflow completes, checks for failure + push event, and posts `biff wall`.
    avoiding dependency installation overhead.
 5. **2-minute timeout** — notification is fire-and-forget; if NATS is down the
    step should fail fast, not hold a runner.
-6. **Template-as-data** — the YAML lives in `src/biff/data/biff-notify.yml`,
-   shipped via `importlib.resources`.  `check_ci_workflow()` compares the
-   deployed file against the bundled template to detect staleness.
+6. **Template-as-data, rendered per repo** — the YAML lives in
+   `src/biff/data/biff-notify.yml`, shipped via `importlib.resources`.  It is
+   *not* deposited verbatim: `NotifyWorkflow(root).render()` parameterizes the
+   `workflows:` trigger list to the target repo before writing (see the
+   2026-07-28 amendment below).  `check_ci_workflow()` compares the deployed
+   file against that per-repo render to detect staleness.
+
+### Amendment (2026-07-28): per-repo workflow-name rendering (biff-9fb)
+
+**Status:** SETTLED. **Related:** biff-9fb, public-website #292, punt-kit #245/#246.
+
+The original template hardcoded `workflows: ["Lint", "Tests", "Docs"]` — biff's
+*own* workflow `name:` fields. `workflow_run` matches a workflow's `name:` field,
+so a fixed list watched the wrong set in every repo but biff itself: reported
+independently by the public-website agent (its workflows are `Build`/`Docs`/`Lint`
+— `Tests` matched nothing and `Build` was unwatched) and the punt-kit agent (its
+test workflow is named `Test`, singular). The template also pinned a
+`astral-sh/setup-uv` SHA that no longer exists on GitHub (HTTP 422), so the notify
+job could not resolve its own action on first trigger. Both defects shipped to all
+ten repos carrying the workflow.
+
+**Decision.** Enablement renders the watched list from the *target repo's own*
+workflow names instead of shipping a fixed list:
+
+- A `@final NotifyWorkflow(repo_root)` class owns the render. `render()`
+  substitutes the bundled template's placeholder line `workflows: []  #
+  BIFF_RENDER` with the sorted, unique top-level `name:` fields found in
+  `<root>/.github/workflows/*.{yml,yaml}`, excluding `biff-notify.yml` by
+  filename and the notify workflow's own name `Biff CI Notifications` (no
+  self-watching). The list is emitted via `json.dumps`, whose output is a valid
+  YAML flow sequence that safely quotes odd characters.
+- A malformed / unreadable / nameless sibling workflow is skipped (the
+  `_workflow_name` reader catches `OSError`/`UnicodeDecodeError`/`yaml.YAMLError`
+  and returns `None`) rather than aborting the enable — it reads arbitrary
+  committed files in the target repo.
+- Zero watchable workflows renders `workflows: []` plus an explanatory comment.
+- **Fail-fast on template drift.** `render()` requires the placeholder to appear
+  exactly once and raises `ValueError` otherwise, so a future edit to the
+  bundled template that breaks the placeholder fails the enable loudly instead of
+  silently depositing a workflow that watches nothing.
+- `deploy_ci_workflow`/`check_ci_workflow` compare against the per-repo render, so
+  a repo whose workflow names change reports not-current and re-renders on the
+  next `biff enable`; it is a no-op when names are unchanged.
+- The `setup-uv` pin is repinned to `c771a70e6277c0a99b617c7a806ffedaca235ff9`
+  (v9.0.0), confirmed resolvable.
+
+Point 6 above is updated accordingly: staleness is detected against the rendered
+output for the repo, not the static bundled template.
 
 ### Integration with `biff enable`/`biff disable`
 
