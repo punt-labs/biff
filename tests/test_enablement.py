@@ -43,6 +43,18 @@ def _hooks_dir(root: Path) -> Path:
     return resolved
 
 
+def _write_workflow(root: Path, filename: str, name: str) -> None:
+    """Write a sibling workflow with a top-level ``name:`` field."""
+    wf = root / ".github" / "workflows"
+    wf.mkdir(parents=True, exist_ok=True)
+    job = "on: [push]\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n"
+    (wf / filename).write_text(f"name: {name}\n{job}")
+
+
+def _notify_text(root: Path) -> str:
+    return (root / ".github" / "workflows" / "biff-notify.yml").read_text()
+
+
 class TestEnable:
     def test_writes_marker(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
@@ -162,6 +174,40 @@ class TestDisable:
         RepoEnablement(tmp_path).disable()
         RepoEnablement(tmp_path).disable()
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
+
+
+class TestCiWorkflowParameterization:
+    """Enable deposits a notify workflow watching THIS repo's own workflows.
+
+    ``workflow_run`` matches a workflow's ``name:`` field, so the deposited list
+    must name the enabling repo's own workflows, not biff's.
+    """
+
+    def test_watches_repo_workflow_names(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        _write_workflow(tmp_path, "build.yml", "Build")
+        _write_workflow(tmp_path, "docs.yml", "Docs")
+        RepoEnablement(tmp_path).enable()
+        assert 'workflows: ["Build", "Docs"]' in _notify_text(tmp_path)
+
+    def test_empty_list_when_no_sibling_workflows(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        RepoEnablement(tmp_path).enable()
+        text = _notify_text(tmp_path)
+        assert "workflows: []" in text
+        assert "No sibling workflows" in text
+
+    def test_reenable_rerenders_after_name_change(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        _write_workflow(tmp_path, "ci.yml", "Tests")
+        first = RepoEnablement(tmp_path).enable()
+        assert first.ci_workflow_changed is True
+        assert 'workflows: ["Tests"]' in _notify_text(tmp_path)
+
+        _write_workflow(tmp_path, "ci.yml", "Unit Tests")  # rename the workflow
+        second = RepoEnablement(tmp_path).enable()
+        assert second.ci_workflow_changed is True  # re-rendered, not a no-op
+        assert 'workflows: ["Unit Tests"]' in _notify_text(tmp_path)
 
 
 class TestSurfaceEquivalence:

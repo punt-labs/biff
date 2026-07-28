@@ -12,6 +12,8 @@ import pytest
 
 from biff.ci_workflow import (
     _WORKFLOW_NAME,
+    _WORKFLOWS_PLACEHOLDER,
+    NotifyWorkflow,
     _template_content,
     check_ci_workflow,
     deploy_ci_workflow,
@@ -22,6 +24,212 @@ from biff.ci_workflow import (
 def _make_repo(tmp_path: Path) -> Path:
     """Create a minimal directory structure (no .git needed for CI workflow)."""
     return tmp_path
+
+
+def _write_workflow(root: Path, filename: str, name: str | None) -> None:
+    """Write a minimal GitHub Actions workflow with an optional top-level name."""
+    wf = root / ".github" / "workflows"
+    wf.mkdir(parents=True, exist_ok=True)
+    header = f"name: {name}\n" if name is not None else ""
+    job = "on: [push]\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n"
+    (wf / filename).write_text(header + job)
+
+
+# A resolvable, non-dead action pin. The prior pin
+# (e58605a9b6da7c637471fab8847a5e5a6b8df081) does not exist on GitHub — the
+# notify job failed to resolve the action on first trigger in every repo.
+_LIVE_SETUP_UV_SHA = "c771a70e6277c0a99b617c7a806ffedaca235ff9"
+_DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
+
+
+# ── template action pins ───────────────────────────────────────────
+
+
+class TestTemplateActionPins:
+    """The bundled template must pin only resolvable action SHAs."""
+
+    def test_setup_uv_pinned_to_live_sha(self) -> None:
+        content = _template_content()
+        assert _LIVE_SETUP_UV_SHA in content
+        assert _DEAD_SETUP_UV_SHA not in content
+
+    def test_template_carries_exactly_one_placeholder(self) -> None:
+        """The template⇄constant invariant: render()'s str.replace needs a match.
+
+        If the template's placeholder line drifts (reindent, edited comment,
+        whitespace), str.replace would silently no-op and deposit a workflow
+        watching nothing. Pin the invariant so drift fails at test time.
+        """
+        assert _template_content().count(_WORKFLOWS_PLACEHOLDER) == 1
+
+
+class TestRenderPlaceholderGuard:
+    """render() fails loud, never silently deposits an unrendered template."""
+
+    def test_missing_placeholder_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        drifted = "name: Biff CI Notifications\non:\n  workflow_run:\n    types: [x]\n"
+        monkeypatch.setattr("biff.ci_workflow._template_content", lambda: drifted)
+        with pytest.raises(ValueError, match="placeholder"):
+            NotifyWorkflow(tmp_path).render()
+
+
+# ── NotifyWorkflow.render (per-repo parameterization) ──────────────
+
+
+class TestNotifyWorkflowRender:
+    """The deposited workflow watches the TARGET repo's own workflow names.
+
+    ``workflow_run`` matches a workflow's ``name:`` field, so a fixed list
+    (the old ``["Lint", "Tests", "Docs"]``) watched the wrong set in every
+    repo but biff's own. The render reads the repo's ``.github/workflows``.
+    """
+
+    def test_lists_repo_workflow_names_sorted_unique(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        _write_workflow(repo, "build.yml", "Build")
+        _write_workflow(repo, "docs.yml", "Docs")
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Build", "Docs", "Tests"]' in rendered
+
+    def test_dedupes_repeated_names(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "a.yml", "Lint")
+        _write_workflow(repo, "b.yml", "Lint")
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Lint"]' in rendered
+
+    def test_reads_yaml_extension(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yaml", "Build")
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Build"]' in rendered
+
+    def test_excludes_notify_workflow_by_filename(self, tmp_path: Path) -> None:
+        """The notify workflow file itself must never appear in its own list."""
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        _write_workflow(repo, _WORKFLOW_NAME, "Some Other Name")
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Tests"]' in rendered
+
+    def test_excludes_notify_workflow_by_name(self, tmp_path: Path) -> None:
+        """A workflow literally named 'Biff CI Notifications' is not self-watched."""
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        _write_workflow(repo, "old-notify.yml", "Biff CI Notifications")
+        rendered = NotifyWorkflow(repo).render()
+        # The notify workflow's own name appears once (its `name:` field), never
+        # as a quoted item in its own watched list.
+        assert 'workflows: ["Tests"]' in rendered
+        assert '"Biff CI Notifications"' not in rendered
+
+    def test_empty_when_no_workflows(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        rendered = NotifyWorkflow(repo).render()
+        assert "workflows: []" in rendered
+        assert "No sibling workflows" in rendered  # explanatory comment
+
+    def test_empty_when_only_self_present(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, _WORKFLOW_NAME, "Biff CI Notifications")
+        rendered = NotifyWorkflow(repo).render()
+        assert "workflows: []" in rendered
+
+    def test_skips_files_without_name(self, tmp_path: Path) -> None:
+        """A nameless workflow has no watchable name — it is skipped, not fatal."""
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        _write_workflow(repo, "nameless.yml", None)
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Tests"]' in rendered
+
+    def test_skips_symlinked_workflow(self, tmp_path: Path) -> None:
+        """A symlinked *.yml is not ours — never followed, never parsed.
+
+        Mirrors the write-path guard (ensure_real_dir, is_regular_file): a
+        committed ``evil.yml -> /outside`` must not be opened and read during
+        enable/check. The read path enforces the same regular-file discipline.
+        """
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        outside = tmp_path / "outside.yml"
+        outside.write_text("name: Sneaky\non: [push]\n")
+        (repo / ".github" / "workflows" / "evil.yml").symlink_to(outside)
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Tests"]' in rendered
+        assert "Sneaky" not in rendered
+
+    def test_skips_non_yaml_files(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        readme = repo / ".github" / "workflows" / "README.md"
+        readme.write_text("name: Not A Workflow")
+        rendered = NotifyWorkflow(repo).render()
+        assert 'workflows: ["Tests"]' in rendered
+
+    def test_symlinked_workflows_dir_reads_nothing(self, tmp_path: Path) -> None:
+        """A symlinked .github/workflows must not be traversed out of the repo.
+
+        deploy runs ensure_real_dir first, but check_ci_workflow renders with no
+        such guard — so _watched_names self-guards: a symlinked .github or
+        .github/workflows yields an empty list (check reports not-current; the
+        next deploy replaces the symlink and renders correctly).
+        """
+        repo = tmp_path / "repo"
+        (repo / ".github").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "ci.yml").write_text("name: Sneaky\non: [push]\n")
+        (repo / ".github" / "workflows").symlink_to(outside, target_is_directory=True)
+
+        rendered = NotifyWorkflow(repo).render()
+        assert "workflows: []" in rendered
+        assert "Sneaky" not in rendered
+
+    def test_symlinked_github_dir_reads_nothing(self, tmp_path: Path) -> None:
+        """Same guard one level up: a symlinked .github component."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside"
+        (outside / "workflows").mkdir(parents=True)
+        (outside / "workflows" / "ci.yml").write_text("name: Sneaky\non: [push]\n")
+        (repo / ".github").symlink_to(outside, target_is_directory=True)
+
+        rendered = NotifyWorkflow(repo).render()
+        assert "workflows: []" in rendered
+        assert "Sneaky" not in rendered
+
+    def test_rendered_carries_live_sha(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        rendered = NotifyWorkflow(repo).render()
+        assert _LIVE_SETUP_UV_SHA in rendered
+        assert _DEAD_SETUP_UV_SHA not in rendered
+
+
+class TestDeployIdempotencyAcrossNameChanges:
+    """A repo whose workflow names change re-renders on the next enable."""
+
+    def test_redeploys_after_workflow_name_change(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Tests")
+        assert deploy_ci_workflow(repo) is True
+        assert deploy_ci_workflow(repo) is False  # unchanged names → no-op
+
+        _write_workflow(repo, "ci.yml", "Unit Tests")  # rename the workflow
+        assert check_ci_workflow(repo) is False  # deposited file now stale
+        assert deploy_ci_workflow(repo) is True  # re-rendered
+        target = repo / ".github" / "workflows" / _WORKFLOW_NAME
+        assert 'workflows: ["Unit Tests"]' in target.read_text()
+
+    def test_check_current_matches_render(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _write_workflow(repo, "ci.yml", "Build")
+        deploy_ci_workflow(repo)
+        assert check_ci_workflow(repo) is True
 
 
 # ── deploy_ci_workflow ─────────────────────────────────────────────
@@ -36,7 +244,7 @@ class TestDeployCiWorkflow:
 
         target = repo / ".github" / "workflows" / _WORKFLOW_NAME
         assert target.exists()
-        assert target.read_text() == _template_content()
+        assert target.read_text() == NotifyWorkflow(repo).render()
 
     def test_creates_directories(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
@@ -55,7 +263,7 @@ class TestDeployCiWorkflow:
         target.write_text("old content")
 
         assert deploy_ci_workflow(repo) is True
-        assert target.read_text() == _template_content()
+        assert target.read_text() == NotifyWorkflow(repo).render()
 
     def test_unusable_root_raises(self) -> None:
         """A non-directory root is a real failure, not a silent ``False`` no-op."""
@@ -82,7 +290,7 @@ class TestDeployCiWorkflow:
 
         assert deploy_ci_workflow(repo) is True
         assert not link.is_symlink()
-        assert link.read_text() == _template_content()
+        assert link.read_text() == NotifyWorkflow(repo).render()
         # The symlink target is untouched.
         assert outside.read_text() == "do not touch"
 
