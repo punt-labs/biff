@@ -170,6 +170,38 @@ class TestNotifyWorkflowRender:
         rendered = NotifyWorkflow(repo).render()
         assert 'workflows: ["Tests"]' in rendered
 
+    def test_symlinked_workflows_dir_reads_nothing(self, tmp_path: Path) -> None:
+        """A symlinked .github/workflows must not be traversed out of the repo.
+
+        deploy runs ensure_real_dir first, but check_ci_workflow renders with no
+        such guard — so _watched_names self-guards: a symlinked .github or
+        .github/workflows yields an empty list (check reports not-current; the
+        next deploy replaces the symlink and renders correctly).
+        """
+        repo = tmp_path / "repo"
+        (repo / ".github").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "ci.yml").write_text("name: Sneaky\non: [push]\n")
+        (repo / ".github" / "workflows").symlink_to(outside, target_is_directory=True)
+
+        rendered = NotifyWorkflow(repo).render()
+        assert "workflows: []" in rendered
+        assert "Sneaky" not in rendered
+
+    def test_symlinked_github_dir_reads_nothing(self, tmp_path: Path) -> None:
+        """Same guard one level up: a symlinked .github component."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside"
+        (outside / "workflows").mkdir(parents=True)
+        (outside / "workflows" / "ci.yml").write_text("name: Sneaky\non: [push]\n")
+        (repo / ".github").symlink_to(outside, target_is_directory=True)
+
+        rendered = NotifyWorkflow(repo).render()
+        assert "workflows: []" in rendered
+        assert "Sneaky" not in rendered
+
     def test_rendered_carries_live_sha(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         _write_workflow(repo, "ci.yml", "Tests")

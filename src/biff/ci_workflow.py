@@ -97,7 +97,18 @@ class NotifyWorkflow:
 
     def _watched_names(self) -> tuple[str, ...]:
         """Sorted, unique workflow ``name:`` fields, minus the notify workflow."""
-        workflows_dir = self._root / ".github" / "workflows"
+        github_dir = self._root / ".github"
+        workflows_dir = github_dir / "workflows"
+        # Self-guard against a symlinked directory component so render() is safe
+        # regardless of caller: deploy_ci_workflow runs ensure_real_dir first,
+        # but check_ci_workflow renders with no such guard. A symlinked .github
+        # or .github/workflows would let the scan read name: values from OUTSIDE
+        # the repo. Refuse to traverse: an empty list makes check report
+        # not-current, and the next deploy's ensure_real_dir replaces the
+        # symlink and renders correctly. (root is the trusted base, matching
+        # ensure_real_dir's contract -- don't inspect above .github.)
+        if github_dir.is_symlink() or workflows_dir.is_symlink():
+            return ()
         names: set[str] = set()
         for path in workflows_dir.glob("*"):
             # Regular files only: a symlinked workflow is not ours -- never
