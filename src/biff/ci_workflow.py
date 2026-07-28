@@ -65,10 +65,22 @@ class NotifyWorkflow:
         return self
 
     def render(self) -> str:
-        """Return the deposited workflow content for this repo."""
-        return _template_content().replace(
-            _WORKFLOWS_PLACEHOLDER, self._workflows_block()
-        )
+        """Return the deposited workflow content for this repo.
+
+        Fails loud if the bundled template and ``_WORKFLOWS_PLACEHOLDER`` have
+        drifted: ``str.replace`` on a missing placeholder silently no-ops, which
+        would deposit an unrendered template that watches nothing -- the exact
+        defect this render exists to prevent.
+        """
+        template = _template_content()
+        if template.count(_WORKFLOWS_PLACEHOLDER) != 1:
+            raise ValueError(
+                "biff-notify.yml template is missing its "
+                f"{_WORKFLOWS_PLACEHOLDER!r} placeholder line; the bundled "
+                "template and _WORKFLOWS_PLACEHOLDER have drifted. Refusing to "
+                "deposit a workflow that would watch nothing."
+            )
+        return template.replace(_WORKFLOWS_PLACEHOLDER, self._workflows_block())
 
     def _workflows_block(self) -> str:
         """Render the ``workflows:`` line (with a comment when nothing to watch)."""

@@ -12,6 +12,7 @@ import pytest
 
 from biff.ci_workflow import (
     _WORKFLOW_NAME,
+    _WORKFLOWS_PLACEHOLDER,
     NotifyWorkflow,
     _template_content,
     check_ci_workflow,
@@ -51,6 +52,27 @@ class TestTemplateActionPins:
         content = _template_content()
         assert _LIVE_SETUP_UV_SHA in content
         assert _DEAD_SETUP_UV_SHA not in content
+
+    def test_template_carries_exactly_one_placeholder(self) -> None:
+        """The template⇄constant invariant: render()'s str.replace needs a match.
+
+        If the template's placeholder line drifts (reindent, edited comment,
+        whitespace), str.replace would silently no-op and deposit a workflow
+        watching nothing. Pin the invariant so drift fails at test time.
+        """
+        assert _template_content().count(_WORKFLOWS_PLACEHOLDER) == 1
+
+
+class TestRenderPlaceholderGuard:
+    """render() fails loud, never silently deposits an unrendered template."""
+
+    def test_missing_placeholder_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        drifted = "name: Biff CI Notifications\non:\n  workflow_run:\n    types: [x]\n"
+        monkeypatch.setattr("biff.ci_workflow._template_content", lambda: drifted)
+        with pytest.raises(ValueError, match="placeholder"):
+            NotifyWorkflow(tmp_path).render()
 
 
 # ── NotifyWorkflow.render (per-repo parameterization) ──────────────
