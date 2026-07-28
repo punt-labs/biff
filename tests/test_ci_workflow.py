@@ -24,6 +24,25 @@ def _make_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+# A resolvable, non-dead action pin. The prior pin
+# (e58605a9b6da7c637471fab8847a5e5a6b8df081) does not exist on GitHub — the
+# notify job failed to resolve the action on first trigger in every repo.
+_LIVE_SETUP_UV_SHA = "c771a70e6277c0a99b617c7a806ffedaca235ff9"
+_DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
+
+
+# ── template action pins ───────────────────────────────────────────
+
+
+class TestTemplateActionPins:
+    """The bundled template must pin only resolvable action SHAs."""
+
+    def test_setup_uv_pinned_to_live_sha(self) -> None:
+        content = _template_content()
+        assert _LIVE_SETUP_UV_SHA in content
+        assert _DEAD_SETUP_UV_SHA not in content
+
+
 # ── deploy_ci_workflow ─────────────────────────────────────────────
 
 
