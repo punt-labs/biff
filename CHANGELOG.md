@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-08-05
+
 ### Changed
 
 - **`talk` orchestration lives once in `commands/talk.py`, ending the MCP/REPL duplication (biff-uin).** `talk` was the only biff command without a `commands/` module: its accept / invite / send / end decision logic was copied between the MCP tools (`server/tools/talk.py`) and the REPL modal loop (`__main__.py`), and the copies drifted (a trigger wired twice, biff-9la). The decision logic now lives in a single `commands/talk.py` behind a structural `TalkContext` protocol that both `CliContext` and `ServerState` satisfy — `resolve_target`, `accept_invite`, `invite`, `send_line`, `end_or_cancel`, `publish_auto_accept`, and the `talk` dispatcher, each a pure async action returning `CommandResult`. Both front-ends delegate to it: the MCP tools wrap each call with a `refresh_talk` description push; the REPL keeps its interactive prompt/plan/modal-loop shell but routes every state action through the shared kernel. Behavior-preserving except for two minor REPL notice-wording changes, now unified with the shared kernel's phrasing: a transient invite-publish failure prints "Could not reach X — invite not sent; try again." (was "talk not started."), and a transient connected-send failure prints "message not sent; try again." (was "not sent; try again.").
