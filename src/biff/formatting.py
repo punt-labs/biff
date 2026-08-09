@@ -99,17 +99,34 @@ def visible_text(raw: str) -> str:
 
     Every render site that echoes remote-controlled text back to a human —
     a wall banner, a talk confirmation, a plan read-back — shares the same
-    question: does this text have anything visible to show, and if not,
-    why not?  There are two distinct reasons, and conflating them produces
-    a false claim:
+    question: does this text have a glyph worth showing, and if not, why
+    not?  There are two distinct reasons, and conflating them produces a
+    false claim:
 
-    * :func:`terminal_safe` left *something* behind (e.g. spaces survive a
-      stripped control byte, or *raw* was whitespace-only to begin with) —
-      there is content, it just isn't visible.  Reported as
-      :data:`_NO_VISIBLE_CONTENT`.
-    * :func:`terminal_safe` left nothing behind at all — *raw* was empty, or
-      every character in it was control/escape and got stripped.  Reported
-      as :data:`_NO_PRINTABLE_TEXT`.
+    * :func:`terminal_safe` left something behind with nonzero terminal
+      width once surrounding whitespace is discounted
+      (:func:`visible_width` of the stripped text > 0) — there is content,
+      report it as-is.  Otherwise there is nothing visible, and the
+      reason splits in two:
+
+      * :func:`terminal_safe` left *something* behind, but it renders no
+        glyph — e.g. *raw* was whitespace-only to begin with (spaces
+        survive filtering; a blank cell isn't a shown glyph), or *raw*
+        was combining marks / variation selectors with no base character
+        to attach to.  These are ``str.isprintable()`` and not
+        whitespace, so they survive both filtering and ``.strip()``, but
+        carry zero terminal width — :func:`visible_width` catches them
+        where ``.strip()`` truthiness would not.  Reported as
+        :data:`_NO_VISIBLE_CONTENT`.
+      * :func:`terminal_safe` left nothing behind at all — *raw* was
+        empty, or every character in it was control/escape and got
+        stripped.  Reported as :data:`_NO_PRINTABLE_TEXT`.
+
+    :func:`visible_width` — not ``str.strip()`` truthiness alone — is the
+    discriminator, because it is the same terminal-cell metric this
+    module already trusts for wrap and clip decisions; a string can be
+    non-empty and non-whitespace under ``.strip()`` while still occupying
+    zero cells (combining marks, variation selectors).
 
     Callers that treat an empty *raw* as a deliberate, meaningful choice
     (e.g. ``/plan ""`` clearing a plan) must check that case themselves
@@ -117,7 +134,7 @@ def visible_text(raw: str) -> str:
     any other invisible text, not passed through blank.
     """
     safe = terminal_safe(raw)
-    if safe.strip():
+    if visible_width(safe.strip()) > 0:
         return safe
     if not safe:
         return _NO_PRINTABLE_TEXT

@@ -481,6 +481,31 @@ class TestFormatTalkEcho:
         assert _NO_PRINTABLE_TEXT not in result
         assert _NO_VISIBLE_CONTENT in result
 
+    def test_combining_marks_only_message_renders_distinct_fallback(
+        self,
+    ) -> None:
+        # Three bare combining acute accents, no base character.  Combining
+        # marks (Unicode category Mn/Mc/Me) are str.isprintable() == True, so
+        # terminal_safe leaves them untouched, and they are not whitespace,
+        # so .strip() wouldn't remove them either — a naive truthiness check
+        # on the stripped string would wrongly call this visible content. It
+        # occupies zero terminal cells (visible_width == 0): no base glyph to
+        # attach to.
+        result = format_talk_echo("Plan:", "́́́")
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT in result
+
+    def test_variation_selector_only_message_renders_distinct_fallback(
+        self,
+    ) -> None:
+        # A bare variation selector (U+FE0F, VARIATION SELECTOR-16) modifies
+        # the presentation of a preceding base character; alone it renders
+        # nothing and occupies zero terminal cells, but it is printable and
+        # not whitespace.
+        result = format_talk_echo("Plan:", "️")
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT in result
+
     def test_empty_message_stays_blank(self) -> None:
         # An empty message is a deliberate "nothing to say" (e.g. clearing a
         # plan via /plan ""), not a sanitization failure — it must not be
