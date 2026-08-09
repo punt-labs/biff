@@ -1,3 +1,10 @@
 {
-  "ignores": [".beads/", ".claude/", ".punt-labs/quarry/captures/", ".tmp/", ".venv/"]
+  "ignores": [
+    ".beads/",
+    ".claude/",
+    ".punt-labs/ethos/",
+    ".punt-labs/quarry/captures/",
+    ".tmp/",
+    ".venv/"
+  ]
 }
