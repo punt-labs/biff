@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-08-09T00:00:00+00:00",
+  "probcli_version": "1.15.1-final",
+  "setsize": 2,
+  "ok": true,
+  "checks": [
+    {
+      "name": "fuzz_type_check",
+      "status": "passed",
+      "detail": "fuzz -t claude-code-biff.tex OK"
+    },
+    {
+      "name": "model_check_bounded",
+      "status": "passed",
+      "detail": "probcli -mc 40000 -p DEFAULT_SETSIZE 2: 40000 states checked (21.1% of total 186734 discovered), 510942 transitions, 0 invariant violations found. Bounded, not exhaustive -- see notes."
+    },
+    {
+      "name": "ctl_om9_no_cross_identity_wipe_full_spec",
+      "status": "incomplete",
+      "formula": "AG({planWiped = zfalse})",
+      "detail": "Exhaustive CTL closure against the full spec (11 given types, 26 operations) did not complete within 280s wall time at DEFAULT_SETSIZE 2 or 3 -- exceeded 300,000 discovered states and still climbing. This is a scale characteristic of the base+biff combined lifecycle model, not specific to the planSet indexing change. See claude-code-biff-om9-globalwipe.report.json for the exhaustively-verified before/after pair on the formal projection harness."
+    },
+    {
+      "name": "ctl_om9_no_cross_identity_wipe_minimal_harness",
+      "status": "passed",
+      "formula": "AG({planWiped = zfalse})",
+      "detail": "Verified TRUE, exhaustively, over 9 total reachable states in under 30ms, against a harness identical to claude-code-biff-om9-globalwipe.tex except StartSession's postcondition restored to this file's own override-based fix. The corresponding pre-fix variant (claude-code-biff-om9-globalwipe.tex itself) proves the formula FALSE with the biff-om9 counterexample -- see its own .report.json."
+    }
+  ],
+  "operations": [
+    { "name": "StartSession", "covered": true },
+    { "name": "SubmitPrompt", "covered": true },
+    { "name": "RejectPrompt", "covered": true },
+    { "name": "BeginToolCall", "covered": true },
+    { "name": "PreToolHookAllow", "covered": true },
+    { "name": "PreToolHookDeny", "covered": true },
+    { "name": "PreToolHookEscalate", "covered": true },
+    { "name": "GrantPermission", "covered": true },
+    { "name": "DenyPermission", "covered": true },
+    { "name": "CompleteToolSuccess", "covered": true },
+    { "name": "CompleteToolFailure", "covered": true },
+    { "name": "SetPlanManual", "covered": true },
+    { "name": "SetPlanAuto", "covered": true },
+    { "name": "ReceiveMessage", "covered": true },
+    { "name": "ReadMessages", "covered": true },
+    { "name": "StartTalk", "covered": true },
+    { "name": "EndTalk", "covered": true },
+    { "name": "PostWall", "covered": true },
+    { "name": "ClearWall", "covered": true },
+    { "name": "SpawnSubagent", "covered": true },
+    { "name": "StartSubagent", "covered": true },
+    { "name": "StopSubagent", "covered": true },
+    { "name": "BeginResponse", "covered": true },
+    { "name": "FinishResponse", "covered": true },
+    { "name": "ForceContinue", "covered": true },
+    { "name": "CompactContext", "covered": true },
+    { "name": "EndSession", "covered": true }
+  ],
+  "notes": [
+    "planSet, planSource re-indexed from flat ZBOOL/finset(PlanSource) to AGENTID-partial-functions per design mission m-2026-08-09-018 Sec 6 (biff-ar1/biff-om9).",
+    "planWiped is a free ghost observer (not a State invariant) checked via explicit CTL formula, matching nats-relay.tex's spuriousTeardown idiom -- see Section 'Identity-Indexed Plan State' for the errata explaining why an earlier draft's pinned-invariant approach was unsound.",
+    "StartSession's precondition was widened from 'sessionPhase = spInactive' to 'sessionPhase = spInactive OR sessionPhase = spEnded', and the sessionId cardinality invariant corrected to exempt spEnded as well as spInactive -- both were necessary base-model errata fixes for a second session's StartSession to be reachable at all (EndSession was previously unfireable: its own postcondition sessionId' = empty directly contradicted the un-corrected invariant 'sessionPhase =/= spInactive => #sessionId = 1' at spEnded).",
+    "StartSubagent added (design Sec 6, optional-but-recommended), formalizing the SubagentStart hook capture for in-process subagents."
+  ]
+}

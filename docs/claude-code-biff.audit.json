@@ -1,0 +1,76 @@
+{
+  "specification": "docs/claude-code-biff.tex",
+  "testDirectory": "",
+  "timestamp": "2026-08-09T00:00:00+00:00",
+  "summary": {
+    "covered": 7,
+    "total": 7,
+    "percentage": 100
+  },
+  "byCategory": {
+    "postcondition": {
+      "covered": 2,
+      "total": 2
+    },
+    "invariant": {
+      "covered": 3,
+      "total": 3
+    },
+    "precondition": {
+      "covered": 2,
+      "total": 2
+    }
+  },
+  "constraints": [
+    {
+      "text": "StartSession clears only identity?'s own plan-marker entry (planSet'(identity) = zfalse), not the whole planSet function.",
+      "category": "postcondition",
+      "source": "StartSession",
+      "coveredBy": "tests/test_hook.py:1428 TestZSpecPlanConsistency.test_session_start_clears_plan_marker",
+      "confidence": "high"
+    },
+    {
+      "text": "StartSession's clear of its own key does not clear a concurrent sibling identity's already-set plan (the direct om9 fix).",
+      "category": "invariant",
+      "source": "StartSession",
+      "coveredBy": "tests/test_hook.py:1441 TestZSpecPlanConsistency.test_session_start_does_not_clear_sibling_identity",
+      "confidence": "high"
+    },
+    {
+      "text": "StartSubagent registers a fresh, unset plan entry for a dispatched subagent's own agent_id, keyed separately from its leader's own hint.",
+      "category": "postcondition",
+      "source": "StartSubagent",
+      "coveredBy": "tests/test_hook.py:467 TestCaptureSubagentHint.test_writes_agent_hint_from_payload; tests/test_hook.py:491 TestCaptureSubagentHint.test_does_not_overwrite_leader_hint",
+      "confidence": "high"
+    },
+    {
+      "text": "SubagentStart with no agent_id present on the payload is a no-op (no spurious plan-entry registration).",
+      "category": "precondition",
+      "source": "StartSubagent",
+      "coveredBy": "tests/test_hook.py:482 TestCaptureSubagentHint.test_no_agent_id_is_noop",
+      "confidence": "high"
+    },
+    {
+      "text": "PreToolHookAllow/PreToolHookDeny: the gate hard-denies Edit/Write when the (mocked, identity-blind) plan marker is unset, and allows when set.",
+      "category": "precondition",
+      "source": "PreToolHookAllow, PreToolHookDeny",
+      "coveredBy": "tests/test_hook.py:1349 TestHandlePreToolUse.test_plan_missing_denies_with_plan_instruction; tests/test_hook.py:1358 TestHandlePreToolUse.test_plan_present_allows",
+      "confidence": "medium"
+    },
+    {
+      "text": "PreToolUse gate fails closed (denies) when reading the plan marker raises, rather than silently allowing.",
+      "category": "invariant",
+      "source": "PreToolHookAllow, PreToolHookDeny",
+      "coveredBy": "tests/test_hook.py:1389 TestPreToolUseFailsClosed.test_marker_read_error_emits_deny",
+      "confidence": "high"
+    },
+    {
+      "text": "PreToolHookAllow's core om9-fix guard -- identity? IN dom planSet AND planSet(identity?) = ztrue -- is checked against THAT SPECIFIC identity, not any identity's plan marker present in the same worktree. Without this test, the existing gate test helper (_gate_mocks in tests/test_hook.py:1270) mocks has_plan_marker with a blanket return_value=plan regardless of the identity argument, so no test would distinguish 'my own identity has a plan' from 'some other identity sharing this worktree has a plan, but I do not.'",
+      "category": "invariant",
+      "source": "PreToolHookAllow",
+      "coveredBy": "tests/test_hook.py:1376 TestHandlePreToolUse.test_other_identity_plan_does_not_satisfy_own_gate",
+      "confidence": "high"
+    }
+  ],
+  "uncovered": []
+}

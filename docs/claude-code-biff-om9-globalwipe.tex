@@ -1,0 +1,301 @@
+%
+% claude-code-biff-om9-globalwipe.tex
+%
+% FROZEN BIFF-OM9 COUNTEREXAMPLE HARNESS --- DO NOT EDIT except in
+% lockstep with docs/claude-code-biff.tex.
+%
+% This is NOT a copy of the full claude-code-biff.tex with one schema
+% changed (the pattern used by docs/nats-relay-xko-isconnected.tex).  The
+% full spec's state space (11 given types: TOOLNAME, TOOLINPUT,
+% TOOLOUTPUT, PROMPT, RESPONSE, AGENTID, SESSIONID, CONTEXTCHUNK, USERID,
+% MSGID, WALLTEXT, and 26 operations spanning the entire base Claude Code
+% tool-call lifecycle) is combinatorially too large for probcli's
+% reachable-state search to close inside any tractable bound at
+% DEFAULT_SETSIZE=2 --- confirmed empirically: unbounded -model_check
+% and -ctlformark runs against the full spec exceeded 280 seconds without
+% concluding, having already discovered 300,000+ states and still
+% climbing.  The state explosion comes entirely from fields (currentTool,
+% context, pendingPrompt/pendingResponse, toolPhase, toolCategory,
+% toolsThisTurn, permMode, activeSubagents, unreadCount, talkActive,
+% wallActive/wallText) that StartSession, SetPlanManual, and EndSession's
+% guards and postconditions never reference except in their own frame
+% conditions --- they are irrelevant to whether the om9 bug is reachable.
+%
+% This harness is the formal PROJECTION of claude-code-biff.tex onto
+% exactly the variables the om9 property depends on: sessionPhase,
+% sessionId, planSet, planSource, planWiped.  Every operation kept here
+% (Init, StartSession, EnterProcessing, SetPlanManual, LeaveProcessing,
+% EndSession) is the corresponding shipped operation with every erased
+% field's frame condition removed and every guard/postcondition on the
+% five kept variables reproduced VERBATIM from claude-code-biff.tex.
+% StartSession here has the SAME pre-fix bug as the shipped spec's fixed
+% StartSession would have if the override were naively type-widened:
+% planSet' = \emptyset, planSource' = \emptyset, instead of the shipped
+% spec's identity?-scoped override.
+%
+% $planWiped$ is deliberately NOT pinned as a State invariant --- an
+% earlier draft of both this file and claude-code-biff.tex did pin it,
+% and that was a genuine error: declaring a ghost as part of State's own
+% invariant makes ProB treat it as a well-formedness FILTER on successor
+% states (any transition whose postcondition would set it to $ztrue$ is
+% silently excluded from the reachable graph, never reported), so
+% ordinary -model_check can never surface the very counterexample the
+% ghost exists to find.  Confirmed empirically: pinning it collapsed this
+% harness's reachable graph from 9 states (with the violation) down to 4
+% states (without it), and reported ``no counterexample found, all
+% states visited'' either way --- a false negative, not a proof.  The
+% correct idiom, matching nats-relay.tex's $spuriousTeardown$ exactly, is
+% a free ghost variable checked by an explicit CTL formula:
+%
+%   probcli claude-code-biff-om9-globalwipe.tex -p DEFAULT_SETSIZE 2 \
+%     -ctlformula "AG({planWiped = zfalse})"
+%
+% MUST report the formula FALSE with a reachable counterexample.
+% Confirmed: CTL counterexample of length 8 found, trace ---
+%   INITIALISATION -> StartSession(A1,S1) -> EnterProcessing ->
+%   SetPlanManual(A1) -> SetPlanManual(A2) -> LeaveProcessing ->
+%   EndSession(A1) -> StartSession(A1,S1) -> planWiped = ztrue.
+% Two identities' plans are registered (A1, A2), A1's own session ends
+% (clearing only A1's own key, correctly), and a second StartSession by
+% A1 wipes EVERYTHING including A2's still-set plan.  That counterexample
+% IS biff-om9 (marker scoping, biff-ar1 lineage, design mission
+% m-2026-08-09-018).  The identical harness with the fix applied (the
+% override-based StartSession, verbatim from the shipped spec) proves
+% the same formula TRUE, exhaustively, in 29ms --- see
+% claude-code-biff.tex \S\ref{sec:om9} for the full before/after pair.
+%
+% Type-check: fuzz -t claude-code-biff-om9-globalwipe.tex
+% Model-check: probcli claude-code-biff-om9-globalwipe.tex \
+%   -p DEFAULT_SETSIZE 2 -ctlformula "AG({planWiped = zfalse})"
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{biff-om9 Counterexample Harness}
+\author{Frozen artifact --- projection of claude-code-biff.tex}
+\date{August 2026}
+\hypersetup{
+  pdftitle={biff-om9 Counterexample Harness},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+% ============================================================
+\section{Basic Types}
+% ============================================================
+
+\begin{zed}
+  [AGENTID, SESSIONID]
+\end{zed}
+
+\begin{zed}
+  SessionPhase ::= spInactive | spIdle | spProcessing | spEnded
+\end{zed}
+
+$spResponding$ (present in the full spec) is erased: no operation kept
+in this harness ever enters or reads it.
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  PlanSource ::= psManual | psAuto
+\end{zed}
+
+% ============================================================
+\section{Global Constants}
+% ============================================================
+
+\begin{axdef}
+  maxPlanEntries : \nat
+  \where
+  maxPlanEntries = 2
+\end{axdef}
+
+The full spec bounds $\#(\dom planSet) \leq maxSubagents + 1$ with
+$maxSubagents = 2$, i.e.\ $3$.  Two is enough to exhibit the om9
+counterexample (one wiped-out identity is sufficient to falsify
+$planWiped = zfalse$) and keeps this harness's own state space minimal;
+raising it to $3$ changes nothing about reachability, only the bound
+itself.
+
+% ============================================================
+\section{State}
+% ============================================================
+
+The projection of claude-code-biff.tex's \texttt{State} onto exactly the
+variables the om9 property depends on.
+
+\begin{schema}{State}
+  sessionId : \finset SESSIONID \\
+  sessionPhase : SessionPhase \\
+  planSet : AGENTID \pfun ZBOOL \\
+  planSource : AGENTID \pfun PlanSource \\
+  planWiped : ZBOOL
+  \where
+  \# sessionId \leq 1 \\
+  sessionPhase \in \{ spInactive, spEnded \} \implies sessionId = \emptyset \\
+  sessionPhase \notin \{ spInactive, spEnded \} \implies \# sessionId = 1 \\
+  \dom planSource \subseteq \dom planSet \\
+  \forall a : \dom planSet @ ( planSet(a) = ztrue \iff a \in \dom planSource ) \\
+  \#(\dom planSet) \leq maxPlanEntries
+  %
+  % planWiped is deliberately NOT pinned here --- see claude-code-biff.tex's
+  % State schema for why (errata: pinning it as a state invariant makes
+  % ProB filter violating successors out of the reachable graph instead
+  % of reporting them, so -model_check can never find the counterexample
+  % the ghost exists to surface).  Checked instead via
+  % `probcli claude-code-biff-om9-globalwipe.tex -ctlformula
+  % "AG({planWiped = zfalse})"`, matching nats-relay.tex's established
+  % idiom for ghost observers.
+\end{schema}
+
+% ============================================================
+\section{Initialization}
+% ============================================================
+
+\begin{schema}{Init}
+  State'
+  \where
+  sessionId' = \emptyset \\
+  sessionPhase' = spInactive \\
+  planSet' = \emptyset \\
+  planSource' = \emptyset \\
+  planWiped' = zfalse
+\end{schema}
+
+% ============================================================
+\section{Operations}
+% ============================================================
+
+\subsection{StartSession --- PRE-FIX VARIANT (the bug)}
+
+Reproduced verbatim from claude-code-biff.tex's \texttt{StartSession},
+minus the erased fields' frame conditions, with the postcondition set to
+the pre-fix global wipe --- see the shipped spec's \texttt{StartSession}
+for the fix (functional override scoped to $identity?$ alone).
+
+\begin{schema}{StartSession}
+  \Delta State \\
+  sid? : SESSIONID \\
+  identity? : AGENTID
+  \where
+  sessionPhase = spInactive \lor sessionPhase = spEnded \\
+  %
+  sessionPhase' = spIdle \\
+  sessionId' = \{ sid? \} \\
+  %
+  % PRE-FIX VARIANT (frozen, biff-om9): wipes EVERY identity's entry,
+  % not just identity?'s own.  This is the bug.
+  %
+  planSet' = \emptyset \\
+  planSource' = \emptyset \\
+  %
+  % Ghost-observer detection, reproduced verbatim from claude-code-biff.tex's
+  % StartSession: planWiped' flips to ztrue iff some identity other than
+  % identity? had planSet(a) = ztrue and no longer does after this operation.
+  %
+  ( ( \exists a : \dom planSet @
+        a \neq identity? \land planSet(a) = ztrue \land
+        ( a \notin \dom planSet' \lor planSet'(a) = zfalse ) )
+    \land planWiped' = ztrue ) \\
+  \lor \\
+  ( ( \lnot ( \exists a : \dom planSet @
+        a \neq identity? \land planSet(a) = ztrue \land
+        ( a \notin \dom planSet' \lor planSet'(a) = zfalse ) ) )
+    \land planWiped' = planWiped )
+\end{schema}
+
+\subsection{EnterProcessing}
+
+Projection of \texttt{SubmitPrompt}: the phase transition that must
+occur before \texttt{SetPlanManual} is enabled, with every erased field
+dropped.
+
+\begin{schema}{EnterProcessing}
+  \Delta State
+  \where
+  sessionPhase = spIdle \\
+  sessionPhase' = spProcessing \\
+  sessionId' = sessionId \\
+  planSet' = planSet \\
+  planSource' = planSource \\
+  planWiped' = planWiped
+\end{schema}
+
+\subsection{SetPlanManual}
+
+Reproduced verbatim from claude-code-biff.tex, minus the erased fields'
+frame conditions.
+
+\begin{schema}{SetPlanManual}
+  \Delta State \\
+  identity? : AGENTID
+  \where
+  sessionPhase = spProcessing \\
+  \#(\dom planSet \cup \{ identity? \}) \leq maxPlanEntries \\
+  %
+  planSet' = planSet \oplus \{ identity? \mapsto ztrue \} \\
+  planSource' = planSource \oplus \{ identity? \mapsto psManual \} \\
+  planWiped' = planWiped \\
+  %
+  sessionPhase' = sessionPhase \\
+  sessionId' = sessionId
+\end{schema}
+
+The explicit domain-cardinality guard is not present on the shipped
+operation (there the bound is carried by the \texttt{State} invariant
+alone, and \texttt{fuzz}/\texttt{probcli} reject successor states that
+violate it without needing a duplicate precondition). It is stated
+explicitly here only to keep this reduced harness's own state space
+small during search; it changes no reachable behaviour, since any
+successor violating the domain bound would already be rejected by the
+\texttt{State} invariant.
+
+\subsection{LeaveProcessing}
+
+Projection of \texttt{BeginResponse} $;$ \texttt{FinishResponse}
+collapsed into one step (both are $\Xi$ on the five kept variables in
+the full spec): the phase transition back to $spIdle$ needed before
+\texttt{EndSession} is enabled.
+
+\begin{schema}{LeaveProcessing}
+  \Delta State
+  \where
+  sessionPhase = spProcessing \\
+  sessionPhase' = spIdle \\
+  sessionId' = sessionId \\
+  planSet' = planSet \\
+  planSource' = planSource \\
+  planWiped' = planWiped
+\end{schema}
+
+\subsection{EndSession}
+
+Reproduced verbatim from claude-code-biff.tex's \emph{fixed}
+\texttt{EndSession} (the symmetric half of the om9 fix is not in
+question here --- only \texttt{StartSession}'s pre-fix behaviour is
+under test), minus the erased fields' frame conditions.
+
+\begin{schema}{EndSession}
+  \Delta State \\
+  identity? : AGENTID
+  \where
+  sessionPhase = spIdle \\
+  %
+  sessionPhase' = spEnded \\
+  sessionId' = \emptyset \\
+  planSet' = planSet \oplus \{ identity? \mapsto zfalse \} \\
+  planSource' = \{ identity? \} \ndres planSource \\
+  planWiped' = planWiped
+\end{schema}
+
+\end{document}

@@ -37,6 +37,7 @@ def _make_resolved(user: str, nats_url: str, tmp_path: Path) -> ResolvedConfig:
         ),
         data_dir=tmp_path / user,
         repo_root=tmp_path,
+        repo_common_root=tmp_path,
     )
 
 

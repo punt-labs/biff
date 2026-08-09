@@ -32,6 +32,7 @@ import yaml
 from biff._stdlib import (
     enabled_marker_path,
     find_git_root,
+    get_repo_common_root,
     get_repo_owner,
     get_repo_slug,
     is_enabled,
@@ -77,6 +78,15 @@ class ResolvedConfig:
 
     config: BiffConfig
     data_dir: Path
+    # Parent of ``git rev-parse --git-common-dir``: the same absolute path from
+    # the main checkout and every linked worktree (biff-ar1/om9 broad-scope
+    # decision).  Distinct from *repo_root* so per-worktree write-through
+    # (config yaml, enabled marker) keeps the nearest-worktree semantics.
+    # Required: ``_load_base_config`` always resolves it (falling back to
+    # ``repo_root`` when ``get_repo_common_root`` returns ``""``), so the
+    # optional-with-``None`` shape had no reachable ``None`` branch and
+    # forced every reader into a dead ``else ""`` guard.
+    repo_common_root: Path
     repo_root: Path | None = None
 
 
@@ -1087,6 +1097,13 @@ class _BaseConfig:
     """Non-identity portion of a resolved config, shared by both entry points."""
 
     repo_root: Path
+    # Parent of ``git rev-parse --git-common-dir``: the same absolute path from
+    # the main checkout and every linked worktree.  Distinct from *repo_root*
+    # (which stays at the nearest worktree top) so per-worktree write-through
+    # (config yaml, ``enabled`` marker) keeps the nearest-worktree semantics
+    # while cross-worktree coordination (wall markers, collision detection)
+    # collapses linked worktrees into one unit (biff-ar1/om9 broad-scope).
+    repo_common_root: Path
     repo_name: str
     data_dir: Path
     relay_url: str | None
@@ -1115,6 +1132,9 @@ def _load_base_config(
     if repo_root is None:
         raise SystemExit("Not in a git repository. Run biff from inside a repo.")
 
+    common_str = get_repo_common_root(str(repo_root))
+    repo_common_root = Path(common_str) if common_str else repo_root
+
     cf = _resolve_config_fields(repo_root)
     relay_url_resolved, relay_auth = _apply_demo_relay_default(
         cf.relay_url, cf.relay_auth
@@ -1138,6 +1158,7 @@ def _load_base_config(
 
     return _BaseConfig(
         repo_root=repo_root,
+        repo_common_root=repo_common_root,
         repo_name=repo_name,
         data_dir=data_dir,
         relay_url=relay_url,
@@ -1245,6 +1266,7 @@ def _assemble_config(
         config=config,
         data_dir=base.data_dir,
         repo_root=base.repo_root,
+        repo_common_root=base.repo_common_root,
     )
 
 

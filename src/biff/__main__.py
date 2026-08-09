@@ -1274,6 +1274,7 @@ def _create_mcp_server(
         unread_path=UNREAD_DIR / f"{find_session_key()}.json",
         dormant=dormant,
         repo_root=resolved.repo_root,
+        repo_common_root=resolved.repo_common_root,
     )
     return create_server(state)
 

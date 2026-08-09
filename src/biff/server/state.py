@@ -44,6 +44,15 @@ class ServerState:
 
     config: BiffConfig
     relay: Relay
+    # Parent of ``git rev-parse --git-common-dir``: the same absolute path from
+    # the main checkout and every linked worktree.  Used for cross-worktree
+    # coordination (wall marker path, ``write_active_session`` third line so
+    # ``_detect_collisions`` matches across linked worktrees) — the per-worktree
+    # ``repo_root`` stays as-is for write-through to per-worktree files
+    # (biff-ar1/om9 broad-scope, DES-054).  Required: ``create_state`` resolves
+    # ``None`` inputs to ``repo_root`` (matching the loader's fallback), so the
+    # field's runtime type is always ``Path`` and every reader is unconditional.
+    repo_common_root: Path
     activity: ActivityTracker = field(default_factory=ActivityTracker)
     display_queue: DisplayQueue = field(default_factory=DisplayQueue)
     tty: str = ""
@@ -112,6 +121,7 @@ def create_state(
     pwd: str | None = None,
     dormant: bool = False,
     repo_root: Path | None = None,
+    repo_common_root: Path | None = None,
     org_repos: frozenset[str] | None = None,
     companion: CompanionSession | None = None,
 ) -> ServerState:
@@ -142,9 +152,15 @@ def create_state(
             )
         else:
             relay = LocalRelay(data_dir=data_dir)
+    # Loader mirrors this fallback: ``get_repo_common_root == ""`` -> ``repo_root``.
+    # A ``None`` from a test that never threaded the common root routes markers
+    # through the shared ``hints/default`` bucket via ``Path("")``, matching the
+    # fail-open contract in DES-054.
+    resolved_common = repo_common_root or repo_root or Path()
     return ServerState(
         config=config,
         relay=relay,
+        repo_common_root=resolved_common,
         tty=tty or generate_tty(),
         hostname=hostname or get_hostname(),
         pwd=pwd or get_pwd(),

@@ -49,6 +49,7 @@ _RESOLVED = ResolvedConfig(
     config=BiffConfig(user="kai", repo_name="myrepo"),
     data_dir=Path("/tmp/biff/myrepo"),
     repo_root=Path("/proj/myrepo"),
+    repo_common_root=Path("/proj/myrepo"),
 )
 
 

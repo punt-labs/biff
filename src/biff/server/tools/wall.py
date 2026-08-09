@@ -180,10 +180,17 @@ async def broadcast_wall_to_repos(
 
 
 def _update_wall_marker(state: ServerState, wall: WallPost | None) -> None:
-    """Write or clear the wall marker for SessionStart hooks."""
+    """Write or clear the wall marker for SessionStart hooks.
+
+    Uses ``state.repo_common_root`` (not ``state.repo_root``) so a
+    ``/wall`` from a linked worktree is discoverable by SessionStart in
+    every linked worktree of the same repo -- the marker path hashes on
+    this string, and the hook side already reads the common-root hash
+    via ``_hint_dir(data)`` (biff-ar1/om9 broad-scope, DES-054).
+    """
     from biff.markers import clear_wall_marker, write_wall_marker  # noqa: PLC0415
 
-    worktree = str(state.repo_root) if state.repo_root else ""
+    worktree = str(state.repo_common_root)
     if wall is not None:
         write_wall_marker(worktree, wall.text, wall.expires_at)
     else:

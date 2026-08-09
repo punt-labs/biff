@@ -173,7 +173,61 @@ def _has_active_session() -> bool:
     return any(f.is_file() for f in adir.iterdir())
 
 
-def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  # noqa: ARG001
+def _resolve_identity(data: dict[str, object]) -> str | None:
+    """Resolve the caller's preferred plan-gate identity from a hook payload.
+
+    Prefers ``agent_id`` over ``session_id`` when both are present: an
+    in-process dispatched subagent shares its leader's OS ``claude``
+    process (and therefore the leader's ``session_id`` fallback via
+    ``SessionHint``), but Claude Code delivers the subagent's *own*
+    ``agent_id`` on its tool-call payloads, distinct from the leader's
+    top-level ``session_id`` (biff-ar1/om9 design §3b).  ``None`` when
+    neither is present — headless/CI/SDK contexts with no Claude session
+    at all — and the marker degrades to the shared, unscoped bucket.
+    """
+    for key in ("agent_id", "session_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
+    """Return this caller's own identities in gate-read preference order.
+
+    The gate's *write* path is scoped to a single identity — the caller's
+    preferred one from :func:`_resolve_identity`, so a ``SessionStart``
+    can never wipe a sibling's marker (om9's core invariant). The *read*
+    path, in contrast, walks a preference list: for a dispatched
+    in-process subagent whose ``Bash``-invoked ``biff plan`` wrote under
+    the leader's ``session_id`` (no channel today for a subagent's
+    ``Bash`` tool to learn its own ``agent_id``), a subsequent
+    ``PreToolUse`` payload's ``agent_id`` alone would find no marker and
+    strand the subagent's edits (design §3b RISK-2). Reading
+    ``agent_id`` first and ``session_id`` second is *this caller's own*
+    identity ladder, never a sibling's — the fallback closes RISK-2
+    without weakening om9 (DES-054 "Amendment: two-key fallback").
+    ``None`` (the shared bucket) is included as the terminal so
+    headless/CI/SDK writes remain visible.
+    """
+    candidates: list[str | None] = []
+    for key in ("agent_id", "session_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            candidates.append(value)
+    if None not in candidates:
+        candidates.append(None)
+    return tuple(candidates)
+
+
+def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
+    """True when *root* has a plan marker for *any* identity in the list."""
+    from biff.markers import has_plan_marker  # noqa: PLC0415
+
+    return any(has_plan_marker(root, identity) for identity in identities)
+
+
+def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
     """Hard-gate Edit/Write on a set plan.
 
     Returns a ``permissionDecision: "deny"`` response that blocks the
@@ -188,6 +242,15 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
     which blocks the edit (proven exhaustively with ProB — the model is
     the authority the code obeys).
 
+    Identity resolution reads a preference ladder — ``agent_id`` first,
+    ``session_id`` second — of *this caller's own* identities: a
+    dispatched subagent's ``Bash``-invoked ``biff plan`` writes under the
+    leader's ``session_id`` (no channel today for a subagent's ``Bash``
+    to learn its own ``agent_id``), so an ``agent_id``-only read would
+    permanently deny every subagent edit. Never any-identity-in-worktree
+    — a sibling session's marker never satisfies this caller's gate; the
+    fallback closes DES-054 RISK-2 without weakening om9's scoping.
+
     One state allows gracefully rather than deny, because a hard block
     there would strand the agent: no active biff session, where the gate
     has no session state to reason about.
@@ -195,9 +258,8 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:  #
     if not _has_active_session():
         return None
 
-    from biff.markers import has_plan_marker  # noqa: PLC0415
-
-    if not has_plan_marker(_get_worktree_root()):
+    root = _repo_common_root(data)
+    if not _has_any_plan_marker(root, _identity_candidates(data)):
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
             "Run /plan <what you're working on>, then retry the edit."
@@ -315,7 +377,7 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
     # Check if a wall is already active to avoid redundant suggestions.
     from biff.markers import read_wall_marker  # noqa: PLC0415
 
-    wall_active = read_wall_marker(_get_worktree_root()) is not None
+    wall_active = read_wall_marker(_repo_common_root(data)) is not None
 
     parts: list[str] = []
 
@@ -345,7 +407,7 @@ def _get_git_branch() -> str:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except (FileNotFoundError, TimeoutError, OSError):
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
     return ""
 
@@ -369,39 +431,44 @@ def _expand_branch_plan(branch: str) -> str:
     return f"→ {branch}"
 
 
-def _get_worktree_root() -> str:
-    """Return the git worktree root path, or empty string on failure."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (FileNotFoundError, TimeoutError, OSError):
-        pass
-    return ""
+def _repo_common_root(data: dict[str, object] | None = None) -> str:
+    """Resolve this repo's common root for the current hook invocation.
+
+    Delegates to :func:`biff._stdlib.get_repo_common_root` — the parent
+    of ``git rev-parse --git-common-dir``, which resolves to the same
+    absolute path from the main checkout and every linked worktree,
+    unlike ``git rev-parse --show-toplevel``'s nearest-worktree view.
+
+    Prefers the hook's own delivered ``cwd`` (``data["cwd"]``) over the
+    ambient process cwd when *data* is given: a dispatched subagent's
+    hook subprocess does not always inherit its own assigned worktree as
+    its ambient cwd, even when its own shell commands do (biff-ar1's
+    biff-if2 manifestation, design §2b/§3a).  With no *data* (a git hook,
+    which never receives a Claude Code payload), resolves against the
+    process's own cwd, which for a git hook subprocess is always correct.
+    """
+    from biff._stdlib import get_repo_common_root  # noqa: PLC0415
+
+    cwd = data.get("cwd") if data else None
+    return get_repo_common_root(cwd if isinstance(cwd, str) and cwd else None)
 
 
-def _hint_dir() -> pathlib.Path:
-    """Worktree-scoped hint directory: ``~/.punt-labs/biff/hints/{hash}/``.
+def _hint_dir(data: dict[str, object] | None = None) -> pathlib.Path:
+    """Repo-scoped hint directory: ``~/.punt-labs/biff/hints/{hash}/``.
 
-    Each git worktree gets its own hint directory so multiple sessions
-    in different worktrees don't race on shared hint files.  Sessions
-    in the same worktree share a hint directory — the coordination
-    contract requires worktree isolation for concurrent sessions.
+    Every linked worktree of a repo shares one hint directory (keyed on
+    the repo-common-root, not the nearest worktree toplevel) — a repo and
+    its worktrees are one coordination unit, not isolated islands
+    (biff-ar1/om9 design, operator-ratified broad-scope decision).
     """
     from biff.markers import hint_dir as _markers_hint_dir  # noqa: PLC0415
 
-    return _markers_hint_dir(_get_worktree_root())
+    return _markers_hint_dir(_repo_common_root(data))
 
 
-def _plan_hint_path() -> pathlib.Path:
-    """Worktree-scoped plan hint file path."""
-    return _hint_dir() / "plan-hint"
+def _plan_hint_path(data: dict[str, object] | None = None) -> pathlib.Path:
+    """Repo-scoped plan hint file path."""
+    return _hint_dir(data) / "plan-hint"
 
 
 def handle_post_checkout(branch_flag: str) -> str | None:
@@ -428,13 +495,13 @@ def handle_post_checkout(branch_flag: str) -> str | None:
     return hint or None
 
 
-def check_plan_hint() -> str | None:
+def check_plan_hint(data: dict[str, object] | None = None) -> str | None:
     """Check for a plan hint written by a git hook.
 
     Reads and deletes ``~/.punt-labs/biff/plan-hint``.  Returns an
     ``additionalContext`` string, or ``None`` if no hint exists.
     """
-    hint_path = _plan_hint_path()
+    hint_path = _plan_hint_path(data)
     if not hint_path.exists():
         return None
     try:
@@ -467,7 +534,7 @@ def _get_commit_subject() -> str:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except (FileNotFoundError, TimeoutError, OSError):
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
     return ""
 
@@ -491,9 +558,9 @@ def handle_post_commit() -> str | None:
     return hint
 
 
-def _wall_hint_path() -> pathlib.Path:
-    """Worktree-scoped wall hint file path."""
-    return _hint_dir() / "wall-hint"
+def _wall_hint_path(data: dict[str, object] | None = None) -> pathlib.Path:
+    """Repo-scoped wall hint file path."""
+    return _hint_dir(data) / "wall-hint"
 
 
 def _read_pre_push_refs() -> list[str]:
@@ -525,13 +592,13 @@ def handle_pre_push(ref_lines: list[str]) -> str | None:
     return None
 
 
-def check_wall_hint() -> str | None:
+def check_wall_hint(data: dict[str, object] | None = None) -> str | None:
     """Check for a wall hint written by a git hook.
 
     Reads and deletes ``~/.punt-labs/biff/wall-hint``.  Returns an
     ``additionalContext`` string, or ``None`` if no hint exists.
     """
-    hint_path = _wall_hint_path()
+    hint_path = _wall_hint_path(data)
     if not hint_path.exists():
         return None
     try:
@@ -545,12 +612,20 @@ def check_wall_hint() -> str | None:
     )
 
 
-def _detect_collisions() -> list[str]:
-    """Find other active sessions in the same worktree.
+def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
+    """Find other active sessions in the same repo (main checkout or any worktree).
 
     Reads ``~/.punt-labs/biff/active/`` files and returns session keys whose
     repo_name matches AND whose worktree_root matches (or is absent,
-    which conservatively counts as a collision).
+    which conservatively counts as a collision).  ``worktree_root``
+    comparison is a plain string match — the *current* side is now the
+    repo-common-root, so two sessions in *different* linked worktrees of
+    the same repo are treated as one coordination unit, matching
+    ``_hint_dir()``'s scope (operator-ratified broad-scope decision,
+    biff-ar1/om9).  A stored row from before this change (which recorded
+    the nearest worktree toplevel, not the common root) legitimately
+    stops matching for a worktree session specifically — a known, narrower
+    residual gap tracked alongside the wall-marker one in DESIGN.md.
 
     Returns an empty list when there is no git root or no active dir.
     """
@@ -565,7 +640,7 @@ def _detect_collisions() -> list[str]:
     if repo_root is None:
         return []
     current_repo = sanitize_repo_name(get_repo_slug(repo_root) or repo_root.name)
-    current_worktree = _get_worktree_root()
+    current_worktree = _repo_common_root(data)
 
     adir = active_dir()
     if not adir.is_dir():
@@ -629,19 +704,25 @@ def _capture_session_hint(data: dict[str, object]) -> None:
         )
 
 
-def handle_session_start() -> str:
+def handle_session_start(data: dict[str, object] | None = None) -> str:
     """Build SessionStart(startup) additionalContext.
 
     Always returns context — at minimum, a /tty nudge.
     Reads the git branch and suggests /plan with auto source.
-    Clears the stale plan marker so the PreToolUse gate starts fresh —
-    a new session inherits no plan (Z ``StartSession``:
-    ``planSet' = zfalse``).
+    Clears *this session's own* stale plan marker so the PreToolUse gate
+    starts fresh for it — a new session inherits no plan (Z
+    ``StartSession``: ``planSet'(identity) = zfalse``, scoped to the
+    starting session's own key only).  A concurrent sibling session's
+    marker, keyed under its own identity, is untouched — the direct fix
+    for om9's core mechanism ("one session's start wipes every session's
+    marker").
     """
     from biff.markers import clear_plan_marker, read_wall_marker  # noqa: PLC0415
 
-    worktree = _get_worktree_root()
-    clear_plan_marker(worktree)
+    data = data or {}
+    worktree = _repo_common_root(data)
+    identity = _resolve_identity(data)
+    clear_plan_marker(worktree, identity)
 
     parts: list[str] = [
         "Biff session starting.",
@@ -691,18 +772,18 @@ def handle_session_resume() -> str:
     return "Biff session resumed. Check /read for unread messages."
 
 
-def handle_pre_compact() -> str:
+def handle_pre_compact(data: dict[str, object] | None = None) -> str:
     """Build PreCompact additionalContext.
 
     Injects the current plan into additionalContext so the model
     retains awareness of what it was working on after compaction.
     """
-    from biff._stdlib import find_git_root  # noqa: PLC0415
     from biff.markers import read_plan_marker  # noqa: PLC0415
 
-    root = find_git_root()
-    if root is not None:
-        plan_text = read_plan_marker(str(root))
+    data = data or {}
+    root = _repo_common_root(data)
+    if root:
+        plan_text = read_plan_marker(root, _resolve_identity(data))
         if plan_text:
             return f"Current biff plan: {plan_text}. Check /read for unread messages."
     return "Biff session resumed after compaction. Check /read for unread messages."
@@ -800,7 +881,7 @@ def cc_post_bash() -> None:
     if not _is_biff_enabled():
         return
     data = _read_hook_input()
-    result = handle_post_bash(data) or check_plan_hint() or check_wall_hint()
+    result = handle_post_bash(data) or check_plan_hint(data) or check_wall_hint(data)
     if result is not None:
         _emit(_post_tool_use_context(result))
 
@@ -821,8 +902,9 @@ def cc_session_start() -> None:
     """SessionStart(startup) — auto-tty, plan from branch, check unread."""
     if not _is_biff_enabled():
         return
-    _capture_session_hint(_read_hook_input())
-    result = handle_session_start()
+    data = _read_hook_input()
+    _capture_session_hint(data)
+    result = handle_session_start(data)
     _emit(_hook_context("SessionStart", result))
 
 
@@ -849,7 +931,7 @@ def cc_pre_compact() -> None:
     """PreCompact — inject plan into additionalContext before compaction."""
     if not _is_biff_enabled():
         return
-    result = handle_pre_compact()
+    result = handle_pre_compact(_read_hook_input())
     _emit(_hook_context("PreCompact", result))
 
 

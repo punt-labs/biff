@@ -153,7 +153,11 @@ class SessionHint:
         return digest.hexdigest()
 
     def write(self) -> None:
-        """Persist this hint to ``sessions/{claude_pid}.json`` (best-effort).
+        """Persist this hint to ``sessions/{claude_pid}.json`` (best-effort)."""
+        self._write_to(_hint_path(self.claude_pid))
+
+    def _write_to(self, path: Path) -> None:
+        """Atomically write this hint's JSON payload to *path* (best-effort).
 
         The durable routing id is owner-private: the directory is chmod'd
         ``0o700`` and the file is created ``0o600`` from its first byte, so a
@@ -163,7 +167,6 @@ class SessionHint:
         under the default umask) and ``O_NOFOLLOW`` refuses a symlink at the
         path.  The atomic temp-then-replace is preserved.
         """
-        path = _hint_path(self.claude_pid)
         sessions_dir = path.parent
         sessions_dir.mkdir(parents=True, exist_ok=True)
         sessions_dir.chmod(0o700)  # umask-independent

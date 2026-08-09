@@ -51,28 +51,21 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         default ``"manual"``.  Auto plans cannot overwrite manual
         plans — the user's intentional plan takes precedence.
         """
+        # Marker write/clear is a thin wrapper around the same shared
+        # function the CLI's `plan` command calls (PL-PA-3) — see
+        # commands/plan.py's `sync_plan_marker` docstring.
+        from biff.commands.plan import sync_plan_marker  # noqa: PLC0415
+
         if source == "auto":
             session = await get_or_create_session(state)
             if session.plan_source == "manual" and session.plan:
                 # Re-write the marker even though the relay plan is unchanged.
                 # SessionStart clears the marker, so auto-plan calls after
                 # a new session starts must restore it.
-                from biff.markers import write_plan_marker  # noqa: PLC0415
-
-                worktree = str(state.repo_root) if state.repo_root else ""
-                write_plan_marker(worktree, session.plan)
+                sync_plan_marker(session.plan)
                 return format_talk_echo("Plan unchanged (manual):", session.plan)
         message = expand_bead_id(message)
         await update_current_session(state, plan=message, plan_source=source)
         await refresh_read_messages(mcp, state)
-
-        # Write/clear plan marker for PreToolUse gate (biff-vq5).
-        from biff.markers import clear_plan_marker, write_plan_marker  # noqa: PLC0415
-
-        worktree = str(state.repo_root) if state.repo_root else ""
-        if message:
-            write_plan_marker(worktree, message)
-        else:
-            clear_plan_marker(worktree)
-
+        sync_plan_marker(message)
         return format_talk_echo("Plan:", message)

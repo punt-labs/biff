@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-08-09T00:00:00+00:00",
+  "probcli_version": "1.15.1-final",
+  "setsize": 2,
+  "ok": false,
+  "note": "This report documents the PRE-FIX (buggy) variant of the biff-om9 counterexample harness. The formula is expected to be FALSE here -- that is the point of the artifact. See claude-code-biff.tex's own StartSession (the fixed, override-based postcondition) for the corresponding TRUE result, verified against the identical harness with only that one schema's postcondition restored to the shipped fix.",
+  "checks": [
+    {
+      "name": "fuzz_type_check",
+      "status": "passed",
+      "detail": "fuzz -t claude-code-biff-om9-globalwipe.tex OK"
+    },
+    {
+      "name": "ctl_om9_no_cross_identity_wipe",
+      "status": "failed",
+      "formula": "AG({planWiped = zfalse})",
+      "result": "FALSE",
+      "detail": "CTL counterexample of length 8 found (9-state trace). Two identities register plans (SetPlanManual for AGENTID1, then AGENTID2), AGENTID1's own session ends (correctly clearing only its own key), then AGENTID1's next StartSession fires the pre-fix global wipe (planSet' = empty), clearing AGENTID2's still-set plan too. That counterexample IS biff-om9.",
+      "trace": [
+        "SETUP_CONSTANTS(maxPlanEntries=2)",
+        "INITIALISATION(planSet={},planSource={},planWiped=zfalse,sessionId={},sessionPhase=spInactive)",
+        "StartSession(AGENTID1,SESSIONID1)",
+        "EnterProcessing(sessionPhase=spProcessing)",
+        "SetPlanManual(AGENTID1)",
+        "SetPlanManual(AGENTID2)",
+        "LeaveProcessing(sessionPhase=spIdle)",
+        "EndSession(AGENTID1)",
+        "StartSession(AGENTID1,SESSIONID1)  -- planWiped becomes ztrue here"
+      ]
+    }
+  ],
+  "notes": [
+    "planWiped is NOT pinned as a State invariant -- confirmed empirically that pinning it makes ProB filter violating successors out of the reachable graph (a false-negative 'no counterexample, all states visited') rather than report them. It is checked exclusively via the explicit CTL formula above, matching nats-relay.tex's spuriousTeardown idiom.",
+    "This harness is a formal projection of claude-code-biff.tex onto {sessionPhase, sessionId, planSet, planSource, planWiped} -- the full combined base-Claude-Code+biff spec (11 given types, 26 operations) is too large for probcli to close exhaustively within a practical time budget; see claude-code-biff.tex Section 'Identity-Indexed Plan State' for the full account.",
+    "The identical harness with the fix applied (override-based StartSession, verbatim from the shipped spec) proves the same CTL formula TRUE, exhaustively, over 9 total reachable states in under 30ms."
+  ]
+}

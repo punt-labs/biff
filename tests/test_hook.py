@@ -39,10 +39,10 @@ _FAKE_HINT_HASH = hashlib.sha256(_FAKE_WORKTREE.encode()).hexdigest()[:16]
 
 
 def _hint_mocks(tmp_path: Path):
-    """Context manager stack mocking Path.home and worktree root."""
+    """Context manager stack mocking Path.home and repo-common-root."""
     return (
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+        patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
     )
 
 
@@ -461,6 +461,32 @@ class TestCaptureSessionHint:
             _capture_session_hint({"session_id": "sid", "source": "startup"})
 
 
+class TestResolveIdentity:
+    """_resolve_identity prefers agent_id over session_id (design §3b)."""
+
+    def test_agent_id_preferred_over_session_id(self) -> None:
+        from biff.hook import _resolve_identity
+
+        result = _resolve_identity({"agent_id": "agent-1", "session_id": "leader-sid"})
+        assert result == "agent-1"
+
+    def test_falls_back_to_session_id(self) -> None:
+        from biff.hook import _resolve_identity
+
+        assert _resolve_identity({"session_id": "leader-sid"}) == "leader-sid"
+
+    def test_neither_present_returns_none(self) -> None:
+        from biff.hook import _resolve_identity
+
+        assert _resolve_identity({}) is None
+
+    def test_empty_agent_id_falls_back(self) -> None:
+        from biff.hook import _resolve_identity
+
+        result = _resolve_identity({"agent_id": "", "session_id": "leader-sid"})
+        assert result == "leader-sid"
+
+
 # ── handle_pre_compact ─────────────────────────────────────────────
 
 
@@ -473,24 +499,33 @@ class TestHandlePreCompact:
 
         m_home, m_wt = _hint_mocks(tmp_path)
         with m_home, m_wt:
-            write_plan_marker(_FAKE_WORKTREE, "biff-sgl: PreCompact hook")
-        with (
-            patch("biff._stdlib.find_git_root", return_value=Path(_FAKE_WORKTREE)),
-            m_home,
-        ):
-            result = handle_pre_compact()
+            write_plan_marker(_FAKE_WORKTREE, "sid-1", "biff-sgl: PreCompact hook")
+            result = handle_pre_compact({"session_id": "sid-1"})
         assert "Current biff plan: biff-sgl: PreCompact hook" in result
         assert "/read" in result
 
     def test_without_plan_marker(self) -> None:
         """When no plan marker, returns generic compaction message."""
-        with (
-            patch("biff._stdlib.find_git_root", return_value=Path("/nonexistent")),
-            patch("biff.markers.read_plan_marker", return_value=None),
-        ):
-            result = handle_pre_compact()
+        with patch("biff.hook._repo_common_root", return_value=""):
+            result = handle_pre_compact({"session_id": "sid-1"})
         assert "resumed after compaction" in result
         assert "/read" in result
+
+    def test_no_data_returns_generic_message(self) -> None:
+        """Called with no payload at all (defensive default) still works."""
+        with patch("biff.hook._repo_common_root", return_value=""):
+            result = handle_pre_compact()
+        assert "resumed after compaction" in result
+
+    def test_different_identity_sees_no_plan(self, tmp_path: Path) -> None:
+        """PreCompact reads only the CALLING session's own plan marker."""
+        from biff.markers import write_plan_marker
+
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            write_plan_marker(_FAKE_WORKTREE, "sid-1", "sid-1's plan")
+            result = handle_pre_compact({"session_id": "sid-2"})
+        assert "resumed after compaction" in result
 
     def test_no_git_root(self) -> None:
         """When not in a git repo, returns generic compaction message."""
@@ -997,7 +1032,7 @@ class TestWorktreeIsolation:
         # Read from worktree B — should see nothing
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.hook._get_worktree_root", return_value=wt_b),
+            patch("biff.hook._repo_common_root", return_value=wt_b),
         ):
             result = check_plan_hint()
 
@@ -1036,7 +1071,7 @@ def _collision_mocks(
     fake_root = repo_root or tmp_path / "my-repo"
     return (
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("biff.hook._get_worktree_root", return_value=worktree),
+        patch("biff.hook._repo_common_root", return_value=worktree),
         patch("biff._stdlib.find_git_root", return_value=fake_root),
         patch("biff._stdlib.get_repo_slug", return_value=repo_slug),
     )
@@ -1180,7 +1215,7 @@ def _gate_mocks(*, plan: bool):
     """
     return (
         patch("biff.hook._has_active_session", return_value=True),
-        patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+        patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
         patch("biff.markers.has_plan_marker", return_value=plan),
     )
 
@@ -1278,6 +1313,77 @@ class TestHandlePreToolUse:
             handle_pre_tool_use({})
         mock_run.assert_not_called()
 
+    def test_other_identity_plan_does_not_satisfy_own_gate(self) -> None:
+        """The gate denies when only a SIBLING identity has a plan set.
+
+        The om9 fix's central invariant: PreToolHookAllow's guard --
+        ``identity? IN dom planSet AND planSet(identity?) = ztrue`` -- is
+        keyed on THAT SPECIFIC identity, not any identity's plan marker
+        present in the same worktree.  The DES-054 two-key fallback
+        (``agent_id`` -> ``session_id`` -> ``None``) is *this caller's
+        own* identity ladder, never a sibling's: a sibling ``agent-sibling``
+        having a plan must not satisfy ``agent-me``'s gate when neither
+        ``agent-me`` (agent_id) nor its leader (session_id) nor the shared
+        bucket has a plan of its own.
+        """
+        my_agent = "agent-me"
+        my_session = "leader-sid"
+        other_identity = "agent-sibling"
+
+        def _plan_by_identity(_root: str, identity: str | None) -> bool:
+            return identity == other_identity
+
+        with (
+            patch("biff.hook._has_active_session", return_value=True),
+            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+            patch(
+                "biff.markers.has_plan_marker", side_effect=_plan_by_identity
+            ) as mock_has,
+        ):
+            result = handle_pre_tool_use(
+                {"agent_id": my_agent, "session_id": my_session}
+            )
+        assert result is not None, "sibling's plan must not satisfy my gate"
+        reason = _deny_reason(result)
+        assert "/plan" in reason
+        # The gate consulted MY own identities (agent -> session -> shared),
+        # in preference order — never the sibling's key.
+        identities_queried = [call.args[1] for call in mock_has.call_args_list]
+        assert identities_queried == [my_agent, my_session, None]
+        assert other_identity not in identities_queried
+
+    def test_session_id_fallback_allows_when_agent_id_has_no_marker(self) -> None:
+        """A dispatched subagent's own edits unblock via the session_id fallback.
+
+        The DES-054 RISK-2 closure: a subagent's ``Bash``-invoked ``biff
+        plan`` can only see the shared ``claude`` PID and therefore only
+        writes under the leader's ``session_id`` (no channel today for a
+        subagent's ``Bash`` tool to learn its own ``agent_id``). Without
+        the fallback, the subagent's own ``PreToolUse`` (whose payload
+        carries the subagent's ``agent_id``) would find no marker under
+        ``agent_id`` and permanently deny every edit. The read path
+        walking ``agent_id`` -> ``session_id`` finds the leader-written
+        marker and allows.
+        """
+        my_agent = "agent-me"
+        my_session = "leader-sid"
+
+        def _plan_by_identity(_root: str, identity: str | None) -> bool:
+            # Only the session_id (leader's) has a marker; my agent_id does not.
+            return identity == my_session
+
+        with (
+            patch("biff.hook._has_active_session", return_value=True),
+            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+            patch("biff.markers.has_plan_marker", side_effect=_plan_by_identity),
+        ):
+            result = handle_pre_tool_use(
+                {"agent_id": my_agent, "session_id": my_session}
+            )
+        assert result is None, (
+            "the session_id fallback must satisfy the gate — DES-054 RISK-2"
+        )
+
 
 class TestPreToolUseFailsClosed:
     """The gate entrypoint denies when it cannot evaluate its condition.
@@ -1294,7 +1400,7 @@ class TestPreToolUseFailsClosed:
             patch("biff.hook._is_biff_enabled", return_value=True),
             patch("biff.hook._read_hook_input", return_value={}),
             patch("biff.hook._has_active_session", return_value=True),
-            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
             patch("biff.markers.has_plan_marker", side_effect=OSError("boom")),
             patch("biff.hook._emit", side_effect=emitted.append),
         ):
@@ -1332,16 +1438,35 @@ class TestZSpecPlanConsistency:
         assert session.plan_source in ("manual", "auto")
 
     def test_session_start_clears_plan_marker(self, tmp_path: Path) -> None:
-        """SessionStart clears stale plan marker (planSet' = zfalse)."""
+        """SessionStart clears its own stale marker (planSet'(identity) = zfalse)."""
         from biff.markers import has_plan_marker, write_plan_marker
 
         m_home, m_wt = _hint_mocks(tmp_path)
         with m_home, m_wt:
-            write_plan_marker(_FAKE_WORKTREE, "stale plan")
-            assert has_plan_marker(_FAKE_WORKTREE)
+            write_plan_marker(_FAKE_WORKTREE, "sid-1", "stale plan")
+            assert has_plan_marker(_FAKE_WORKTREE, "sid-1")
             with patch("biff.hook._get_git_branch", return_value="main"):
-                handle_session_start()
-            assert not has_plan_marker(_FAKE_WORKTREE)
+                handle_session_start({"session_id": "sid-1"})
+            assert not has_plan_marker(_FAKE_WORKTREE, "sid-1")
+
+    def test_session_start_does_not_clear_sibling_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """A concurrent sibling session's marker survives another's SessionStart.
+
+        This is the direct fix for om9's core mechanism: before scoping the
+        marker by identity, every ``SessionStart`` unconditionally cleared
+        the ONE shared marker file, revoking a plan another session's gate
+        was already relying on.
+        """
+        from biff.markers import has_plan_marker, write_plan_marker
+
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            write_plan_marker(_FAKE_WORKTREE, "sid-sibling", "sibling's plan")
+            with patch("biff.hook._get_git_branch", return_value="main"):
+                handle_session_start({"session_id": "sid-new"})
+            assert has_plan_marker(_FAKE_WORKTREE, "sid-sibling")
 
 
 class TestZSpecSessionEndCleanup:
