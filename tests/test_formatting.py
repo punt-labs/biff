@@ -308,6 +308,24 @@ class TestFormatWall:
         longest = max(visible_width(line) for line in result.splitlines())
         assert longest <= 2 * TABLE_WIDTH
 
+    def test_giant_from_tty_renders_bounded(self) -> None:
+        # WallPost.from_tty has no max_length either, and format_wall
+        # concatenates it onto the already-clipped from_user
+        # (``sender += f" ({from_tty})"``) — clipping from_user alone and
+        # then appending an unbounded from_tty defeats the cap just as
+        # completely as an unbounded from_user would (biff-2sw).
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="word " * 100,  # 500 chars — WallPost caps text at 512
+            from_user="kai",
+            from_tty="t" * 10_000,
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall(wall)
+        longest = max(visible_width(line) for line in result.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
+
 
 class TestFormatWallConfirmation:
     """The post-confirmation shown to the poster wraps like the read-back (biff-2sw)."""

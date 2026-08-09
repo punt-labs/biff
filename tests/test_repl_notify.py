@@ -286,3 +286,30 @@ class TestNotifyState:
         lines = state.check(0, wall)
         assert len(lines) == 1
         assert _NO_PRINTABLE_TEXT in lines[0]
+
+    def test_wall_giant_sender_renders_bounded(self) -> None:
+        """A forged 10,000-char sender must not blow up the between-prompt banner.
+
+        Mirrors ``TestFormatWall.test_giant_sender_renders_bounded`` in
+        tests/test_formatting.py — ``_format_wall_banner`` was the third,
+        independently vulnerable call site for the same defect: unlike
+        ``format_wall`` and ``format_wall_status_line``, it was never wired
+        to the ``_MAX_LABEL_WIDTH`` cap, so ``from_user`` fed straight into
+        the wrap-width budget uncapped, collapsing ``width`` toward 1 and
+        exploding a 500-char body into ~400 hard-broken lines, each
+        carrying a 10,000-char indent — ~4,000,000 characters of REPL
+        output between prompts from a single forged sender.
+        """
+        state = NotifyState()
+        wall = WallPost(
+            text="word " * 100,  # 500 chars — WallPost caps text at 512
+            from_user="u" * 10_000,
+            posted_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        lines = state.check(0, wall)
+        assert len(lines) == 1
+        rendered_lines = lines[0].splitlines()
+        assert len(rendered_lines) <= 40
+        longest = max(visible_width(line) for line in rendered_lines)
+        assert longest <= 2 * TABLE_WIDTH

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from biff._formatting import TABLE_WIDTH, visible_width, wrap_cells
-from biff.formatting import format_remaining, terminal_safe, visible_text
+from biff.formatting import format_remaining, sanitized_sender, visible_text
 from biff.models import WallPost
 
 
@@ -42,9 +42,13 @@ class NotifyState:
         wall_key = _wall_key(wall)
         if wall_key and wall_key != self.last_wall_key:
             remaining = format_remaining(wall.expires_at) if wall else ""
-            # Wall fields are remote-controlled; strip terminal escapes before
-            # this line is printed to the REPL between commands (biff-lbj).
-            from_user = terminal_safe(wall.from_user) if wall else ""
+            # Wall fields are remote-controlled; strip terminal escapes and
+            # cap the label length before this line is printed to the REPL
+            # between commands (biff-lbj). ``WallPost.from_user`` has no
+            # ``max_length`` and feeds directly into the wrap-width budget
+            # below — an uncapped sender collapses ``width`` toward 1 and
+            # explodes into one hard-broken line per glyph (biff-2sw).
+            from_user = sanitized_sender(wall.from_user) if wall else ""
             # Wall text can run up to 512 chars (biff-2sw) — a CJK/emoji-heavy
             # post must wrap the same way format_wall/format_wall_status_line
             # already do, and a control-only post must show the same

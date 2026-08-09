@@ -57,6 +57,7 @@ __all__ = [
     "pair_events",
     "parse_duration",
     "sanitize_wall_message",
+    "sanitized_sender",
     "terminal_safe",
     "visible_text",
 ]
@@ -69,6 +70,43 @@ _TALK_WRAP_MIN = 24
 # drive the per-line wrap indent (defense in depth for the O(label x body)
 # amplification — see TalkNotification.from_payload, biff-7g7).
 _MAX_LABEL_WIDTH = 40
+
+
+def _truncate(text: str, width: int) -> str:
+    """Return *text* clipped to *width* terminal cells, ending with an ellipsis.
+
+    Delegates to :func:`biff._formatting.clip_to_width` so labels clip on the
+    same wcwidth cell-width basis as the table primitives and
+    :func:`format_talk_line`'s wrap — a wide glyph (CJK, emoji) at the clip
+    boundary is never undercounted the way code-point ``len()`` would
+    undercount it.
+    """
+    return clip_to_width(text, width)
+
+
+def sanitized_sender(from_user: str, from_tty: str = "") -> str:
+    """Return a wall/talk sender label safe to fold into a wrap-width budget.
+
+    Neutralises *from_user* — and *from_tty*, when given — via
+    :func:`terminal_safe`, composes ``"user (tty)"`` when a tty is present,
+    then clips the WHOLE composed string to :data:`_MAX_LABEL_WIDTH`.
+
+    Neither ``WallPost.from_user`` nor ``WallPost.from_tty`` carries a
+    ``max_length`` on the wire. Clipping only the ``from_user`` piece and
+    then concatenating an unbounded ``from_tty`` after it defeats the cap —
+    the combined label is exactly as unboundable as an uncapped
+    ``from_user`` alone, and collapses a caller's wrap-width budget toward 1
+    the same way (the O(label x body) amplification
+    :func:`format_talk_line` already guards against). Every render site
+    that folds a sender into a header line or a wrap-width budget must clip
+    through this one function rather than reimplement the two-step
+    transform (biff-2sw).
+    """
+    label = terminal_safe(from_user)
+    if from_tty:
+        label = f"{label} ({terminal_safe(from_tty)})"
+    return _truncate(label, _MAX_LABEL_WIDTH)
+
 
 # Wrap budget for free-form text rendered under the standard ROW_PREFIX
 # indent (wall body, the finger Host:/Dir: line).
@@ -443,14 +481,13 @@ def format_wall(wall: WallPost) -> str:
     message was silently dropped.  See :func:`visible_text` for how a
     control-only body is distinguished from a whitespace-only one.
 
-    ``WallPost.from_user`` has no ``max_length``, so the sender is capped at
-    :data:`_MAX_LABEL_WIDTH` the same way :func:`format_talk_line` caps its
+    Neither ``WallPost.from_user`` nor ``WallPost.from_tty`` has a
+    ``max_length``, so the composed sender is capped via
+    :func:`sanitized_sender` the same way :func:`format_talk_line` caps its
     label — otherwise a forged sender renders one unbounded header line.
     """
     remaining = format_remaining(wall.expires_at)
-    sender = _truncate(terminal_safe(wall.from_user), _MAX_LABEL_WIDTH)
-    if wall.from_tty:
-        sender += f" ({terminal_safe(wall.from_tty)})"
+    sender = sanitized_sender(wall.from_user, wall.from_tty)
     text = visible_text(wall.text)
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
@@ -483,15 +520,15 @@ def format_wall_status_line(post: WallPost) -> str:
     embedding raw text on one unbounded line (biff-2sw). Falls back the same
     way on a control-only body.
 
-    ``WallPost.from_user`` has no ``max_length``, so the sender is capped at
-    :data:`_MAX_LABEL_WIDTH` the same way :func:`format_talk_line` caps its
+    ``WallPost.from_user`` has no ``max_length``, so the sender is capped via
+    :func:`sanitized_sender` the same way :func:`format_talk_line` caps its
     label — otherwise a forged sender collapses ``width`` toward 1 and
     explodes the wrap into one hard-broken line per glyph, each carrying a
     sender-sized indent (the same O(label x body) amplification
     :func:`format_talk_line` already guards against).
     """
     remaining = format_remaining(post.expires_at)
-    sender = _truncate(terminal_safe(post.from_user), _MAX_LABEL_WIDTH)
+    sender = sanitized_sender(post.from_user)
     text = visible_text(post.text)
     prefix = f"wall: {sender}: "
     width = max(TABLE_WIDTH - visible_width(prefix), 1)
@@ -559,18 +596,6 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     chunks = wrap_cells(safe_body, width, preserve_whitespace=True) or [""]
     indent = " " * min(visible_width(lead), TABLE_WIDTH)
     return [lead + chunks[0], *(indent + chunk for chunk in chunks[1:])]
-
-
-def _truncate(text: str, width: int) -> str:
-    """Return *text* clipped to *width* terminal cells, ending with an ellipsis.
-
-    Delegates to :func:`biff._formatting.clip_to_width` so labels clip on the
-    same wcwidth cell-width basis as the table primitives and
-    :func:`format_talk_line`'s wrap — a wide glyph (CJK, emoji) at the clip
-    boundary is never undercounted the way code-point ``len()`` would
-    undercount it.
-    """
-    return clip_to_width(text, width)
 
 
 def format_talk_echo(prefix: str, message: str) -> str:
