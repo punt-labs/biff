@@ -380,6 +380,21 @@ def _write_bot_identity_fixture(repo_root: Path, handle: str = "claude") -> None
     )
 
 
+def _write_gitmodules_ethos(repo_root: Path) -> None:
+    """Write ``.gitmodules`` declaring the ``.punt-labs/ethos`` submodule.
+
+    Mirrors what ``git submodule add`` writes, without actually
+    populating ``.punt-labs/ethos`` -- reproduces the exact on-disk shape
+    of an uninitialized submodule (a plain ``git clone``, or
+    ``git worktree add``, neither of which initializes submodules).
+    """
+    (repo_root / ".gitmodules").write_text(
+        '[submodule ".punt-labs/ethos"]\n'
+        "\tpath = .punt-labs/ethos\n"
+        "\turl = git@github.com:punt-labs/team.git\n"
+    )
+
+
 class TestLoadCliConfig:
     """The CLI entry point uses the human-identity chain only."""
 
@@ -629,6 +644,38 @@ class TestLoadCliConfig:
                 load_cli_config(start=repo)
         finally:
             identity_path.chmod(0o644)
+
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_uninitialized_ethos_submodule_falls_back_to_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        """Regression for the live-reproduced gap in this exact worktree.
+
+        ``.gitmodules`` declares the ethos submodule but it was never
+        checked out, so ``.punt-labs/ethos/identities/`` doesn't exist --
+        there is no identity file to find the bot's registration in.
+        Before this fix, that missing directory was folded into
+        "confirmed no bots" and the resolved bot login was trusted
+        outright. It must instead be treated as unverifiable and rejected,
+        exactly like a corrupted identity file.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_gitmodules_ethos(repo)
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.display_name == ""
+        assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_uninitialized_ethos_submodule_exits_when_no_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_gitmodules_ethos(repo)
+        with pytest.raises(SystemExit, match="Cannot confirm"):
+            load_cli_config(start=repo)
 
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_uses_github_login_when_no_matching_bot_identity(
@@ -991,15 +1038,42 @@ class TestReadIdentityYaml:
 
 
 class TestKnownAgentGithubLogins:
-    def test_missing_identities_dir_is_complete_and_silent(
+    def test_missing_identities_dir_and_no_gitmodules_entry_is_complete_and_silent(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """No ethos submodule at all is the common, valid case -- no warning."""
+        """No ethos integration at all is the common, valid case -- no warning.
+
+        Distinct from ``test_declared_but_uninitialized_submodule_is_
+        incomplete_with_warning`` below: both leave
+        ``.punt-labs/ethos/identities/`` missing, but only THIS repo has
+        no ``.gitmodules`` entry declaring the submodule, so the missing
+        directory is trustworthy here.
+        """
         with caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER):
             scan = _known_agent_github_logins(tmp_path)
         assert scan.logins == frozenset()
         assert scan.complete is True
         assert not any(r.levelno == logging.WARNING for r in caplog.records)
+
+    def test_declared_but_uninitialized_submodule_is_incomplete_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reproduces this worktree's exact live state (biff-if2 review).
+
+        ``.gitmodules`` declares the ``.punt-labs/ethos`` submodule, but
+        it was never checked out -- a plain ``git clone`` or
+        ``git worktree add`` (neither initializes submodules) leaves
+        ``.punt-labs/ethos/identities/`` missing, identical on disk to
+        the "no ethos integration" case above. That absence is
+        unverifiable here, not "confirmed no bots": the scan must report
+        itself incomplete rather than silently trusting an empty result.
+        """
+        _write_gitmodules_ethos(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset()
+        assert scan.complete is False
+        assert any("uninitialized submodule" in r.getMessage() for r in caplog.records)
 
     @_SKIP_AS_ROOT
     def test_unreadable_identities_dir_is_incomplete_with_warning(

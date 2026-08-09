@@ -285,10 +285,22 @@ class _AgentLoginScan:
 def _list_identity_yaml_files(identities_dir: Path) -> tuple[Path, ...] | None:
     """Return every ``*.yaml`` file directly under *identities_dir*.
 
-    Returns ``None`` (already logged) when the directory doesn't exist,
-    isn't a directory, or can't be listed. ``None`` here means "this scan
-    cannot be trusted" -- distinct from an empty tuple, which means "this
-    directory genuinely has no identity files."
+    Returns ``None`` (already logged) when the directory exists but isn't
+    a directory or can't be listed (``OSError``, e.g. permission denied).
+    ``None`` here means "this scan cannot be trusted."
+
+    Returns ``()`` when the directory is simply absent
+    (``FileNotFoundError``). Absence alone is ambiguous, not
+    trustworthy: it looks identical whether this repo has no ethos
+    submodule at all, or the ethos submodule is declared in
+    ``.gitmodules`` but was never checked out -- ``git clone`` without
+    ``--recurse-submodules``, or ``git worktree add`` (which never
+    initializes submodules), are the common real-world ways the latter
+    happens (see the org CLAUDE.md "Initial checkout" section). This
+    function has no way to tell those two cases apart from
+    ``identities_dir`` alone; callers that need to must additionally
+    consult ``.gitmodules`` (see :func:`_ethos_submodule_declared`) --
+    an empty tuple here is not, by itself, license to trust the scan.
 
     Uses ``iterdir()``, not ``glob()``: ``Path.glob`` silently skips
     directories it can't scandir (it swallows ``PermissionError``
@@ -296,12 +308,9 @@ def _list_identity_yaml_files(identities_dir: Path) -> tuple[Path, ...] | None:
     "unreadable" back into "empty" -- exactly the silent failure this
     function exists to surface. ``os.stat`` (unlike ``Path.is_dir`` /
     ``exists``) likewise lets ``PermissionError`` propagate instead of
-    folding it into a bare ``False``, distinguishing "no ethos submodule"
-    (``FileNotFoundError``) from "submodule configured but its directory
-    isn't readable" -- a submodule present but never checked out, e.g.
-    ``git clone`` without ``--recurse-submodules``, is the common
-    real-world way the latter shows up (see the org CLAUDE.md "Initial
-    checkout" section).
+    folding it into a bare ``False``, distinguishing "directory absent"
+    (``FileNotFoundError`` -> ``()``) from "directory present but not
+    readable" (``OSError`` -> ``None``).
     """
     try:
         st = identities_dir.stat()
@@ -367,6 +376,33 @@ def _scan_agent_logins(paths: tuple[Path, ...]) -> _AgentLoginScan:
     return _AgentLoginScan(logins=frozenset(logins), complete=incomplete == 0)
 
 
+_ETHOS_SUBMODULE_PATH = ".punt-labs/ethos"
+
+
+def _ethos_submodule_declared(repo_root: Path) -> bool:
+    """Return whether ``.gitmodules`` declares a submodule at ``.punt-labs/ethos``.
+
+    A missing ``.punt-labs/ethos/identities/`` directory is ambiguous on
+    its own: it looks identical whether this repo has no ethos
+    integration at all (genuinely empty, safe to trust) or the ethos
+    submodule is declared but was never checked out (unverifiable, must
+    fail closed per DES-053). ``.gitmodules`` is an ordinary git-tracked
+    file present in every checkout and worktree regardless of
+    submodule-init state, so its content -- not directory presence -- is
+    the reliable signal for which case applies. A simple text search for
+    the ``path =`` line is sufficient here; ``.gitmodules`` is trusted
+    repo content, not adversarial input, so a full INI parser buys
+    nothing.
+    """
+    gitmodules = repo_root / ".gitmodules"
+    try:
+        text = gitmodules.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    pattern = rf"^[ \t]*path[ \t]*=[ \t]*{re.escape(_ETHOS_SUBMODULE_PATH)}[ \t]*$"
+    return re.search(pattern, text, re.MULTILINE) is not None
+
+
 def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
     """Return the GitHub logins of every ``kind: agent`` identity on disk.
 
@@ -378,12 +414,31 @@ def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
     a human is at the keyboard. Cross-checking the resolved login
     against the repo's own identity registry lets
     :func:`_resolve_human_identity` detect and reject that case
-    (biff-if2). Returns an empty, complete scan when the identities
-    directory is absent -- inert in repos with no ethos submodule.
+    (biff-if2).
+
+    Returns an empty, complete scan when the identities directory is
+    absent or empty AND ``.gitmodules`` doesn't declare an ethos
+    submodule -- inert in repos with no ethos integration at all.
+    Returns an empty, *incomplete* scan when the directory is absent or
+    empty but ``.gitmodules`` DOES declare a submodule at
+    ``.punt-labs/ethos``: an uninitialized submodule is unverifiable,
+    not "confirmed no bots" (see :func:`_ethos_submodule_declared`,
+    DES-053).
     """
     identities_dir = repo_root / ".punt-labs" / "ethos" / "identities"
     paths = _list_identity_yaml_files(identities_dir)
     if paths is None:
+        return _AgentLoginScan(logins=frozenset(), complete=False)
+    if not paths and _ethos_submodule_declared(repo_root):
+        logger.warning(
+            "%s declares a submodule at %s but %s has no identity files -- "
+            "treating the bot-login scan as incomplete (uninitialized "
+            "submodule, not 'no ethos integration'); run "
+            "`git submodule update --init` to populate it",
+            repo_root / ".gitmodules",
+            _ETHOS_SUBMODULE_PATH,
+            identities_dir,
+        )
         return _AgentLoginScan(logins=frozenset(), complete=False)
     return _scan_agent_logins(paths)
 
