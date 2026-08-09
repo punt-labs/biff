@@ -1,4 +1,4 @@
-"""Structural checks on ``hooks/hooks.json`` (biff-ar1/om9 design §3b).
+"""Structural checks on ``hooks/hooks.json``.
 
 Not behavioral coverage of any handler -- just the wiring contract: every
 hook event's ``command`` names a script that actually exists in
@@ -50,23 +50,9 @@ class TestHooksJsonWiring:
     def test_valid_json(self) -> None:
         _load_events()  # raises on parse failure
 
-    def test_subagent_start_registered(self) -> None:
-        events = _load_events()
-        assert "SubagentStart" in events
-
-    def test_subagent_start_points_at_dispatcher(self) -> None:
-        events = _load_events()
-        commands = _commands_for(events, "SubagentStart")
-        assert any("subagent-start.sh" in c for c in commands)
-
     def test_every_referenced_script_exists_and_is_executable(self) -> None:
         events = _load_events()
         for command in _all_commands(events):
             script = _HOOKS_DIR / command.replace(_PREFIX, "")
             assert script.is_file(), f"hooks.json references missing script: {script}"
             assert os.access(script, os.X_OK), f"script is not executable: {script}"
-
-    def test_subagent_start_script_dispatches_to_biff_hook(self) -> None:
-        script = _HOOKS_DIR / "subagent-start.sh"
-        content = script.read_text()
-        assert "biff-hook claude-code subagent-start" in content

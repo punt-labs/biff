@@ -174,7 +174,7 @@ def _has_active_session() -> bool:
 
 
 def _resolve_identity(data: dict[str, object]) -> str | None:
-    """Resolve the caller's plan-gate identity from a hook payload.
+    """Resolve the caller's preferred plan-gate identity from a hook payload.
 
     Prefers ``agent_id`` over ``session_id`` when both are present: an
     in-process dispatched subagent shares its leader's OS ``claude``
@@ -185,13 +185,46 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
     neither is present — headless/CI/SDK contexts with no Claude session
     at all — and the marker degrades to the shared, unscoped bucket.
     """
-    agent_id = data.get("agent_id")
-    if isinstance(agent_id, str) and agent_id:
-        return agent_id
-    session_id = data.get("session_id")
-    if isinstance(session_id, str) and session_id:
-        return session_id
+    for key in ("agent_id", "session_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
     return None
+
+
+def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
+    """Return this caller's own identities in gate-read preference order.
+
+    The gate's *write* path is scoped to a single identity — the caller's
+    preferred one from :func:`_resolve_identity`, so a ``SessionStart``
+    can never wipe a sibling's marker (om9's core invariant). The *read*
+    path, in contrast, walks a preference list: for a dispatched
+    in-process subagent whose ``Bash``-invoked ``biff plan`` wrote under
+    the leader's ``session_id`` (no channel today for a subagent's
+    ``Bash`` tool to learn its own ``agent_id``), a subsequent
+    ``PreToolUse`` payload's ``agent_id`` alone would find no marker and
+    strand the subagent's edits (design §3b RISK-2). Reading
+    ``agent_id`` first and ``session_id`` second is *this caller's own*
+    identity ladder, never a sibling's — the fallback closes RISK-2
+    without weakening om9 (DES-054 "Amendment: two-key fallback").
+    ``None`` (the shared bucket) is included as the terminal so
+    headless/CI/SDK writes remain visible.
+    """
+    candidates: list[str | None] = []
+    for key in ("agent_id", "session_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            candidates.append(value)
+    if None not in candidates:
+        candidates.append(None)
+    return tuple(candidates)
+
+
+def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
+    """True when *root* has a plan marker for *any* identity in the list."""
+    from biff.markers import has_plan_marker  # noqa: PLC0415
+
+    return any(has_plan_marker(root, identity) for identity in identities)
 
 
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
@@ -209,6 +242,15 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
     which blocks the edit (proven exhaustively with ProB — the model is
     the authority the code obeys).
 
+    Identity resolution reads a preference ladder — ``agent_id`` first,
+    ``session_id`` second — of *this caller's own* identities: a
+    dispatched subagent's ``Bash``-invoked ``biff plan`` writes under the
+    leader's ``session_id`` (no channel today for a subagent's ``Bash``
+    to learn its own ``agent_id``), so an ``agent_id``-only read would
+    permanently deny every subagent edit. Never any-identity-in-worktree
+    — a sibling session's marker never satisfies this caller's gate; the
+    fallback closes DES-054 RISK-2 without weakening om9's scoping.
+
     One state allows gracefully rather than deny, because a hard block
     there would strand the agent: no active biff session, where the gate
     has no session state to reason about.
@@ -216,9 +258,8 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
     if not _has_active_session():
         return None
 
-    from biff.markers import has_plan_marker  # noqa: PLC0415
-
-    if not has_plan_marker(_repo_common_root(data), _resolve_identity(data)):
+    root = _repo_common_root(data)
+    if not _has_any_plan_marker(root, _identity_candidates(data)):
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
             "Run /plan <what you're working on>, then retry the edit."
@@ -663,49 +704,6 @@ def _capture_session_hint(data: dict[str, object]) -> None:
         )
 
 
-def _capture_subagent_hint(data: dict[str, object]) -> None:
-    """Persist a ``SubagentStart``'s ``agent_id`` as its own distinguishable identity.
-
-    An in-process ``AgentTool`` subagent shares its leader's ``claude``
-    OS process, so it would otherwise resolve the *leader's* identity via
-    ``SessionHint.resolve_routing_id()`` — indistinguishable from the
-    leader's own plan.  Written under the subagent's own ``agent_id`` key
-    (``SessionHint.write_agent_hint``) rather than the leader's per-pid
-    hint file, so capturing it never overwrites the leader's own hint.  A
-    missing/empty ``agent_id`` is a no-op.
-
-    Fails closed at the trust boundary: ``agent_id`` arrives on the hook
-    payload from a channel this process does not control, and
-    ``pathlib.Path``'s ``/`` operator honors ``..`` and absolute
-    components — a value like ``"../{pid}"`` or ``"/tmp/pwned"`` would
-    otherwise overwrite the leader hint or write to and chmod an
-    unintended directory. A value that fails
-    :func:`session_id.is_safe_agent_id` is logged and dropped;
-    ``session_id._agent_hint_path`` also raises as defense-in-depth.
-    """
-    agent_id = data.get("agent_id")
-    if not isinstance(agent_id, str) or not agent_id:
-        return
-    from biff.session_id import SessionHint, is_safe_agent_id  # noqa: PLC0415
-
-    if not is_safe_agent_id(agent_id):
-        logger.warning(
-            "Ignoring subagent hook payload with unsafe agent_id %r; "
-            "identity resolution degraded for this subagent",
-            agent_id,
-        )
-        return
-
-    hint = SessionHint.capture_for_agent(agent_id, source="subagent")
-    try:
-        hint.write_agent_hint(agent_id)
-    except OSError:
-        logger.warning(
-            "Failed to persist subagent hint; identity resolution degraded",
-            exc_info=True,
-        )
-
-
 def handle_session_start(data: dict[str, object] | None = None) -> str:
     """Build SessionStart(startup) additionalContext.
 
@@ -935,22 +933,6 @@ def cc_pre_compact() -> None:
         return
     result = handle_pre_compact(_read_hook_input())
     _emit(_hook_context("PreCompact", result))
-
-
-@_cc_app.command("subagent-start")
-def cc_subagent_start() -> None:
-    """SubagentStart — capture a dispatched subagent's own agent_id.
-
-    An in-process ``AgentTool`` subagent shares its leader's OS ``claude``
-    process (empirically confirmed 2026-08-09), so without this capture a
-    subagent's own ``PreToolUse`` calls would resolve the *leader's*
-    identity via ``SessionHint`` -- indistinguishable from the leader's own
-    edits.  Capturing ``agent_id`` here gives it a hint file of its own,
-    distinct from the leader's per-pid hint (biff-ar1/om9 design §3b).
-    """
-    if not _is_biff_enabled():
-        return
-    _capture_subagent_hint(_read_hook_input())
 
 
 # ── Git commands ─────────────────────────────────────────────────────

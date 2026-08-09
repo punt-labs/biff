@@ -5,83 +5,14 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
-
-import pytest
+from typing import TYPE_CHECKING
 
 import biff.session_id as sid_mod
-from biff.session_id import SessionHint, is_safe_agent_id
+from biff.session_id import SessionHint
 from biff.tty import validate_routing_id
 
-
-def _hint(pid: int = 4321) -> SessionHint:
-    """Build a hint suitable for exercising :meth:`write_agent_hint`."""
-    return SessionHint(
-        session_id="agent-x",
-        claude_pid=pid,
-        claude_start_time=1.0,
-        source="subagent",
-    )
-
-
-class TestAgentHintPathSafety:
-    """Reject unsafe agent_id components before they touch the filesystem.
-
-    ``agent_id`` arrives on the SubagentStart hook stdin -- untrusted --
-    and ``pathlib.Path``'s ``/`` operator honors ``..`` and absolute
-    components, so a naive composition into ``sessions/{pid}/`` would
-    overwrite the leader hint (``../{pid}``) or write to and chmod an
-    unintended directory (``/tmp/pwned``).
-    """
-
-    def test_relative_traversal_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        with pytest.raises(ValueError, match="unsafe agent id"):
-            _hint().write_agent_hint("../4321")
-
-    def test_absolute_path_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        pwned = tmp_path / "pwned"
-        with pytest.raises(ValueError, match="unsafe agent id"):
-            _hint().write_agent_hint(str(pwned))
-        # The attacker's intended write target must not exist.
-        assert not pwned.with_suffix(".json").exists()
-
-    def test_nested_dir_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        with pytest.raises(ValueError, match="unsafe agent id"):
-            _hint().write_agent_hint("evil/nested")
-
-    def test_traversal_does_not_overwrite_leader_hint(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """``../{pid}`` would resolve into the leader's own per-pid file."""
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        leader = SessionHint(
-            session_id="leader-sid",
-            claude_pid=4321,
-            claude_start_time=1.0,
-            source="startup",
-        )
-        leader.write()
-        with pytest.raises(ValueError):
-            _hint().write_agent_hint("../4321")
-        assert SessionHint.load(4321) == leader
-
-    def test_is_safe_agent_id_predicate(self) -> None:
-        assert is_safe_agent_id("agent-1")
-        assert is_safe_agent_id("Agent_2")
-        assert is_safe_agent_id("2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b")
-        assert not is_safe_agent_id("../4321")
-        assert not is_safe_agent_id("/tmp/pwned")
-        assert not is_safe_agent_id("evil/nested")
-        assert not is_safe_agent_id("")
-        assert not is_safe_agent_id("has spaces")
+if TYPE_CHECKING:
+    import pytest
 
 
 def _use_tmp_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -208,75 +139,6 @@ class TestCapture:
         assert hint.claude_start_time == 999.0
         assert hint.session_id == "sid-xyz"
         assert hint.source == "startup"
-
-
-class TestAgentHint:
-    """SubagentStart's own hint, distinguishable from its leader's (design §3b)."""
-
-    def test_captures_agent_id_as_session_id(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr(sid_mod, "_resolve_claude_pid", lambda: 12345)
-        monkeypatch.setattr(sid_mod, "_process_start_time", _fixed_start_time(999.0))
-        hint = SessionHint.capture_for_agent("agent-xyz", "subagent")
-        assert hint.claude_pid == 12345
-        assert hint.session_id == "agent-xyz"
-        assert hint.source == "subagent"
-
-    def test_write_agent_hint_does_not_collide_with_leader_hint(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """A subagent's own hint file never overwrites its leader's per-pid file."""
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        leader = SessionHint(
-            session_id="leader-sid",
-            claude_pid=57369,
-            claude_start_time=1.0,
-            source="startup",
-        )
-        leader.write()
-
-        subagent = SessionHint(
-            session_id="agent-abc",
-            claude_pid=57369,  # same OS claude PID as its leader
-            claude_start_time=1.0,
-            source="subagent",
-        )
-        subagent.write_agent_hint("agent-abc")
-
-        # The leader's own hint (sessions/{pid}.json) is untouched.
-        assert SessionHint.load(57369) == leader
-
-    def test_write_agent_hint_then_read_back(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        hint = SessionHint(
-            session_id="agent-abc",
-            claude_pid=57369,
-            claude_start_time=1.0,
-            source="subagent",
-        )
-        hint.write_agent_hint("agent-abc")
-
-        path = tmp_path / "sessions" / "57369" / "agent-abc.json"
-        assert path.is_file()
-        assert path.stat().st_mode & 0o777 == 0o600
-
-    def test_two_subagents_under_one_leader_get_distinct_files(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        _use_tmp_data_dir(monkeypatch, tmp_path)
-        SessionHint(
-            session_id="agent-a", claude_pid=1, claude_start_time=1.0, source="subagent"
-        ).write_agent_hint("agent-a")
-        SessionHint(
-            session_id="agent-b", claude_pid=1, claude_start_time=1.0, source="subagent"
-        ).write_agent_hint("agent-b")
-
-        assert (tmp_path / "sessions" / "1" / "agent-a.json").is_file()
-        assert (tmp_path / "sessions" / "1" / "agent-b.json").is_file()
 
 
 class TestResolveRoutingId:

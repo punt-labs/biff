@@ -6008,14 +6008,6 @@ the subagent's own `agent_id` on payloads it can see) from its leader's
 file, so without this preference a subagent's own edits would be gated
 against its leader's plan, not its own.
 
-**`SubagentStart` hook registered** (`hooks/subagent-start.sh` →
-`biff-hook claude-code subagent-start` → `hook.py`'s
-`_capture_subagent_hint`), because the in-process dispatch model is now
-confirmed, not hypothetical. `SessionHint.capture_for_agent` /
-`write_agent_hint` (`session_id.py`) persist a subagent's own identity to
-`sessions/{claude_pid}/{agent_id}.json` — a sibling of, never a collision
-with, the leader's own `sessions/{claude_pid}.json`.
-
 **Marker file layout: `plan/{identity_or_"shared"}`.** `markers.py`'s
 `hint_dir()` stays a per-repo directory (unchanged — also backs wall
 markers, which are deliberately shared across every session in a repo).
@@ -6048,10 +6040,10 @@ for its own subsequent edits.
 
 `SessionHint.resolve_routing_id()` is reused read-only, exactly as
 `server/app.py` already used it for tty routing (biff-7ak) — no change
-to its recycle-guard or resolution logic. The only addition is a second,
-parallel write path (`write_agent_hint`, sharing `_write_to`'s atomic
-write logic with `write()`) for a subagent's own identity, keyed
-separately from the leader's per-pid hint so the two can never collide.
+to its recycle-guard or resolution logic. No second write path was added:
+a subagent's own identity is discovered from the hook payload directly
+(see the "Amendment: two-key fallback" below), which makes an on-disk
+per-agent hint unnecessary.
 
 ### Broad-scope closure: `state.repo_common_root` on the server side
 
@@ -6075,23 +6067,124 @@ now written under the same hash a hook read in *any* linked worktree
 of the same repo will look up, and two sessions in *different* linked
 worktrees are detected as colliding rather than silently coexisting.
 
-### RISK-2 (accepted, unclosed): in-process subagent's own CLI writes still resolve to its leader's identity
+### RISK-2 (CLOSED): in-process subagent's own CLI writes and PreToolUse gate
 
-`SubagentStart` gives a subagent's own `PreToolUse`/other hook calls a
-distinguishable identity (`agent_id`) to be gated against. It does
-**not** give a subagent's own `Bash`-invoked `biff plan` CLI call any way
-to learn its own `agent_id` — no environment channel for it exists today
-(confirmed absent in the design's own research). A CLI-invoked `biff
-plan` from inside a dispatched subagent can therefore only resolve
-`SessionHint.resolve_routing_id()` (the shared `claude_pid` → the
-leader's own hint), so it writes under the **leader's** identity. That
-write remains visible to the leader's own edits and to any hook call
-that falls back to `session_id` (no `agent_id` on the payload), but is
-not visible to a gate check keyed on the subagent's own `agent_id`. This
-is the design's own named, accepted limitation (§3b/§7 RISK-2) — real,
-bounded, and not attempted to be closed here; closing it needs a
-Claude-Code-side channel exposing subagent identity into `Bash` tool
-environments, outside biff's control.
+A subagent's `Bash`-invoked `biff plan` still has no channel to learn
+its own `agent_id`, so it writes the marker under the leader's
+`session_id` — that half of the constraint is unchanged and Claude-Code
+side, outside biff's control. What DES-054's original write closed by
+scoping the marker file, this amendment closes on the *read* side.
+
+#### Amendment: two-key fallback closes RISK-2
+
+The gate's read path (`hook.handle_pre_tool_use`) now walks a
+preference ladder of *this caller's own* identities — `agent_id` first,
+`session_id` second, `None` (shared bucket) third — and allows if any
+one has a marker. The write path is unchanged: `SessionStart`'s
+`clear_plan_marker` still targets a single identity, and every write
+(`sync_plan_marker`, MCP `plan`) still writes to one identity's file,
+so om9's core invariant (a sibling `SessionStart` cannot wipe another
+identity's marker) is untouched. Only the READ side falls back.
+
+The preference order is deliberate:
+
+- `agent_id` first — the caller's own most-specific identity; when the
+  subagent has itself called `/plan` via an MCP-visible path or the
+  future case where Claude Code exposes a channel for `Bash` to learn
+  the agent id, this is the marker the subagent actually wrote.
+- `session_id` second — the leader's shared identity; the RISK-2 case
+  where the subagent's `Bash`-invoked `biff plan` wrote there because
+  no other channel exists. Reading this satisfies the subagent's own
+  gate without ever pointing at any *other* session's marker.
+- `None` (shared bucket) third — the headless/CI/SDK path already
+  falls through here at write time; keeping the read consistent means
+  a plan set in that mode still satisfies subsequent gate reads.
+
+Never any-identity-in-worktree. A sibling session's marker never
+satisfies this caller's gate: the ladder only reads keys the caller
+itself would have written to. RISK-2's remaining "the subagent can't
+learn its own agent_id" gap is closed at biff's boundary because the
+gate does not require the subagent to know its own agent_id in order to
+unblock — the leader's session marker (which the subagent's `Bash` CAN
+write to) is enough. `tests/test_hook.py::test_session_id_fallback_
+allows_when_agent_id_has_no_marker` locks this in; `test_other_identity_
+plan_does_not_satisfy_own_gate` locks in the negative — a sibling's
+plan does not satisfy me.
+
+#### Amendment: SubagentStart / per-agent hint persistence removed
+
+The original DES-054 registered a `SubagentStart` hook
+(`hooks/subagent-start.sh` → `hook._capture_subagent_hint` →
+`SessionHint.capture_for_agent` + `write_agent_hint` →
+`sessions/{claude_pid}/{agent_id}.json`) on the reasoning that a
+subagent needed a distinguishable, persisted identity. The two-key
+fallback above obsoletes that: the read path takes `agent_id` from the
+hook payload directly (`_resolve_identity(data)`); no on-disk read ever
+consults an agent hint file. The persisted hint was dead code — written
+on every subagent start, never read by anything — carrying its own
+attack surface (the `agent_id` path-traversal class that commit 0b0f809
+had to close, now impossible because the code no longer composes an
+`agent_id` into a filesystem path at all).
+
+Removed accordingly: `hooks/subagent-start.sh`; the `SubagentStart`
+entry in `hooks/hooks.json`; `hook.cc_subagent_start`,
+`hook._capture_subagent_hint`; `session_id.SessionHint.
+capture_for_agent`, `SessionHint.write_agent_hint`,
+`session_id.is_safe_agent_id`, `session_id._agent_hint_path`,
+`session_id._require_agent_hint_contained`, and the
+`_SAFE_AGENT_ID_RE` constant they depended on. Their tests
+(`tests/test_hook.py::TestCaptureSubagentHint*`,
+`tests/test_session_id.py::TestAgentHintPathSafety`, `TestAgentHint`,
+and the `test_subagent_start_*` cases in
+`tests/test_hooks_registration.py`) come out with them — a test for
+absent code is dead too.
+
+The `StartSubagent` schema in `docs/claude-code-biff.tex` STAYS. It is
+the formal model of what Claude Code does when a subagent boots — an
+abstract "a new agent identity enters `planSet` with no plan of its
+own" — and remains correct. That identity is created *lazily* the first
+time the subagent writes a marker, not eagerly via a persistence step;
+the model's `planSet` was never identified with an on-disk file.
+
+If Claude Code ever exposes `agent_id` into a subagent's `Bash` tool
+environment (e.g. via env-var), revisit this decision: at that point a
+subagent could write its OWN marker directly and neither the fallback
+nor the per-agent hint would be needed to close RISK-2.
+
+#### Amendment: root-resolution failure — fail-open with observability
+
+`_stdlib.get_repo_common_root()` returns `""` (the "shared/default"
+hash bucket) on any git failure: `FileNotFoundError` (git not on PATH),
+`subprocess.TimeoutExpired` (5s cap), `OSError` (I/O), or a non-zero
+git exit. Downstream, `markers.hint_dir("")` composes `hints/default/`
+— a single per-user bucket that unifies every repo's markers under one
+hash if git ever fails.
+
+Choice: **fail-open with observability**, not fail-loud. A hook
+subprocess raising here would break the invoking tool call
+(`PreToolUse` `deny`, `PostToolUse` no-op silent nudge), and git
+transiently failing (a slow disk, a permission blip, a git upgrade
+mid-session) would take biff down with it — worse than a shared bucket
+for the failure window. But silence is the wrong other end of that
+tradeoff: the shared bucket cross-contaminates markers across repos
+for as long as the failure lasts, which is exactly the "silent failure
+we already got bitten by" class this branch's whole history has been
+about. So both sites now log:
+
+- `_stdlib.get_repo_common_root()` logs at `logger.debug` when git is
+  not installed (the common non-broken case on a fresh machine —
+  noise if elevated) and at `logger.warning` for every other failure
+  (`TimeoutExpired`, non-zero git exit with `stderr` included, other
+  `OSError`).
+- `markers.hint_dir("")` logs at `logger.warning` when it composes
+  the shared default bucket, naming the cross-contamination
+  consequence so an operator reading logs can trace a misrouted plan
+  or wall back to a root-resolution outage rather than believing it a
+  marker-file bug.
+
+Recovery path is a normal biff invocation: once git resolves cleanly
+again, every subsequent hook and MCP call goes back to the correct
+per-repo hash. No sticky failure state, no manual cleanup.
 
 ### RISK-3: on-disk plan-marker format change (breaking, self-healing)
 

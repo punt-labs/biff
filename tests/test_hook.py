@@ -461,139 +461,6 @@ class TestCaptureSessionHint:
             _capture_session_hint({"session_id": "sid", "source": "startup"})
 
 
-class TestCaptureSubagentHint:
-    """SubagentStart persists a dispatched subagent's own agent_id (design §3b)."""
-
-    def test_writes_agent_hint_from_payload(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_subagent_hint
-
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_subagent_hint({"agent_id": "agent-1", "session_id": "leader-sid"})
-
-        path = tmp_path / "sessions" / "4321" / "agent-1.json"
-        assert path.is_file()
-
-    def test_no_agent_id_is_noop(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_subagent_hint
-
-        with patch.object(sid_mod, "biff_data_dir", return_value=tmp_path):
-            _capture_subagent_hint({"session_id": "leader-sid"})
-
-        assert not (tmp_path / "sessions").exists()
-
-    def test_does_not_overwrite_leader_hint(self, tmp_path: Path) -> None:
-        """Capturing a subagent's hint leaves its leader's own hint untouched."""
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint, _capture_subagent_hint
-
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_session_hint({"session_id": "leader-sid", "source": "startup"})
-            _capture_subagent_hint({"agent_id": "agent-1", "session_id": "leader-sid"})
-            leader_hint = sid_mod.SessionHint.load(4321)
-
-        assert leader_hint is not None
-        assert leader_hint.session_id == "leader-sid"
-
-    def test_write_failure_is_swallowed(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_subagent_hint
-
-        def _boom(_self: object, _agent_id: str) -> None:
-            raise OSError("disk full")
-
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-            patch.object(sid_mod.SessionHint, "write_agent_hint", _boom),
-        ):
-            # Must not raise.
-            _capture_subagent_hint({"agent_id": "agent-1"})
-
-
-class TestCaptureSubagentHintSafety:
-    """Trust-boundary sanitization: ``agent_id`` from hook stdin is untrusted.
-
-    ``pathlib.Path``'s ``/`` operator honors ``..`` and absolute
-    components, so a naive composition into ``sessions/{pid}/`` would
-    (1) overwrite the leader's own hint (``../{pid}``) or (2) chmod a
-    system directory (``/tmp/pwned``). Fail closed at the hook: log and
-    drop, do not fall through to write with a mangled path.
-    """
-
-    def test_relative_traversal_is_noop(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint, _capture_subagent_hint
-
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_session_hint({"session_id": "leader-sid", "source": "startup"})
-            _capture_subagent_hint({"agent_id": "../4321"})
-            leader = sid_mod.SessionHint.load(4321)
-
-        # The leader's per-pid file was NOT overwritten by the traversal.
-        assert leader is not None
-        assert leader.session_id == "leader-sid"
-
-    def test_absolute_path_is_noop(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_subagent_hint
-
-        # An attacker-controlled absolute path composed via Path("/x") /
-        # "/tmp/pwned" collapses to "/tmp/pwned" -- must never be written.
-        pwned = tmp_path / "pwned"
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_subagent_hint({"agent_id": str(pwned)})
-
-        assert not pwned.with_suffix(".json").exists()
-
-    def test_nested_dir_is_noop(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_subagent_hint
-
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_subagent_hint({"agent_id": "evil/nested"})
-
-        # No subagent hint written under an injected subdirectory.
-        assert not (tmp_path / "sessions" / "4321" / "evil").exists()
-        assert not (tmp_path / "sessions" / "4321" / "evil.json").exists()
-
-    def test_safe_agent_id_still_writes(self, tmp_path: Path) -> None:
-        """Sanity: sanitizer does not reject legitimate hex/dash/underscore ids."""
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_subagent_hint
-
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_subagent_hint({"agent_id": "agent-1_ok"})
-
-        assert (tmp_path / "sessions" / "4321" / "agent-1_ok.json").is_file()
-
-
 class TestResolveIdentity:
     """_resolve_identity prefers agent_id over session_id (design §3b)."""
 
@@ -1452,14 +1319,15 @@ class TestHandlePreToolUse:
         The om9 fix's central invariant: PreToolHookAllow's guard --
         ``identity? IN dom planSet AND planSet(identity?) = ztrue`` -- is
         keyed on THAT SPECIFIC identity, not any identity's plan marker
-        present in the same worktree.  A single-arg (identity-blind) mock
-        cannot catch a regression that reintroduces the old shared-file
-        semantics.  This one uses ``side_effect`` keyed on the identity
-        argument: a sibling identity has a plan; MY identity does not;
-        the gate must deny and must have queried the marker with MY
-        identity, not the sibling's.
+        present in the same worktree.  The DES-054 two-key fallback
+        (``agent_id`` -> ``session_id`` -> ``None``) is *this caller's
+        own* identity ladder, never a sibling's: a sibling ``agent-sibling``
+        having a plan must not satisfy ``agent-me``'s gate when neither
+        ``agent-me`` (agent_id) nor its leader (session_id) nor the shared
+        bucket has a plan of its own.
         """
-        my_identity = "agent-me"
+        my_agent = "agent-me"
+        my_session = "leader-sid"
         other_identity = "agent-sibling"
 
         def _plan_by_identity(_root: str, identity: str | None) -> bool:
@@ -1472,14 +1340,49 @@ class TestHandlePreToolUse:
                 "biff.markers.has_plan_marker", side_effect=_plan_by_identity
             ) as mock_has,
         ):
-            result = handle_pre_tool_use({"agent_id": my_identity})
+            result = handle_pre_tool_use(
+                {"agent_id": my_agent, "session_id": my_session}
+            )
         assert result is not None, "sibling's plan must not satisfy my gate"
         reason = _deny_reason(result)
         assert "/plan" in reason
-        # Prove the gate resolved and passed MY identity, not the sibling's.
-        mock_has.assert_called_once()
-        _, identity_arg = mock_has.call_args.args
-        assert identity_arg == my_identity
+        # The gate consulted MY own identities (agent -> session -> shared),
+        # in preference order — never the sibling's key.
+        identities_queried = [call.args[1] for call in mock_has.call_args_list]
+        assert identities_queried == [my_agent, my_session, None]
+        assert other_identity not in identities_queried
+
+    def test_session_id_fallback_allows_when_agent_id_has_no_marker(self) -> None:
+        """A dispatched subagent's own edits unblock via the session_id fallback.
+
+        The DES-054 RISK-2 closure: a subagent's ``Bash``-invoked ``biff
+        plan`` can only see the shared ``claude`` PID and therefore only
+        writes under the leader's ``session_id`` (no channel today for a
+        subagent's ``Bash`` tool to learn its own ``agent_id``). Without
+        the fallback, the subagent's own ``PreToolUse`` (whose payload
+        carries the subagent's ``agent_id``) would find no marker under
+        ``agent_id`` and permanently deny every edit. The read path
+        walking ``agent_id`` -> ``session_id`` finds the leader-written
+        marker and allows.
+        """
+        my_agent = "agent-me"
+        my_session = "leader-sid"
+
+        def _plan_by_identity(_root: str, identity: str | None) -> bool:
+            # Only the session_id (leader's) has a marker; my agent_id does not.
+            return identity == my_session
+
+        with (
+            patch("biff.hook._has_active_session", return_value=True),
+            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+            patch("biff.markers.has_plan_marker", side_effect=_plan_by_identity),
+        ):
+            result = handle_pre_tool_use(
+                {"agent_id": my_agent, "session_id": my_session}
+            )
+        assert result is None, (
+            "the session_id fallback must satisfy the gate — DES-054 RISK-2"
+        )
 
 
 class TestPreToolUseFailsClosed:
