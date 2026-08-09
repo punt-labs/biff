@@ -131,6 +131,12 @@ class TestWrapCells:
             assert visible_width(line) <= 10
         assert "".join(lines) == body
 
+    def test_single_glyph_wider_than_budget_still_emitted_whole(self) -> None:
+        # A 2-cell glyph against a 1-cell budget has no narrower unit to
+        # split into — it is emitted whole, exceeding the requested width,
+        # rather than dropped or corrupted.
+        assert wrap_cells("你a", 1) == ["你", "a"]
+
 
 class TestClipToWidth:
     def test_ascii_under_budget_unchanged(self) -> None:

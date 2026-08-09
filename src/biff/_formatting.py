@@ -175,6 +175,11 @@ def _break_long_word(word: str, width: int) -> list[str]:
     wrong — it counts characters, not cells, so a wide-glyph run slips
     past the budget uncounted. This walks character-by-character summing
     :func:`visible_width` cells instead.
+
+    A single glyph wider than *width* (e.g. a 2-cell CJK ideograph against
+    a 1-cell budget) is still emitted whole, as its own oversized chunk —
+    there is no narrower unit to split it into, so the budget is exceeded
+    rather than the glyph dropped or corrupted.
     """
     chunks: list[str] = []
     chunk: list[str] = []
