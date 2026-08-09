@@ -78,6 +78,25 @@ class SessionHint:
         )
 
     @classmethod
+    def capture_for_agent(cls, agent_id: str, source: str) -> Self:
+        """Build a hint for an in-process subagent's own ``agent_id``.
+
+        Same recycle-guard shape as :meth:`capture`, but the identity
+        being recorded is the subagent's own ``agent_id`` rather than a
+        top-level session's ``session_id`` — the two are written to
+        different files (:meth:`write` vs :meth:`write_agent_hint`) so a
+        subagent's hint is never confused with, or overwrites, its
+        leader's own per-pid hint (biff-ar1/om9 design §3b).
+        """
+        pid = _resolve_claude_pid()
+        return cls(
+            session_id=agent_id,
+            claude_pid=pid,
+            claude_start_time=_process_start_time(pid),
+            source=source,
+        )
+
+    @classmethod
     def load(cls, pid: int) -> Self | None:
         """Read the hint for *pid*, or ``None`` if absent or malformed.
 
@@ -153,7 +172,22 @@ class SessionHint:
         return digest.hexdigest()
 
     def write(self) -> None:
-        """Persist this hint to ``sessions/{claude_pid}.json`` (best-effort).
+        """Persist this hint to ``sessions/{claude_pid}.json`` (best-effort)."""
+        self._write_to(_hint_path(self.claude_pid))
+
+    def write_agent_hint(self, agent_id: str) -> None:
+        """Persist this hint to ``sessions/{claude_pid}/{agent_id}.json``.
+
+        Same write semantics as :meth:`write`, but keyed additionally by
+        *agent_id* under the shared leader ``claude_pid`` rather than the
+        leader's own per-pid file — so an in-process subagent's identity
+        is discoverable without ever overwriting its leader's hint
+        (biff-ar1/om9 design §3b).
+        """
+        self._write_to(_agent_hint_path(self.claude_pid, agent_id))
+
+    def _write_to(self, path: Path) -> None:
+        """Atomically write this hint's JSON payload to *path* (best-effort).
 
         The durable routing id is owner-private: the directory is chmod'd
         ``0o700`` and the file is created ``0o600`` from its first byte, so a
@@ -163,7 +197,6 @@ class SessionHint:
         under the default umask) and ``O_NOFOLLOW`` refuses a symlink at the
         path.  The atomic temp-then-replace is preserved.
         """
-        path = _hint_path(self.claude_pid)
         sessions_dir = path.parent
         sessions_dir.mkdir(parents=True, exist_ok=True)
         sessions_dir.chmod(0o700)  # umask-independent
@@ -245,6 +278,15 @@ def _sessions_dir() -> Path:
 def _hint_path(pid: int) -> Path:
     """Hint file path for a ``claude`` PID."""
     return _sessions_dir() / f"{pid}.json"
+
+
+def _agent_hint_path(pid: int, agent_id: str) -> Path:
+    """Hint file path for one subagent's own identity under a ``claude`` PID.
+
+    A subdirectory per PID, not a suffix on the leader's own filename, so
+    it can never collide with :func:`_hint_path`'s ``{pid}.json``.
+    """
+    return _sessions_dir() / str(pid) / f"{agent_id}.json"
 
 
 def _resolve_claude_pid() -> int:

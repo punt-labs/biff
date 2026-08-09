@@ -39,10 +39,10 @@ _FAKE_HINT_HASH = hashlib.sha256(_FAKE_WORKTREE.encode()).hexdigest()[:16]
 
 
 def _hint_mocks(tmp_path: Path):
-    """Context manager stack mocking Path.home and worktree root."""
+    """Context manager stack mocking Path.home and repo-common-root."""
     return (
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+        patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
     )
 
 
@@ -473,24 +473,33 @@ class TestHandlePreCompact:
 
         m_home, m_wt = _hint_mocks(tmp_path)
         with m_home, m_wt:
-            write_plan_marker(_FAKE_WORKTREE, "biff-sgl: PreCompact hook")
-        with (
-            patch("biff._stdlib.find_git_root", return_value=Path(_FAKE_WORKTREE)),
-            m_home,
-        ):
-            result = handle_pre_compact()
+            write_plan_marker(_FAKE_WORKTREE, "sid-1", "biff-sgl: PreCompact hook")
+            result = handle_pre_compact({"session_id": "sid-1"})
         assert "Current biff plan: biff-sgl: PreCompact hook" in result
         assert "/read" in result
 
     def test_without_plan_marker(self) -> None:
         """When no plan marker, returns generic compaction message."""
-        with (
-            patch("biff._stdlib.find_git_root", return_value=Path("/nonexistent")),
-            patch("biff.markers.read_plan_marker", return_value=None),
-        ):
-            result = handle_pre_compact()
+        with patch("biff.hook._repo_common_root", return_value=""):
+            result = handle_pre_compact({"session_id": "sid-1"})
         assert "resumed after compaction" in result
         assert "/read" in result
+
+    def test_no_data_returns_generic_message(self) -> None:
+        """Called with no payload at all (defensive default) still works."""
+        with patch("biff.hook._repo_common_root", return_value=""):
+            result = handle_pre_compact()
+        assert "resumed after compaction" in result
+
+    def test_different_identity_sees_no_plan(self, tmp_path: Path) -> None:
+        """PreCompact reads only the CALLING session's own plan marker."""
+        from biff.markers import write_plan_marker
+
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            write_plan_marker(_FAKE_WORKTREE, "sid-1", "sid-1's plan")
+            result = handle_pre_compact({"session_id": "sid-2"})
+        assert "resumed after compaction" in result
 
     def test_no_git_root(self) -> None:
         """When not in a git repo, returns generic compaction message."""
@@ -997,7 +1006,7 @@ class TestWorktreeIsolation:
         # Read from worktree B — should see nothing
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("biff.hook._get_worktree_root", return_value=wt_b),
+            patch("biff.hook._repo_common_root", return_value=wt_b),
         ):
             result = check_plan_hint()
 
@@ -1036,7 +1045,7 @@ def _collision_mocks(
     fake_root = repo_root or tmp_path / "my-repo"
     return (
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("biff.hook._get_worktree_root", return_value=worktree),
+        patch("biff.hook._repo_common_root", return_value=worktree),
         patch("biff._stdlib.find_git_root", return_value=fake_root),
         patch("biff._stdlib.get_repo_slug", return_value=repo_slug),
     )
@@ -1180,7 +1189,7 @@ def _gate_mocks(*, plan: bool):
     """
     return (
         patch("biff.hook._has_active_session", return_value=True),
-        patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+        patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
         patch("biff.markers.has_plan_marker", return_value=plan),
     )
 
@@ -1294,7 +1303,7 @@ class TestPreToolUseFailsClosed:
             patch("biff.hook._is_biff_enabled", return_value=True),
             patch("biff.hook._read_hook_input", return_value={}),
             patch("biff.hook._has_active_session", return_value=True),
-            patch("biff.hook._get_worktree_root", return_value=_FAKE_WORKTREE),
+            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
             patch("biff.markers.has_plan_marker", side_effect=OSError("boom")),
             patch("biff.hook._emit", side_effect=emitted.append),
         ):
@@ -1332,16 +1341,35 @@ class TestZSpecPlanConsistency:
         assert session.plan_source in ("manual", "auto")
 
     def test_session_start_clears_plan_marker(self, tmp_path: Path) -> None:
-        """SessionStart clears stale plan marker (planSet' = zfalse)."""
+        """SessionStart clears its own stale marker (planSet'(identity) = zfalse)."""
         from biff.markers import has_plan_marker, write_plan_marker
 
         m_home, m_wt = _hint_mocks(tmp_path)
         with m_home, m_wt:
-            write_plan_marker(_FAKE_WORKTREE, "stale plan")
-            assert has_plan_marker(_FAKE_WORKTREE)
+            write_plan_marker(_FAKE_WORKTREE, "sid-1", "stale plan")
+            assert has_plan_marker(_FAKE_WORKTREE, "sid-1")
             with patch("biff.hook._get_git_branch", return_value="main"):
-                handle_session_start()
-            assert not has_plan_marker(_FAKE_WORKTREE)
+                handle_session_start({"session_id": "sid-1"})
+            assert not has_plan_marker(_FAKE_WORKTREE, "sid-1")
+
+    def test_session_start_does_not_clear_sibling_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """A concurrent sibling session's marker survives another's SessionStart.
+
+        This is the direct fix for om9's core mechanism: before scoping the
+        marker by identity, every ``SessionStart`` unconditionally cleared
+        the ONE shared marker file, revoking a plan another session's gate
+        was already relying on.
+        """
+        from biff.markers import has_plan_marker, write_plan_marker
+
+        m_home, m_wt = _hint_mocks(tmp_path)
+        with m_home, m_wt:
+            write_plan_marker(_FAKE_WORKTREE, "sid-sibling", "sibling's plan")
+            with patch("biff.hook._get_git_branch", return_value="main"):
+                handle_session_start({"session_id": "sid-new"})
+            assert has_plan_marker(_FAKE_WORKTREE, "sid-sibling")
 
 
 class TestZSpecSessionEndCleanup:

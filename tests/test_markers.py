@@ -40,22 +40,54 @@ class TestPlanMarker:
 
     def test_write_creates_marker(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
-            write_plan_marker("/test/root", "biff-vq5: PreToolUse gate")
-            assert has_plan_marker("/test/root")
+            write_plan_marker("/test/root", "sid-1", "biff-vq5: PreToolUse gate")
+            assert has_plan_marker("/test/root", "sid-1")
 
     def test_clear_removes_marker(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
-            write_plan_marker("/test/root", "some plan")
-            clear_plan_marker("/test/root")
-            assert not has_plan_marker("/test/root")
+            write_plan_marker("/test/root", "sid-1", "some plan")
+            clear_plan_marker("/test/root", "sid-1")
+            assert not has_plan_marker("/test/root", "sid-1")
 
     def test_no_marker_returns_false(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
-            assert not has_plan_marker("/test/root")
+            assert not has_plan_marker("/test/root", "sid-1")
 
     def test_clear_missing_marker_is_noop(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
-            clear_plan_marker("/test/root")  # should not raise
+            clear_plan_marker("/test/root", "sid-1")  # should not raise
+
+    def test_none_identity_uses_shared_bucket(self, tmp_path: Path) -> None:
+        """A caller with no resolvable identity falls back to 'shared'."""
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            write_plan_marker("/test/root", None, "headless plan")
+            assert has_plan_marker("/test/root", None)
+            assert (hint_dir("/test/root") / "plan" / "shared").is_file()
+
+    def test_different_identities_do_not_collide(self, tmp_path: Path) -> None:
+        """Two sessions in one repo each get their own marker file."""
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            write_plan_marker("/test/root", "sid-a", "plan A")
+            write_plan_marker("/test/root", "sid-b", "plan B")
+            assert has_plan_marker("/test/root", "sid-a")
+            assert has_plan_marker("/test/root", "sid-b")
+
+            clear_plan_marker("/test/root", "sid-a")
+            assert not has_plan_marker("/test/root", "sid-a")
+            # sid-b's marker is untouched by sid-a's clear -- the direct
+            # fix for om9's core mechanism.
+            assert has_plan_marker("/test/root", "sid-b")
+
+    def test_identity_with_traversal_chars_falls_back_to_shared(
+        self, tmp_path: Path
+    ) -> None:
+        """An identity outside the safe charset never reaches the path join."""
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            write_plan_marker("/test/root", "../../etc/passwd", "hostile")
+            # The write landed in the shared bucket, not an escaped path.
+            assert has_plan_marker("/test/root", None)
+            escaped = hint_dir("/test/root") / "plan" / "../../etc/passwd"
+            assert not escaped.resolve().is_file()
 
 
 class TestWallMarker:
