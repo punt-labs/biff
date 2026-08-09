@@ -32,6 +32,7 @@ from biff.formatting import (
     format_talk_end,
     format_talk_line,
     terminal_safe,
+    visible_text,
 )
 from biff.models import Message
 from biff.nats_relay import NatsRelay
@@ -94,6 +95,14 @@ def format_agent_drain(drain: AgentDrain) -> str:
     but is only noise in model input.  Every field is length-clamped at
     the :meth:`TalkNotification.from_payload` ingress boundary, so a
     single line stays bounded without a render-side cap (biff-7g7).
+
+    A frame with no body at all (an accept, or an invite sent with no
+    opening line) contributes no line — there is nothing to report.  A
+    frame whose body is merely *invisible* after neutralisation
+    (whitespace-only or control-only) still contributes a line naming the
+    sender: the agent must see that a message arrived even when it had
+    nothing visible to show, matching :func:`~biff.formatting.format_talk_line`
+    on the terminal side (biff-7g7, biff-2sw round 6).
     """
     lines: list[str] = []
     for _user, invite in sorted(drain.pending.items()):
@@ -106,12 +115,9 @@ def format_agent_drain(drain: AgentDrain) -> str:
         if notif.is_end:
             lines.append(format_talk_end(label))
             continue
-        # Skip a body that is empty or whitespace-only after neutralisation:
-        # spaces survive terminal_safe, so guard on the stripped body — matching
-        # format_talk_line, so a blank message renders nothing on both surfaces
-        # and never leaves a dangling ``label:`` line (biff-7g7).
-        if (body := terminal_safe(notif.nbody)) and body.strip():
-            lines.append(f"{HEADER_PREFIX}{label}: {body}")
+        if not notif.nbody:
+            continue
+        lines.append(f"{HEADER_PREFIX}{label}: {visible_text(notif.nbody)}")
     return "\n".join(lines)
 
 

@@ -120,11 +120,14 @@ class TestFormatAgentDrain:
         assert "hi[2Jthere" in result
 
     def test_control_only_tty_and_body_collapse(self) -> None:
-        """A control-only tty renders bare user; a control-only body renders nothing.
+        """A control-only tty renders bare user; a control-only body renders a
+        fallback line.
 
         Both fields are attacker-controlled (DES-046): a tty that is empty only
-        after neutralisation must not leave a dangling ``user:`` label, and a
-        body that neutralises to empty must produce no line at all (biff-7g7).
+        after neutralisation must not leave a dangling ``user:`` label
+        (biff-7g7).  A body that neutralises to empty still arrived — it must
+        produce a line, not silence, matching the recipient-visible fallback
+        used everywhere else (biff-2sw round 6).
         """
         ctrl_tty = TalkNotification.from_payload(
             {
@@ -149,15 +152,19 @@ class TestFormatAgentDrain:
         rendered = format_agent_drain(
             AgentDrain(messages=(ctrl_tty, ctrl_body), pending={})
         )
-        # bare user, no dangling colon; body skipped; shared ▶ idiom prefix
-        assert rendered == f"{HEADER_PREFIX}eric: hi"
+        # bare user, no dangling colon; body renders its fallback line
+        expected = (
+            f"{HEADER_PREFIX}eric: hi\n"
+            f"{HEADER_PREFIX}eric:tty2: (message contained no printable text)"
+        )
+        assert rendered == expected
 
-    def test_whitespace_only_body_dropped(self) -> None:
-        """A whitespace-only body renders nothing, matching the REPL render.
+    def test_whitespace_only_body_renders_distinct_fallback(self) -> None:
+        """A whitespace-only body renders an explicit fallback, matching the REPL.
 
-        Spaces survive terminal_safe (they are printable), so an all-whitespace
-        body must be skipped here just as ``format_talk_line`` skips it — both
-        surfaces agree, and the agent's context never shows a bare ``user:``.
+        Spaces survive terminal_safe (they are printable) — nothing was
+        stripped, so the fallback wording must say so, not claim the body had
+        "no printable text" — both surfaces agree (biff-2sw round 6).
         """
         blank = TalkNotification.from_payload(
             {
@@ -180,7 +187,11 @@ class TestFormatAgentDrain:
             }
         )
         rendered = format_agent_drain(AgentDrain(messages=(blank, real), pending={}))
-        assert rendered == f"{HEADER_PREFIX}eric:tty2: hi"
+        expected = (
+            f"{HEADER_PREFIX}eric:tty2: (message had no visible content)\n"
+            f"{HEADER_PREFIX}eric:tty2: hi"
+        )
+        assert rendered == expected
 
     def test_invite_uses_shared_arrow_not_phone(self) -> None:
         """The agent drain shares the ``▶`` idiom — no ``📞`` prefix (biff-7g7)."""

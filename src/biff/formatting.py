@@ -58,6 +58,7 @@ __all__ = [
     "parse_duration",
     "sanitize_wall_message",
     "terminal_safe",
+    "visible_text",
 ]
 
 # Never wrap a talk body narrower than this, however long the sender
@@ -73,15 +74,52 @@ _MAX_LABEL_WIDTH = 40
 # indent (wall body, the finger Host:/Dir: line).
 _ROW_TEXT_WIDTH = TABLE_WIDTH - len(ROW_PREFIX)
 
-# Shown in place of a body that is non-empty on the wire but renders to
-# nothing after terminal_safe strips every character as control/escape —
-# a confirmation or read-back must never silently swallow the sender's
-# entire message and look like it succeeded (biff-2sw round 4).
+# Two distinct fallbacks for two distinct failure modes. Both cover a body
+# that is non-empty on the wire but renders as nothing visible — a
+# confirmation or read-back must never silently swallow the sender's
+# entire message and look like it succeeded, or like nothing arrived
+# (biff-2sw round 4, round 6).
+#
+# terminal_safe actually removed characters (control/escape bytes) and
+# nothing printable survived:
 _NO_PRINTABLE_TEXT = "(message contained no printable text)"
+# terminal_safe changed nothing — the text was whitespace-only to begin
+# with. Saying "no printable text" here would be false: whitespace *is*
+# printable (str.isprintable() is True for spaces), nothing was stripped,
+# the text just has nothing visible to show.
+_NO_VISIBLE_CONTENT = "(message had no visible content)"
 
 # The finger "Plan:" body hangs one level deeper than ROW_PREFIX.
 _PLAN_INDENT = "    "
 _PLAN_TEXT_WIDTH = TABLE_WIDTH - len(_PLAN_INDENT)
+
+
+def visible_text(raw: str) -> str:
+    """Return *raw* neutralised by :func:`terminal_safe`, or an honest fallback.
+
+    Every render site that echoes remote-controlled text back to a human —
+    a wall banner, a talk confirmation, a plan read-back — shares the same
+    question: does this text have anything visible to show, and if not,
+    why not?  There are two distinct reasons, and conflating them produces
+    a false claim:
+
+    * The text was whitespace-only (or empty) and :func:`terminal_safe`
+      left it untouched — nothing was stripped, there was simply nothing
+      to see.  Reported as :data:`_NO_VISIBLE_CONTENT`.
+    * The text held only control/escape characters, and :func:`terminal_safe`
+      actually removed them all.  Reported as :data:`_NO_PRINTABLE_TEXT`.
+
+    Callers that treat an empty *raw* as a deliberate, meaningful choice
+    (e.g. ``/plan ""`` clearing a plan) must check that case themselves
+    before calling this — an empty string here is reported the same as
+    any other invisible text, not passed through blank.
+    """
+    safe = terminal_safe(raw)
+    if safe.strip():
+        return safe
+    if safe == raw:
+        return _NO_VISIBLE_CONTENT
+    return _NO_PRINTABLE_TEXT
 
 
 # ---------------------------------------------------------------------------
@@ -383,15 +421,14 @@ def format_wall(wall: WallPost) -> str:
     body made entirely of control/escape characters renders to nothing once
     :func:`terminal_safe` strips them — falling through would show teammates
     a bare, empty-looking ``▶  WALL`` banner with no hint the poster's
-    message was silently dropped.
+    message was silently dropped.  See :func:`visible_text` for how a
+    control-only body is distinguished from a whitespace-only one.
     """
     remaining = format_remaining(wall.expires_at)
     sender = terminal_safe(wall.from_user)
     if wall.from_tty:
         sender += f" ({terminal_safe(wall.from_tty)})"
-    text = terminal_safe(wall.text)
-    if not text.strip():
-        text = _NO_PRINTABLE_TEXT
+    text = visible_text(wall.text)
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
     return f"▶  WALL from {sender} ({remaining} remaining)\n{body}"
@@ -408,9 +445,7 @@ def format_wall_confirmation(post: WallPost) -> str:
     looks successful but silently ate the poster's entire message.
     """
     remaining = format_remaining(post.expires_at)
-    text = terminal_safe(post.text)
-    if not text.strip():
-        text = _NO_PRINTABLE_TEXT
+    text = visible_text(post.text)
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
     return f"Wall posted ({remaining}):\n{body}"
@@ -427,9 +462,7 @@ def format_wall_status_line(post: WallPost) -> str:
     """
     remaining = format_remaining(post.expires_at)
     sender = terminal_safe(post.from_user)
-    text = terminal_safe(post.text)
-    if not text.strip():
-        text = _NO_PRINTABLE_TEXT
+    text = visible_text(post.text)
     prefix = f"wall: {sender}: "
     width = max(TABLE_WIDTH - visible_width(prefix), 1)
     chunks = wrap_cells(text, width, preserve_whitespace=True) or [""]
@@ -457,9 +490,12 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     :func:`terminal_safe`, the output boundary (biff-lbj).
 
     Returns one string per rendered line so the caller can colourise each, or
-    an empty list when the body is empty *after* neutralisation — a
-    control-only payload has nothing to show and must not render a bare lead
-    (biff-7g7).
+    an empty list when *body* is empty to begin with — a truly bodiless frame
+    (an accept, or an invite sent with no opening line) has nothing to say and
+    renders no line.  A body that is merely *invisible* after neutralisation
+    (whitespace-only or control-only) is a different case: the sender did send
+    something, so the recipient sees an explanatory line rather than silence —
+    see :func:`visible_text` (biff-7g7, biff-2sw round 6).
 
     The lead is bounded independently of the input: the label is truncated to
     :data:`_MAX_LABEL_WIDTH` and the continuation indent never exceeds
@@ -474,12 +510,9 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     ``TalkNotification.nbody``; a future caller feeding an unclamped body from a
     non-notification source would reintroduce the linear term.
     """
-    safe_body = terminal_safe(body)
-    # Whitespace survives terminal_safe (spaces are printable), so guard on the
-    # stripped body: an all-whitespace or control-only payload has nothing to
-    # show and must render no line, never a bare arrow lead.
-    if not safe_body.strip():
+    if not body:
         return []
+    safe_body = visible_text(body)
     safe_label = _truncate(terminal_safe(label), _MAX_LABEL_WIDTH)
     lead = f"{HEADER_PREFIX}{stamp}{safe_label}  "
     width = max(_TALK_WRAP_MIN, TABLE_WIDTH - visible_width(lead))
@@ -519,16 +552,17 @@ def format_talk_echo(prefix: str, message: str) -> str:
     chars for talk, unbounded for a plan, potentially CJK/emoji-heavy — and
     must not embed it raw on one unbounded line.
 
-    A non-empty *message* that renders to nothing after :func:`terminal_safe`
-    (control/escape characters only) shows the same explicit fallback
+    A non-empty *message* that has nothing visible to show — whitespace-only,
+    or control/escape characters only — shows the same explicit fallback
     :func:`format_wall_confirmation` does, rather than a confirmation that
-    looks successful but silently ate the caller's entire message. An empty
-    *message* (e.g. clearing a plan) is left blank — that is the caller's
-    deliberate intent, not a sanitization failure.
+    looks successful but silently ate the caller's entire message.  See
+    :func:`visible_text` for how the two cases are worded differently: a
+    whitespace-only message was never actually stripped of anything, so it
+    must not claim otherwise.  An empty *message* (e.g. clearing a plan) is
+    left blank — that is the caller's deliberate intent, not a sanitization
+    failure.
     """
-    text = terminal_safe(message)
-    if message and not text.strip():
-        text = _NO_PRINTABLE_TEXT
+    text = visible_text(message) if message else message
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
     return f"{prefix}\n{body}"

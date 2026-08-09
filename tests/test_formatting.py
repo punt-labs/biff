@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from biff._formatting import TABLE_WIDTH, visible_width
 from biff.formatting import (
     _NO_PRINTABLE_TEXT,
+    _NO_VISIBLE_CONTENT,
     _TALK_WRAP_MIN,
     format_finger,
     format_finger_multi,
@@ -274,6 +275,22 @@ class TestFormatWall:
         result = format_wall(wall)
         assert _NO_PRINTABLE_TEXT in result
 
+    def test_whitespace_only_body_renders_distinct_fallback(self) -> None:
+        # A body that is nothing but spaces survives terminal_safe unchanged
+        # (spaces are printable) — it is not "stripped", so it must not get
+        # the same wording as a control-only body that actually lost content.
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="a   ",  # min_length=1 forbids pure whitespace; pad with "a"
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall(wall)
+        assert "a" in result
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT not in result
+
 
 class TestFormatWallConfirmation:
     """The post-confirmation shown to the poster wraps like the read-back (biff-2sw)."""
@@ -329,6 +346,19 @@ class TestFormatWallConfirmation:
         result = format_wall_confirmation(post)
         assert _NO_PRINTABLE_TEXT in result
 
+    def test_whitespace_only_body_renders_distinct_fallback(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="a   ",
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_confirmation(post)
+        assert "a" in result
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT not in result
+
 
 class TestFormatWallStatusLine:
     """The ``biff status`` wall line wraps like every other wall render (biff-2sw)."""
@@ -382,6 +412,19 @@ class TestFormatWallStatusLine:
         result = format_wall_status_line(post)
         assert _NO_PRINTABLE_TEXT in result
 
+    def test_whitespace_only_body_renders_distinct_fallback(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="a   ",
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_status_line(post)
+        assert "a" in result
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT not in result
+
 
 class TestFormatTalkEcho:
     """``talk`` accept/send confirmations wrap the echoed message (biff-2sw)."""
@@ -414,6 +457,17 @@ class TestFormatTalkEcho:
         # empty send (this helper is also reused by /plan's confirmation).
         result = format_talk_echo("Sent:", "\x00\x1b\x07")
         assert _NO_PRINTABLE_TEXT in result
+
+    def test_whitespace_only_message_renders_distinct_fallback(self) -> None:
+        # "   " survives terminal_safe unchanged (spaces are printable), so
+        # claiming it was "stripped to no printable text" would be false —
+        # nothing was stripped.  The state/confirmation split this closes:
+        # /plan "   " stores plan="   " verbatim (update_current_session uses
+        # model_copy, which skips pydantic validation) while the confirmation
+        # must not claim the text was removed when it wasn't (biff-2sw round 6).
+        result = format_talk_echo("Plan:", "   ")
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT in result
 
     def test_empty_message_stays_blank(self) -> None:
         # An empty message is a deliberate "nothing to say" (e.g. clearing a
@@ -556,19 +610,30 @@ class TestFormatTalkLine:
         ]
 
     def test_empty_body_renders_nothing(self) -> None:
+        # A truly bodiless frame (nothing sent at all) has nothing to report.
         assert format_talk_line("eric:tty2", "") == []
 
-    def test_control_only_body_renders_nothing(self) -> None:
-        # A body that is empty only AFTER neutralisation (control-only payload)
-        # must produce no line — not a bare, dangling lead (biff-7g7).
-        assert format_talk_line("eric:tty2", "\x00\x1b\x07") == []
+    def test_control_only_body_renders_fallback(self) -> None:
+        # A body that is empty only AFTER neutralisation (control-only
+        # payload) still arrived — the recipient must see that, not silence
+        # (biff-7g7, biff-2sw round 6).
+        (line,) = format_talk_line("eric:tty2", "\x00\x1b\x07")
+        assert "▶  eric:tty2  " in line
+        assert "no printable text" in line
 
-    def test_whitespace_only_body_renders_nothing(self) -> None:
-        # Spaces survive terminal_safe (they are printable), but a body with
-        # nothing but whitespace has nothing to show — it must render no line,
-        # not a bare ▶ lead (biff-7g7).
-        assert format_talk_line("eric:tty2", "   ") == []
-        assert format_talk_line("eric:tty2", "\t \n") == []
+    def test_whitespace_only_body_renders_distinct_fallback(self) -> None:
+        # Spaces survive terminal_safe unchanged (they are printable) — nothing
+        # was stripped, so the fallback wording must not claim it was.
+        (line,) = format_talk_line("eric:tty2", "   ")
+        assert "no visible content" in line
+        assert "no printable text" not in line
+
+    def test_tab_and_newline_only_body_renders_stripped_fallback(self) -> None:
+        # Tab and newline are NOT printable (unlike space) — terminal_safe
+        # actually removes them, so this is the "stripped" case, not the
+        # "untouched whitespace" case.
+        (line,) = format_talk_line("eric:tty2", "\t\n")
+        assert "no printable text" in line
 
     def test_internal_space_runs_preserved(self) -> None:
         # The message is the user's content — runs of intentional spaces (aligned
