@@ -5867,6 +5867,41 @@ with a warning naming the specific remediation (`git submodule update
 --init`). If `.gitmodules` has no such entry, the directory's absence is
 trusted as before: `complete=True`, no warning, inert.
 
+### Amendment — `_ethos_submodule_declared` inherited the same fail-open bug it was written to close
+
+Two further independent reviews converged on the same gap, one function
+after the amendment above landed: `_ethos_submodule_declared`'s own
+`.gitmodules` read used a bare `except OSError: return False`, folding a
+confirmed-absent `.gitmodules` together with one that exists but is
+unreadable (permission denied, I/O error) into the same `False` — exactly
+the collapse this whole decision exists to close, reopened one function
+later with zero log line. `UnicodeDecodeError` (raised by
+`Path.read_text(encoding="utf-8")` on invalid UTF-8) is not an `OSError`
+subclass, so it wasn't caught at all: a corrupted `.gitmodules` would
+propagate uncaught through `_known_agent_github_logins` and crash the CLI.
+
+Rather than patch this instance in isolation — the same mistake had
+already been made once and fixed correctly once, in `_read_identity_yaml`
+— the fix extracts `_read_text_or_fail_closed`, a shared helper returning
+the file's text, `None` for a confirmed-absent file
+(`FileNotFoundError`), or an `_Unreadable` sentinel (carrying the
+triggering `OSError`/`UnicodeDecodeError`) for any other read failure.
+Both `_read_identity_yaml` and `_ethos_submodule_declared` route through
+it, so a third call site inherits the fail-closed distinction by
+construction instead of being free to reimplement it, correctly or not.
+
+`_ethos_submodule_declared`'s return type changes from `bool` to a
+three-state `_SubmoduleDeclaration` enum (`ABSENT` / `DECLARED` /
+`UNVERIFIABLE`) so `_known_agent_github_logins` can keep distinguishing
+"confirmed not declared" (safe, inert) from "declared or unverifiable"
+(fail closed, for two distinct reasons that each get their own warning)
+through the refactor.
+
+The same review pass also fixed a latent false negative: the declaration
+regex's trailing `[ \t]*$` did not match a `.gitmodules` checked out with
+CRLF line endings (the `\r` immediately before `\n` isn't consumed by
+`[ \t]`). The pattern now ends `[ \t]*\r?$`.
+
 ### Rejected alternative — check a global/org-wide bot registry
 
 Considered cross-checking resolved logins against an org-wide list of
@@ -5883,9 +5918,11 @@ tree with no new dependency.
 ### Full detail
 
 See `_resolve_human_identity`, `_known_agent_github_logins`,
-`_ethos_submodule_declared`, `_AgentLoginScan`,
+`_ethos_submodule_declared`, `_SubmoduleDeclaration`,
+`_read_text_or_fail_closed`, `_Unreadable`, `_AgentLoginScan`,
 `_list_identity_yaml_files`, and `_scan_agent_logins` in
 `src/biff/config.py`, and their tests in `tests/test_config.py`
-(`TestReadIdentityYaml`, `TestKnownAgentGithubLogins`, and the
-`test_rejects_bot_github_login_*` / `test_corrupted_bot_identity_file_*`
-/ `test_uninitialized_ethos_submodule_*` cases in `TestLoadCliConfig`).
+(`TestReadIdentityYaml`, `TestEthosSubmoduleDeclared`,
+`TestKnownAgentGithubLogins`, and the `test_rejects_bot_github_login_*` /
+`test_corrupted_bot_identity_file_*` / `test_uninitialized_ethos_submodule_*`
+cases in `TestLoadCliConfig`).
