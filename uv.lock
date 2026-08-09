@@ -964,7 +964,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15.0,<1" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "wcwidth", specifier = ">=0.8.2" },
+    { name = "wcwidth", specifier = ">=0.8.2,<1" },
 ]
 provides-extras = ["lux", "dev"]
 
