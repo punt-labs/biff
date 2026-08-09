@@ -5811,9 +5811,10 @@ registry, no network call, and no dependency on `ethos.yaml` naming a
 specific agent — the scan collects every `kind: agent` entry's `github`
 field it can find in the repo's own registry, independent of which agent
 (if any) is configured to run there. This keeps the check inert in repos
-with no ethos submodule (empty scan, nothing rejected) and keeps its
-failure domain identical to the resolver it protects: same directory,
-same trust boundary, same repo-local scope.
+with no ethos integration at all (empty scan, nothing rejected — see the
+amendment below for the one case where an empty scan is *not* inert) and
+keeps its failure domain identical to the resolver it protects: same
+directory, same trust boundary, same repo-local scope.
 
 **An incomplete scan is treated the same as a confirmed match.** The scan
 returns not just the set of known bot logins but whether the scan itself
@@ -5836,6 +5837,36 @@ accounts and have no reason to carry that field. Only a field that is
 completeness, since that is evidence of a specific, nameable
 registration gone wrong rather than an ordinary unpopulated field.
 
+### Amendment — an uninitialized ethos submodule is unverifiable, not empty
+
+Two independent reviews of this decision converged on the same gap: an
+absent `.punt-labs/ethos/identities/` directory was unconditionally
+treated as "confirmed no bots" (`complete=True`). That is correct when a
+repo has no ethos integration at all, but wrong when the ethos submodule
+*is* declared (`.gitmodules` names `.punt-labs/ethos`) and simply was
+never checked out — `git clone` without `--recurse-submodules`, or
+`git worktree add`, which never initializes submodules, are both
+ordinary and common (the org `CLAUDE.md` documents the first as a
+routine mistake). Both cases leave the identities directory equally
+absent; a missing directory alone cannot distinguish "genuinely no
+ethos" from "unverifiable — the registry that would prove or disprove a
+bot login exists but isn't populated." Live-reproduced in the repo's own
+`.tmp/wt-review-if2` worktree during review: `.gitmodules` declared the
+submodule, but it had never been initialized there, so the identities
+directory was absent and the original code trusted the empty scan.
+
+`_known_agent_github_logins` now consults `.gitmodules` — via
+`_ethos_submodule_declared` — whenever the identities directory is
+absent or empty. `.gitmodules` is an ordinary git-tracked file present
+in every checkout and worktree regardless of submodule-init state, so it
+carries no ambiguity about init state the way directory presence does.
+If `.gitmodules` declares a submodule at `.punt-labs/ethos` and the
+identities directory has no files, the scan reports `complete=False` —
+the same fail-closed path an unreadable identity file already takes —
+with a warning naming the specific remediation (`git submodule update
+--init`). If `.gitmodules` has no such entry, the directory's absence is
+trusted as before: `complete=True`, no warning, inert.
+
 ### Rejected alternative — check a global/org-wide bot registry
 
 Considered cross-checking resolved logins against an org-wide list of
@@ -5852,8 +5883,9 @@ tree with no new dependency.
 ### Full detail
 
 See `_resolve_human_identity`, `_known_agent_github_logins`,
-`_AgentLoginScan`, `_list_identity_yaml_files`, and `_scan_agent_logins`
-in `src/biff/config.py`, and their tests in `tests/test_config.py`
+`_ethos_submodule_declared`, `_AgentLoginScan`,
+`_list_identity_yaml_files`, and `_scan_agent_logins` in
+`src/biff/config.py`, and their tests in `tests/test_config.py`
 (`TestReadIdentityYaml`, `TestKnownAgentGithubLogins`, and the
 `test_rejects_bot_github_login_*` / `test_corrupted_bot_identity_file_*`
-cases in `TestLoadCliConfig`).
+/ `test_uninitialized_ethos_submodule_*` cases in `TestLoadCliConfig`).
