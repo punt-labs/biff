@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from biff._formatting import TABLE_WIDTH, visible_width
 from biff.cli_session import CliContext
 from biff.commands.plan import plan
+from biff.formatting import _NO_PRINTABLE_TEXT
 from biff.relay import LocalRelay
 
 
@@ -56,3 +58,35 @@ class TestPlan:
         assert session is not None
         assert session.plan == "bootstrapped"
         assert session.tty_name == "cli"
+
+    async def test_cjk_plan_wraps_within_the_table_width(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        # /plan is free-form, unbounded-length user text — a CJK-heavy plan
+        # renders at 2 cells/glyph and must wrap the confirmation, not
+        # overflow it onto one unbounded line (biff-2sw).
+        message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
+        result = await plan(ctx, message)
+        assert not result.error
+        lines = result.text.splitlines()
+        assert len(lines) > 2  # "Plan:" + wrapped body lines
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    async def test_escape_in_message_neutralized(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        result = await plan(ctx, "clear\x1b[2Jme")
+        assert not result.error
+        assert "\x1b[2J" not in result.text
+        assert "clear[2Jme" in result.text
+
+    async def test_control_only_message_shows_fallback(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        # A message that is every character control/escape strips to nothing
+        # under terminal_safe — the confirmation must say so explicitly
+        # rather than look like a successful, empty plan was set.
+        result = await plan(ctx, "\x00\x1b\x07")
+        assert not result.error
+        assert _NO_PRINTABLE_TEXT in result.text

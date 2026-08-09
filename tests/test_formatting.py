@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from biff._formatting import TABLE_WIDTH, visible_width
 from biff.formatting import (
+    _NO_PRINTABLE_TEXT,
     _TALK_WRAP_MIN,
     format_finger,
     format_finger_multi,
@@ -258,6 +259,21 @@ class TestFormatWall:
         for line in result.splitlines():
             assert visible_width(line) <= TABLE_WIDTH
 
+    def test_control_only_body_renders_fallback(self) -> None:
+        # WallPost.text requires min_length=1, so a control-only body still
+        # passes validation but strips to nothing under terminal_safe — the
+        # render must say so explicitly, not show a blank, empty-looking
+        # WALL banner that hides the fact the message was dropped.
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="\x00\x1b\x07",
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall(wall)
+        assert _NO_PRINTABLE_TEXT in result
+
 
 class TestFormatWallConfirmation:
     """The post-confirmation shown to the poster wraps like the read-back (biff-2sw)."""
@@ -299,6 +315,19 @@ class TestFormatWallConfirmation:
         result = format_wall_confirmation(post)
         for line in result.splitlines():
             assert visible_width(line) <= TABLE_WIDTH
+
+    def test_control_only_body_renders_fallback(self) -> None:
+        # A confirmation that quietly showed nothing would look successful
+        # while hiding that the poster's entire message was dropped.
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="\x00\x1b\x07",
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_confirmation(post)
+        assert _NO_PRINTABLE_TEXT in result
 
 
 class TestFormatWallStatusLine:
@@ -342,6 +371,17 @@ class TestFormatWallStatusLine:
         assert "\x1b[2K" not in out
         assert "dep[2Jloy freeze" in out
 
+    def test_control_only_body_renders_fallback(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="\x00\x1b\x07",
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_status_line(post)
+        assert _NO_PRINTABLE_TEXT in result
+
 
 class TestFormatTalkEcho:
     """``talk`` accept/send confirmations wrap the echoed message (biff-2sw)."""
@@ -367,6 +407,21 @@ class TestFormatTalkEcho:
         result = format_talk_echo("Sent:", "hi\x1b[2Jthere")
         assert "\x1b[2J" not in result
         assert "hi[2Jthere" in result
+
+    def test_control_only_body_renders_fallback(self) -> None:
+        # A non-empty message that strips to nothing must say so explicitly
+        # instead of echoing a blank body that looks like a successful,
+        # empty send (this helper is also reused by /plan's confirmation).
+        result = format_talk_echo("Sent:", "\x00\x1b\x07")
+        assert _NO_PRINTABLE_TEXT in result
+
+    def test_empty_message_stays_blank(self) -> None:
+        # An empty message is a deliberate "nothing to say" (e.g. clearing a
+        # plan via /plan ""), not a sanitization failure — it must not be
+        # mistaken for control-only garbage and get the fallback text.
+        result = format_talk_echo("Plan:", "")
+        assert _NO_PRINTABLE_TEXT not in result
+        assert result == "Plan:\n   "
 
 
 class TestPairEvents:
