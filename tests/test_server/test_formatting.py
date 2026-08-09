@@ -137,6 +137,22 @@ class TestWrapCells:
         # rather than dropped or corrupted.
         assert wrap_cells("你a", 1) == ["你", "a"]
 
+    def test_oversized_ansi_token_hard_break_never_splits_mid_escape(self) -> None:
+        # A single unbroken "word" carrying an ANSI escape, wider than the
+        # budget, must hard-break on visible content only — never inside
+        # the escape sequence itself (e.g. "\x1b[31m" split into "\x1b[3"
+        # and "1m" across two chunks, corrupting it). The escape is
+        # stripped up front, the same way visible_width strips it, so no
+        # chunk carries a partial or complete escape sequence at all.
+        token = "\x1b[31m" + ("x" * 20) + "\x1b[0m"
+        lines = wrap_cells(token, 5)
+        assert len(lines) > 1
+        assert "".join(lines) == "x" * 20
+        for line in lines:
+            assert "\x1b" not in line
+            assert visible_width(line) <= 5
+            assert visible_width(line) == len(line)
+
 
 class TestClipToWidth:
     def test_ascii_under_budget_unchanged(self) -> None:
@@ -176,6 +192,17 @@ class TestClipToWidth:
         # No clipping needed — the ellipsis-vs-width contract only applies
         # when a clip actually has to happen.
         assert clip_to_width("", 0) == ""
+
+    def test_ansi_text_that_needs_clipping_never_leaves_dangling_escape(self) -> None:
+        # The truncation walk must strip ANSI first (matching visible_width),
+        # not walk the raw string — otherwise a clip boundary lands inside
+        # an escape sequence and emits a dangling, unterminated introducer
+        # ahead of the ellipsis.
+        text = "\x1b[31m" + ("x" * 20) + "\x1b[0m"
+        result = clip_to_width(text, 8)
+        assert result.endswith("…")
+        assert "\x1b" not in result
+        assert visible_width(result) <= 8
 
 
 class TestLastComponent:

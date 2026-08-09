@@ -98,6 +98,11 @@ def clip_to_width(text: str, width: int, *, ellipsis: str = "…") -> str:
     is too narrow to hold even the ellipsis — the alternative is silently
     returning a result wider than the caller asked for, which breaks the
     function's own contract.
+
+    The truncation walk strips ANSI escapes first, the same way
+    :func:`visible_width` does, so a clip boundary landing inside a would-be
+    escape sequence cannot emit a dangling, unterminated introducer ahead of
+    the ellipsis.
     """
     if visible_width(text) <= width:
         return text
@@ -107,7 +112,7 @@ def clip_to_width(text: str, width: int, *, ellipsis: str = "…") -> str:
     budget = width - visible_width(ellipsis)
     out: list[str] = []
     out_width = 0
-    for ch in text:
+    for ch in _ANSI_RE.sub("", text):
         ch_width = _char_width(ch)
         if out_width + ch_width > budget:
             break
@@ -180,11 +185,16 @@ def _break_long_word(word: str, width: int) -> list[str]:
     a 1-cell budget) is still emitted whole, as its own oversized chunk —
     there is no narrower unit to split it into, so the budget is exceeded
     rather than the glyph dropped or corrupted.
+
+    ANSI escapes are stripped up front, the same way :func:`visible_width`
+    strips them before measuring — walking the raw, unstripped word would
+    let a hard break land mid-escape (e.g. splitting ``\\x1b[31m`` into
+    ``\\x1b[3`` and ``1m`` across two chunks) and corrupt the sequence.
     """
     chunks: list[str] = []
     chunk: list[str] = []
     chunk_width = 0
-    for ch in word:
+    for ch in _ANSI_RE.sub("", word):
         ch_width = _char_width(ch)
         if chunk and chunk_width + ch_width > width:
             chunks.append("".join(chunk))
