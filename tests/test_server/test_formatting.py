@@ -81,6 +81,13 @@ class TestVisibleWidth:
         # 5 ASCII cells + 3 CJK glyphs * 2 cells = 11.
         assert visible_width("hello你好嗎") == 11
 
+    def test_control_character_contributes_zero_width(self) -> None:
+        # wcwidth returns -1 for control/indeterminate characters; _char_width
+        # clamps that to 0 rather than letting it subtract from the budget.
+        # BEL (\x07) is outside the ANSI CSI regex, so it reaches wcwidth
+        # directly, unlike stripped CSI sequences.
+        assert visible_width("a\x07b") == 2
+
 
 class TestWrapCells:
     def test_ascii_wraps_like_textwrap(self) -> None:
