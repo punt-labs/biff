@@ -23,6 +23,7 @@ import re
 import stat
 import subprocess
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import cast
 
@@ -231,6 +232,44 @@ def get_ethos_roster() -> EthosRoster | None:
     return _parse_roster_legacy(raw)
 
 
+@dataclass(frozen=True, slots=True)
+class _Unreadable:
+    """Sentinel: a path exists but its contents could not be recovered.
+
+    Carries the triggering exception so each caller can log with its own
+    context-specific wording -- what a permission-denied or corrupt-encoding
+    read *means* differs by caller (a malformed identity file vs. an
+    unverifiable ``.gitmodules``), even though the failure mode reaching
+    this point is identical.
+    """
+
+    exc: OSError | UnicodeDecodeError
+
+
+def _read_text_or_fail_closed(path: Path) -> str | _Unreadable | None:
+    """Return *path*'s UTF-8 text, distinguishing absence from unreadability.
+
+    Three outcomes, not two. Collapsing "confirmed absent"
+    (``FileNotFoundError``) and "exists but unreadable" (any other
+    ``OSError``, or ``UnicodeDecodeError`` on invalid UTF-8) into a single
+    ``None`` is the exact bug this helper exists to make structurally hard
+    to repeat -- see DES-053's amendment history in ``DESIGN.md``, where
+    that collapse was fixed once in :func:`_read_identity_yaml` and then
+    reintroduced from scratch in what is now :func:`_ethos_submodule_declared`.
+
+    Returns ``None`` only for ``FileNotFoundError`` -- the one case safe to
+    treat as "nothing to see here." Returns :class:`_Unreadable` for every
+    other read failure, so the caller fails closed instead of silently
+    treating an unverifiable file as absent.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        return _Unreadable(exc)
+
+
 def _read_identity_yaml(path: Path) -> dict[str, object] | None:
     """Load identity YAML, swallowing parse errors with a warning.
 
@@ -239,19 +278,20 @@ def _read_identity_yaml(path: Path) -> dict[str, object] | None:
     starting -- the fallback chain handles missing or malformed
     identity files (spec invariant 8).
     """
-    try:
-        raw: object = yaml.safe_load(path.read_text())
-    except FileNotFoundError:
+    text = _read_text_or_fail_closed(path)
+    if text is None:
         # Benign TOCTOU race with the directory listing in
         # _list_identity_yaml_files -- the file existed when listed,
         # gone by the time it's read. Not worth a warning.
         return None
-    except OSError as exc:
-        logger.warning("Failed to read identity YAML %s: %s", path, exc)
+    if isinstance(text, _Unreadable):
+        if isinstance(text.exc, UnicodeDecodeError):
+            logger.warning("Identity YAML %s is not valid UTF-8: %s", path, text.exc)
+        else:
+            logger.warning("Failed to read identity YAML %s: %s", path, text.exc)
         return None
-    except UnicodeDecodeError as exc:
-        logger.warning("Identity YAML %s is not valid UTF-8: %s", path, exc)
-        return None
+    try:
+        raw: object = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         logger.warning("Failed to parse identity YAML %s: %s", path, exc)
         return None
@@ -379,8 +419,25 @@ def _scan_agent_logins(paths: tuple[Path, ...]) -> _AgentLoginScan:
 _ETHOS_SUBMODULE_PATH = ".punt-labs/ethos"
 
 
-def _ethos_submodule_declared(repo_root: Path) -> bool:
-    """Return whether ``.gitmodules`` declares a submodule at ``.punt-labs/ethos``.
+class _SubmoduleDeclaration(Enum):
+    """Whether ``.gitmodules`` declares a submodule at ``.punt-labs/ethos``.
+
+    Three states, not two -- ``ABSENT`` and ``UNVERIFIABLE`` must stay
+    distinguishable all the way to the caller. Only ``ABSENT`` is safe to
+    treat as "no ethos integration here." Both ``DECLARED`` and
+    ``UNVERIFIABLE`` mean the caller cannot trust an empty identities scan
+    and must fail closed, for different but equally load-bearing reasons:
+    one is a confirmed match, the other is a match that couldn't be ruled
+    out.
+    """
+
+    ABSENT = "absent"
+    DECLARED = "declared"
+    UNVERIFIABLE = "unverifiable"
+
+
+def _ethos_submodule_declared(repo_root: Path) -> _SubmoduleDeclaration:
+    """Classify whether ``.gitmodules`` declares a submodule at ``.punt-labs/ethos``.
 
     A missing ``.punt-labs/ethos/identities/`` directory is ambiguous on
     its own: it looks identical whether this repo has no ethos
@@ -393,14 +450,43 @@ def _ethos_submodule_declared(repo_root: Path) -> bool:
     the ``path =`` line is sufficient here; ``.gitmodules`` is trusted
     repo content, not adversarial input, so a full INI parser buys
     nothing.
+
+    An unreadable or non-UTF-8 ``.gitmodules`` is classified
+    ``UNVERIFIABLE``, not ``ABSENT`` -- a ``.gitmodules`` that correctly
+    declares the submodule but happens to be unreadable must fail closed
+    exactly like a confirmed ``DECLARED`` match, or the bot-impersonation
+    vulnerability DES-053 exists to close reopens silently and without a
+    log line. Routes through :func:`_read_text_or_fail_closed` so this
+    distinction doesn't have to be reimplemented by hand here.
     """
     gitmodules = repo_root / ".gitmodules"
-    try:
-        text = gitmodules.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    pattern = rf"^[ \t]*path[ \t]*=[ \t]*{re.escape(_ETHOS_SUBMODULE_PATH)}[ \t]*$"
-    return re.search(pattern, text, re.MULTILINE) is not None
+    text = _read_text_or_fail_closed(gitmodules)
+    if text is None:
+        return _SubmoduleDeclaration.ABSENT
+    if isinstance(text, _Unreadable):
+        if isinstance(text.exc, UnicodeDecodeError):
+            logger.warning(
+                "%s is not valid UTF-8 -- treating the ethos submodule "
+                "declaration as unverifiable: %s",
+                gitmodules,
+                text.exc,
+            )
+        else:
+            logger.warning(
+                "%s exists but could not be read -- treating the ethos "
+                "submodule declaration as unverifiable: %s",
+                gitmodules,
+                text.exc,
+            )
+        return _SubmoduleDeclaration.UNVERIFIABLE
+    # ``\r?`` before the end anchor: a .gitmodules checked out with CRLF
+    # line endings leaves a trailing \r that [ \t]*$ alone would not
+    # consume, producing a false ABSENT for a submodule that is in fact
+    # declared.
+    pattern = rf"^[ \t]*path[ \t]*=[ \t]*{re.escape(_ETHOS_SUBMODULE_PATH)}[ \t]*\r?$"
+    if re.search(pattern, text, re.MULTILINE) is not None:
+        return _SubmoduleDeclaration.DECLARED
+    return _SubmoduleDeclaration.ABSENT
 
 
 def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
@@ -421,25 +507,33 @@ def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
     submodule -- inert in repos with no ethos integration at all.
     Returns an empty, *incomplete* scan when the directory is absent or
     empty but ``.gitmodules`` DOES declare a submodule at
-    ``.punt-labs/ethos``: an uninitialized submodule is unverifiable,
-    not "confirmed no bots" (see :func:`_ethos_submodule_declared`,
+    ``.punt-labs/ethos``, or when ``.gitmodules`` itself couldn't be read
+    or decoded: an uninitialized submodule is unverifiable, and so is a
+    submodule declaration we can't confirm one way or the other -- neither
+    is "confirmed no bots" (see :func:`_ethos_submodule_declared`,
     DES-053).
     """
     identities_dir = repo_root / ".punt-labs" / "ethos" / "identities"
     paths = _list_identity_yaml_files(identities_dir)
     if paths is None:
         return _AgentLoginScan(logins=frozenset(), complete=False)
-    if not paths and _ethos_submodule_declared(repo_root):
-        logger.warning(
-            "%s declares a submodule at %s but %s has no identity files -- "
-            "treating the bot-login scan as incomplete (uninitialized "
-            "submodule, not 'no ethos integration'); run "
-            "`git submodule update --init` to populate it",
-            repo_root / ".gitmodules",
-            _ETHOS_SUBMODULE_PATH,
-            identities_dir,
-        )
-        return _AgentLoginScan(logins=frozenset(), complete=False)
+    if not paths:
+        declaration = _ethos_submodule_declared(repo_root)
+        if declaration is _SubmoduleDeclaration.DECLARED:
+            logger.warning(
+                "%s declares a submodule at %s but %s has no identity files -- "
+                "treating the bot-login scan as incomplete (uninitialized "
+                "submodule, not 'no ethos integration'); run "
+                "`git submodule update --init` to populate it",
+                repo_root / ".gitmodules",
+                _ETHOS_SUBMODULE_PATH,
+                identities_dir,
+            )
+            return _AgentLoginScan(logins=frozenset(), complete=False)
+        if declaration is _SubmoduleDeclaration.UNVERIFIABLE:
+            # _ethos_submodule_declared already logged the specific
+            # OSError / UnicodeDecodeError.
+            return _AgentLoginScan(logins=frozenset(), complete=False)
     return _scan_agent_logins(paths)
 
 

@@ -15,8 +15,10 @@ from biff.config import (
     DEMO_RELAY_URL,
     EthosIdentity,
     GitHubIdentity,
+    _ethos_submodule_declared,
     _known_agent_github_logins,
     _read_identity_yaml,
+    _SubmoduleDeclaration,
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
@@ -1032,6 +1034,87 @@ class TestReadIdentityYaml:
         assert any(
             "did not parse to a mapping" in r.getMessage() for r in caplog.records
         )
+
+
+# -- _ethos_submodule_declared --
+
+
+class TestEthosSubmoduleDeclared:
+    """Direct coverage of the ``.gitmodules`` classification helper.
+
+    ``_ethos_submodule_declared`` used to fold "confirmed absent" and
+    "exists but unreadable/undecodable" into a single ``False`` return --
+    the exact bug class DES-053 exists to close, reintroduced one
+    function later. These tests exercise the helper in isolation so that
+    regression coverage does not depend on threading through
+    ``_known_agent_github_logins`` and ``load_cli_config``.
+    """
+
+    def test_no_gitmodules_file_is_absent(self, tmp_path: Path) -> None:
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.ABSENT
+
+    def test_gitmodules_without_ethos_entry_is_absent(self, tmp_path: Path) -> None:
+        (tmp_path / ".gitmodules").write_text(
+            '[submodule "vendor/other"]\n'
+            "\tpath = vendor/other\n"
+            "\turl = git@example.com:x/other.git\n"
+        )
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.ABSENT
+
+    def test_gitmodules_with_ethos_entry_is_declared(self, tmp_path: Path) -> None:
+        _write_gitmodules_ethos(tmp_path)
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.DECLARED
+
+    def test_gitmodules_with_crlf_line_endings_is_declared(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``.gitmodules`` checked out with CRLF line endings (Windows,
+        or ``core.autocrlf=true``) must still match. The declaration
+        regex's trailing ``[ \\t]*$`` does not, on its own, consume a
+        ``\\r`` sitting immediately before the ``\\n`` -- a plausible
+        latent false negative on any repo checked out with CRLF.
+        """
+        (tmp_path / ".gitmodules").write_bytes(
+            b'[submodule ".punt-labs/ethos"]\r\n'
+            b"\tpath = .punt-labs/ethos\r\n"
+            b"\turl = git@github.com:punt-labs/team.git\r\n"
+        )
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.DECLARED
+
+    @_SKIP_AS_ROOT
+    def test_unreadable_gitmodules_is_unverifiable_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``.gitmodules`` that correctly declares the ethos submodule
+        but happens to be unreadable must fail closed (UNVERIFIABLE), not
+        be folded into ABSENT -- an unreadable file that in fact declares
+        the submodule is exactly the bot-impersonation vulnerability
+        DES-053 exists to close, reopened silently.
+        """
+        _write_gitmodules_ethos(tmp_path)
+        path = tmp_path / ".gitmodules"
+        path.chmod(0o000)
+        try:
+            with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+                result = _ethos_submodule_declared(tmp_path)
+        finally:
+            path.chmod(0o644)
+        assert result is _SubmoduleDeclaration.UNVERIFIABLE
+        assert any("could not be read" in r.getMessage() for r in caplog.records)
+
+    def test_invalid_utf8_gitmodules_is_unverifiable_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``UnicodeDecodeError`` is not an ``OSError`` subclass -- a bare
+        ``except OSError`` does not catch it at all, so a corrupted
+        ``.gitmodules`` would previously propagate uncaught through
+        ``_known_agent_github_logins`` and crash the CLI.
+        """
+        (tmp_path / ".gitmodules").write_bytes(b"\xff\xfe not valid utf-8\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            result = _ethos_submodule_declared(tmp_path)
+        assert result is _SubmoduleDeclaration.UNVERIFIABLE
+        assert any("not valid UTF-8" in r.getMessage() for r in caplog.records)
 
 
 # -- _known_agent_github_logins --
