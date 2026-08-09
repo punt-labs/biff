@@ -282,57 +282,61 @@ class _AgentLoginScan:
     complete: bool
 
 
-def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
-    """Return the GitHub logins of every ``kind: agent`` identity on disk.
+def _list_identity_yaml_files(identities_dir: Path) -> tuple[Path, ...] | None:
+    """Return every ``*.yaml`` file directly under *identities_dir*.
 
-    Scans ``{repo_root}/.punt-labs/ethos/identities/*.yaml`` directly --
-    unlike :func:`resolve_agent_identity_from_disk`, this does not
-    require ``ethos.yaml`` to name a specific agent. A durable Claude
-    Agento shell sources a bot's ``GH_TOKEN`` for its entire lifetime
-    (org CLAUDE.md), so ``gh api user`` can resolve to the bot even when
-    a human is at the keyboard. Cross-checking the resolved login
-    against the repo's own identity registry lets
-    :func:`_resolve_human_identity` detect and reject that case
-    (biff-if2). Returns an empty, complete scan when the identities
-    directory is absent -- inert in repos with no ethos submodule.
+    Returns ``None`` (already logged) when the directory doesn't exist,
+    isn't a directory, or can't be listed. ``None`` here means "this scan
+    cannot be trusted" -- distinct from an empty tuple, which means "this
+    directory genuinely has no identity files."
+
+    Uses ``iterdir()``, not ``glob()``: ``Path.glob`` silently skips
+    directories it can't scandir (it swallows ``PermissionError``
+    internally to mimic shell glob semantics), which would fold
+    "unreadable" back into "empty" -- exactly the silent failure this
+    function exists to surface. ``os.stat`` (unlike ``Path.is_dir`` /
+    ``exists``) likewise lets ``PermissionError`` propagate instead of
+    folding it into a bare ``False``, distinguishing "no ethos submodule"
+    (``FileNotFoundError``) from "submodule configured but its directory
+    isn't readable" -- a submodule present but never checked out, e.g.
+    ``git clone`` without ``--recurse-submodules``, is the common
+    real-world way the latter shows up (see the org CLAUDE.md "Initial
+    checkout" section).
     """
-    identities_dir = repo_root / ".punt-labs" / "ethos" / "identities"
-    # os.stat (unlike Path.is_dir/exists) lets PermissionError propagate
-    # instead of folding it into a bare False -- that's what lets us tell
-    # "no ethos submodule" (FileNotFoundError, a complete scan of nothing)
-    # apart from "ethos submodule configured but its directory isn't
-    # readable" (an incomplete scan; a submodule present but never
-    # checked out, e.g. ``git clone`` without ``--recurse-submodules``,
-    # is the common real-world way this shows up -- see the org
-    # CLAUDE.md "Initial checkout" section).
     try:
         st = identities_dir.stat()
     except FileNotFoundError:
         logger.debug("No identities directory at %s", identities_dir)
-        return _AgentLoginScan(logins=frozenset(), complete=True)
-    except PermissionError:
-        logger.warning(
-            "Identities directory %s exists but is not readable (permission denied)",
-            identities_dir,
-        )
-        return _AgentLoginScan(logins=frozenset(), complete=False)
+        return ()
     except OSError as exc:
         logger.warning(
-            "Failed to stat identities directory %s: %s", identities_dir, exc
+            "Identities directory %s is not readable: %s", identities_dir, exc
         )
-        return _AgentLoginScan(logins=frozenset(), complete=False)
+        return None
     if not stat.S_ISDIR(st.st_mode):
         logger.warning("%s exists but is not a directory", identities_dir)
-        return _AgentLoginScan(logins=frozenset(), complete=False)
-    paths = sorted(identities_dir.glob("*.yaml"))
+        return None
+    try:
+        return tuple(sorted(p for p in identities_dir.iterdir() if p.suffix == ".yaml"))
+    except OSError as exc:
+        logger.warning(
+            "Identities directory %s is not readable: %s", identities_dir, exc
+        )
+        return None
+
+
+def _scan_agent_logins(paths: tuple[Path, ...]) -> _AgentLoginScan:
+    """Read every identity file in *paths*, collecting agent GitHub logins.
+
+    Counts entries this scan could not fully account for: unreadable/
+    unparsable files, and ``kind: agent`` entries that DO declare a
+    ``github`` field but with an unusable value. A ``github`` field
+    that's simply absent is the ordinary, expected shape for most agent
+    identities (most agents aren't registered bot accounts) and is not
+    counted here -- only a field that's present but broken (null, wrong
+    type, empty string) is evidence something is wrong.
+    """
     logins: set[str] = set()
-    # Counts entries this scan could not fully account for: unreadable/
-    # unparsable files, and ``kind: agent`` entries that DO declare a
-    # ``github`` field but with an unusable value. A ``github`` field
-    # that's simply absent is the ordinary, expected shape for most
-    # agent identities (most agents aren't registered bot accounts) and
-    # is not counted here -- only a field that's present but broken
-    # (null, wrong type, empty string) is evidence something is wrong.
     incomplete = 0
     for path in paths:
         identity = _read_identity_yaml(path)
@@ -361,6 +365,27 @@ def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
             incomplete,
         )
     return _AgentLoginScan(logins=frozenset(logins), complete=incomplete == 0)
+
+
+def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
+    """Return the GitHub logins of every ``kind: agent`` identity on disk.
+
+    Scans ``{repo_root}/.punt-labs/ethos/identities/*.yaml`` directly --
+    unlike :func:`resolve_agent_identity_from_disk`, this does not
+    require ``ethos.yaml`` to name a specific agent. A durable Claude
+    Agento shell sources a bot's ``GH_TOKEN`` for its entire lifetime
+    (org CLAUDE.md), so ``gh api user`` can resolve to the bot even when
+    a human is at the keyboard. Cross-checking the resolved login
+    against the repo's own identity registry lets
+    :func:`_resolve_human_identity` detect and reject that case
+    (biff-if2). Returns an empty, complete scan when the identities
+    directory is absent -- inert in repos with no ethos submodule.
+    """
+    identities_dir = repo_root / ".punt-labs" / "ethos" / "identities"
+    paths = _list_identity_yaml_files(identities_dir)
+    if paths is None:
+        return _AgentLoginScan(logins=frozenset(), complete=False)
+    return _scan_agent_logins(paths)
 
 
 def _find_ethos_config(repo_root: Path) -> Path | None:
