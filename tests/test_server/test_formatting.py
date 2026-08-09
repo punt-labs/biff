@@ -142,6 +142,28 @@ class TestClipToWidth:
         assert visible_width(result) <= 8
         assert result.endswith("…")
 
+    def test_zero_width_that_needs_clipping_raises(self) -> None:
+        # A budget too narrow to even hold the ellipsis must raise rather
+        # than silently return a result wider than the requested budget.
+        with pytest.raises(ValueError, match="narrower than"):
+            clip_to_width("hello", 0)
+
+    def test_width_narrower_than_ellipsis_raises(self) -> None:
+        with pytest.raises(ValueError, match="narrower than"):
+            clip_to_width("hello world", 0)
+
+    def test_width_meeting_the_ellipsis_budget_does_not_raise(self) -> None:
+        # width == visible_width(ellipsis) is the minimum viable budget —
+        # the clip degenerates to the bare ellipsis, but that's still a
+        # result no wider than requested.
+        result = clip_to_width("hello world", 1)
+        assert result == "…"
+
+    def test_text_that_fits_is_returned_even_when_width_is_zero(self) -> None:
+        # No clipping needed — the ellipsis-vs-width contract only applies
+        # when a clip actually has to happen.
+        assert clip_to_width("", 0) == ""
+
 
 class TestLastComponent:
     def test_deep_path(self) -> None:

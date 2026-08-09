@@ -93,10 +93,18 @@ def clip_to_width(text: str, width: int, *, ellipsis: str = "…") -> str:
     Measures by cell width (:func:`visible_width`), not code points, so the
     clip boundary never straddles a wide glyph (CJK, emoji) and undercounts
     its contribution to the budget the way ``len()``-based clipping would.
+
+    Raises :class:`ValueError` when a clip is actually needed but *width*
+    is too narrow to hold even the ellipsis — the alternative is silently
+    returning a result wider than the caller asked for, which breaks the
+    function's own contract.
     """
     if visible_width(text) <= width:
         return text
-    budget = max(width - visible_width(ellipsis), 0)
+    if width < visible_width(ellipsis):
+        msg = f"clip width {width} is narrower than the ellipsis {ellipsis!r}"
+        raise ValueError(msg)
+    budget = width - visible_width(ellipsis)
     out: list[str] = []
     out_width = 0
     for ch in text:
