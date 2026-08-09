@@ -25,6 +25,7 @@ dependencies = [
     "nats-py[nkeys]>=2.13.1,<3",
     "pyyaml>=6.0,<7",
     "psutil>=6.0,<8",
+    "wcwidth>=0.8.2",
 ]
 
 [project.optional-dependencies]
