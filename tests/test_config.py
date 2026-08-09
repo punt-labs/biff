@@ -583,6 +583,26 @@ class TestLoadCliConfig:
         assert resolved.config.display_name == ""
         assert resolved.config.kind == ""
 
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_rejects_bot_github_login_differing_only_by_case(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        """GitHub logins are case-insensitive -- a registry entry that
+        differs only by case (or trailing whitespace) from the resolved
+        login must still be caught by the bot denylist, not fail open.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        identities = repo / ".punt-labs" / "ethos" / "identities"
+        identities.mkdir(parents=True, exist_ok=True)
+        (identities / "claude.yaml").write_text(
+            "handle: claude\nname: Claude Agento\nkind: agent\n"
+            "github: ' Claude-PuntLabs '\n"
+        )
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.kind == ""
+
     @patch("biff.config.get_os_user", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
     def test_rejects_bot_github_login_exits_when_no_os_user(
@@ -1229,6 +1249,21 @@ class TestKnownAgentGithubLogins:
             "Scanned 2 identity files, 1 incomplete or unreadable" in r.getMessage()
             for r in caplog.records
         )
+
+    def test_github_field_normalized_to_casefolded_stripped_login(
+        self, tmp_path: Path
+    ) -> None:
+        """GitHub logins are case-insensitive -- ``scan.logins`` must store
+        the casefolded, whitespace-stripped form so a membership check
+        against a resolved (also-normalized) login isn't defeated by an
+        identity YAML whose ``github`` field differs only by case or a
+        trailing space from ``gh api user``'s canonical ``.login``.
+        """
+        _write_identity_yaml(
+            tmp_path, "claude", "kind: agent\ngithub: ' Claude-PuntLabs '\n"
+        )
+        scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset({"claude-puntlabs"})
 
     @_SKIP_AS_ROOT
     def test_corrupted_bot_identity_file_not_silently_trusted(

@@ -316,6 +316,10 @@ class _AgentLoginScan:
     ``complete`` -- treating an incomplete scan as trustworthy is
     exactly how a bot's GitHub login leaks into a human identity with
     its own registration file sitting right there, just unreadable.
+
+    ``logins`` entries are casefolded and stripped -- GitHub logins are
+    case-insensitive, so callers must normalize the login they compare
+    against the same way (see :func:`_resolve_human_identity`).
     """
 
     logins: frozenset[str]
@@ -397,8 +401,13 @@ def _scan_agent_logins(paths: tuple[Path, ...]) -> _AgentLoginScan:
         if identity.get("kind") != "agent" or "github" not in identity:
             continue
         github = identity.get("github")
-        if isinstance(github, str) and github:
-            logins.add(github)
+        if isinstance(github, str) and github.strip():
+            # GitHub logins are case-insensitive; casefold + strip so a
+            # registry entry that differs only by case or trailing
+            # whitespace from `gh api user`'s canonical `.login` still
+            # lands in the denylist (see the matching normalization in
+            # _resolve_human_identity).
+            logins.add(github.strip().casefold())
         else:
             incomplete += 1
             logger.warning(
@@ -1186,7 +1195,9 @@ def _resolve_human_identity(
     unverified_login: str | None = None
     if identity is not None:
         scan = _known_agent_github_logins(repo_root)
-        if identity.login in scan.logins:
+        # scan.logins is already casefolded + stripped -- normalize this
+        # side identically or a same-login-different-case bot fails open.
+        if identity.login.strip().casefold() in scan.logins:
             logger.warning(
                 "GitHub login %r matches a known bot/agent identity; "
                 "falling back to OS user for CLI identity",
