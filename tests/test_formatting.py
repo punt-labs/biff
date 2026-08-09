@@ -469,6 +469,18 @@ class TestFormatTalkEcho:
         assert _NO_PRINTABLE_TEXT not in result
         assert _NO_VISIBLE_CONTENT in result
 
+    def test_mixed_control_and_space_message_renders_distinct_fallback(
+        self,
+    ) -> None:
+        # " \x07 " has a BEL sandwiched between two spaces.  terminal_safe
+        # strips the BEL but keeps both spaces, so something survived (just
+        # not anything visible) — this must read the same as a pure-
+        # whitespace body, not "no printable text", which would falsely
+        # claim nothing survived at all.
+        result = format_talk_echo("Plan:", " \x07 ")
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT in result
+
     def test_empty_message_stays_blank(self) -> None:
         # An empty message is a deliberate "nothing to say" (e.g. clearing a
         # plan via /plan ""), not a sanitization failure — it must not be

@@ -103,11 +103,13 @@ def visible_text(raw: str) -> str:
     why not?  There are two distinct reasons, and conflating them produces
     a false claim:
 
-    * The text was whitespace-only (or empty) and :func:`terminal_safe`
-      left it untouched — nothing was stripped, there was simply nothing
-      to see.  Reported as :data:`_NO_VISIBLE_CONTENT`.
-    * The text held only control/escape characters, and :func:`terminal_safe`
-      actually removed them all.  Reported as :data:`_NO_PRINTABLE_TEXT`.
+    * :func:`terminal_safe` left *something* behind (e.g. spaces survive a
+      stripped control byte, or *raw* was whitespace-only to begin with) —
+      there is content, it just isn't visible.  Reported as
+      :data:`_NO_VISIBLE_CONTENT`.
+    * :func:`terminal_safe` left nothing behind at all — *raw* was empty, or
+      every character in it was control/escape and got stripped.  Reported
+      as :data:`_NO_PRINTABLE_TEXT`.
 
     Callers that treat an empty *raw* as a deliberate, meaningful choice
     (e.g. ``/plan ""`` clearing a plan) must check that case themselves
@@ -117,9 +119,9 @@ def visible_text(raw: str) -> str:
     safe = terminal_safe(raw)
     if safe.strip():
         return safe
-    if safe == raw:
-        return _NO_VISIBLE_CONTENT
-    return _NO_PRINTABLE_TEXT
+    if not safe:
+        return _NO_PRINTABLE_TEXT
+    return _NO_VISIBLE_CONTENT
 
 
 # ---------------------------------------------------------------------------
