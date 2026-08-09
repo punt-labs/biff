@@ -291,6 +291,23 @@ class TestFormatWall:
         assert _NO_PRINTABLE_TEXT not in result
         assert _NO_VISIBLE_CONTENT not in result
 
+    def test_giant_sender_renders_bounded(self) -> None:
+        # WallPost.from_user has no max_length — mirrors
+        # test_giant_label_and_body_render_bounded's defense in depth for
+        # format_talk_line: a forged sender must not blow the header line
+        # (or, for format_wall_status_line, the per-line indent) past a
+        # bounded size.
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="word " * 100,  # 500 chars — WallPost caps text at 512
+            from_user="u" * 10_000,
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall(wall)
+        longest = max(visible_width(line) for line in result.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
+
 
 class TestFormatWallConfirmation:
     """The post-confirmation shown to the poster wraps like the read-back (biff-2sw)."""
@@ -424,6 +441,24 @@ class TestFormatWallStatusLine:
         assert "a" in result
         assert _NO_PRINTABLE_TEXT not in result
         assert _NO_VISIBLE_CONTENT not in result
+
+    def test_giant_sender_renders_bounded(self) -> None:
+        # WallPost.from_user has no max_length. Here the sender feeds
+        # directly into the wrap-width budget (``width = TABLE_WIDTH -
+        # visible_width(prefix)``), so an uncapped sender collapses width
+        # toward 1 and explodes into one hard-broken line per glyph, each
+        # carrying a sender-sized indent — the O(label x body) amplification
+        # test_giant_label_and_body_render_bounded guards against for talk.
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="word " * 100,  # 500 chars — WallPost caps text at 512
+            from_user="u" * 10_000,
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_status_line(post)
+        longest = max(visible_width(line) for line in result.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
 
 
 class TestFormatTalkEcho:

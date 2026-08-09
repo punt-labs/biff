@@ -442,9 +442,13 @@ def format_wall(wall: WallPost) -> str:
     a bare, empty-looking ``▶  WALL`` banner with no hint the poster's
     message was silently dropped.  See :func:`visible_text` for how a
     control-only body is distinguished from a whitespace-only one.
+
+    ``WallPost.from_user`` has no ``max_length``, so the sender is capped at
+    :data:`_MAX_LABEL_WIDTH` the same way :func:`format_talk_line` caps its
+    label — otherwise a forged sender renders one unbounded header line.
     """
     remaining = format_remaining(wall.expires_at)
-    sender = terminal_safe(wall.from_user)
+    sender = _truncate(terminal_safe(wall.from_user), _MAX_LABEL_WIDTH)
     if wall.from_tty:
         sender += f" ({terminal_safe(wall.from_tty)})"
     text = visible_text(wall.text)
@@ -478,9 +482,16 @@ def format_wall_status_line(post: WallPost) -> str:
     with continuation lines aligned under the sender label instead of
     embedding raw text on one unbounded line (biff-2sw). Falls back the same
     way on a control-only body.
+
+    ``WallPost.from_user`` has no ``max_length``, so the sender is capped at
+    :data:`_MAX_LABEL_WIDTH` the same way :func:`format_talk_line` caps its
+    label — otherwise a forged sender collapses ``width`` toward 1 and
+    explodes the wrap into one hard-broken line per glyph, each carrying a
+    sender-sized indent (the same O(label x body) amplification
+    :func:`format_talk_line` already guards against).
     """
     remaining = format_remaining(post.expires_at)
-    sender = terminal_safe(post.from_user)
+    sender = _truncate(terminal_safe(post.from_user), _MAX_LABEL_WIDTH)
     text = visible_text(post.text)
     prefix = f"wall: {sender}: "
     width = max(TABLE_WIDTH - visible_width(prefix), 1)
