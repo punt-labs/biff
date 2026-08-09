@@ -308,6 +308,7 @@ class TestExtractRelayAuth:
 _KAI = GitHubIdentity(login="kai", display_name="Kai Chen")
 _KAI_NO_NAME = GitHubIdentity(login="kai", display_name="")
 _FROM_GIT = GitHubIdentity(login="from-git", display_name="Git User")
+_BOT_IDENTITY = GitHubIdentity(login="claude-puntlabs", display_name="Claude Agento")
 
 
 def _setup_repo_with_yaml(tmp_path: Path) -> Path:
@@ -331,6 +332,21 @@ def _write_agent_identity_fixture(repo_root: Path, handle: str = "claude") -> No
     identities.mkdir(parents=True, exist_ok=True)
     (identities / f"{handle}.yaml").write_text(
         f"handle: {handle}\nname: Claude Agento\nkind: agent\n"
+    )
+
+
+def _write_bot_identity_fixture(repo_root: Path, handle: str = "claude") -> None:
+    """Register a ``kind: agent`` identity with a GitHub login, no ``ethos.yaml``.
+
+    Unlike :func:`_write_agent_identity_fixture`, this omits
+    ``.punt-labs/ethos.yaml`` -- the bot-login cross-check scans every
+    identity file directly and must not depend on the repo's *active*
+    agent being configured.
+    """
+    identities = repo_root / ".punt-labs" / "ethos" / "identities"
+    identities.mkdir(parents=True, exist_ok=True)
+    (identities / f"{handle}.yaml").write_text(
+        f"handle: {handle}\nname: Claude Agento\nkind: agent\ngithub: claude-puntlabs\n"
     )
 
 
@@ -499,6 +515,60 @@ class TestLoadCliConfig:
         resolved = load_cli_config(start=repo)
         assert resolved.config.user == "kai"
         assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_rejects_bot_github_login_falls_back_to_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        """A ``GH_TOKEN`` pinned to a bot PAT must not silently become the CLI user.
+
+        Regression for biff-if2: every Claude Agento session sources a
+        bot ``GH_TOKEN`` into its shell (org CLAUDE.md). Once ``gh api
+        user`` resolves to that bot, the CLI must reject it and fall
+        back to the OS user rather than silently identifying the human
+        operator as the bot.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.display_name == ""
+        assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_rejects_bot_github_login_exits_when_no_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)
+        with pytest.raises(SystemExit, match="claude-puntlabs"):
+            load_cli_config(start=repo)
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_uses_github_login_when_no_matching_bot_identity(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        """A GitHub login with no matching agent identity is used normally."""
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)  # registers claude-puntlabs, not kai
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "kai"
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_human_identity_with_github_field_is_not_rejected(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        """Only ``kind: agent`` identities are cross-checked -- humans are exempt."""
+        repo = _setup_repo_with_yaml(tmp_path)
+        identities = repo / ".punt-labs" / "ethos" / "identities"
+        identities.mkdir(parents=True, exist_ok=True)
+        (identities / "jfreeman.yaml").write_text(
+            "handle: jfreeman\nname: Jim Freeman\nkind: human\ngithub: kai\n"
+        )
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "kai"
 
 
 class TestLoadMcpConfig:

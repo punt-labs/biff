@@ -241,6 +241,34 @@ def _read_identity_yaml(path: Path) -> dict[str, object] | None:
     return None
 
 
+def _known_agent_github_logins(repo_root: Path) -> frozenset[str]:
+    """Return the GitHub logins of every ``kind: agent`` identity on disk.
+
+    Scans ``{repo_root}/.punt-labs/ethos/identities/*.yaml`` directly --
+    unlike :func:`resolve_agent_identity_from_disk`, this does not
+    require ``ethos.yaml`` to name a specific agent. A durable Claude
+    Agento shell sources a bot's ``GH_TOKEN`` for its entire lifetime
+    (org CLAUDE.md), so ``gh api user`` can resolve to the bot even when
+    a human is at the keyboard. Cross-checking the resolved login
+    against the repo's own identity registry lets
+    :func:`_resolve_human_identity` detect and reject that case
+    (biff-if2). Returns an empty set when the identities directory is
+    absent -- inert in repos with no ethos submodule.
+    """
+    identities_dir = repo_root / ".punt-labs" / "ethos" / "identities"
+    if not identities_dir.is_dir():
+        return frozenset()
+    logins: set[str] = set()
+    for path in sorted(identities_dir.glob("*.yaml")):
+        identity = _read_identity_yaml(path)
+        if identity is None or identity.get("kind") != "agent":
+            continue
+        github = identity.get("github")
+        if isinstance(github, str) and github:
+            logins.add(github)
+    return frozenset(logins)
+
+
 def _find_ethos_config(repo_root: Path) -> Path | None:
     """Return the ethos config path, preferring the new location over the legacy one."""
     primary = repo_root / ".punt-labs" / "ethos.yaml"
@@ -844,21 +872,44 @@ def _load_base_config(
     )
 
 
+_BOT_GITHUB_NO_USER_MSG = (
+    "GitHub identity {login!r} is registered as a bot/agent account in "
+    ".punt-labs/ethos/identities/; refusing to use it as your CLI identity. "
+    "Pass --user <handle>, or run biff from a shell whose GH_TOKEN is not "
+    "pinned to a bot."
+)
+
+
 def _resolve_human_identity(
-    user_override: str | None,
+    user_override: str | None, repo_root: Path
 ) -> tuple[str, str, str]:
     """Return (user, display_name, kind) from the human-identity chain.
 
     Chain: ``user_override`` -> ``get_github_identity()`` -> ``get_os_user()``.
+    A resolved GitHub login that matches a ``kind: agent`` identity in
+    ``.punt-labs/ethos/identities/`` is rejected and treated the same as
+    ``get_github_identity()`` returning ``None`` -- a bot's ``GH_TOKEN``
+    pinned into a human's shell (every Claude Agento session sources one,
+    see ``~/.punt-labs/git-identity.env``) must never silently become the
+    human's biff identity (DES-040 amendment, biff-if2).
+
     Raises :class:`SystemExit` when no identity source succeeds.
     """
     if user_override is not None:
         return user_override, "", ""
     identity = get_github_identity()
     if identity is not None:
-        return identity.login, identity.display_name, ""
+        if identity.login not in _known_agent_github_logins(repo_root):
+            return identity.login, identity.display_name, ""
+        logger.warning(
+            "GitHub login %r matches a known bot/agent identity; "
+            "falling back to OS user for CLI identity",
+            identity.login,
+        )
     os_user = get_os_user()
     if os_user is None:
+        if identity is not None:
+            raise SystemExit(_BOT_GITHUB_NO_USER_MSG.format(login=identity.login))
         raise SystemExit(_NO_USER_MSG)
     return os_user, "", ""
 
@@ -949,7 +1000,9 @@ def load_cli_config(
     The CLI runs in the user's shell -- a human at the terminal. CLI
     sessions identify as the human, never the agent. This is the
     pre-spec behavior with the now-deleted ``get_ethos_identity()``
-    step removed (spec § 1.1).
+    step removed (spec § 1.1). A GitHub login matching a known
+    ``kind: agent`` identity is rejected even when ``get_github_identity``
+    resolves one -- see :func:`_resolve_human_identity` (biff-if2).
 
     Raises :class:`SystemExit` for the same conditions as
     :func:`_load_base_config`, plus when no identity source succeeds.
@@ -960,5 +1013,5 @@ def load_cli_config(
         prefix=prefix,
         start=start,
     )
-    user, display_name, kind = _resolve_human_identity(user_override)
+    user, display_name, kind = _resolve_human_identity(user_override, base.repo_root)
     return _assemble_config(base, user, display_name, kind)
