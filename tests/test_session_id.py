@@ -141,6 +141,75 @@ class TestCapture:
         assert hint.source == "startup"
 
 
+class TestAgentHint:
+    """SubagentStart's own hint, distinguishable from its leader's (design §3b)."""
+
+    def test_captures_agent_id_as_session_id(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(sid_mod, "_resolve_claude_pid", lambda: 12345)
+        monkeypatch.setattr(sid_mod, "_process_start_time", _fixed_start_time(999.0))
+        hint = SessionHint.capture_for_agent("agent-xyz", "subagent")
+        assert hint.claude_pid == 12345
+        assert hint.session_id == "agent-xyz"
+        assert hint.source == "subagent"
+
+    def test_write_agent_hint_does_not_collide_with_leader_hint(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A subagent's own hint file never overwrites its leader's per-pid file."""
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        leader = SessionHint(
+            session_id="leader-sid",
+            claude_pid=57369,
+            claude_start_time=1.0,
+            source="startup",
+        )
+        leader.write()
+
+        subagent = SessionHint(
+            session_id="agent-abc",
+            claude_pid=57369,  # same OS claude PID as its leader
+            claude_start_time=1.0,
+            source="subagent",
+        )
+        subagent.write_agent_hint("agent-abc")
+
+        # The leader's own hint (sessions/{pid}.json) is untouched.
+        assert SessionHint.load(57369) == leader
+
+    def test_write_agent_hint_then_read_back(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        hint = SessionHint(
+            session_id="agent-abc",
+            claude_pid=57369,
+            claude_start_time=1.0,
+            source="subagent",
+        )
+        hint.write_agent_hint("agent-abc")
+
+        path = tmp_path / "sessions" / "57369" / "agent-abc.json"
+        assert path.is_file()
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    def test_two_subagents_under_one_leader_get_distinct_files(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        SessionHint(
+            session_id="agent-a", claude_pid=1, claude_start_time=1.0, source="subagent"
+        ).write_agent_hint("agent-a")
+        SessionHint(
+            session_id="agent-b", claude_pid=1, claude_start_time=1.0, source="subagent"
+        ).write_agent_hint("agent-b")
+
+        assert (tmp_path / "sessions" / "1" / "agent-a.json").is_file()
+        assert (tmp_path / "sessions" / "1" / "agent-b.json").is_file()
+
+
 class TestResolveRoutingId:
     """Server-side resolution: hint -> routing id, with the recycle guard."""
 

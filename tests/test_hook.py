@@ -461,6 +461,92 @@ class TestCaptureSessionHint:
             _capture_session_hint({"session_id": "sid", "source": "startup"})
 
 
+class TestCaptureSubagentHint:
+    """SubagentStart persists a dispatched subagent's own agent_id (design §3b)."""
+
+    def test_writes_agent_hint_from_payload(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_subagent_hint
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+        ):
+            _capture_subagent_hint({"agent_id": "agent-1", "session_id": "leader-sid"})
+
+        path = tmp_path / "sessions" / "4321" / "agent-1.json"
+        assert path.is_file()
+
+    def test_no_agent_id_is_noop(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_subagent_hint
+
+        with patch.object(sid_mod, "biff_data_dir", return_value=tmp_path):
+            _capture_subagent_hint({"session_id": "leader-sid"})
+
+        assert not (tmp_path / "sessions").exists()
+
+    def test_does_not_overwrite_leader_hint(self, tmp_path: Path) -> None:
+        """Capturing a subagent's hint leaves its leader's own hint untouched."""
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_session_hint, _capture_subagent_hint
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+        ):
+            _capture_session_hint({"session_id": "leader-sid", "source": "startup"})
+            _capture_subagent_hint({"agent_id": "agent-1", "session_id": "leader-sid"})
+            leader_hint = sid_mod.SessionHint.load(4321)
+
+        assert leader_hint is not None
+        assert leader_hint.session_id == "leader-sid"
+
+    def test_write_failure_is_swallowed(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_subagent_hint
+
+        def _boom(_self: object, _agent_id: str) -> None:
+            raise OSError("disk full")
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+            patch.object(sid_mod.SessionHint, "write_agent_hint", _boom),
+        ):
+            # Must not raise.
+            _capture_subagent_hint({"agent_id": "agent-1"})
+
+
+class TestResolveIdentity:
+    """_resolve_identity prefers agent_id over session_id (design §3b)."""
+
+    def test_agent_id_preferred_over_session_id(self) -> None:
+        from biff.hook import _resolve_identity
+
+        result = _resolve_identity({"agent_id": "agent-1", "session_id": "leader-sid"})
+        assert result == "agent-1"
+
+    def test_falls_back_to_session_id(self) -> None:
+        from biff.hook import _resolve_identity
+
+        assert _resolve_identity({"session_id": "leader-sid"}) == "leader-sid"
+
+    def test_neither_present_returns_none(self) -> None:
+        from biff.hook import _resolve_identity
+
+        assert _resolve_identity({}) is None
+
+    def test_empty_agent_id_falls_back(self) -> None:
+        from biff.hook import _resolve_identity
+
+        result = _resolve_identity({"agent_id": "", "session_id": "leader-sid"})
+        assert result == "leader-sid"
+
+
 # ── handle_pre_compact ─────────────────────────────────────────────
 
 
