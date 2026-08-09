@@ -313,3 +313,28 @@ class TestNotifyState:
         assert len(rendered_lines) <= 40
         longest = max(visible_width(line) for line in rendered_lines)
         assert longest <= 2 * TABLE_WIDTH
+
+    def test_wall_unbroken_body_suffix_never_overflows_table_width(self) -> None:
+        """An unbroken body's suffix must not push the last line past width.
+
+        Mirrors ``TestFormatWallStatusLine.
+        test_unbroken_body_suffix_never_overflows_table_width`` in
+        tests/test_formatting.py — ``_format_wall_banner`` appended the
+        ``(remaining)`` suffix to the last wrapped chunk *after*
+        ``wrap_cells`` had already chosen line breaks, so a body with no
+        spaces to break at could hard-wrap to a last chunk that exactly
+        filled the wrap budget; the suffix then overflowed ``TABLE_WIDTH``.
+        """
+        state = NotifyState()
+        prefix_width = visible_width("  \U0001f4e2 WALL kai: ")
+        body_width = TABLE_WIDTH - prefix_width
+        wall = WallPost(
+            text="x" * (body_width * 3),
+            from_user="kai",
+            posted_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        lines = state.check(0, wall)
+        assert len(lines) == 1
+        for rendered_line in lines[0].splitlines():
+            assert visible_width(rendered_line) <= TABLE_WIDTH

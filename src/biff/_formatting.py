@@ -219,11 +219,13 @@ def wrap_cells(
     boundary the way code-point counting would let them.
 
     Set *preserve_whitespace* to keep internal whitespace runs verbatim,
-    matching ``textwrap.wrap(replace_whitespace=False)``; the default
-    collapses each run to a single space, matching ``textwrap.wrap``'s
-    default. Whitespace landing exactly on a wrap boundary is always
-    dropped, regardless of *preserve_whitespace* — only whitespace
-    *within* a line survives.
+    matching ``textwrap.wrap(replace_whitespace=False)``. The default
+    collapses each whitespace run to a single space — stricter than
+    ``textwrap.wrap``'s default, which only replaces individual whitespace
+    characters (tabs, newlines) with a space and leaves multi-space runs
+    at their original length. Whitespace landing exactly on a wrap
+    boundary is always dropped, regardless of *preserve_whitespace* — only
+    whitespace *within* a line survives.
     """
     width = max(width, 1)
     tokens = _WORD_OR_WHITESPACE_RE.findall(text)

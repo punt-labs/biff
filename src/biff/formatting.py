@@ -591,18 +591,26 @@ def format_wall_status_line(post: WallPost) -> str:
     explodes the wrap into one hard-broken line per glyph, each carrying a
     sender-sized indent (the same O(label x body) amplification
     :func:`format_talk_line` already guards against).
+
+    The ``(remaining)`` suffix is reserved out of the wrap budget up front
+    rather than appended to the last chunk after :func:`wrap_cells` has
+    already chosen line breaks. An unbroken glyph run with no space to break
+    at can fill the wrap budget exactly — appending the suffix afterward
+    would then push that line past :data:`TABLE_WIDTH`, the exact overflow
+    this function exists to prevent.
     """
     remaining = format_remaining(post.expires_at)
     sender = sanitized_sender(post.from_user)
     text = visible_text(post.text)
     prefix = f"wall: {sender}: "
-    width = max(TABLE_WIDTH - visible_width(prefix), 1)
+    suffix = f" ({remaining})"
+    width = max(TABLE_WIDTH - visible_width(prefix) - visible_width(suffix), 1)
     chunks = wrap_cells(text, width, preserve_whitespace=True) or [""]
     indent = " " * visible_width(prefix)
     rendered = [
         (prefix if i == 0 else indent) + chunk for i, chunk in enumerate(chunks)
     ]
-    rendered[-1] += f" ({remaining})"
+    rendered[-1] += suffix
     return "\n".join(rendered)
 
 

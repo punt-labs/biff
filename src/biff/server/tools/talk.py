@@ -90,9 +90,9 @@ def format_agent_drain(drain: AgentDrain) -> str:
     (``_format_talk_lines``, ``_format_idle_banners``) but stays
     single-line on purpose: this text is injected into the *model's*
     context, not printed to an 80-column terminal, so it deliberately
-    skips ``format_talk_line``'s ``textwrap`` wrapping and hang-indent
-    continuation whitespace — alignment padding that aids a human reader
-    but is only noise in model input.  Every field is length-clamped at
+    skips ``format_talk_line``'s wrapping and hang-indent continuation
+    whitespace — alignment padding that aids a human reader but is only
+    noise in model input.  Every field is length-clamped at
     the :meth:`TalkNotification.from_payload` ingress boundary, so a
     single line stays bounded without a render-side cap (biff-7g7).
 

@@ -86,15 +86,23 @@ def _format_wall_banner(from_user: str, text: str, remaining: str) -> str:
     ``\\033[0m`` color wrapper is applied to the whole composed block —
     opening before the first line, closing after the last — rather than
     embedded per line, so a wrap boundary can never land inside the escape.
+
+    The ``(remaining)`` suffix is reserved out of the wrap budget up front,
+    the same way :func:`~biff.formatting.format_wall_status_line` does —
+    appending it to the last chunk after :func:`wrap_cells` has already
+    chosen line breaks would let an unbroken glyph run fill the wrap budget
+    exactly, and the suffix would then push that line past
+    :data:`TABLE_WIDTH`.
     """
     prefix = f"  📢 WALL {from_user}: "
-    width = max(TABLE_WIDTH - visible_width(prefix), 1)
+    suffix = f" ({remaining})"
+    width = max(TABLE_WIDTH - visible_width(prefix) - visible_width(suffix), 1)
     chunks = wrap_cells(text, width, preserve_whitespace=True) or [""]
     indent = " " * visible_width(prefix)
     rendered = [
         (prefix if i == 0 else indent) + chunk for i, chunk in enumerate(chunks)
     ]
-    rendered[-1] += f" ({remaining})"
+    rendered[-1] += suffix
     body = "\n".join(rendered)
     return f"\033[1;31m{body}\033[0m"
 

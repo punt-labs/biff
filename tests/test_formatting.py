@@ -519,6 +519,25 @@ class TestFormatWallStatusLine:
         longest = max(visible_width(line) for line in result.splitlines())
         assert longest <= 2 * TABLE_WIDTH
 
+    def test_unbroken_body_suffix_never_overflows_table_width(self) -> None:
+        # An unbroken run (no spaces to break at) hard-wraps to chunks that
+        # exactly fill the wrap budget. Appending " (remaining)" to the last
+        # chunk AFTER wrap_cells had already chosen line breaks (the old
+        # logic) pushed that line past TABLE_WIDTH — the suffix must be
+        # reserved out of the budget up front instead.
+        now = datetime.now(UTC)
+        prefix_width = visible_width("wall: kai: ")
+        body_width = TABLE_WIDTH - prefix_width
+        post = WallPost(
+            text="x" * (body_width * 3),
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_status_line(post)
+        for line in result.splitlines():
+            assert visible_width(line) <= TABLE_WIDTH
+
 
 class TestFormatTalkEcho:
     """``talk`` accept/send confirmations wrap the echoed message (biff-2sw)."""
