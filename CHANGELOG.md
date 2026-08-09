@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-08-09
+
 ### Security
 
 - **A malicious `agent_id` on the `SubagentStart` hook payload can no longer overwrite the leader's session hint or chmod an unintended directory.** `agent_id` arrives on hook stdin (untrusted) and was composed directly into a filesystem path in `session_id._agent_hint_path`; `pathlib.Path`'s `/` operator honors `..` and absolute components, so `agent_id="../{pid}"` would resolve into and overwrite the leader's `sessions/{pid}.json`, and `agent_id="/tmp/pwned"` would write there and — via `_write_to`'s parent `chmod(0o700)` — tighten permissions on the traversed directory. `hook._capture_subagent_hint` now validates against the same safe charset the plan-marker path uses (`[0-9a-zA-Z_-]{1,128}`, exposed as `session_id.is_safe_agent_id`) and fails closed (log warning, no-op) at the trust boundary; `session_id._agent_hint_path` re-validates and raises `ValueError` as defense-in-depth; `write_agent_hint` additionally refuses any target whose resolved parent is outside `sessions/{claude_pid}/` before `_write_to`'s mkdir/chmod can amplify the traversal.
