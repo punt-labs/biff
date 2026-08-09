@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `biff` CLI no longer silently identifies as a bot account when `GH_TOKEN` is pinned to one (biff-if2).** `load_cli_config()` resolved identity via `gh api user`, which reads whatever `GH_TOKEN` is active in the shell — env wins over the `gh` keychain. Every Claude Agento session sources a bot PAT into its shell for its whole lifetime (org CLAUDE.md), so any `biff` CLI invocation from that shell, by a human or otherwise, resolved as the bot. CLI identity resolution now cross-checks the resolved GitHub login against every `kind: agent` identity's `github` field in `.punt-labs/ethos/identities/*.yaml`; a match is rejected and resolution falls through to the OS username (or a clear error naming the rejected bot login) instead of silently returning the bot's identity.
+
 ## [1.12.1] - 2026-08-05
 
 ### Changed
