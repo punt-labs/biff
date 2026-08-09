@@ -1373,6 +1373,41 @@ class TestHandlePreToolUse:
             handle_pre_tool_use({})
         mock_run.assert_not_called()
 
+    def test_other_identity_plan_does_not_satisfy_own_gate(self) -> None:
+        """The gate denies when only a SIBLING identity has a plan set.
+
+        The om9 fix's central invariant: PreToolHookAllow's guard --
+        ``identity? IN dom planSet AND planSet(identity?) = ztrue`` -- is
+        keyed on THAT SPECIFIC identity, not any identity's plan marker
+        present in the same worktree.  A single-arg (identity-blind) mock
+        cannot catch a regression that reintroduces the old shared-file
+        semantics.  This one uses ``side_effect`` keyed on the identity
+        argument: a sibling identity has a plan; MY identity does not;
+        the gate must deny and must have queried the marker with MY
+        identity, not the sibling's.
+        """
+        my_identity = "agent-me"
+        other_identity = "agent-sibling"
+
+        def _plan_by_identity(_root: str, identity: str | None) -> bool:
+            return identity == other_identity
+
+        with (
+            patch("biff.hook._has_active_session", return_value=True),
+            patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
+            patch(
+                "biff.markers.has_plan_marker", side_effect=_plan_by_identity
+            ) as mock_has,
+        ):
+            result = handle_pre_tool_use({"agent_id": my_identity})
+        assert result is not None, "sibling's plan must not satisfy my gate"
+        reason = _deny_reason(result)
+        assert "/plan" in reason
+        # Prove the gate resolved and passed MY identity, not the sibling's.
+        mock_has.assert_called_once()
+        _, identity_arg = mock_has.call_args.args
+        assert identity_arg == my_identity
+
 
 class TestPreToolUseFailsClosed:
     """The gate entrypoint denies when it cannot evaluate its condition.
