@@ -1018,7 +1018,7 @@ def _resolve_human_identity(
     ``get_github_identity()`` returning ``None`` -- a bot's ``GH_TOKEN``
     pinned into a human's shell (every Claude Agento session sources one,
     see ``~/.punt-labs/git-identity.env``) must never silently become the
-    human's biff identity (DES-040 amendment, biff-if2).
+    human's biff identity (DES-053, biff-if2).
 
     The same rejection applies, more cautiously, when the identity scan
     itself is incomplete (an identity file was unreadable or malformed):
@@ -1153,7 +1153,7 @@ def load_cli_config(
     pre-spec behavior with the now-deleted ``get_ethos_identity()``
     step removed (spec § 1.1). A GitHub login matching a known
     ``kind: agent`` identity is rejected even when ``get_github_identity``
-    resolves one -- see :func:`_resolve_human_identity` (biff-if2).
+    resolves one -- see :func:`_resolve_human_identity` (DES-053, biff-if2).
 
     Raises :class:`SystemExit` for the same conditions as
     :func:`_load_base_config`, plus when no identity source succeeds.

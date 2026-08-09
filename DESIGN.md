@@ -4307,7 +4307,8 @@ routing, edge cases, implementation sequence, and file change list.
 **Topic:** Primary identity from disk; companion deferred to heartbeat
 **Bead:** biff-8fg3
 **Related:** DES-009 (identity — GitHub login), DES-039 (dual-session
-registration), `docs/spec-agent-first-identity.md`,
+registration), DES-053 (bot-GitHub-login rejection),
+`docs/spec-agent-first-identity.md`,
 `docs/agent-first-identity.md`
 
 ### Context
@@ -5763,3 +5764,96 @@ Revised rules 2 and 6:
   CLI + hooks) and deploys the same per-clone git hooks via the same code path;
   `biff uninstall` removes them. The Amendment 1 "run `biff install`" hint from
   `enable` is dropped — `enable` now deploys the hooks itself.
+
+---
+
+## DES-053: CLI Rejects a Bot's GitHub Login — Amendment to Agent-First Identity Resolution
+
+**Date:** 2026-08-08
+**Status:** SETTLED
+**Bead:** biff-if2
+**Related:** DES-040 (agent-first identity resolution — the chain this
+amends), DES-009 (identity — GitHub login)
+
+### Context
+
+DES-040 split identity resolution into two chains: `load_mcp_config` uses
+the agent-first chain, `load_cli_config` uses the human-identity chain
+(`user_override` → `get_github_identity()` → `get_os_user()`). The CLI
+chain assumed `gh api user` always resolves a human, because a human runs
+the CLI from their own terminal.
+
+That assumption breaks for a specific, common case at Punt Labs: a
+durable Claude Agento shell sources a bot's `GH_TOKEN` into its
+environment for the entire session (org `CLAUDE.md`, `~/.punt-labs/
+git-identity.env`). If a human then runs `biff` from inside that same
+shell — or a shell that inherited its environment — `gh api user`
+resolves to the bot's login (`claude-puntlabs`), not the human's. Nothing
+in the DES-040 chain treated this as a distinct case: the bot's GitHub
+identity would be silently adopted as the human's biff identity, so
+`biff write` and `biff talk` would attribute the human's messages to the
+bot.
+
+### Decision
+
+`_resolve_human_identity` cross-checks the login `get_github_identity()`
+resolves against the repo's own agent-identity registry
+(`.punt-labs/ethos/identities/*.yaml`) before trusting it. A login that
+matches any `kind: agent` entry's `github` field is rejected exactly as
+if `get_github_identity()` had returned `None`, and resolution falls
+through to `get_os_user()`.
+
+**Scope is deliberately repo-local, matching `resolve_agent_identity_from_disk`.**
+The scan reads only `{repo_root}/.punt-labs/ethos/identities/`, the same
+directory `resolve_agent_identity_from_disk` (DES-040) already reads for
+agent-first MCP resolution. There is no query against a global identity
+registry, no network call, and no dependency on `ethos.yaml` naming a
+specific agent — the scan collects every `kind: agent` entry's `github`
+field it can find in the repo's own registry, independent of which agent
+(if any) is configured to run there. This keeps the check inert in repos
+with no ethos submodule (empty scan, nothing rejected) and keeps its
+failure domain identical to the resolver it protects: same directory,
+same trust boundary, same repo-local scope.
+
+**An incomplete scan is treated the same as a confirmed match.** The scan
+returns not just the set of known bot logins but whether the scan itself
+was complete (every identity file was readable and parseable, and every
+`kind: agent` entry's `github` field, when present, was well-formed). If
+any file was unreadable, corrupted, or had a malformed `github` field,
+the scan is incomplete — and `_resolve_human_identity` refuses to trust
+the resolved GitHub login rather than treating "not found in an
+incomplete scan" as "confirmed not a bot." Reviewed and live-reproduced
+during the fix: a corrupted or permission-denied identity file for the
+bot's own registration would otherwise silently zero out the known-bot
+set and let the exact leak this decision closes reopen through a
+different door. See `_AgentLoginScan` and `_list_identity_yaml_files` in
+`src/biff/config.py`.
+
+A `github` field that is simply **absent** from a `kind: agent` entry is
+not treated as incomplete — most agent identities are not registered bot
+accounts and have no reason to carry that field. Only a field that is
+*present but broken* (null, wrong type, empty string) counts against
+completeness, since that is evidence of a specific, nameable
+registration gone wrong rather than an ordinary unpopulated field.
+
+### Rejected alternative — check a global/org-wide bot registry
+
+Considered cross-checking resolved logins against an org-wide list of
+known bot accounts (e.g. a Punt Labs-maintained registry independent of
+any one repo). Rejected: it would add a network dependency (or a second
+on-disk source of truth) to a resolution chain that DES-040 specifically
+moved off of subprocess/network calls to eliminate a startup race. The
+repo-local `.punt-labs/ethos/identities/` registry is already the
+authoritative source for exactly this data in the context that matters —
+the repo the CLI is running in — and keeps the two identity resolvers
+(agent-first for MCP, human-first for CLI) reading from the same file
+tree with no new dependency.
+
+### Full detail
+
+See `_resolve_human_identity`, `_known_agent_github_logins`,
+`_AgentLoginScan`, `_list_identity_yaml_files`, and `_scan_agent_logins`
+in `src/biff/config.py`, and their tests in `tests/test_config.py`
+(`TestReadIdentityYaml`, `TestKnownAgentGithubLogins`, and the
+`test_rejects_bot_github_login_*` / `test_corrupted_bot_identity_file_*`
+cases in `TestLoadCliConfig`).
