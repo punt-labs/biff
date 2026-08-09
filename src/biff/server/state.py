@@ -53,6 +53,13 @@ class ServerState:
     owns_relay: bool = True
     dormant: bool = False
     repo_root: Path | None = None
+    # Parent of ``git rev-parse --git-common-dir``: the same absolute path from
+    # the main checkout and every linked worktree.  Used for cross-worktree
+    # coordination (wall marker path, ``write_active_session`` third line so
+    # ``_detect_collisions`` matches across linked worktrees) — the per-worktree
+    # ``repo_root`` stays as-is for write-through to per-worktree files
+    # (biff-ar1/om9 broad-scope, DES-054).
+    repo_common_root: Path | None = None
     org_repos: frozenset[str] = field(default_factory=lambda: frozenset[str]())
     companion: CompanionSession | None = None
     talk: TalkState = field(init=False)
@@ -112,6 +119,7 @@ def create_state(
     pwd: str | None = None,
     dormant: bool = False,
     repo_root: Path | None = None,
+    repo_common_root: Path | None = None,
     org_repos: frozenset[str] | None = None,
     companion: CompanionSession | None = None,
 ) -> ServerState:
@@ -152,6 +160,7 @@ def create_state(
         owns_relay=owns_relay,
         dormant=dormant,
         repo_root=repo_root,
+        repo_common_root=repo_common_root,
         org_repos=org_repos or frozenset(),
         companion=companion,
     )

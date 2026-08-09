@@ -6053,44 +6053,27 @@ parallel write path (`write_agent_hint`, sharing `_write_to`'s atomic
 write logic with `write()`) for a subagent's own identity, keyed
 separately from the leader's per-pid hint so the two can never collide.
 
-### Known, bounded residual gaps (out of this mission's file scope)
+### Broad-scope closure: `state.repo_common_root` on the server side
 
-Two consumers of the old worktree-root primitive were **not** brought
-into this fix, because they live outside `hook.py`/`markers.py`/
-`commands/plan.py`/`server/tools/plan.py`/`session_id.py`/`_stdlib.py` —
-the implementation mission's own write-set boundary:
-
-1. **`server/tools/wall.py`**'s `_update_wall_marker` still resolves its
-   write root from `state.repo_root` (`find_git_root()`-based, the
-   *nearest* worktree toplevel, computed once at MCP server startup) —
-   unchanged by this fix. `hook.py`'s wall-marker *reads*
-   (`handle_post_pr`, `handle_session_start`) now resolve the
-   repo-common-root, per the operator's broad-scope ratification. For a
-   session in the repo's main checkout (the dominant case), nearest-root
-   and common-root are identical, so this is invisible. For a session in
-   a **linked worktree** specifically, a `/wall` broadcast posted from
-   the MCP server would be written under the worktree's own nearest
-   root while a hook read for that same worktree now looks under the
-   common root — the same class of mismatch this whole fix closes for
-   the plan marker, reopened narrowly for wall. Needs a follow-up
-   touching `server/tools/wall.py` (switch `_update_wall_marker`'s root
-   resolution to `get_repo_common_root()`, matching the plan marker's
-   fix) to fully honor the broad-scope decision for wall.
-2. **`_detect_collisions()`**'s comparison against `write_active_session`
-   /`_write_marker` (`server/app.py`, also `state.repo_root`-sourced,
-   also out of scope) has the identical shape of gap: the *current*
-   side of the comparison is now the repo-common-root, but a stored
-   row from a linked-worktree session still records the nearest
-   toplevel. Two sessions in *different* linked worktrees of one repo
-   will not be detected as colliding via this path until `server/app.py`
-   is updated the same way. Two sessions in the *same* directory (main
-   checkout or the same worktree) are unaffected — both sides compute
-   the identical value either way.
-
-Both gaps are narrower than the bug this fix closes (which manifested
-across the dominant non-worktree case too) and are self-healing in the
-same sense RISK-3 below is: no crash, no silent data loss, a
-conservative miss rather than a false grant.
+The initial fix ran out of file-scope before it could reach the two
+server-side consumers that also resolved root the old way
+(`server/tools/wall.py`'s `_update_wall_marker`, `server/app.py`'s
+`_write_marker`/`write_active_session` third line). A follow-up round
+carried the operator's ratified broad-scope decision through to those
+consumers by adding `repo_common_root: Path` to `_BaseConfig`,
+`ResolvedConfig`, and `ServerState` (populated in `_load_base_config`
+via `get_repo_common_root(str(repo_root))`, with a `repo_root` fallback
+on a git failure) and switching those two call sites to
+`state.repo_common_root`. `state.repo_root` deliberately stays as the
+nearest-worktree toplevel because the three other consumers
+(`server/tools/biff_toggle.py`, `biff_relay.py`, `poll_config.py`) write
+committed per-worktree files (`.punt-labs/biff/enabled`,
+`config.yaml`/`config.local.yaml`) — for those, collapsing to the
+common root would write outside the user's current checkout, the
+opposite of the intended UX. A `/wall` posted from a linked worktree is
+now written under the same hash a hook read in *any* linked worktree
+of the same repo will look up, and two sessions in *different* linked
+worktrees are detected as colliding rather than silently coexisting.
 
 ### RISK-2 (accepted, unclosed): in-process subagent's own CLI writes still resolve to its leader's identity
 
