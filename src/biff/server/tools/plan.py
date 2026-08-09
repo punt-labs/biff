@@ -26,8 +26,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @mcp.tool(
         name="plan",
         description=(
-            "Set what you're currently working on. "
-            "Visible to teammates via /finger and /who."
+            "Set your BSD-style .plan status: a short, ONE-LINE status of "
+            "what you're working on right now (the classic Unix finger/.plan "
+            "file), visible to teammates via /finger and /who. This is NOT a "
+            "task plan, todo list, or step-by-step breakdown — keep it to "
+            "around 40 characters. Example: 'refactoring the auth layer' or "
+            "'biff-if2: CLI identity fix'."
         ),
     )
     @track_activity(state)

@@ -1,5 +1,5 @@
 ---
-description: Set what you're currently working on (visible to teammates)
+description: Set your BSD .plan status — a one-line, ~40-char note (not a task plan), visible via /finger and /who
 argument-hint: "<message>"
 allowed-tools: ["ToolSearch", "mcp__plugin_biff_tty__plan"]
 ---
