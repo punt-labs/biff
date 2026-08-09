@@ -3,9 +3,9 @@
   "testDirectory": "",
   "timestamp": "2026-08-09T00:00:00+00:00",
   "summary": {
-    "covered": 6,
+    "covered": 7,
     "total": 7,
-    "percentage": 86
+    "percentage": 100
   },
   "byCategory": {
     "postcondition": {
@@ -13,7 +13,7 @@
       "total": 2
     },
     "invariant": {
-      "covered": 2,
+      "covered": 3,
       "total": 3
     },
     "precondition": {
@@ -63,15 +63,14 @@
       "source": "PreToolHookAllow, PreToolHookDeny",
       "coveredBy": "tests/test_hook.py:1389 TestPreToolUseFailsClosed.test_marker_read_error_emits_deny",
       "confidence": "high"
-    }
-  ],
-  "uncovered": [
+    },
     {
-      "text": "PreToolHookAllow's core om9-fix guard -- identity? IN dom planSet AND planSet(identity?) = ztrue -- is checked against THAT SPECIFIC identity, not any identity's plan marker present in the same worktree. The one existing gate test helper (_gate_mocks in tests/test_hook.py:1270) mocks has_plan_marker with a blanket `return_value=plan` regardless of the identity argument it is called with, so no test currently distinguishes 'my own identity has a plan' from 'some other identity sharing this worktree has a plan, but I do not.'",
+      "text": "PreToolHookAllow's core om9-fix guard -- identity? IN dom planSet AND planSet(identity?) = ztrue -- is checked against THAT SPECIFIC identity, not any identity's plan marker present in the same worktree. Without this test, the existing gate test helper (_gate_mocks in tests/test_hook.py:1270) mocks has_plan_marker with a blanket return_value=plan regardless of the identity argument, so no test would distinguish 'my own identity has a plan' from 'some other identity sharing this worktree has a plan, but I do not.'",
       "category": "invariant",
       "source": "PreToolHookAllow",
-      "suggestion": "Add a test asserting handle_pre_tool_use denies Edit/Write when has_plan_marker(root, OTHER_identity) is True but has_plan_marker(root, THIS session's own identity) is False -- i.e. mock has_plan_marker with a side_effect keyed on the identity argument, not a blanket return_value, and assert the gate resolves and passes its OWN identity (not a sibling's) to the check.",
-      "testPattern": "TestHandlePreToolUse.test_other_identity_plan_does_not_satisfy_own_gate"
+      "coveredBy": "tests/test_hook.py:1376 TestHandlePreToolUse.test_other_identity_plan_does_not_satisfy_own_gate",
+      "confidence": "high"
     }
-  ]
+  ],
+  "uncovered": []
 }
