@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **CJK and emoji no longer overflow the 80-column wrap on `who`/`read`/`wall`/`finger`/`talk` (biff-2sw).** The formatting layer measured line width by counting Python code points, so wide glyphs (CJK ideographs, most emoji) — which render at roughly 2 terminal cells each — were undercounted by half, and a line of wide-glyph text could run well past the 80-column table width with no wrap applied. Width measurement and wrapping now use `wcwidth` to count actual terminal cells: `visible_width` sums per-character cell widths instead of `len()`, a new `wrap_cells` primitive wraps by cell budget (including a cell-aware hard break for an unbroken run of wide glyphs longer than the line), and label truncation (`clip_to_width`) clips by cell width instead of code points. `talk`, which had its own independent wrap and truncation logic, now shares the same primitives as `who`/`read`/`wall`/`finger` instead of reimplementing them.
+
 ## [1.12.1] - 2026-08-05
 
 ### Changed
