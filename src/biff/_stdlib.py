@@ -109,6 +109,41 @@ def sanitize_repo_name(name: str) -> str:
     return sanitized
 
 
+def get_repo_common_root(cwd: str | None = None) -> str:
+    """Return the parent of ``git rev-parse --git-common-dir``'s output.
+
+    Unifies a repo's main checkout and every linked worktree to the same
+    absolute path -- unlike ``git rev-parse --show-toplevel``, which
+    reports the *nearest* worktree root and treats each linked worktree
+    as its own isolated repo.  Resolved against *cwd* when given, so a
+    caller can thread a hook's own delivered ``cwd`` (e.g. a dispatched
+    subagent's ``PreToolUse`` payload) instead of trusting the calling
+    process's ambient working directory, which does not always reflect
+    which worktree the invoking session actually believes itself to be
+    in.  Falls back to the process's own cwd when *cwd* is omitted.
+    Returns ``""`` on any git failure (not a repo, git unavailable,
+    timeout) -- callers degrade gracefully on an empty root, matching
+    every other git-shellout helper in this module.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            cwd=cwd or None,
+        )
+    except (FileNotFoundError, TimeoutError, OSError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = Path(cwd or Path.cwd()) / common_dir
+    return str(common_dir.resolve().parent)
+
+
 def get_repo_owner(repo_root: Path) -> str | None:
     """Extract the repo owner from the git remote URL.
 
