@@ -673,11 +673,28 @@ def _capture_subagent_hint(data: dict[str, object]) -> None:
     (``SessionHint.write_agent_hint``) rather than the leader's per-pid
     hint file, so capturing it never overwrites the leader's own hint.  A
     missing/empty ``agent_id`` is a no-op.
+
+    Fails closed at the trust boundary: ``agent_id`` arrives on the hook
+    payload from a channel this process does not control, and
+    ``pathlib.Path``'s ``/`` operator honors ``..`` and absolute
+    components — a value like ``"../{pid}"`` or ``"/tmp/pwned"`` would
+    otherwise overwrite the leader hint or write to and chmod an
+    unintended directory. A value that fails
+    :func:`session_id.is_safe_agent_id` is logged and dropped;
+    ``session_id._agent_hint_path`` also raises as defense-in-depth.
     """
     agent_id = data.get("agent_id")
     if not isinstance(agent_id, str) or not agent_id:
         return
-    from biff.session_id import SessionHint  # noqa: PLC0415
+    from biff.session_id import SessionHint, is_safe_agent_id  # noqa: PLC0415
+
+    if not is_safe_agent_id(agent_id):
+        logger.warning(
+            "Ignoring subagent hook payload with unsafe agent_id %r; "
+            "identity resolution degraded for this subagent",
+            agent_id,
+        )
+        return
 
     hint = SessionHint.capture_for_agent(agent_id, source="subagent")
     try:

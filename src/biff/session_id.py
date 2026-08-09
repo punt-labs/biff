@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from hashlib import blake2b
@@ -43,6 +44,15 @@ logger = logging.getLogger(__name__)
 _DERIVE_DIGEST_BYTES = 8  # 16 hex chars — inside the routing-id charset
 _RESOLVE_ATTEMPTS = 10
 _RESOLVE_DELAY_S = 0.05  # SessionStart fires before MCP connect; retry is a safety net
+
+# Safe charset for an ``agent_id`` used as a filesystem path component.
+# Same semantics as ``markers._identity_component``: a superset of the routing
+# id charset that still refuses anything a path could traverse (``/``, ``..``,
+# ``\``, leading ``.``-only). Untrusted values -- ``agent_id`` arrives on the
+# SubagentStart hook stdin -- MUST match before composition; ``../{pid}`` or
+# ``/tmp/x`` otherwise resolve out of the sessions directory (see
+# :func:`_agent_hint_path`).
+_SAFE_AGENT_ID_RE = re.compile(r"^[0-9a-zA-Z_-]{1,128}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,8 +193,16 @@ class SessionHint:
         leader's own per-pid file — so an in-process subagent's identity
         is discoverable without ever overwriting its leader's hint
         (biff-ar1/om9 design §3b).
+
+        Raises ``ValueError`` if *agent_id* would escape the intended
+        ``sessions/{claude_pid}/`` directory: :func:`_agent_hint_path`
+        rejects a bad charset, and the resolved-parent containment check
+        below refuses any residual traversal BEFORE ``_write_to``'s
+        ``mkdir``/``chmod`` can amplify it onto an unintended directory.
         """
-        self._write_to(_agent_hint_path(self.claude_pid, agent_id))
+        path = _agent_hint_path(self.claude_pid, agent_id)
+        _require_agent_hint_contained(path, self.claude_pid)
+        self._write_to(path)
 
     def _write_to(self, path: Path) -> None:
         """Atomically write this hint's JSON payload to *path* (best-effort).
@@ -280,13 +298,55 @@ def _hint_path(pid: int) -> Path:
     return _sessions_dir() / f"{pid}.json"
 
 
+def is_safe_agent_id(agent_id: str) -> bool:
+    """Return ``True`` when *agent_id* is safe as a filesystem path component.
+
+    The predicate the trust boundary (``hook._capture_subagent_hint``)
+    calls before composing an ``agent_id`` from an untrusted hook
+    payload into a path. Matches :data:`_SAFE_AGENT_ID_RE`; a value that
+    fails must be dropped (fail closed) rather than sanitized, because
+    :class:`pathlib.Path`'s ``/`` operator honors ``..`` and absolute
+    components — silent coercion would still write to an unintended
+    directory.
+    """
+    return bool(_SAFE_AGENT_ID_RE.match(agent_id))
+
+
 def _agent_hint_path(pid: int, agent_id: str) -> Path:
     """Hint file path for one subagent's own identity under a ``claude`` PID.
 
     A subdirectory per PID, not a suffix on the leader's own filename, so
     it can never collide with :func:`_hint_path`'s ``{pid}.json``.
+
+    Validates *agent_id* against :func:`is_safe_agent_id` before
+    composition: an unsanitized value from the SubagentStart hook
+    payload could otherwise escape the sessions directory
+    (``agent_id="../{pid}"`` resolves to and overwrites the leader
+    hint; ``agent_id="/tmp/x"`` composes to an absolute path since
+    :class:`pathlib.Path`'s ``/`` honors absolute components). Callers
+    should sanitize at the trust boundary; this raise is
+    defense-in-depth so a future caller cannot re-open the hole.
     """
+    if not is_safe_agent_id(agent_id):
+        msg = f"unsafe agent id: {agent_id!r}"
+        raise ValueError(msg)
     return _sessions_dir() / str(pid) / f"{agent_id}.json"
+
+
+def _require_agent_hint_contained(path: Path, claude_pid: int) -> None:
+    """Refuse *path* if it resolves outside ``sessions/{claude_pid}/``.
+
+    Last-line-of-defense containment check: even if some future caller
+    composes an unsafe component into *path*, a resolved parent outside
+    the intended directory refuses the write BEFORE
+    :meth:`SessionHint._write_to`'s ``mkdir``/``chmod`` can amplify the
+    traversal by tightening permissions on an unintended directory.
+    """
+    allowed = (_sessions_dir() / str(claude_pid)).resolve(strict=False)
+    resolved = path.resolve(strict=False)
+    if resolved.parent != allowed:
+        msg = f"agent hint path {resolved} escapes {allowed}"
+        raise ValueError(msg)
 
 
 def _resolve_claude_pid() -> int:

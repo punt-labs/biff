@@ -5,14 +5,83 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import pytest
 
 import biff.session_id as sid_mod
-from biff.session_id import SessionHint
+from biff.session_id import SessionHint, is_safe_agent_id
 from biff.tty import validate_routing_id
 
-if TYPE_CHECKING:
-    import pytest
+
+def _hint(pid: int = 4321) -> SessionHint:
+    """Build a hint suitable for exercising :meth:`write_agent_hint`."""
+    return SessionHint(
+        session_id="agent-x",
+        claude_pid=pid,
+        claude_start_time=1.0,
+        source="subagent",
+    )
+
+
+class TestAgentHintPathSafety:
+    """Reject unsafe agent_id components before they touch the filesystem.
+
+    ``agent_id`` arrives on the SubagentStart hook stdin -- untrusted --
+    and ``pathlib.Path``'s ``/`` operator honors ``..`` and absolute
+    components, so a naive composition into ``sessions/{pid}/`` would
+    overwrite the leader hint (``../{pid}``) or write to and chmod an
+    unintended directory (``/tmp/pwned``).
+    """
+
+    def test_relative_traversal_raises(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        with pytest.raises(ValueError, match="unsafe agent id"):
+            _hint().write_agent_hint("../4321")
+
+    def test_absolute_path_raises(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        pwned = tmp_path / "pwned"
+        with pytest.raises(ValueError, match="unsafe agent id"):
+            _hint().write_agent_hint(str(pwned))
+        # The attacker's intended write target must not exist.
+        assert not pwned.with_suffix(".json").exists()
+
+    def test_nested_dir_raises(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        with pytest.raises(ValueError, match="unsafe agent id"):
+            _hint().write_agent_hint("evil/nested")
+
+    def test_traversal_does_not_overwrite_leader_hint(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``../{pid}`` would resolve into the leader's own per-pid file."""
+        _use_tmp_data_dir(monkeypatch, tmp_path)
+        leader = SessionHint(
+            session_id="leader-sid",
+            claude_pid=4321,
+            claude_start_time=1.0,
+            source="startup",
+        )
+        leader.write()
+        with pytest.raises(ValueError):
+            _hint().write_agent_hint("../4321")
+        assert SessionHint.load(4321) == leader
+
+    def test_is_safe_agent_id_predicate(self) -> None:
+        assert is_safe_agent_id("agent-1")
+        assert is_safe_agent_id("Agent_2")
+        assert is_safe_agent_id("2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b")
+        assert not is_safe_agent_id("../4321")
+        assert not is_safe_agent_id("/tmp/pwned")
+        assert not is_safe_agent_id("evil/nested")
+        assert not is_safe_agent_id("")
+        assert not is_safe_agent_id("has spaces")
 
 
 def _use_tmp_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

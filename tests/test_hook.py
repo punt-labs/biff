@@ -521,6 +521,79 @@ class TestCaptureSubagentHint:
             _capture_subagent_hint({"agent_id": "agent-1"})
 
 
+class TestCaptureSubagentHintSafety:
+    """Trust-boundary sanitization: ``agent_id`` from hook stdin is untrusted.
+
+    ``pathlib.Path``'s ``/`` operator honors ``..`` and absolute
+    components, so a naive composition into ``sessions/{pid}/`` would
+    (1) overwrite the leader's own hint (``../{pid}``) or (2) chmod a
+    system directory (``/tmp/pwned``). Fail closed at the hook: log and
+    drop, do not fall through to write with a mangled path.
+    """
+
+    def test_relative_traversal_is_noop(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_session_hint, _capture_subagent_hint
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+        ):
+            _capture_session_hint({"session_id": "leader-sid", "source": "startup"})
+            _capture_subagent_hint({"agent_id": "../4321"})
+            leader = sid_mod.SessionHint.load(4321)
+
+        # The leader's per-pid file was NOT overwritten by the traversal.
+        assert leader is not None
+        assert leader.session_id == "leader-sid"
+
+    def test_absolute_path_is_noop(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_subagent_hint
+
+        # An attacker-controlled absolute path composed via Path("/x") /
+        # "/tmp/pwned" collapses to "/tmp/pwned" -- must never be written.
+        pwned = tmp_path / "pwned"
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+        ):
+            _capture_subagent_hint({"agent_id": str(pwned)})
+
+        assert not pwned.with_suffix(".json").exists()
+
+    def test_nested_dir_is_noop(self, tmp_path: Path) -> None:
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_subagent_hint
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+        ):
+            _capture_subagent_hint({"agent_id": "evil/nested"})
+
+        # No subagent hint written under an injected subdirectory.
+        assert not (tmp_path / "sessions" / "4321" / "evil").exists()
+        assert not (tmp_path / "sessions" / "4321" / "evil.json").exists()
+
+    def test_safe_agent_id_still_writes(self, tmp_path: Path) -> None:
+        """Sanity: sanitizer does not reject legitimate hex/dash/underscore ids."""
+        import biff.session_id as sid_mod
+        from biff.hook import _capture_subagent_hint
+
+        with (
+            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
+            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
+            patch.object(sid_mod, "_process_start_time", return_value=42.0),
+        ):
+            _capture_subagent_hint({"agent_id": "agent-1_ok"})
+
+        assert (tmp_path / "sessions" / "4321" / "agent-1_ok.json").is_file()
+
+
 class TestResolveIdentity:
     """_resolve_identity prefers agent_id over session_id (design §3b)."""
 
