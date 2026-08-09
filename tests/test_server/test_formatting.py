@@ -8,10 +8,12 @@ import pytest
 
 from biff._formatting import (
     ColumnSpec,
+    clip_to_width,
     format_idle,
     format_table,
     last_component,
     visible_width,
+    wrap_cells,
 )
 from biff.formatting import format_read, format_read_dual
 from biff.models import Message
@@ -67,6 +69,78 @@ class TestVisibleWidth:
 
     def test_multiple_ansi(self) -> None:
         assert visible_width("\033[31mred\033[0m \033[32mgreen\033[0m") == 9
+
+    def test_cjk_counts_two_cells_per_glyph(self) -> None:
+        # Each CJK ideograph renders at 2 terminal cells, not 1 code point.
+        assert visible_width("你好") == 4
+
+    def test_emoji_counts_two_cells(self) -> None:
+        assert visible_width("🚀") == 2
+
+    def test_mixed_ascii_and_cjk(self) -> None:
+        # 5 ASCII cells + 3 CJK glyphs * 2 cells = 11.
+        assert visible_width("hello你好嗎") == 11
+
+
+class TestWrapCells:
+    def test_ascii_wraps_like_textwrap(self) -> None:
+        lines = wrap_cells("word " * 20, 40)
+        assert all(visible_width(line) <= 40 for line in lines)
+        assert len(lines) > 1
+
+    def test_cjk_wraps_by_cell_width_not_code_points(self) -> None:
+        # 40 CJK glyphs at 2 cells each = 80 cells — must wrap well
+        # before 80 code points if the budget is 40 cells.
+        body = "你好" * 20  # "你好" x 20 == 40 glyphs, 80 cells
+        lines = wrap_cells(body, 40)
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= 40
+
+    def test_mixed_ascii_and_cjk_stays_within_budget(self) -> None:
+        body = ("hello " + "你好嗎 ") * 10
+        lines = wrap_cells(body, 30)
+        for line in lines:
+            assert visible_width(line) <= 30
+
+    def test_preserve_whitespace_keeps_internal_runs(self) -> None:
+        lines = wrap_cells("a    b   c", 40, preserve_whitespace=True)
+        assert lines == ["a    b   c"]
+
+    def test_collapses_whitespace_by_default(self) -> None:
+        lines = wrap_cells("a\t\tb", 40)
+        assert lines == ["a b"]
+
+    def test_empty_text_returns_no_lines(self) -> None:
+        assert wrap_cells("", 40) == []
+
+    def test_never_drops_a_lone_wide_glyph_word(self) -> None:
+        # A single unbroken run of wide glyphs longer than the budget must
+        # still hard-break rather than overflow a line forever.
+        body = "你" * 30  # 30 CJK glyphs, 60 cells, no whitespace
+        lines = wrap_cells(body, 10)
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= 10
+        assert "".join(lines) == body
+
+
+class TestClipToWidth:
+    def test_ascii_under_budget_unchanged(self) -> None:
+        assert clip_to_width("hello", 10) == "hello"
+
+    def test_ascii_over_budget_clips_with_ellipsis(self) -> None:
+        result = clip_to_width("hello world", 8)
+        assert result.endswith("…")
+        assert visible_width(result) <= 8
+
+    def test_cjk_clips_by_cell_width_not_code_points(self) -> None:
+        # 10 CJK glyphs = 20 cells; clipping to 8 cells must keep far
+        # fewer than 8 code points, unlike a len()-based clip.
+        text = "你" * 10
+        result = clip_to_width(text, 8)
+        assert visible_width(result) <= 8
+        assert result.endswith("…")
 
 
 class TestLastComponent:

@@ -11,7 +11,6 @@ The primitive layer (``ColumnSpec``, ``format_table``, ``format_idle``,
 
 from __future__ import annotations
 
-import textwrap
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
@@ -19,11 +18,13 @@ from biff._formatting import (
     ROW_PREFIX,
     TABLE_WIDTH,
     ColumnSpec,
+    clip_to_width,
     format_idle,
     format_table,
     last_component,
     terminal_safe,
     visible_width,
+    wrap_cells,
 )
 from biff._stdlib import display_repo_name
 from biff.models import Message, SessionEvent, UserSession, WallPost
@@ -200,11 +201,11 @@ def format_user_header(session: UserSession) -> str:
     mesg = "on" if session.biff_enabled else "off"
     if session.display_name:
         right = f"Name: {terminal_safe(session.display_name)}"
-        line1 = f"\u25b6  {left:<38s}{right}"
+        line1 = f"▶  {left:<38s}{right}"
         line2 = f"   Messages: {mesg}"
         return f"{line1}\n{line2}"
     right = f"Messages: {mesg}"
-    return f"\u25b6  {left:<38s}{right}"
+    return f"▶  {left:<38s}{right}"
 
 
 def format_tty_block(session: UserSession) -> str:
@@ -353,39 +354,39 @@ def format_wall(wall: WallPost) -> str:
     if wall.from_tty:
         sender += f" ({terminal_safe(wall.from_tty)})"
     text = terminal_safe(wall.text)
-    return f"\u25b6  WALL from {sender} ({remaining} remaining)\n   {text}"
+    return f"▶  WALL from {sender} ({remaining} remaining)\n   {text}"
 
 
 # ---------------------------------------------------------------------------
-# talk \u2014 conversation lines
+# talk — conversation lines
 # ---------------------------------------------------------------------------
 
 
 def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
-    """Render one incoming talk line in the biff ``\u25b6`` idiom, wrapped.
+    """Render one incoming talk line in the biff ``▶`` idiom, wrapped.
 
-    Matches the ``who``/``read``/``wall`` convention: a leading ``\u25b6``
-    prefix, the sender's ``user:tty`` address, then the message \u2014 wrapped
+    Matches the ``who``/``read``/``wall`` convention: a leading ``▶``
+    prefix, the sender's ``user:tty`` address, then the message — wrapped
     to :data:`TABLE_WIDTH` with continuation lines aligned under the body.
     *stamp* is the caller's ``[HH:MM] `` prefix (empty when timestamps are
     off).  All remote-controlled text is neutralised here via
     :func:`terminal_safe`, the output boundary (biff-lbj).
 
     Returns one string per rendered line so the caller can colourise each, or
-    an empty list when the body is empty *after* neutralisation \u2014 a
+    an empty list when the body is empty *after* neutralisation — a
     control-only payload has nothing to show and must not render a bare lead
     (biff-7g7).
 
     The lead is bounded independently of the input: the label is truncated to
     :data:`_MAX_LABEL_WIDTH` and the continuation indent never exceeds
     :data:`TABLE_WIDTH`.  Without those caps a forged megabyte label would be
-    copied onto every wrapped body chunk \u2014 O(label x body) allocation
+    copied onto every wrapped body chunk — O(label x body) allocation
     from a single frame (defense in depth behind the
     :meth:`TalkNotification.from_payload` boundary clamp).
 
-    Precondition: *body* MUST already be boundary-clamped by the caller \u2014 the
+    Precondition: *body* MUST already be boundary-clamped by the caller — the
     lead is capped here, but the body is not, so the wrap work is O(body).
-    Every current caller passes the \u2264 :data:`~biff.talk_types.MAX_BODY_LEN`
+    Every current caller passes the ≤ :data:`~biff.talk_types.MAX_BODY_LEN`
     ``TalkNotification.nbody``; a future caller feeding an unclamped body from a
     non-notification source would reintroduce the linear term.
     """
@@ -398,34 +399,35 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     safe_label = _truncate(terminal_safe(label), _MAX_LABEL_WIDTH)
     lead = f"{HEADER_PREFIX}{stamp}{safe_label}  "
     width = max(_TALK_WRAP_MIN, TABLE_WIDTH - visible_width(lead))
-    # replace_whitespace=False keeps the sender's spacing *within* a line —
-    # textwrap's default would rewrite each whitespace char to a space.
+    # preserve_whitespace=True keeps the sender's spacing *within* a line —
+    # the default collapse would rewrite each whitespace char to a space.
     # terminal_safe has already stripped every control char (tabs, newlines)
     # before this point, so only spaces remain: nothing can inject a line or skew
-    # the wrap width.  Whitespace that lands on a wrap boundary is still dropped
-    # (textwrap's drop_whitespace default) — the render is not byte-for-byte
-    # verbatim across wraps, and deliberately so: keeping boundary spaces would
-    # skew continuation lines off the hang indent for no reader benefit.
-    chunks = textwrap.wrap(safe_body, width, replace_whitespace=False) or [""]
+    # the wrap width.  wrap_cells measures by terminal cell (wcwidth), not code
+    # points, so CJK/emoji in the body wrap at the right boundary instead of
+    # overflowing TABLE_WIDTH.  Whitespace that lands on a wrap boundary is
+    # still dropped — the render is not byte-for-byte verbatim across wraps,
+    # and deliberately so: keeping boundary spaces would skew continuation
+    # lines off the hang indent for no reader benefit.
+    chunks = wrap_cells(safe_body, width, preserve_whitespace=True) or [""]
     indent = " " * min(visible_width(lead), TABLE_WIDTH)
     return [lead + chunks[0], *(indent + chunk for chunk in chunks[1:])]
 
 
 def _truncate(text: str, width: int) -> str:
-    """Return *text* clipped to *width* code points, ending with ``\u2026``.
+    """Return *text* clipped to *width* terminal cells, ending with an ellipsis.
 
-    Clips by code-point count (``len``) as an approximation of display width.
-    *text* is already neutralised (no ANSI, no control characters), so one code
-    point is usually one column \u2014 but wide glyphs (emoji, CJK) occupy more than
-    one terminal column, so the clip is not column-accurate for them.
+    Delegates to :func:`biff._formatting.clip_to_width` so labels clip on the
+    same wcwidth cell-width basis as the table primitives and
+    :func:`format_talk_line`'s wrap — a wide glyph (CJK, emoji) at the clip
+    boundary is never undercounted the way code-point ``len()`` would
+    undercount it.
     """
-    if len(text) <= width:
-        return text
-    return text[: width - 1] + "\u2026"
+    return clip_to_width(text, width)
 
 
 def format_talk_end(label: str) -> str:
-    """Render a partner-hangup line in the ``\u25b6`` idiom.
+    """Render a partner-hangup line in the ``▶`` idiom.
 
     The label is capped at :data:`_MAX_LABEL_WIDTH` like the
     :func:`format_talk_line` lead, so a forged sender label (bounded only by the

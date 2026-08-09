@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
-import textwrap
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
+
+from wcwidth import wcwidth
 
 # Table layout constants -------------------------------------------------------
 
@@ -64,9 +65,47 @@ def format_idle(dt: datetime) -> str:
     return f"{minutes}m"
 
 
+def _char_width(ch: str) -> int:
+    """Return one character's terminal cell width, never negative.
+
+    ``wcwidth`` returns -1 for non-printable/control characters. Callers
+    render only text that has already passed through :func:`terminal_safe`
+    or ANSI-stripping, but clamp defensively rather than let a stray
+    control character subtract from a width budget.
+    """
+    return max(wcwidth(ch), 0)
+
+
 def visible_width(s: str) -> int:
-    """Return printable width of *s*, ignoring ANSI escape sequences."""
-    return len(_ANSI_RE.sub("", s))
+    """Return the printable width of *s* in terminal cells (ANSI-aware).
+
+    Sums each character's ``wcwidth`` cell count rather than counting code
+    points, so CJK ideographs and most emoji — which render at two
+    terminal cells — are not undercounted the way ``len()`` would
+    undercount them.
+    """
+    return sum(_char_width(ch) for ch in _ANSI_RE.sub("", s))
+
+
+def clip_to_width(text: str, width: int, *, ellipsis: str = "…") -> str:
+    """Clip *text* to *width* terminal cells, appending *ellipsis* if clipped.
+
+    Measures by cell width (:func:`visible_width`), not code points, so the
+    clip boundary never straddles a wide glyph (CJK, emoji) and undercounts
+    its contribution to the budget the way ``len()``-based clipping would.
+    """
+    if visible_width(text) <= width:
+        return text
+    budget = max(width - visible_width(ellipsis), 0)
+    out: list[str] = []
+    out_width = 0
+    for ch in text:
+        ch_width = _char_width(ch)
+        if out_width + ch_width > budget:
+            break
+        out.append(ch)
+        out_width += ch_width
+    return "".join(out) + ellipsis
 
 
 def terminal_safe(text: str) -> str:
@@ -112,6 +151,89 @@ def _fmt_cell(text: str, width: int, align: Literal["left", "right"]) -> str:
     return text + " " * padding
 
 
+_WORD_OR_WHITESPACE_RE = re.compile(r"\S+|\s+")
+
+
+def _break_long_word(word: str, width: int) -> list[str]:
+    """Split *word* into chunks no wider than *width* terminal cells.
+
+    A single unbroken run of wide glyphs (e.g. CJK with no spaces) is the
+    case ``textwrap.wrap``'s code-point-based ``break_long_words`` gets
+    wrong — it counts characters, not cells, so a wide-glyph run slips
+    past the budget uncounted. This walks character-by-character summing
+    :func:`visible_width` cells instead.
+    """
+    chunks: list[str] = []
+    chunk: list[str] = []
+    chunk_width = 0
+    for ch in word:
+        ch_width = _char_width(ch)
+        if chunk and chunk_width + ch_width > width:
+            chunks.append("".join(chunk))
+            chunk = []
+            chunk_width = 0
+        chunk.append(ch)
+        chunk_width += ch_width
+    if chunk:
+        chunks.append("".join(chunk))
+    return chunks
+
+
+def wrap_cells(
+    text: str, width: int, *, preserve_whitespace: bool = False
+) -> list[str]:
+    """Wrap *text* to *width* terminal cells.
+
+    Mirrors :func:`textwrap.wrap` in spirit — lines break at whitespace,
+    over-wide words hard-break — but measures every token by
+    :func:`visible_width` (wcwidth cell count) instead of ``len()``, so
+    CJK and emoji (which render at up to two cells) do not slip past the
+    boundary the way code-point counting would let them.
+
+    Set *preserve_whitespace* to keep internal whitespace runs verbatim,
+    matching ``textwrap.wrap(replace_whitespace=False)``; the default
+    collapses each run to a single space, matching ``textwrap.wrap``'s
+    default. Whitespace landing exactly on a wrap boundary is always
+    dropped, regardless of *preserve_whitespace* — only whitespace
+    *within* a line survives.
+    """
+    width = max(width, 1)
+    tokens = _WORD_OR_WHITESPACE_RE.findall(text)
+    if not preserve_whitespace:
+        tokens = [" " if tok.isspace() else tok for tok in tokens]
+
+    lines: list[str] = []
+    line: list[str] = []
+    line_width = 0
+
+    def flush() -> None:
+        if line:
+            lines.append("".join(line))
+
+    for tok in tokens:
+        is_ws = tok.isspace()
+        if is_ws and not line:
+            continue  # never start a line with whitespace
+        tok_width = visible_width(tok)
+        if line and line_width + tok_width > width:
+            flush()
+            line = []
+            line_width = 0
+            if is_ws:
+                continue  # whitespace landing on the break is dropped
+        if tok_width > width and not is_ws:
+            word_chunks = _break_long_word(tok, width)
+            lines.extend(word_chunks[:-1])
+            line = [word_chunks[-1]]
+            line_width = visible_width(word_chunks[-1])
+            continue
+        line.append(tok)
+        line_width += tok_width
+
+    flush()
+    return lines
+
+
 def _render_rows(
     specs: list[ColumnSpec],
     rows: list[list[str]],
@@ -129,7 +251,7 @@ def _render_rows(
             cells = [_fmt_cell(row[i], col_widths[i], specs[i].align) for i in range(n)]
             output.append(ROW_PREFIX + _COL_SEP.join(cells))
         else:
-            chunks = textwrap.wrap(row[var_idx], col_widths[var_idx]) or [""]
+            chunks = wrap_cells(row[var_idx], col_widths[var_idx]) or [""]
             for chunk_i, chunk in enumerate(chunks):
                 if chunk_i == 0:
                     cells = [

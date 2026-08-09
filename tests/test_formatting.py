@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 
-from biff._formatting import TABLE_WIDTH
+from biff._formatting import TABLE_WIDTH, visible_width
 from biff.formatting import (
     _TALK_WRAP_MIN,
     format_finger,
@@ -347,8 +347,8 @@ class TestFormatTalkLine:
 
     def test_internal_space_runs_preserved(self) -> None:
         # The message is the user's content — runs of intentional spaces (aligned
-        # text) must survive verbatim.  wrap(replace_whitespace=False) keeps them;
-        # the default rewrites each whitespace char and can alter the body.
+        # text) must survive verbatim.  wrap_cells(preserve_whitespace=True) keeps
+        # them; the default collapses each whitespace run to a single space.
         assert format_talk_line("eric:tty2", "a    b   c") == [
             "▶  eric:tty2  a    b   c"
         ]
@@ -390,6 +390,29 @@ class TestFormatTalkLine:
         assert "\x1b[2J" not in line
         assert "e[2Jvil:tty2  hi" in line
 
+    def test_cjk_body_wraps_within_the_table_width(self) -> None:
+        # A run of CJK glyphs renders at 2 cells each — this body is 60
+        # code points but 120 terminal cells, so it must wrap into several
+        # lines, each still within TABLE_WIDTH *cells*.
+        body = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 2
+        lines = format_talk_line("eric:tty2", body)
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_emoji_body_wraps_within_the_table_width(self) -> None:
+        body = "🚀" * 60  # 60 emoji at 2 cells each = 120 cells
+        lines = format_talk_line("eric:tty2", body)
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_mixed_ascii_and_cjk_body_stays_within_width(self) -> None:
+        body = ("hello 你好嗎 world 再見 ") * 6
+        lines = format_talk_line("eric:tty2", body.strip())
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
 
 class TestFormatTalkEnd:
     def test_hangup_line_uses_the_arrow_prefix(self) -> None:
@@ -407,4 +430,11 @@ class TestFormatTalkEnd:
         # _MAX_LABEL_WIDTH as format_talk_line's lead (biff-7g7).
         out = format_talk_end("u" * 129)
         assert len(out) <= TABLE_WIDTH
+        assert "…" in out
+
+    def test_long_cjk_label_is_clipped_by_cell_width(self) -> None:
+        # A CJK label at 2 cells/glyph must clip by cell width, not code
+        # points, or the hangup line overflows TABLE_WIDTH cells.
+        out = format_talk_end("你" * 60)
+        assert visible_width(out) <= TABLE_WIDTH
         assert "…" in out
