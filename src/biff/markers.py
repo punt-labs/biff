@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 from biff._stdlib import biff_data_dir
+
+logger = logging.getLogger(__name__)
 
 # Claude session_id / agent_id tokens are hex-and-dash UUIDs; this charset
 # is deliberately generous (also admits SessionHint-derived hex ids) while
@@ -48,16 +51,32 @@ def _identity_component(identity: str | None) -> str:
     """
     if identity and _SAFE_IDENTITY_RE.match(identity):
         return identity
+    logger.debug(
+        "identity %r outside safe charset or absent; using shared bucket",
+        identity,
+    )
     return _SHARED_IDENTITY
 
 
 def hint_dir(worktree_root: str) -> Path:
-    """Repo-scoped hint directory: ``~/.punt-labs/biff/hints/{hash}/``."""
-    h = (
-        hashlib.sha256(worktree_root.encode()).hexdigest()[:16]
-        if worktree_root
-        else "default"
-    )
+    """Repo-scoped hint directory: ``~/.punt-labs/biff/hints/{hash}/``.
+
+    An empty *worktree_root* falls back to the shared ``default`` bucket
+    and logs a warning: every unresolved repo lands in the same hash, so
+    two concurrent repos with unresolvable roots would share plan/wall
+    markers.  Fail-open is deliberate (DES-054 amendment "root-resolution
+    failure -- fail-open with observability") -- raising here would break
+    every read-only caller (``has_plan_marker``, ``read_wall_marker``) --
+    but the warning names the cross-contamination consequence so an
+    operator can trace a misrouted marker back to its cause.
+    """
+    if not worktree_root:
+        logger.warning(
+            "empty worktree_root; hint markers routed to shared 'default' bucket "
+            "(cross-repo contamination risk until git root resolves)",
+        )
+        return biff_data_dir() / "hints" / "default"
+    h = hashlib.sha256(worktree_root.encode()).hexdigest()[:16]
     return biff_data_dir() / "hints" / h
 
 

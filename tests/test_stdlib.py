@@ -9,11 +9,16 @@ suite-wide by the autouse ``_confine_git_walk`` fixture in conftest.py.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from biff._stdlib import get_repo_common_root
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -74,9 +79,7 @@ class TestGetRepoCommonRoot:
         empty.mkdir()
         assert get_repo_common_root(str(empty)) == ""
 
-    def test_default_cwd_uses_process_cwd(
-        self, tmp_path: Path, monkeypatch: object
-    ) -> None:
+    def test_default_cwd_uses_process_cwd(self, tmp_path: Path) -> None:
         """Omitting *cwd* falls back to the process's own working directory."""
         import os
 
@@ -120,3 +123,87 @@ class TestGetRepoCommonRoot:
 
         with patch("subprocess.run", side_effect=_raise_timeout):
             assert get_repo_common_root(str(repo)) == ""
+
+
+class TestGetRepoCommonRootLogging:
+    """Failure modes are logged at the level DES-054 amendment names.
+
+    Silence was the exact bug this branch's history keeps circling back
+    to: the shared 'default' hint bucket cross-contaminates markers
+    across repos for as long as git resolution fails, and until this
+    round the failure was invisible in logs.
+    """
+
+    def test_git_missing_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A missing ``git`` binary is the benign common case -- debug, not warning."""
+
+        def _raise_fnf(*_args: object, **_kwargs: object) -> object:
+            raise FileNotFoundError(2, "No such file or directory", "git")
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="biff._stdlib"),
+            patch("subprocess.run", side_effect=_raise_fnf),
+        ):
+            assert get_repo_common_root(str(tmp_path)) == ""
+
+        records = [r for r in caplog.records if r.name == "biff._stdlib"]
+        assert len(records) == 1
+        assert records[0].levelno == logging.DEBUG
+        assert "git not on PATH" in records[0].getMessage()
+
+    def test_timeout_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A hung ``git`` is an operational concern -- warn so the outage is visible."""
+
+        def _raise_timeout(*_args: object, **_kwargs: object) -> object:
+            raise subprocess.TimeoutExpired(cmd=["git"], timeout=5)
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="biff._stdlib"),
+            patch("subprocess.run", side_effect=_raise_timeout),
+        ):
+            assert get_repo_common_root(str(tmp_path)) == ""
+
+        records = [r for r in caplog.records if r.name == "biff._stdlib"]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert "timed out" in records[0].getMessage()
+
+    def test_nonzero_exit_logs_stderr(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Non-zero git exit is warned with git's own ``stderr`` for triage."""
+        not_a_repo = tmp_path / "not-a-repo"
+        not_a_repo.mkdir()
+
+        with caplog.at_level(logging.DEBUG, logger="biff._stdlib"):
+            assert get_repo_common_root(str(not_a_repo)) == ""
+
+        records = [r for r in caplog.records if r.name == "biff._stdlib"]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        msg = records[0].getMessage()
+        assert "git rev-parse exited" in msg
+        assert "not a git repository" in msg.lower()
+
+    def test_os_error_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A generic ``OSError`` (permission blip, EIO) surfaces at warning."""
+
+        def _raise_os(*_args: object, **_kwargs: object) -> object:
+            raise PermissionError(13, "Permission denied", "git")
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="biff._stdlib"),
+            patch("subprocess.run", side_effect=_raise_os),
+        ):
+            assert get_repo_common_root(str(tmp_path)) == ""
+
+        records = [r for r in caplog.records if r.name == "biff._stdlib"]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert "OSError" in records[0].getMessage()

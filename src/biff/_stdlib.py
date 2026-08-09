@@ -12,11 +12,14 @@ Adding a third-party import here defeats the entire purpose.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import cast
+
+logger = logging.getLogger(__name__)
 
 # ── Git helpers ──────────────────────────────────────────────────────
 
@@ -124,6 +127,14 @@ def get_repo_common_root(cwd: str | None = None) -> str:
     Returns ``""`` on any git failure (not a repo, git unavailable,
     timeout) -- callers degrade gracefully on an empty root, matching
     every other git-shellout helper in this module.
+
+    Failure modes are named in the log so an operator can trace a
+    cross-repo hint-bucket collision back to a root-resolution outage
+    rather than treating it as a marker-file bug (DES-054 amendment
+    "root-resolution failure -- fail-open with observability").  Missing
+    git is debug (the common benign case on a fresh machine); every
+    other failure -- timeout, non-zero git exit, OS error -- is warning
+    with the specific reason and git's ``stderr`` included.
     """
     try:
         result = subprocess.run(
@@ -134,9 +145,29 @@ def get_repo_common_root(cwd: str | None = None) -> str:
             timeout=5,
             cwd=cwd or None,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except FileNotFoundError:
+        logger.debug("git not on PATH; repo-common-root unresolved (cwd=%s)", cwd)
+        return ""
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "git rev-parse timed out after 5s; repo-common-root unresolved (cwd=%s)",
+            cwd,
+        )
+        return ""
+    except OSError:
+        logger.warning(
+            "git rev-parse failed with OSError; repo-common-root unresolved (cwd=%s)",
+            cwd,
+            exc_info=True,
+        )
         return ""
     if result.returncode != 0:
+        logger.warning(
+            "git rev-parse exited %d; repo-common-root unresolved (cwd=%s, stderr=%s)",
+            result.returncode,
+            cwd,
+            result.stderr.strip(),
+        )
         return ""
     common_dir = Path(result.stdout.strip())
     if not common_dir.is_absolute():

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from biff.markers import (
@@ -15,6 +17,9 @@ from biff.markers import (
     write_plan_marker,
     write_wall_marker,
 )
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestHintDir:
@@ -33,6 +38,32 @@ class TestHintDir:
     def test_empty_root_uses_default(self) -> None:
         d = hint_dir("")
         assert d.name == "default"
+
+    def test_empty_root_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Cross-repo hint-bucket collisions are visible in logs.
+
+        The write path here is fail-open by policy (DES-054 amendment
+        "root-resolution failure -- fail-open with observability") but
+        the shared bucket unifies unrelated repos' markers, so the
+        outage must be traceable.
+        """
+        with caplog.at_level(logging.DEBUG, logger="biff.markers"):
+            hint_dir("")
+        warnings = [
+            r
+            for r in caplog.records
+            if r.name == "biff.markers" and r.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 1
+        assert "default" in warnings[0].getMessage()
+
+    def test_populated_root_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The normal per-repo path emits no diagnostics."""
+        with caplog.at_level(logging.DEBUG, logger="biff.markers"):
+            hint_dir("/some/root")
+        assert not any(r.name == "biff.markers" for r in caplog.records)
 
 
 class TestPlanMarker:
