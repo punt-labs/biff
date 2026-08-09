@@ -134,7 +134,7 @@ def get_repo_common_root(cwd: str | None = None) -> str:
             timeout=5,
             cwd=cwd or None,
         )
-    except (FileNotFoundError, TimeoutError, OSError):
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return ""
     if result.returncode != 0:
         return ""
@@ -310,7 +310,12 @@ def expand_bead_id(message: str) -> str:
                 title = rec.get("title", "")
                 if isinstance(title, str) and title:
                     return f"{message}: {title}"
-    except (FileNotFoundError, json.JSONDecodeError, TimeoutError, OSError):
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ):
         pass
     return message
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from biff._stdlib import get_repo_common_root
 
@@ -100,3 +101,22 @@ class TestGetRepoCommonRoot:
         )
         assert not Path(result.stdout.strip()).is_absolute()
         assert get_repo_common_root(str(repo)) == str(repo.resolve())
+
+    def test_subprocess_timeout_degrades_to_empty(self, tmp_path: Path) -> None:
+        """A hung ``git`` call must degrade to ``""`` (fail-open), not propagate.
+
+        ``subprocess.TimeoutExpired`` is a ``SubprocessError``, NOT a
+        ``TimeoutError`` -- catching ``TimeoutError`` alone silently missed
+        it and the exception unwound the hook subprocess, breaking the
+        invoking tool call. The catch list now includes
+        ``subprocess.TimeoutExpired`` explicitly. Confirms the
+        fail-open contract DES-054 records under "Amendment:
+        root-resolution failure".
+        """
+        repo = _make_repo(tmp_path / "repo")
+
+        def _raise_timeout(*_args: object, **_kwargs: object) -> object:
+            raise subprocess.TimeoutExpired(cmd=["git"], timeout=5)
+
+        with patch("subprocess.run", side_effect=_raise_timeout):
+            assert get_repo_common_root(str(repo)) == ""

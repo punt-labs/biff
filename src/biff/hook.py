@@ -407,7 +407,7 @@ def _get_git_branch() -> str:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except (FileNotFoundError, TimeoutError, OSError):
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
     return ""
 
@@ -534,7 +534,7 @@ def _get_commit_subject() -> str:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except (FileNotFoundError, TimeoutError, OSError):
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
     return ""
 
