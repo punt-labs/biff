@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from biff._formatting import (
+    TABLE_WIDTH,
     ColumnSpec,
     clip_to_width,
     format_idle,
@@ -454,3 +455,19 @@ class TestFormatReadDual:
         agent_msgs = [self._make_msg("rmh", "claude", "b")]
         output = format_read_dual("jfreeman", human_msgs, "claude", agent_msgs)
         assert "\n\n" in output
+
+    def test_giant_sender_renders_bounded(self) -> None:
+        # Message.from_user/from_tty have no max_length on the wire. FROM
+        # is a fixed READ_SPECS column and MESSAGE is the shared
+        # variable/wrap column within each identity's section — an
+        # unbounded sender would widen FROM and collapse the wrap budget
+        # for every message in that section, not just the forged one.
+        human_msgs = [
+            self._make_msg("u" * 10_000, "jfreeman", "hey", from_tty="t" * 10_000),
+            self._make_msg("kai", "jfreeman", "short reply"),
+        ]
+        output = format_read_dual("jfreeman", human_msgs, "claude", [])
+        longest = max(visible_width(line) for line in output.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
+        kai_line = next(line for line in output.splitlines() if "kai" in line)
+        assert visible_width(kai_line) <= 2 * TABLE_WIDTH

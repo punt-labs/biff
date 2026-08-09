@@ -21,6 +21,7 @@ from biff.formatting import (
     format_talk_echo,
     format_talk_end,
     format_talk_line,
+    format_user_header,
     format_wall,
     format_wall_confirmation,
     format_wall_status_line,
@@ -70,6 +71,29 @@ class TestFormatWho:
         # so kai's line has two consecutive "+" (S and P), eric has "+" then "-"
         assert "+  +" in kai_line  # S=+, P=+
         assert "+  -" in eric_line  # S=+, P=-
+
+    def test_giant_user_and_hostname_render_bounded(self) -> None:
+        # UserSession.user/tty_name/hostname have no max_length on the wire,
+        # and every WHO_SPECS column is fixed=True — format_table sizes a
+        # fixed column to its longest cell across ALL rows, so one forged
+        # session would otherwise widen NAME and HOST for every row in the
+        # table, not just its own (mirrors the wall/talk giant-sender
+        # defense-in-depth tests for format_wall/format_wall_status_line).
+        forged = UserSession(
+            user="u" * 10_000,
+            tty="abcd1234",
+            tty_name="t" * 10_000,
+            hostname="h" * 10_000,
+            last_active=datetime.now(UTC),
+        )
+        normal = UserSession(user="eric", tty="efgh5678", last_active=datetime.now(UTC))
+        result = format_who([forged, normal])
+        longest = max(visible_width(line) for line in result.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
+        # The unforged row must not have been dragged along by the forged
+        # session's column widths.
+        eric_line = next(line for line in result.splitlines() if "eric" in line)
+        assert visible_width(eric_line) <= 2 * TABLE_WIDTH
 
 
 class TestFormatWhoKindTags:
@@ -191,6 +215,23 @@ class TestFormatFinger:
         result = format_finger(session)
         for line in result.splitlines():
             assert visible_width(line) <= TABLE_WIDTH
+
+    def test_giant_user_kind_and_display_name_render_bounded(self) -> None:
+        # UserSession.user/kind/display_name have no max_length on the
+        # wire, and fmt_cell pads its column to width but never truncates
+        # — an unbounded field previously rendered one unbounded Login:
+        # line, however long the user/kind/display_name.
+        session = UserSession(
+            user="u" * 10_000,
+            tty="abcd1234",
+            tty_name="tty1",
+            kind="k" * 10_000,
+            display_name="d" * 10_000,
+            last_active=datetime.now(UTC),
+        )
+        result = format_user_header(session)
+        for line in result.splitlines():
+            assert visible_width(line) <= 2 * TABLE_WIDTH
 
 
 class TestParseDuration:
@@ -625,6 +666,41 @@ class TestPairEvents:
         assert pairs[0][1] is None
 
 
+class TestFormatLast:
+    def test_giant_user_and_hostname_render_bounded(self) -> None:
+        # SessionEvent.user/tty_name/hostname have no max_length on the
+        # wire, and every LAST_SPECS column is fixed=True — format_table
+        # sizes a fixed column to its longest cell across ALL rows, so one
+        # forged login event would otherwise widen NAME and HOST for every
+        # row in the table, not just its own.
+        now = datetime.now(UTC)
+        forged = SessionEvent(
+            session_key="evil:tty9",
+            event="login",
+            user="u" * 10_000,
+            tty="tty9",
+            tty_name="t" * 10_000,
+            hostname="h" * 10_000,
+            timestamp=now,
+        )
+        normal = SessionEvent(
+            session_key="kai:tty1",
+            event="login",
+            user="kai",
+            tty="tty1",
+            timestamp=now,
+        )
+        result = format_last(
+            [(forged, None), (normal, None)], {"evil:tty9", "kai:tty1"}
+        )
+        longest = max(visible_width(line) for line in result.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
+        # The unforged row must not have been dragged along by the forged
+        # event's column widths.
+        kai_line = next(line for line in result.splitlines() if "kai" in line)
+        assert visible_width(kai_line) <= 2 * TABLE_WIDTH
+
+
 class TestFormatRead:
     def test_basic_messages(self):
         m = Message(from_user="kai", to_user="eric", body="hey there")
@@ -632,6 +708,27 @@ class TestFormatRead:
         assert "kai" in result
         assert "@kai" not in result
         assert "hey there" in result
+
+    def test_giant_sender_renders_bounded(self) -> None:
+        # Message.from_user/from_tty have no max_length on the wire. FROM
+        # is a fixed READ_SPECS column (widens for every row) and MESSAGE
+        # is the shared variable/wrap column (its budget shrinks toward its
+        # floor for every row) — mirrors the wall/talk giant-sender
+        # defense-in-depth tests for format_wall/format_wall_status_line.
+        messages = [
+            Message(
+                from_user="u" * 10_000,
+                from_tty="t" * 10_000,
+                to_user="eric",
+                body="hey there",
+            ),
+            Message(from_user="kai", to_user="eric", body="short reply"),
+        ]
+        result = format_read(messages)
+        longest = max(visible_width(line) for line in result.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
+        kai_line = next(line for line in result.splitlines() if "kai" in line)
+        assert visible_width(kai_line) <= 2 * TABLE_WIDTH
 
 
 class TestTerminalSafe:

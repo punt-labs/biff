@@ -57,6 +57,7 @@ __all__ = [
     "pair_events",
     "parse_duration",
     "sanitize_wall_message",
+    "sanitized_address",
     "sanitized_sender",
     "terminal_safe",
     "visible_text",
@@ -71,6 +72,12 @@ _TALK_WRAP_MIN = 24
 # amplification — see TalkNotification.from_payload, biff-7g7).
 _MAX_LABEL_WIDTH = 40
 
+# format_user_header's two-column "Login: ... Name: ..." layout — fmt_cell
+# pads the left column to this width but never truncates, so the left
+# column's content must be pre-clipped or an unbounded field renders one
+# unbounded line instead of a fixed-width column.
+_LOGIN_COL_WIDTH = 38
+
 
 def _truncate(text: str, width: int) -> str:
     """Return *text* clipped to *width* terminal cells, ending with an ellipsis.
@@ -82,6 +89,23 @@ def _truncate(text: str, width: int) -> str:
     undercount it.
     """
     return clip_to_width(text, width)
+
+
+def _sanitized_label(from_user: str, from_tty: str, tty_format: str) -> str:
+    """Neutralise, compose, and clip a sender/identity label as one unit.
+
+    Shared by :func:`sanitized_sender` (``"user (tty)"``, for headers) and
+    :func:`sanitized_address` (``"user:tty"``, for copy-pasteable reply
+    addresses) — both compose two wire fields with no ``max_length`` and
+    both must clip the WHOLE composed string, not just *from_user*, or the
+    cap is defeated by concatenating an unbounded *from_tty* after it.
+    *tty_format* is a ``str.format``-style template taking the sanitised
+    user then the sanitised tty, e.g. ``"{} ({})"`` or ``"{}:{}"``.
+    """
+    label = terminal_safe(from_user)
+    if from_tty:
+        label = tty_format.format(label, terminal_safe(from_tty))
+    return _truncate(label, _MAX_LABEL_WIDTH)
 
 
 def sanitized_sender(from_user: str, from_tty: str = "") -> str:
@@ -100,12 +124,30 @@ def sanitized_sender(from_user: str, from_tty: str = "") -> str:
     :func:`format_talk_line` already guards against). Every render site
     that folds a sender into a header line or a wrap-width budget must clip
     through this one function rather than reimplement the two-step
-    transform (biff-2sw).
+    transform.
     """
-    label = terminal_safe(from_user)
-    if from_tty:
-        label = f"{label} ({terminal_safe(from_tty)})"
-    return _truncate(label, _MAX_LABEL_WIDTH)
+    return _sanitized_label(from_user, from_tty, "{} ({})")
+
+
+def sanitized_address(from_user: str, from_tty: str = "") -> str:
+    """Return a copy-pasteable ``user:tty`` address, bounded like ``sanitized_sender``.
+
+    ``who``/``last``/``read`` render a ``user:tty`` reply address — for
+    pasting straight into ``/write`` — rather than :func:`sanitized_sender`'s
+    ``user (tty)`` header form, but the underlying hazard is identical:
+    ``UserSession.user``/``tty_name``, ``SessionEvent.user``/``tty_name``,
+    and ``Message.from_user``/``from_tty`` all lack a ``max_length`` on the
+    wire. Every table these addresses render into (``WHO_SPECS``,
+    ``LAST_SPECS``, ``READ_SPECS``) either widens a *fixed* column for
+    every row from the longest cell in the table
+    (:func:`~biff._formatting.format_table`'s fixed-column sizing), or — for
+    ``READ_SPECS``'s variable ``MESSAGE`` column — collapses the shared wrap
+    budget toward its floor, multiplying the damage across every row in the
+    table rather than just the forged one. Clipping the whole composed
+    address bounds both failure modes the same way
+    :func:`sanitized_sender` already does for wall/talk headers.
+    """
+    return _sanitized_label(from_user, from_tty, "{}:{}")
 
 
 # Wrap budget for free-form text rendered under the standard ROW_PREFIX
@@ -247,10 +289,15 @@ WHO_SPECS: list[ColumnSpec] = [
 
 
 def _format_who_name(s: UserSession) -> str:
-    """Render a session as a copy-pasteable address for ``/write``."""
+    """Render a session as a copy-pasteable address for ``/write``.
+
+    Routed through :func:`sanitized_address` — ``UserSession.user`` and
+    ``tty_name`` carry no ``max_length`` on the wire, and NAME is a
+    *fixed* :data:`WHO_SPECS` column, so an unbounded value here would
+    widen every row in the table, not just the forged session's own row.
+    """
     tty = terminal_safe(s.tty_name) or (s.tty[:8] if s.tty else "")
-    user = terminal_safe(s.user)
-    return f"{user}:{tty}" if tty else user
+    return sanitized_address(s.user, tty)
 
 
 def _format_who_kind(s: UserSession) -> str:
@@ -267,6 +314,11 @@ def format_who(sessions: list[UserSession]) -> str:
     address directly into ``/write``.  P column shows ``+`` if the
     session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.
+
+    ``UserSession.hostname`` has no ``max_length`` on the wire either, and
+    HOST is a *fixed* column like NAME — clipped via ``_truncate`` for the
+    same reason :func:`_format_who_name` routes through
+    :func:`sanitized_address`.
     """
     rows: list[list[str]] = [
         [
@@ -276,7 +328,7 @@ def format_who(sessions: list[UserSession]) -> str:
             format_idle(s.last_active),
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
-            terminal_safe(s.hostname) or "-",
+            _truncate(terminal_safe(s.hostname), _MAX_LABEL_WIDTH) or "-",
         ]
         for s in sessions
     ]
@@ -305,20 +357,28 @@ def _format_finger_idle(dt: datetime) -> str:
 
 
 def format_user_header(session: UserSession) -> str:
-    """Format the user-level header (shown once per user)."""
+    """Format the user-level header (shown once per user).
+
+    ``UserSession.user``/``kind``/``display_name`` have no ``max_length``
+    on the wire, and :func:`fmt_cell` pads its column to width but never
+    truncates — an unbounded field would render one unbounded line instead
+    of the intended fixed-width two-column layout. Each composed piece is
+    clipped before padding.
+    """
     user = terminal_safe(session.user)
     login_label = user
     if session.kind:
         login_label = f"{user} [{terminal_safe(session.kind)}]"
-    left = f"Login: {login_label}"
+    left = _truncate(f"Login: {login_label}", _LOGIN_COL_WIDTH)
     mesg = "on" if session.biff_enabled else "off"
     if session.display_name:
-        right = f"Name: {terminal_safe(session.display_name)}"
-        line1 = f"▶  {fmt_cell(left, 38, 'left')}{right}"
+        name = _truncate(terminal_safe(session.display_name), _MAX_LABEL_WIDTH)
+        right = f"Name: {name}"
+        line1 = f"▶  {fmt_cell(left, _LOGIN_COL_WIDTH, 'left')}{right}"
         line2 = f"   Messages: {mesg}"
         return f"{line1}\n{line2}"
     right = f"Messages: {mesg}"
-    return f"▶  {fmt_cell(left, 38, 'left')}{right}"
+    return f"▶  {fmt_cell(left, _LOGIN_COL_WIDTH, 'left')}{right}"
 
 
 def format_tty_block(session: UserSession) -> str:
@@ -425,14 +485,19 @@ def format_last(
     pairs: list[tuple[SessionEvent, SessionEvent | None]],
     active_keys: set[str],
 ) -> str:
-    """Build a columnar table matching Unix ``last(1)`` style."""
+    """Build a columnar table matching Unix ``last(1)`` style.
+
+    ``SessionEvent.user``/``tty_name``/``hostname`` have no ``max_length``
+    on the wire, and NAME/HOST are *fixed* :data:`LAST_SPECS` columns —
+    bounded the same way :func:`_format_who_name`/:func:`format_who` bound
+    the equivalent ``/who`` fields.
+    """
     rows: list[list[str]] = []
     for login, logout in pairs:
         tty = terminal_safe(login.tty_name) or (login.tty[:8] if login.tty else "")
-        user = terminal_safe(login.user)
-        name = f"{user}:{tty}" if tty else user
+        name = sanitized_address(login.user, tty)
         repo = display_repo_name(login.repo) or "-"
-        host = terminal_safe(login.hostname) or "-"
+        host = _truncate(terminal_safe(login.hostname), _MAX_LABEL_WIDTH) or "-"
         login_str = _format_timestamp(login.timestamp)
         if logout is not None:
             logout_str = _format_timestamp(logout.timestamp)
@@ -652,7 +717,16 @@ def format_read_dual(
     agent_user: str,
     agent_msgs: list[Message],
 ) -> str:
-    """Format messages with per-identity section headers."""
+    """Format messages with per-identity section headers.
+
+    ``Message.from_user``/``from_tty`` have no ``max_length`` on the wire.
+    FROM is a *fixed* :data:`READ_SPECS` column and MESSAGE is the shared
+    variable/wrap column, so the sender is routed through
+    :func:`sanitized_address` for the same two-fold reason
+    :func:`format_read` is: an unbounded value would widen FROM for every
+    row in a section's table, and collapse the MESSAGE wrap budget shared
+    by every message in that section.
+    """
     sections: list[str] = []
     for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
         if not msgs:
@@ -660,8 +734,7 @@ def format_read_dual(
         rows: list[list[str]] = []
         for m in msgs:
             ts = m.timestamp.strftime("%a %b %d %H:%M")
-            fu = terminal_safe(m.from_user)
-            sender = f"{fu}:{terminal_safe(m.from_tty)}" if m.from_tty else fu
+            sender = sanitized_address(m.from_user, m.from_tty)
             rows.append([sender, ts, terminal_safe(m.body)])
         table = format_table(READ_SPECS, rows)
         # Indent the table under the section header: replace the
@@ -677,11 +750,16 @@ def format_read(messages: list[Message]) -> str:
 
     The FROM column renders a copy-pasteable reply address:
     ``user:ttyNN`` when the sender's tty is known, ``user`` otherwise.
+
+    ``Message.from_user``/``from_tty`` have no ``max_length`` on the wire.
+    FROM is a *fixed* :data:`READ_SPECS` column (unbounded content widens
+    it for every row) and MESSAGE is the table's variable/wrap column
+    (unbounded FROM content shrinks the shared wrap budget toward its
+    floor for every row) — :func:`sanitized_address` bounds both.
     """
     rows: list[list[str]] = []
     for m in messages:
         ts = m.timestamp.strftime("%a %b %d %H:%M")
-        fu = terminal_safe(m.from_user)
-        sender = f"{fu}:{terminal_safe(m.from_tty)}" if m.from_tty else fu
+        sender = sanitized_address(m.from_user, m.from_tty)
         rows.append([sender, ts, terminal_safe(m.body)])
     return format_table(READ_SPECS, rows)
