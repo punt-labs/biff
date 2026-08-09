@@ -904,8 +904,11 @@ async def _register_companion(state: ServerState) -> None:
     # marker against a hook whose ``_repo_common_root`` also resolves to the
     # common root -- two sessions in different linked worktrees of the same
     # repo are one coordination unit (biff-ar1/om9 broad-scope, DES-054).
-    worktree = str(state.repo_common_root) if state.repo_common_root else ""
-    _write_marker(state.config.repo_name, state.companion.session_key, worktree)
+    _write_marker(
+        state.config.repo_name,
+        state.companion.session_key,
+        str(state.repo_common_root),
+    )
     # Frozen dataclass — update via object.__setattr__.
     object.__setattr__(state.companion, "tty_name", companion_name)
     logger.info(
@@ -1006,7 +1009,7 @@ async def _active_lifespan(
     _write_marker(
         state.config.repo_name,
         state.session_key,
-        str(state.repo_common_root) if state.repo_common_root else "",
+        str(state.repo_common_root),
     )
     logger.info("Session ready: %s (%s)", state.session_key, final_name)
 

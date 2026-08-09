@@ -146,6 +146,7 @@ class TestSessionCleanup:
             ),
             data_dir=tmp_path / "eric2",
             repo_root=tmp_path,
+            repo_common_root=tmp_path,
         )
 
         # Eric connects and is visible.

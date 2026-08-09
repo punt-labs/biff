@@ -139,6 +139,7 @@ class TestCliSessionLifecycle:
             ),
             data_dir=tmp_path,
             repo_root=tmp_path,
+            repo_common_root=tmp_path,
         )
 
     @pytest.mark.anyio()
@@ -234,6 +235,7 @@ class TestCliSessionLifecycle:
             config=BiffConfig(user="kai", repo_name="test"),
             data_dir=tmp_path,
             repo_root=tmp_path,
+            repo_common_root=tmp_path,
         )
         with (
             patch("biff.cli_session.load_cli_config", return_value=no_relay),

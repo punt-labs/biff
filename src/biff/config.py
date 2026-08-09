@@ -78,12 +78,16 @@ class ResolvedConfig:
 
     config: BiffConfig
     data_dir: Path
-    repo_root: Path | None = None
     # Parent of ``git rev-parse --git-common-dir``: the same absolute path from
     # the main checkout and every linked worktree (biff-ar1/om9 broad-scope
     # decision).  Distinct from *repo_root* so per-worktree write-through
     # (config yaml, enabled marker) keeps the nearest-worktree semantics.
-    repo_common_root: Path | None = None
+    # Required: ``_load_base_config`` always resolves it (falling back to
+    # ``repo_root`` when ``get_repo_common_root`` returns ``""``), so the
+    # optional-with-``None`` shape had no reachable ``None`` branch and
+    # forced every reader into a dead ``else ""`` guard.
+    repo_common_root: Path
+    repo_root: Path | None = None
 
 
 @dataclass(frozen=True)

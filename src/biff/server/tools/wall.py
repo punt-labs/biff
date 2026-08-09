@@ -190,7 +190,7 @@ def _update_wall_marker(state: ServerState, wall: WallPost | None) -> None:
     """
     from biff.markers import clear_wall_marker, write_wall_marker  # noqa: PLC0415
 
-    worktree = str(state.repo_common_root) if state.repo_common_root else ""
+    worktree = str(state.repo_common_root)
     if wall is not None:
         write_wall_marker(worktree, wall.text, wall.expires_at)
     else:
