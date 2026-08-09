@@ -169,8 +169,9 @@ biff invariants are added.
   %
   % --- Biff workflow state ---
   %
-  planSet : ZBOOL \\
-  planSource : \finset PlanSource \\
+  planSet : AGENTID \pfun ZBOOL \\
+  planSource : AGENTID \pfun PlanSource \\
+  planWiped : ZBOOL \\
   unreadCount : \nat \\
   talkActive : ZBOOL \\
   wallActive : ZBOOL \\
@@ -180,8 +181,20 @@ biff invariants are added.
   % === Base invariants (from claude-code.tex) ===
   %
   \# sessionId \leq 1 \\
-  sessionPhase = spInactive \implies sessionId = \emptyset \\
-  sessionPhase \neq spInactive \implies \# sessionId = 1 \\
+  %
+  % A session id exists exactly during the strictly-active phases.  The
+  % original statement (``sessionPhase \neq spInactive \implies \#
+  % sessionId = 1'') wrongly demanded a session id at $spEnded$ too,
+  % directly contradicting EndSession's own postcondition (sessionId' =
+  % \emptyset there) --- an unsatisfiable conjunction that made EndSession
+  % unfireable in ProB (no successor state could ever satisfy both).
+  % Errata, corrected here: $spEnded$ joins $spInactive$ as a phase with
+  % no session id, matching the precedent already set for
+  % $activeSubagents$/$pendingPrompt$ two lines below, both of which
+  % already exempt $spEnded$ the same way.
+  %
+  sessionPhase \in \{ spInactive, spEnded \} \implies sessionId = \emptyset \\
+  sessionPhase \notin \{ spInactive, spEnded \} \implies \# sessionId = 1 \\
   sessionPhase \neq spProcessing \implies toolPhase = tpNone \\
   \# currentTool \leq 1 \\
   toolPhase = tpNone \implies currentTool = \emptyset \\
@@ -204,11 +217,22 @@ biff invariants are added.
   %
   % === Biff invariants ===
   %
-  % Plan source exists iff plan is set
+  % Plan source exists iff plan is set, stated per identity now that
+  % planSet/planSource are indexed rather than session-global (biff-ar1/om9,
+  % \S\ref{sec:om9}).  The old cardinality-based encoding (a finset of size
+  % $\leq 1$ standing for ``optional'') is replaced by the more direct
+  % optional-via-partial-function idiom, since the key already distinguishes
+  % identities.
   %
-  \# planSource \leq 1 \\
-  planSet = zfalse \implies planSource = \emptyset \\
-  planSet = ztrue \implies \# planSource = 1 \\
+  \dom planSource \subseteq \dom planSet \\
+  \forall a : \dom planSet @ ( planSet(a) = ztrue \iff a \in \dom planSource ) \\
+  %
+  % Bounded for animation --- ProB will not animate an unbounded carrier,
+  % and the domain of planSet is exactly the population of identities the
+  % model has ever seen ask about or set a plan: the current session plus
+  % at most maxSubagents concurrently observed peers.
+  %
+  \#(\dom planSet) \leq maxSubagents + 1 \\
   %
   % Unread bounded for animation
   %
@@ -220,13 +244,116 @@ biff invariants are added.
   wallActive = zfalse \implies wallText = \emptyset \\
   wallActive = ztrue \implies \# wallText = 1 \\
   %
-  % No biff state when session is inactive
+  % No biff state when session is inactive --- except planSet/planSource,
+  % which (\S\ref{sec:om9}) now persist across this session's own lifecycle
+  % boundary by design: they model the shared, identity-indexed marker file
+  % on disk, not this session's local memory, so another identity's entry
+  % must survive this session going inactive.  Dropping the old
+  % ``sessionPhase = spInactive \implies planSet = zfalse'' invariant is
+  % deliberate, not an oversight --- see \S\ref{sec:om9}.
   %
-  sessionPhase = spInactive \implies planSet = zfalse \\
   sessionPhase = spInactive \implies unreadCount = 0 \\
   sessionPhase = spInactive \implies talkActive = zfalse \\
   sessionPhase = spInactive \implies wallActive = zfalse
+  %
+  % om9 regression guard (\S\ref{sec:om9}): $planWiped$ is deliberately
+  % NOT pinned here (errata --- an earlier draft of this schema did pin
+  % it, on the mistaken reasoning that this file's absence of
+  % deadlock/liveness analysis made nats-relay.tex's warning about
+  % pinned ghost observers inapplicable). It is not: declaring a ghost
+  % as part of \texttt{State}'s own invariant makes ProB treat it as a
+  % WELL-FORMEDNESS FILTER on successor states --- any transition whose
+  % postcondition would set it to $ztrue$ is silently excluded from the
+  % reachable graph rather than reported, so ordinary \texttt{-model\_check}
+  % can never find the very counterexample the ghost exists to surface
+  % (confirmed empirically: pinning it collapses an 8-state reachable
+  % counterexample trace down to 4 states, none of them a violation).
+  % The correct idiom, matching \texttt{nats-relay.tex}'s
+  % $spuriousTeardown$ exactly, is a free ghost variable checked by an
+  % explicit CTL formula: \texttt{probcli claude-code-biff.tex
+  % -ctlformula "AG({planWiped = zfalse})"}.
 \end{schema}
+
+\subsection{Identity-Indexed Plan State --- the biff-ar1 / biff-om9 Fix}
+\label{sec:om9}
+
+% DES-0XX PLACEHOLDER: the parallel code-implementation mission
+% (m-2026-08-09-021, worker rmh, same design mission m-2026-08-09-018)
+% logs this decision in DESIGN.md under its own DES-0XX entry number.
+% As of this spec's authorship that entry had not yet landed on this
+% branch (checked via `bd show biff-ar1`, which records no DES-0XX
+% reference).  Fill in the real number here once rmh's mission closes
+% and the entry exists --- do not guess it.
+
+Earlier revisions of this specification modelled \texttt{planSet} as a
+single flat \texttt{ZBOOL}: ``is the plan set,'' with no notion of
+\emph{whose} plan.  That was adequate for a model of one session's own
+perspective, but it could not even state, let alone rule out, the failure
+mode reported as biff-ar1/biff-om9: two sessions (or an in-process
+subagent and its leader, \texttt{claude-code.tex}'s $AGENTID$) sharing one
+worktree, where one session's \texttt{SessionStart} unconditionally wiped
+the shared on-disk marker file and so cleared a plan another, concurrently
+running session depended on.  A flat boolean has no room for a second
+occupant; the bug was invisible to the model, not merely unproven.
+
+The fix (design mission \texttt{m-2026-08-09-018},
+\texttt{.tmp/plan-gate-design/biff-ar1-om9-design.md} \S6) re-indexes
+\texttt{planSet} and \texttt{planSource} by $AGENTID$ --- the same base
+type \texttt{activeSubagents} already uses for ``the other identities this
+session knows about,'' so this is filling a gap in the model's existing
+vocabulary, not inventing a new one.  \texttt{StartSession} (and,
+symmetrically, \texttt{EndSession}) must now update \emph{only its own}
+key via functional override ($\oplus$), never the whole function.  The
+ghost observer \texttt{planWiped} is the machine-checked statement of that
+requirement: it starts \texttt{zfalse}, and the shipped
+\texttt{StartSession} below is provably incapable of setting it, because
+$(\, f \oplus \{x \mapsto v\}\,)(y) = f(y)$ for every $y \neq x$ is a
+toolkit fact about override, not something that needs a search to confirm.
+What \emph{does} need a search to confirm is that a naive, type-blind port
+of the old assignment --- literally generalising
+``\texttt{planSet}${}'{} = zfalse$'' to ``\texttt{planSet}${}'{} =
+\emptyset$'' without rethinking the logic, exactly the kind of edit a
+mechanical type-widening pass produces --- reintroduces the bug.
+
+\texttt{planWiped} is deliberately \emph{not} pinned as a state invariant
+here (errata --- an earlier draft of this schema pinned it, on the
+mistaken belief that this file's lack of deadlock/liveness analysis made
+\texttt{nats-relay.tex}'s warning about pinned ghost observers
+inapplicable; it is not: pinning a ghost inside \texttt{State}'s own
+invariant makes ProB filter violating successors out of the reachable
+graph instead of reporting them, so ordinary model checking can never
+find the very counterexample the ghost exists to surface).  The correct
+idiom, matching \texttt{nats-relay.tex}'s $spuriousTeardown$ exactly, is
+a free ghost variable checked by an explicit CTL formula:
+\texttt{probcli claude-code-biff.tex -ctlformula "AG(\{planWiped =
+zfalse\})"}.
+
+This file's own state space (11 given types, 26 operations spanning the
+whole base Claude Code tool-call lifecycle) is too large for probcli to
+close exhaustively within a practical time budget --- confirmed
+empirically, both plain \texttt{-model\_check} and the CTL check exceeded
+280 seconds against the full spec, past 300,000 discovered states and
+still climbing.  The counterexample and its closure are instead verified
+against \texttt{claude-code-biff-om9-globalwipe.tex}, the formal
+\emph{projection} of this spec onto exactly the five variables the om9
+property depends on ($sessionPhase$, $sessionId$, $planSet$,
+$planSource$, $planWiped$) --- every operation kept there
+(\texttt{StartSession}, \texttt{SetPlanManual}, \texttt{EndSession}, and
+the two phase-transition steps between them) reproduces the corresponding
+shipped guard and postcondition verbatim, with only the erased fields'
+frame conditions removed.  Against the pre-fix (naive global-wipe)
+variant of that harness, \texttt{probcli -ctlformula "AG(\{planWiped =
+zfalse\})"} reports the formula \textbf{FALSE} with an 8-step reachable
+counterexample: register two identities' plans (\texttt{SetPlanManual}
+for $A$, then $B$), end $A$'s own session (correctly clearing only $A$'s
+key), then let $A$'s \emph{next} session start and wipe \emph{everything}
+--- including $B$'s still-set plan.  That counterexample \emph{is}
+biff-om9.  Against the fixed (override-based) variant of the identical
+harness --- the same construction shipped in this file's own
+\texttt{StartSession} below --- the same formula is \textbf{TRUE},
+proven exhaustively over the harness's whole reachable state space (9
+states) in under 30ms: the fix makes the bad state \emph{unreachable},
+not merely less likely.
 
 % ============================================================
 \section{Initialization}
@@ -247,8 +374,12 @@ biff invariants are added.
   pendingPrompt' = \emptyset \\
   pendingResponse' = \emptyset \\
   %
-  planSet' = zfalse \\
+  % Empty partial functions: no identity has ever set a plan, since Init
+  % models the whole system before any session has started (\S\ref{sec:om9}).
+  %
+  planSet' = \emptyset \\
   planSource' = \emptyset \\
+  planWiped' = zfalse \\
   unreadCount' = 0 \\
   talkActive' = zfalse \\
   wallActive' = zfalse \\
@@ -267,6 +398,7 @@ schema captures ``biff state unchanged'' to reduce repetition.
   \where
   planSet' = planSet \\
   planSource' = planSource \\
+  planWiped' = planWiped \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
@@ -283,15 +415,46 @@ schema captures ``biff state unchanged'' to reduce repetition.
 initializes the session. If a wall is active, it is injected into
 context.
 
+Errata (\S\ref{sec:om9}): the precondition was, in every prior revision
+of this specification, \texttt{sessionPhase = spInactive} alone. That
+made $spEnded$ a true dead end --- no operation in this file is ever
+enabled from $spEnded$, so once one session's lifecycle finished, no
+\emph{second} session could ever start within the same reachable-state
+trace, and every multi-identity scenario this section exists to model
+(including the om9 counterexample itself) was consequently unreachable
+from \texttt{Init} for a reason having nothing to do with whether the
+fix below is correct. The corrected precondition,
+\texttt{sessionPhase = spInactive $\lor$ sessionPhase = spEnded},
+allows a new session to start either as the very first one (from
+\texttt{Init}) or as a successor to one that has already ended ---
+exactly the ordinary case of a second Claude Code session starting in
+the same worktree later, which is the scenario biff-om9 is about.
+
+$identity?$ is the resolved plan-marker identity for the starting
+session --- \emph{not} necessarily the same token as $sid?$
+(\S\ref{sec:om9}: the code resolves $session\_id$ or $agent\_id$
+depending on how the session was dispatched, per design \S3a).  They are
+modelled as separate inputs of separate given types precisely because
+the code resolves them from separate fields on the hook payload, and
+conflating them would hide the exact identity-resolution ambiguity the
+design document leaves open (OPEN-DECISION-1).  A new session inherits
+no plan of its own --- the ``new session starts unset'' invariant biff's
+\texttt{clear\_plan\_marker} call encodes --- but, critically, it must
+touch \emph{only} $identity?$'s own entry in $planSet$/$planSource$,
+never anyone else's: this is the formal statement of the biff-om9 fix.
+Functional override ($\oplus$) makes that guarantee by construction,
+since $(f \oplus \{x \mapsto v\})(y) = f(y)$ for every $y \neq x$.
+
 \begin{schema}{StartSession}
   \Delta State \\
   sid? : SESSIONID \\
+  identity? : AGENTID \\
   source? : SessionStartSource \\
   mode? : PermissionMode \\
   hasWall? : ZBOOL \\
   wallContent? : \finset WALLTEXT
   \where
-  sessionPhase = spInactive \\
+  sessionPhase = spInactive \lor sessionPhase = spEnded \\
   \# wallContent? \leq 1 \\
   hasWall? = zfalse \implies wallContent? = \emptyset \\
   hasWall? = ztrue \implies \# wallContent? = 1 \\
@@ -308,8 +471,31 @@ context.
   pendingPrompt' = \emptyset \\
   pendingResponse' = \emptyset \\
   %
-  planSet' = zfalse \\
-  planSource' = \emptyset \\
+  % THE FIX (\S\ref{sec:om9}): scope to identity?'s own key only, via
+  % override --- every other identity's entry in planSet/planSource is
+  % provably untouched.
+  %
+  planSet' = planSet \oplus \{ identity? \mapsto zfalse \} \\
+  planSource' = \{ identity? \} \ndres planSource \\
+  %
+  % Regression guard: planWiped can only ever be driven to ztrue by an
+  % operation whose postcondition actually clears another identity's
+  % ztrue entry.  Under the override above that never happens, so this
+  % disjunction's second disjunct is the only one ever reachable here ---
+  % but it is stated as a disjunction, not assumed, so a future edit to
+  % the postcondition above that reintroduces global clearing is caught
+  % by z-spec test, not merely by inspection.
+  %
+  ( ( \exists a : \dom planSet @
+        a \neq identity? \land planSet(a) = ztrue \land
+        ( a \notin \dom planSet' \lor planSet'(a) = zfalse ) )
+    \land planWiped' = ztrue ) \\
+  \lor \\
+  ( ( \lnot ( \exists a : \dom planSet @
+        a \neq identity? \land planSet(a) = ztrue \land
+        ( a \notin \dom planSet' \lor planSet'(a) = zfalse ) ) )
+    \land planWiped' = planWiped ) \\
+  %
   unreadCount' = 0 \\
   talkActive' = zfalse \\
   wallActive' = hasWall? \\
@@ -385,20 +571,32 @@ The \texttt{PreToolUse} hook checks workflow prerequisites for
 edit tools (the shipped hook matches \texttt{Edit|Write} only). The
 hook allows only if the plan is set (for edit tools), or
 unconditionally for other tools --- including \texttt{Bash}, which
-is not gated.
+is not gated. $identity?$ (\S\ref{sec:om9}) is the identity the hook
+resolves for \emph{this} invocation --- $session\_id$ from the hook's
+own JSON payload, or $agent\_id$ when present for an in-process
+subagent's own tool call (design \S3a) --- and the guard now checks
+\emph{that} identity's own entry in $planSet$, not a flat, session-global
+boolean: two identities sharing one worktree can have independently true
+or false plans.
 
 \begin{schema}{PreToolHookAllow}
   BiffFrame \\
   hookDecision? : PermissionDecision \\
-  needsPermission? : ZBOOL
+  needsPermission? : ZBOOL \\
+  identity? : AGENTID
   \where
   sessionPhase = spProcessing \\
   toolPhase = tpPreHook \\
   hookDecision? = pdAllow \\
   %
-  % WORKFLOW GATE: edit tools require a set plan (Bash is not gated)
+  % WORKFLOW GATE (biff-ar1/om9 fix, \S\ref{sec:om9}): edit tools require
+  % identity?'s OWN plan to be set (Bash is not gated).  Written total ---
+  % an identity absent from dom planSet has no recorded plan, and the
+  % guard correctly denies rather than leaving planSet(identity?)
+  % undefined.
   %
-  toolCategory = tcEdit \implies planSet = ztrue \\
+  toolCategory = tcEdit \implies
+    identity? \in \dom planSet \land planSet(identity?) = ztrue \\
   %
   toolPhase' = \IF needsPermission? = ztrue \THEN tpPermission \ELSE tpExecuting \\
   %
@@ -417,12 +615,21 @@ is not gated.
 \subsection{PreToolHookDeny}
 
 The hook denies the tool call (workflow prerequisites not met,
-or explicit deny for other reasons).
+or explicit deny for other reasons). $identity?$ is carried here too
+(\S\ref{sec:om9}, design \S6) --- the hook resolves the calling identity
+once, before branching to allow or deny, so every \texttt{PreToolUse}
+invocation, allowed or denied, is associated with the same identity
+token.  \texttt{PreToolHookDeny} is deliberately the general ``deny''
+outcome (workflow gate \emph{or} any other reason the hook chooses to
+deny), so unlike \texttt{PreToolHookAllow} it does not itself constrain
+$planSet(identity?)$ --- $identity?$ documents whose call was denied,
+which is exactly the field a denial audit trail would need.
 
 \begin{schema}{PreToolHookDeny}
   BiffFrame \\
   hookDecision? : PermissionDecision \\
-  denialContext? : CONTEXTCHUNK
+  denialContext? : CONTEXTCHUNK \\
+  identity? : AGENTID
   \where
   sessionPhase = spProcessing \\
   toolPhase = tpPreHook \\
@@ -558,16 +765,25 @@ They occur during \texttt{spProcessing} as tool completions.
 \subsection{SetPlanManual}
 
 The user or Claude explicitly calls \texttt{/plan}. This sets the
-plan and blocks auto-overwrite.
+plan and blocks auto-overwrite. $identity?$ (\S\ref{sec:om9}) is the
+identity the \texttt{/plan} call resolves to --- the same token
+\texttt{PreToolHookAllow} will later look up.  Required for
+type-correctness once $planSet$/$planSource$ are indexed, not called
+out explicitly in design \S6 (which scopes the identity-input change to
+\texttt{StartSession} and the \texttt{PreToolHook*} pair), but every
+writer of $planSet$/$planSource$ must name whose entry it writes for the
+whole specification to remain a well-typed theory.
 
 \begin{schema}{SetPlanManual}
-  \Delta State
+  \Delta State \\
+  identity? : AGENTID
   \where
   sessionPhase = spProcessing \\
   toolPhase = tpNone \\
   %
-  planSet' = ztrue \\
-  planSource' = \{ psManual \} \\
+  planSet' = planSet \oplus \{ identity? \mapsto ztrue \} \\
+  planSource' = planSource \oplus \{ identity? \mapsto psManual \} \\
+  planWiped' = planWiped \\
   %
   % Frame: everything else unchanged
   %
@@ -591,17 +807,21 @@ plan and blocks auto-overwrite.
 \subsection{SetPlanAuto}
 
 The \texttt{PostToolUse} Bash hook detects a git branch and
-auto-sets the plan. Only succeeds if no manual plan is set.
+auto-sets the plan. Only succeeds if no manual plan is set ---
+now checked against $identity?$'s own source entry, not a
+session-global one, mirroring \texttt{SetPlanManual}.
 
 \begin{schema}{SetPlanAuto}
-  \Delta State
+  \Delta State \\
+  identity? : AGENTID
   \where
   sessionPhase = spProcessing \\
   toolPhase = tpNone \\
-  planSource \neq \{ psManual \} \\
+  identity? \notin \dom planSource \lor planSource(identity?) \neq psManual \\
   %
-  planSet' = ztrue \\
-  planSource' = \{ psAuto \} \\
+  planSet' = planSet \oplus \{ identity? \mapsto ztrue \} \\
+  planSource' = planSource \oplus \{ identity? \mapsto psAuto \} \\
+  planWiped' = planWiped \\
   %
   sessionPhase' = sessionPhase \\
   sessionId' = sessionId \\
@@ -647,6 +867,7 @@ increments unread count.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
+  planWiped' = planWiped \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -677,6 +898,7 @@ Claude calls \texttt{/read}. Clears unread count.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
+  planWiped' = planWiped \\
   talkActive' = talkActive \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -708,6 +930,7 @@ Claude calls \texttt{/talk @user}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
+  planWiped' = planWiped \\
   unreadCount' = unreadCount \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -739,6 +962,7 @@ Claude calls \texttt{/talk\_end}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
+  planWiped' = planWiped \\
   unreadCount' = unreadCount \\
   wallActive' = wallActive \\
   wallText' = wallText
@@ -771,6 +995,7 @@ Claude calls \texttt{/wall <message>}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
+  planWiped' = planWiped \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive
 \end{schema}
@@ -802,6 +1027,7 @@ Claude calls \texttt{/wall --clear}.
   pendingResponse' = pendingResponse \\
   planSet' = planSet \\
   planSource' = planSource \\
+  planWiped' = planWiped \\
   unreadCount' = unreadCount \\
   talkActive' = talkActive
 \end{schema}
@@ -830,6 +1056,51 @@ Claude calls \texttt{/wall --clear}.
   context' = context \\
   pendingPrompt' = pendingPrompt \\
   pendingResponse' = pendingResponse
+\end{schema}
+
+\subsection{StartSubagent}
+
+Claude Code's \texttt{SubagentStart} hook fires for an in-process
+subagent dispatched via the Agent tool (design \S3b, \S\ref{sec:om9}).
+biff does not register this hook today --- the code-side mission
+(biff-ar1, \S\ref{sec:om9}) adds it precisely because an in-process
+subagent is otherwise invisible to plan-gate scoping: $activeSubagents$
+already tracks that the subagent \emph{exists}, but until now nothing
+gave it its own entry in $planSet$, so its own \texttt{PreToolHookAllow}
+check could only ever consult its \emph{leader}'s plan.
+\texttt{StartSubagent} registers a fresh, unset plan entry for
+$agentId?$ --- mirroring \texttt{StartSession}'s ``a new identity
+inherits no plan'' rule, scoped to $AGENTID$ rather than $SESSIONID$,
+and via the same override construction, so it is equally incapable of
+disturbing any other identity's entry.
+
+\begin{schema}{StartSubagent}
+  \Delta State \\
+  agentId? : AGENTID
+  \where
+  sessionPhase = spProcessing \\
+  agentId? \in activeSubagents \\
+  agentId? \notin \dom planSet \\
+  %
+  planSet' = planSet \oplus \{ agentId? \mapsto zfalse \} \\
+  planSource' = \{ agentId? \} \ndres planSource \\
+  planWiped' = planWiped \\
+  %
+  sessionPhase' = sessionPhase \\
+  sessionId' = sessionId \\
+  permMode' = permMode \\
+  toolPhase' = toolPhase \\
+  currentTool' = currentTool \\
+  toolCategory' = toolCategory \\
+  toolsThisTurn' = toolsThisTurn \\
+  activeSubagents' = activeSubagents \\
+  context' = context \\
+  pendingPrompt' = pendingPrompt \\
+  pendingResponse' = pendingResponse \\
+  unreadCount' = unreadCount \\
+  talkActive' = talkActive \\
+  wallActive' = wallActive \\
+  wallText' = wallText
 \end{schema}
 
 \subsection{StopSubagent}
@@ -963,8 +1234,19 @@ read messages but is not forced to).
 
 \subsection{EndSession}
 
+$identity?$ is the ending session's own plan-marker identity, the same
+kind of token \texttt{StartSession} takes (\S\ref{sec:om9}).  The
+original spec cleared $planSet$ wholesale here, exactly the same
+session-global assumption that made \texttt{StartSession}'s unconditional
+wipe look correct; scoping the clear to $identity?$'s own key is the
+symmetric half of the om9 fix, and it is required for consistency ---
+without it, ending one session would erase every other concurrently
+running session's plan on the way out, the same bug from the opposite
+end of the lifecycle.
+
 \begin{schema}{EndSession}
   \Delta State \\
+  identity? : AGENTID \\
   reason? : SessionEndReason
   \where
   sessionPhase = spIdle \\
@@ -982,10 +1264,12 @@ read messages but is not forced to).
   pendingResponse' = \emptyset \\
   permMode' = permMode \\
   %
-  % Biff state cleared
+  % Biff state cleared --- but only for identity?'s own key
+  % (\S\ref{sec:om9}); every other identity's entry is untouched.
   %
-  planSet' = zfalse \\
-  planSource' = \emptyset \\
+  planSet' = planSet \oplus \{ identity? \mapsto zfalse \} \\
+  planSource' = \{ identity? \} \ndres planSource \\
+  planWiped' = planWiped \\
   unreadCount' = 0 \\
   talkActive' = zfalse \\
   wallActive' = zfalse \\
@@ -1000,26 +1284,50 @@ The specification enforces these properties across all reachable states:
 
 \begin{enumerate}
   \item \textbf{Plan before editing} (workflow gate): the
-    \texttt{PreToolHookAllow} operation requires \texttt{planSet = ztrue}
-    for edit tools (\texttt{tcEdit}). No path through the state machine
-    can reach tool execution for file-modifying tools without a set
-    plan. \texttt{Bash} is not gated (the shipped hook matches
-    \texttt{Edit|Write} only). The gate consults the plan alone ---
-    never beads.
+    \texttt{PreToolHookAllow} operation requires
+    \texttt{identity? $\in$ dom planSet $\land$ planSet(identity?) =
+    ztrue} for edit tools (\texttt{tcEdit}) --- \emph{that specific
+    identity's own} plan, not a session-global flag
+    (\S\ref{sec:om9}). No path through the state machine can reach
+    tool execution for file-modifying tools without \emph{that
+    identity} having a set plan. \texttt{Bash} is not gated (the
+    shipped hook matches \texttt{Edit|Write} only). The gate consults
+    the plan alone --- never beads.
 
   \item \textbf{Manual plan blocks auto}: \texttt{SetPlanAuto} has
-    precondition \texttt{planSource $\neq$ \{psManual\}}, preventing
-    auto-detection from overwriting an explicit plan.
+    precondition \texttt{identity? $\notin$ dom planSource $\lor$
+    planSource(identity?) $\neq$ psManual}, preventing auto-detection
+    from overwriting an explicit plan --- checked against
+    \texttt{identity?}'s own source entry.
 
   \item \textbf{Wall consistency}: wall text exists if and only if
     the wall is active. No orphan text, no active wall without content.
 
   \item \textbf{Plan consistency}: plan source exists if and only if
-    plan is set.
+    plan is set, for every identity independently:
+    \texttt{$\forall a : \dom\ planSet @ ( planSet(a) = ztrue
+    \iff a \in \dom\ planSource )$}.
 
-  \item \textbf{Clean session boundaries}: all biff state is cleared
-    on \texttt{Init} and \texttt{EndSession}. No state leaks between
-    sessions.
+  \item \textbf{No cross-identity interference} (biff-ar1/om9 fix,
+    \S\ref{sec:om9}): \texttt{planWiped = zfalse} holds across every
+    reachable state. \texttt{StartSession}, \texttt{EndSession},
+    \texttt{SetPlanManual}, \texttt{SetPlanAuto}, and
+    \texttt{StartSubagent} update $planSet$/$planSource$ only via
+    functional override or domain subtraction on their \emph{own}
+    identity key, so no operation can ever clear another identity's
+    already-set plan. The frozen artifact
+    \texttt{claude-code-biff-om9-globalwipe.tex} demonstrates the
+    converse: a \texttt{StartSession} that naively assigns
+    \texttt{planSet}${}'{} = \emptyset$ (the type-blind generalisation
+    of the old flat \texttt{planSet}${}'{} = zfalse$) makes
+    \texttt{planWiped = zfalse} false, and probcli returns the
+    counterexample --- that counterexample \emph{is} biff-om9.
+
+  \item \textbf{Clean session boundaries}: all biff state --- except
+    \emph{other identities'} $planSet$/$planSource$ entries, which are
+    deliberately persistent (\S\ref{sec:om9}) --- is cleared on
+    \texttt{Init} and, for its own identity, on \texttt{EndSession}. No
+    session's own state leaks into a session that starts after it.
 
   \item \textbf{Talk exclusivity}: \texttt{StartTalk} requires
     \texttt{talkActive = zfalse}; \texttt{EndTalk} requires
@@ -1037,9 +1345,10 @@ The specification enforces these properties across all reachable states:
 \hline
 \textbf{Hook} & \textbf{Matcher} & \textbf{Operation} & \textbf{Biff Effect} & \textbf{Blocks?} \\
 \hline
-SessionStart & * & StartSession & Load wall & No \\
+SessionStart & * & StartSession & Load wall; set own plan key & No \\
+SubagentStart & * & StartSubagent & Register subagent's own plan key & No \\
 PostToolUse & Bash & SetPlanAuto & Auto plan from branch & No \\
-PreToolUse & Edit|Write & PreToolHookAllow/Deny & Require plan & Yes \\
+PreToolUse & Edit|Write & PreToolHookAllow/Deny & Require identity's plan & Yes \\
 PostToolUse & biff\_\_plan & SetPlanManual & Set manual plan & No \\
 PostToolUse & biff\_\_write & (side effect) & Message sent & No \\
 PostToolUse & biff\_\_read & ReadMessages & Clear unread & No \\
@@ -1071,13 +1380,17 @@ gaps where the spec does not yet cover the use case.
 \textbf{Z coverage:} Not modeled as an operation. \texttt{/who} is a
 read-only query that does not change state. However, the state it reads
 (\texttt{planSet}, \texttt{planSource}, \texttt{talkActive}) is maintained
-by the model.
+by the model, now per identity (\S\ref{sec:om9}): a \texttt{/who} query
+sees each identity's own plan, not one session-global flag.
 
 \textbf{What the model proves:} The \texttt{planSet} and
 \texttt{planSource} variables are always consistent (invariant 4:
-plan source exists iff plan is set). Any \texttt{/who} query will
-see coherent plan state --- never a dangling source without a plan,
-or a plan without a source.
+plan source exists iff plan is set, per identity) and no identity's
+entry can be disturbed by another identity's session lifecycle
+(invariant 5, the biff-ar1/om9 fix). Any \texttt{/who} query will
+see coherent plan state for every identity --- never a dangling
+source without a plan, a plan without a source, or one identity's
+plan clobbered by another's \texttt{SessionStart}.
 
 \textbf{Gap:} None for V1. The idle time display relies on
 \texttt{last\_active} timestamps in the relay, which is outside the
@@ -1087,7 +1400,7 @@ model's scope (relay internals are opaque).
 
 \textbf{Z coverage:} Not modeled as an operation. Same rationale as UC1
 --- read-only query. The \texttt{talkActive} state is accurate because
-\texttt{StartTalk} and \texttt{EndTalk} enforce exclusivity (invariant 6).
+\texttt{StartTalk} and \texttt{EndTalk} enforce exclusivity (invariant 7).
 
 \textbf{What the model proves:} A \texttt{/finger} query will never show
 a session simultaneously in talk and not-in-talk. The talk state is
@@ -1102,11 +1415,14 @@ add \texttt{mesgMode : ZBOOL} to the state schema.
 \textbf{Z coverage:} Fully modeled.
 
 \begin{itemize}
-  \item Manual path: \texttt{SetPlanManual} --- sets \texttt{planSet = ztrue},
-    \texttt{planSource = \{psManual\}}.
-  \item Auto path: \texttt{SetPlanAuto} --- sets \texttt{planSet = ztrue},
-    \texttt{planSource = \{psAuto\}}, guarded by
-    \texttt{planSource $\neq$ \{psManual\}}.
+  \item Manual path: \texttt{SetPlanManual} --- sets
+    \texttt{planSet(identity?) = ztrue},
+    \texttt{planSource(identity?) = psManual}.
+  \item Auto path: \texttt{SetPlanAuto} --- sets
+    \texttt{planSet(identity?) = ztrue},
+    \texttt{planSource(identity?) = psAuto}, guarded by
+    \texttt{identity? $\notin$ dom planSource $\lor$
+    planSource(identity?) $\neq$ psManual}.
   \item \texttt{/tty} naming is outside the model (relay metadata, no
     workflow impact).
 \end{itemize}
@@ -1114,15 +1430,21 @@ add \texttt{mesgMode : ZBOOL} to the state schema.
 \textbf{What the model proves:}
 
 \begin{enumerate}
-  \item \textbf{Manual blocks auto}: \texttt{SetPlanAuto} has precondition
-    \texttt{planSource $\neq$ \{psManual\}}. The model checker verified
-    across 161K states that no auto-plan overwrites a manual plan.
+  \item \textbf{Manual blocks auto}: \texttt{SetPlanAuto} has
+    precondition \texttt{identity? $\notin$ dom planSource $\lor$
+    planSource(identity?) $\neq$ psManual}, checked per identity. The
+    model checker verifies that no auto-plan overwrites a manual plan
+    for that identity, and (\S\ref{sec:om9}) that it cannot touch any
+    \emph{other} identity's plan either --- see the model-check report
+    for the current state count.
   \item \textbf{Plan is prerequisite for editing}: Once the
     plan-before-editing gate is active, the model proves that no file
-    edit (\texttt{tcEdit}) executes without \texttt{planSet = ztrue}
-    (\texttt{Bash} is not gated). This validates the use
-    case's claim that plan declaration is meaningful --- it is enforced,
-    not advisory.
+    edit (\texttt{tcEdit}) executes for identity $a$ without
+    \texttt{planSet(a) = ztrue} (\texttt{Bash} is not gated). This
+    validates the use case's claim that plan declaration is
+    meaningful --- it is enforced, not advisory, and (\S\ref{sec:om9})
+    it is enforced \emph{per identity}: one agent's plan does not
+    authorise another's edits.
 \end{enumerate}
 
 \textbf{Gap:} Bead ID expansion (step 3 in the use case) is a relay-side
@@ -1397,12 +1719,17 @@ ensures every agent declares work before editing. The
 \texttt{StartSession} operation's wall injection models the SessionStart
 hook's coordination guidance.
 
-\textbf{What the model proves:} Every active editing session has
-\texttt{planSet = ztrue}. This means \texttt{/who} output will always
-show a plan for every working agent. The plan-before-work invariant is
-the formal foundation for duplicate avoidance: if every agent must
-declare intent before acting, the declarations are observable, and
-conflicts are detectable.
+\textbf{What the model proves:} Every actively editing identity $a$ has
+\texttt{planSet(a) = ztrue}. This means \texttt{/who} output will always
+show a plan for every working agent --- and, since biff-ar1/om9
+(\S\ref{sec:om9}), one concurrent agent's \texttt{SessionStart} can no
+longer silently blank another's declared plan out from under it, which
+is precisely the failure mode that made the earlier flat-boolean model's
+duplicate-avoidance guarantee unsound for exactly this use case: two
+agents sharing a worktree. The plan-before-work invariant is the formal
+foundation for duplicate avoidance: if every agent must declare intent
+before acting, the declarations are observable, persist independently,
+and conflicts are detectable.
 
 \textbf{Gap:} The model does not verify that the agent actually checks
 \texttt{/who} before starting work. This is a behavioral directive
