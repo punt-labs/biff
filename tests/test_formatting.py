@@ -506,6 +506,30 @@ class TestFormatTalkEcho:
         assert _NO_PRINTABLE_TEXT not in result
         assert _NO_VISIBLE_CONTENT in result
 
+    def test_spacing_combining_mark_only_message_renders_distinct_fallback(
+        self,
+    ) -> None:
+        # U+0940 DEVANAGARI VOWEL SIGN II is Unicode category Mc ("Spacing
+        # Combining Mark") — the category used for Indic-script vowel signs
+        # and visargas.  Like the Mn accents above it is str.isprintable()
+        # and not whitespace, so it survives terminal_safe and .strip()
+        # unchanged, but with no base consonant to attach to it renders no
+        # glyph and occupies zero terminal cells.
+        result = format_talk_echo("Plan:", "ी")
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT in result
+
+    def test_isolated_hangul_jamo_only_message_renders_distinct_fallback(
+        self,
+    ) -> None:
+        # U+1161 HANGUL JUNGSEONG A is a conjoining medial vowel jamo,
+        # plausible from partial IME input or clipboard mangling.  Isolated
+        # (not composed into a syllable block), wcwidth reports it as zero
+        # width — printable, not whitespace, no visible glyph on its own.
+        result = format_talk_echo("Plan:", "ᅡ")
+        assert _NO_PRINTABLE_TEXT not in result
+        assert _NO_VISIBLE_CONTENT in result
+
     def test_empty_message_stays_blank(self) -> None:
         # An empty message is a deliberate "nothing to say" (e.g. clearing a
         # plan via /plan ""), not a sanitization failure — it must not be
