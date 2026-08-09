@@ -73,6 +73,12 @@ _MAX_LABEL_WIDTH = 40
 # indent (wall body, the finger Host:/Dir: line).
 _ROW_TEXT_WIDTH = TABLE_WIDTH - len(ROW_PREFIX)
 
+# Shown in place of a body that is non-empty on the wire but renders to
+# nothing after terminal_safe strips every character as control/escape —
+# a confirmation or read-back must never silently swallow the sender's
+# entire message and look like it succeeded (biff-2sw round 4).
+_NO_PRINTABLE_TEXT = "(message contained no printable text)"
+
 # The finger "Plan:" body hangs one level deeper than ROW_PREFIX.
 _PLAN_INDENT = "    "
 _PLAN_TEXT_WIDTH = TABLE_WIDTH - len(_PLAN_INDENT)
@@ -372,12 +378,20 @@ def format_wall(wall: WallPost) -> str:
     Wall text can run up to 512 characters (biff-2sw) — a CJK- or
     emoji-heavy post would otherwise overflow the 80-column terminal on a
     single unwrapped line, the same defect class fixed for who/read/talk.
+
+    ``WallPost.text`` requires at least one character on the wire, but a
+    body made entirely of control/escape characters renders to nothing once
+    :func:`terminal_safe` strips them — falling through would show teammates
+    a bare, empty-looking ``▶  WALL`` banner with no hint the poster's
+    message was silently dropped.
     """
     remaining = format_remaining(wall.expires_at)
     sender = terminal_safe(wall.from_user)
     if wall.from_tty:
         sender += f" ({terminal_safe(wall.from_tty)})"
     text = terminal_safe(wall.text)
+    if not text.strip():
+        text = _NO_PRINTABLE_TEXT
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
     return f"▶  WALL from {sender} ({remaining} remaining)\n{body}"
@@ -389,10 +403,14 @@ def format_wall_confirmation(post: WallPost) -> str:
     Echoes the same up-to-512-char, potentially CJK/emoji-heavy text
     :func:`format_wall` renders on read-back, so the confirmation shown at
     post time must wrap the same way instead of embedding raw text on one
-    unbounded line (biff-2sw).
+    unbounded line (biff-2sw). A control-only body — see :func:`format_wall`
+    — renders the same explicit fallback rather than a confirmation that
+    looks successful but silently ate the poster's entire message.
     """
     remaining = format_remaining(post.expires_at)
     text = terminal_safe(post.text)
+    if not text.strip():
+        text = _NO_PRINTABLE_TEXT
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
     return f"Wall posted ({remaining}):\n{body}"
@@ -404,11 +422,14 @@ def format_wall_status_line(post: WallPost) -> str:
     Wraps the same way as :func:`format_wall` and :func:`format_wall_confirmation`
     — the body can run up to 512 chars and is potentially CJK/emoji-heavy —
     with continuation lines aligned under the sender label instead of
-    embedding raw text on one unbounded line (biff-2sw).
+    embedding raw text on one unbounded line (biff-2sw). Falls back the same
+    way on a control-only body.
     """
     remaining = format_remaining(post.expires_at)
     sender = terminal_safe(post.from_user)
     text = terminal_safe(post.text)
+    if not text.strip():
+        text = _NO_PRINTABLE_TEXT
     prefix = f"wall: {sender}: "
     width = max(TABLE_WIDTH - visible_width(prefix), 1)
     chunks = wrap_cells(text, width, preserve_whitespace=True) or [""]
@@ -493,11 +514,21 @@ def format_talk_echo(prefix: str, message: str) -> str:
     """Render *prefix* followed by *message* wrapped to table width.
 
     Shares :func:`format_wall_confirmation`'s wrap treatment: the ``talk``
-    accept/send confirmations quote back the caller's own outgoing message —
-    up to :data:`~biff.talk_types.MAX_BODY_LEN` chars, potentially
-    CJK/emoji-heavy — and must not embed it raw on one unbounded line.
+    accept/send confirmations and the ``/plan`` set confirmation both quote
+    back the caller's own text — up to :data:`~biff.talk_types.MAX_BODY_LEN`
+    chars for talk, unbounded for a plan, potentially CJK/emoji-heavy — and
+    must not embed it raw on one unbounded line.
+
+    A non-empty *message* that renders to nothing after :func:`terminal_safe`
+    (control/escape characters only) shows the same explicit fallback
+    :func:`format_wall_confirmation` does, rather than a confirmation that
+    looks successful but silently ate the caller's entire message. An empty
+    *message* (e.g. clearing a plan) is left blank — that is the caller's
+    deliberate intent, not a sanitization failure.
     """
     text = terminal_safe(message)
+    if message and not text.strip():
+        text = _NO_PRINTABLE_TEXT
     chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
     body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
     return f"{prefix}\n{body}"

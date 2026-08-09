@@ -5,6 +5,7 @@ from __future__ import annotations
 from biff._stdlib import expand_bead_id
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
+from biff.formatting import format_talk_echo
 from biff.models import UserSession
 from biff.tty import get_hostname, get_pwd
 
@@ -24,6 +25,6 @@ async def plan(ctx: CliContext, message: str) -> CommandResult:
     updated = session.model_copy(update={"plan": message, "plan_source": "manual"})
     await ctx.relay.update_session(updated)
     return CommandResult(
-        text=f"Plan: {message}",
+        text=format_talk_echo("Plan:", message),
         json_data={"plan": message},
     )

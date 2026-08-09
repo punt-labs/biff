@@ -11,7 +11,7 @@ class TestPlan:
     async def test_set_plan(self, ctx: CliContext, relay: LocalRelay) -> None:
         result = await plan(ctx, "working on tests")
         assert not result.error
-        assert result.text == "Plan: working on tests"
+        assert result.text == "Plan:\n   working on tests"
         assert result.json_data == {"plan": "working on tests"}
 
         # Verify session was updated
@@ -26,7 +26,7 @@ class TestPlan:
         await plan(ctx, "first plan")
         result = await plan(ctx, "second plan")
         assert not result.error
-        assert result.text == "Plan: second plan"
+        assert result.text == "Plan:\n   second plan"
 
         session = await relay.get_session("kai:abc12345")
         assert session is not None
@@ -35,7 +35,7 @@ class TestPlan:
     async def test_empty_plan(self, ctx: CliContext, relay: LocalRelay) -> None:
         result = await plan(ctx, "")
         assert not result.error
-        assert result.text == "Plan: "
+        assert result.text == "Plan:\n   "
         assert result.json_data == {"plan": ""}
 
         session = await relay.get_session("kai:abc12345")
