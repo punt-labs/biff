@@ -158,6 +158,35 @@ class TestFormatFinger:
         assert "Login: kai" in result
         assert "[" not in result.split("\n")[0]
 
+    def test_cjk_plan_wraps_within_the_table_width(self) -> None:
+        # /plan is free-form user text with no length cap — a CJK-heavy
+        # plan renders at 2 cells/glyph and must wrap, not overflow.
+        session = UserSession(
+            user="kai",
+            tty="abcd1234",
+            tty_name="tty1",
+            plan="这是一段很长的中文文本用来测试自动换行是否正常工作" * 3,
+            last_active=datetime.now(UTC),
+        )
+        result = format_finger(session)
+        lines = result.splitlines()
+        assert len(lines) > 3  # header + on-since + Plan: + wrapped body
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_cjk_host_and_dir_wrap_within_the_table_width(self) -> None:
+        session = UserSession(
+            user="kai",
+            tty="abcd1234",
+            tty_name="tty1",
+            hostname="主机名" * 20,
+            pwd="/项目/代码仓库" * 10,
+            last_active=datetime.now(UTC),
+        )
+        result = format_finger(session)
+        for line in result.splitlines():
+            assert visible_width(line) <= TABLE_WIDTH
+
 
 class TestParseDuration:
     def test_default_empty(self):
@@ -197,6 +226,34 @@ class TestFormatWall:
         assert "kai" in result
         assert "@kai" not in result
         assert "standup in 5" in result
+
+    def test_cjk_body_wraps_within_the_table_width(self) -> None:
+        # A CJK-heavy wall post (up to 512 chars) renders at 2 cells/glyph —
+        # without cell-aware wrapping this overflows TABLE_WIDTH on one line.
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="这是一段很长的中文文本用来测试自动换行是否正常工作" * 3,
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall(wall)
+        lines = result.splitlines()
+        assert len(lines) > 2  # header + wrapped body lines
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_emoji_body_wraps_within_the_table_width(self) -> None:
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="🚀" * 90,
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall(wall)
+        for line in result.splitlines():
+            assert visible_width(line) <= TABLE_WIDTH
 
 
 class TestPairEvents:

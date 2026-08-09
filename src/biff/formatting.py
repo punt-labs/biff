@@ -65,6 +65,14 @@ _TALK_WRAP_MIN = 24
 # amplification — see TalkNotification.from_payload, biff-7g7).
 _MAX_LABEL_WIDTH = 40
 
+# Wrap budget for free-form text rendered under the standard ROW_PREFIX
+# indent (wall body, the finger Host:/Dir: line).
+_ROW_TEXT_WIDTH = TABLE_WIDTH - len(ROW_PREFIX)
+
+# The finger "Plan:" body hangs one level deeper than ROW_PREFIX.
+_PLAN_INDENT = "    "
+_PLAN_TEXT_WIDTH = TABLE_WIDTH - len(_PLAN_INDENT)
+
 
 # ---------------------------------------------------------------------------
 # Duration parsing (shared by wall CLI + MCP tool)
@@ -220,9 +228,16 @@ def format_tty_block(session: UserSession) -> str:
     if session.hostname or session.pwd:
         host = terminal_safe(session.hostname) or "?"
         pwd = terminal_safe(session.pwd) or "?"
-        lines.append(f"   Host: {host}  Dir: {pwd}")
+        host_line = f"Host: {host}  Dir: {pwd}"
+        chunks = wrap_cells(host_line, _ROW_TEXT_WIDTH, preserve_whitespace=True)
+        lines.extend(ROW_PREFIX + chunk for chunk in chunks)
     plan = terminal_safe(session.plan)
-    lines.append(f"   Plan:\n    {plan}" if plan else "   No Plan.")
+    if plan:
+        lines.append("   Plan:")
+        chunks = wrap_cells(plan, _PLAN_TEXT_WIDTH, preserve_whitespace=True)
+        lines.extend(_PLAN_INDENT + chunk for chunk in chunks)
+    else:
+        lines.append("   No Plan.")
     return "\n".join(lines)
 
 
@@ -348,13 +363,20 @@ def sanitize_wall_message(message: str) -> str:
 
 
 def format_wall(wall: WallPost) -> str:
-    """Format a wall post for display."""
+    """Format a wall post for display, wrapped to the table width.
+
+    Wall text can run up to 512 characters (biff-2sw) — a CJK- or
+    emoji-heavy post would otherwise overflow the 80-column terminal on a
+    single unwrapped line, the same defect class fixed for who/read/talk.
+    """
     remaining = format_remaining(wall.expires_at)
     sender = terminal_safe(wall.from_user)
     if wall.from_tty:
         sender += f" ({terminal_safe(wall.from_tty)})"
     text = terminal_safe(wall.text)
-    return f"▶  WALL from {sender} ({remaining} remaining)\n   {text}"
+    chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
+    body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
+    return f"▶  WALL from {sender} ({remaining} remaining)\n{body}"
 
 
 # ---------------------------------------------------------------------------
