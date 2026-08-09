@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from biff._stdlib import expand_bead_id
+from biff.formatting import format_talk_echo
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import get_or_create_session, update_current_session
@@ -56,7 +57,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
                 worktree = str(state.repo_root) if state.repo_root else ""
                 write_plan_marker(worktree, session.plan)
-                return f"Plan unchanged (manual): {session.plan}"
+                return format_talk_echo("Plan unchanged (manual):", session.plan)
         message = expand_bead_id(message)
         await update_current_session(state, plan=message, plan_source=source)
         await refresh_read_messages(mcp, state)
@@ -70,4 +71,4 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         else:
             clear_plan_marker(worktree)
 
-        return f"Plan: {message}"
+        return format_talk_echo("Plan:", message)
