@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from biff.formatting import (
-    format_remaining,
     format_wall,
+    format_wall_confirmation,
     parse_duration,
     sanitize_wall_message,
 )
@@ -119,8 +119,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         )
         _update_wall_marker(state, wall=post)
 
-        remaining = format_remaining(post.expires_at)
-        return f"Wall posted ({remaining}): {message}"
+        return format_wall_confirmation(post)
 
 
 def _validate_target_repo(repo: str, visible_repos: frozenset[str]) -> str | None:

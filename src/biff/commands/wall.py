@@ -9,8 +9,8 @@ from pydantic import ValidationError
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.formatting import (
-    format_remaining,
     format_wall,
+    format_wall_confirmation,
     parse_duration,
     sanitize_wall_message,
 )
@@ -62,8 +62,7 @@ async def wall(
     await broadcast_wall_to_repos(
         ctx.relay, ctx.visible_repos, wall=post, target_repo=None
     )
-    remaining = format_remaining(post.expires_at)
     return CommandResult(
-        text=f"Wall posted ({remaining}): {message}",
+        text=format_wall_confirmation(post),
         json_data=post.model_dump(mode="json"),
     )

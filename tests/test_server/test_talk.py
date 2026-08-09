@@ -40,7 +40,7 @@ class TestFormatTalkMessages:
             timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
         )
         result = format_talk_messages([msg])
-        assert result == "[10:30:45] kai: check PR #42"
+        assert result == "▶  [10:30:45] kai  check PR #42"
 
     def test_multiple_messages(self) -> None:
         msgs = [
@@ -60,11 +60,27 @@ class TestFormatTalkMessages:
         result = format_talk_messages(msgs)
         lines = result.split("\n")
         assert len(lines) == 2
-        assert "kai: first" in lines[0]
-        assert "eric: second" in lines[1]
+        assert "kai" in lines[0] and "first" in lines[0]
+        assert "eric" in lines[1] and "second" in lines[1]
 
     def test_empty_list(self) -> None:
         assert format_talk_messages([]) == ""
+
+    def test_cjk_body_wraps_within_the_table_width(self) -> None:
+        """A CJK-heavy backlog message must wrap, not overflow (biff-2sw)."""
+        from biff._formatting import TABLE_WIDTH, visible_width
+
+        msg = Message(
+            from_user="kai",
+            to_user="eric",
+            body="这是一段很长的中文文本用来测试自动换行是否正常工作" * 2,
+            timestamp=datetime(2026, 1, 15, 10, 30, 45, tzinfo=UTC),
+        )
+        result = format_talk_messages([msg])
+        lines = result.splitlines()
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
 
 
 class TestFormatAgentDrain:

@@ -34,6 +34,19 @@ class TestWallPostAndRead:
         assert "Wall posted" in result
         assert "sprint freeze" in result
 
+    async def test_post_confirmation_wraps_cjk_within_the_table_width(
+        self, kai: RecordingClient
+    ) -> None:
+        """The MCP post confirmation must wrap a CJK-heavy message (biff-2sw)."""
+        from biff._formatting import TABLE_WIDTH, visible_width
+
+        cjk_message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
+        result = await kai.call("wall", message=cjk_message)
+        lines = result.splitlines()
+        assert len(lines) > 2  # lead + wrapped body lines
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
 
 class TestWallClear:
     async def test_clear_wall(self, kai: RecordingClient) -> None:

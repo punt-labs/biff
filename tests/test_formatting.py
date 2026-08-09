@@ -16,9 +16,12 @@ from biff.formatting import (
     format_finger_multi,
     format_last,
     format_read,
+    format_talk_echo,
     format_talk_end,
     format_talk_line,
     format_wall,
+    format_wall_confirmation,
+    format_wall_status_line,
     format_who,
     pair_events,
     parse_duration,
@@ -254,6 +257,116 @@ class TestFormatWall:
         result = format_wall(wall)
         for line in result.splitlines():
             assert visible_width(line) <= TABLE_WIDTH
+
+
+class TestFormatWallConfirmation:
+    """The post-confirmation shown to the poster wraps like the read-back (biff-2sw)."""
+
+    def test_basic_confirmation(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="deploy freeze",
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_confirmation(post)
+        assert "Wall posted" in result
+        assert "deploy freeze" in result
+
+    def test_cjk_body_wraps_within_the_table_width(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="这是一段很长的中文文本用来测试自动换行是否正常工作" * 3,
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_confirmation(post)
+        lines = result.splitlines()
+        assert len(lines) > 2  # lead + wrapped body lines
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_emoji_body_wraps_within_the_table_width(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="🚀" * 90,
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_confirmation(post)
+        for line in result.splitlines():
+            assert visible_width(line) <= TABLE_WIDTH
+
+
+class TestFormatWallStatusLine:
+    """The ``biff status`` wall line wraps like every other wall render (biff-2sw)."""
+
+    def test_basic_line(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="deploy freeze",
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_status_line(post)
+        assert result.startswith("wall: kai: deploy freeze (")
+
+    def test_cjk_body_wraps_within_the_table_width(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            text="这是一段很长的中文文本用来测试自动换行是否正常工作" * 3,
+            from_user="kai",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        result = format_wall_status_line(post)
+        lines = result.splitlines()
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_escapes_neutralized(self) -> None:
+        now = datetime.now(UTC)
+        post = WallPost(
+            from_user="ev\x1b[2Kil",
+            text="dep\x1b[2Jloy freeze",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        out = format_wall_status_line(post)
+        assert "\x1b[2J" not in out
+        assert "\x1b[2K" not in out
+        assert "dep[2Jloy freeze" in out
+
+
+class TestFormatTalkEcho:
+    """``talk`` accept/send confirmations wrap the echoed message (biff-2sw)."""
+
+    def test_basic_echo(self) -> None:
+        result = format_talk_echo("Sent to eric:tty2:", "hello there")
+        assert result == "Sent to eric:tty2:\n   hello there"
+
+    def test_cjk_message_wraps_within_the_table_width(self) -> None:
+        message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
+        result = format_talk_echo("Sent:", message)
+        lines = result.splitlines()
+        assert len(lines) > 2  # prefix + wrapped body lines
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_emoji_message_wraps_within_the_table_width(self) -> None:
+        result = format_talk_echo("Sent:", "🚀" * 90)
+        for line in result.splitlines():
+            assert visible_width(line) <= TABLE_WIDTH
+
+    def test_escapes_neutralized(self) -> None:
+        result = format_talk_echo("Sent:", "hi\x1b[2Jthere")
+        assert "\x1b[2J" not in result
+        assert "hi[2Jthere" in result
 
 
 class TestPairEvents:

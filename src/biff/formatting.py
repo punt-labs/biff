@@ -44,11 +44,14 @@ __all__ = [
     "format_read_dual",
     "format_remaining",
     "format_table",
+    "format_talk_echo",
     "format_talk_end",
     "format_talk_line",
     "format_tty_block",
     "format_user_header",
     "format_wall",
+    "format_wall_confirmation",
+    "format_wall_status_line",
     "format_who",
     "last_component",
     "pair_events",
@@ -380,6 +383,43 @@ def format_wall(wall: WallPost) -> str:
     return f"▶  WALL from {sender} ({remaining} remaining)\n{body}"
 
 
+def format_wall_confirmation(post: WallPost) -> str:
+    """Format the post-confirmation shown to the poster, wrapped to table width.
+
+    Echoes the same up-to-512-char, potentially CJK/emoji-heavy text
+    :func:`format_wall` renders on read-back, so the confirmation shown at
+    post time must wrap the same way instead of embedding raw text on one
+    unbounded line (biff-2sw).
+    """
+    remaining = format_remaining(post.expires_at)
+    text = terminal_safe(post.text)
+    chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
+    body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
+    return f"Wall posted ({remaining}):\n{body}"
+
+
+def format_wall_status_line(post: WallPost) -> str:
+    """Format the ``wall: sender: text (remaining)`` line shown by ``biff status``.
+
+    Wraps the same way as :func:`format_wall` and :func:`format_wall_confirmation`
+    — the body can run up to 512 chars and is potentially CJK/emoji-heavy —
+    with continuation lines aligned under the sender label instead of
+    embedding raw text on one unbounded line (biff-2sw).
+    """
+    remaining = format_remaining(post.expires_at)
+    sender = terminal_safe(post.from_user)
+    text = terminal_safe(post.text)
+    prefix = f"wall: {sender}: "
+    width = max(TABLE_WIDTH - visible_width(prefix), 1)
+    chunks = wrap_cells(text, width, preserve_whitespace=True) or [""]
+    indent = " " * visible_width(prefix)
+    rendered = [
+        (prefix if i == 0 else indent) + chunk for i, chunk in enumerate(chunks)
+    ]
+    rendered[-1] += f" ({remaining})"
+    return "\n".join(rendered)
+
+
 # ---------------------------------------------------------------------------
 # talk — conversation lines
 # ---------------------------------------------------------------------------
@@ -447,6 +487,20 @@ def _truncate(text: str, width: int) -> str:
     undercount it.
     """
     return clip_to_width(text, width)
+
+
+def format_talk_echo(prefix: str, message: str) -> str:
+    """Render *prefix* followed by *message* wrapped to table width.
+
+    Shares :func:`format_wall_confirmation`'s wrap treatment: the ``talk``
+    accept/send confirmations quote back the caller's own outgoing message —
+    up to :data:`~biff.talk_types.MAX_BODY_LEN` chars, potentially
+    CJK/emoji-heavy — and must not embed it raw on one unbounded line.
+    """
+    text = terminal_safe(message)
+    chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
+    body = "\n".join(ROW_PREFIX + chunk for chunk in chunks)
+    return f"{prefix}\n{body}"
 
 
 def format_talk_end(label: str) -> str:

@@ -66,6 +66,20 @@ class TestWall:
         assert not result.error
         assert "Wall posted" in result.text
 
+    async def test_post_confirmation_wraps_cjk_within_the_table_width(
+        self, ctx: CliContext
+    ) -> None:
+        """The post confirmation must wrap a CJK-heavy message (biff-2sw)."""
+        from biff._formatting import TABLE_WIDTH, visible_width
+
+        cjk_message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
+        result = await wall(ctx, cjk_message, "1h", clear=False)
+        assert not result.error
+        lines = result.text.splitlines()
+        assert len(lines) > 2  # lead + wrapped body lines
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
     async def test_message_truncated(self, ctx: CliContext) -> None:
         long_msg = "x" * 600
         result = await wall(ctx, long_msg, "1h", clear=False)

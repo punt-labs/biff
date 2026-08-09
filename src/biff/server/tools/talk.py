@@ -27,7 +27,12 @@ import logging
 from typing import TYPE_CHECKING
 
 import biff.commands.talk as talk_commands
-from biff.formatting import HEADER_PREFIX, format_talk_end, terminal_safe
+from biff.formatting import (
+    HEADER_PREFIX,
+    format_talk_end,
+    format_talk_line,
+    terminal_safe,
+)
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.server.tools._activity import track_activity
@@ -49,11 +54,18 @@ _NO_MESSAGES = "No pending talk activity."
 
 
 def format_talk_messages(messages: list[Message]) -> str:
-    """Format messages in chat style for talk output."""
+    """Format messages in the shared who/read/wall ``▶`` idiom for talk output.
+
+    Reuses :func:`format_talk_line`'s wrap/hang-indent treatment instead of
+    embedding each up-to-512-char, potentially CJK/emoji-heavy body on one
+    unbounded line — the same defect class fixed for who/read/wall/finger
+    (biff-2sw).
+    """
     lines: list[str] = []
     for m in messages:
-        ts = m.timestamp.strftime("%H:%M:%S")
-        lines.append(f"[{ts}] {terminal_safe(m.from_user)}: {terminal_safe(m.body)}")
+        stamp = f"[{m.timestamp.strftime('%H:%M:%S')}] "
+        sender = f"{m.from_user}:{m.from_tty}" if m.from_tty else m.from_user
+        lines.extend(format_talk_line(sender, m.body, stamp=stamp))
     return "\n".join(lines)
 
 
