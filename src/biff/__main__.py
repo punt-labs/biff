@@ -570,8 +570,10 @@ async def _repl_loop(
 
 def _print_talk_banner(notif: TalkNotification) -> None:
     """Print a third-party talk notification in the wrapped ``▶`` idiom."""
-    # Render first: a control-only body neutralises to nothing, and clearing the
-    # prompt to then print no banner would blank the line for no reason (biff-7g7).
+    # Render first: only a truly bodiless frame (no body at all) renders no
+    # line — a whitespace- or control-only body still renders an explanatory
+    # fallback line (biff-2sw round 6).  Clearing the prompt before checking
+    # would blank the line even on the rare truly-empty case (biff-7g7).
     lines = format_talk_line(notif.sender_label, notif.nbody)
     if not lines:
         return

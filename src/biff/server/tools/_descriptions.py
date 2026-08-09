@@ -23,7 +23,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-from biff.formatting import terminal_safe
+from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
 from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
@@ -294,12 +294,15 @@ async def refresh_wall(
         queue.remove_by_kind("wall")
     else:
         remaining = format_remaining(current.expires_at)
-        # Wall text/sender are remote-controlled; strip terminal escapes
-        # before they reach the tool description and status line (biff-lbj).
+        # Wall text/sender are remote-controlled; strip terminal escapes and
+        # cap the sender length before they reach the tool description and
+        # status line (biff-lbj). Neither ``from_user`` nor ``from_tty`` has
+        # a ``max_length`` on the wire, so both are clipped together via
+        # sanitized_sender — clipping ``from_user`` alone before
+        # concatenating an unbounded ``from_tty`` would leave the composed
+        # label just as unboundable (biff-2sw).
         wall_text = terminal_safe(current.text)
-        sender = terminal_safe(current.from_user)
-        if current.from_tty:
-            sender += f" ({terminal_safe(current.from_tty)})"
+        sender = sanitized_sender(current.from_user, current.from_tty)
         tool.description = (
             f"[WALL] {wall_text} — {sender}, "
             f"expires in {remaining}. "
@@ -334,8 +337,10 @@ async def refresh_wall(
                 )
 
                 spoken = terminal_safe(current.text)
+                # from_user has no max_length on the wire; sanitized_sender
+                # bounds it before it reaches subprocess argv (biff-2sw).
                 speak_fire_and_forget(
-                    f"Wall from {terminal_safe(current.from_user)}: {spoken}",
+                    f"Wall from {sanitized_sender(current.from_user)}: {spoken}",
                     vibe_tags=vibes_from_text(spoken),
                 )
         else:

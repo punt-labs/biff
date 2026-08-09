@@ -27,7 +27,13 @@ import logging
 from typing import TYPE_CHECKING
 
 import biff.commands.talk as talk_commands
-from biff.formatting import HEADER_PREFIX, format_talk_end, terminal_safe
+from biff.formatting import (
+    HEADER_PREFIX,
+    format_talk_end,
+    format_talk_line,
+    terminal_safe,
+    visible_text,
+)
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.server.tools._activity import track_activity
@@ -49,11 +55,18 @@ _NO_MESSAGES = "No pending talk activity."
 
 
 def format_talk_messages(messages: list[Message]) -> str:
-    """Format messages in chat style for talk output."""
+    """Format messages in the shared who/read/wall ``▶`` idiom for talk output.
+
+    Reuses :func:`format_talk_line`'s wrap/hang-indent treatment instead of
+    embedding each up-to-512-char, potentially CJK/emoji-heavy body on one
+    unbounded line — the same defect class fixed for who/read/wall/finger
+    (biff-2sw).
+    """
     lines: list[str] = []
     for m in messages:
-        ts = m.timestamp.strftime("%H:%M:%S")
-        lines.append(f"[{ts}] {terminal_safe(m.from_user)}: {terminal_safe(m.body)}")
+        stamp = f"[{m.timestamp.strftime('%H:%M:%S')}] "
+        sender = f"{m.from_user}:{m.from_tty}" if m.from_tty else m.from_user
+        lines.extend(format_talk_line(sender, m.body, stamp=stamp))
     return "\n".join(lines)
 
 
@@ -77,11 +90,19 @@ def format_agent_drain(drain: AgentDrain) -> str:
     (``_format_talk_lines``, ``_format_idle_banners``) but stays
     single-line on purpose: this text is injected into the *model's*
     context, not printed to an 80-column terminal, so it deliberately
-    skips ``format_talk_line``'s ``textwrap`` wrapping and hang-indent
-    continuation whitespace — alignment padding that aids a human reader
-    but is only noise in model input.  Every field is length-clamped at
+    skips ``format_talk_line``'s wrapping and hang-indent continuation
+    whitespace — alignment padding that aids a human reader but is only
+    noise in model input.  Every field is length-clamped at
     the :meth:`TalkNotification.from_payload` ingress boundary, so a
     single line stays bounded without a render-side cap (biff-7g7).
+
+    A frame with no body at all (an accept, or an invite sent with no
+    opening line) contributes no line — there is nothing to report.  A
+    frame whose body is merely *invisible* after neutralisation
+    (whitespace-only or control-only) still contributes a line naming the
+    sender: the agent must see that a message arrived even when it had
+    nothing visible to show, matching :func:`~biff.formatting.format_talk_line`
+    on the terminal side (biff-7g7, biff-2sw round 6).
     """
     lines: list[str] = []
     for _user, invite in sorted(drain.pending.items()):
@@ -94,12 +115,9 @@ def format_agent_drain(drain: AgentDrain) -> str:
         if notif.is_end:
             lines.append(format_talk_end(label))
             continue
-        # Skip a body that is empty or whitespace-only after neutralisation:
-        # spaces survive terminal_safe, so guard on the stripped body — matching
-        # format_talk_line, so a blank message renders nothing on both surfaces
-        # and never leaves a dangling ``label:`` line (biff-7g7).
-        if (body := terminal_safe(notif.nbody)) and body.strip():
-            lines.append(f"{HEADER_PREFIX}{label}: {body}")
+        if not notif.nbody:
+            continue
+        lines.append(f"{HEADER_PREFIX}{label}: {visible_text(notif.nbody)}")
     return "\n".join(lines)
 
 

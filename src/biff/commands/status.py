@@ -6,7 +6,7 @@ from importlib.metadata import version as pkg_version
 
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
-from biff.formatting import format_idle, format_remaining, terminal_safe
+from biff.formatting import format_idle, format_wall_status_line
 
 
 async def status(ctx: CliContext) -> CommandResult:
@@ -39,10 +39,7 @@ async def status(ctx: CliContext) -> CommandResult:
         f"unread: {total_unread} message{plural}",
     ]
     if wall_post:
-        remaining = format_remaining(wall_post.expires_at)
-        wall_from = terminal_safe(wall_post.from_user)
-        wall_text = terminal_safe(wall_post.text)
-        lines.append(f"wall: {wall_from}: {wall_text} ({remaining})")
+        lines.append(format_wall_status_line(wall_post))
     else:
         lines.append("wall: (none)")
 

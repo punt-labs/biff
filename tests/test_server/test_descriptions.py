@@ -374,6 +374,77 @@ class TestTalkDescriptionConnectedHint:
         assert "talk jfreeman <message>" in desc
 
 
+class TestRefreshWallSenderBounds:
+    """A forged sender must not blow up the ``wall`` tool description (biff-2sw).
+
+    Neither ``WallPost.from_user`` nor ``WallPost.from_tty`` has a
+    ``max_length`` on the wire. ``refresh_wall`` composed them into the
+    description with no cap at all — the third independent call site for
+    this defect class, alongside ``format_wall`` and
+    ``format_wall_status_line`` in ``biff.formatting``.
+    """
+
+    async def test_giant_sender_and_tty_render_bounded(
+        self, state: ServerState
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        mcp = create_server(state)
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="deploy freeze",
+            from_user="u" * 10_000,
+            from_tty="t" * 10_000,
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        await _descriptions.refresh_wall(mcp, state, wall=wall)
+        tool = await mcp.get_tool("wall")
+        assert tool is not None
+        assert tool.description is not None
+        # Well under the pre-fix ~20,000+ char blowup — bounded by the
+        # capped sender plus the 512-char wall text ceiling, not the
+        # 10,000-char forged fields.
+        assert len(tool.description) < 700
+        assert "u" * 10_000 not in tool.description
+        assert "t" * 10_000 not in tool.description
+
+    async def test_giant_sender_bounded_in_vox_announcement(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The vox announcement must clip ``from_user`` too (biff-2sw).
+
+        A giant ``from_user`` bypassing ``sanitized_sender`` here would
+        embed unboundedly in subprocess argv passed to ``vox unmute``,
+        turning a forged wall into an expensive real synthesis request
+        on every teammate's session with vox enabled.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        spoken_calls: list[str] = []
+
+        def _capture(text: str, *, vibe_tags: str = "") -> None:
+            del vibe_tags
+            spoken_calls.append(text)
+
+        monkeypatch.setattr("biff.integration.vox.speak_fire_and_forget", _capture)
+
+        mcp = create_server(state)
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="deploy freeze",
+            from_user="u" * 10_000,
+            from_tty="tty1",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        await _descriptions.refresh_wall(mcp, state, wall=wall)
+
+        assert len(spoken_calls) == 1
+        assert len(spoken_calls[0]) < 700
+        assert "u" * 10_000 not in spoken_calls[0]
+
+
 class TestPollInbox:
     """Verify the background inbox poller detects changes and refreshes."""
 

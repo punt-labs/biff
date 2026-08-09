@@ -7,11 +7,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from biff._formatting import (
+    TABLE_WIDTH,
     ColumnSpec,
+    clip_to_width,
     format_idle,
     format_table,
     last_component,
     visible_width,
+    wrap_cells,
 )
 from biff.formatting import format_read, format_read_dual
 from biff.models import Message
@@ -67,6 +70,140 @@ class TestVisibleWidth:
 
     def test_multiple_ansi(self) -> None:
         assert visible_width("\033[31mred\033[0m \033[32mgreen\033[0m") == 9
+
+    def test_cjk_counts_two_cells_per_glyph(self) -> None:
+        # Each CJK ideograph renders at 2 terminal cells, not 1 code point.
+        assert visible_width("你好") == 4
+
+    def test_emoji_counts_two_cells(self) -> None:
+        assert visible_width("🚀") == 2
+
+    def test_mixed_ascii_and_cjk(self) -> None:
+        # 5 ASCII cells + 3 CJK glyphs * 2 cells = 11.
+        assert visible_width("hello你好嗎") == 11
+
+    def test_control_character_contributes_zero_width(self) -> None:
+        # wcwidth returns -1 for control/indeterminate characters; _char_width
+        # clamps that to 0 rather than letting it subtract from the budget.
+        # BEL (\x07) is outside the ANSI CSI regex, so it reaches wcwidth
+        # directly, unlike stripped CSI sequences.
+        assert visible_width("a\x07b") == 2
+
+
+class TestWrapCells:
+    def test_ascii_wraps_like_textwrap(self) -> None:
+        lines = wrap_cells("word " * 20, 40)
+        assert all(visible_width(line) <= 40 for line in lines)
+        assert len(lines) > 1
+
+    def test_cjk_wraps_by_cell_width_not_code_points(self) -> None:
+        # 40 CJK glyphs at 2 cells each = 80 cells — must wrap well
+        # before 80 code points if the budget is 40 cells.
+        body = "你好" * 20  # "你好" x 20 == 40 glyphs, 80 cells
+        lines = wrap_cells(body, 40)
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= 40
+
+    def test_mixed_ascii_and_cjk_stays_within_budget(self) -> None:
+        body = ("hello " + "你好嗎 ") * 10
+        lines = wrap_cells(body, 30)
+        for line in lines:
+            assert visible_width(line) <= 30
+
+    def test_preserve_whitespace_keeps_internal_runs(self) -> None:
+        lines = wrap_cells("a    b   c", 40, preserve_whitespace=True)
+        assert lines == ["a    b   c"]
+
+    def test_collapses_whitespace_by_default(self) -> None:
+        lines = wrap_cells("a\t\tb", 40)
+        assert lines == ["a b"]
+
+    def test_empty_text_returns_no_lines(self) -> None:
+        assert wrap_cells("", 40) == []
+
+    def test_never_drops_a_lone_wide_glyph_word(self) -> None:
+        # A single unbroken run of wide glyphs longer than the budget must
+        # still hard-break rather than overflow a line forever.
+        body = "你" * 30  # 30 CJK glyphs, 60 cells, no whitespace
+        lines = wrap_cells(body, 10)
+        assert len(lines) > 1
+        for line in lines:
+            assert visible_width(line) <= 10
+        assert "".join(lines) == body
+
+    def test_single_glyph_wider_than_budget_still_emitted_whole(self) -> None:
+        # A 2-cell glyph against a 1-cell budget has no narrower unit to
+        # split into — it is emitted whole, exceeding the requested width,
+        # rather than dropped or corrupted.
+        assert wrap_cells("你a", 1) == ["你", "a"]
+
+    def test_oversized_ansi_token_hard_break_never_splits_mid_escape(self) -> None:
+        # A single unbroken "word" carrying an ANSI escape, wider than the
+        # budget, must hard-break on visible content only — never inside
+        # the escape sequence itself (e.g. "\x1b[31m" split into "\x1b[3"
+        # and "1m" across two chunks, corrupting it). The escape is
+        # stripped up front, the same way visible_width strips it, so no
+        # chunk carries a partial or complete escape sequence at all.
+        token = "\x1b[31m" + ("x" * 20) + "\x1b[0m"
+        lines = wrap_cells(token, 5)
+        assert len(lines) > 1
+        assert "".join(lines) == "x" * 20
+        for line in lines:
+            assert "\x1b" not in line
+            assert visible_width(line) <= 5
+            assert visible_width(line) == len(line)
+
+
+class TestClipToWidth:
+    def test_ascii_under_budget_unchanged(self) -> None:
+        assert clip_to_width("hello", 10) == "hello"
+
+    def test_ascii_over_budget_clips_with_ellipsis(self) -> None:
+        result = clip_to_width("hello world", 8)
+        assert result.endswith("…")
+        assert visible_width(result) <= 8
+
+    def test_cjk_clips_by_cell_width_not_code_points(self) -> None:
+        # 10 CJK glyphs = 20 cells; clipping to 8 cells must keep far
+        # fewer than 8 code points, unlike a len()-based clip.
+        text = "你" * 10
+        result = clip_to_width(text, 8)
+        assert visible_width(result) <= 8
+        assert result.endswith("…")
+
+    def test_zero_width_that_needs_clipping_raises(self) -> None:
+        # A budget too narrow to even hold the ellipsis must raise rather
+        # than silently return a result wider than the requested budget.
+        with pytest.raises(ValueError, match="narrower than"):
+            clip_to_width("hello", 0)
+
+    def test_width_narrower_than_ellipsis_raises(self) -> None:
+        with pytest.raises(ValueError, match="narrower than"):
+            clip_to_width("hello world", 0)
+
+    def test_width_meeting_the_ellipsis_budget_does_not_raise(self) -> None:
+        # width == visible_width(ellipsis) is the minimum viable budget —
+        # the clip degenerates to the bare ellipsis, but that's still a
+        # result no wider than requested.
+        result = clip_to_width("hello world", 1)
+        assert result == "…"
+
+    def test_text_that_fits_is_returned_even_when_width_is_zero(self) -> None:
+        # No clipping needed — the ellipsis-vs-width contract only applies
+        # when a clip actually has to happen.
+        assert clip_to_width("", 0) == ""
+
+    def test_ansi_text_that_needs_clipping_never_leaves_dangling_escape(self) -> None:
+        # The truncation walk must strip ANSI first (matching visible_width),
+        # not walk the raw string — otherwise a clip boundary lands inside
+        # an escape sequence and emits a dangling, unterminated introducer
+        # ahead of the ellipsis.
+        text = "\x1b[31m" + ("x" * 20) + "\x1b[0m"
+        result = clip_to_width(text, 8)
+        assert result.endswith("…")
+        assert "\x1b" not in result
+        assert visible_width(result) <= 8
 
 
 class TestLastComponent:
@@ -318,3 +455,19 @@ class TestFormatReadDual:
         agent_msgs = [self._make_msg("rmh", "claude", "b")]
         output = format_read_dual("jfreeman", human_msgs, "claude", agent_msgs)
         assert "\n\n" in output
+
+    def test_giant_sender_renders_bounded(self) -> None:
+        # Message.from_user/from_tty have no max_length on the wire. FROM
+        # is a fixed READ_SPECS column and MESSAGE is the shared
+        # variable/wrap column within each identity's section — an
+        # unbounded sender would widen FROM and collapse the wrap budget
+        # for every message in that section, not just the forged one.
+        human_msgs = [
+            self._make_msg("u" * 10_000, "jfreeman", "hey", from_tty="t" * 10_000),
+            self._make_msg("kai", "jfreeman", "short reply"),
+        ]
+        output = format_read_dual("jfreeman", human_msgs, "claude", [])
+        longest = max(visible_width(line) for line in output.splitlines())
+        assert longest <= 2 * TABLE_WIDTH
+        kai_line = next(line for line in output.splitlines() if "kai" in line)
+        assert visible_width(kai_line) <= 2 * TABLE_WIDTH

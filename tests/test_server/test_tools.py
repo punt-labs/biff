@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 from fastmcp.tools.function_tool import FunctionTool
 
+from biff._formatting import TABLE_WIDTH, visible_width
+from biff.formatting import _NO_PRINTABLE_TEXT
 from biff.models import BiffConfig, Message, UserSession
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
@@ -550,6 +552,49 @@ class TestPlanTool:
         session = await state.relay.get_session(state.session_key)
         assert session is not None
         assert session.last_active > old_time
+
+    async def test_cjk_plan_wraps_within_the_table_width(
+        self, state: ServerState
+    ) -> None:
+        # The MCP /plan confirmation shares format_talk_echo's wrap
+        # treatment with the CLI command — a CJK-heavy plan must wrap here
+        # too, not just at the CLI (biff-2sw).
+        fn = await _get_tool_fn(state, "plan")
+        message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
+        result = await fn(message=message)
+        lines = result.splitlines()
+        assert len(lines) > 2
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
+
+    async def test_control_only_message_shows_fallback(
+        self, state: ServerState
+    ) -> None:
+        fn = await _get_tool_fn(state, "plan")
+        result = await fn(message="\x00\x1b\x07")
+        assert _NO_PRINTABLE_TEXT in result
+
+    async def test_unchanged_manual_plan_wraps_within_the_table_width(
+        self, state: ServerState
+    ) -> None:
+        # The "Plan unchanged (manual)" no-op echoes the existing session
+        # plan (biff.formatting.format_talk_echo) and must wrap it the same
+        # way as a fresh set.
+        await state.relay.update_session(
+            UserSession(
+                user="kai",
+                tty=_KAI_TTY,
+                plan="这是一段很长的中文文本用来测试自动换行是否正常工作" * 3,
+                plan_source="manual",
+            )
+        )
+        fn = await _get_tool_fn(state, "plan")
+        result = await fn(message="→ feature-branch", source="auto")
+        assert "unchanged" in result
+        lines = result.splitlines()
+        assert len(lines) > 2
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
 
 
 class TestSendMessageTool:

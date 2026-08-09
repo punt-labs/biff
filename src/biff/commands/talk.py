@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Protocol
 from nats.errors import Error as NatsError
 
 from biff.commands._result import CommandResult
-from biff.formatting import terminal_safe
+from biff.formatting import format_talk_echo
 from biff.server.tools._session import resolve_talk_target
 from biff.talk_types import MAX_BODY_LEN, TalkPhase
 from biff.tty import format_address, parse_address
@@ -138,13 +138,11 @@ async def accept_invite(
             text=f"Could not reach {accept_display} — accept not sent; try again.",
             error=True,
         )
-    opening = f' Sent: "{terminal_safe(message[:MAX_BODY_LEN])}".' if message else ""
-    return CommandResult(
-        text=(
-            f"Connected to {accept_display} — accepted their invite.{opening} "
-            "Use talk_read to see replies, talk_end to close."
-        ),
-    )
+    lines = [f"Connected to {accept_display} — accepted their invite."]
+    if message:
+        lines.append(format_talk_echo("Sent:", message[:MAX_BODY_LEN]))
+    lines.append("Use talk_read to see replies, talk_end to close.")
+    return CommandResult(text="\n".join(lines))
 
 
 async def invite(
@@ -226,7 +224,7 @@ async def send_line(
             error=True,
         )
     return CommandResult(
-        text=f'Sent to {display}: "{terminal_safe(message[:MAX_BODY_LEN])}".',
+        text=format_talk_echo(f"Sent to {display}:", message[:MAX_BODY_LEN]),
     )
 
 

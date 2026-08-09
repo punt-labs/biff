@@ -133,7 +133,9 @@ class TestAcceptInvite:
             resolve_tty="tty2",
             message="on my way",
         )
-        assert 'sent: "on my way"' in result.text.lower()
+        lowered = result.text.lower()
+        assert "sent:" in lowered
+        assert "on my way" in lowered
         assert kai.talk.phase is TalkPhase.CONNECTED
 
     async def test_accept_refused_when_connected_elsewhere(
@@ -168,7 +170,28 @@ class TestSendLine:
             kai, to_key=_ERIC_KEY, display="eric:tty2", message="hello there"
         )
         assert not result.error
-        assert 'sent to eric:tty2: "hello there"' in result.text.lower()
+        lowered = result.text.lower()
+        assert "sent to eric:tty2:" in lowered
+        assert "hello there" in lowered
+
+    async def test_send_confirmation_wraps_cjk_within_the_table_width(
+        self, kai: CliContext
+    ) -> None:
+        """The echoed message must wrap, not overflow, for CJK text (biff-2sw)."""
+        from biff._formatting import TABLE_WIDTH, visible_width
+
+        kai.talk.begin_connected(
+            partner="eric", partner_tty="tty2", partner_key=_ERIC_KEY
+        )
+        cjk_message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
+        result = await talk_commands.send_line(
+            kai, to_key=_ERIC_KEY, display="eric:tty2", message=cjk_message
+        )
+        assert not result.error
+        lines = result.text.splitlines()
+        assert len(lines) > 2  # lead + wrapped body lines
+        for line in lines:
+            assert visible_width(line) <= TABLE_WIDTH
 
     async def test_empty_message_is_a_caller_error(self, kai: CliContext) -> None:
         kai.talk.begin_connected(

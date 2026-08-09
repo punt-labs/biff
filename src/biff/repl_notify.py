@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from biff.formatting import format_remaining, terminal_safe
+from biff._formatting import TABLE_WIDTH, visible_width, wrap_cells
+from biff.formatting import format_remaining, sanitized_sender, visible_text
 from biff.models import WallPost
 
 
@@ -41,13 +42,20 @@ class NotifyState:
         wall_key = _wall_key(wall)
         if wall_key and wall_key != self.last_wall_key:
             remaining = format_remaining(wall.expires_at) if wall else ""
-            # Wall fields are remote-controlled; strip terminal escapes before
-            # this line is printed to the REPL between commands (biff-lbj).
-            from_user = terminal_safe(wall.from_user) if wall else ""
-            wall_text = terminal_safe(wall.text) if wall else ""
-            lines.append(
-                f"  \033[1;31m📢 WALL {from_user}: {wall_text} ({remaining})\033[0m"
-            )
+            # Wall fields are remote-controlled; strip terminal escapes and
+            # cap the label length before this line is printed to the REPL
+            # between commands (biff-lbj). ``WallPost.from_user`` has no
+            # ``max_length`` and feeds directly into the wrap-width budget
+            # below — an uncapped sender collapses ``width`` toward 1 and
+            # explodes into one hard-broken line per glyph (biff-2sw).
+            from_user = sanitized_sender(wall.from_user) if wall else ""
+            # Wall text can run up to 512 chars (biff-2sw) — a CJK/emoji-heavy
+            # post must wrap the same way format_wall/format_wall_status_line
+            # already do, and a control-only post must show the same
+            # visible_text fallback instead of rendering an empty-looking
+            # banner with no hint the message was dropped.
+            wall_text = visible_text(wall.text) if wall else ""
+            lines.append(_format_wall_banner(from_user, wall_text, remaining))
         elif not wall_key and self.last_wall_key:
             lines.append("  \033[2m📢 Wall cleared\033[0m")
 
@@ -66,6 +74,37 @@ class NotifyState:
         """
         self.last_unread = unread
         self.last_wall_key = _wall_key(wall)
+
+
+def _format_wall_banner(from_user: str, text: str, remaining: str) -> str:
+    """Render the between-prompt wall banner, wrapped to table width.
+
+    Shares :func:`biff.formatting.format_wall_status_line`'s wrap treatment
+    — wall text can run up to 512 chars and is potentially CJK/emoji-heavy,
+    so it must wrap like every other wall render site instead of overflowing
+    80 columns on one unbounded line (biff-2sw). The ``\\033[1;31m`` /
+    ``\\033[0m`` color wrapper is applied to the whole composed block —
+    opening before the first line, closing after the last — rather than
+    embedded per line, so a wrap boundary can never land inside the escape.
+
+    The ``(remaining)`` suffix is reserved out of the wrap budget up front,
+    the same way :func:`~biff.formatting.format_wall_status_line` does —
+    appending it to the last chunk after :func:`wrap_cells` has already
+    chosen line breaks would let an unbroken glyph run fill the wrap budget
+    exactly, and the suffix would then push that line past
+    :data:`TABLE_WIDTH`.
+    """
+    prefix = f"  📢 WALL {from_user}: "
+    suffix = f" ({remaining})"
+    width = max(TABLE_WIDTH - visible_width(prefix) - visible_width(suffix), 1)
+    chunks = wrap_cells(text, width, preserve_whitespace=True) or [""]
+    indent = " " * visible_width(prefix)
+    rendered = [
+        (prefix if i == 0 else indent) + chunk for i, chunk in enumerate(chunks)
+    ]
+    rendered[-1] += suffix
+    body = "\n".join(rendered)
+    return f"\033[1;31m{body}\033[0m"
 
 
 def _wall_key(wall: WallPost | None) -> str:
