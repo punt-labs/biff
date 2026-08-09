@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +15,10 @@ from biff.config import (
     DEMO_RELAY_URL,
     EthosIdentity,
     GitHubIdentity,
+    _ethos_submodule_declared,
+    _known_agent_github_logins,
+    _read_identity_yaml,
+    _SubmoduleDeclaration,
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
@@ -27,6 +33,14 @@ from biff.config import (
     sanitize_repo_name,
 )
 from biff.models import RelayAuth
+
+_CONFIG_LOGGER = "biff.config"
+
+# chmod-based permission-denial tests don't work when running as root
+# (root bypasses the permission bits entirely).
+_SKIP_AS_ROOT = pytest.mark.skipif(
+    os.geteuid() == 0, reason="permission checks are meaningless as root"
+)
 
 # -- find_git_root --
 
@@ -91,6 +105,24 @@ class TestGetGithubIdentity:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = ""
             assert get_github_identity() is None
+
+    def test_failure_logs_at_debug_with_stderr(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``gh api user`` failure (expired token, rate limit, network
+        error) must leave a trail -- at debug, not warning, since the same
+        code path fires on every machine without ``gh`` configured at all.
+        """
+        with (
+            patch("biff.config.subprocess.run") as mock_run,
+            caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER),
+        ):
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = "HTTP 401: Bad credentials"
+            assert get_github_identity() is None
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert any("Bad credentials" in r.getMessage() for r in debug_records)
 
     def test_returns_none_when_empty(self) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
@@ -308,6 +340,7 @@ class TestExtractRelayAuth:
 _KAI = GitHubIdentity(login="kai", display_name="Kai Chen")
 _KAI_NO_NAME = GitHubIdentity(login="kai", display_name="")
 _FROM_GIT = GitHubIdentity(login="from-git", display_name="Git User")
+_BOT_IDENTITY = GitHubIdentity(login="claude-puntlabs", display_name="Claude Agento")
 
 
 def _setup_repo_with_yaml(tmp_path: Path) -> Path:
@@ -331,6 +364,36 @@ def _write_agent_identity_fixture(repo_root: Path, handle: str = "claude") -> No
     identities.mkdir(parents=True, exist_ok=True)
     (identities / f"{handle}.yaml").write_text(
         f"handle: {handle}\nname: Claude Agento\nkind: agent\n"
+    )
+
+
+def _write_bot_identity_fixture(repo_root: Path, handle: str = "claude") -> None:
+    """Register a ``kind: agent`` identity with a GitHub login, no ``ethos.yaml``.
+
+    Unlike :func:`_write_agent_identity_fixture`, this omits
+    ``.punt-labs/ethos.yaml`` -- the bot-login cross-check scans every
+    identity file directly and must not depend on the repo's *active*
+    agent being configured.
+    """
+    identities = repo_root / ".punt-labs" / "ethos" / "identities"
+    identities.mkdir(parents=True, exist_ok=True)
+    (identities / f"{handle}.yaml").write_text(
+        f"handle: {handle}\nname: Claude Agento\nkind: agent\ngithub: claude-puntlabs\n"
+    )
+
+
+def _write_gitmodules_ethos(repo_root: Path) -> None:
+    """Write ``.gitmodules`` declaring the ``.punt-labs/ethos`` submodule.
+
+    Mirrors what ``git submodule add`` writes, without actually
+    populating ``.punt-labs/ethos`` -- reproduces the exact on-disk shape
+    of an uninitialized submodule (a plain ``git clone``, or
+    ``git worktree add``, neither of which initializes submodules).
+    """
+    (repo_root / ".gitmodules").write_text(
+        '[submodule ".punt-labs/ethos"]\n'
+        "\tpath = .punt-labs/ethos\n"
+        "\turl = git@github.com:punt-labs/team.git\n"
     )
 
 
@@ -499,6 +562,166 @@ class TestLoadCliConfig:
         resolved = load_cli_config(start=repo)
         assert resolved.config.user == "kai"
         assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_rejects_bot_github_login_falls_back_to_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        """A ``GH_TOKEN`` pinned to a bot PAT must not silently become the CLI user.
+
+        Regression for biff-if2: every Claude Agento session sources a
+        bot ``GH_TOKEN`` into its shell (org CLAUDE.md). Once ``gh api
+        user`` resolves to that bot, the CLI must reject it and fall
+        back to the OS user rather than silently identifying the human
+        operator as the bot.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.display_name == ""
+        assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_rejects_bot_github_login_differing_only_by_case(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        """GitHub logins are case-insensitive -- a registry entry that
+        differs only by case (or trailing whitespace) from the resolved
+        login must still be caught by the bot denylist, not fail open.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        identities = repo / ".punt-labs" / "ethos" / "identities"
+        identities.mkdir(parents=True, exist_ok=True)
+        (identities / "claude.yaml").write_text(
+            "handle: claude\nname: Claude Agento\nkind: agent\n"
+            "github: ' Claude-PuntLabs '\n"
+        )
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_rejects_bot_github_login_exits_when_no_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)
+        with pytest.raises(SystemExit, match="claude-puntlabs"):
+            load_cli_config(start=repo)
+
+    @_SKIP_AS_ROOT
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_corrupted_bot_identity_file_falls_back_with_warning(
+        self,
+        _mock_gh: object,
+        _mock_os: object,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """End-to-end regression for the live-reproduced biff-if2 gap.
+
+        The bot's own identity file (the one that would prove
+        ``claude-puntlabs`` is a bot, not a human) is unreadable --
+        chmod 000. Before this fix, the scan silently came back empty
+        and the CLI resolved ``claude-puntlabs`` as if it were a
+        legitimate human GitHub login, with zero log output. Now the
+        CLI refuses to trust an identity it cannot verify, falls back
+        to the OS user, and the fallback is accompanied by a warning.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)
+        identity_path = repo / ".punt-labs" / "ethos" / "identities" / "claude.yaml"
+        identity_path.chmod(0o000)
+        try:
+            with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+                resolved = load_cli_config(start=repo)
+        finally:
+            identity_path.chmod(0o644)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.kind == ""
+        assert any(
+            "Cannot confirm GitHub login" in r.getMessage() for r in caplog.records
+        )
+        assert any(
+            "Failed to read identity YAML" in r.getMessage() for r in caplog.records
+        )
+
+    @_SKIP_AS_ROOT
+    @patch("biff.config.get_os_user", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_corrupted_bot_identity_file_exits_when_no_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)
+        identity_path = repo / ".punt-labs" / "ethos" / "identities" / "claude.yaml"
+        identity_path.chmod(0o000)
+        try:
+            with pytest.raises(SystemExit, match="Cannot confirm"):
+                load_cli_config(start=repo)
+        finally:
+            identity_path.chmod(0o644)
+
+    @patch("biff.config.get_os_user", return_value="jfreeman")
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_uninitialized_ethos_submodule_falls_back_to_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        """Regression for the live-reproduced gap in this exact worktree.
+
+        ``.gitmodules`` declares the ethos submodule but it was never
+        checked out, so ``.punt-labs/ethos/identities/`` doesn't exist --
+        there is no identity file to find the bot's registration in.
+        Before this fix, that missing directory was folded into
+        "confirmed no bots" and the resolved bot login was trusted
+        outright. It must instead be treated as unverifiable and rejected,
+        exactly like a corrupted identity file.
+        """
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_gitmodules_ethos(repo)
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "jfreeman"
+        assert resolved.config.display_name == ""
+        assert resolved.config.kind == ""
+
+    @patch("biff.config.get_os_user", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_BOT_IDENTITY)
+    def test_uninitialized_ethos_submodule_exits_when_no_os_user(
+        self, _mock_gh: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_gitmodules_ethos(repo)
+        with pytest.raises(SystemExit, match="Cannot confirm"):
+            load_cli_config(start=repo)
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_uses_github_login_when_no_matching_bot_identity(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        """A GitHub login with no matching agent identity is used normally."""
+        repo = _setup_repo_with_yaml(tmp_path)
+        _write_bot_identity_fixture(repo)  # registers claude-puntlabs, not kai
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "kai"
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_human_identity_with_github_field_is_not_rejected(
+        self, _mock_gh: object, tmp_path: Path
+    ) -> None:
+        """Only ``kind: agent`` identities are cross-checked -- humans are exempt."""
+        repo = _setup_repo_with_yaml(tmp_path)
+        identities = repo / ".punt-labs" / "ethos" / "identities"
+        identities.mkdir(parents=True, exist_ok=True)
+        (identities / "jfreeman.yaml").write_text(
+            "handle: jfreeman\nname: Jim Freeman\nkind: human\ngithub: kai\n"
+        )
+        resolved = load_cli_config(start=repo)
+        assert resolved.config.user == "kai"
 
 
 class TestLoadMcpConfig:
@@ -762,6 +985,315 @@ def _write_identity_yaml(repo_root: Path, handle: str, body: str) -> Path:
     path = identities / f"{handle}.yaml"
     path.write_text(body)
     return path
+
+
+class TestReadIdentityYaml:
+    """Every failure mode of ``_read_identity_yaml`` must be observable in
+    logs -- this is the function ``_known_agent_github_logins`` depends on
+    for the bot-identity cross-check (biff-if2); a silent failure here
+    reopens that exact hole.
+    """
+
+    def test_missing_file_logs_nothing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER):
+            assert _read_identity_yaml(tmp_path / "gone.yaml") is None
+        assert caplog.records == []
+
+    @_SKIP_AS_ROOT
+    def test_permission_denied_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "claude.yaml"
+        path.write_text("kind: agent\ngithub: claude-puntlabs\n")
+        path.chmod(0o000)
+        try:
+            with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+                result = _read_identity_yaml(path)
+        finally:
+            path.chmod(0o644)
+        assert result is None
+        assert any(
+            "Failed to read identity YAML" in r.getMessage() for r in caplog.records
+        )
+
+    def test_invalid_utf8_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "claude.yaml"
+        path.write_bytes(b"kind: agent\ngithub: \xff\xfe not valid utf-8\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            result = _read_identity_yaml(path)
+        assert result is None
+        assert any("not valid UTF-8" in r.getMessage() for r in caplog.records)
+
+    def test_malformed_yaml_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "claude.yaml"
+        path.write_text("kind: [unclosed\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            result = _read_identity_yaml(path)
+        assert result is None
+        assert any(
+            "Failed to parse identity YAML" in r.getMessage() for r in caplog.records
+        )
+
+    def test_wrong_shape_yaml_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A YAML file that parses to a list (not a mapping) is malformed
+        for identity purposes even though it's syntactically valid YAML.
+        """
+        path = tmp_path / "claude.yaml"
+        path.write_text("- kind: agent\n- github: claude-puntlabs\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            result = _read_identity_yaml(path)
+        assert result is None
+        assert any(
+            "did not parse to a mapping" in r.getMessage() for r in caplog.records
+        )
+
+
+# -- _ethos_submodule_declared --
+
+
+class TestEthosSubmoduleDeclared:
+    """Direct coverage of the ``.gitmodules`` classification helper.
+
+    ``_ethos_submodule_declared`` used to fold "confirmed absent" and
+    "exists but unreadable/undecodable" into a single ``False`` return --
+    the exact bug class DES-053 exists to close, reintroduced one
+    function later. These tests exercise the helper in isolation so that
+    regression coverage does not depend on threading through
+    ``_known_agent_github_logins`` and ``load_cli_config``.
+    """
+
+    def test_no_gitmodules_file_is_absent(self, tmp_path: Path) -> None:
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.ABSENT
+
+    def test_gitmodules_without_ethos_entry_is_absent(self, tmp_path: Path) -> None:
+        (tmp_path / ".gitmodules").write_text(
+            '[submodule "vendor/other"]\n'
+            "\tpath = vendor/other\n"
+            "\turl = git@example.com:x/other.git\n"
+        )
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.ABSENT
+
+    def test_gitmodules_with_ethos_entry_is_declared(self, tmp_path: Path) -> None:
+        _write_gitmodules_ethos(tmp_path)
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.DECLARED
+
+    def test_gitmodules_with_crlf_line_endings_is_declared(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``.gitmodules`` checked out with CRLF line endings (Windows,
+        or ``core.autocrlf=true``) must still match. The declaration
+        regex's trailing ``[ \\t]*$`` does not, on its own, consume a
+        ``\\r`` sitting immediately before the ``\\n`` -- a plausible
+        latent false negative on any repo checked out with CRLF.
+        """
+        (tmp_path / ".gitmodules").write_bytes(
+            b'[submodule ".punt-labs/ethos"]\r\n'
+            b"\tpath = .punt-labs/ethos\r\n"
+            b"\turl = git@github.com:punt-labs/team.git\r\n"
+        )
+        assert _ethos_submodule_declared(tmp_path) is _SubmoduleDeclaration.DECLARED
+
+    @_SKIP_AS_ROOT
+    def test_unreadable_gitmodules_is_unverifiable_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``.gitmodules`` that correctly declares the ethos submodule
+        but happens to be unreadable must fail closed (UNVERIFIABLE), not
+        be folded into ABSENT -- an unreadable file that in fact declares
+        the submodule is exactly the bot-impersonation vulnerability
+        DES-053 exists to close, reopened silently.
+        """
+        _write_gitmodules_ethos(tmp_path)
+        path = tmp_path / ".gitmodules"
+        path.chmod(0o000)
+        try:
+            with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+                result = _ethos_submodule_declared(tmp_path)
+        finally:
+            path.chmod(0o644)
+        assert result is _SubmoduleDeclaration.UNVERIFIABLE
+        assert any("could not be read" in r.getMessage() for r in caplog.records)
+
+    def test_invalid_utf8_gitmodules_is_unverifiable_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``UnicodeDecodeError`` is not an ``OSError`` subclass -- a bare
+        ``except OSError`` does not catch it at all, so a corrupted
+        ``.gitmodules`` would previously propagate uncaught through
+        ``_known_agent_github_logins`` and crash the CLI.
+        """
+        (tmp_path / ".gitmodules").write_bytes(b"\xff\xfe not valid utf-8\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            result = _ethos_submodule_declared(tmp_path)
+        assert result is _SubmoduleDeclaration.UNVERIFIABLE
+        assert any("not valid UTF-8" in r.getMessage() for r in caplog.records)
+
+
+# -- _known_agent_github_logins --
+
+
+class TestKnownAgentGithubLogins:
+    def test_missing_identities_dir_and_no_gitmodules_entry_is_complete_and_silent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No ethos integration at all is the common, valid case -- no warning.
+
+        Distinct from ``test_declared_but_uninitialized_submodule_is_
+        incomplete_with_warning`` below: both leave
+        ``.punt-labs/ethos/identities/`` missing, but only THIS repo has
+        no ``.gitmodules`` entry declaring the submodule, so the missing
+        directory is trustworthy here.
+        """
+        with caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset()
+        assert scan.complete is True
+        assert not any(r.levelno == logging.WARNING for r in caplog.records)
+
+    def test_declared_but_uninitialized_submodule_is_incomplete_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reproduces this worktree's exact live state (biff-if2 review).
+
+        ``.gitmodules`` declares the ``.punt-labs/ethos`` submodule, but
+        it was never checked out -- a plain ``git clone`` or
+        ``git worktree add`` (neither initializes submodules) leaves
+        ``.punt-labs/ethos/identities/`` missing, identical on disk to
+        the "no ethos integration" case above. That absence is
+        unverifiable here, not "confirmed no bots": the scan must report
+        itself incomplete rather than silently trusting an empty result.
+        """
+        _write_gitmodules_ethos(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset()
+        assert scan.complete is False
+        assert any("uninitialized submodule" in r.getMessage() for r in caplog.records)
+
+    @_SKIP_AS_ROOT
+    def test_unreadable_identities_dir_is_incomplete_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        identities = tmp_path / ".punt-labs" / "ethos" / "identities"
+        identities.mkdir(parents=True)
+        identities.chmod(0o000)
+        try:
+            with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+                scan = _known_agent_github_logins(tmp_path)
+        finally:
+            identities.chmod(0o755)
+        assert scan.complete is False
+        assert any("not readable" in r.getMessage() for r in caplog.records)
+
+    def test_agent_entry_with_null_github_field_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write_identity_yaml(tmp_path, "claude", "kind: agent\ngithub:\n")  # null
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset()
+        assert scan.complete is False
+        assert any("malformed 'github' field" in r.getMessage() for r in caplog.records)
+
+    def test_agent_entry_with_wrong_type_github_field_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write_identity_yaml(tmp_path, "claude", "kind: agent\ngithub: 42\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset()
+        assert scan.complete is False
+        assert any("malformed 'github' field" in r.getMessage() for r in caplog.records)
+
+    def test_agent_entry_with_empty_github_field_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write_identity_yaml(tmp_path, "claude", "kind: agent\ngithub: ''\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.complete is False
+        assert any("malformed 'github' field" in r.getMessage() for r in caplog.records)
+
+    def test_agent_entry_missing_github_field_is_ordinary_and_complete(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Most agent identities have no ``github`` field at all -- that's
+        normal (only bot accounts registered against a GitHub login need
+        one) and must not be treated as a scan failure.
+        """
+        _write_identity_yaml(tmp_path, "claude", "kind: agent\nname: Claude\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset()
+        assert scan.complete is True
+        assert caplog.records == []
+
+    def test_aggregate_summary_logged_when_any_file_fails(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write_identity_yaml(tmp_path, "good", "kind: agent\ngithub: good-bot\n")
+        _write_identity_yaml(tmp_path, "bad", "kind: [unclosed\n")
+        with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+            scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset({"good-bot"})
+        assert scan.complete is False
+        assert any(
+            "Scanned 2 identity files, 1 incomplete or unreadable" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_github_field_normalized_to_casefolded_stripped_login(
+        self, tmp_path: Path
+    ) -> None:
+        """GitHub logins are case-insensitive -- ``scan.logins`` must store
+        the casefolded, whitespace-stripped form so a membership check
+        against a resolved (also-normalized) login isn't defeated by an
+        identity YAML whose ``github`` field differs only by case or a
+        trailing space from ``gh api user``'s canonical ``.login``.
+        """
+        _write_identity_yaml(
+            tmp_path, "claude", "kind: agent\ngithub: ' Claude-PuntLabs '\n"
+        )
+        scan = _known_agent_github_logins(tmp_path)
+        assert scan.logins == frozenset({"claude-puntlabs"})
+
+    @_SKIP_AS_ROOT
+    def test_corrupted_bot_identity_file_not_silently_trusted(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Regression for the live-reproduced biff-if2 gap: the bot's OWN
+        identity file being corrupted (chmod 000) must not silently zero
+        out the known-agent set. The scan must report itself incomplete
+        (so callers refuse to trust an unverifiable GitHub login instead
+        of treating "empty set" as "definitely not a bot") and must log a
+        warning -- not fail with zero trace, as it did before this fix.
+        """
+        path = _write_identity_yaml(
+            tmp_path, "claude", "kind: agent\ngithub: claude-puntlabs\n"
+        )
+        path.chmod(0o000)
+        try:
+            with caplog.at_level(logging.WARNING, logger=_CONFIG_LOGGER):
+                scan = _known_agent_github_logins(tmp_path)
+        finally:
+            path.chmod(0o644)
+        assert "claude-puntlabs" not in scan.logins
+        assert scan.complete is False, (
+            "an incomplete scan must say so -- an empty logins set here is "
+            "indistinguishable from 'no bots registered' unless paired "
+            "with complete=False"
+        )
+        assert any(
+            "Failed to read identity YAML" in r.getMessage() for r in caplog.records
+        )
 
 
 class TestResolveAgentIdentityFromDisk:

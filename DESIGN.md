@@ -4307,7 +4307,8 @@ routing, edge cases, implementation sequence, and file change list.
 **Topic:** Primary identity from disk; companion deferred to heartbeat
 **Bead:** biff-8fg3
 **Related:** DES-009 (identity — GitHub login), DES-039 (dual-session
-registration), `docs/spec-agent-first-identity.md`,
+registration), DES-053 (bot-GitHub-login rejection),
+`docs/spec-agent-first-identity.md`,
 `docs/agent-first-identity.md`
 
 ### Context
@@ -5763,3 +5764,165 @@ Revised rules 2 and 6:
   CLI + hooks) and deploys the same per-clone git hooks via the same code path;
   `biff uninstall` removes them. The Amendment 1 "run `biff install`" hint from
   `enable` is dropped — `enable` now deploys the hooks itself.
+
+---
+
+## DES-053: CLI Rejects a Bot's GitHub Login — Amendment to Agent-First Identity Resolution
+
+**Date:** 2026-08-08
+**Status:** SETTLED
+**Bead:** biff-if2
+**Related:** DES-040 (agent-first identity resolution — the chain this
+amends), DES-009 (identity — GitHub login)
+
+### Context
+
+DES-040 split identity resolution into two chains: `load_mcp_config` uses
+the agent-first chain, `load_cli_config` uses the human-identity chain
+(`user_override` → `get_github_identity()` → `get_os_user()`). The CLI
+chain assumed `gh api user` always resolves a human, because a human runs
+the CLI from their own terminal.
+
+That assumption breaks for a specific, common case at Punt Labs: a
+durable Claude Agento shell sources a bot's `GH_TOKEN` into its
+environment for the entire session (org `CLAUDE.md`, `~/.punt-labs/
+git-identity.env`). If a human then runs `biff` from inside that same
+shell — or a shell that inherited its environment — `gh api user`
+resolves to the bot's login (`claude-puntlabs`), not the human's. Nothing
+in the DES-040 chain treated this as a distinct case: the bot's GitHub
+identity would be silently adopted as the human's biff identity, so
+`biff write` and `biff talk` would attribute the human's messages to the
+bot.
+
+### Decision
+
+`_resolve_human_identity` cross-checks the login `get_github_identity()`
+resolves against the repo's own agent-identity registry
+(`.punt-labs/ethos/identities/*.yaml`) before trusting it. A login that
+matches any `kind: agent` entry's `github` field is rejected exactly as
+if `get_github_identity()` had returned `None`, and resolution falls
+through to `get_os_user()`.
+
+**Scope is deliberately repo-local, matching `resolve_agent_identity_from_disk`.**
+The scan reads only `{repo_root}/.punt-labs/ethos/identities/`, the same
+directory `resolve_agent_identity_from_disk` (DES-040) already reads for
+agent-first MCP resolution. There is no query against a global identity
+registry, no network call, and no dependency on `ethos.yaml` naming a
+specific agent — the scan collects every `kind: agent` entry's `github`
+field it can find in the repo's own registry, independent of which agent
+(if any) is configured to run there. This keeps the check inert in repos
+with no ethos integration at all (empty scan, nothing rejected — see the
+amendment below for the one case where an empty scan is *not* inert) and
+keeps its failure domain identical to the resolver it protects: same
+directory, same trust boundary, same repo-local scope.
+
+**An incomplete scan is treated the same as a confirmed match.** The scan
+returns not just the set of known bot logins but whether the scan itself
+was complete (every identity file was readable and parseable, and every
+`kind: agent` entry's `github` field, when present, was well-formed). If
+any file was unreadable, corrupted, or had a malformed `github` field,
+the scan is incomplete — and `_resolve_human_identity` refuses to trust
+the resolved GitHub login rather than treating "not found in an
+incomplete scan" as "confirmed not a bot." Reviewed and live-reproduced
+during the fix: a corrupted or permission-denied identity file for the
+bot's own registration would otherwise silently zero out the known-bot
+set and let the exact leak this decision closes reopen through a
+different door. See `_AgentLoginScan` and `_list_identity_yaml_files` in
+`src/biff/config.py`.
+
+A `github` field that is simply **absent** from a `kind: agent` entry is
+not treated as incomplete — most agent identities are not registered bot
+accounts and have no reason to carry that field. Only a field that is
+*present but broken* (null, wrong type, empty string) counts against
+completeness, since that is evidence of a specific, nameable
+registration gone wrong rather than an ordinary unpopulated field.
+
+### Amendment — an uninitialized ethos submodule is unverifiable, not empty
+
+Two independent reviews of this decision converged on the same gap: an
+absent `.punt-labs/ethos/identities/` directory was unconditionally
+treated as "confirmed no bots" (`complete=True`). That is correct when a
+repo has no ethos integration at all, but wrong when the ethos submodule
+*is* declared (`.gitmodules` names `.punt-labs/ethos`) and simply was
+never checked out — `git clone` without `--recurse-submodules`, or
+`git worktree add`, which never initializes submodules, are both
+ordinary and common (the org `CLAUDE.md` documents the first as a
+routine mistake). Both cases leave the identities directory equally
+absent; a missing directory alone cannot distinguish "genuinely no
+ethos" from "unverifiable — the registry that would prove or disprove a
+bot login exists but isn't populated." Live-reproduced in the repo's own
+`.tmp/wt-review-if2` worktree during review: `.gitmodules` declared the
+submodule, but it had never been initialized there, so the identities
+directory was absent and the original code trusted the empty scan.
+
+`_known_agent_github_logins` now consults `.gitmodules` — via
+`_ethos_submodule_declared` — whenever the identities directory is
+absent or empty. `.gitmodules` is an ordinary git-tracked file present
+in every checkout and worktree regardless of submodule-init state, so it
+carries no ambiguity about init state the way directory presence does.
+If `.gitmodules` declares a submodule at `.punt-labs/ethos` and the
+identities directory has no files, the scan reports `complete=False` —
+the same fail-closed path an unreadable identity file already takes —
+with a warning naming the specific remediation (`git submodule update
+--init`). If `.gitmodules` has no such entry, the directory's absence is
+trusted as before: `complete=True`, no warning, inert.
+
+### Amendment — `_ethos_submodule_declared` inherited the same fail-open bug it was written to close
+
+Two further independent reviews converged on the same gap, one function
+after the amendment above landed: `_ethos_submodule_declared`'s own
+`.gitmodules` read used a bare `except OSError: return False`, folding a
+confirmed-absent `.gitmodules` together with one that exists but is
+unreadable (permission denied, I/O error) into the same `False` — exactly
+the collapse this whole decision exists to close, reopened one function
+later with zero log line. `UnicodeDecodeError` (raised by
+`Path.read_text(encoding="utf-8")` on invalid UTF-8) is not an `OSError`
+subclass, so it wasn't caught at all: a corrupted `.gitmodules` would
+propagate uncaught through `_known_agent_github_logins` and crash the CLI.
+
+Rather than patch this instance in isolation — the same mistake had
+already been made once and fixed correctly once, in `_read_identity_yaml`
+— the fix extracts `_read_text_or_fail_closed`, a shared helper returning
+the file's text, `None` for a confirmed-absent file
+(`FileNotFoundError`), or an `_Unreadable` sentinel (carrying the
+triggering `OSError`/`UnicodeDecodeError`) for any other read failure.
+Both `_read_identity_yaml` and `_ethos_submodule_declared` route through
+it, so a third call site inherits the fail-closed distinction by
+construction instead of being free to reimplement it, correctly or not.
+
+`_ethos_submodule_declared`'s return type changes from `bool` to a
+three-state `_SubmoduleDeclaration` enum (`ABSENT` / `DECLARED` /
+`UNVERIFIABLE`) so `_known_agent_github_logins` can keep distinguishing
+"confirmed not declared" (safe, inert) from "declared or unverifiable"
+(fail closed, for two distinct reasons that each get their own warning)
+through the refactor.
+
+The same review pass also fixed a latent false negative: the declaration
+regex's trailing `[ \t]*$` did not match a `.gitmodules` checked out with
+CRLF line endings (the `\r` immediately before `\n` isn't consumed by
+`[ \t]`). The pattern now ends `[ \t]*\r?$`.
+
+### Rejected alternative — check a global/org-wide bot registry
+
+Considered cross-checking resolved logins against an org-wide list of
+known bot accounts (e.g. a Punt Labs-maintained registry independent of
+any one repo). Rejected: it would add a network dependency (or a second
+on-disk source of truth) to a resolution chain that DES-040 specifically
+moved off of subprocess/network calls to eliminate a startup race. The
+repo-local `.punt-labs/ethos/identities/` registry is already the
+authoritative source for exactly this data in the context that matters —
+the repo the CLI is running in — and keeps the two identity resolvers
+(agent-first for MCP, human-first for CLI) reading from the same file
+tree with no new dependency.
+
+### Full detail
+
+See `_resolve_human_identity`, `_known_agent_github_logins`,
+`_ethos_submodule_declared`, `_SubmoduleDeclaration`,
+`_read_text_or_fail_closed`, `_Unreadable`, `_AgentLoginScan`,
+`_list_identity_yaml_files`, and `_scan_agent_logins` in
+`src/biff/config.py`, and their tests in `tests/test_config.py`
+(`TestReadIdentityYaml`, `TestEthosSubmoduleDeclared`,
+`TestKnownAgentGithubLogins`, and the `test_rejects_bot_github_login_*` /
+`test_corrupted_bot_identity_file_*` / `test_uninitialized_ethos_submodule_*`
+cases in `TestLoadCliConfig`).
