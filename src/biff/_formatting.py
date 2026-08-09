@@ -143,8 +143,13 @@ def last_component(path: str) -> str:
 # Table formatter --------------------------------------------------------------
 
 
-def _fmt_cell(text: str, width: int, align: Literal["left", "right"]) -> str:
-    """Pad *text* to *width* using visible width (ANSI-aware)."""
+def fmt_cell(text: str, width: int, align: Literal["left", "right"]) -> str:
+    """Pad *text* to *width* using visible width (ANSI-aware).
+
+    Public: used by :mod:`biff.formatting` for single-field alignment
+    outside a full :func:`format_table` (e.g. the finger user header's
+    two-column layout), not just internally by the table renderer.
+    """
     padding = max(0, width - visible_width(text))
     if align == "right":
         return " " * padding + text
@@ -248,14 +253,14 @@ def _render_rows(
 
     for row in rows:
         if var_idx is None:
-            cells = [_fmt_cell(row[i], col_widths[i], specs[i].align) for i in range(n)]
+            cells = [fmt_cell(row[i], col_widths[i], specs[i].align) for i in range(n)]
             output.append(ROW_PREFIX + _COL_SEP.join(cells))
         else:
             chunks = wrap_cells(row[var_idx], col_widths[var_idx]) or [""]
             for chunk_i, chunk in enumerate(chunks):
                 if chunk_i == 0:
                     cells = [
-                        _fmt_cell(
+                        fmt_cell(
                             chunk if i == var_idx else row[i],
                             col_widths[i],
                             specs[i].align,
@@ -317,8 +322,7 @@ def format_table(specs: list[ColumnSpec], rows: list[list[str]]) -> str:
 
     # Step 4: render header.
     header_cells = [
-        _fmt_cell(spec.header, col_widths[i], spec.align)
-        for i, spec in enumerate(specs)
+        fmt_cell(spec.header, col_widths[i], spec.align) for i, spec in enumerate(specs)
     ]
     header = HEADER_PREFIX + _COL_SEP.join(header_cells)
 

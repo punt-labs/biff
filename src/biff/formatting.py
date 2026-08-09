@@ -19,6 +19,7 @@ from biff._formatting import (
     TABLE_WIDTH,
     ColumnSpec,
     clip_to_width,
+    fmt_cell,
     format_idle,
     format_table,
     last_component,
@@ -209,11 +210,11 @@ def format_user_header(session: UserSession) -> str:
     mesg = "on" if session.biff_enabled else "off"
     if session.display_name:
         right = f"Name: {terminal_safe(session.display_name)}"
-        line1 = f"▶  {left:<38s}{right}"
+        line1 = f"▶  {fmt_cell(left, 38, 'left')}{right}"
         line2 = f"   Messages: {mesg}"
         return f"{line1}\n{line2}"
     right = f"Messages: {mesg}"
-    return f"▶  {left:<38s}{right}"
+    return f"▶  {fmt_cell(left, 38, 'left')}{right}"
 
 
 def format_tty_block(session: UserSession) -> str:
