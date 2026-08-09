@@ -242,8 +242,8 @@ def _read_identity_yaml(path: Path) -> dict[str, object] | None:
     try:
         raw: object = yaml.safe_load(path.read_text())
     except FileNotFoundError:
-        # Benign TOCTOU race with the directory glob in
-        # _known_agent_github_logins -- the file existed when listed,
+        # Benign TOCTOU race with the directory listing in
+        # _list_identity_yaml_files -- the file existed when listed,
         # gone by the time it's read. Not worth a warning.
         return None
     except OSError as exc:
