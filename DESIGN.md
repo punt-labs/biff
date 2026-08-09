@@ -5926,3 +5926,210 @@ See `_resolve_human_identity`, `_known_agent_github_logins`,
 `TestKnownAgentGithubLogins`, and the `test_rejects_bot_github_login_*` /
 `test_corrupted_bot_identity_file_*` / `test_uninitialized_ethos_submodule_*`
 cases in `TestLoadCliConfig`).
+
+---
+
+## DES-054: Plan-Gate Marker Scoped by (Repo-Common-Root, Identity)
+
+**Date:** 2026-08-09
+**Status:** Settled
+**Beads:** biff-ar1, biff-om9
+**Related:** DES-051 (the gate this marker feeds — "must actually drive
+plan-setting," unchanged by this decision), DES-017 (hint-file
+architecture), biff-7ak (`SessionHint` / `session_id.py`, reused
+read-only here)
+
+### Problem
+
+biff-ar1 and biff-om9 were one design gap wearing two symptoms: the
+`plan-active` marker the `PreToolUse` gate reads (`hook.py`) was keyed by
+worktree root alone (`markers.py`), with no session dimension.
+
+- **ar1** — the hook's root resolution and the MCP/CLI writer's root
+  resolution could disagree (main vs. linked worktree, or an outer
+  session's cwd vs. a dispatched subagent's own cwd), so the gate read
+  the wrong file and denied an edit whose plan really was set. A fifth
+  documented occurrence (biff-if2) traced this to a second, distinct
+  cause: the hook never received or used the `cwd` Claude Code already
+  delivers on every hook payload — it resolved git state against
+  whatever ambient OS cwd the hook subprocess happened to start with,
+  which for a dispatched subagent does not always match the subagent's
+  own assigned directory even when its own shell commands do.
+- **om9** — two concurrent sessions in one repo shared one marker file;
+  either session's `SessionStart` cleared it out from under the other,
+  so a gate that was satisfied a moment ago denied mid-task with no
+  warning.
+- **PL-PA-3 (a named parity gap, biff-ar1's third occurrence)** —
+  `commands/plan.py`'s `plan()` (what `biff plan` calls) never wrote the
+  marker at all; only the MCP `plan` tool did. A CLI-only session (every
+  ethos-mission worker in this org — no MCP tools) running `biff plan`
+  saw a success message while the gate kept denying every subsequent
+  edit.
+
+A companion design (`.tmp/plan-gate-design/biff-ar1-om9-design.md`,
+mission m-2026-08-09-018) resolved two design options — fix the marker's
+scoping (Option A) vs. narrow the gate to exempt worktrees/subagents
+(Option B) — and one empirical open question about how ethos-mission
+workers are actually dispatched. Both were ratified by the operator
+before implementation (m-2026-08-09-021): **Option A**, broad scope (the
+shared root-resolution primitive changes for every consumer, not just
+the plan gate), and in-process `AgentTool` dispatch confirmed (a
+dispatched worker shares its leader's OS `claude` PID), making
+`SubagentStart` hook registration required, not a hedge.
+
+### Decision
+
+**Root: `git rev-parse --git-common-dir`'s parent, not `--show-toplevel`.**
+`_stdlib.get_repo_common_root()` replaces `hook.py`'s old
+`_get_worktree_root()` (`git rev-parse --show-toplevel`). Empirically
+verified (design §2a, and `tests/test_stdlib.py`): the parent of
+`--git-common-dir`'s output is the same absolute path from a repo's main
+checkout and every linked worktree, where `--show-toplevel` reports each
+worktree's own nearest root and isolates them. `hook.py`'s own
+`_repo_common_root(data)` wrapper additionally threads the hook's
+delivered `data["cwd"]` through to the subprocess call instead of
+trusting the ambient process cwd — the second, independent half of the
+ar1/biff-if2 fix; git-flag-switching alone does not close the
+manifestation where the hook process's ambient cwd never reflects the
+invoking subagent's directory at all.
+
+**Broad scope, per the operator's ratification**: `_hint_dir()` (backing
+both plan and wall *hints* — the git-hook-driven `/plan`/`/wall`
+suggestion text, distinct from the plan/wall *markers*) and
+`_detect_collisions()` now resolve "worktree" as repo-common-root too — a
+repo's linked worktrees are one coordination unit, not isolated islands.
+
+**Identity: `agent_id` preferred over `session_id`.**
+`hook.py`'s `_resolve_identity(data)` reads `data.get("agent_id")` first,
+falling back to `data.get("session_id")`, then `None`. This distinguishes
+a dispatched in-process subagent's own tool calls (Claude Code delivers
+the subagent's own `agent_id` on payloads it can see) from its leader's
+— both share one OS `claude` process and therefore one `SessionHint`
+file, so without this preference a subagent's own edits would be gated
+against its leader's plan, not its own.
+
+**`SubagentStart` hook registered** (`hooks/subagent-start.sh` →
+`biff-hook claude-code subagent-start` → `hook.py`'s
+`_capture_subagent_hint`), because the in-process dispatch model is now
+confirmed, not hypothetical. `SessionHint.capture_for_agent` /
+`write_agent_hint` (`session_id.py`) persist a subagent's own identity to
+`sessions/{claude_pid}/{agent_id}.json` — a sibling of, never a collision
+with, the leader's own `sessions/{claude_pid}.json`.
+
+**Marker file layout: `plan/{identity_or_"shared"}`.** `markers.py`'s
+`hint_dir()` stays a per-repo directory (unchanged — also backs wall
+markers, which are deliberately shared across every session in a repo).
+Only the plan marker's layout inside that directory changes:
+`write_plan_marker`/`clear_plan_marker`/`has_plan_marker`/
+`read_plan_marker` all take an `identity: str | None` parameter now.
+`clear_plan_marker` in `SessionStart` (`handle_session_start`) removes
+only the starting session's own file — the direct, one-line fix for
+om9's core mechanism. An identity read from an untrusted hook payload is
+sanitized (`markers._identity_component`) before it can reach a
+filesystem path: anything outside a safe charset (or absent) degrades to
+the shared bucket rather than being used as a path component, closing a
+path-traversal class of bug the design didn't need to introduce.
+
+**PL-PA-3 closed**: `commands/plan.py` gained `sync_plan_marker(message)`
+— resolves root via `get_repo_common_root()` and identity via
+`SessionHint.resolve_routing_id()` fresh on every call (never cached at
+process startup, so a long-running MCP server and a one-shot CLI
+invocation always agree with the hook's own resolution), then
+writes/clears the marker. Both `commands.plan.plan()` (the CLI's
+orchestration function) and `server/tools/plan.py`'s MCP `plan` tool
+call this same function — the MCP tool's own session-state management
+(`get_or_create_session`/`update_current_session`/
+`refresh_read_messages`, and the "auto can't overwrite manual" special
+case) is unchanged; only its marker-writing half was extracted and
+shared. A CLI-only session running `biff plan` now satisfies the gate
+for its own subsequent edits.
+
+### Why session_id.py needed no state-machine change
+
+`SessionHint.resolve_routing_id()` is reused read-only, exactly as
+`server/app.py` already used it for tty routing (biff-7ak) — no change
+to its recycle-guard or resolution logic. The only addition is a second,
+parallel write path (`write_agent_hint`, sharing `_write_to`'s atomic
+write logic with `write()`) for a subagent's own identity, keyed
+separately from the leader's per-pid hint so the two can never collide.
+
+### Known, bounded residual gaps (out of this mission's file scope)
+
+Two consumers of the old worktree-root primitive were **not** brought
+into this fix, because they live outside `hook.py`/`markers.py`/
+`commands/plan.py`/`server/tools/plan.py`/`session_id.py`/`_stdlib.py` —
+the implementation mission's own write-set boundary:
+
+1. **`server/tools/wall.py`**'s `_update_wall_marker` still resolves its
+   write root from `state.repo_root` (`find_git_root()`-based, the
+   *nearest* worktree toplevel, computed once at MCP server startup) —
+   unchanged by this fix. `hook.py`'s wall-marker *reads*
+   (`handle_post_pr`, `handle_session_start`) now resolve the
+   repo-common-root, per the operator's broad-scope ratification. For a
+   session in the repo's main checkout (the dominant case), nearest-root
+   and common-root are identical, so this is invisible. For a session in
+   a **linked worktree** specifically, a `/wall` broadcast posted from
+   the MCP server would be written under the worktree's own nearest
+   root while a hook read for that same worktree now looks under the
+   common root — the same class of mismatch this whole fix closes for
+   the plan marker, reopened narrowly for wall. Needs a follow-up
+   touching `server/tools/wall.py` (switch `_update_wall_marker`'s root
+   resolution to `get_repo_common_root()`, matching the plan marker's
+   fix) to fully honor the broad-scope decision for wall.
+2. **`_detect_collisions()`**'s comparison against `write_active_session`
+   /`_write_marker` (`server/app.py`, also `state.repo_root`-sourced,
+   also out of scope) has the identical shape of gap: the *current*
+   side of the comparison is now the repo-common-root, but a stored
+   row from a linked-worktree session still records the nearest
+   toplevel. Two sessions in *different* linked worktrees of one repo
+   will not be detected as colliding via this path until `server/app.py`
+   is updated the same way. Two sessions in the *same* directory (main
+   checkout or the same worktree) are unaffected — both sides compute
+   the identical value either way.
+
+Both gaps are narrower than the bug this fix closes (which manifested
+across the dominant non-worktree case too) and are self-healing in the
+same sense RISK-3 below is: no crash, no silent data loss, a
+conservative miss rather than a false grant.
+
+### RISK-2 (accepted, unclosed): in-process subagent's own CLI writes still resolve to its leader's identity
+
+`SubagentStart` gives a subagent's own `PreToolUse`/other hook calls a
+distinguishable identity (`agent_id`) to be gated against. It does
+**not** give a subagent's own `Bash`-invoked `biff plan` CLI call any way
+to learn its own `agent_id` — no environment channel for it exists today
+(confirmed absent in the design's own research). A CLI-invoked `biff
+plan` from inside a dispatched subagent can therefore only resolve
+`SessionHint.resolve_routing_id()` (the shared `claude_pid` → the
+leader's own hint), so it writes under the **leader's** identity. That
+write remains visible to the leader's own edits and to any hook call
+that falls back to `session_id` (no `agent_id` on the payload), but is
+not visible to a gate check keyed on the subagent's own `agent_id`. This
+is the design's own named, accepted limitation (§3b/§7 RISK-2) — real,
+bounded, and not attempted to be closed here; closing it needs a
+Claude-Code-side channel exposing subagent identity into `Bash` tool
+environments, outside biff's control.
+
+### RISK-3: on-disk plan-marker format change (breaking, self-healing)
+
+`plan/{identity}` replaces the single flat `plan-active` file. A stale
+`plan-active` file left by a pre-upgrade biff session is simply not read
+by the new code — DES-051's graceful-allow/fail-closed paths make a
+resulting spurious deny recoverable (re-run `/plan`), not silent or
+destructive. No migration code was written; none is needed.
+
+### Full detail
+
+See `_stdlib.get_repo_common_root`, `hook.py`'s `_repo_common_root`,
+`_resolve_identity`, `_capture_subagent_hint`, `cc_subagent_start`, and
+the updated `_detect_collisions`/`handle_session_start`/
+`handle_pre_compact`/`handle_pre_tool_use`; `markers.py`'s
+`_identity_component`/`_plan_marker_path` and the four plan-marker
+functions' new `identity` parameter; `session_id.py`'s
+`SessionHint.capture_for_agent`/`write_agent_hint`/`_write_to`/
+`_agent_hint_path`; `commands/plan.py`'s `sync_plan_marker`; and their
+tests in `tests/test_stdlib.py`, `tests/test_markers.py`,
+`tests/test_hook.py`, `tests/test_session_id.py`,
+`tests/test_hooks_registration.py`, and `tests/test_plan_gate_scoping.py`
+(the four documented-occurrence regressions, each reproduced against a
+real git repo rather than a git mock).
