@@ -20,6 +20,7 @@ import importlib.resources
 import json
 import logging
 import re
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,6 +106,15 @@ def get_github_identity() -> GitHubIdentity | None:
             check=False,
         )
         if result.returncode != 0:
+            # debug, not warning: the common case on a machine without
+            # ``gh`` configured is indistinguishable here from an expired
+            # token, rate limit, or network error -- avoid noise while
+            # still leaving a trail for the uncommon cases.
+            logger.debug(
+                "gh api user failed (exit %d): %s",
+                result.returncode,
+                result.stderr.strip(),
+            )
             return None
         parts = result.stdout.strip().split("\t", maxsplit=1)
         login = parts[0].strip()
@@ -231,17 +241,48 @@ def _read_identity_yaml(path: Path) -> dict[str, object] | None:
     """
     try:
         raw: object = yaml.safe_load(path.read_text())
-    except (OSError, UnicodeDecodeError):
+    except FileNotFoundError:
+        # Benign TOCTOU race with the directory glob in
+        # _known_agent_github_logins -- the file existed when listed,
+        # gone by the time it's read. Not worth a warning.
+        return None
+    except OSError as exc:
+        logger.warning("Failed to read identity YAML %s: %s", path, exc)
+        return None
+    except UnicodeDecodeError as exc:
+        logger.warning("Identity YAML %s is not valid UTF-8: %s", path, exc)
         return None
     except yaml.YAMLError as exc:
         logger.warning("Failed to parse identity YAML %s: %s", path, exc)
         return None
     if isinstance(raw, dict):
         return cast("dict[str, object]", raw)
+    logger.warning(
+        "Identity YAML %s did not parse to a mapping (got %s)",
+        path,
+        type(raw).__name__,
+    )
     return None
 
 
-def _known_agent_github_logins(repo_root: Path) -> frozenset[str]:
+@dataclass(frozen=True, slots=True)
+class _AgentLoginScan:
+    """Result of scanning ``.punt-labs/ethos/identities/`` for bot logins.
+
+    ``complete`` is ``False`` whenever any identity file could not be
+    read or parsed. A caller that finds its resolved login absent from
+    ``logins`` cannot tell "genuinely not a bot" from "the file that
+    would have said so was unreadable" unless it also checks
+    ``complete`` -- treating an incomplete scan as trustworthy is
+    exactly how a bot's GitHub login leaks into a human identity with
+    its own registration file sitting right there, just unreadable.
+    """
+
+    logins: frozenset[str]
+    complete: bool
+
+
+def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
     """Return the GitHub logins of every ``kind: agent`` identity on disk.
 
     Scans ``{repo_root}/.punt-labs/ethos/identities/*.yaml`` directly --
@@ -252,21 +293,74 @@ def _known_agent_github_logins(repo_root: Path) -> frozenset[str]:
     a human is at the keyboard. Cross-checking the resolved login
     against the repo's own identity registry lets
     :func:`_resolve_human_identity` detect and reject that case
-    (biff-if2). Returns an empty set when the identities directory is
-    absent -- inert in repos with no ethos submodule.
+    (biff-if2). Returns an empty, complete scan when the identities
+    directory is absent -- inert in repos with no ethos submodule.
     """
     identities_dir = repo_root / ".punt-labs" / "ethos" / "identities"
-    if not identities_dir.is_dir():
-        return frozenset()
+    # os.stat (unlike Path.is_dir/exists) lets PermissionError propagate
+    # instead of folding it into a bare False -- that's what lets us tell
+    # "no ethos submodule" (FileNotFoundError, a complete scan of nothing)
+    # apart from "ethos submodule configured but its directory isn't
+    # readable" (an incomplete scan; a submodule present but never
+    # checked out, e.g. ``git clone`` without ``--recurse-submodules``,
+    # is the common real-world way this shows up -- see the org
+    # CLAUDE.md "Initial checkout" section).
+    try:
+        st = identities_dir.stat()
+    except FileNotFoundError:
+        logger.debug("No identities directory at %s", identities_dir)
+        return _AgentLoginScan(logins=frozenset(), complete=True)
+    except PermissionError:
+        logger.warning(
+            "Identities directory %s exists but is not readable (permission denied)",
+            identities_dir,
+        )
+        return _AgentLoginScan(logins=frozenset(), complete=False)
+    except OSError as exc:
+        logger.warning(
+            "Failed to stat identities directory %s: %s", identities_dir, exc
+        )
+        return _AgentLoginScan(logins=frozenset(), complete=False)
+    if not stat.S_ISDIR(st.st_mode):
+        logger.warning("%s exists but is not a directory", identities_dir)
+        return _AgentLoginScan(logins=frozenset(), complete=False)
+    paths = sorted(identities_dir.glob("*.yaml"))
     logins: set[str] = set()
-    for path in sorted(identities_dir.glob("*.yaml")):
+    # Counts entries this scan could not fully account for: unreadable/
+    # unparsable files, and ``kind: agent`` entries that DO declare a
+    # ``github`` field but with an unusable value. A ``github`` field
+    # that's simply absent is the ordinary, expected shape for most
+    # agent identities (most agents aren't registered bot accounts) and
+    # is not counted here -- only a field that's present but broken
+    # (null, wrong type, empty string) is evidence something is wrong.
+    incomplete = 0
+    for path in paths:
         identity = _read_identity_yaml(path)
-        if identity is None or identity.get("kind") != "agent":
+        if identity is None:
+            # _read_identity_yaml already logged the specific OSError /
+            # UnicodeDecodeError / YAMLError.
+            incomplete += 1
+            continue
+        if identity.get("kind") != "agent" or "github" not in identity:
             continue
         github = identity.get("github")
         if isinstance(github, str) and github:
             logins.add(github)
-    return frozenset(logins)
+        else:
+            incomplete += 1
+            logger.warning(
+                "Agent identity %s has a malformed 'github' field (got %r); "
+                "it cannot be cross-checked against a resolved GitHub login",
+                path,
+                github,
+            )
+    if incomplete:
+        logger.warning(
+            "Scanned %d identity files, %d incomplete or unreadable",
+            len(paths),
+            incomplete,
+        )
+    return _AgentLoginScan(logins=frozenset(logins), complete=incomplete == 0)
 
 
 def _find_ethos_config(repo_root: Path) -> Path | None:
@@ -879,6 +973,14 @@ _BOT_GITHUB_NO_USER_MSG = (
     "pinned to a bot."
 )
 
+_UNVERIFIED_GITHUB_NO_USER_MSG = (
+    "Cannot confirm GitHub identity {login!r} is not a bot/agent account -- "
+    "the scan of .punt-labs/ethos/identities/ was incomplete (see the "
+    "warnings above), so refusing to use it as your CLI identity out of "
+    "caution. Pass --user <handle>, or fix the identity file(s) that "
+    "failed to read."
+)
+
 
 def _resolve_human_identity(
     user_override: str | None, repo_root: Path
@@ -893,21 +995,45 @@ def _resolve_human_identity(
     see ``~/.punt-labs/git-identity.env``) must never silently become the
     human's biff identity (DES-040 amendment, biff-if2).
 
+    The same rejection applies, more cautiously, when the identity scan
+    itself is incomplete (an identity file was unreadable or malformed):
+    trusting an incomplete scan would let a corrupted registration file
+    reopen the exact leak this function exists to close, just silently
+    instead of via a missing check.
+
     Raises :class:`SystemExit` when no identity source succeeds.
     """
     if user_override is not None:
         return user_override, "", ""
     identity = get_github_identity()
+    # None means "not applicable" (no login rejected for incompleteness),
+    # not "failed to compute" -- only set when the scan-incomplete branch
+    # below is taken.
+    unverified_login: str | None = None
     if identity is not None:
-        if identity.login not in _known_agent_github_logins(repo_root):
+        scan = _known_agent_github_logins(repo_root)
+        if identity.login in scan.logins:
+            logger.warning(
+                "GitHub login %r matches a known bot/agent identity; "
+                "falling back to OS user for CLI identity",
+                identity.login,
+            )
+        elif not scan.complete:
+            unverified_login = identity.login
+            logger.warning(
+                "Cannot confirm GitHub login %r is not a bot/agent identity "
+                "-- the identity scan was incomplete; falling back to OS "
+                "user for CLI identity out of caution",
+                identity.login,
+            )
+        else:
             return identity.login, identity.display_name, ""
-        logger.warning(
-            "GitHub login %r matches a known bot/agent identity; "
-            "falling back to OS user for CLI identity",
-            identity.login,
-        )
     os_user = get_os_user()
     if os_user is None:
+        if unverified_login is not None:
+            raise SystemExit(
+                _UNVERIFIED_GITHUB_NO_USER_MSG.format(login=unverified_login)
+            )
         if identity is not None:
             raise SystemExit(_BOT_GITHUB_NO_USER_MSG.format(login=identity.login))
         raise SystemExit(_NO_USER_MSG)
