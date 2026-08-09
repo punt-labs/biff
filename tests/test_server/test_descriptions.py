@@ -409,6 +409,41 @@ class TestRefreshWallSenderBounds:
         assert "u" * 10_000 not in tool.description
         assert "t" * 10_000 not in tool.description
 
+    async def test_giant_sender_bounded_in_vox_announcement(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The vox announcement must clip ``from_user`` too (biff-2sw).
+
+        A giant ``from_user`` bypassing ``sanitized_sender`` here would
+        embed unboundedly in subprocess argv passed to ``vox unmute``,
+        turning a forged wall into an expensive real synthesis request
+        on every teammate's session with vox enabled.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        spoken_calls: list[str] = []
+
+        def _capture(text: str, *, vibe_tags: str = "") -> None:
+            del vibe_tags
+            spoken_calls.append(text)
+
+        monkeypatch.setattr("biff.integration.vox.speak_fire_and_forget", _capture)
+
+        mcp = create_server(state)
+        now = datetime.now(UTC)
+        wall = WallPost(
+            text="deploy freeze",
+            from_user="u" * 10_000,
+            from_tty="tty1",
+            posted_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        await _descriptions.refresh_wall(mcp, state, wall=wall)
+
+        assert len(spoken_calls) == 1
+        assert len(spoken_calls[0]) < 700
+        assert "u" * 10_000 not in spoken_calls[0]
+
 
 class TestPollInbox:
     """Verify the background inbox poller detects changes and refreshes."""

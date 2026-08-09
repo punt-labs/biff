@@ -337,8 +337,10 @@ async def refresh_wall(
                 )
 
                 spoken = terminal_safe(current.text)
+                # from_user has no max_length on the wire; sanitized_sender
+                # bounds it before it reaches subprocess argv (biff-2sw).
                 speak_fire_and_forget(
-                    f"Wall from {terminal_safe(current.from_user)}: {spoken}",
+                    f"Wall from {sanitized_sender(current.from_user)}: {spoken}",
                     vibe_tags=vibes_from_text(spoken),
                 )
         else:

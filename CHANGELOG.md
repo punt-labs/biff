@@ -16,6 +16,8 @@
 
 - **A message of bare combining marks or a lone variation selector rendered as if it were real content.** `visible_text`'s first-pass fix used `text.strip()` truthiness to decide whether anything survived sanitization, but a run of combining accents or an isolated variation selector (Unicode categories Mn and the FE0x block) passes Python's `str.isprintable()` and isn't whitespace, so it survived `.strip()` untouched and was echoed as legitimate content — even though it occupies zero terminal cells and this codebase's own `visible_width` already knew that. The discriminator now checks `visible_width(text.strip()) > 0` instead of string truthiness, so it agrees with the width metric every wrap/clip decision in this module already trusts; ordinary text, including CJK and emoji, is unaffected.
 
+- **A forged wall sender could trigger an expensive real TTS synthesis request on every teammate's session (biff-2sw).** `refresh_wall`'s vox announcement (`Wall from {sender}: {text}`) bypassed `sanitized_sender` and passed `WallPost.from_user` — which has no `max_length` on the wire — through `terminal_safe` alone, straight into subprocess argv for `vox unmute`. A giant or forged `from_user` reached every vox-enabled teammate's TTS provider unbounded, alongside a risk of `OSError`/E2BIG on extreme input. It now routes through `sanitized_sender`, matching every other wall render site fixed above.
+
 ## [1.12.1] - 2026-08-05
 
 ### Changed
