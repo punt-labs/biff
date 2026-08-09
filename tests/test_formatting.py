@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from biff._formatting import TABLE_WIDTH, visible_width
 from biff.formatting import (
+    _MAX_LABEL_CHARS,
     _NO_PRINTABLE_TEXT,
     _NO_VISIBLE_CONTENT,
     _TALK_WRAP_MIN,
@@ -29,6 +30,8 @@ from biff.formatting import (
     pair_events,
     parse_duration,
     sanitize_wall_message,
+    sanitized_address,
+    sanitized_sender,
     terminal_safe,
 )
 from biff.models import Message, SessionEvent, UserSession, WallPost
@@ -823,6 +826,48 @@ class TestRenderSanitization:
         out = format_last([(login, None)], {"evil:tty9"})
         assert "\x1b[2K" not in out
         assert re.search(r"ev\[2Kil", out) is not None
+
+
+class TestSanitizedLabelCharBound:
+    """clip_to_width alone is not enough to bound a sender label (biff-2sw).
+
+    ``clip_to_width`` only clips when ``visible_width(text)`` exceeds the
+    cell-width budget. A label built entirely of combining marks or
+    variation selectors has ``visible_width == 0`` no matter how many
+    characters it holds — the cell-width axis never triggers, and an
+    unbounded payload sails through verbatim. ``_sanitized_label`` must
+    also bound raw character count, independent of cell width, to close
+    that gap.
+    """
+
+    def test_combining_marks_sender_stays_bounded_in_length(self) -> None:
+        # Thousands of bare combining acute accents: zero terminal cells,
+        # but 10,000 characters if left uncapped.
+        payload = "́" * 10_000
+        out = sanitized_sender(payload)
+        assert len(out) <= _MAX_LABEL_CHARS
+
+    def test_combining_marks_address_stays_bounded_in_length(self) -> None:
+        payload = "́" * 10_000
+        out = sanitized_address(payload)
+        assert len(out) <= _MAX_LABEL_CHARS
+
+    def test_variation_selectors_sender_stays_bounded_in_length(self) -> None:
+        # Variation selector-16 is printable and zero-width without a
+        # preceding base glyph to attach to.
+        payload = "️" * 10_000
+        out = sanitized_sender(payload)
+        assert len(out) <= _MAX_LABEL_CHARS
+
+    def test_zero_width_payload_in_tty_field_stays_bounded(self) -> None:
+        # The tty field is concatenated after from_user — must be bounded
+        # the same way, not just the leading field.
+        out = sanitized_sender("kai", "́" * 10_000)
+        assert len(out) <= _MAX_LABEL_CHARS
+
+    def test_ordinary_label_is_unaffected(self) -> None:
+        assert sanitized_sender("kai", "tty1") == "kai (tty1)"
+        assert sanitized_address("kai", "tty1") == "kai:tty1"
 
 
 class TestFormatTalkLine:

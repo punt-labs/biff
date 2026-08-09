@@ -72,6 +72,17 @@ _TALK_WRAP_MIN = 24
 # amplification — see TalkNotification.from_payload, biff-7g7).
 _MAX_LABEL_WIDTH = 40
 
+# clip_to_width (via _truncate) only clips when visible_width(text) exceeds
+# the cell-width budget — a label built entirely of zero-cell code points
+# (combining marks, variation selectors) has visible_width == 0 no matter how
+# many characters it holds, so the cell-width axis alone never triggers a
+# clip. Bounding raw character count closes that gap independently of which
+# axis — cells or code points — a forged payload tries to exploit. Sized a
+# few times over _MAX_LABEL_WIDTH so legitimate wide-glyph content (CJK,
+# emoji, which need one code point per cell) is never cut before the
+# cell-width clip gets a chance to run.
+_MAX_LABEL_CHARS = _MAX_LABEL_WIDTH * 4
+
 # format_user_header's two-column "Login: ... Name: ..." layout — fmt_cell
 # pads the left column to this width but never truncates, so the left
 # column's content must be pre-clipped or an unbounded field renders one
@@ -101,11 +112,17 @@ def _sanitized_label(from_user: str, from_tty: str, tty_format: str) -> str:
     cap is defeated by concatenating an unbounded *from_tty* after it.
     *tty_format* is a ``str.format``-style template taking the sanitised
     user then the sanitised tty, e.g. ``"{} ({})"`` or ``"{}:{}"``.
+
+    Bounded on two independent axes: :data:`_MAX_LABEL_CHARS` caps raw
+    character count before :data:`_MAX_LABEL_WIDTH` caps terminal cell
+    width, so a label made entirely of zero-cell code points (combining
+    marks, variation selectors) cannot sail through unbounded just because
+    it is zero-width by construction — see :func:`clip_to_width`.
     """
     label = terminal_safe(from_user)
     if from_tty:
         label = tty_format.format(label, terminal_safe(from_tty))
-    return _truncate(label, _MAX_LABEL_WIDTH)
+    return _truncate(label[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
 
 
 def sanitized_sender(from_user: str, from_tty: str = "") -> str:
