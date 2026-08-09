@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from biff._formatting import TABLE_WIDTH, visible_width
+from biff.formatting import _NO_PRINTABLE_TEXT
 from biff.models import WallPost
 from biff.repl_notify import NotifyState
 
@@ -241,3 +243,46 @@ class TestNotifyState:
         assert "\x1b[2J" not in lines[0]
         assert "\x1b[2K" not in lines[0]
         assert "dep[2Jloy freeze" in lines[0]
+
+    def test_wall_cjk_body_wraps_within_table_width(self) -> None:
+        """A CJK/emoji-heavy wall post wraps instead of overflowing 80 columns.
+
+        Mirrors ``TestFormatWallStatusLine.test_cjk_body_wraps_within_the_table_width``
+        — the between-prompt banner shares the same up-to-512-char wall body
+        as ``format_wall_status_line``, and was the last unwrapped render site
+        left standing (biff-2sw).
+        """
+        state = NotifyState()
+        wall = WallPost(
+            text="这是一段很长的中文文本用来测试自动换行是否正常工作" * 3,
+            from_user="kai",
+            from_tty="tty1",
+            posted_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        lines = state.check(0, wall)
+        assert len(lines) == 1
+        rendered_lines = lines[0].splitlines()
+        assert len(rendered_lines) > 1
+        for rendered_line in rendered_lines:
+            assert visible_width(rendered_line) <= TABLE_WIDTH
+
+    def test_wall_control_only_body_renders_fallback(self) -> None:
+        """A control-only wall post shows the explicit fallback, not silence.
+
+        Mirrors ``TestFormatWallStatusLine.test_control_only_body_renders_fallback``
+        — before this fix, ``terminal_safe`` stripped the body to nothing and
+        the banner rendered as ``WALL kai: (1h remaining)`` with no hint the
+        poster's message was dropped.
+        """
+        state = NotifyState()
+        wall = WallPost(
+            text="\x00\x1b\x07",
+            from_user="kai",
+            from_tty="tty1",
+            posted_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        lines = state.check(0, wall)
+        assert len(lines) == 1
+        assert _NO_PRINTABLE_TEXT in lines[0]
