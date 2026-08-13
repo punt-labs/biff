@@ -50,6 +50,14 @@ tests/transcripts/
 # Biff local activation (per-user, not committed)
 .biff.local
 
+# The sibling lock a punt CLI takes before mutating a shared host file
+# (tool-enable-disable.md 2.4). Per-machine runtime state, and it persists by
+# design — unlinking a lock file races the next writer. The pattern is broad
+# because the lock is named for its host file and tools differ on the suffix:
+# both .CLAUDE.md.lock and .CLAUDE.md.punt-import.lock occur. Mirrors the same
+# rule in punt-labs/team; a submodule's .gitignore does not govern this repo.
+.*.lock
+
 # Deprecated tooling
 .claude-flow/
 
