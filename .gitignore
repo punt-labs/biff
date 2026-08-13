@@ -56,9 +56,16 @@ tests/transcripts/
 # OS
 .DS_Store
 
-# Claude Code (settings.json is tracked; everything else is local/runtime)
-.claude/
+# Claude Code (settings.json is tracked; everything else is local/runtime).
+# Use `.claude/*`, not `.claude/`: git cannot re-include a file whose parent
+# directory is excluded, so the `!` line below is dead against a bare `.claude/`.
+# But a mid-pattern slash anchors to this directory, so `.claude/*` covers only
+# the root one where bare `.claude/` covered every depth; `*/**/.claude/`
+# restores that. Nested .claude dirs hold settings.local.json, which carries
+# machine-local MCP config and absolute-path allow rules — never commit it.
+.claude/*
 !.claude/settings.json
+*/**/.claude/
 docs/fuzz.sty
 docs/*.mf
 docs/*.pk
