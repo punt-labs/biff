@@ -474,6 +474,25 @@ class TestHeartbeat:
         assert result is not None
         assert result.biff_enabled is False
 
+    async def test_does_not_advance_last_tool_at(self, relay: LocalRelay) -> None:
+        """Regression for biff-liu: heartbeat must not touch last_tool_at.
+
+        last_tool_at is the idle time /who and /finger display; only a real
+        tool invocation (update_current_session) may advance it. Heartbeat
+        runs unconditionally on a fixed interval and must leave it alone —
+        it may bump last_active (liveness) as always.
+        """
+        old_tool_at = datetime.now(UTC) - timedelta(minutes=10)
+        await relay.update_session(
+            UserSession(user="kai", tty="tty1", last_tool_at=old_tool_at)
+        )
+        await relay.heartbeat("kai:tty1")
+        await relay.heartbeat("kai:tty1")
+        result = await relay.get_session("kai:tty1")
+        assert result is not None
+        assert result.last_tool_at == old_tool_at
+        assert result.last_active > old_tool_at
+
 
 # -- Session Key Validation --
 

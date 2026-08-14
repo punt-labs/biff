@@ -186,6 +186,10 @@ async def register_session(
                     existing.tty_name,
                     session_key,
                 )
+    # Both activity timestamps start identical: a session that has never
+    # invoked a tool reads idle as time-since-registration, its own
+    # meaningful start time (biff-liu) — not epoch-era or spuriously fresh.
+    registered_at = datetime.now(UTC)
     session = UserSession(
         user=user,
         tty=tty_hex,
@@ -195,7 +199,8 @@ async def register_session(
         hostname=hostname,
         pwd=pwd,
         repo=repo,
-        last_active=datetime.now(UTC),
+        last_active=registered_at,
+        last_tool_at=registered_at,
     )
     await relay.update_session(session)
     # Record the claimed alias so the next resume of this session_id reclaims
@@ -384,7 +389,10 @@ async def _heartbeat_loop(
     Each ``heartbeat()`` call updates ``last_active`` and — for NATS KV —
     resets the key's TTL.  When the process sleeps (laptop lid closed) or
     dies (SIGKILL), heartbeats stop and the relay eventually expires the
-    session.
+    session.  ``heartbeat()`` deliberately never touches ``last_tool_at``
+    (biff-liu) — that field is the idle time ``/who`` and ``/finger``
+    display, and must only advance on a real tool call, not this
+    unconditional tick.
 
     On every tick while ``state.companion`` is ``None``, polls the
     ethos roster for the human identity (spec § 3.2). The poll cost

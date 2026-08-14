@@ -146,9 +146,21 @@ def resolve_talk_target(
 
 
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:
-    """Update this server's session with automatic last_active refresh."""
+    """Update this server's session, refreshing both activity timestamps.
+
+    ``last_active`` marks the process alive — the same field the
+    background heartbeat refreshes on every tick, regardless of whether
+    anything happened.  ``last_tool_at`` marks a REAL tool invocation and
+    is the single writer for that field outside of session registration
+    (biff-liu): every call site is reached from inside a
+    ``track_activity``-decorated tool body (see
+    :mod:`biff.server.tools._activity`), so a call here always
+    corresponds to genuine agent/human activity, never a background tick.
+    """
     session = await get_or_create_session(state)
-    updates["last_active"] = datetime.now(UTC)
+    now = datetime.now(UTC)
+    updates["last_active"] = now
+    updates["last_tool_at"] = now
     updated = session.model_copy(update=updates)
     await state.relay.update_session(updated)
     return updated

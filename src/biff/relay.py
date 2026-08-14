@@ -476,7 +476,14 @@ class LocalRelay:
         ]
 
     async def heartbeat(self, session_key: str) -> None:
-        """Update last_active timestamp, creating session if needed."""
+        """Update last_active timestamp, creating session if needed.
+
+        Deliberately touches only ``last_active`` (liveness) — never
+        ``last_tool_at`` (biff-liu), the idle time ``/who``/``/finger``
+        display.  ``model_copy(update=...)`` below only overwrites the
+        keys named in its ``update`` mapping, so ``last_tool_at`` on the
+        existing session survives unchanged.
+        """
         self._validate_session_key(session_key)
         sessions = self._read_sessions()
         existing = sessions.get(session_key)
