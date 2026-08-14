@@ -357,7 +357,7 @@ class TestFormatWall:
         # concatenates it onto the already-clipped from_user
         # (``sender += f" ({from_tty})"``) — clipping from_user alone and
         # then appending an unbounded from_tty defeats the cap just as
-        # completely as an unbounded from_user would (biff-2sw).
+        # completely as an unbounded from_user would.
         now = datetime.now(UTC)
         wall = WallPost(
             text="word " * 100,  # 500 chars — WallPost caps text at 512
@@ -372,7 +372,7 @@ class TestFormatWall:
 
 
 class TestFormatWallConfirmation:
-    """The post-confirmation shown to the poster wraps like the read-back (biff-2sw)."""
+    """The post-confirmation shown to the poster wraps like the read-back."""
 
     def test_basic_confirmation(self) -> None:
         now = datetime.now(UTC)
@@ -440,7 +440,7 @@ class TestFormatWallConfirmation:
 
 
 class TestFormatWallStatusLine:
-    """The ``biff status`` wall line wraps like every other wall render (biff-2sw)."""
+    """The ``biff status`` wall line wraps like every other wall render."""
 
     def test_basic_line(self) -> None:
         now = datetime.now(UTC)
@@ -543,7 +543,7 @@ class TestFormatWallStatusLine:
 
 
 class TestFormatTalkEcho:
-    """``talk`` accept/send confirmations wrap the echoed message (biff-2sw)."""
+    """``talk`` accept/send confirmations wrap the echoed message."""
 
     def test_basic_echo(self) -> None:
         result = format_talk_echo("Sent to eric:tty2:", "hello there")
@@ -580,7 +580,7 @@ class TestFormatTalkEcho:
         # nothing was stripped.  The state/confirmation split this closes:
         # /plan "   " stores plan="   " verbatim (update_current_session uses
         # model_copy, which skips pydantic validation) while the confirmation
-        # must not claim the text was removed when it wasn't (biff-2sw round 6).
+        # must not claim the text was removed when it wasn't.
         result = format_talk_echo("Plan:", "   ")
         assert _NO_PRINTABLE_TEXT not in result
         assert _NO_VISIBLE_CONTENT in result
@@ -754,7 +754,7 @@ class TestFormatRead:
 
 
 class TestTerminalSafe:
-    """`terminal_safe` strips control/escape chars from remote text (biff-lbj)."""
+    """`terminal_safe` strips control/escape chars from remote text."""
 
     def test_strips_esc_and_bel(self) -> None:
         assert terminal_safe("a\x1b[2Jb\x07c") == "a[2Jbc"
@@ -771,7 +771,7 @@ class TestTerminalSafe:
 
 
 class TestRenderSanitization:
-    """Remote terminal escapes are neutralized at every render site (biff-lbj).
+    """Remote terminal escapes are neutralized at every render site.
 
     Each render path is fed a relay-sourced field carrying a screen-clear
     (`\\x1b[2J`) and assert the raw escape never reaches the output.
@@ -829,7 +829,7 @@ class TestRenderSanitization:
 
 
 class TestSanitizedLabelCharBound:
-    """clip_to_width alone is not enough to bound a sender label (biff-2sw).
+    """clip_to_width alone is not enough to bound a sender label.
 
     ``clip_to_width`` only clips when ``visible_width(text)`` exceeds the
     cell-width budget. A label built entirely of combining marks or
@@ -871,7 +871,7 @@ class TestSanitizedLabelCharBound:
 
 
 class TestFormatTalkLine:
-    """`format_talk_line` renders talk in the ▶ who/read/wall idiom (biff-7g7)."""
+    """`format_talk_line` renders talk in the ▶ who/read/wall idiom."""
 
     def test_short_message_single_prefixed_line(self) -> None:
         assert format_talk_line("eric:tty2", "hi") == ["▶  eric:tty2  hi"]
@@ -890,8 +890,7 @@ class TestFormatTalkLine:
 
     def test_control_only_body_renders_fallback(self) -> None:
         # A body that is empty only AFTER neutralisation (control-only
-        # payload) still arrived — the recipient must see that, not silence
-        # (biff-7g7, biff-2sw round 6).
+        # payload) still arrived — the recipient must see that, not silence.
         (line,) = format_talk_line("eric:tty2", "\x00\x1b\x07")
         assert "▶  eric:tty2  " in line
         assert "no printable text" in line
@@ -992,7 +991,7 @@ class TestFormatTalkEnd:
     def test_long_label_is_truncated(self) -> None:
         # A forged label (up to the from_payload MAX_KEY_LEN clamp) must not
         # produce an unbounded hangup line — the label is capped to the same
-        # _MAX_LABEL_WIDTH as format_talk_line's lead (biff-7g7).
+        # _MAX_LABEL_WIDTH as format_talk_line's lead.
         out = format_talk_end("u" * 129)
         assert len(out) <= TABLE_WIDTH
         assert "…" in out
