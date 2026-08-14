@@ -379,7 +379,7 @@ class TestWhoTool:
         assert "1m" in result
 
     async def test_hides_dead_sessions(self, state: ServerState) -> None:
-        """Sessions past the liveness window are dropped from /who (biff-mue)."""
+        """Sessions past the liveness window are dropped from /who."""
         old_time = datetime.now(UTC) - timedelta(days=2)
         recent_time = datetime.now(UTC) - timedelta(seconds=30)
         await state.relay.update_session(
@@ -558,7 +558,7 @@ class TestPlanTool:
     ) -> None:
         # The MCP /plan confirmation shares format_talk_echo's wrap
         # treatment with the CLI command — a CJK-heavy plan must wrap here
-        # too, not just at the CLI (biff-2sw).
+        # too, not just at the CLI.
         fn = await _get_tool_fn(state, "plan")
         message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
         result = await fn(message=message)
