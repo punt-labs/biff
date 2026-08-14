@@ -28,6 +28,20 @@ from biff.server.tools._session import update_current_session
 _TEST_REPO = "_test-activity-timestamp"
 
 
+def _finger_idle_value(rendered: str) -> str:
+    """Return the exact ``idle`` field value from a ``format_finger`` block.
+
+    A plain substring check (``"idle 0:10" in rendered``) would still pass
+    if the format grew a seconds component (``idle 0:10:47``) or rendered a
+    malformed value (``idle 0:100``) that merely starts with the expected
+    text -- this isolates the whole field so the comparison is exact.
+    """
+    on_since_line = next(
+        line for line in rendered.splitlines() if line.strip().startswith("On since")
+    )
+    return on_since_line.rsplit("idle ", 1)[1]
+
+
 def _who_idle_cell(rendered: str) -> str:
     """Return the IDLE column value from a single-row /who table.
 
@@ -70,7 +84,7 @@ class TestIdleDisplaySurvivesHeartbeat:
         session = await state.relay.get_session(state.session_key)
         assert session is not None
         rendered = format_finger(session)
-        assert "idle 0:10" in rendered, (
+        assert _finger_idle_value(rendered) == "0:10", (
             f"heartbeat ticks advanced the displayed idle time: {rendered!r}"
         )
 
@@ -128,7 +142,7 @@ class TestIdleResetsOnRealActivity:
         session = await state.relay.get_session(state.session_key)
         assert session is not None
         rendered = format_finger(session)
-        assert "idle 0:00" in rendered
+        assert _finger_idle_value(rendered) == "0:00"
 
 
 class TestIdleIsolatedPerUser:
