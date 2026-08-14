@@ -1,6 +1,6 @@
-"""Regression test for biff-liu round 2: /who row order matches the IDLE column.
+"""Regression test: /who row order matches the IDLE column.
 
-The IDLE column of ``/who`` renders ``last_tool_at`` (biff-liu), but the
+The IDLE column of ``/who`` renders ``last_tool_at``, but the
 row order was still computed from ``last_active`` -- heartbeat recency,
 not real activity. Once every visible session heartbeats within the same
 liveness window, ``last_active`` order is effectively arbitrary; the

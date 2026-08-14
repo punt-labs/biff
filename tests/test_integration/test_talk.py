@@ -39,7 +39,7 @@ class TestTalkEndRefreshesActivity:
     Unlike talk/talk_read/talk_listen, talk_end never called
     ``update_current_session`` -- ending a talk didn't reset the idle
     time shown in ``/who``/``/finger``, even though it is genuine user
-    activity (biff-liu round 2).
+    activity.
     """
 
     async def test_talk_end_advances_last_tool_at(

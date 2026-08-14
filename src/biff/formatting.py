@@ -401,10 +401,10 @@ def format_user_header(session: UserSession) -> str:
 def format_tty_block(session: UserSession) -> str:
     """Format per-TTY details (on-since, host/dir, plan).
 
-    ``idle`` reads ``last_tool_at`` — the last real tool invocation
-    (biff-liu) — not ``last_active``, which the background heartbeat
-    refreshes every tick regardless of activity and would otherwise make
-    idle read as 0-1 minutes for every live session.
+    ``idle`` reads ``last_tool_at`` — the last real tool invocation —
+    not ``last_active``, which the background heartbeat refreshes every
+    tick regardless of activity and would otherwise make idle read as
+    0-1 minutes for every live session.
     """
     idle = _format_finger_idle(session.last_tool_at)
     since = session.last_active.strftime("%a %b %d %H:%M (%Z)")

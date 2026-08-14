@@ -63,7 +63,7 @@ class TestWho:
     ) -> None:
         """Row order must match the IDLE column (last_tool_at), not the
         heartbeat-refreshed last_active -- otherwise the visible order
-        and the visible idle values disagree (biff-liu round 2)."""
+        and the visible idle values disagree."""
         from datetime import UTC, datetime, timedelta
 
         now = datetime.now(UTC)

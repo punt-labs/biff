@@ -392,7 +392,7 @@ class TestHeartbeat:
         assert result.tty_name == "dev-laptop"
 
     async def test_does_not_advance_last_tool_at(self, relay: NatsRelay) -> None:
-        """Regression for biff-liu: heartbeat must not touch last_tool_at.
+        """Regression: heartbeat must not touch last_tool_at.
 
         last_tool_at is the idle time /who and /finger display; only a real
         tool invocation (update_current_session) may advance it. Heartbeat

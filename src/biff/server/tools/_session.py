@@ -164,11 +164,11 @@ async def update_current_session(state: ServerState, **updates: object) -> UserS
     ``last_active`` marks the process alive — the same field the
     background heartbeat refreshes on every tick, regardless of whether
     anything happened.  ``last_tool_at`` marks a REAL tool invocation and
-    is the single writer for that field outside of session registration
-    (biff-liu): every call site is reached from inside a
-    ``track_activity``-decorated tool body (see
-    :mod:`biff.server.tools._activity`), so a call here always
-    corresponds to genuine agent/human activity, never a background tick.
+    is the single writer for that field outside of session registration:
+    every call site is reached from inside a ``track_activity``-decorated
+    tool body (see :mod:`biff.server.tools._activity`), so a call here
+    always corresponds to genuine agent/human activity, never a
+    background tick.
     """
     session = await get_or_create_session(state)
     now = datetime.now(UTC)

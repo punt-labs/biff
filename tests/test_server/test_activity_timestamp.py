@@ -1,4 +1,4 @@
-"""Regression tests for biff-liu: displayed idle vs heartbeat.
+"""Regression tests: displayed idle vs heartbeat.
 
 The IDLE column in ``/who`` and the ``idle H:MM`` field in ``/finger`` used
 to be computed from ``UserSession.last_active`` — the same field the

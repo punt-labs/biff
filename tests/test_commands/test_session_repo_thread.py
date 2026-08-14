@@ -1,4 +1,4 @@
-"""Regression tests for biff-hvi: CLI session fallback repo/ttyN drift.
+"""Regression tests: CLI session fallback repo/ttyN drift.
 
 Before this, the CLI fallback in ``plan``/``mesg``/``tty`` independently
 rebuilt a missing session record from the calling process's environment

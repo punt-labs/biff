@@ -188,7 +188,7 @@ async def register_session(
                 )
     # Both activity timestamps start identical: a session that has never
     # invoked a tool reads idle as time-since-registration, its own
-    # meaningful start time (biff-liu) — not epoch-era or spuriously fresh.
+    # meaningful start time — not epoch-era or spuriously fresh.
     registered_at = datetime.now(UTC)
     session = UserSession(
         user=user,
@@ -235,10 +235,10 @@ def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
     signal handler is deferred to run on the main thread at the next
     bytecode boundary; if that boundary lands while the main thread (or a
     thread it must wait on) already holds the logging module's lock,
-    calling ``logger.warning()`` from here could block forever -- exactly
-    biff-teh, reintroduced by this fix.  Writing a compiled bytes constant
-    straight to fd 2 touches no lock and needs no formatting, so it
-    cannot deadlock the way logging can.
+    calling ``logger.warning()`` from here could block forever --
+    reintroducing the exact hang this handler exists to prevent.  Writing
+    a compiled bytes constant straight to fd 2 touches no lock and needs
+    no formatting, so it cannot deadlock the way logging can.
     """
     for step, errors, label in steps:
         try:
@@ -415,9 +415,8 @@ async def _heartbeat_loop(
     resets the key's TTL.  When the process sleeps (laptop lid closed) or
     dies (SIGKILL), heartbeats stop and the relay eventually expires the
     session.  ``heartbeat()`` deliberately never touches ``last_tool_at``
-    (biff-liu) — that field is the idle time ``/who`` and ``/finger``
-    display, and must only advance on a real tool call, not this
-    unconditional tick.
+    — that field is the idle time ``/who`` and ``/finger`` display, and
+    must only advance on a real tool call, not this unconditional tick.
 
     On every tick while ``state.companion`` is ``None``, polls the
     ethos roster for the human identity (spec § 3.2). The poll cost

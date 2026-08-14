@@ -215,7 +215,7 @@ class TestUserSession:
         assert restored.last_tool_at == tool_at
 
     def test_last_tool_at_missing_from_wire_falls_back_to_last_active(self) -> None:
-        """A pre-biff-liu KV/JSONL record has no last_tool_at key at all.
+        """A record written before this field existed has no last_tool_at key.
 
         The fallback must read the record's own last_active, not the field
         default (now()) — the latter would make a long-dead session read as

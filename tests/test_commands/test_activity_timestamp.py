@@ -1,7 +1,7 @@
-"""Regression tests for biff-liu round 2: CLI commands must advance idle.
+"""Regression tests: CLI commands must advance idle.
 
-The MCP surface has ``update_current_session`` (biff-liu) writing
-``last_tool_at`` on every real tool invocation. The CLI ``plan``,
+The MCP surface has ``update_current_session`` writing ``last_tool_at``
+on every real tool invocation. The CLI ``plan``,
 ``tty``, and ``mesg`` commands each wrote their session update inline via
 ``model_copy`` and never touched ``last_tool_at`` -- for a long-lived
 interactive REPL session (``cli_session(interactive=True)``) that meant

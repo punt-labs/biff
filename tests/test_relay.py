@@ -439,7 +439,7 @@ class TestRemoveSentinel:
 
 class TestHeartbeat:
     async def test_skips_missing_session(self, relay: LocalRelay) -> None:
-        """Heartbeat is a no-op when no session exists (biff-hvi).
+        """Heartbeat is a no-op when no session exists.
 
         Matches ``NatsRelay.heartbeat``: creating a bare session would
         destroy tty_name, repo, pwd, hostname, plan, and other fields
@@ -507,7 +507,7 @@ class TestHeartbeat:
         assert result.biff_enabled is False
 
     async def test_does_not_advance_last_tool_at(self, relay: LocalRelay) -> None:
-        """Regression for biff-liu: heartbeat must not touch last_tool_at.
+        """Regression: heartbeat must not touch last_tool_at.
 
         last_tool_at is the idle time /who and /finger display; only a real
         tool invocation (update_current_session) may advance it. Heartbeat

@@ -21,7 +21,7 @@ async def who(ctx: CliContext) -> CommandResult:
         return CommandResult(text="No sessions.", json_data=[])
     # Sort by last_tool_at, matching the IDLE column format_who renders
     # (:func:`biff.formatting.format_who`) -- last_active is heartbeat
-    # recency, unrelated to the idle value shown (biff-liu round 2).
+    # recency, unrelated to the idle value shown.
     sorted_sessions = sorted(live, key=lambda s: s.last_tool_at, reverse=True)
     return CommandResult(
         text=format_who(sorted_sessions),

@@ -88,7 +88,7 @@ class UserSession(BaseModel):
     refreshed by the background heartbeat on a fixed interval regardless
     of activity — it answers "is the process alive" and is what
     :meth:`is_live` reads.  ``last_tool_at`` is refreshed only by a real
-    tool invocation (``update_current_session``, biff-liu) — it answers
+    tool invocation (``update_current_session``) — it answers
     "when did someone last actually do something", and is what the
     presence surfaces (``/who`` IDLE, ``/finger`` idle) display.
     Conflating the two made every live session's displayed idle time
@@ -114,7 +114,7 @@ class UserSession(BaseModel):
     last_tool_at: datetime = Field(
         default_factory=_utc_now,
         description=(
-            "Timestamp of the last real tool invocation (biff-liu). "
+            "Timestamp of the last real tool invocation. "
             "Never None: a session with no invocation yet reads as its "
             "own start time, set at registration. Distinct from "
             "last_active, which the heartbeat refreshes every tick."
@@ -133,7 +133,8 @@ class UserSession(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _backfill_last_tool_at(cls, data: object) -> object:
-        """Fall back ``last_tool_at`` to ``last_active`` for pre-biff-liu records.
+        """Fall back ``last_tool_at`` to ``last_active`` for records written
+        before this field existed.
 
         A KV/JSONL row written by a server that predates this field carries
         no ``last_tool_at`` key at all.  The field's own ``default_factory``

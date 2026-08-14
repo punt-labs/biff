@@ -19,8 +19,8 @@ decorated with :func:`track_activity` -- they must work while dormant so
 
 Every tool body decorated here that touches session state does so via
 :func:`~biff.server.tools._session.update_current_session`, which is the
-single writer of ``UserSession.last_tool_at`` (biff-liu) -- the timestamp
-``/who`` and ``/finger`` display as idle time.  ``track_activity`` marks
+single writer of ``UserSession.last_tool_at`` -- the timestamp ``/who``
+and ``/finger`` display as idle time.  ``track_activity`` marks
 the boundary of a real tool call; ``update_current_session`` persists it.
 The pairing is what keeps ``last_tool_at`` distinct from ``last_active``,
 which the background heartbeat refreshes unconditionally every tick.

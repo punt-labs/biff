@@ -229,7 +229,7 @@ async def cli_session(
 
         # Both activity timestamps start identical: a session that has
         # never invoked a tool reads idle as time-since-registration, its
-        # own meaningful start time (biff-liu).
+        # own meaningful start time.
         registered_at = datetime.now(UTC)
         session = UserSession(
             user=user,

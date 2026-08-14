@@ -1457,10 +1457,10 @@ class NatsRelay:
         heartbeat is harmless; overwriting with a bare session is not.
 
         Deliberately touches only ``last_active`` (liveness) — never
-        ``last_tool_at`` (biff-liu), the idle time ``/who``/``/finger``
-        display.  ``model_copy(update=...)`` below only overwrites the
-        keys named in its ``update`` mapping, so ``last_tool_at`` on the
-        existing session survives unchanged.
+        ``last_tool_at``, the idle time ``/who``/``/finger`` display.
+        ``model_copy(update=...)`` below only overwrites the keys named
+        in its ``update`` mapping, so ``last_tool_at`` on the existing
+        session survives unchanged.
         """
         kv_key = self._kv_key(session_key)
         _, kv = await self._ensure_connected()

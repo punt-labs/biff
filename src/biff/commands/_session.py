@@ -25,13 +25,13 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
     invisible (the session is deleted on exit), but a long-lived
     interactive REPL (``cli_session(interactive=True)``) never advances
     ``last_tool_at`` past registration, since only the background
-    heartbeat loop touches ``last_active``.  An actively-used REPL then
-    reads as increasingly idle the longer it runs (biff-liu round 2).
+    heartbeat loop touches ``last_active``.  An actively-used REPL would
+    otherwise read as increasingly idle the longer it runs.
 
     A missing session is backfilled from *ctx* -- the same identity and
-    process environment every caller already has in hand.  Before this
-    (biff-hvi), each of the three call sites built this fallback
-    independently and two bugs crept in: ``repo`` was omitted entirely
+    process environment every caller already has in hand.  Before this,
+    each of the three call sites built this fallback independently and
+    two bugs crept in: ``repo`` was omitted entirely
     (defaulting to ``""``), and ``plan``/``mesg`` hardcoded
     ``tty_name="cli"`` instead of the ttyN this process actually
     claimed.  An empty ``repo`` isn't just cosmetic -- it drops the

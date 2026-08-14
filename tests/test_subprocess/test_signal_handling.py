@@ -181,10 +181,10 @@ class TestSignalSurvivesCleanupFailure:
         raises ``PermissionError`` (an ``OSError``) instead of succeeding.
         The process must still terminate within the grace period -- the
         handler's async-signal-safe ``os.write(2, ...)`` failure report
-        must not block the way a ``logger.warning()`` call could
-        (biff-teh, the defect this branch exists to close).  No sentinel
-        appearing proves the failure was genuinely hit, not silently
-        skipped.
+        must not block the way a ``logger.warning()`` call could, which
+        would reintroduce the exact hang this handler exists to prevent.
+        No sentinel appearing proves the failure was genuinely hit, not
+        silently skipped.
         """
         proc, home = active_server
         sentinels_root = _sentinel_dir(home).parent
