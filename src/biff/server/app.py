@@ -245,6 +245,18 @@ def _write_sentinel(repo_name: str, session_key: str) -> None:
     (d / safe).write_text(session_key)
 
 
+def _remove_sentinel(repo_name: str, session_key: str) -> None:
+    """Remove a sentinel once its session has genuinely been cleaned up.
+
+    Pairs with :func:`_write_sentinel` — a sentinel written defensively
+    before a best-effort teardown attempt (biff-7xd) must be cleared once
+    that attempt actually succeeds, or every future reaper tick would
+    redundantly re-process an already-deleted session.
+    """
+    safe = session_key.replace(":", "-")
+    (sentinel_dir(repo_name) / safe).unlink(missing_ok=True)
+
+
 # (action, exception types it may raise, fixed stderr label for a failure)
 _SignalCleanupStep = tuple[Callable[[], None], tuple[type[Exception], ...], bytes]
 
@@ -910,55 +922,76 @@ async def _close_orphaned_logins(
         logger.info("Closed %d orphaned login(s)", len(orphaned))
 
 
-async def _release_relay(state: ServerState) -> None:
-    """Release TTY name, delete session, and close the relay."""
-    tty_name = get_tty_name()
+async def _release_session(
+    state: ServerState, *, user: str, session_key: str, tty_name: str | None
+) -> None:
+    """Release one session's TTY reservation and KV row.
+
+    Removes the reap-fallback sentinel written by :func:`_lifespan_cleanup`
+    before teardown started (biff-7xd) only once ``delete_session`` actually
+    succeeds.  A call that times out or raises leaves the sentinel in place,
+    so a reaper — this server's own periodic :func:`_reap_loop`, another
+    running server's, or the next startup's :func:`_reap_sentinels` —
+    finishes the job later instead of the row silently outliving its
+    process.
+    """
     if tty_name:
         try:
             await asyncio.wait_for(
-                state.relay.release_tty_name(state.config.user, tty_name),
+                state.relay.release_tty_name(user, tty_name),
                 timeout=_TEARDOWN_STEP_TIMEOUT,
             )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
     try:
         await asyncio.wait_for(
-            state.relay.delete_session(state.session_key),
-            timeout=_TEARDOWN_STEP_TIMEOUT,
+            state.relay.delete_session(session_key), timeout=_TEARDOWN_STEP_TIMEOUT
         )
-    except Exception:
-        logger.exception("Failed to delete session %s", state.session_key)
-    # Release companion session (DES-039).
-    if state.companion:
-        if state.companion.tty_name:
-            try:
-                await asyncio.wait_for(
-                    state.relay.release_tty_name(
-                        state.companion.user, state.companion.tty_name
-                    ),
-                    timeout=_TEARDOWN_STEP_TIMEOUT,
-                )
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to release companion TTY name %s",
-                    state.companion.tty_name,
-                    exc_info=True,
-                )
-        try:
-            await asyncio.wait_for(
-                state.relay.delete_session(state.companion.session_key),
-                timeout=_TEARDOWN_STEP_TIMEOUT,
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "Failed to delete companion session %s",
-                state.companion.session_key,
-                exc_info=True,
-            )
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to delete session %s", session_key, exc_info=True)
+    else:
+        _remove_sentinel(state.config.repo_name, session_key)
+
+
+async def _release_relay(state: ServerState) -> None:
+    """Release TTY names, delete sessions, and close the relay."""
+    await _release_session(
+        state,
+        user=state.config.user,
+        session_key=state.session_key,
+        tty_name=get_tty_name(),
+    )
+    if state.companion:  # Release companion session (DES-039).
+        await _release_session(
+            state,
+            user=state.companion.user,
+            session_key=state.companion.session_key,
+            tty_name=state.companion.tty_name,
+        )
     try:
         await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to close relay", exc_info=True)
+
+
+def _write_reap_fallback_sentinels(state: ServerState) -> None:
+    """Write reap-fallback sentinels before the best-effort NATS teardown.
+
+    Every step of that teardown is now bounded (``_TEARDOWN_STEP_TIMEOUT``,
+    biff-7xd) and can abort partway through a wedged connection.  Before
+    this, only the signal-triggered shutdown path
+    (``_active_lifespan._signal_handler``) wrote a sentinel first — normal
+    shutdown had no equivalent, so a timed-out ``delete_session`` here
+    silently orphaned the KV row: no logout event, no sentinel, no reaper
+    coverage.  Written unconditionally and removed by :func:`_release_session`
+    only once its session's KV row is actually deleted, so a healthy
+    shutdown leaves nothing behind for the reaper to redundantly process.
+    """
+    with suppress(OSError):
+        _write_sentinel(state.config.repo_name, state.session_key)
+    if state.companion:
+        with suppress(OSError):
+            _write_sentinel(state.config.repo_name, state.companion.session_key)
 
 
 async def _lifespan_cleanup(
@@ -974,6 +1007,7 @@ async def _lifespan_cleanup(
     must happen while the NATS connection is still healthy.
     """
     if state.owns_relay:
+        _write_reap_fallback_sentinels(state)
         await _append_logout_event(state)
         await _append_companion_logout_event(state)
     await _shutdown_tasks(shutdown, tasks)
