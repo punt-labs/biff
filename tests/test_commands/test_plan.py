@@ -64,7 +64,7 @@ class TestPlan:
     ) -> None:
         # /plan is free-form, unbounded-length user text — a CJK-heavy plan
         # renders at 2 cells/glyph and must wrap the confirmation, not
-        # overflow it onto one unbounded line (biff-2sw).
+        # overflow it onto one unbounded line.
         message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
         result = await plan(ctx, message)
         assert not result.error
@@ -103,8 +103,7 @@ class TestPlan:
         # ``model_validate_json`` — which strips "   " down to "" — so a
         # subsequent ``/finger`` or ``/who`` shows no plan at all.  "(message
         # had no visible content)" is the accurate framing for both moments:
-        # nothing survives to be seen, on the confirmation or on read-back
-        # (biff-2sw round 6).
+        # nothing survives to be seen, on the confirmation or on read-back.
         result = await plan(ctx, "   ")
         assert not result.error
         assert _NO_PRINTABLE_TEXT not in result.text

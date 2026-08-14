@@ -1,4 +1,4 @@
-"""Unit tests for NatsRelay connection-health diagnostic logging (biff-6px).
+"""Unit tests for NatsRelay connection-health diagnostic logging.
 
 Covers the ``_ConnectionHealth`` single-source log points and the
 ``_tracked`` wedge onset/recovery choke point:
@@ -61,7 +61,7 @@ def _connected_nc() -> MagicMock:
 
 def _onset_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     # INFO, not WARNING: the wedge onset is a transient, self-recovering event
-    # that must stay off the CLI's WARNING stderr floor (biff-9la).
+    # that must stay off the CLI's WARNING stderr floor.
     return [
         r
         for r in caplog.records
@@ -208,7 +208,7 @@ class TestWedgeOnsetRecovery:
 
 
 class TestForceReconnectLatch:
-    """The proactive force-reconnect fires once per wedge episode (biff-3hp).
+    """The proactive force-reconnect fires once per wedge episode.
 
     ``_ConnectionHealth`` owns the consecutive-timeout counter and the
     once-per-episode latch; ``NatsRelay._tracked`` acts on the decision.
@@ -307,7 +307,7 @@ class TestLifecycleContext:
 
         (record,) = [r for r in caplog.records if "Disconnected" in r.getMessage()]
         # INFO, not WARNING: a disconnect is transient/auto-recovering and must
-        # stay off the CLI terminal — file only (biff-9la).
+        # stay off the CLI terminal — file only.
         assert record.levelno == logging.INFO
         assert "after 30s connected" in record.getMessage()
 

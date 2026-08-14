@@ -121,7 +121,7 @@ class TestTalkNotification:
 
     def test_sender_label_control_only_tty_collapses_to_user(self) -> None:
         # A tty that is non-empty raw but empty after neutralisation must not
-        # render a dangling ``user:`` — it collapses to the bare user (biff-7g7).
+        # render a dangling ``user:`` — it collapses to the bare user.
         n = TalkNotification.from_payload(
             _message("eric", OTHER_KEY, "hi", tty="\x00\x1b\x07")
         )
@@ -130,7 +130,7 @@ class TestTalkNotification:
     def test_sender_label_control_only_user_falls_back_to_placeholder(self) -> None:
         # A user non-empty raw but empty after neutralisation must not render a
         # leading ``:tty`` — the user half falls back to the "?" placeholder
-        # from_payload uses for a missing ``from`` (biff-7g7).
+        # from_payload uses for a missing ``from``.
         n = TalkNotification.from_payload(_message("\x00", OTHER_KEY, "hi", tty="tty2"))
         assert n.sender_label == "?:tty2"
 
@@ -151,7 +151,7 @@ class TestTalkNotification:
         # Every wire field is attacker-controlled (DES-046); a malicious
         # publisher can bypass the sender-side MAX_BODY_LEN truncation.  The
         # boundary must clamp so a forged megabyte field cannot be stored or
-        # amplified downstream (biff-7g7).
+        # amplified downstream.
         huge = "x" * 1_000_000
         n = TalkNotification.from_payload(
             {
@@ -174,8 +174,8 @@ class TestTalkNotification:
         # A forged payload can send JSON null (key present, value None), a number,
         # or a nested dict/list for any field.  str(None) must not leak "None" as
         # the sender, and a nested structure must not be stringified past the
-        # clamp — each non-str value falls back to that field's documented default
-        # (biff-7g7).
+        # clamp — each non-str value falls back to that field's documented
+        # default.
         n = TalkNotification.from_payload(
             {
                 "type": "message",
