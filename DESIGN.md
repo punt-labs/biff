@@ -6329,6 +6329,24 @@ helper, one place where a CLI session record is built, all fields
 populated consistently. The triplicated construction is why this rotted
 in the first place.
 
+### Known limitation: a mixed-version fleet reports mixed truth
+
+The backfill makes an old record *readable*; it cannot make it *correct*.
+A session served by a server predating this change writes no
+`last_tool_at` at all, and its `last_active` is refreshed by that
+server's own heartbeat on every tick. Reading such a record therefore
+backfills a timestamp that is always fresh, and the idle column shows
+`0m` for it — the original bug, persisting for exactly as long as that
+old server keeps running.
+
+This is not a defect in the backfill; there is no better source. It does
+mean the fix lands per-process rather than per-fleet: until every
+running server is upgraded, `/who` shows correct idle for upgraded
+sessions and the old always-zero for the rest, with nothing on the
+surface distinguishing the two. Worth knowing when reading a mixed
+fleet during a rollout, and worth remembering before concluding from a
+single `0m` row that the fix did not work.
+
 ### Consequence for biff-b3e
 
 biff-b3e was filed on the reasoning that hiding dead sessions costs the
