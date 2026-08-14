@@ -225,6 +225,8 @@ def _write_sentinel(repo_name: str, session_key: str) -> None:
 # (action, exception types it may raise, fixed stderr label for a failure)
 _SignalCleanupStep = tuple[Callable[[], None], tuple[type[Exception], ...], bytes]
 
+_UNEXPECTED_CLEANUP_ERROR = b"biff: signal cleanup: unexpected error\n"
+
 
 def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
     """Run best-effort signal-handler cleanup steps, reporting failures.
@@ -245,6 +247,19 @@ def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
             step()
         except errors:
             os.write(2, label)
+        except BaseException:  # noqa: BLE001 -- see below (PY-EH-6)
+            # A step can only be trusted to raise the types it declared
+            # *today*.  If a future step's callee starts raising something
+            # outside its declared tuple, the exception must not be allowed
+            # to escape this loop and skip the terminating os.kill below --
+            # that would silently reintroduce the exact hang this handler
+            # exists to prevent.  A signal handler whose only remaining job
+            # is to reach that os.kill is the clearest system boundary in
+            # this codebase, which is what PY-EH-6 requires for a catch
+            # this broad.  BaseException (not Exception) is deliberate:
+            # KeyboardInterrupt or a second signal arriving mid-cleanup is
+            # exactly the case where the exit path must not be lost.
+            os.write(2, _UNEXPECTED_CLEANUP_ERROR)
 
 
 async def _reap_sentinels(state: ServerState) -> None:
