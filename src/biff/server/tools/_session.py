@@ -46,7 +46,20 @@ async def get_or_create_session(state: ServerState) -> UserSession:
         # ``_format_who_name`` uses so display stays consistent and the
         # v1.8.0 biff-dzqc invariant (no empty ``tty_name`` rows) holds.
         stashed = get_tty_name()
-        if not stashed:
+        if stashed:
+            # tty_name was already reserved, so lifespan registration ran
+            # to completion and the session row was deleted out from under
+            # a still-running process afterward (reaper sentinel, TTL
+            # expiry, manual delete).  The record rebuilt below resets
+            # plan, plan_source, and biff_enabled to defaults, which
+            # /who then renders as a plausible-looking but wrong row --
+            # surface the resurrection rather than let it pass silently.
+            logger.warning(
+                "Session %s reaped mid-run; resurrecting with default "
+                "plan/biff_enabled state",
+                state.session_key,
+            )
+        else:
             logger.warning(
                 "Auto-creating session %s without a reserved tty_name; "
                 "lifespan registration may not have completed",

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from biff.cli_session import CliContext
 from biff.models import UserSession
 from biff.tty import get_hostname, get_pwd
+
+logger = logging.getLogger(__name__)
 
 
 async def update_current_session(ctx: CliContext, **updates: object) -> UserSession:
@@ -46,6 +49,17 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
     """
     session = await ctx.relay.get_session(ctx.session_key)
     if session is None:
+        # cli_session() always registers the row before yielding a
+        # CliContext to a command, so reaching this fallback means the
+        # row was deleted out from under a still-running process (reaper
+        # sentinel, TTL expiry, manual delete) -- for a long-lived REPL,
+        # an operator's ``mesg off`` would silently flip back on, and set
+        # plan text would silently be erased. Surface it rather than
+        # rebuild the record without a trace.
+        logger.warning(
+            "Session %s missing at update time; rebuilding from process environment",
+            ctx.session_key,
+        )
         session = UserSession(
             user=ctx.user,
             tty=ctx.tty,
