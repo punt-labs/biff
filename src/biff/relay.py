@@ -476,7 +476,14 @@ class LocalRelay:
         ]
 
     async def heartbeat(self, session_key: str) -> None:
-        """Update last_active timestamp, creating session if needed.
+        """Update ``last_active`` for an existing session; skip if missing.
+
+        Matches :meth:`NatsRelay.heartbeat` (biff-hvi): a missing session
+        (expired, deleted, or not yet created) is skipped rather than
+        replaced with a bare ``UserSession(user, tty)``, which would
+        destroy ``tty_name``, ``repo``, ``pwd``, ``hostname``, ``plan``,
+        and every other field that only the lifespan or a tool handler
+        knows how to set.
 
         Deliberately touches only ``last_active`` (liveness) — never
         ``last_tool_at`` (biff-liu), the idle time ``/who``/``/finger``
@@ -487,13 +494,11 @@ class LocalRelay:
         self._validate_session_key(session_key)
         sessions = self._read_sessions()
         existing = sessions.get(session_key)
-        if existing:
-            sessions[session_key] = existing.model_copy(
-                update={"last_active": datetime.now(UTC)}
-            )
-        else:
-            user, tty = session_key.split(":", maxsplit=1)
-            sessions[session_key] = UserSession(user=user, tty=tty)
+        if existing is None:
+            return
+        sessions[session_key] = existing.model_copy(
+            update={"last_active": datetime.now(UTC)}
+        )
         self._write_sessions(sessions)
 
     async def get_sessions(self) -> list[UserSession]:

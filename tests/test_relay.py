@@ -438,13 +438,16 @@ class TestRemoveSentinel:
 
 
 class TestHeartbeat:
-    async def test_creates_new_session(self, relay: LocalRelay) -> None:
+    async def test_skips_missing_session(self, relay: LocalRelay) -> None:
+        """Heartbeat is a no-op when no session exists (biff-hvi).
+
+        Matches ``NatsRelay.heartbeat``: creating a bare session would
+        destroy tty_name, repo, pwd, hostname, plan, and other fields
+        that only the lifespan or tool handlers know how to set.
+        """
         await relay.heartbeat("kai:tty1")
         result = await relay.get_session("kai:tty1")
-        assert result is not None
-        assert result.user == "kai"
-        assert result.tty == "tty1"
-        assert result.plan == ""
+        assert result is None
 
     async def test_updates_last_active(self, relay: LocalRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)

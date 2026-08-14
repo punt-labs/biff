@@ -25,9 +25,22 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
     heartbeat loop touches ``last_active``.  An actively-used REPL then
     reads as increasingly idle the longer it runs (biff-liu round 2).
 
-    A missing session is backfilled the same way each of the three
-    call sites did on their own: a fresh :class:`UserSession` with
-    ``tty_name`` from *ctx* (``"cli"`` when the context has none yet).
+    A missing session is backfilled from *ctx* -- the same identity and
+    process environment every caller already has in hand.  Before this
+    (biff-hvi), each of the three call sites built this fallback
+    independently and two bugs crept in: ``repo`` was omitted entirely
+    (defaulting to ``""``), and ``plan``/``mesg`` hardcoded
+    ``tty_name="cli"`` instead of the ttyN this process actually
+    claimed.  An empty ``repo`` isn't just cosmetic -- it drops the
+    record out of ``get_sessions_for_repos`` filtering and out of
+    ``resolve_tty_name``'s local-repo tiebreak -- and a later reader
+    backfilling ``repo`` from ITS OWN config (e.g. an MCP server sharing
+    the session key across repos, DES-034) can leave ``repo`` and
+    ``pwd`` sourced from two different processes, so ``/who``'s REPO
+    column and ``/finger``'s Dir disagree about the same session.
+    Threading ``repo`` and the claimed ``tty_name`` from *ctx* here
+    means both fields come from the one process that is actually
+    writing the record.
     """
     session = await ctx.relay.get_session(ctx.session_key)
     if session is None:
@@ -37,6 +50,7 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
             tty_name=ctx.tty_name or "cli",
             hostname=get_hostname(),
             pwd=get_pwd(),
+            repo=ctx.config.repo_name,
         )
     now = datetime.now(UTC)
     updates["last_active"] = now
