@@ -25,7 +25,7 @@ _TTY_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 # "----" is not a valid id), max 64 chars (a UUID is 36).
 _ROUTING_ID_RE = re.compile(r"^(?=.*[0-9a-fA-F])[0-9a-fA-F-]{1,64}$")
 
-# Names-KV discriminator for session_id->tty reclaim hints (biff-7ak).
+# Names-KV discriminator for session_id->tty reclaim hints.
 # Reservation keys are {user}.{name}; the reclaim mapping is
 # {user}.sid.{session_id}.  A reclaimed display name must never fall in this
 # namespace, or it would collide with a hint key.
@@ -120,7 +120,7 @@ def format_address(user: str, tty: str | None = None) -> str:
     """Render a canonical biff address: bare ``user:ttyN`` (or bare ``user``).
 
     The single source of truth for how an address is *shown*.  Biff dropped
-    the ``@`` sigil (biff-5gb): the canonical form carries no prefix.  The
+    the ``@`` sigil: the canonical form carries no prefix.  The
     input parser (:func:`parse_address`) still tolerates one leading ``@``
     for muscle memory, but everything biff renders is bare.
     """
@@ -184,7 +184,7 @@ async def claim_tty_name(
         ok = await relay.reserve_tty_name(user, candidate, session_key)
         if ok:
             return candidate
-        # Same-identity takeover (biff-7ak): our own just-exited session may
+        # Same-identity takeover: our own just-exited session may
         # still hold this alias in the exit->resume overlap — its reservation
         # has not released or TTL-expired yet.  Under identity routing the
         # reservation value is our session key ({user}:{session_id}, stable
@@ -268,7 +268,7 @@ def parse_address(address: str) -> tuple[str, str | None]:
     """Parse a ``user`` or ``user:tty`` address string.
 
     Returns ``(user, tty)`` where *tty* is ``None`` when not specified.
-    The canonical form is bare (biff-5gb); a single leading ``@`` is
+    The canonical form is bare; a single leading ``@`` is
     tolerated and stripped for muscle memory.  Exactly one ``@`` is
     removed — ``@@user`` keeps a literal ``@user`` so a malformed address
     is not silently normalized into a valid one.  Surrounding whitespace

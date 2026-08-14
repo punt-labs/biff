@@ -49,7 +49,7 @@ SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends; KV storage retentio
 # Presence liveness: a session is "live" only if it heartbeat within this
 # window (2x the 60s heartbeat interval).  Distinct from the 3-day storage
 # TTL — used to hide dead sessions from presence before their KV entry
-# expires (biff-mue).
+# expires.
 PRESENCE_LIVENESS_SECONDS = 120.0
 
 
@@ -58,7 +58,7 @@ def live_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
 
     Drops dead sessions (shut down, killed, or wedged) whose KV entry has not
     yet hit the longer storage TTL, so every presence surface (``who``,
-    ``finger``) reflects who is actually reachable (biff-mue).
+    ``finger``) reflects who is actually reachable.
     """
     now = datetime.now(UTC)
     return [
@@ -169,7 +169,7 @@ class Relay(Protocol):
 
     async def list_reserved_names(self, user: str) -> list[str]: ...
 
-    # -- session_id -> last tty-name hint (resume reclaim, biff-7ak) --
+    # -- session_id -> last tty-name hint (resume reclaim) --
 
     async def get_session_tty_hint(self, user: str, session_id: str) -> str | None: ...
 

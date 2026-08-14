@@ -3,7 +3,7 @@
 Preferences toggled at the REPL prompt (e.g. ``timestamps on``) that affect
 how output is rendered.  These are display state, not configuration — they
 live only for the duration of the interactive session and are never
-persisted (biff-4uq).
+persisted.
 """
 
 from __future__ import annotations
