@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
@@ -930,7 +931,7 @@ async def _active_lifespan(
     """
     _cleaned_up = False
 
-    def _signal_handler(_signum: int, _frame: object) -> None:
+    def _signal_handler(signum: int, _frame: object) -> None:
         nonlocal _cleaned_up
         if _cleaned_up:
             return
@@ -954,6 +955,34 @@ async def _active_lifespan(
                     state.relay.write_remove_sentinel(state.companion.session_key)
                 with suppress(OSError, ValueError):
                     state.relay.delete_session_sync(state.companion.session_key)
+        # signal.signal() replaces the platform's default terminate
+        # disposition, so returning here leaves the process running —
+        # the signal has been fully "handled" as far as the OS is
+        # concerned, but nothing actually terminates it.
+        #
+        # sys.exit() was tried first and rejected: it raises SystemExit
+        # on the main thread, which *does* unwind correctly through the
+        # blocking selector call inside asyncio's event loop (verified
+        # empirically with a stack-trace dump from inside the handler).
+        # But the stdio transport (mcp.server.stdio.stdio_server) reads
+        # stdin on a non-daemon AnyIO worker thread that stays blocked
+        # in a real blocking read with no EOF pending.  CPython's normal
+        # interpreter shutdown (threading._shutdown, run via atexit)
+        # joins every non-daemon thread before the process actually
+        # exits, so SystemExit propagating cleanly still leaves the
+        # process hung forever waiting on that thread join — confirmed
+        # by spawning a real subprocess, sending SIGTERM, and observing
+        # it survive a 13s grace period even though the handler ran to
+        # completion and the exception traceback showed a clean unwind.
+        #
+        # Restoring the default disposition and re-delivering the signal
+        # to ourselves terminates the process at the kernel level — no
+        # Python-level shutdown, no thread joins, and it yields the
+        # standard 128+signum exit status.  The sentinel and best-effort
+        # cleanup above already ran and are on disk before this point,
+        # so nothing is lost by skipping the (broken) Python shutdown path.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)
