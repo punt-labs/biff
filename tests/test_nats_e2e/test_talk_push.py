@@ -232,11 +232,11 @@ class TestTalkPushNotification:
     ) -> None:
         """A forced client replacement re-establishes the orphaned talk SUB.
 
-        Closing the poller's NATS client and redialing is the biff-3hp
+        Closing the poller's NATS client and redialing is the proactive
         force-reconnect signature: the always-on talk SUB is orphaned on the
         closed client, and the fresh client carries none.  The poller must
         detect the generation bump and re-subscribe, or an unsolicited invite
-        is silently lost (biff-9la) — the destructive biff-3hp x biff-9la
+        is silently lost — the destructive orphaned-SUB x silent-drop
         interaction.  Since the old client is closed, a frame can only reach
         ``TalkState`` through a SUB re-established on the new client
         (``nats-relay.tex`` ``talkSubGen``).

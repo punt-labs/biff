@@ -1,4 +1,4 @@
-"""Dual-session lifespan over NATS (biff-dzqc).
+"""Dual-session lifespan over NATS.
 
 Boots two full MCP servers, each with a companion, sharing a NATS relay.
 Asserts the KV contains four fully formed rows (2 primary + 2 companion)

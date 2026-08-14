@@ -250,7 +250,7 @@ class TestUnreadSummary:
 
 
 class TestUserSessionLiveness:
-    """UserSession.is_live — heartbeat-freshness liveness check (biff-mue)."""
+    """UserSession.is_live — heartbeat-freshness liveness check."""
 
     def test_fresh_session_is_live(self) -> None:
         now = datetime.now(UTC)

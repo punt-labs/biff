@@ -557,7 +557,7 @@ class TestProductCommandErrorHandling:
 
 
 class TestNatsErrorStaysOffTerminal:
-    """A transient NATS error_cb reaches biff.log but never the REPL (biff-9la).
+    """A transient NATS error_cb reaches biff.log but never the REPL.
 
     Boundary test: wire the real ``configure_logging`` + ``_suppress_nats_noise``
     the CLI uses, fire the real ``error_cb``, and prove the terminal stays clean

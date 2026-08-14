@@ -1,4 +1,4 @@
-"""Tests for workflow marker files (biff-vq5, biff-41j)."""
+"""Tests for workflow marker files."""
 
 from __future__ import annotations
 
