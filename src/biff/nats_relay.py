@@ -84,11 +84,11 @@ _WTMP_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
-# relay caller (biff-wr3)
+# relay caller
 
 # Keepalive tuning so a half-open connection (socket up, server not
-# responding) is detected in ~60-80s, not the nats-py default of 240s
-# (biff-tww).  Detection latency is roughly ``_PING_INTERVAL *
+# responding) is detected in ~60-80s, not the nats-py default of 240s.
+# Detection latency is roughly ``_PING_INTERVAL *
 # _MAX_OUTSTANDING_PINGS`` (20*3 = ~60s), and up to one interval higher
 # (~80s) because nats-py trips only when the outstanding-PING count
 # *exceeds* the max.  nats-py defaults are
@@ -106,7 +106,7 @@ _MAX_OUTSTANDING_PINGS = 3  # unanswered PINGs before the conn is declared dead
 _MAX_RECONNECT_ATTEMPTS = -1  # infinite
 _RECONNECT_TIME_WAIT = 2  # seconds between reconnect attempts (nats-py default)
 
-# Proactive wedge detection (biff-3hp).  A half-open connection (socket up,
+# Proactive wedge detection.  A half-open connection (socket up,
 # server unresponsive) makes every JS/KV request raise ``nats: timeout``.
 # The keepalive path (DES-041) recovers in ~60-80s; the proactive detector
 # beats it by tearing the connection down after this many *consecutive*
@@ -123,8 +123,9 @@ _WEDGE_FORCE_RECONNECT_THRESHOLD = 3
 # Default stream prefix (DES-016).  Tests override via stream_prefix="biff-dev".
 _DEFAULT_STREAM_PREFIX = "biff"
 
-# KV key namespaces reserved for encryption (DES-016, biff-lff).
-# Session keys are {repo}.{user}.{tty}; these prefixes are not sessions.
+# KV key namespaces reserved for a future end-to-end encryption feature
+# (DES-016). Session keys are {repo}.{user}.{tty}; these prefixes are not
+# sessions.
 # Name reservations live in a separate ``biff-names`` bucket, so "name"
 # does not belong here — it would silently block a user named "name".
 RESERVED_KV_NAMESPACES: frozenset[str] = frozenset({"key"})
@@ -180,7 +181,7 @@ class _ConnectionHealth:
     Timings use ``time.monotonic()`` — immune to wall-clock adjustments.
     The consecutive-timeout count is exposed via :attr:`consecutive_timeouts`,
     and :meth:`should_force_reconnect` latches the once-per-episode decision to
-    force a proactive reconnect (biff-3hp).  This class only *decides*; it never
+    force a proactive reconnect.  This class only *decides*; it never
     changes connection state — :class:`NatsRelay` owns the teardown.
     """
 
@@ -217,7 +218,7 @@ class _ConnectionHealth:
 
     @property
     def consecutive_timeouts(self) -> int:
-        """Runtime JS/KV timeouts since the last success (biff-3hp foundation)."""
+        """Runtime JS/KV timeouts since the last success."""
         return self._timeout_count
 
     def record_connected(self, provision_ms: float, *, is_new_connection: bool) -> None:
@@ -247,7 +248,7 @@ class _ConnectionHealth:
         INFO, not WARNING: provisioning timeout tears the connection down and
         the next call reconnects — a transient, self-recovering event.  At
         WARNING it would clear the CLI's stderr floor and print into the
-        interactive REPL; at INFO it reaches biff.log only (biff-9la).
+        interactive REPL; at INFO it reaches biff.log only.
         """
         logger.info(
             "NATS provisioning timed out after %.0fs at %s — tearing down connection",
@@ -263,12 +264,11 @@ class _ConnectionHealth:
 
         INFO, not WARNING: a disconnect is a transient, auto-recovering event
         (nats-py reconnects) — it must stay off the CLI's WARNING stderr floor
-        and reach biff.log only, or it prints into the interactive REPL
-        (biff-9la).
+        and reach biff.log only, or it prints into the interactive REPL.
 
         Clears the wedge counter and force-reconnect latch: once nats-py's
         keepalive has declared the socket down, it owns recovery, so the
-        proactive teardown (biff-3hp) must not also fire.
+        proactive teardown must not also fire.
         """
         self._timeout_count = 0
         self._wedge_onset_at = None
@@ -311,7 +311,7 @@ class _ConnectionHealth:
         INFO, not WARNING: a close fires on intentional teardown (CLI exit,
         disconnect) and on nats-py giving up mid-reconnect — background
         lifecycle events that must not clear the CLI's WARNING stderr floor and
-        print into the interactive REPL; biff.log keeps them (biff-9la).
+        print into the interactive REPL; biff.log keeps them.
 
         Clears the wedge counter and force-reconnect latch: a close is a
         lifecycle reset point like connect/disconnect/reconnect, so the latch
@@ -369,7 +369,7 @@ class _ConnectionHealth:
         INFO, not WARNING: a half-open timeout self-recovers (keepalive or the
         proactive teardown reconnects), so it must stay off the CLI's WARNING
         stderr floor and reach biff.log only — otherwise the onset prints into
-        the interactive REPL (biff-9la).
+        the interactive REPL.
 
         The wording tracks the actual state: a still-connected socket that
         stops answering is half-open; a socket that is mid-reconnect is
@@ -456,8 +456,8 @@ class NatsRelay:
         # ``(_generation, _reconnect_epoch)`` is the complete identity of the
         # live transport: a force-reconnect whose gate observed an earlier epoch
         # is a no-op against a client that has since healed itself in place
-        # (``nats-relay.tex`` ``reconnectEpoch`` / ``StaleForceTeardown``,
-        # biff-xko).  ``is_connected`` cannot separate a wedged socket from a
+        # (``nats-relay.tex`` ``reconnectEpoch`` / ``StaleForceTeardown``).
+        # ``is_connected`` cannot separate a wedged socket from a
         # reconnected one — it is true in both — so the epoch carries the datum
         # ``is_connected`` does not.
         self._reconnect_epoch = 0
@@ -543,7 +543,7 @@ class NatsRelay:
             if self._nc is owner:
                 is_connected = owner is not None and owner.is_connected
                 self._health.record_timeout(operation, is_connected=is_connected)
-                # Proactive wedge recovery (biff-3hp): only on a still-connected
+                # Proactive wedge recovery: only on a still-connected
                 # socket — if nats-py's keepalive already declared the connection
                 # down (is_connected False), it owns the reconnect.
                 if is_connected and self._health.should_force_reconnect(
@@ -553,8 +553,8 @@ class NatsRelay:
                     # identity above): if a transparent reconnect completes on
                     # the same client before _force_reconnect re-checks under
                     # the lock, the epoch advances and the teardown is skipped —
-                    # the wedge already healed (nats-relay.tex StaleForceTeardown,
-                    # biff-xko).  No await separates this from the gate decision,
+                    # the wedge already healed (nats-relay.tex StaleForceTeardown).
+                    # No await separates this from the gate decision,
                     # so self._reconnect_epoch is the gate-time value.
                     await self._force_reconnect(self._reconnect_epoch)
             raise
@@ -575,7 +575,7 @@ class NatsRelay:
 
         Fired by :meth:`_tracked` after ``_WEDGE_FORCE_RECONNECT_THRESHOLD``
         consecutive runtime timeouts on a still-connected socket — the
-        half-open signature (DES-041, biff-3hp).  Rather than wait out the
+        half-open signature (DES-041).  Rather than wait out the
         ~60-80s keepalive floor, close the socket and clear the cached handles;
         the next :meth:`_ensure_connected` dials a fresh client.
 
@@ -599,11 +599,12 @@ class NatsRelay:
         since the gate observed it (``self._reconnect_epoch == gate_epoch``).
         If *either* advanced — a full redial bumped the object, or a transparent
         same-object reconnect bumped the epoch — the wedge already healed and
-        the teardown is skipped.  The epoch conjunct closes biff-xko: between
-        the gate and this re-check, nats-py can complete a transparent reconnect
-        on the same client, leaving ``is_connected`` true exactly as it was when
-        wedged; only the advanced epoch distinguishes the healed client from a
-        still-wedged one, so tearing it down here would kill a healthy client.
+        the teardown is skipped.  The epoch conjunct closes the race where,
+        between the gate and this re-check, nats-py can complete a transparent
+        reconnect on the same client, leaving ``is_connected`` true exactly as
+        it was when wedged; only the advanced epoch distinguishes the healed
+        client from a still-wedged one, so tearing it down here would kill a
+        healthy client.
         """
         wedged = self._nc
         if wedged is None or wedged.is_closed:
@@ -662,7 +663,7 @@ class NatsRelay:
             self._health.record_reconnected()
             # A transparent same-object reconnect completed: advance the epoch
             # so a force-reconnect whose gate observed the earlier value skips
-            # the now-healed client (nats-relay.tex Reconnect, biff-xko).  The
+            # the now-healed client (nats-relay.tex Reconnect).  The
             # client object and _generation are unchanged — nats-py reconnects
             # in place — so the epoch is the only signal that this happened.
             self._reconnect_epoch += 1
@@ -672,7 +673,7 @@ class NatsRelay:
                 return  # stale callback from a superseded client
             # nats-py gave up reconnecting (or the connection closed).  Drop
             # the client so the next _ensure_connected builds a fresh one
-            # instead of reusing a dead connection (biff-wr3).
+            # instead of reusing a dead connection.
             self._health.record_closed()
             self._nc = None
             self._js = None
@@ -693,9 +694,9 @@ class NatsRelay:
                 # events that nats-py auto-recovers from — the connection
                 # self-heals without a restart.  At ERROR they cleared the
                 # CLI's WARNING stderr floor and dumped a traceback into the
-                # interactive REPL (biff-9la); at INFO they reach biff.log
+                # interactive REPL; at INFO they reach biff.log
                 # only.  exc_info keeps the full traceback for diagnosis; %r
-                # keeps the cause visible for message-less errors (biff-wr3).
+                # keeps the cause visible for message-less errors.
                 logger.info(
                     "NATS error (transient, auto-recovering): %r", exc, exc_info=exc
                 )
@@ -741,7 +742,7 @@ class NatsRelay:
             # Bound provisioning: a disconnected/reconnecting connection
             # (is_closed is False, is_connected is False) lets JetStream/KV
             # calls block forever while we hold _connect_lock, wedging every
-            # relay caller (biff-wr3).  Time it out so the lock is always
+            # relay caller.  Time it out so the lock is always
             # released and callers get an error instead of hanging.
             js, kv, names_kv = await asyncio.wait_for(
                 self._provision(nc), timeout=_CONNECT_PROVISION_TIMEOUT
@@ -772,7 +773,7 @@ class NatsRelay:
         """Provision JetStream, the KV buckets, and the inbox stream on *nc*.
 
         Run under a timeout by :meth:`_open_connection` so a disconnected
-        connection cannot block relay callers indefinitely (biff-wr3).
+        connection cannot block relay callers indefinitely.
         Returns ``(js, sessions_kv, names_kv)``.
         """
         js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
@@ -856,7 +857,7 @@ class NatsRelay:
             if "maximum number of streams" in str(exc):
                 # INFO: wtmp degrades gracefully (session history disabled),
                 # core messaging is unaffected — a background provisioning
-                # event that must stay off the CLI terminal (biff-9la).
+                # event that must stay off the CLI terminal.
                 logger.info("Wtmp stream unavailable: %s", exc)
                 self._wtmp_available = False
             else:
@@ -868,7 +869,7 @@ class NatsRelay:
                 self._wtmp_available = True
         except Exception:  # noqa: BLE001 — provisioning must never crash startup
             # INFO: degrades gracefully; a background connect/reconnect event
-            # that must not print into the interactive REPL (biff-9la).  The
+            # that must not print into the interactive REPL.  The
             # traceback stays in biff.log for diagnosis.
             logger.info("Wtmp stream provisioning failed", exc_info=True)
             self._wtmp_available = False
@@ -900,7 +901,7 @@ class NatsRelay:
         except Exception:  # noqa: BLE001 — best-effort cleanup must never crash startup
             # INFO: best-effort background cleanup on connect/reconnect; a
             # failure is non-fatal and must not print into the interactive
-            # REPL (biff-9la).  The traceback stays in biff.log.
+            # REPL.  The traceback stays in biff.log.
             logger.info("Legacy stream cleanup failed", exc_info=True)
 
     @property
@@ -1107,7 +1108,7 @@ class NatsRelay:
         frame reaches the addressed ``@user:tty`` whatever repository or
         organization either party runs in.  Neither repository nor
         organization is a routing coordinate — a reply routes to the peer's
-        identity taken from the frame, held locally (biff-e9u).  Visibility
+        identity taken from the frame, held locally.  Visibility
         is the only gate, enforced at resolution, not on the subject.  A
         session subscribes to ``subjectOf`` of its own key; a sender
         publishes to ``subjectOf`` of the peer's key.  Core NATS (no
@@ -1252,7 +1253,7 @@ class NatsRelay:
         :meth:`fetch_user_inbox` (user broadcast inbox).  A valid frame is
         acked (WORK_QUEUE deletes it); a malformed frame is ``term()``ed —
         never acked — so a wire-integrity fault is not silently destroyed as
-        if delivered (biff-cuy).  Acks are fire-and-forget in nats.py, so we
+        if delivered.  Acks are fire-and-forget in nats.py, so we
         flush before deleting the consumer to ensure the server has processed
         all acks.
         """
@@ -1453,7 +1454,7 @@ class NatsRelay:
         except (ValidationError, ValueError):
             # INFO: heartbeat runs in the background loop; a skipped tick is
             # harmless (3-day TTL) and must not print into the interactive
-            # REPL (biff-9la).  biff.log records the anomaly.
+            # REPL.  biff.log records the anomaly.
             logger.info("Corrupt session for %s, skip heartbeat", session_key)
             return
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
@@ -1475,7 +1476,7 @@ class NatsRelay:
             except Exception:  # noqa: BLE001
                 # INFO: reservation refresh runs inside the background
                 # heartbeat; a transient failure retries next tick and must
-                # not print into the interactive REPL (biff-9la).
+                # not print into the interactive REPL.
                 logger.info("Failed to refresh TTY name reservation", exc_info=True)
 
     async def get_sessions(self) -> list[UserSession]:
@@ -1523,7 +1524,7 @@ class NatsRelay:
         except Exception:  # noqa: BLE001
             # INFO: org discovery runs at session startup and is best-effort
             # (returns empty on any transient failure) — it must not print a
-            # traceback into the interactive REPL (biff-9la).  biff.log keeps
+            # traceback into the interactive REPL.  biff.log keeps
             # the full detail.
             logger.info("Org discovery failed for %s", org, exc_info=True)
             return frozenset()
@@ -1568,7 +1569,7 @@ class NatsRelay:
         except Exception:  # noqa: BLE001
             # INFO: a transient peer-repo query failure returns [] and
             # self-recovers on the next call — it must not print a traceback
-            # into the interactive REPL (biff-9la).  biff.log keeps the detail.
+            # into the interactive REPL.  biff.log keeps the detail.
             logger.info("Failed to query sessions for repo %s", repo, exc_info=True)
             return []
 
@@ -1624,7 +1625,7 @@ class NatsRelay:
         except (TimeoutError, NatsError) as exc:
             # INFO: the consumer auto-expires (inactive_threshold), so this
             # teardown-path failure is self-healing and must not print into
-            # the interactive REPL (biff-9la).
+            # the interactive REPL.
             logger.info(
                 "Consumer cleanup failed for %s (will auto-expire): %s",
                 session_key,
@@ -1673,7 +1674,7 @@ class NatsRelay:
         # and every branch here is a benign, self-recovering reservation race
         # (TTL lapse, another session took the name, concurrent update).  At
         # WARNING these would clear the CLI's stderr floor and print into the
-        # interactive REPL (biff-9la); at INFO biff.log keeps the detail.
+        # interactive REPL; at INFO biff.log keeps the detail.
         self._validate_user(user)
         names_kv = await self._ensure_names_kv()
         key = f"{user}.{name}"
@@ -1729,7 +1730,7 @@ class NatsRelay:
             parts = key.split(".", maxsplit=1)
             if len(parts) == 2 and parts[0] == user:
                 name = parts[1]
-                # Skip the session_id->tty reclaim namespace (biff-7ak):
+                # Skip the session_id->tty reclaim namespace:
                 # {user}.sid.{session_id} is a hint, not a reserved tty name.
                 if name.startswith(f"{SID_HINT_NAMESPACE}."):
                     continue
