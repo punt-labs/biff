@@ -19,8 +19,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from biff._formatting import HEADER_PREFIX, ROW_PREFIX
-from biff.formatting import format_finger, format_who
+from biff.formatting import WHO_SPECS, format_finger, format_who
 from biff.models import BiffConfig
 from biff.server.state import create_state
 from biff.server.tools._session import update_current_session
@@ -45,16 +44,23 @@ def _finger_idle_value(rendered: str) -> str:
 def _who_idle_cell(rendered: str) -> str:
     """Return the IDLE column value from a single-row /who table.
 
-    WHO_SPECS column order is NAME, K, REPO, IDLE, S, P, HOST. The caller
-    must give every session a non-empty ``kind`` so the K column never
-    renders blank -- otherwise a plain whitespace split would collapse it
-    and misalign the remaining columns.
+    Whitespace-splitting the row would silently misalign as soon as any
+    cell contains internal whitespace of its own (a longer hostname, a
+    multi-word alias) -- every WHO_SPECS column happens to be a single
+    token today, so it would pass by luck rather than by correctness.
+    Instead, slice both lines at the exact character offsets where the
+    IDLE column starts and where the next column starts, read off the
+    header's own rendered layout using the real WHO_SPECS column order.
+    ``HEADER_PREFIX``/``ROW_PREFIX`` are asserted equal width by
+    ``_formatting.py``, so the header's offsets apply unchanged to the
+    row.
     """
     header, row = rendered.splitlines()[:2]
-    header_cells = header.removeprefix(HEADER_PREFIX).split()
-    row_cells = row.removeprefix(ROW_PREFIX).split()
-    idle_index = header_cells.index("IDLE")
-    return row_cells[idle_index]
+    names = [spec.header for spec in WHO_SPECS]
+    idle_pos = names.index("IDLE")
+    start = header.index("IDLE")
+    end = header.index(names[idle_pos + 1], start)
+    return row[start:end].strip()
 
 
 class TestIdleDisplaySurvivesHeartbeat:
@@ -91,10 +97,10 @@ class TestIdleDisplaySurvivesHeartbeat:
     async def test_who_idle_reflects_real_inactivity_not_heartbeat(
         self, tmp_path: Path
     ) -> None:
-        # kind="agent" gives the K column non-empty content ("[A]"), so
-        # every WHO_SPECS column below renders a non-blank cell and the
-        # row can be parsed by plain whitespace-splitting (_who_idle_cell).
-        config = BiffConfig(user="kai", repo_name=_TEST_REPO, kind="agent")
+        # kind left blank on purpose: the K column then renders empty,
+        # proving _who_idle_cell's column-boundary slicing handles a
+        # blank cell correctly (a whitespace .split() would not have).
+        config = BiffConfig(user="kai", repo_name=_TEST_REPO)
         state = create_state(config, tmp_path, tty="tty1")
         await update_current_session(state)
 

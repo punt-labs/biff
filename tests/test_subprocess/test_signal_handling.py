@@ -23,6 +23,7 @@ import threading
 import time
 from collections.abc import Generator
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -39,14 +40,14 @@ def _sentinel_dir(home: Path) -> Path:
     return home / ".punt-labs" / "biff" / "sentinels" / "punt-labs__biff"
 
 
-def _wait_for_startup(proc: subprocess.Popen[str]) -> None:
-    """Block until the server has passed through active-lifespan startup.
+def _start_stderr_pump(proc: subprocess.Popen[str]) -> queue.Queue[str | None]:
+    """Start a background thread draining ``proc.stderr`` into a queue.
 
-    ``_active_lifespan`` -- which registers the signal handlers under test
-    -- runs to completion before FastMCP logs this line (the lifespan context
-    manager is entered before the stdio transport starts), so waiting for it
-    is both correct and far faster than a fixed sleep.  Reads stderr on a
-    background thread so a hung startup can't block this wait forever.
+    Reading stderr must happen off the main thread so a hung child
+    process can never block the caller.  Returning the queue (rather than
+    consuming it entirely here) lets callers keep draining it after
+    startup, to capture stderr lines emitted later -- e.g. the
+    async-signal-safe cleanup diagnostics written during signal handling.
     """
     assert proc.stderr is not None
     lines: queue.Queue[str | None] = queue.Queue()
@@ -58,7 +59,21 @@ def _wait_for_startup(proc: subprocess.Popen[str]) -> None:
         lines.put(None)
 
     threading.Thread(target=_pump, daemon=True).start()
+    return lines
 
+
+def _wait_for_startup(
+    proc: subprocess.Popen[str], lines: queue.Queue[str | None]
+) -> None:
+    """Block until the server has passed through active-lifespan startup.
+
+    ``_active_lifespan`` -- which registers the signal handlers under test
+    -- runs to completion before FastMCP logs this line (the lifespan context
+    manager is entered before the stdio transport starts), so waiting for it
+    is both correct and far faster than a fixed sleep.  *lines* is the queue
+    a background thread (:func:`_start_stderr_pump`) is already draining
+    ``proc.stderr`` into.
+    """
     deadline = time.monotonic() + _STARTUP_TIMEOUT
     while time.monotonic() < deadline:
         try:
@@ -74,6 +89,26 @@ def _wait_for_startup(proc: subprocess.Popen[str]) -> None:
     raise AssertionError(f"server did not start within {_STARTUP_TIMEOUT}s")
 
 
+def _drain_stderr(lines: queue.Queue[str | None], timeout: float = 2.0) -> str:
+    """Collect stderr lines queued after the process has exited.
+
+    Call after :func:`_wait_for_exit` -- stderr closes when the process
+    does, at which point the pump thread enqueues a final ``None``
+    sentinel and stops, so this drains exactly what remains.
+    """
+    collected: list[str] = []
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            line = lines.get(timeout=max(deadline - time.monotonic(), 0))
+        except queue.Empty:
+            break
+        if line is None:
+            break
+        collected.append(line)
+    return "".join(collected)
+
+
 def _wait_for_exit(proc: subprocess.Popen[str], grace: float = _GRACE_PERIOD) -> int:
     """Poll for process exit, raising if it survives the grace period."""
     deadline = time.monotonic() + grace
@@ -87,8 +122,16 @@ def _wait_for_exit(proc: subprocess.Popen[str], grace: float = _GRACE_PERIOD) ->
     )
 
 
+class ActiveServer(NamedTuple):
+    """A running, non-dormant ``biff mcp`` subprocess under test."""
+
+    proc: subprocess.Popen[str]
+    home: Path
+    stderr_lines: queue.Queue[str | None]
+
+
 @pytest.fixture
-def active_server(tmp_path: Path) -> Generator[tuple[subprocess.Popen[str], Path]]:
+def active_server(tmp_path: Path) -> Generator[ActiveServer]:
     """Spawn a real, non-dormant ``biff mcp`` subprocess.
 
     Isolated HOME redirects ``biff_data_dir()`` (``~/.punt-labs/biff``) so
@@ -128,9 +171,10 @@ def active_server(tmp_path: Path) -> Generator[tuple[subprocess.Popen[str], Path
         stderr=subprocess.PIPE,
         text=True,
     )
-    _wait_for_startup(proc)
+    lines = _start_stderr_pump(proc)
+    _wait_for_startup(proc, lines)
     try:
-        yield proc, home
+        yield ActiveServer(proc, home, lines)
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -144,7 +188,7 @@ class TestSignalTerminatesProcess:
     """SIGTERM, SIGINT, and SIGHUP each terminate the server after cleanup."""
 
     def test_process_exits_and_sentinel_precedes_exit(
-        self, active_server: tuple[subprocess.Popen[str], Path], sig: signal.Signals
+        self, active_server: ActiveServer, sig: signal.Signals
     ) -> None:
         """Sending *sig* to a real subprocess ends it and leaves a sentinel.
 
@@ -153,7 +197,7 @@ class TestSignalTerminatesProcess:
         assertion proves the signal terminated it, not the OS default action
         firing before our handler ran (which would also leave no sentinel).
         """
-        proc, home = active_server
+        proc, home, _stderr_lines = active_server
         os.kill(proc.pid, sig)
         exit_code = _wait_for_exit(proc)
 
@@ -172,9 +216,7 @@ class TestSignalTerminatesProcess:
 class TestSignalSurvivesCleanupFailure:
     """A failing cleanup step must not stop the handler from terminating."""
 
-    def test_survives_sentinel_write_failure(
-        self, active_server: tuple[subprocess.Popen[str], Path]
-    ) -> None:
+    def test_survives_sentinel_write_failure(self, active_server: ActiveServer) -> None:
         """The handler must still exit when its first cleanup step raises.
 
         Makes the sentinels directory read-only so ``_write_sentinel``
@@ -184,9 +226,11 @@ class TestSignalSurvivesCleanupFailure:
         must not block the way a ``logger.warning()`` call could, which
         would reintroduce the exact hang this handler exists to prevent.
         No sentinel appearing proves the failure was genuinely hit, not
-        silently skipped.
+        silently skipped, and the stderr assertion below proves the
+        diagnostic ``os.write(2, ...)`` itself actually fired -- the exit
+        code alone would also pass if that write were silently dropped.
         """
-        proc, home = active_server
+        proc, home, stderr_lines = active_server
         sentinels_root = _sentinel_dir(home).parent
         sentinels_root.mkdir(parents=True, exist_ok=True)
         sentinels_root.chmod(0o500)
@@ -203,4 +247,9 @@ class TestSignalSurvivesCleanupFailure:
         assert not _sentinel_dir(home).exists(), (
             "sentinel directory should not exist -- its creation must "
             "have failed for this test to prove anything"
+        )
+
+        stderr = _drain_stderr(stderr_lines)
+        assert "biff: signal cleanup: sentinel write failed" in stderr, (
+            f"handler did not report the sentinel-write failure: {stderr!r}"
         )
