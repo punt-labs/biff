@@ -1,16 +1,15 @@
-"""Regression tests for biff-ar1 / biff-om9 -- the plan-gate marker scoping fix.
+"""Regression tests for the plan-gate marker scoping fix.
 
 Each class reproduces one of the design's documented real-world occurrences
 against a real git repo (main checkout + linked worktree), not a mock of
 git, and shows the fix closes it:
 
-- ``TestWorktreeVsMainRootMismatch`` -- ar1 occurrence 1 (a session in a
-  linked worktree and the MCP writer resolved different absolute paths).
-- ``TestSubagentCwdDiffersFromAmbientCwd`` -- ar1 occurrence 5 / biff-if2
-  (a dispatched subagent's hook subprocess inherits its outer session's
-  ambient cwd, not its own).
-- ``TestConcurrentSessionStartDoesNotClearSibling`` -- om9's core mechanism
-  (one session's ``SessionStart`` wiping every concurrent session's marker).
+- ``TestWorktreeVsMainRootMismatch`` -- a session in a
+  linked worktree and the MCP writer resolved different absolute paths.
+- ``TestSubagentCwdDiffersFromAmbientCwd`` -- a dispatched subagent's hook
+  subprocess inherits its outer session's ambient cwd, not its own.
+- ``TestConcurrentSessionStartDoesNotClearSibling`` -- one session's
+  ``SessionStart`` wiping every concurrent session's marker.
 - ``TestCliOnlyPlanSatisfiesGate`` -- PL-PA-3 (a CLI-only session's ``biff
   plan`` never wrote the marker the gate reads).
 """
@@ -81,7 +80,7 @@ class TestWorktreeVsMainRootMismatch:
 
 
 class TestSubagentCwdDiffersFromAmbientCwd:
-    """ar1 occurrence 5 / biff-if2: hook's ambient cwd != its delivered cwd."""
+    """Hook's ambient cwd != its delivered cwd."""
 
     def test_hook_uses_delivered_cwd_not_ambient_process_cwd(
         self, tmp_path: Path
@@ -93,7 +92,8 @@ class TestSubagentCwdDiffersFromAmbientCwd:
         unrelated repo), but the payload's own ``cwd`` field names the
         subagent's actual worktree.  A gate that trusted only the ambient
         cwd would resolve the wrong repo (or none at all) and deny an edit
-        whose plan really is set -- exactly the biff-if2 manifestation.
+        whose plan really is set -- the exact failure mode this test
+        reproduces.
         """
         subagent_repo = _make_repo(tmp_path / "subagent-repo")
         outer_repo = _make_repo(tmp_path / "outer-repo")
