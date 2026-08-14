@@ -1,7 +1,7 @@
 """Tests for ReplDisplay (biff.repl_display).
 
 Session-scoped display preferences for the REPL — the ``timestamps``
-toggle and its ``[HH:MM]`` stamp rendering (biff-4uq).
+toggle and its ``[HH:MM]`` stamp rendering.
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ def _relay() -> NatsRelay:
 
 
 class TestSidHintKey:
-    """The session_id reclaim-hint key validates both segments (biff-7ak P2)."""
+    """The session_id reclaim-hint key validates both segments."""
 
     def test_valid_session_id_builds_key(self) -> None:
         key = _relay()._sid_hint_key("kai", "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b")

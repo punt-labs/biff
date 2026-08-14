@@ -1,9 +1,9 @@
-"""Active-session marker file tests (biff-dzqc).
+"""Active-session marker file tests.
 
 ``write_active_session`` drops a file under ``~/.punt-labs/biff/active/``
-so the SessionEnd hook can find running sessions on shutdown.  Prior
-to biff-dzqc the marker write was wrapped in ``with suppress(OSError)``
-and silently skipped when it failed; the v1.8.0 defect on PID 983529
+so the SessionEnd hook can find running sessions on shutdown.  The
+marker write used to be wrapped in ``with suppress(OSError)``
+and silently skipped when it failed; a v1.8.0 defect on PID 983529
 showed a companion KV row with no corresponding marker file.  These
 tests pin the primary and companion marker invariants.
 """
@@ -57,7 +57,7 @@ class TestActiveMarkers:
     ) -> None:
         """Companion marker is written by _register_companion (heartbeat path).
 
-        Startup no longer registers the companion (biff-8fg3) -- the
+        Startup no longer registers the companion -- the
         marker is written when the heartbeat path successfully resolves
         the roster and calls ``_register_companion``. This test pins
         that invariant by invoking the helper directly.

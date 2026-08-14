@@ -1,4 +1,4 @@
-"""Tests for ``biff._stdlib.get_repo_common_root`` (biff-ar1/om9 design §3a).
+"""Tests for ``biff._stdlib.get_repo_common_root``.
 
 Uses real ``git init``/``git worktree add`` under ``tmp_path`` -- the same
 approach ``test_git_hooks.py`` uses -- so these tests exercise the actual
@@ -51,7 +51,7 @@ class TestGetRepoCommonRoot:
     def test_linked_worktree_resolves_to_main_root(self, tmp_path: Path) -> None:
         """A linked worktree's common root is the MAIN repo's path, not its own.
 
-        This is the empirical fact the biff-ar1 fix depends on (design §2a):
+        This is the empirical fact the plan-gate scoping fix depends on:
         ``--git-common-dir``'s parent is identical whether resolved from the
         main checkout or from any of its linked worktrees.
         """

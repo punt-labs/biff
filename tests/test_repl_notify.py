@@ -229,7 +229,7 @@ class TestNotifyState:
         assert lines == []
 
     def test_wall_escapes_neutralized(self) -> None:
-        """A malicious wall can't inject terminal escapes into the banner (biff-lbj)."""
+        """A malicious wall can't inject terminal escapes into the banner."""
         state = NotifyState()
         wall = WallPost(
             from_user="ev\x1b[2Kil",
@@ -250,7 +250,7 @@ class TestNotifyState:
         Mirrors ``TestFormatWallStatusLine.test_cjk_body_wraps_within_the_table_width``
         — the between-prompt banner shares the same up-to-512-char wall body
         as ``format_wall_status_line``, and was the last unwrapped render site
-        left standing (biff-2sw).
+        left standing.
         """
         state = NotifyState()
         wall = WallPost(
