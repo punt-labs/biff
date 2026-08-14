@@ -38,9 +38,11 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
     the session key across repos, DES-034) can leave ``repo`` and
     ``pwd`` sourced from two different processes, so ``/who``'s REPO
     column and ``/finger``'s Dir disagree about the same session.
-    Threading ``repo`` and the claimed ``tty_name`` from *ctx* here
-    means both fields come from the one process that is actually
-    writing the record.
+    Threading ``repo``, ``kind``, and the claimed ``tty_name`` from
+    *ctx* here builds the same shaped record ``cli_session()``'s own
+    registration does (``repo=config.repo_name``, ``kind=config.kind``)
+    rather than a subset of it -- every field comes from the one
+    process that is actually writing the record.
     """
     session = await ctx.relay.get_session(ctx.session_key)
     if session is None:
@@ -51,6 +53,7 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
             hostname=get_hostname(),
             pwd=get_pwd(),
             repo=ctx.config.repo_name,
+            kind=ctx.config.kind,
         )
     now = datetime.now(UTC)
     updates["last_active"] = now

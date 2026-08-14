@@ -31,6 +31,20 @@ class TestFallbackThreadsRepoAndTtyName:
         session = await update_current_session(ctx)
         assert session.repo == ctx.config.repo_name
 
+    async def test_missing_session_carries_owning_kind(self, relay: LocalRelay) -> None:
+        """The fallback builds the SAME shaped record cli_session()'s own
+        registration does (repo=config.repo_name, kind=config.kind) --
+        not a subset of it."""
+        ctx = CliContext(
+            relay=relay,
+            config=BiffConfig(user="kai", repo_name="lux", kind="agent"),
+            session_key="kai:aaa11111",
+            user="kai",
+            tty="aaa11111",
+        )
+        session = await update_current_session(ctx)
+        assert session.kind == "agent"
+
     async def test_missing_session_preserves_claimed_tty_name(
         self, relay: LocalRelay
     ) -> None:
