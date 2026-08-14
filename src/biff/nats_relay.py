@@ -461,6 +461,10 @@ class NatsRelay:
         # reconnected one — it is true in both — so the epoch carries the datum
         # ``is_connected`` does not.
         self._reconnect_epoch = 0
+        # Session keys for which heartbeat() has already logged a missing-
+        # session warning -- caps the warning at once per key rather than
+        # once per heartbeat tick, which runs on a fixed interval forever.
+        self._heartbeat_missing_warned: set[str] = set()
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
@@ -1431,6 +1435,17 @@ class NatsRelay:
         all_sessions = await self.get_sessions()
         return [s for s in all_sessions if s.user == user]
 
+    def _warn_heartbeat_missing_once(self, session_key: str) -> None:
+        """Warn once per session key that heartbeat found no session.
+
+        A session vanishing under a running heartbeat loop is anomalous --
+        warn once per key, not on every tick, since the loop runs on a
+        fixed interval for the life of the process.
+        """
+        if session_key not in self._heartbeat_missing_warned:
+            self._heartbeat_missing_warned.add(session_key)
+            logger.warning("Heartbeat found no session for %s; skipping", session_key)
+
     async def heartbeat(self, session_key: str) -> None:
         """Update ``last_active`` for an existing session.
 
@@ -1452,9 +1467,11 @@ class NatsRelay:
         try:
             entry = await self._tracked("kv.get", kv.get(kv_key))
             if entry.value is None:
+                self._warn_heartbeat_missing_once(session_key)
                 return  # No session to heartbeat
             existing = UserSession.model_validate_json(entry.value)
         except (KeyNotFoundError, BucketNotFoundError):
+            self._warn_heartbeat_missing_once(session_key)
             return  # Session not found — nothing to heartbeat
         except (ValidationError, ValueError):
             # INFO: heartbeat runs in the background loop; a skipped tick is
@@ -1462,6 +1479,7 @@ class NatsRelay:
             # REPL (biff-9la).  biff.log records the anomaly.
             logger.info("Corrupt session for %s, skip heartbeat", session_key)
             return
+        self._heartbeat_missing_warned.discard(session_key)
         updated = existing.model_copy(update={"last_active": datetime.now(UTC)})
         # Re-anchor to the current connection: the kv.get above may have let a
         # concurrent loop rebuild self._nc, leaving `kv` stale.  Fast path

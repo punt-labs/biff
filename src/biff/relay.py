@@ -317,6 +317,10 @@ class LocalRelay:
 
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
+        # Session keys for which heartbeat() has already logged a missing-
+        # session warning -- caps the warning at once per key rather than
+        # once per heartbeat tick, which runs on a fixed interval forever.
+        self._heartbeat_missing_warned: set[str] = set()
 
     @staticmethod
     def _validate_user(user: str) -> str:
@@ -495,7 +499,17 @@ class LocalRelay:
         sessions = self._read_sessions()
         existing = sessions.get(session_key)
         if existing is None:
+            # A session vanishing under a running heartbeat loop is
+            # anomalous (expired, deleted, or never created) -- warn once
+            # per key, not on every tick, since the loop runs on a fixed
+            # interval for the lifetime of the process.
+            if session_key not in self._heartbeat_missing_warned:
+                self._heartbeat_missing_warned.add(session_key)
+                logger.warning(
+                    "Heartbeat found no session for %s; skipping", session_key
+                )
             return
+        self._heartbeat_missing_warned.discard(session_key)
         sessions[session_key] = existing.model_copy(
             update={"last_active": datetime.now(UTC)}
         )

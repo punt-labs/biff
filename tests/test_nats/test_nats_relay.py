@@ -332,6 +332,23 @@ class TestHeartbeat:
         result = await relay.get_session(f"kai:{_KAI_TTY}")
         assert result is None
 
+    async def test_warns_once_on_missing_session(
+        self, relay: NatsRelay, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A session vanishing under a live heartbeat loop is anomalous.
+
+        The loop runs on a fixed interval for the life of the process, so
+        the warning must fire once per key, not on every tick.
+        """
+        key = f"kai:{_KAI_TTY}"
+        with caplog.at_level("WARNING"):
+            await relay.heartbeat(key)
+            await relay.heartbeat(key)
+            await relay.heartbeat(key)
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert key in warnings[0].message
+
     async def test_updates_last_active(self, relay: NatsRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
         await relay.update_session(

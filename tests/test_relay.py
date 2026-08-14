@@ -449,6 +449,35 @@ class TestHeartbeat:
         result = await relay.get_session("kai:tty1")
         assert result is None
 
+    async def test_warns_once_on_missing_session(
+        self, relay: LocalRelay, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A session vanishing under a live heartbeat loop is anomalous.
+
+        The loop runs on a fixed interval for the life of the process, so
+        the warning must fire once per key, not on every tick.
+        """
+        with caplog.at_level("WARNING"):
+            await relay.heartbeat("kai:tty1")
+            await relay.heartbeat("kai:tty1")
+            await relay.heartbeat("kai:tty1")
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "kai:tty1" in warnings[0].message
+
+    async def test_rewarns_after_session_reappears_and_vanishes_again(
+        self, relay: LocalRelay, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A fresh disappearance after recovery is anomalous again."""
+        with caplog.at_level("WARNING"):
+            await relay.heartbeat("kai:tty1")
+            await relay.update_session(UserSession(user="kai", tty="tty1"))
+            await relay.heartbeat("kai:tty1")
+            await relay.delete_session("kai:tty1")
+            await relay.heartbeat("kai:tty1")
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 2
+
     async def test_updates_last_active(self, relay: LocalRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
         await relay.update_session(
