@@ -79,9 +79,9 @@ class ResolvedConfig:
     config: BiffConfig
     data_dir: Path
     # Parent of ``git rev-parse --git-common-dir``: the same absolute path from
-    # the main checkout and every linked worktree (biff-ar1/om9 broad-scope
-    # decision).  Distinct from *repo_root* so per-worktree write-through
-    # (config yaml, enabled marker) keeps the nearest-worktree semantics.
+    # the main checkout and every linked worktree.  Distinct from *repo_root*
+    # so per-worktree write-through (config yaml, enabled marker) keeps the
+    # nearest-worktree semantics.
     # Required: ``_load_base_config`` always resolves it (falling back to
     # ``repo_root`` when ``get_repo_common_root`` returns ``""``), so the
     # optional-with-``None`` shape had no reachable ``None`` branch and
@@ -518,8 +518,7 @@ def _known_agent_github_logins(repo_root: Path) -> _AgentLoginScan:
     (org CLAUDE.md), so ``gh api user`` can resolve to the bot even when
     a human is at the keyboard. Cross-checking the resolved login
     against the repo's own identity registry lets
-    :func:`_resolve_human_identity` detect and reject that case
-    (biff-if2).
+    :func:`_resolve_human_identity` detect and reject that case.
 
     Returns an empty, complete scan when the identities directory is
     absent or empty AND ``.gitmodules`` doesn't declare an ethos
@@ -1102,7 +1101,7 @@ class _BaseConfig:
     # (which stays at the nearest worktree top) so per-worktree write-through
     # (config yaml, ``enabled`` marker) keeps the nearest-worktree semantics
     # while cross-worktree coordination (wall markers, collision detection)
-    # collapses linked worktrees into one unit (biff-ar1/om9 broad-scope).
+    # collapses linked worktrees into one unit.
     repo_common_root: Path
     repo_name: str
     data_dir: Path
@@ -1197,7 +1196,7 @@ def _resolve_human_identity(
     ``get_github_identity()`` returning ``None`` -- a bot's ``GH_TOKEN``
     pinned into a human's shell (every Claude Agento session sources one,
     see ``~/.punt-labs/git-identity.env``) must never silently become the
-    human's biff identity (DES-053, biff-if2).
+    human's biff identity (DES-053).
 
     The same rejection applies, more cautiously, when the identity scan
     itself is incomplete (an identity file was unreadable or malformed):
@@ -1335,7 +1334,7 @@ def load_cli_config(
     pre-spec behavior with the now-deleted ``get_ethos_identity()``
     step removed (spec § 1.1). A GitHub login matching a known
     ``kind: agent`` identity is rejected even when ``get_github_identity``
-    resolves one -- see :func:`_resolve_human_identity` (DES-053, biff-if2).
+    resolves one -- see :func:`_resolve_human_identity` (DES-053).
 
     Raises :class:`SystemExit` for the same conditions as
     :func:`_load_base_config`, plus when no identity source succeeds.

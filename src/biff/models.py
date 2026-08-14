@@ -57,8 +57,9 @@ class Message(BaseModel):
     body: str = Field(min_length=1, max_length=512)
     timestamp: datetime = Field(default_factory=_utc_now)
     read: bool = False
-    # Encryption envelope — reserved for biff-lff (DES-016).
-    # All defaults are empty/false; populated when E2E encryption is active.
+    # Encryption envelope, reserved for a future end-to-end encryption
+    # feature (DES-016).  All defaults are empty/false; populated when
+    # E2E encryption is active.
     encrypted: bool = False
     nonce: str = ""
     sender_pubkey: str = ""
@@ -122,7 +123,7 @@ class UserSession(BaseModel):
         ``last_active``.  A session whose last heartbeat is older than
         *ttl_seconds* has stopped heartbeating (shut down, killed, or
         wedged) and is not live, even though its KV entry may not have
-        hit the longer storage TTL yet (biff-mue).
+        hit the longer storage TTL yet.
         """
         return (now - self.last_active).total_seconds() <= ttl_seconds
 

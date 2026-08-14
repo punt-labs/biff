@@ -3,7 +3,7 @@
 Both front-ends route here: the ``biff enable`` / ``biff disable`` CLI verbs and
 the MCP ``biff`` tool (``/biff enable`` / ``/biff disable``).  Sharing one
 definition is what makes the two surfaces equivalent -- the "two equivalent ways
-to one state" model (DES-052, biff-j5u).
+to one state" model (DES-052).
 
 ``enable`` fully activates the current clone in one verb (the beads ``bd setup``
 model), writing three artifacts:
