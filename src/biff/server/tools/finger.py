@@ -42,7 +42,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         addresses = user.split()
         # Availability check: only live sessions (heartbeat within the
-        # liveness window), not dead ones lingering in the KV (biff-mue).
+        # liveness window), not dead ones lingering in the KV.
         all_sessions = live_sessions(
             await state.relay.get_sessions_for_repos(state.visible_repos)
         )

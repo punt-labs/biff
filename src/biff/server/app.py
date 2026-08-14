@@ -88,7 +88,7 @@ def _write_marker(repo_name: str, session_key: str, worktree_root: str) -> None:
     """Write the active-session marker, logging OSError rather than swallowing it.
 
     A missing marker breaks SessionEnd hook cleanup — failures must be
-    visible in logs so operators can diagnose them (biff-dzqc).
+    visible in logs so operators can diagnose them.
     """
     try:
         write_active_session(repo_name, session_key, worktree_root=worktree_root)
@@ -120,7 +120,7 @@ async def register_session(
     file; the caller owns that.
     """
     session_key = build_session_key(user, tty_hex)
-    # Resume reclaim (biff-7ak): when no name is explicitly requested, prefer
+    # Resume reclaim: when no name is explicitly requested, prefer
     # the ttyN this session_id last held so a resumed session keeps its alias.
     # The routing token (tty_hex) is the session_id under identity routing.
     from_hint = False
@@ -239,7 +239,7 @@ async def _reap_sentinels(state: ServerState) -> None:
     # just-exited incarnation ({user}:{session_id} is stable across resume),
     # so a leftover sentinel for our own key must NOT be reaped — we are
     # already registered live under it, and reaping would log us out, release
-    # the alias we just reclaimed, and delete our own KV row (biff-7ak).
+    # the alias we just reclaimed, and delete our own KV row.
     live_keys = {state.session_key}
     if state.companion_session_key:
         live_keys.add(state.companion_session_key)
@@ -328,9 +328,9 @@ async def _poll_companion_registration(state: ServerState) -> None:
     if roster.root.handle == state.config.user:
         return  # Root IS the agent -- no human companion to register
     # Derive the companion's routing id from the agent's session_id
-    # (``state.tty`` under identity routing) salted by the human's handle
-    # (biff-7ak amendment 3): stable across resume and distinct from the
-    # agent by construction, so the human side is not volatile.
+    # (``state.tty`` under identity routing) salted by the human's handle:
+    # stable across resume and distinct from the agent by construction,
+    # so the human side is not volatile.
     companion = CompanionSession(
         user=roster.root.handle,
         display_name=roster.root.display_name,
@@ -470,7 +470,7 @@ async def _run_kv_watch(
         # __anext__ raises StopAsyncIteration on the snapshot-done None
         # marker, terminating the iterator and creating a blind window
         # where notifications can be missed before the restart loop
-        # re-creates the watcher.  See biff-udp.
+        # re-creates the watcher.
         while not shutdown.is_set():
             try:
                 entry = await watcher.updates(timeout=5.0)  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
@@ -903,7 +903,7 @@ async def _register_companion(state: ServerState) -> None:
     # Store the repo-common-root so ``_detect_collisions`` matches this
     # marker against a hook whose ``_repo_common_root`` also resolves to the
     # common root -- two sessions in different linked worktrees of the same
-    # repo are one coordination unit (biff-ar1/om9 broad-scope, DES-054).
+    # repo are one coordination unit (DES-054).
     _write_marker(
         state.config.repo_name,
         state.companion.session_key,
@@ -986,7 +986,7 @@ async def _active_lifespan(
         sorted(state.visible_repos),
     )
 
-    # Claim-then-write (DES-035, biff-dzqc): reserve TTY name first, then
+    # Claim-then-write (DES-035): reserve TTY name first, then
     # write the KV row exactly once with ``tty_name`` already populated.
     # An unreserved hex fallback would defeat the DES-035 invariant.
     _, final_name = await register_session(
@@ -1015,7 +1015,7 @@ async def _active_lifespan(
 
     # Companion (human) registration is deferred entirely to the
     # heartbeat loop. The ethos roster is not yet available at
-    # startup on claude --resume (spec § 3.2, biff-8fg3).
+    # startup on claude --resume (spec § 3.2).
 
     # Write the initial unread file and wall state immediately so the
     # status line has identity from the first render (before the poller ticks).

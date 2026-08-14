@@ -49,7 +49,7 @@ class ServerState:
     # coordination (wall marker path, ``write_active_session`` third line so
     # ``_detect_collisions`` matches across linked worktrees) — the per-worktree
     # ``repo_root`` stays as-is for write-through to per-worktree files
-    # (biff-ar1/om9 broad-scope, DES-054).  Required: ``create_state`` resolves
+    # (DES-054).  Required: ``create_state`` resolves
     # ``None`` inputs to ``repo_root`` (matching the loader's fallback), so the
     # field's runtime type is always ``Path`` and every reader is unconditional.
     repo_common_root: Path

@@ -73,7 +73,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         state.talk.set_tty_name(claimed)
         await update_current_session(state, tty_name=claimed)
         # Keep the resume-reclaim hint current so the next resume reclaims
-        # the RENAMED alias, not the stale one (biff-7ak). The routing token
+        # the RENAMED alias, not the stale one. The routing token
         # is state.tty (the session_id under identity routing).
         await state.relay.set_session_tty_hint(state.config.user, state.tty, claimed)
         await refresh_read_messages(mcp, state)
