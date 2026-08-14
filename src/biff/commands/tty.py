@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
-from biff.models import UserSession
-from biff.tty import get_hostname, get_pwd, rename_tty, validate_tty_name
+from biff.commands._session import update_current_session
+from biff.tty import rename_tty, validate_tty_name
 
 
 async def tty(ctx: CliContext, name: str) -> CommandResult:
@@ -39,18 +39,7 @@ async def tty(ctx: CliContext, name: str) -> CommandResult:
     # Keep the talk state's outgoing from_tty in sync with the new name.
     ctx.talk.set_tty_name(claimed)
 
-    session = await ctx.relay.get_session(ctx.session_key)
-    if session is None:
-        session = UserSession(
-            user=ctx.user,
-            tty=ctx.tty,
-            tty_name=claimed,
-            hostname=get_hostname(),
-            pwd=get_pwd(),
-        )
-    else:
-        session = session.model_copy(update={"tty_name": claimed})
-    await ctx.relay.update_session(session)
+    await update_current_session(ctx, tty_name=claimed)
     # Keep the resume-reclaim hint current so the next resume reclaims the
     # RENAMED alias, not the stale one (biff-7ak). The routing token is
     # ctx.tty (the session_id under identity routing).

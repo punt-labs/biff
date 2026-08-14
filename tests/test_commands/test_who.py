@@ -58,6 +58,42 @@ class TestWho:
         assert data[0]["user"] == "eric"
         assert data[1]["user"] == "kai"
 
+    async def test_row_order_follows_last_tool_at_not_last_active(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        """Row order must match the IDLE column (last_tool_at), not the
+        heartbeat-refreshed last_active -- otherwise the visible order
+        and the visible idle values disagree (biff-liu round 2)."""
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        # kai heartbeated most recently but has been idle the longest;
+        # eric is the opposite. Sorting by last_active would put kai
+        # first; sorting by last_tool_at (matching IDLE) puts eric first.
+        await relay.update_session(
+            UserSession(
+                user="kai",
+                tty="aaa11111",
+                tty_name="tty1",
+                last_active=now,
+                last_tool_at=now - timedelta(minutes=10),
+            )
+        )
+        await relay.update_session(
+            UserSession(
+                user="eric",
+                tty="bbb22222",
+                tty_name="tty2",
+                last_active=now - timedelta(seconds=5),
+                last_tool_at=now,
+            )
+        )
+        result = await who(ctx)
+        assert not result.error
+        data = cast("list[dict[str, object]]", result.json_data)
+        assert data[0]["user"] == "eric"
+        assert data[1]["user"] == "kai"
+
     async def test_hides_dead_session(self, ctx: CliContext, relay: LocalRelay) -> None:
         """A session that stopped heartbeating (> liveness window) is hidden."""
         from datetime import UTC, datetime, timedelta
