@@ -36,6 +36,7 @@ __all__ = [
     "READ_SPECS",
     "WHO_SPECS",
     "ColumnSpec",
+    "format_dead_footnote",
     "format_finger",
     "format_finger_multi",
     "format_idle",
@@ -350,6 +351,31 @@ def format_who(sessions: list[UserSession]) -> str:
         for s in sessions
     ]
     return format_table(WHO_SPECS, rows)
+
+
+def format_dead_footnote(dead: list[UserSession]) -> str:
+    """Render a trailing summary line for KV rows that died without deregistering.
+
+    A session that shuts down cleanly deletes its own KV row, so a row
+    :func:`~biff.relay.dead_sessions` still finds is a session that stopped
+    heartbeating without cleanup — killed, wedged, or its host vanished
+    (DES-056). The main ``/who`` table only ever renders *live* rows, so
+    this signal would otherwise be invisible until the 3-day storage TTL
+    reaps the row.
+
+    Deliberately reports counts and idle durations only, never a `user` or
+    `tty_name` — unlike :data:`WHO_SPECS`, there is no fixed column here for
+    an unbounded field to widen, so there is nothing to sanitize or clip.
+    Returns ``""`` when *dead* is empty so callers can append unconditionally.
+    """
+    if not dead:
+        return ""
+    by_recency = sorted(dead, key=lambda s: s.last_active, reverse=True)
+    ages = ", ".join(format_idle(s.last_active) for s in by_recency)
+    noun = "session" if len(dead) == 1 else "sessions"
+    text = f"{len(dead)} {noun} stopped responding (last seen {ages})"
+    chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
+    return "\n".join(ROW_PREFIX + chunk for chunk in chunks)
 
 
 # ---------------------------------------------------------------------------

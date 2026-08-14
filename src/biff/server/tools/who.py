@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from biff.formatting import format_who
-from biff.relay import live_sessions
+from biff.formatting import format_dead_footnote, format_who
+from biff.relay import dead_sessions, live_sessions
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import update_current_session
@@ -36,10 +36,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await refresh_read_messages(mcp, state)
         sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
         live = live_sessions(sessions)
+        footnote = format_dead_footnote(dead_sessions(sessions))
         if not live:
-            return "No sessions."
-        # Sort by last_tool_at, matching the IDLE column format_who renders
-        # (:func:`biff.formatting.format_who`) -- last_active is heartbeat
-        # recency, unrelated to the idle value shown.
-        sorted_sessions = sorted(live, key=lambda s: s.last_tool_at, reverse=True)
-        return format_who(sorted_sessions)
+            text = "No sessions."
+        else:
+            # Sort by last_tool_at, matching the IDLE column format_who
+            # renders (:func:`biff.formatting.format_who`) -- last_active is
+            # heartbeat recency, unrelated to the idle value shown.
+            sorted_sessions = sorted(live, key=lambda s: s.last_tool_at, reverse=True)
+            text = format_who(sorted_sessions)
+        return f"{text}\n{footnote}" if footnote else text
