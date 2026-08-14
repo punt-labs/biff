@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`biff plan` no longer resolves a different repo root than the `PreToolUse` gate that reads it (biff-7xd).** `sync_plan_marker()` called `get_repo_common_root()` with no `cwd` argument, which falls back to the ambient process working directory; the gate's read path (`_repo_common_root`) resolves against its own delivered `cwd`. The two could diverge — most concretely for a dispatched subagent whose hook subprocess doesn't always inherit its own worktree as its ambient cwd (biff-ar1/biff-if2) — leaving a plan written under one root invisible to a gate check reading a different root, and incorrectly denying the edit. The write path now threads `Path.cwd()` through explicitly so both sides agree.
+- **Tier-3b NATS integration tests (`pytest -m nats`) no longer hang indefinitely on session teardown.** Every step of session shutdown (`_append_logout_event`, `_append_companion_logout_event`, `_release_relay`) made a NATS/JetStream round-trip with no ceiling of its own; nats-py reconnects indefinitely on a lost connection by design, so a best-effort teardown call issued while nats-py is mid-reconnect could block far past any nominal per-request timeout. Each of these calls is now wrapped in `asyncio.wait_for` with a bounded ceiling, so a wedged connection during shutdown costs a few seconds per step instead of hanging the whole test session.
+
 ### Added
 
 - **`/who` gave no signal that a session had died without deregistering — the exact five-week `biff mcp` orphan DES-056 found was invisible on every presence surface (biff-b3e).** `live_sessions()` (biff-mue) correctly keeps a dead session's row out of the main table, but a session that shuts down cleanly *deletes* its own KV row — so a row still present but failing liveness is, by construction, a session that died without cleanup (killed, wedged, host vanished). Hiding that row outright traded a visible-but-misleading anomaly (a should-be-alive server showing `idle 5h`) for an invisible one: the operator lost the only cue that something had died. `/who` now appends a trailing footnote — `N sessions stopped responding (last seen 6m, 35d)` — reporting count and last-seen age for exactly those rows, never naming the user or tty (there is no fixed column here for an unbounded field to widen, so nothing needs sanitizing). The footnote uses a wider threshold than the 120s liveness window (`DEAD_REPORT_SECONDS`, 3x) so a session that merely missed one heartbeat tick (laptop sleep, GC pause) does not flap into and back out of the footnote before the next `/who` call. `/finger`, `is_live`, `live_sessions`, and which sessions render in the main table are unchanged. See DES-057.
+- **`pytest-timeout`** now guards every test with a 120s ceiling (thread-based watchdog, dumps every thread's stack on expiry) so a future hang reports instead of wedging a developer's session.
 
 ## [1.13.1] - 2026-08-21
 
