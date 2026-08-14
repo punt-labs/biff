@@ -55,8 +55,16 @@ class TestTalkEndRefreshesActivity:
             )
         )
 
+        # The baseline ``update_current_session`` call above already moved
+        # ``last_tool_at`` past ``backdated``, so asserting only
+        # ``> backdated`` would pass even if talk_end's own
+        # ``update_current_session`` call were deleted -- it would prove
+        # nothing about the fix under test. Capture ``before`` immediately
+        # before the call under test and require ``last_tool_at`` to have
+        # advanced past THAT point.
+        before = datetime.now(UTC)
         await recorder.call("talk_end")
 
         session = await state.relay.get_session(state.session_key)
         assert session is not None
-        assert session.last_tool_at > backdated
+        assert session.last_tool_at >= before
