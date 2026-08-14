@@ -2,7 +2,7 @@
 
 ``RepoEnablement`` is the single definition of what ``enable``/``disable`` do,
 so both front-ends (the CLI verbs and the MCP ``biff`` tool) produce an
-identical fully-active clone (DES-052, biff-j5u).  ``enable`` writes three
+identical fully-active clone (DES-052).  ``enable`` writes three
 artifacts -- the committed marker, the committed CI workflow, and this clone's
 local ``.git/hooks`` dispatchers -- and ``disable`` removes exactly those.
 

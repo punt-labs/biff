@@ -88,7 +88,7 @@ class TestLifespanRegistration:
     async def test_active_lifespan_does_not_register_companion_at_startup(
         self, primary_state_with_companion: ServerState
     ) -> None:
-        """Companion registration is deferred to the heartbeat loop (biff-8fg3).
+        """Companion registration is deferred to the heartbeat loop.
 
         Even when ``state.companion`` is pre-populated (legacy path,
         retained so fixtures can probe the registration helper), the
@@ -353,7 +353,7 @@ class TestPollCompanionRegistration:
     ) -> None:
         """No companion when the agent is itself the roster root.
 
-        Agent-first identity (biff-8fg3) means ``config.user`` is always
+        Agent-first identity means ``config.user`` is always
         the agent. When the roster root handle equals ``config.user``,
         the agent is operating without a human at the terminal -- an
         unusual configuration, but valid. No companion is registered.
@@ -430,7 +430,7 @@ class TestPollCompanionRegistration:
     ) -> None:
         """Companion routing id is a stable derivation, not a random hex.
 
-        The human side must not reproduce the bug (biff-7ak amendment 3):
+        The human side must not reproduce the volatile-tty bug:
         the companion id derives deterministically from the agent's
         session_id salted by the human handle — stable across resume and
         distinct from the agent's own id.
@@ -587,7 +587,7 @@ class TestOrgReposRefresh:
 
 
 class TestResumeReclaim:
-    """Routing on the Claude session_id cures LOST and MISROUTED (biff-7ak).
+    """Routing on the Claude session_id cures LOST and MISROUTED messages.
 
     ``register_session`` is invoked with the session_id as the routing token
     (``tty_hex``).  The session key ``{user}:{session_id}`` is stable across
@@ -625,7 +625,7 @@ class TestResumeReclaim:
         Live-verify caught this: on resume our own just-exited session still
         holds its ttyN (the reservation has not released/expired yet), so a
         naive claim treated 'taken' as a foreign collision and reassigned a
-        fresh tty. Same-identity takeover reclaims tty16 -> tty16 (biff-7ak).
+        fresh tty. Same-identity takeover reclaims tty16 -> tty16.
         """
         from biff.server.app import register_session
 
@@ -668,7 +668,7 @@ class TestResumeReclaim:
         The value flows into a KV key / NATS subject via claim_tty_name, so a
         dotted / namespace-colliding value is validated at the trust boundary
         and the resume falls back to a fresh lowest-free alias — never the
-        poisoned name (biff-7ak security review P2).
+        poisoned name.
         """
         from biff.server.app import register_session
 
@@ -810,7 +810,7 @@ class TestReapSentinels:
         Under identity routing a resumed session carries the SAME key as its
         just-exited incarnation, so reaping the prior sentinel would wipe the
         live session's presence: log it out, release the reclaimed alias, and
-        delete its KV row (biff-7ak).
+        delete its KV row.
         """
         from biff.server import app as app_mod
         from biff.server.app import _write_sentinel, register_session
