@@ -3,7 +3,7 @@
 The MCP ``talk``/``talk_end`` tools and the REPL modal loop both drive the same
 ephemeral :class:`~biff.talk_state.TalkState`.  Before this module the accept /
 invite / send / end decision logic was copied into both, and the copies drifted
-(a trigger wired twice, biff-9la).  Every state-changing talk action now lives
+(a trigger wired twice).  Every state-changing talk action now lives
 here as a pure async function returning
 :class:`~biff.commands._result.CommandResult`; the MCP tool wraps each call with
 a ``refresh_talk`` description push, and the REPL wraps them in its interactive
@@ -159,7 +159,7 @@ async def invite(
     An idle session publishes an invite; a non-idle phase to a *different* peer
     refuses rather than abandon the live talk with no end frame.  The invite body
     carries a runnable ``talk me:ttyN`` reply hint (canonical bare address, no
-    ``@`` — biff-5gb) unless *message* supplies an opening line.
+    ``@``) unless *message* supplies an opening line.
     """
     talk_state = ctx.talk
     if talk_state.phase is not TalkPhase.IDLE:

@@ -13,7 +13,7 @@ async def who(ctx: CliContext) -> CommandResult:
 
     Sessions whose last heartbeat is older than the liveness window are
     dead (shut down, killed, or wedged) but may linger in the KV until the
-    longer storage TTL; they are hidden from presence (biff-mue).
+    longer storage TTL; they are hidden from presence.
     """
     sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     live = live_sessions(sessions)
