@@ -5,6 +5,7 @@
 ### Fixed
 
 - **Tier-3b NATS integration tests (`pytest -m nats`) no longer hang indefinitely on session teardown.** Every step of session shutdown (`_append_logout_event`, `_append_companion_logout_event`, `_release_relay`) made a NATS/JetStream round-trip with no ceiling of its own; nats-py reconnects indefinitely on a lost connection by design, so a best-effort teardown call issued while nats-py is mid-reconnect could block far past any nominal per-request timeout. Each of these calls is now wrapped in `asyncio.wait_for` with a bounded ceiling, so a wedged connection during shutdown costs a few seconds per step instead of hanging the whole test session.
+- **A session whose teardown aborts partway (bounded by the fix above, or cut off by FastMCP's own 5s client disconnect timeout) no longer silently orphans its KV row.** Normal (non-signal) shutdown never wrote a reap-fallback sentinel — only the SIGTERM/SIGINT/SIGHUP signal handler did — so an incomplete `_release_relay` left the session dead but invisible, with no reaper coverage. `_lifespan_cleanup` now writes the same sentinel the signal handler uses before attempting teardown, and removes it only once the KV row is actually deleted, so this server's own reaper, another running server's, or the next startup's orphan sweep finishes the job.
 
 ### Added
 
