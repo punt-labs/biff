@@ -109,7 +109,7 @@ def _suppress_nats_noise() -> None:
     it dropped every transient connection log (disconnect, reconnect, wedge,
     error_cb) from the FILE too, while the one ERROR-level line (error_cb)
     still cleared the stderr floor and dumped a traceback into the interactive
-    REPL (biff-9la).  At INFO the transient events — all demoted to INFO in
+    REPL.  At INFO the transient events — all demoted to INFO in
     nats_relay — reach biff.log for diagnosis and stay off the terminal, while
     genuine WARNING+ anomalies (malformed messages) still surface.
     """
@@ -176,7 +176,7 @@ def main(
 
 
 def _release_prompt(prompt_gate: threading_mod.Event) -> None:
-    """Flush stdout, then open the prompt gate (biff-1xt5).
+    """Flush stdout, then open the prompt gate.
 
     The stdin thread prints the next prompt via ``input()`` the instant the
     gate opens, and ``input()`` flushes immediately.  Any buffered stdout must
@@ -190,7 +190,7 @@ def _release_prompt(prompt_gate: threading_mod.Event) -> None:
 
 
 def _handle_timestamps(args: list[str], repl_display: ReplDisplay) -> None:
-    """Handle the REPL-only ``timestamps on|off`` toggle (biff-4uq).
+    """Handle the REPL-only ``timestamps on|off`` toggle.
 
     Prints a usage line on bad input, otherwise updates *repl_display* and
     confirms the new state.
@@ -206,7 +206,7 @@ def _handle_timestamps(args: list[str], repl_display: ReplDisplay) -> None:
 def _format_idle_banners(
     notifs: list[TalkNotification],
     # None keeps the historical timestamp-free banner for callers/tests that
-    # predate the display toggle — see ReplDisplay (biff-4uq).
+    # predate the display toggle — see ReplDisplay.
     display: ReplDisplay | None = None,
 ) -> list[str]:
     """Format drained idle-mode notifications as REPL banner lines.
@@ -221,7 +221,7 @@ def _format_idle_banners(
     for notif in notifs:
         # Accepts are silent (the handshake owns them); every other bodied
         # frame — invite or idle-arriving message — renders as a yellow ▶
-        # line in the shared who/read/wall idiom (biff-7g7).
+        # line in the shared who/read/wall idiom.
         if notif.is_accept or not notif.nbody:
             continue
         stamp = display.stamp(datetime.now(UTC)) if display is not None else ""
@@ -287,7 +287,7 @@ async def _sync_notify(ctx: CliContext, notify: object) -> None:
 def _format_talk_lines(
     notifs: list[TalkNotification],
     # None keeps the historical timestamp-free rendering for callers (and
-    # tests) that predate the display toggle — see ReplDisplay (biff-4uq).
+    # tests) that predate the display toggle — see ReplDisplay.
     display: ReplDisplay | None = None,
 ) -> list[str]:
     """Format drained connected-mode notifications as conversation lines.
@@ -542,7 +542,7 @@ async def _repl_loop(
             _release_prompt(prompt_gate)
             continue
 
-        # REPL-only display toggle (not an MCP tool) — biff-4uq.
+        # REPL-only display toggle (not an MCP tool).
         if tokens and tokens[0].lower() == "timestamps":
             _handle_timestamps(tokens[1:], repl_display)
             _release_prompt(prompt_gate)
@@ -572,8 +572,8 @@ def _print_talk_banner(notif: TalkNotification) -> None:
     """Print a third-party talk notification in the wrapped ``▶`` idiom."""
     # Render first: only a truly bodiless frame (no body at all) renders no
     # line — a whitespace- or control-only body still renders an explanatory
-    # fallback line (biff-2sw round 6).  Clearing the prompt before checking
-    # would blank the line even on the rare truly-empty case (biff-7g7).
+    # fallback line.  Clearing the prompt before checking would blank the
+    # line even on the rare truly-empty case.
     lines = format_talk_line(notif.sender_label, notif.nbody)
     if not lines:
         return
@@ -866,7 +866,7 @@ class _TalkSubscription:
     """A generation-tracked, crash-safe talk-notify SUB (nats-relay.tex talkSubGen).
 
     Both talk front-ends subscribe to the per-user notify subject to wake on an
-    incoming frame.  A wedge teardown (``_force_reconnect``, biff-3hp) or a
+    incoming frame.  A wedge teardown (``_force_reconnect``) or a
     give-up close drops the NATS client and the next dial builds a fresh one
     with no SUB, orphaning the held handle on the closed client.
     :meth:`reconcile` re-subscribes when the relay dials a new client — detected
@@ -905,7 +905,7 @@ class _TalkSubscription:
         ``subscribe`` raise; a raise here must not crash the caller and kill the
         retry loop that was meant to self-heal.  On failure, leave the handle
         and generation unchanged so the next ``reconcile`` tick retries, and
-        let the latch log the failure once (biff-9la).  The generation binds
+        let the latch log the failure once.  The generation binds
         only after a successful subscribe.
         """
         relay = self._relay
@@ -1259,14 +1259,14 @@ def _create_mcp_server(
     )
     dormant = not is_enabled(resolved.repo_root)
 
-    # Route on the Claude session_id (biff-7ak): read the SessionStart hook's
+    # Route on the Claude session_id: read the SessionStart hook's
     # hint left for this server's claude ancestor.  None outside Claude Code
     # (headless/CI/SDK) — create_state then mints a fresh, misroute-safe hex.
     routing_id = SessionHint.resolve_routing_id()
 
     # Companion (human) registration is deferred to the heartbeat
     # loop -- the ethos roster is not yet available at startup on
-    # claude --resume (spec § 3.2, biff-8fg3).
+    # claude --resume (spec § 3.2).
     state = create_state(
         resolved.config,
         resolved.data_dir,
