@@ -51,6 +51,19 @@ logger = logging.getLogger(__name__)
 # that shared budget without touching the wedge-detection machinery itself.
 _ORG_REPOS_REFRESH_INTERVAL = 600.0  # seconds
 
+# Bound each best-effort NATS teardown call independently of nats-py's own
+# per-request timeout.  nats-py reconnects forever on a lost connection
+# (``_MAX_RECONNECT_ATTEMPTS = -1`` in nats_relay.py, DES-019 — correct for
+# a long-lived server, since a network blip must never kill the session),
+# so a request issued while nats-py is mid-reconnect can ride that policy
+# and block far past its nominal request timeout.  Shutdown code has
+# already decided the session is ending regardless of server
+# acknowledgment (biff-7xd) — every step below already treats failure as
+# "log and move on," so bounding each step to a few seconds turns a
+# wedged connection into a slow-but-finite teardown instead of the tier
+# hanging indefinitely.
+_TEARDOWN_STEP_TIMEOUT = 3.0
+
 
 class _SessionCaptureMiddleware(Middleware):
     """Capture the MCP session during ``initialize``.
@@ -754,10 +767,12 @@ async def _append_logout_event(state: ServerState) -> None:
         timestamp=datetime.now(UTC),
     )
     try:
-        await state.relay.append_wtmp(logout_event)
+        await asyncio.wait_for(
+            state.relay.append_wtmp(logout_event), timeout=_TEARDOWN_STEP_TIMEOUT
+        )
         # Flush ensures the publish hits the wire before process exit.
         if isinstance(state.relay, NatsRelay):
-            await state.relay.flush()
+            await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to append wtmp logout event", exc_info=True)
 
@@ -804,9 +819,11 @@ async def _append_companion_logout_event(state: ServerState) -> None:
         timestamp=datetime.now(UTC),
     )
     try:
-        await state.relay.append_wtmp(logout_event)
+        await asyncio.wait_for(
+            state.relay.append_wtmp(logout_event), timeout=_TEARDOWN_STEP_TIMEOUT
+        )
         if isinstance(state.relay, NatsRelay):
-            await state.relay.flush()
+            await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to append companion wtmp logout event", exc_info=True)
 
@@ -898,19 +915,28 @@ async def _release_relay(state: ServerState) -> None:
     tty_name = get_tty_name()
     if tty_name:
         try:
-            await state.relay.release_tty_name(state.config.user, tty_name)
+            await asyncio.wait_for(
+                state.relay.release_tty_name(state.config.user, tty_name),
+                timeout=_TEARDOWN_STEP_TIMEOUT,
+            )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
     try:
-        await state.relay.delete_session(state.session_key)
+        await asyncio.wait_for(
+            state.relay.delete_session(state.session_key),
+            timeout=_TEARDOWN_STEP_TIMEOUT,
+        )
     except Exception:
         logger.exception("Failed to delete session %s", state.session_key)
     # Release companion session (DES-039).
     if state.companion:
         if state.companion.tty_name:
             try:
-                await state.relay.release_tty_name(
-                    state.companion.user, state.companion.tty_name
+                await asyncio.wait_for(
+                    state.relay.release_tty_name(
+                        state.companion.user, state.companion.tty_name
+                    ),
+                    timeout=_TEARDOWN_STEP_TIMEOUT,
                 )
             except Exception:  # noqa: BLE001
                 logger.warning(
@@ -919,7 +945,10 @@ async def _release_relay(state: ServerState) -> None:
                     exc_info=True,
                 )
         try:
-            await state.relay.delete_session(state.companion.session_key)
+            await asyncio.wait_for(
+                state.relay.delete_session(state.companion.session_key),
+                timeout=_TEARDOWN_STEP_TIMEOUT,
+            )
         except Exception:  # noqa: BLE001
             logger.warning(
                 "Failed to delete companion session %s",
@@ -927,7 +956,7 @@ async def _release_relay(state: ServerState) -> None:
                 exc_info=True,
             )
     try:
-        await state.relay.close()
+        await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to close relay", exc_info=True)
 
