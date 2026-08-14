@@ -1,4 +1,4 @@
-"""Tests for git hook deployment (DES-017, biff-9z2).
+"""Tests for git hook deployment (DES-017).
 
 Unit tests for deploy/remove/check operations on the resolved git hooks
 directory.  Uses a real ``git init`` under ``tmp_path`` so the hooks-dir

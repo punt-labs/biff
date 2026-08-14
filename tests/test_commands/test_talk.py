@@ -177,7 +177,7 @@ class TestSendLine:
     async def test_send_confirmation_wraps_cjk_within_the_table_width(
         self, kai: CliContext
     ) -> None:
-        """The echoed message must wrap, not overflow, for CJK text (biff-2sw)."""
+        """The echoed message must wrap, not overflow, for CJK text."""
         from biff._formatting import TABLE_WIDTH, visible_width
 
         kai.talk.begin_connected(

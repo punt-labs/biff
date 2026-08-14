@@ -80,7 +80,7 @@ class TestHeartbeatLoop:
     ) -> None:
         """A transient heartbeat failure logs at INFO (with traceback) — never
         WARNING+ — so the REPL's WARNING-level stderr handler keeps it off the
-        interactive terminal while the file handler still records it (biff-9la).
+        interactive terminal while the file handler still records it.
         """
         import logging
 

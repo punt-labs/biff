@@ -71,7 +71,7 @@ class TestStatus:
     async def test_status_cjk_wall_wraps_within_the_table_width(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
-        """A CJK-heavy wall must wrap in the status line, not overflow (biff-2sw)."""
+        """A CJK-heavy wall must wrap in the status line, not overflow."""
         from biff._formatting import TABLE_WIDTH, visible_width
 
         cjk_message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
@@ -86,7 +86,7 @@ class TestStatus:
     async def test_status_wall_escapes_neutralized(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
-        """A wall written past input sanitization can't inject escapes (biff-lbj)."""
+        """A wall written past input sanitization can't inject escapes."""
         now = datetime.now(UTC)
         await relay.set_wall(
             WallPost(
