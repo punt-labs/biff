@@ -534,7 +534,16 @@ class LocalRelay:
     def delete_session_sync(self, session_key: str) -> None:
         """Remove a session from storage (sync, safe from signal handlers)."""
         self._validate_session_key(session_key)
-        sessions = self._read_sessions()
+        try:
+            sessions = self._parse_sessions_file()
+        except (ValidationError, ValueError, json.JSONDecodeError, AttributeError):
+            # No logger here: unlike _read_sessions, this method also runs
+            # from inside a signal handler's cleanup step
+            # (server.app._run_signal_cleanup_steps), where a logging call
+            # can deadlock on the module's lock.  A corrupt file has no
+            # valid session to remove anyway, so swallowing silently here
+            # is honest -- the caller only wanted this one key gone.
+            return
         if session_key in sessions:
             del sessions[session_key]
             self._write_sessions(sessions)
@@ -757,14 +766,24 @@ class LocalRelay:
         """Atomically rewrite a session's TTY inbox."""
         self._write_inbox_file(self._inbox_path_for_key(session_key), messages)
 
-    def _read_sessions(self) -> dict[str, UserSession]:
-        """Read all sessions."""
+    def _parse_sessions_file(self) -> dict[str, UserSession]:
+        """Parse sessions.json, raising on corruption.
+
+        No logging and no fallback here -- callers decide how to handle
+        corruption.  Split out of ``_read_sessions`` so
+        ``delete_session_sync`` (also reachable from a signal handler's
+        cleanup step) can swallow corruption without calling ``logger``.
+        """
         path = self._data_dir / "sessions.json"
         if not path.exists():
             return {}
+        data = json.loads(path.read_text())
+        return {k: UserSession.model_validate(v) for k, v in data.items()}
+
+    def _read_sessions(self) -> dict[str, UserSession]:
+        """Read all sessions, logging (and starting fresh) on corruption."""
         try:
-            data = json.loads(path.read_text())
-            return {k: UserSession.model_validate(v) for k, v in data.items()}
+            return self._parse_sessions_file()
         except (ValidationError, ValueError, json.JSONDecodeError, AttributeError):
             logger.warning("Corrupt sessions file, starting fresh")
             return {}

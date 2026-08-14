@@ -618,6 +618,31 @@ class TestMalformedSessions:
         assert "kai:tty1" in result
         assert result["kai:tty1"].plan == "testing"
 
+    def test_read_sessions_logs_on_corruption(
+        self, relay: LocalRelay, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The async-path reader logs -- it never runs from a signal handler."""
+        (tmp_path / "sessions.json").write_text("not json at all")
+        with caplog.at_level("WARNING"):
+            relay._read_sessions()
+        assert any(
+            "Corrupt sessions file" in r.message
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        )
+
+    def test_delete_session_sync_swallows_corruption_without_logging(
+        self, relay: LocalRelay, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """delete_session_sync also runs from inside a signal handler's
+        cleanup step (server.app._run_signal_cleanup_steps), where a
+        logging call can deadlock on the module lock -- unlike
+        _read_sessions, it must never log, only swallow and return."""
+        (tmp_path / "sessions.json").write_text("not json at all")
+        with caplog.at_level("WARNING"):
+            relay.delete_session_sync("kai:tty1")  # must not raise
+        assert not caplog.records
+
 
 class TestSessionTtyHint:
     """session_id -> last tty_name reclaim hint (biff-7ak).
