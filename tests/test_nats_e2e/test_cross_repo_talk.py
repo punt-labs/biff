@@ -1,4 +1,4 @@
-"""NATS E2E: talk routes on identity alone, gated only by visibility (biff-e9u).
+"""NATS E2E: talk routes on identity alone, gated only by visibility.
 
 Talk's NATS subject is the globally-unique ``user:tty`` identity and nothing
 else (talk.tex ``subjectOf~k = k``): neither repository nor organization is a
@@ -9,7 +9,8 @@ never on the subject.
 
 Three properties are proven end to end:
 
-* Same org, different repos complete a full talk (the biff-e9u regression).
+* Same org, different repos complete a full talk (a former repo-keying
+  regression).
 * Different orgs, mutually peered so both are visible, complete a full talk —
   org was over-scoping, just like repo.
 * A peer you cannot see cannot be talked to: resolution raises and no frame is
@@ -40,8 +41,8 @@ from biff.testing import RecordingClient, Transcript
 
 pytestmark = pytest.mark.nats
 
-# Same organization, two repositories (sanitized ``owner__repo``): the pair
-# biff-e9u mis-routed under repo keying.
+# Same organization, two repositories (sanitized ``owner__repo``): repo-keyed
+# routing used to mis-route this pair.
 _KAI_REPO = "punt-labs__biff"
 _ERIC_REPO = "punt-labs__vox"
 
@@ -183,7 +184,7 @@ async def _drive_full_talk(
 
 
 class TestSameOrgDifferentRepoTalk:
-    """Same org, different repos — the biff-e9u regression guard."""
+    """Same org, different repos — the repo-keying regression guard."""
 
     @pytest.mark.transcript
     async def test_full_talk_flow(

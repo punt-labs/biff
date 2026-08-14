@@ -1,4 +1,4 @@
-"""Tests for bead ID auto-expansion in /plan (biff-5zq)."""
+"""Tests for bead ID auto-expansion in /plan."""
 
 from __future__ import annotations
 
