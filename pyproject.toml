@@ -39,6 +39,7 @@ dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=6.0.0",
+    "pytest-timeout>=2.3.1",
     "claude-agent-sdk>=0.1.36",
     "punt-lux>=0.14.0",
     "types-PyYAML>=6.0",
@@ -163,6 +164,16 @@ minversion = "8.0"
 addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not nats and not hosted and not stress'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Per-test ceiling so a regression REPORTS (with every thread's stack
+# dumped) instead of wedging a developer's session (biff-7xd).  "thread"
+# method: a watchdog thread dumps stacks and hard-exits the process on
+# expiry, which works even when the hang is inside a blocked asyncio
+# await that the default "signal" method's SIGALRM cannot interrupt
+# promptly.  120s comfortably covers tier-4 SDK tests (~30s/call) while
+# still catching genuine hangs long before a developer has to reach for
+# a manual kill.
+timeout = 120
+timeout_method = "thread"
 markers = [
     "slow: marks tests as slow (run with -m slow)",
     "subprocess: marks tests that spawn biff subprocesses (run with -m subprocess)",
