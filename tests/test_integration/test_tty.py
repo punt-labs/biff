@@ -71,7 +71,7 @@ class TestTtyNaming:
     ) -> None:
         """The tty tool keeps state.talk in sync so talk reply hints stay valid.
 
-        Talk invite reply hints render from ``state.talk.my_tty_name`` (biff-uin);
+        Talk invite reply hints render from ``state.talk.my_tty_name``;
         if the rename tool updated only the description global and not the shared
         TalkState, a later invite would embed the stale tty and the partner's
         suggested ``talk user:tty`` address would no longer resolve.

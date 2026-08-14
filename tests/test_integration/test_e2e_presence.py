@@ -125,7 +125,7 @@ class TestMultiUserPresence:
         """A session past the liveness window is hidden from /who and /finger.
 
         Drives the MCP tools (not the CLI command) — the surface agents
-        actually invoke (biff-mue).
+        actually invoke.
         """
         from datetime import UTC, datetime, timedelta
 

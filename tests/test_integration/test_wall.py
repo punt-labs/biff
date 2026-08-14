@@ -37,7 +37,7 @@ class TestWallPostAndRead:
     async def test_post_confirmation_wraps_cjk_within_the_table_width(
         self, kai: RecordingClient
     ) -> None:
-        """The MCP post confirmation must wrap a CJK-heavy message (biff-2sw)."""
+        """The MCP post confirmation must wrap a CJK-heavy message."""
         from biff._formatting import TABLE_WIDTH, visible_width
 
         cjk_message = "这是一段很长的中文文本用来测试自动换行是否正常工作" * 3
