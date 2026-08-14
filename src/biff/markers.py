@@ -9,8 +9,8 @@ Markers are scoped per-repo via SHA-256 hash of the repo-common-root
 (the main checkout's path, shared by every linked worktree -- see
 ``_stdlib.get_repo_common_root``), matching the existing hint-file
 architecture (DES-017).  The plan marker additionally carries a session
-identity dimension (biff-ar1/om9 design §3d): two concurrent sessions in
-one repo each get their own plan-active file, so one session's
+identity dimension: two concurrent sessions in one repo each get their
+own plan-active file, so one session's
 ``SessionStart`` cannot clear a sibling session's marker out from under
 it, and the ``PreToolUse`` gate reads the *caller's own* plan rather than
 whichever session happened to write last.

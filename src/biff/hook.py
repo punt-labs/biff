@@ -181,7 +181,7 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
     process (and therefore the leader's ``session_id`` fallback via
     ``SessionHint``), but Claude Code delivers the subagent's *own*
     ``agent_id`` on its tool-call payloads, distinct from the leader's
-    top-level ``session_id`` (biff-ar1/om9 design §3b).  ``None`` when
+    top-level ``session_id``.  ``None`` when
     neither is present — headless/CI/SDK contexts with no Claude session
     at all — and the marker degrades to the shared, unscoped bucket.
     """
@@ -282,7 +282,7 @@ def handle_post_bash(data: dict[str, object]) -> str | None:
     Biff does not depend on beads: the gate is plan-only (DES-051) and
     this handler holds no gate state.  It only emits soft nudges — a
     dotplan reminder on a bead claim, and a lux beads-board refresh when
-    lux is showing (biff-og4p consumer integration).
+    lux is showing.
 
     Returns an ``additionalContext`` string, or ``None`` to stay silent.
     """
@@ -385,7 +385,7 @@ def handle_post_pr(data: dict[str, object]) -> str | None:
         parts.append("This team uses biff for communication.")
         parts.append(f'Consider announcing to the team: /wall "{escaped_msg}" 10m')
 
-    # Lux PR dashboard (biff-g75a consumer integration).
+    # Lux PR dashboard.
     if _is_lux_enabled() and bare == "create_pull_request":
         parts.append(
             "Lux is active — render a PR dashboard with /lux:dashboard "
@@ -442,10 +442,10 @@ def _repo_common_root(data: dict[str, object] | None = None) -> str:
     Prefers the hook's own delivered ``cwd`` (``data["cwd"]``) over the
     ambient process cwd when *data* is given: a dispatched subagent's
     hook subprocess does not always inherit its own assigned worktree as
-    its ambient cwd, even when its own shell commands do (biff-ar1's
-    biff-if2 manifestation, design §2b/§3a).  With no *data* (a git hook,
-    which never receives a Claude Code payload), resolves against the
-    process's own cwd, which for a git hook subprocess is always correct.
+    its ambient cwd, even when its own shell commands do.  With no *data*
+    (a git hook, which never receives a Claude Code payload), resolves
+    against the process's own cwd, which for a git hook subprocess is
+    always correct.
     """
     from biff._stdlib import get_repo_common_root  # noqa: PLC0415
 
@@ -458,8 +458,7 @@ def _hint_dir(data: dict[str, object] | None = None) -> pathlib.Path:
 
     Every linked worktree of a repo shares one hint directory (keyed on
     the repo-common-root, not the nearest worktree toplevel) — a repo and
-    its worktrees are one coordination unit, not isolated islands
-    (biff-ar1/om9 design, operator-ratified broad-scope decision).
+    its worktrees are one coordination unit, not isolated islands.
     """
     from biff.markers import hint_dir as _markers_hint_dir  # noqa: PLC0415
 
@@ -621,9 +620,8 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
     comparison is a plain string match — the *current* side is now the
     repo-common-root, so two sessions in *different* linked worktrees of
     the same repo are treated as one coordination unit, matching
-    ``_hint_dir()``'s scope (operator-ratified broad-scope decision,
-    biff-ar1/om9).  A stored row from before this change (which recorded
-    the nearest worktree toplevel, not the common root) legitimately
+    ``_hint_dir()``'s scope.  A stored row from before this change (which
+    recorded the nearest worktree toplevel, not the common root) legitimately
     stops matching for a worktree session specifically — a known, narrower
     residual gap tracked alongside the wall-marker one in DESIGN.md.
 
@@ -676,7 +674,7 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
 
 
 def _capture_session_hint(data: dict[str, object]) -> None:
-    """Persist the Claude ``session_id`` for the MCP server (biff-7ak).
+    """Persist the Claude ``session_id`` for the MCP server.
 
     SessionStart is the only hook that sees ``session_id`` (on stdin); the
     server, unable to observe it (DES-011), reads the hint back by walking
@@ -744,7 +742,7 @@ def handle_session_start(data: dict[str, object] | None = None) -> str:
 
     parts.append("Check /read for unread messages.")
 
-    # Load active wall broadcast (biff-41j).
+    # Load active wall broadcast.
     wall_text = read_wall_marker(worktree)
     if wall_text:
         parts.append(f"Active wall: {wall_text}")
