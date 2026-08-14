@@ -69,7 +69,7 @@ _TALK_WRAP_MIN = 24
 
 # Cap the rendered sender label so a forged, boundary-slipped label can never
 # drive the per-line wrap indent (defense in depth for the O(label x body)
-# amplification — see TalkNotification.from_payload, biff-7g7).
+# amplification — see TalkNotification.from_payload).
 _MAX_LABEL_WIDTH = 40
 
 # clip_to_width (via _truncate) only clips when visible_width(text) exceeds
@@ -174,8 +174,7 @@ _ROW_TEXT_WIDTH = TABLE_WIDTH - len(ROW_PREFIX)
 # Two distinct fallbacks for two distinct failure modes. Both cover a body
 # that is non-empty on the wire but renders as nothing visible — a
 # confirmation or read-back must never silently swallow the sender's
-# entire message and look like it succeeded, or like nothing arrived
-# (biff-2sw round 4, round 6).
+# entire message and look like it succeeded, or like nothing arrived.
 #
 # terminal_safe actually removed characters (control/escape bytes) and
 # nothing printable survived:
@@ -544,7 +543,7 @@ def sanitize_wall_message(message: str) -> str:
     Strips all non-printable characters via :func:`terminal_safe` (control,
     ESC/OSC introducers, and other C0/C1 chars) and collapses runs of
     whitespace to single spaces.  This is input-side hygiene; render sites
-    sanitize again at the output boundary (biff-lbj).
+    sanitize again at the output boundary.
     """
     return " ".join(terminal_safe(message).split())
 
@@ -552,7 +551,7 @@ def sanitize_wall_message(message: str) -> str:
 def format_wall(wall: WallPost) -> str:
     """Format a wall post for display, wrapped to the table width.
 
-    Wall text can run up to 512 characters (biff-2sw) — a CJK- or
+    Wall text can run up to 512 characters — a CJK- or
     emoji-heavy post would otherwise overflow the 80-column terminal on a
     single unwrapped line, the same defect class fixed for who/read/talk.
 
@@ -582,7 +581,7 @@ def format_wall_confirmation(post: WallPost) -> str:
     Echoes the same up-to-512-char, potentially CJK/emoji-heavy text
     :func:`format_wall` renders on read-back, so the confirmation shown at
     post time must wrap the same way instead of embedding raw text on one
-    unbounded line (biff-2sw). A control-only body — see :func:`format_wall`
+    unbounded line. A control-only body — see :func:`format_wall`
     — renders the same explicit fallback rather than a confirmation that
     looks successful but silently ate the poster's entire message.
     """
@@ -599,7 +598,7 @@ def format_wall_status_line(post: WallPost) -> str:
     Wraps the same way as :func:`format_wall` and :func:`format_wall_confirmation`
     — the body can run up to 512 chars and is potentially CJK/emoji-heavy —
     with continuation lines aligned under the sender label instead of
-    embedding raw text on one unbounded line (biff-2sw). Falls back the same
+    embedding raw text on one unbounded line. Falls back the same
     way on a control-only body.
 
     ``WallPost.from_user`` has no ``max_length``, so the sender is capped via
@@ -644,7 +643,7 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     to :data:`TABLE_WIDTH` with continuation lines aligned under the body.
     *stamp* is the caller's ``[HH:MM] `` prefix (empty when timestamps are
     off).  All remote-controlled text is neutralised here via
-    :func:`terminal_safe`, the output boundary (biff-lbj).
+    :func:`terminal_safe`, the output boundary.
 
     Returns one string per rendered line so the caller can colourise each, or
     an empty list when *body* is empty to begin with — a truly bodiless frame
@@ -652,7 +651,7 @@ def format_talk_line(label: str, body: str, *, stamp: str = "") -> list[str]:
     renders no line.  A body that is merely *invisible* after neutralisation
     (whitespace-only or control-only) is a different case: the sender did send
     something, so the recipient sees an explanatory line rather than silence —
-    see :func:`visible_text` (biff-7g7, biff-2sw round 6).
+    see :func:`visible_text`.
 
     The lead is bounded independently of the input: the label is truncated to
     :data:`_MAX_LABEL_WIDTH` and the continuation indent never exceeds
