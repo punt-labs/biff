@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from biff._stdlib import expand_bead_id, get_repo_common_root
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
@@ -20,12 +22,17 @@ def sync_plan_marker(message: str) -> None:
     marker, so a CLI-only session (every ethos-mission worker in this
     org) could run ``biff plan`` and see a success message while the
     ``PreToolUse`` gate kept denying edits: the marker it reads was never
-    written (PL-PA-3, biff-ar1's occurrence 3).  Root and identity are
-    resolved fresh on every call — never cached at process startup — so a
-    long-running MCP server and a one-shot CLI invocation always resolve
-    the same key the hook itself resolves (design biff-ar1/om9 §3a/§3c).
+    written.  Root and identity are resolved fresh on every call — never
+    cached at process startup — so a long-running MCP server and a
+    one-shot CLI invocation always resolve the same key the hook itself
+    resolves.  Root is resolved from ``Path.cwd()`` explicitly, not left
+    to default: passing no ``cwd`` makes ``get_repo_common_root`` shell
+    out with the subprocess's own ambient working directory, which can
+    silently diverge from ``Path.cwd()`` and, in turn, from whatever
+    ``cwd`` the ``PreToolUse`` gate is handed — writing the marker under
+    a different repo-root bucket than the gate reads it from.
     """
-    root = get_repo_common_root()
+    root = get_repo_common_root(str(Path.cwd()))
     identity = SessionHint.resolve_routing_id()
     if message:
         write_plan_marker(root, identity, message)
