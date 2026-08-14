@@ -167,3 +167,40 @@ class TestSignalTerminatesProcess:
 
         sentinels = list(_sentinel_dir(home).glob("*"))
         assert sentinels, "signal handler did not write its cleanup sentinel"
+
+
+class TestSignalSurvivesCleanupFailure:
+    """A failing cleanup step must not stop the handler from terminating."""
+
+    def test_survives_sentinel_write_failure(
+        self, active_server: tuple[subprocess.Popen[str], Path]
+    ) -> None:
+        """The handler must still exit when its first cleanup step raises.
+
+        Makes the sentinels directory read-only so ``_write_sentinel``
+        raises ``PermissionError`` (an ``OSError``) instead of succeeding.
+        The process must still terminate within the grace period -- the
+        handler's async-signal-safe ``os.write(2, ...)`` failure report
+        must not block the way a ``logger.warning()`` call could
+        (biff-teh, the defect this branch exists to close).  No sentinel
+        appearing proves the failure was genuinely hit, not silently
+        skipped.
+        """
+        proc, home = active_server
+        sentinels_root = _sentinel_dir(home).parent
+        sentinels_root.mkdir(parents=True, exist_ok=True)
+        sentinels_root.chmod(0o500)
+        try:
+            os.kill(proc.pid, signal.SIGTERM)
+            exit_code = _wait_for_exit(proc)
+        finally:
+            sentinels_root.chmod(0o700)
+
+        assert exit_code == -signal.SIGTERM.value, (
+            f"expected termination by SIGTERM despite a failing cleanup "
+            f"step, got exit code {exit_code}"
+        )
+        assert not _sentinel_dir(home).exists(), (
+            "sentinel directory should not exist -- its creation must "
+            "have failed for this test to prove anything"
+        )

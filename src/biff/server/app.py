@@ -10,7 +10,7 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -220,6 +220,31 @@ def _write_sentinel(repo_name: str, session_key: str) -> None:
     d.mkdir(parents=True, exist_ok=True)
     safe = session_key.replace(":", "-")
     (d / safe).write_text(session_key)
+
+
+# (action, exception types it may raise, fixed stderr label for a failure)
+_SignalCleanupStep = tuple[Callable[[], None], tuple[type[Exception], ...], bytes]
+
+
+def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
+    """Run best-effort signal-handler cleanup steps, reporting failures.
+
+    Called only from inside ``_signal_handler``.  A failed step reports
+    via ``os.write(2, label)`` with a pre-built, fixed-form bytes literal
+    -- never logging, never string formatting at call time.  A Python
+    signal handler is deferred to run on the main thread at the next
+    bytecode boundary; if that boundary lands while the main thread (or a
+    thread it must wait on) already holds the logging module's lock,
+    calling ``logger.warning()`` from here could block forever -- exactly
+    biff-teh, reintroduced by this fix.  Writing a compiled bytes constant
+    straight to fd 2 touches no lock and needs no formatting, so it
+    cannot deadlock the way logging can.
+    """
+    for step, errors, label in steps:
+        try:
+            step()
+        except errors:
+            os.write(2, label)
 
 
 async def _reap_sentinels(state: ServerState) -> None:
@@ -946,23 +971,63 @@ async def _active_lifespan(
         _cleaned_up = True
         # Write sentinel — relay-agnostic, picked up by any
         # running server's reaper task.  Smallest possible
-        # operation (touch a file), runs first.
-        with suppress(OSError):
-            _write_sentinel(state.config.repo_name, state.session_key)
+        # operation (touch a file), runs first.  Steps are collected here
+        # and run by ``_run_signal_cleanup_steps`` below -- see that
+        # function for why a failed step reports via ``os.write(2, ...)``
+        # rather than logging.
+        steps: list[_SignalCleanupStep] = [
+            (
+                lambda: _write_sentinel(state.config.repo_name, state.session_key),
+                (OSError,),
+                b"biff: signal cleanup: sentinel write failed\n",
+            ),
+        ]
         if state.companion:
-            with suppress(OSError):
-                _write_sentinel(state.config.repo_name, state.companion.session_key)
+            companion = state.companion
+            steps.append(
+                (
+                    lambda: _write_sentinel(
+                        state.config.repo_name, companion.session_key
+                    ),
+                    (OSError,),
+                    b"biff: signal cleanup: companion sentinel write failed\n",
+                )
+            )
         # Best-effort sync cleanup for LocalRelay only.
         if isinstance(state.relay, LocalRelay):
-            with suppress(OSError):
-                state.relay.write_remove_sentinel(state.session_key)
-            with suppress(OSError, ValueError):
-                state.relay.delete_session_sync(state.session_key)
+            relay = state.relay
+            steps.append(
+                (
+                    lambda: relay.write_remove_sentinel(state.session_key),
+                    (OSError,),
+                    b"biff: signal cleanup: remove-sentinel write failed\n",
+                )
+            )
+            steps.append(
+                (
+                    lambda: relay.delete_session_sync(state.session_key),
+                    (OSError, ValueError),
+                    b"biff: signal cleanup: session delete failed\n",
+                )
+            )
             if state.companion:
-                with suppress(OSError):
-                    state.relay.write_remove_sentinel(state.companion.session_key)
-                with suppress(OSError, ValueError):
-                    state.relay.delete_session_sync(state.companion.session_key)
+                companion = state.companion
+                steps.append(
+                    (
+                        lambda: relay.write_remove_sentinel(companion.session_key),
+                        (OSError,),
+                        b"biff: signal cleanup: companion remove-sentinel "
+                        b"write failed\n",
+                    )
+                )
+                steps.append(
+                    (
+                        lambda: relay.delete_session_sync(companion.session_key),
+                        (OSError, ValueError),
+                        b"biff: signal cleanup: companion session delete failed\n",
+                    )
+                )
+        _run_signal_cleanup_steps(steps)
         # signal.signal() replaces the platform's default terminate
         # disposition, so returning here leaves the process running —
         # the signal has been fully "handled" as far as the OS is
