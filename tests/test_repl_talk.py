@@ -95,7 +95,7 @@ class TestFormatTalkLines:
 
     def test_control_only_body_renders_fallback(self) -> None:
         # A body empty only after neutralisation still arrived — the recipient
-        # sees an explanatory fallback line, not silence (biff-2sw round 6).
+        # sees an explanatory fallback line, not silence.
         lines = _format_talk_lines([_notif("message", body="\x00\x1b\x07")])
         assert len(lines) == 1
         assert "no printable text" in lines[0]
@@ -196,7 +196,7 @@ class TestFormatIdleBanners:
 
     def test_control_only_body_renders_fallback(self) -> None:
         # A body empty only after neutralisation still arrived — the recipient
-        # sees an explanatory fallback line, not silence (biff-2sw round 6).
+        # sees an explanatory fallback line, not silence.
         lines = _format_idle_banners([_notif("message", body="\x00\x1b\x07")])
         assert len(lines) == 1
         assert "no printable text" in lines[0]
@@ -234,14 +234,14 @@ class TestPrintTalkBanner:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # A control-only body still arrived — it must print an explanatory
-        # banner, not silence (biff-2sw round 6).
+        # banner, not silence.
         _print_talk_banner(_notif("invite", body="\x00\x1b\x07"))
         out = capsys.readouterr().out
         assert "no printable text" in out
 
 
 # ---------------------------------------------------------------------------
-# _withdraw_talk_invite — best-effort withdraw log level (biff-9la)
+# _withdraw_talk_invite — best-effort withdraw log level
 # ---------------------------------------------------------------------------
 
 
@@ -283,7 +283,7 @@ class TestWithdrawTalkInviteResilience:
 
 
 # ---------------------------------------------------------------------------
-# _handle_repl_talk initiator — invite publish rollback (biff-9la, H)
+# _handle_repl_talk initiator — invite publish rollback
 # ---------------------------------------------------------------------------
 
 
@@ -607,7 +607,7 @@ class TestReplTalkSubscriptionResilience:
     replacement opens: ``get_nc``/``subscribe`` can raise ``NatsError``,
     ``TimeoutError``, ``OSError``, or a base ``nats.errors.Error``.  An
     unguarded raise dumps a traceback and exits the REPL, killing the retry
-    loop that was meant to self-heal (biff-9la).
+    loop that was meant to self-heal.
     """
 
     @staticmethod

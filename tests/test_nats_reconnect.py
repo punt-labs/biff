@@ -1,4 +1,4 @@
-"""Unit tests for NatsRelay connection-wedge recovery (biff-wr3).
+"""Unit tests for NatsRelay connection-wedge recovery.
 
 Regression coverage for the production incident where a NATS
 ``unexpected EOF`` sent every MCP server into a state where
@@ -149,9 +149,9 @@ class TestProvisionTimeout:
 class TestHalfOpenWedgeRecovery:
     """A half-open connection must be detected and recovered, not looped on.
 
-    Regression coverage for biff-tww (DES-041): the NATS socket stays up but
-    the server stops responding, so every JetStream/KV request raises
-    ``nats: timeout``.  nats-py's default keepalive
+    Regression coverage for the wedge-recovery path (DES-041): the NATS
+    socket stays up but the server stops responding, so every JetStream/KV
+    request raises ``nats: timeout``.  nats-py's default keepalive
     (ping_interval=120s, max_outstanding_pings=2) only declares such a
     connection dead after ~240s — during which the poller and heartbeat
     crash-loop with no recovery.  The fix tunes keepalive so detection
@@ -223,7 +223,7 @@ class TestHalfOpenWedgeRecovery:
 
 
 class TestProactiveWedgeDetector:
-    """N consecutive runtime timeouts force a reconnect without keepalive (biff-3hp).
+    """N consecutive runtime timeouts force a reconnect without keepalive.
 
     The keepalive path (DES-041) takes ~60-80s to detect a half-open
     connection.  The proactive detector tears the connection down after
@@ -331,7 +331,7 @@ class TestProactiveWedgeDetector:
 
 class TestReconnectEpochGuard:
     """A force-reconnect must not tear down a client that transparently
-    reconnected between the gate and the under-lock re-check (biff-xko).
+    reconnected between the gate and the under-lock re-check.
 
     The proactive gate (``_tracked``) captures ``_reconnect_epoch`` when it
     schedules ``_force_reconnect``.  If nats-py completes an in-place reconnect
@@ -942,7 +942,7 @@ class TestCallbackGenerationGuard:
             caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
             await on_error_a(RuntimeError("boom from superseded client"))
 
-        # error_cb logs at INFO now (transient, auto-recovering — biff-9la), so
+        # error_cb logs at INFO (transient, auto-recovering), so
         # filter by the error message to skip benign "Connected"/"Reconnected"
         # INFO lines the setup emits.
         errors = [
@@ -970,7 +970,7 @@ class TestCallbackGenerationGuard:
             caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
             await on_error(RuntimeError("boom"))
 
-        # INFO, not ERROR: transient, auto-recovering — file only (biff-9la).
+        # INFO, not ERROR: transient, auto-recovering — file only.
         errors = [
             r
             for r in caplog.records
