@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`/who` gave no signal that a session had died without deregistering — the exact five-week `biff mcp` orphan DES-056 found was invisible on every presence surface (biff-b3e).** `live_sessions()` (biff-mue) correctly keeps a dead session's row out of the main table, but a session that shuts down cleanly *deletes* its own KV row — so a row still present but failing liveness is, by construction, a session that died without cleanup (killed, wedged, host vanished). Hiding that row outright traded a visible-but-misleading anomaly (a should-be-alive server showing `idle 5h`) for an invisible one: the operator lost the only cue that something had died. `/who` now appends a trailing footnote — `N sessions stopped responding (last seen 6m, 35d)` — reporting count and last-seen age for exactly those rows, never naming the user or tty (there is no fixed column here for an unbounded field to widen, so nothing needs sanitizing). The footnote uses a wider threshold than the 120s liveness window (`DEAD_REPORT_SECONDS`, 3x) so a session that merely missed one heartbeat tick (laptop sleep, GC pause) does not flap into and back out of the footnote before the next `/who` call. `/finger`, `is_live`, `live_sessions`, and which sessions render in the main table are unchanged. See DES-057.
+
 ## [1.13.1] - 2026-08-21
 
 ### Removed
