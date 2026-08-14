@@ -253,7 +253,13 @@ def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
             # outside its declared tuple, the exception must not be allowed
             # to escape this loop and skip the terminating os.kill below --
             # that would silently reintroduce the exact hang this handler
-            # exists to prevent.  A signal handler whose only remaining job
+            # exists to prevent.  Not hypothetical: the sentinel step below
+            # calls Path.home() on every invocation (via sentinel_dir() ->
+            # biff_data_dir()), which raises RuntimeError, not OSError,
+            # when HOME is unset and pwd.getpwuid() can't resolve the
+            # user -- caught here even after that step's own tuple is
+            # widened, because the next step someone adds may get its
+            # tuple wrong too.  A signal handler whose only remaining job
             # is to reach that os.kill is the clearest system boundary in
             # this codebase, which is what PY-EH-6 requires for a catch
             # this broad.  BaseException (not Exception) is deliberate:
@@ -992,7 +998,11 @@ async def _active_lifespan(
         steps: list[_SignalCleanupStep] = [
             (
                 lambda: _write_sentinel(state.config.repo_name, state.session_key),
-                (OSError,),
+                # RuntimeError: sentinel_dir() -> biff_data_dir() calls
+                # Path.home() fresh on every invocation, which raises
+                # RuntimeError (not OSError) when HOME is unset and
+                # pwd.getpwuid() can't resolve the user.
+                (OSError, RuntimeError),
                 b"biff: signal cleanup: sentinel write failed\n",
             ),
         ]
@@ -1003,7 +1013,7 @@ async def _active_lifespan(
                     lambda: _write_sentinel(
                         state.config.repo_name, companion.session_key
                     ),
-                    (OSError,),
+                    (OSError, RuntimeError),
                     b"biff: signal cleanup: companion sentinel write failed\n",
                 )
             )

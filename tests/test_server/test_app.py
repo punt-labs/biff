@@ -2,15 +2,31 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastmcp import FastMCP
 
 from biff.server.app import (
     _UNEXPECTED_CLEANUP_ERROR,
     _run_signal_cleanup_steps,
+    _write_sentinel,
     create_server,
 )
 from biff.server.state import ServerState
+
+
+@pytest.fixture
+def written(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """Patch ``os.write`` and capture each write's bytes payload."""
+    captured: list[bytes] = []
+
+    def _fake_write(_fd: int, data: bytes) -> int:
+        captured.append(data)
+        return len(data)
+
+    monkeypatch.setattr("os.write", _fake_write)
+    return captured
 
 
 class TestCreateServer:
@@ -53,18 +69,6 @@ class TestSignalCleanupStepsNeverPropagate:
     the existing subprocess suite already proves termination end to end
     for the declared-exception path.
     """
-
-    @pytest.fixture
-    def written(self, monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
-        """Patch ``os.write`` and capture each write's bytes payload."""
-        captured: list[bytes] = []
-
-        def _fake_write(_fd: int, data: bytes) -> int:
-            captured.append(data)
-            return len(data)
-
-        monkeypatch.setattr("os.write", _fake_write)
-        return captured
 
     def test_declared_exception_reports_its_own_label(
         self, written: list[bytes]
@@ -121,3 +125,49 @@ class TestSignalCleanupStepsNeverPropagate:
         )
         assert ran == ["second"]
         assert written == [_UNEXPECTED_CLEANUP_ERROR]
+
+
+class TestWriteSentinelRuntimeError:
+    """_write_sentinel can raise RuntimeError, not just OSError.
+
+    ``sentinel_dir()`` -> ``biff_data_dir()`` calls ``Path.home()`` fresh
+    on every ``_write_sentinel`` call, and ``Path.home()`` raises
+    ``RuntimeError`` (not ``OSError``) when ``HOME`` is unset and
+    ``pwd.getpwuid()`` can't resolve the user.  Not hypothetical: this is
+    the concrete instance the ``_run_signal_cleanup_steps`` catch-all
+    guards against.
+    """
+
+    def test_raises_runtime_error_when_home_unresolvable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _boom() -> Path:
+            msg = "could not determine home directory"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(Path, "home", _boom)
+        with pytest.raises(RuntimeError):
+            _write_sentinel("_test-repo", "kai:tty1")
+
+    def test_declared_tuple_reports_its_own_label_not_the_catch_all(
+        self, written: list[bytes], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reproduces the exact step ``_signal_handler`` builds for the
+        sentinel write -- ``(OSError, RuntimeError)`` -- proving that
+        tuple, not the catch-all, is what reports this failure."""
+
+        def _boom() -> Path:
+            msg = "could not determine home directory"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(Path, "home", _boom)
+        _run_signal_cleanup_steps(
+            [
+                (
+                    lambda: _write_sentinel("_test-repo", "kai:tty1"),
+                    (OSError, RuntimeError),
+                    b"biff: signal cleanup: sentinel write failed\n",
+                )
+            ]
+        )
+        assert written == [b"biff: signal cleanup: sentinel write failed\n"]
