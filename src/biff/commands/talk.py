@@ -116,7 +116,7 @@ async def accept_invite(
     # it so a retry re-accepts rather than sending a fresh outbound invite (CR-2).
     consumed = talk_state.consume_pending_invite(user)
     # Name the connected partner by the inviter's DISPLAY tty (``ttyN``), not the
-    # session-key hex, so the connected hint reads ``talk @user:ttyN`` — the
+    # session-key hex, so the connected hint reads ``talk user:ttyN`` — the
     # address ``/who`` shows and ``resolve_talk_target`` matches.
     partner_tty = pending.tty or resolve_tty or ""
     accept_display = f"{user}:{partner_tty}" if partner_tty else display

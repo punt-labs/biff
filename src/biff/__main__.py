@@ -1602,7 +1602,7 @@ def statusline() -> None:
 def talk(
     to: Annotated[
         str,
-        typer.Argument(help="User to talk to, e.g. @jmf-pobox"),
+        typer.Argument(help="User to talk to, e.g. jmf-pobox"),
     ],
     message: Annotated[
         str,

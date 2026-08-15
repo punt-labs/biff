@@ -135,7 +135,7 @@ def resolve_talk_target(
     """Resolve a talk address to a specific session.
 
     Returns ``(session_key, display)``.  Talk is session-scoped: the
-    address MUST name a session (``@user:ttyN``).  A bare ``@user`` has no
+    address MUST name a session (``user:ttyN``).  A bare ``user`` has no
     unambiguous target and raises ``ValueError`` directing the caller to a
     session.
 

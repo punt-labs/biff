@@ -88,9 +88,9 @@ class PendingInvite:
     """A pending talk invite awaiting a response (notification.tex ``talkPending``).
 
     Retains the inviter's session key so the accept hint names a specific
-    session (``talk @user:tty``, never a bare ``@user`` that fails at the
+    session (``talk user:tty``, never a bare ``user`` that fails at the
     prompt), the inviter's display tty name (``ttyN``) so the hint reads as
-    the same address ``/who`` shows and ``talk @user:ttyN`` resolves against
+    the same address ``/who`` shows and ``talk user:ttyN`` resolves against
     — not the opaque session-key hex — and the monotonic arrival time so the
     poller can age out an invite whose inviter never returns (notification.tex
     ``ExpirePendingInvite``).
@@ -106,7 +106,7 @@ class PendingInvite:
 
         A key missing either half — colonless (``user``), empty-tty (``user:``),
         or empty-user (``:tty``) — could only render a hint that fails at the
-        prompt (``talk @user`` or ``talk @:tty``), so it is rejected at
+        prompt (``talk user`` or ``talk :tty``), so it is rejected at
         construction to keep every recorded invite's hint runnable
         (notification.tex ``HintNamesSession``).
 
@@ -158,11 +158,11 @@ class PendingInvite:
     def accept_command(self) -> str:
         """A runnable command that accepts this invite by naming the session.
 
-        Prefers the inviter's display tty name (``talk @user:ttyN``) — the
+        Prefers the inviter's display tty name (``talk user:ttyN``) — the
         form ``/who`` shows and ``resolve_talk_target`` matches — so the
         printed hint is exactly what the recipient types.  Falls back to the
         session key when the frame carried no display tty (still a runnable
-        ``talk @user:tty`` by the ``HintNamesSession`` invariant).
+        ``talk user:tty`` by the ``HintNamesSession`` invariant).
         """
         if self.tty:
             return f"talk {format_address(self.user, self.tty)}"
