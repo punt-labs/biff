@@ -87,8 +87,8 @@ class TestFormatAgentDrain:
     """``talk_read`` names the inviter's session by its display tty.
 
     Same source as the ``[TALK]`` marker (``PendingInvite.accept_command``),
-    so both surfaces render the reconciled ``talk @user:ttyN`` hint — the form
-    ``/who`` shows and ``talk @user:ttyN`` resolves against — never the opaque
+    so both surfaces render the reconciled ``talk user:ttyN`` hint — the form
+    ``/who`` shows and ``talk user:ttyN`` resolves against — never the opaque
     session-key hex.
     """
 
@@ -246,7 +246,7 @@ class TestResolveTalkTarget:
     _SENDER = "kai:sender01"
 
     def test_bare_user_errors(self) -> None:
-        """A bare @user has no unambiguous session — reject with a hint."""
+        """A bare user has no unambiguous session — reject with a hint."""
         sessions = [UserSession(user="eric", tty="def456")]
         with pytest.raises(ValueError, match="specific session"):
             resolve_talk_target(sessions, "eric", None, sender_key=self._SENDER)

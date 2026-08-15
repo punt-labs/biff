@@ -300,8 +300,8 @@ class TestTalkSignal:
 class TestTalkDescriptionAcceptHint:
     """The ``[TALK]`` marker names the inviter's session by its display tty.
 
-    The accept hint must read as the ``@user:ttyN`` address ``/who`` shows —
-    the form ``talk @user:ttyN`` resolves against — not the opaque session-key
+    The accept hint must read as the ``user:ttyN`` address ``/who`` shows —
+    the form ``talk user:ttyN`` resolves against — not the opaque session-key
     hex the inviter's session actually keys on.  Same source as
     ``format_agent_drain`` (``PendingInvite.accept_command``), so both surfaces
     stay reconciled.
@@ -384,9 +384,9 @@ class TestTalkDescriptionQueuedInvite:
 class TestTalkDescriptionConnectedHint:
     """The connected ``[TALK]`` hint names the partner's session (DES-043).
 
-    A bare ``talk @user`` reply hint can fail resolution when the partner
+    A bare ``talk user`` reply hint can fail resolution when the partner
     runs several sessions; the connected hint must carry the partner's tty so
-    it reads as the session-scoped ``talk @user:tty`` the accept path emits.
+    it reads as the session-scoped ``talk user:tty`` the accept path emits.
     """
 
     def test_connected_hint_carries_partner_tty(self, tmp_path: Path) -> None:
