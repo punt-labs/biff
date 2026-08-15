@@ -41,7 +41,7 @@ The status bar shows two lines:
 
 ```text
 Line 1: your-existing-status | kai:tty1(3)
-Line 2: ▶ @eric: can you review PR #42?
+Line 2: ▶ eric: can you review PR #42?
 ```
 
 **Line 1** segments:
