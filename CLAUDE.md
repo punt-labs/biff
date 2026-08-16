@@ -6,6 +6,30 @@ I am a principal engineer. Every change I make leaves the codebase in a better s
 
 There is no such thing as a "pre-existing" issue. If you see a problem — in code you wrote, code a reviewer flagged, or code you happen to be reading — you fix it. Do not classify issues as "pre-existing" to justify ignoring them. Do not suggest that something is "outside the scope of this change." If it is broken and you can see it, it is your problem now.
 
+## No Git Submodules
+
+**This repo is cloned onto every user's machine.** `claude plugin install biff@punt-labs` clones it, and it clones **with submodules**. Everything tracked here ships to every consumer.
+
+So the org-wide rule "every project adds `punt-labs/team` as a submodule at `.punt-labs/ethos/`" does **not** apply to biff. It was added, and it broke keyless installs: `.gitmodules` used the SSH URL `git@github.com:punt-labs/team.git`, so any user without a GitHub SSH key hit
+
+```text
+fatal: clone of 'git@github.com:punt-labs/team.git' into submodule path ... failed
+Failed to clone '.punt-labs/ethos' a second time, aborting
+```
+
+`punt-labs/team` being public does not help — SSH auth fails before repo visibility is consulted. An HTTPS URL would fix the auth failure but still push 1.1 MB of internal identity data onto every user's disk. Do not re-add it.
+
+What remains at that path is ordinary tracked content, not a submodule, and it is deliberately two files:
+
+| File | Why it stays |
+|------|--------------|
+| `.punt-labs/ethos.yaml` | Names this repo's agent (`claude`). Read by `_find_ethos_config()`. |
+| `.punt-labs/ethos/identities/claude.yaml` | The only file biff's runtime actually consumes — see below. |
+
+`claude.yaml` is not an arbitrary subset. `resolve_agent_identity_from_disk()` (DES-040) reads it to give an agent session agent-first identity, and `_known_agent_github_logins()` (DES-053) scans that directory for every `kind: agent` identity's `github` login so a leaked bot PAT can be rejected. `claude.yaml` is the only agent identity in the entire org registry carrying a `github` field, so it alone carries that security property. The global `~/.punt-labs/ethos/` cannot substitute — it holds the human identity, not `claude`.
+
+The rest of the registry is gitignored. Clone `punt-labs/team` into `.punt-labs/ethos/` locally if you want the full roster; git will keep it untracked. Everything else resolves from the `ethos` CLI at runtime.
+
 ## Standards
 
 Follow [punt-kit standards](../punt-kit/standards/) for Python, workflow, GitHub, CLI, and plugins. Below are biff-specific overrides and additions.

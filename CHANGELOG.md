@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`claude plugin install biff@punt-labs` no longer fails for users without a GitHub SSH key.** Claude Code clones plugin repos with `--recurse-submodules`, and this repo carried a `.punt-labs/ethos` submodule pointing at `git@github.com:punt-labs/team.git`. SSH authentication fails before repo visibility is consulted, so `punt-labs/team` being public did not help — every keyless install aborted with `fatal: clone of 'git@github.com:punt-labs/team.git' into submodule path ... failed`. The submodule is removed rather than switched to an HTTPS URL, which would have fixed the auth failure but still shipped 1.1 MB of internal identity data (246 files: identities, personalities, writing styles, roles, talents, teams) to every user's disk.
+
+### Removed
+
+- **The `.punt-labs/ethos` git submodule and `.gitmodules`.** One file is retained as ordinary tracked content in the submodule's place: `.punt-labs/ethos/identities/claude.yaml` (248 bytes), the only file biff's own runtime reads from that registry. `resolve_agent_identity_from_disk()` (DES-040) needs it to resolve agent-first identity for a session in this repo, and `_known_agent_github_logins()` (DES-053) needs it for the bot-login cross-check — `claude.yaml` is the sole `kind: agent` identity in the whole registry carrying a `github` field, so it alone supplies that check's rejection set. Nothing in the identity-resolution code changed; the fail-closed handling of a declared-but-uninitialized submodule still applies to any *other* repo biff inspects. Developers who want the full org roster locally can clone `punt-labs/team` into `.punt-labs/ethos/`; `.gitignore` keeps it untracked.
+
 ## [1.12.2] - 2026-08-09
 
 ### Security
