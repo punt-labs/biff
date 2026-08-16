@@ -19,12 +19,12 @@ Failed to clone '.punt-labs/ethos' a second time, aborting
 
 `punt-labs/team` being public does not help — SSH auth fails before repo visibility is consulted. An HTTPS URL would fix the auth failure but still push 1.1 MB of internal identity data onto every user's disk. Do not re-add it.
 
-What remains at that path is ordinary tracked content, not a submodule, and it is deliberately two files:
+What remains under `.punt-labs/` is ordinary tracked content, not a submodule, and it is deliberately two files:
 
 | File | Why it stays |
 |------|--------------|
-| `.punt-labs/ethos.yaml` | Names this repo's agent (`claude`). Read by `_find_ethos_config()`. |
-| `.punt-labs/ethos/identities/claude.yaml` | The only file biff's runtime actually consumes — see below. |
+| `.punt-labs/ethos.yaml` | Names this repo's agent (`claude`). Located by `_find_ethos_config()`, then parsed by `_read_agent_handle()` for the `agent` field. |
+| `.punt-labs/ethos/identities/claude.yaml` | The only file biff's runtime consumes from the org registry — see below. |
 
 `claude.yaml` is not an arbitrary subset. `resolve_agent_identity_from_disk()` (DES-040) reads it to give an agent session agent-first identity, and `_known_agent_github_logins()` (DES-053) scans that directory for every `kind: agent` identity's `github` login so a leaked bot PAT can be rejected. `claude.yaml` is the only agent identity in the entire org registry carrying a `github` field, so it alone carries that security property. The global `~/.punt-labs/ethos/` cannot substitute — it holds the human identity, not `claude`.
 
