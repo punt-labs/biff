@@ -1,9 +1,14 @@
-"""Structural checks on ``hooks/hooks.json``.
+"""Structural checks on ``plugin/hooks/hooks.json``.
 
 Not behavioral coverage of any handler -- just the wiring contract: every
 hook event's ``command`` names a script that actually exists in
-``hooks/`` and is executable, so a missing or non-executable dispatcher
-fails loudly here rather than silently no-op'ing under Claude Code.
+``plugin/hooks/`` and is executable, so a missing or non-executable
+dispatcher fails loudly here rather than silently no-op'ing under Claude
+Code.
+
+``${CLAUDE_PLUGIN_ROOT}`` is the ``plugin/`` directory -- the subtree the
+marketplace's ``git-subdir`` source checks out -- so the prefix below stays
+plugin-root-relative while the repo-relative directory gains ``plugin/``.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ import os
 from pathlib import Path
 from typing import cast
 
-_HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
+_HOOKS_DIR = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
 _HOOKS_JSON = _HOOKS_DIR / "hooks.json"
 
 _PREFIX = "${CLAUDE_PLUGIN_ROOT}/hooks/"

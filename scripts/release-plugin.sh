@@ -6,8 +6,8 @@ set -euo pipefail
 # from it.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PLUGIN_JSON="${REPO_ROOT}/.claude-plugin/plugin.json"
-COMMANDS_DIR="${REPO_ROOT}/commands"
+PLUGIN_JSON="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
+COMMANDS_DIR="${REPO_ROOT}/plugin/commands"
 
 # Preflight: abort if repo has uncommitted changes
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain -uno)" ]]; then

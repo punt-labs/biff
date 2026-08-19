@@ -10,7 +10,7 @@ set -euo pipefail
 # commit and restores from its parent.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PLUGIN_JSON="${REPO_ROOT}/.claude-plugin/plugin.json"
+PLUGIN_JSON="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
 
 # Preflight: abort if repo has uncommitted changes
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain -uno)" ]]; then
@@ -31,11 +31,11 @@ fi
 echo "Restoring dev state from parent of ${RELEASE_PREP_COMMIT:0:12}"
 git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- "$PLUGIN_JSON"
 
-# Restore dev commands if the parent commit had a commands/ directory
-if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- commands/ | grep -q .; then
-  git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- commands/
+# Restore dev commands if the parent commit had a plugin/commands/ directory
+if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- plugin/commands/ | grep -q .; then
+  git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- plugin/commands/
 fi
 
 git -C "$REPO_ROOT" add "$PLUGIN_JSON"
-git -C "$REPO_ROOT" add commands/ 2>/dev/null || true
+git -C "$REPO_ROOT" add plugin/commands/ 2>/dev/null || true
 git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state [skip ci]"

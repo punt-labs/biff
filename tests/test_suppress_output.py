@@ -1,4 +1,4 @@
-"""Tests for hooks/suppress-output.sh — PostToolUse display hook.
+"""Tests for plugin/hooks/suppress-output.sh — PostToolUse display hook.
 
 Invokes the shell script via subprocess with JSON on stdin,
 verifies the JSON output matches expected panel summaries.
@@ -11,7 +11,9 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
-HOOK = str(Path(__file__).resolve().parent.parent / "hooks" / "suppress-output.sh")
+HOOK = str(
+    Path(__file__).resolve().parent.parent / "plugin" / "hooks" / "suppress-output.sh"
+)
 
 
 def _run_hook(tool_name: str, tool_response: str) -> dict[str, object]:
