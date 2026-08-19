@@ -31,11 +31,17 @@ fi
 echo "Restoring dev state from parent of ${RELEASE_PREP_COMMIT:0:12}"
 git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- "$PLUGIN_JSON"
 
-# Restore dev commands if the parent commit had a plugin/commands/ directory
+# Restore dev commands if the parent commit had a plugin/commands/ directory.
+# The `add` belongs inside this branch, beside the checkout that populates the
+# directory. It used to run unconditionally as
+# `git add plugin/commands/ 2>/dev/null || true`, where the suppression existed
+# to tolerate the no-commands case — but it also swallowed a genuine add
+# failure in the case where commands WERE restored, and the commit below then
+# shipped without them while reporting success.
 if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- plugin/commands/ | grep -q .; then
   git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- plugin/commands/
+  git -C "$REPO_ROOT" add plugin/commands/
 fi
 
 git -C "$REPO_ROOT" add "$PLUGIN_JSON"
-git -C "$REPO_ROOT" add plugin/commands/ 2>/dev/null || true
 git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state [skip ci]"
