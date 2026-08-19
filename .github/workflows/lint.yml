@@ -26,3 +26,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src/ tests/
       - run: uv run pyright
+      # The shell surface — the plugin's hook dispatchers, the curl|sh
+      # installer, and the release scripts — had no lint gate at all, so a
+      # broken path in a moved script would only surface at runtime on a
+      # user's machine. Mirrors `make lint` so local and CI agree.
+      - run: shellcheck plugin/hooks/*.sh install.sh scripts/*.sh
