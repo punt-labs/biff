@@ -8,6 +8,8 @@
 
 ### Added
 
+- **`tests/test_plugin_surface.py` enforces that the plugin surface never reaches outside `plugin/`.** The `git-subdir` install materializes `plugin/` and nothing else, so a runtime path pointing at a sibling directory (`assets/`, `scripts/`, `src/`) resolves on a developer's full checkout and is simply absent on an installed plugin — a hook that references one fails silently rather than loudly. The tests walk every text file in the surface, collect the paths it addresses through `${CLAUDE_PLUGIN_ROOT}` and through `session-start.sh`'s script-relative `$PLUGIN_ROOT`, require each to exist inside `plugin/`, and assert no hook derives its plugin root from `git rev-parse` (which would break the moment the surface moved into a subdirectory). Verified to fail on an injected `${CLAUDE_PLUGIN_ROOT}/assets/nope.sh` reference, not merely to pass today.
+
 - **`make lint` and the Lint workflow run `shellcheck` on the shell surface.** The plugin's nine hook dispatchers, the `curl | sh` installer, and the two release scripts had no lint gate locally or in CI, so a broken path in a shell script surfaced only at runtime on a user's machine. Both entry points run the same command (`shellcheck plugin/hooks/*.sh install.sh scripts/*.sh`), and the surface passes with no suppressions.
 
 ### Fixed
