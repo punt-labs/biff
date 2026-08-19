@@ -55,6 +55,24 @@ def _referenced_paths(pattern: re.Pattern[str]) -> list[tuple[Path, str]]:
     return found
 
 
+def _assert_in_surface(source: Path, target: str, spelling: str) -> None:
+    """Require *target* to name a path that exists inside ``plugin/``.
+
+    Existence alone is not enough. ``${CLAUDE_PLUGIN_ROOT}/../src/foo`` exists
+    on a developer's full checkout and is absent on an installed plugin, so a
+    bare ``exists()`` check would pass for precisely the escape these tests
+    are here to catch. Containment is therefore asserted first, against the
+    *resolved* path, and only then existence.
+    """
+    candidate = _PLUGIN / target.rstrip("/")
+    where = f"{source.relative_to(_PLUGIN.parent)} references {spelling}"
+    resolved = candidate.resolve()
+    assert resolved.is_relative_to(_PLUGIN.resolve()), (
+        f"{where}, which escapes the plugin surface (resolves to {resolved})"
+    )
+    assert candidate.exists(), f"{where}, which is not in the surface"
+
+
 class TestSurfaceIsSelfContained:
     """Every path the surface addresses at runtime lives inside ``plugin/``."""
 
@@ -66,21 +84,13 @@ class TestSurfaceIsSelfContained:
             f"expected the hooks.json dispatchers, found {len(references)}"
         )
         for source, target in references:
-            resolved = _PLUGIN / target.rstrip("/")
-            assert resolved.exists(), (
-                f"{source.relative_to(_PLUGIN.parent)} references "
-                f"${{CLAUDE_PLUGIN_ROOT}}/{target}, which is not in the surface"
-            )
+            _assert_in_surface(source, target, f"${{CLAUDE_PLUGIN_ROOT}}/{target}")
 
     def test_script_relative_references_resolve(self) -> None:
         references = _referenced_paths(_SCRIPT_ROOT_VAR)
         assert references, "expected session-start.sh's $PLUGIN_ROOT references"
         for source, target in references:
-            resolved = _PLUGIN / target.rstrip("/")
-            assert resolved.exists(), (
-                f"{source.relative_to(_PLUGIN.parent)} references "
-                f"$PLUGIN_ROOT/{target}, which is not in the surface"
-            )
+            _assert_in_surface(source, target, f"$PLUGIN_ROOT/{target}")
 
     def test_no_hook_derives_the_plugin_root_from_git(self) -> None:
         """A git-derived plugin root breaks as soon as the surface moves.
