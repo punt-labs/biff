@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+## [1.12.3] - 2026-08-19
 ### Fixed
 
 - **`claude plugin install biff@punt-labs` no longer fails for users without a GitHub SSH key.** Claude Code clones plugin repos with `--recurse-submodules`, and this repo carried a `.punt-labs/ethos` submodule pointing at `git@github.com:punt-labs/team.git`. SSH authentication fails before repo visibility is consulted, so `punt-labs/team` being public did not help — every keyless install aborted with `fatal: clone of 'git@github.com:punt-labs/team.git' into submodule path ... failed`. The submodule is removed rather than switched to an HTTPS URL, which would have fixed the auth failure but still shipped 1.1 MB of internal identity data (246 files: identities, personalities, writing styles, roles, talents, teams) to every user's disk.
