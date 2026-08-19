@@ -96,6 +96,17 @@ docs/*.synctex.gz
 .punt-labs/lux.md
 .punt-labs/local/
 
+# Ethos org registry — this repo has NO submodule at .punt-labs/ethos (see
+# CLAUDE.md, "No Git Submodules"). A local clone of punt-labs/team at this
+# path stays untracked; the only committed file is the one agent identity
+# biff's own runtime reads (src/biff/config.py, DES-040 and DES-053).
+# The `dir/*` + negation form is required: git cannot re-include a file whose
+# parent directory is itself excluded, so each level is opened explicitly.
+.punt-labs/ethos/*
+!.punt-labs/ethos/identities/
+.punt-labs/ethos/identities/*
+!.punt-labs/ethos/identities/claude.yaml
+
 # Dev scratch files
 *.tmp
 hook-feedback.md
