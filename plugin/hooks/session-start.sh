@@ -104,10 +104,24 @@ if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
 fi
 
 # ── Install statusline if not already active ─────────────────────────
+# The output is CAPTURED, not suppressed, for two independent reasons.
+# (1) `biff install-statusline` prints "Installed." on stdout, and this hook's
+#     stdout must be nothing but the JSON block below — the old
+#     `2>/dev/null` muted only stderr, so a successful install emitted
+#     "Installed." ahead of the JSON and corrupted it.
+# (2) The old `|| true` swallowed failure and then claimed success anyway.
+#     Since a failure leaves $STASH_PATH absent, the hook retried and
+#     re-lied every single session. Success is now claimed only on exit 0,
+#     the failure is surfaced on stderr where hook debugging can see it, and
+#     the user is told the truth in additionalContext.
 if [[ ! -f "$STASH_PATH" ]]; then
   if command -v biff &>/dev/null; then
-    biff install-statusline 2>/dev/null || true
-    ACTIONS+=("Installed biff statusline (wraps existing)")
+    if statusline_out="$(biff install-statusline 2>&1)"; then
+      ACTIONS+=("Installed biff statusline (wraps existing)")
+    else
+      printf 'biff install-statusline failed: %s\n' "$statusline_out" >&2
+      ACTIONS+=("biff statusline install FAILED (see hook stderr)")
+    fi
   fi
 fi
 
