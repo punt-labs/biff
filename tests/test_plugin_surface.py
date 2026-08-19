@@ -34,6 +34,10 @@ _PLUGIN_ROOT_VAR = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"'\s]+)")
 # -- the capture stops at the closing quote, leaving a directory prefix.
 _SCRIPT_ROOT_VAR = re.compile(r"\$PLUGIN_ROOT/([^\"'\s]*)")
 
+# An assignment to any *PLUGIN_ROOT* variable, capturing the right-hand side:
+# `PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"` -> the `"$(cd ...)"` part.
+_PLUGIN_ROOT_ASSIGN = re.compile(r"^\s*\w*PLUGIN_ROOT\w*=(.*)$", re.MULTILINE)
+
 
 def _surface_files() -> list[Path]:
     """Every text file shipped in the plugin surface."""
@@ -92,17 +96,32 @@ class TestSurfaceIsSelfContained:
         for source, target in references:
             _assert_in_surface(source, target, f"$PLUGIN_ROOT/{target}")
 
-    def test_no_hook_derives_the_plugin_root_from_git(self) -> None:
-        """A git-derived plugin root breaks as soon as the surface moves.
+    def test_plugin_root_is_derived_script_relatively(self) -> None:
+        """The plugin root must come from the script's own location.
 
-        The hooks *do* call ``git rev-parse --show-toplevel`` to find the
-        **consumer's** repo, which is correct -- that is where the enablement
-        marker lives. What must never happen is assigning that value to the
-        plugin root: on an installed plugin the checkout is not the user's
-        repo, and after DES-055 it is not even the repo root.
+        The hooks *do* call ``git rev-parse --show-toplevel``, ten of them, to
+        find the **consumer's** repo -- that is where the enablement marker
+        lives, and it is correct. What must never happen is a plugin root
+        derived from git: on an installed plugin the checkout is not the
+        user's repo, and since DES-055 it is not even a repo root.
+
+        So this is a whitelist, not a blacklist. Every assignment to a
+        ``*PLUGIN_ROOT*`` variable must derive from ``dirname``/``BASH_SOURCE``,
+        which rules out a git-derived value however it is laundered --
+        including the two-step form ``ROOT=$(git rev-parse --show-toplevel);
+        PLUGIN_ROOT="$ROOT/plugin"``, which any pattern hunting for
+        ``rev-parse`` on the assignment line would miss.
         """
+        assignments: list[tuple[Path, str]] = []
         for script in sorted(_PLUGIN.glob("hooks/*.sh")):
             body = script.read_text(encoding="utf-8")
-            assert not re.search(r"PLUGIN_ROOT=.*rev-parse", body), (
-                f"{script.name} derives the plugin root from git"
+            assignments.extend(
+                (script, match.group(1)) for match in _PLUGIN_ROOT_ASSIGN.finditer(body)
+            )
+
+        assert assignments, "expected session-start.sh to assign a PLUGIN_ROOT"
+        for script, rhs in assignments:
+            assert "dirname" in rhs or "BASH_SOURCE" in rhs, (
+                f"{script.name} assigns a plugin root that is not script-relative: "
+                f"{rhs.strip()}"
             )
