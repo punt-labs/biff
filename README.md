@@ -408,6 +408,14 @@ make format                # Auto-format code
 make help                  # List all targets
 ```
 
+Everything the Claude Code plugin ships lives under `plugin/` — the manifest
+(`plugin/.claude-plugin/plugin.json`), the slash commands (`plugin/commands/`),
+and the hook dispatchers (`plugin/hooks/`). The marketplace installs that one
+directory via Claude Code's `git-subdir` source, so an install never fetches
+`src/`, `tests/`, or `docs/`. `${CLAUDE_PLUGIN_ROOT}` is therefore `plugin/`:
+to run a local change without releasing, point Claude Code at
+`claude --plugin-dir "$PWD/plugin"`.
+
 ## License
 
 MIT

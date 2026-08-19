@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The shippable plugin surface moved to `plugin/`, so a marketplace install fetches only the plugin.** `.claude-plugin/`, `commands/`, and `hooks/` now live under a single `plugin/` directory, which lets the marketplace entry use Claude Code's `git-subdir` source (`"source": "git-subdir"`, `"path": "plugin"`). That source is a blobless partial clone plus `git sparse-checkout set --cone plugin`, so an install stops fetching whole directories: `src/`, `tests/`, `docs/`, `scripts/`, `research/`, `spikes/`, `.github/`, `.beads/`, and this repo's own `.punt-labs/` working data and `.claude/` dev config are all absent. Measured against this branch on GitHub: 66 files / 1.4 MB of working tree (3.3 MB including `.git`) versus 327 files / 5.2 MB (7.1 MB including `.git`) for an equivalent shallow full clone — 5x fewer files and a 3.7x smaller working tree. Note that cone mode always materializes the files sitting in the *repo root*, so roughly 1.2 MB of root-level documents (`DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`, `prfaq.tex`, `press-release-v0.11.4.pdf`, `uv.lock`, `README.md`) still travel with an install; `plugin/` itself is only 208 KB. Shrinking that remainder means moving root documents into a subdirectory, which this change does not attempt. Nothing in the surface reaches outside itself at runtime — the MCP server is the `biff` binary on `PATH` from PyPI, and every hook script depends only on `$HOME`, `biff-hook`, and the consumer repo's `.punt-labs/biff/enabled` marker — and `${CLAUDE_PLUGIN_ROOT}/hooks/*.sh` in `hooks.json` stays correct because the whole `hooks/` directory moved together. One consequence for anyone working in this repo: `${CLAUDE_PLUGIN_ROOT}` is now `plugin/`, so a development install is `claude --plugin-dir <repo>/plugin` rather than `--plugin-dir <repo>`. No user-visible behavior change; existing installs are unaffected until the marketplace entry is repointed. See DES-055.
+
+### Added
+
+- **`make lint` and the Lint workflow run `shellcheck` on the shell surface.** The plugin's nine hook dispatchers, the `curl | sh` installer, and the two release scripts had no lint gate locally or in CI, so a broken path in a shell script surfaced only at runtime on a user's machine. Both entry points run the same command (`shellcheck plugin/hooks/*.sh install.sh scripts/*.sh`), and the surface passes with no suppressions.
+
+### Fixed
+
+- **`tests/test_repl_readline.py::test_loads_history_file` failed on every libedit build of Python, and the class was overwriting the developer's real REPL history.** The test hand-wrote `who\nfinger @kai\n` and asserted readline had loaded two entries; libedit (macOS, and the uv-managed CPython this repo runs on) only recognizes a history file carrying its own `_HiStOrY_V2_` header, so the plain-text fixture loaded zero entries. The fixture is now written by `readline.write_history_file`, i.e. in whatever format the linked backend reads back — production code was never affected, because `setup`/`_save_history` round-trip through the same backend. Separately, `setup()` registers an `atexit` handler that re-reads the module global `_HISTORY_PATH` at process exit, long after a test's `patch` has been undone, so every test in the class was queuing a write to `~/.punt-labs/biff/repl_history` with whatever the tests had pushed into readline; an autouse fixture now patches `atexit.register` for the class.
+
+- **A relocated plugin surface can no longer turn `tests/test_server/test_instructions.py` into a green run of skips.** Its `_DEV_PLUGIN` probe (`(_COMMANDS / "poll-dev.md").is_file()`) exists so the dev-command assertions stay valid after `release-plugin.sh` deletes the `*-dev.md` files for a release — but a *wrong* `_COMMANDS` path is indistinguishable from that state, so three assertions silently became "dev commands are removed in a prod release build" skips. The module now raises at collection when the commands directory is absent.
+
 ## [1.12.3] - 2026-08-19
 
 ### Fixed

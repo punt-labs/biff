@@ -6209,3 +6209,88 @@ tests in `tests/test_stdlib.py`, `tests/test_markers.py`,
 `tests/test_hooks_registration.py`, and `tests/test_plan_gate_scoping.py`
 (the four documented-occurrence regressions, each reproduced against a
 real git repo rather than a git mock).
+
+---
+
+## DES-055: The Shippable Plugin Surface Lives in `plugin/` — `git-subdir` Marketplace Source
+
+**Date**: 2026-08-19
+**Status**: Implemented
+
+### Problem
+
+`claude plugin install biff@punt-labs` clones this whole repository onto
+every user's machine. The marketplace entry used the `url` source, which
+is a full (shallow) git clone: `src/`, `tests/`, `docs/`, `research/`,
+`spikes/`, `.github/`, `.beads/`, the 300 KB `DESIGN.md`, and this repo's
+own `.punt-labs/` and `.claude/` working state all landed on disk to
+deliver four directories of markdown, JSON, and shell.
+
+That is not only waste. It is the same class of problem as the ethos
+submodule (DES-052's neighbour, the `.punt-labs/ethos` gitlink removal):
+everything tracked here ships to every consumer, so the repo layout is a
+distribution decision, not an internal preference.
+
+### Decision
+
+The shippable surface moves into a single directory, `plugin/`:
+
+```text
+plugin/
+├── .claude-plugin/
+│   ├── plugin.json          manifest — mcpServers.tty runs `biff mcp`
+│   └── agents/              plugin-shipped agent definitions
+├── commands/                slash commands (name.md + name-dev.md)
+└── hooks/                   hook dispatchers + hooks.json
+```
+
+The marketplace entry then uses Claude Code's `git-subdir` source
+(`"source": "git-subdir"`, `"path": "plugin"`), which is a blobless
+partial clone plus `git sparse-checkout set --cone plugin`. Whole
+directories outside `plugin/` are never fetched.
+
+Nothing in the surface reaches outside itself at runtime, which is what
+makes the split safe: `hooks.json` addresses every script as
+`${CLAUDE_PLUGIN_ROOT}/hooks/<name>.sh` and the whole `hooks/` directory
+moved together, so those paths are unchanged; the MCP server is the
+`biff` binary on `PATH` from PyPI, not code in the plugin; and each hook
+script depends only on `$HOME`, the `biff-hook` binary, and the
+consumer's own `$REPO_ROOT/.punt-labs/biff/enabled` marker.
+
+### Cone mode still ships the repo root
+
+`sparse-checkout --cone` excludes directories, not files. Every file
+sitting in the repo *root* — `DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`,
+`prfaq.tex`, `press-release-v0.11.4.pdf`, `README.md`, `CLAUDE.md` — is
+still materialized by an install. Roughly 1 MB of root documents travels
+with a plugin that is itself ~150 KB. Shrinking that remainder means
+moving root documents into a subdirectory; this decision does not
+attempt it, and any future attempt has to weigh it against every
+external link into `DESIGN.md`.
+
+### Alternatives rejected
+
+- **A separate published plugin repo.** Two repos to keep in sync, and
+  the plugin would stop being reviewable in the same PR as the code it
+  drives. The two channels already have to release together (marketplace
+  config + PyPI binary); splitting the repo doubles the coordination.
+- **Bundling the plugin inside the wheel.** biff did this once
+  (`biff.plugins.biff` + `installer.py`, both long gone) and moved to the
+  marketplace deliberately: `claude plugin update` is the users' upgrade
+  path for prompts and hooks, not `uv tool upgrade`.
+- **Leaving the surface at the repo root and accepting the full clone.**
+  This is what was measured as the cost; see the CHANGELOG entry for the
+  before/after numbers.
+
+### Consequences for anyone working in this repo
+
+- `${CLAUDE_PLUGIN_ROOT}` is `plugin/`. A dev install is
+  `claude --plugin-dir <repo>/plugin`, not `--plugin-dir <repo>`.
+- Repo-relative references to the surface had to move with it:
+  `tests/test_hooks_registration.py`, `tests/test_suppress_output.py`,
+  `scripts/release-plugin.sh`, and `scripts/restore-dev-plugin.sh`.
+- `punt release` and `punt audit` resolve `plugin.json` at
+  `<root>/.claude-plugin/plugin.json` in punt-kit's own code. Until
+  punt-kit learns the `plugin/` location, biff's release cannot bump the
+  plugin version or read its committed name — this is tracked as a
+  cross-repo prerequisite, not a biff-local fix.
