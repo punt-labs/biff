@@ -164,7 +164,13 @@ class TestWriteSentinelRuntimeError:
     def test_raises_runtime_error_when_home_unresolvable(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def _boom() -> Path:
+        def _boom(*args: object) -> Path:
+            # ``Path.home`` is a classmethod; monkeypatching it with a plain
+            # function can be invoked with the implicit class argument
+            # depending on how the attribute is accessed, so this must accept
+            # (and ignore) any arguments rather than a fixed zero-arg
+            # signature -- a mismatch here raises TypeError instead of the
+            # RuntimeError this test means to exercise.
             msg = "could not determine home directory"
             raise RuntimeError(msg)
 
@@ -179,7 +185,8 @@ class TestWriteSentinelRuntimeError:
         sentinel write -- ``(OSError, RuntimeError)`` -- proving that
         tuple, not the catch-all, is what reports this failure."""
 
-        def _boom() -> Path:
+        def _boom(*args: object) -> Path:
+            # See the sibling test above for why this accepts *args.
             msg = "could not determine home directory"
             raise RuntimeError(msg)
 
