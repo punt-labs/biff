@@ -243,6 +243,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @track_activity(state)
     async def talk_end() -> str:
         """Close the active talk session, sending an end frame if connected."""
+        await update_current_session(state)
         result = await talk_commands.end_or_cancel(state)
         await refresh_talk(mcp, state)
         return result.text

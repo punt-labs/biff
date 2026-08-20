@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -185,6 +186,10 @@ async def register_session(
                     existing.tty_name,
                     session_key,
                 )
+    # Both activity timestamps start identical: a session that has never
+    # invoked a tool reads idle as time-since-registration, its own
+    # meaningful start time — not epoch-era or spuriously fresh.
+    registered_at = datetime.now(UTC)
     session = UserSession(
         user=user,
         tty=tty_hex,
@@ -194,7 +199,8 @@ async def register_session(
         hostname=hostname,
         pwd=pwd,
         repo=repo,
-        last_active=datetime.now(UTC),
+        last_active=registered_at,
+        last_tool_at=registered_at,
     )
     await relay.update_session(session)
     # Record the claimed alias so the next resume of this session_id reclaims
@@ -214,6 +220,69 @@ def _write_sentinel(repo_name: str, session_key: str) -> None:
     d.mkdir(parents=True, exist_ok=True)
     safe = session_key.replace(":", "-")
     (d / safe).write_text(session_key)
+
+
+# (action, exception types it may raise, fixed stderr label for a failure)
+_SignalCleanupStep = tuple[Callable[[], None], tuple[type[Exception], ...], bytes]
+
+_UNEXPECTED_CLEANUP_ERROR = b"biff: signal cleanup: unexpected error\n"
+
+
+def _report_cleanup_failure(label: bytes) -> None:
+    """Write *label* to fd 2, swallowing a failed write itself.
+
+    Called only from inside ``_run_signal_cleanup_steps``.  fd 2 can be
+    closed or redirected to a broken pipe by the time the signal handler
+    runs; if ``os.write`` itself raised uncaught here, that exception
+    would escape the cleanup loop and skip the terminating ``os.kill``
+    that follows it in ``_signal_handler`` -- reintroducing the exact
+    orphan-process hang this handler exists to prevent, on the failure
+    path.  ``OSError`` is the specific, narrow exception ``os.write``
+    raises for a bad fd (PY-EH-6: this single ``write()`` call is a true
+    system boundary).
+    """
+    with suppress(OSError):
+        os.write(2, label)
+
+
+def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
+    """Run best-effort signal-handler cleanup steps, reporting failures.
+
+    Called only from inside ``_signal_handler``.  A failed step reports
+    via ``os.write(2, label)`` with a pre-built, fixed-form bytes literal
+    -- never logging, never string formatting at call time.  A Python
+    signal handler is deferred to run on the main thread at the next
+    bytecode boundary; if that boundary lands while the main thread (or a
+    thread it must wait on) already holds the logging module's lock,
+    calling ``logger.warning()`` from here could block forever --
+    reintroducing the exact hang this handler exists to prevent.  Writing
+    a compiled bytes constant straight to fd 2 touches no lock and needs
+    no formatting, so it cannot deadlock the way logging can.
+    """
+    for step, errors, label in steps:
+        try:
+            step()
+        except errors:
+            _report_cleanup_failure(label)
+        except BaseException:  # noqa: BLE001 -- see below (PY-EH-6)
+            # A step can only be trusted to raise the types it declared
+            # *today*.  If a future step's callee starts raising something
+            # outside its declared tuple, the exception must not be allowed
+            # to escape this loop and skip the terminating os.kill below --
+            # that would silently reintroduce the exact hang this handler
+            # exists to prevent.  Not hypothetical: the sentinel step below
+            # calls Path.home() on every invocation (via sentinel_dir() ->
+            # biff_data_dir()), which raises RuntimeError, not OSError,
+            # when HOME is unset and pwd.getpwuid() can't resolve the
+            # user -- caught here even after that step's own tuple is
+            # widened, because the next step someone adds may get its
+            # tuple wrong too.  A signal handler whose only remaining job
+            # is to reach that os.kill is the clearest system boundary in
+            # this codebase, which is what PY-EH-6 requires for a catch
+            # this broad.  BaseException (not Exception) is deliberate:
+            # KeyboardInterrupt or a second signal arriving mid-cleanup is
+            # exactly the case where the exit path must not be lost.
+            _report_cleanup_failure(_UNEXPECTED_CLEANUP_ERROR)
 
 
 async def _reap_sentinels(state: ServerState) -> None:
@@ -383,7 +452,9 @@ async def _heartbeat_loop(
     Each ``heartbeat()`` call updates ``last_active`` and — for NATS KV —
     resets the key's TTL.  When the process sleeps (laptop lid closed) or
     dies (SIGKILL), heartbeats stop and the relay eventually expires the
-    session.
+    session.  ``heartbeat()`` deliberately never touches ``last_tool_at``
+    — that field is the idle time ``/who`` and ``/finger`` display, and
+    must only advance on a real tool call, not this unconditional tick.
 
     On every tick while ``state.companion`` is ``None``, polls the
     ethos roster for the human identity (spec § 3.2). The poll cost
@@ -930,30 +1001,102 @@ async def _active_lifespan(
     """
     _cleaned_up = False
 
-    def _signal_handler(_signum: int, _frame: object) -> None:
+    def _signal_handler(signum: int, _frame: object) -> None:
         nonlocal _cleaned_up
         if _cleaned_up:
             return
         _cleaned_up = True
         # Write sentinel — relay-agnostic, picked up by any
         # running server's reaper task.  Smallest possible
-        # operation (touch a file), runs first.
-        with suppress(OSError):
-            _write_sentinel(state.config.repo_name, state.session_key)
+        # operation (touch a file), runs first.  Steps are collected here
+        # and run by ``_run_signal_cleanup_steps`` below -- see that
+        # function for why a failed step reports via ``os.write(2, ...)``
+        # rather than logging.
+        steps: list[_SignalCleanupStep] = [
+            (
+                lambda: _write_sentinel(state.config.repo_name, state.session_key),
+                # RuntimeError: sentinel_dir() -> biff_data_dir() calls
+                # Path.home() fresh on every invocation, which raises
+                # RuntimeError (not OSError) when HOME is unset and
+                # pwd.getpwuid() can't resolve the user.
+                (OSError, RuntimeError),
+                b"biff: signal cleanup: sentinel write failed\n",
+            ),
+        ]
         if state.companion:
-            with suppress(OSError):
-                _write_sentinel(state.config.repo_name, state.companion.session_key)
+            companion = state.companion
+            steps.append(
+                (
+                    lambda: _write_sentinel(
+                        state.config.repo_name, companion.session_key
+                    ),
+                    (OSError, RuntimeError),
+                    b"biff: signal cleanup: companion sentinel write failed\n",
+                )
+            )
         # Best-effort sync cleanup for LocalRelay only.
         if isinstance(state.relay, LocalRelay):
-            with suppress(OSError):
-                state.relay.write_remove_sentinel(state.session_key)
-            with suppress(OSError, ValueError):
-                state.relay.delete_session_sync(state.session_key)
+            relay = state.relay
+            steps.append(
+                (
+                    lambda: relay.write_remove_sentinel(state.session_key),
+                    (OSError,),
+                    b"biff: signal cleanup: remove-sentinel write failed\n",
+                )
+            )
+            steps.append(
+                (
+                    lambda: relay.delete_session_sync(state.session_key),
+                    (OSError, ValueError),
+                    b"biff: signal cleanup: session delete failed\n",
+                )
+            )
             if state.companion:
-                with suppress(OSError):
-                    state.relay.write_remove_sentinel(state.companion.session_key)
-                with suppress(OSError, ValueError):
-                    state.relay.delete_session_sync(state.companion.session_key)
+                companion = state.companion
+                steps.append(
+                    (
+                        lambda: relay.write_remove_sentinel(companion.session_key),
+                        (OSError,),
+                        b"biff: signal cleanup: companion remove-sentinel "
+                        b"write failed\n",
+                    )
+                )
+                steps.append(
+                    (
+                        lambda: relay.delete_session_sync(companion.session_key),
+                        (OSError, ValueError),
+                        b"biff: signal cleanup: companion session delete failed\n",
+                    )
+                )
+        _run_signal_cleanup_steps(steps)
+        # signal.signal() replaces the platform's default terminate
+        # disposition, so returning here leaves the process running —
+        # the signal has been fully "handled" as far as the OS is
+        # concerned, but nothing actually terminates it.
+        #
+        # sys.exit() was tried first and rejected: it raises SystemExit
+        # on the main thread, which *does* unwind correctly through the
+        # blocking selector call inside asyncio's event loop (verified
+        # empirically with a stack-trace dump from inside the handler).
+        # But the stdio transport (mcp.server.stdio.stdio_server) reads
+        # stdin on a non-daemon AnyIO worker thread that stays blocked
+        # in a real blocking read with no EOF pending.  CPython's normal
+        # interpreter shutdown (threading._shutdown, run via atexit)
+        # joins every non-daemon thread before the process actually
+        # exits, so SystemExit propagating cleanly still leaves the
+        # process hung forever waiting on that thread join — confirmed
+        # by spawning a real subprocess, sending SIGTERM, and observing
+        # it survive a 13s grace period even though the handler ran to
+        # completion and the exception traceback showed a clean unwind.
+        #
+        # Restoring the default disposition and re-delivering the signal
+        # to ourselves terminates the process at the kernel level — no
+        # Python-level shutdown, no thread joins, and it yields the
+        # standard 128+signum exit status.  The sentinel and best-effort
+        # cleanup above already ran and are on disk before this point,
+        # so nothing is lost by skipping the (broken) Python shutdown path.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)

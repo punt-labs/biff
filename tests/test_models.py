@@ -177,6 +177,69 @@ class TestUserSession:
         with pytest.raises(ValidationError, match="timezone"):
             UserSession(user="kai", last_active=naive)
 
+    def test_last_tool_at_defaults_near_construction_time(self) -> None:
+        """A fresh session (never invoked a tool) idles from its own start."""
+        before = datetime.now(UTC)
+        session = UserSession(user="kai")
+        after = datetime.now(UTC)
+        assert before <= session.last_tool_at <= after
+
+    def test_last_tool_at_is_utc(self) -> None:
+        session = UserSession(user="kai")
+        assert session.last_tool_at.tzinfo == UTC
+
+    def test_non_utc_last_tool_at_normalized(self) -> None:
+        eastern = timezone(timedelta(hours=-5))
+        ts = datetime(2026, 2, 13, 12, 0, tzinfo=eastern)
+        session = UserSession(user="kai", last_tool_at=ts)
+        assert session.last_tool_at == ts.astimezone(UTC)
+
+    def test_naive_last_tool_at_rejected(self) -> None:
+        naive = datetime(2026, 2, 13, 12, 0)
+        with pytest.raises(ValidationError, match="timezone"):
+            UserSession(user="kai", last_tool_at=naive)
+
+    def test_last_tool_at_independent_of_last_active(self) -> None:
+        """The two timestamps are distinct fields, not aliases of one value."""
+        tool_at = datetime(2026, 2, 13, 10, 0, tzinfo=UTC)
+        active_at = datetime(2026, 2, 13, 12, 0, tzinfo=UTC)
+        session = UserSession(user="kai", last_tool_at=tool_at, last_active=active_at)
+        assert session.last_tool_at == tool_at
+        assert session.last_active == active_at
+        assert session.last_tool_at != session.last_active
+
+    def test_last_tool_at_round_trip(self) -> None:
+        tool_at = datetime(2026, 2, 13, 10, 0, tzinfo=UTC)
+        session = UserSession(user="kai", last_tool_at=tool_at)
+        restored = UserSession.model_validate_json(session.model_dump_json())
+        assert restored.last_tool_at == tool_at
+
+    def test_last_tool_at_missing_from_wire_falls_back_to_last_active(self) -> None:
+        """A record written before this field existed has no last_tool_at key.
+
+        The fallback must read the record's own last_active, not the field
+        default (now()) — the latter would make a long-dead session read as
+        freshly active, reproducing the exact bug this field fixes.
+        """
+        old = datetime(2026, 2, 13, 8, 0, tzinfo=UTC)
+        raw = f'{{"user": "kai", "last_active": "{old.isoformat()}"}}'
+        session = UserSession.model_validate_json(raw)
+        assert session.last_tool_at == old
+        assert session.last_tool_at == session.last_active
+
+    def test_last_tool_at_present_on_wire_is_not_overwritten(self) -> None:
+        """A record that already carries both fields keeps them distinct."""
+        tool_at = datetime(2026, 2, 13, 9, 0, tzinfo=UTC)
+        active_at = datetime(2026, 2, 13, 12, 0, tzinfo=UTC)
+        raw = (
+            '{"user": "kai", '
+            f'"last_active": "{active_at.isoformat()}", '
+            f'"last_tool_at": "{tool_at.isoformat()}"}}'
+        )
+        session = UserSession.model_validate_json(raw)
+        assert session.last_tool_at == tool_at
+        assert session.last_active == active_at
+
 
 class TestBiffConfig:
     _REPO = "_test-models"

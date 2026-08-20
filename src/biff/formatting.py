@@ -342,7 +342,7 @@ def format_who(sessions: list[UserSession]) -> str:
             _format_who_name(s),
             _format_who_kind(s),
             display_repo_name(s.repo) or "-",
-            format_idle(s.last_active),
+            format_idle(s.last_tool_at),
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
             _truncate(terminal_safe(s.hostname), _MAX_LABEL_WIDTH) or "-",
@@ -399,8 +399,14 @@ def format_user_header(session: UserSession) -> str:
 
 
 def format_tty_block(session: UserSession) -> str:
-    """Format per-TTY details (on-since, host/dir, plan)."""
-    idle = _format_finger_idle(session.last_active)
+    """Format per-TTY details (on-since, host/dir, plan).
+
+    ``idle`` reads ``last_tool_at`` — the last real tool invocation —
+    not ``last_active``, which the background heartbeat refreshes every
+    tick regardless of activity and would otherwise make idle read as
+    0-1 minutes for every live session.
+    """
+    idle = _format_finger_idle(session.last_tool_at)
     since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
     tty_label = terminal_safe(session.tty_name) or (
         session.tty[:8] if session.tty else "?"
@@ -429,8 +435,14 @@ def format_finger(session: UserSession) -> str:
 
 
 def format_finger_multi(sessions: list[UserSession]) -> str:
-    """Format all sessions for a user (header once, multiple tty blocks)."""
-    by_idle = sorted(sessions, key=lambda s: s.last_active, reverse=True)
+    """Format all sessions for a user (header once, multiple tty blocks).
+
+    Ordered most-recently-active first by ``last_tool_at``, matching the
+    idle time each block renders (:func:`format_tty_block`) — sorting on
+    ``last_active`` instead would order by heartbeat recency, which is
+    unrelated to the idle value shown.
+    """
+    by_idle = sorted(sessions, key=lambda s: s.last_tool_at, reverse=True)
     header = format_user_header(by_idle[0])
     tty_blocks = [format_tty_block(s) for s in by_idle]
     return header + "\n" + "\n".join(tty_blocks)

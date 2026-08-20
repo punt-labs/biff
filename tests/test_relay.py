@@ -438,13 +438,45 @@ class TestRemoveSentinel:
 
 
 class TestHeartbeat:
-    async def test_creates_new_session(self, relay: LocalRelay) -> None:
+    async def test_skips_missing_session(self, relay: LocalRelay) -> None:
+        """Heartbeat is a no-op when no session exists.
+
+        Matches ``NatsRelay.heartbeat``: creating a bare session would
+        destroy tty_name, repo, pwd, hostname, plan, and other fields
+        that only the lifespan or tool handlers know how to set.
+        """
         await relay.heartbeat("kai:tty1")
         result = await relay.get_session("kai:tty1")
-        assert result is not None
-        assert result.user == "kai"
-        assert result.tty == "tty1"
-        assert result.plan == ""
+        assert result is None
+
+    async def test_warns_once_on_missing_session(
+        self, relay: LocalRelay, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A session vanishing under a live heartbeat loop is anomalous.
+
+        The loop runs on a fixed interval for the life of the process, so
+        the warning must fire once per key, not on every tick.
+        """
+        with caplog.at_level("WARNING"):
+            await relay.heartbeat("kai:tty1")
+            await relay.heartbeat("kai:tty1")
+            await relay.heartbeat("kai:tty1")
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "kai:tty1" in warnings[0].message
+
+    async def test_rewarns_after_session_reappears_and_vanishes_again(
+        self, relay: LocalRelay, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A fresh disappearance after recovery is anomalous again."""
+        with caplog.at_level("WARNING"):
+            await relay.heartbeat("kai:tty1")
+            await relay.update_session(UserSession(user="kai", tty="tty1"))
+            await relay.heartbeat("kai:tty1")
+            await relay.delete_session("kai:tty1")
+            await relay.heartbeat("kai:tty1")
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 2
 
     async def test_updates_last_active(self, relay: LocalRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
@@ -473,6 +505,25 @@ class TestHeartbeat:
         result = await relay.get_session("kai:tty1")
         assert result is not None
         assert result.biff_enabled is False
+
+    async def test_does_not_advance_last_tool_at(self, relay: LocalRelay) -> None:
+        """Regression: heartbeat must not touch last_tool_at.
+
+        last_tool_at is the idle time /who and /finger display; only a real
+        tool invocation (update_current_session) may advance it. Heartbeat
+        runs unconditionally on a fixed interval and must leave it alone —
+        it may bump last_active (liveness) as always.
+        """
+        old_tool_at = datetime.now(UTC) - timedelta(minutes=10)
+        await relay.update_session(
+            UserSession(user="kai", tty="tty1", last_tool_at=old_tool_at)
+        )
+        await relay.heartbeat("kai:tty1")
+        await relay.heartbeat("kai:tty1")
+        result = await relay.get_session("kai:tty1")
+        assert result is not None
+        assert result.last_tool_at == old_tool_at
+        assert result.last_active > old_tool_at
 
 
 # -- Session Key Validation --
@@ -566,6 +617,31 @@ class TestMalformedSessions:
         result = relay._read_sessions()
         assert "kai:tty1" in result
         assert result["kai:tty1"].plan == "testing"
+
+    def test_read_sessions_logs_on_corruption(
+        self, relay: LocalRelay, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The async-path reader logs -- it never runs from a signal handler."""
+        (tmp_path / "sessions.json").write_text("not json at all")
+        with caplog.at_level("WARNING"):
+            relay._read_sessions()
+        assert any(
+            "Corrupt sessions file" in r.message
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        )
+
+    def test_delete_session_sync_swallows_corruption_without_logging(
+        self, relay: LocalRelay, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """delete_session_sync also runs from inside a signal handler's
+        cleanup step (server.app._run_signal_cleanup_steps), where a
+        logging call can deadlock on the module lock -- unlike
+        _read_sessions, it must never log, only swallow and return."""
+        (tmp_path / "sessions.json").write_text("not json at all")
+        with caplog.at_level("WARNING"):
+            relay.delete_session_sync("kai:tty1")  # must not raise
+        assert not caplog.records
 
 
 class TestSessionTtyHint:

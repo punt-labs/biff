@@ -6212,6 +6212,167 @@ real git repo rather than a git mock).
 
 ---
 
+## DES-056: Liveness and Activity Are Two Clocks — `last_active` vs `last_tool_at`
+
+**Date:** 2026-08-14
+**Status:** Settled
+**Beads:** biff-liu, biff-teh, biff-r91, biff-hvi
+**Related:** biff-mue (the liveness filter this decision deliberately
+leaves untouched), biff-b3e (the still-open question of whether dead
+sessions should be shown as stale rather than hidden), DES-011a
+(process-tree walk, the mechanism behind the orphan class below)
+
+### Problem
+
+`UserSession.last_active` was answering two questions that have
+different answers, and one of them was wrong.
+
+`is_live()` asks *is this process alive?* The heartbeat answers it
+correctly by rewriting `last_active` to `now()` on every tick.
+
+The `IDLE` column in `/who` and the `idle H:MM` field in `/finger` ask
+*is anyone actually doing anything?* They read the same field — so the
+heartbeat destroyed the answer. Worse, both surfaces render only
+sessions that heartbeated within `PRESENCE_LIVENESS_SECONDS` (120s), so
+every visible row had a `last_active` under two minutes old **by
+construction**. The column could not render anything but `0m` or `1m`.
+Observed 2026-08-14: all sixteen rows read `0m` simultaneously — not
+sixteen coincidences, a field structurally incapable of varying.
+
+The operator cost was not cosmetic. A Claude session orphaned on Aug 13
+displayed `idle 0:00` beside a live-looking plan and was read as an
+active agent; its plan was five weeks stale. A `biff mcp` server
+orphaned on Jul 17 ran for five weeks unnoticed. Nothing on any presence
+surface distinguished either from a session being typed in that second.
+
+Two adjacent defects surfaced from the same investigation and are fixed
+in the same change, because each one independently defeats the others:
+
+- **biff-teh** — `_active_lifespan`'s `_signal_handler` wrote its
+  sentinel and *returned*. `signal.signal()` replaces the platform's
+  default terminate disposition, so `kill <pid>` did nothing but touch a
+  file. That is where the orphans came from.
+- **biff-r91** — the entire tier-3 subprocess suite had been erroring on
+  collection ("No such option: `--transport`") since the `serve`/`mcp`
+  CLI split. Tier 3 is deselected by default and CI runs tiers 1–2, so
+  nothing reported it.
+
+### Decision
+
+**Add a second clock; do not repurpose the first.**
+`UserSession.last_tool_at` is written only on real tool invocations, via
+`update_current_session()` at the top of every `track_activity`-decorated
+handler and via the shared CLI writer in `commands/_session.py`.
+`last_active`, `is_live`, `PRESENCE_LIVENESS_SECONDS` and
+`live_sessions` are unchanged — which sessions appear and which are
+hidden is exactly as before. `IDLE`/`idle` and the `/who` and
+`/finger` sort orders read `last_tool_at`.
+
+**Rejected: renaming `last_active` to `last_heartbeat` and reusing the
+good name for activity.** It reads better and it is the wrong call. The
+KV record is a wire format shared across a mixed-version fleet — this
+org runs PyPI installs and local builds side by side. An older server
+writing heartbeat semantics into a field a newer server reads as
+activity produces a silently wrong idle time, which is precisely the bug
+class being fixed here. Additive only. The new name was also chosen to
+be unmistakable beside `last_active` in a diff: `last_activity` would
+have been a maintenance trap.
+
+**Never `Optional`.** `last_tool_at` is initialised at session
+registration, so a session nobody has touched reports time since it
+started — the correct answer, not a null. Records written by
+pre-DES-056 servers lack the key entirely; a `model_validator(mode=
+"before")` backfills from that record's own `last_active` rather than
+from `now()`, which is the closest available approximation and avoids an
+epoch-era idle appearing in the table.
+
+**Termination re-delivers the signal rather than raising `SystemExit`.**
+`sys.exit()` was implemented first and rejected on evidence. `SystemExit`
+*does* unwind cleanly out of the blocking selector call — verified with a
+stack dump taken from inside the handler. The hang is one layer further
+down: `mcp.server.stdio.stdio_server()` reads stdin on a **non-daemon**
+AnyIO worker thread, blocked in a real `read()` on a stdin that will
+never see EOF — exactly the state of every real orphan, parent gone and
+pipe never closed. CPython's interpreter shutdown joins every non-daemon
+thread before exiting, so a clean `SystemExit` still hangs forever on
+that join, silently, with no error and no traceback. `signal.signal(
+signum, SIG_DFL)` followed by `os.kill(os.getpid(), signum)` terminates
+at the kernel level, never enters that path, and yields the standard
+128+signum status. The sentinel and best-effort cleanup have already run
+and are on disk by that point.
+
+### Why the writer audit was the work
+
+The bug is one writer refreshing a field it should not, so an incomplete
+audit relocates it rather than fixing it. Every path that touches either
+timestamp was enumerated and its behaviour stated: the two `heartbeat()`
+implementations (`last_active` only — `model_copy` never names the new
+field), `heartbeat()`'s no-session fallback, `update_current_session()`
+(the single activity writer), `get_or_create_session()`'s auto-create
+branch, `register_session()` and the companion path, and
+`cli_session`'s registration and heartbeat loop.
+
+The first pass drew that boundary around the model and display layers
+and **missed the CLI command surface** — a leader scoping error, not a
+worker one. `commands/plan.py`, `tty.py` and `mesg.py` each called
+`update_session()` with a `model_copy` that never named `last_tool_at`,
+so a long-lived interactive REPL would have shown a *monotonically
+growing* idle time while in active use. That would have replaced one
+wrong number with another. Those three writers now share a single
+construction path in `commands/_session.py`, which is also where
+biff-hvi is fixed: the same three fallbacks were dropping `repo`
+(leaving `/who`'s repo column and `/finger`'s `Dir` line free to
+disagree — observed live, one session reporting `punt-labs/lux` and
+`.../vox` simultaneously) and hardcoding `tty_name="cli"`, discarding
+the claimed `ttyN` and making the session unaddressable by `/write`. One
+helper, one place where a CLI session record is built, all fields
+populated consistently. The triplicated construction is why this rotted
+in the first place.
+
+### Known limitation: a mixed-version fleet reports mixed truth
+
+The backfill makes an old record *readable*; it cannot make it *correct*.
+A session served by a server predating this change writes no
+`last_tool_at` at all, and its `last_active` is refreshed by that
+server's own heartbeat on every tick. Reading such a record therefore
+backfills a timestamp that is always fresh, and the idle column shows
+`0m` for it — the original bug, persisting for exactly as long as that
+old server keeps running.
+
+This is not a defect in the backfill; there is no better source. It does
+mean the fix lands per-process rather than per-fleet: until every
+running server is upgraded, `/who` shows correct idle for upgraded
+sessions and the old always-zero for the rest, with nothing on the
+surface distinguishing the two. Worth knowing when reading a mixed
+fleet during a rollout, and worth remembering before concluding from a
+single `0m` row that the fix did not work.
+
+### Consequence for biff-b3e
+
+biff-b3e was filed on the reasoning that hiding dead sessions costs the
+operator the cue that something died — trading a visible anomaly
+(`idle 5h`) for an invisible one. That premise shifts here. A *live but
+untouched* session now reports its own real idle time, which is most of
+the signal that bead wanted. What remains genuinely uncovered is the
+*dead* case, still hidden outright by the 120s filter — which is what
+let a five-week orphan sit unnoticed.
+
+### Full detail
+
+See `models.py`'s `last_tool_at` field and its before-validator;
+`server/tools/_activity.py` and `_session.py`'s
+`update_current_session`; `commands/_session.py`; the `who`/`finger`
+row builders and sorts in `formatting.py`, `server/tools/who.py` and
+`commands/who.py`; `server/app.py`'s `_signal_handler`; and their tests
+in `tests/test_server/test_activity_timestamp.py`,
+`tests/test_commands/test_activity_timestamp.py`,
+`tests/test_integration/test_who_ordering.py`,
+`tests/test_subprocess/test_signal_handling.py` (real subprocesses
+receiving real signals — an in-process handler call cannot observe a
+process staying alive), and the revived tier-3 suite.
+
+---
+
 ## DES-055: The Shippable Plugin Surface Lives in `plugin/` — `git-subdir` Marketplace Source
 
 **Date**: 2026-08-19

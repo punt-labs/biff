@@ -46,7 +46,20 @@ async def get_or_create_session(state: ServerState) -> UserSession:
         # ``_format_who_name`` uses so display stays consistent and the
         # v1.8.0 biff-dzqc invariant (no empty ``tty_name`` rows) holds.
         stashed = get_tty_name()
-        if not stashed:
+        if stashed:
+            # tty_name was already reserved, so lifespan registration ran
+            # to completion and the session row was deleted out from under
+            # a still-running process afterward (reaper sentinel, TTL
+            # expiry, manual delete).  The record rebuilt below resets
+            # plan, plan_source, and biff_enabled to defaults, which
+            # /who then renders as a plausible-looking but wrong row --
+            # surface the resurrection rather than let it pass silently.
+            logger.warning(
+                "Session %s reaped mid-run; resurrecting with default "
+                "plan/biff_enabled state",
+                state.session_key,
+            )
+        else:
             logger.warning(
                 "Auto-creating session %s without a reserved tty_name; "
                 "lifespan registration may not have completed",
@@ -146,9 +159,21 @@ def resolve_talk_target(
 
 
 async def update_current_session(state: ServerState, **updates: object) -> UserSession:
-    """Update this server's session with automatic last_active refresh."""
+    """Update this server's session, refreshing both activity timestamps.
+
+    ``last_active`` marks the process alive — the same field the
+    background heartbeat refreshes on every tick, regardless of whether
+    anything happened.  ``last_tool_at`` marks a REAL tool invocation and
+    is the single writer for that field outside of session registration:
+    every call site is reached from inside a ``track_activity``-decorated
+    tool body (see :mod:`biff.server.tools._activity`), so a call here
+    always corresponds to genuine agent/human activity, never a
+    background tick.
+    """
     session = await get_or_create_session(state)
-    updates["last_active"] = datetime.now(UTC)
+    now = datetime.now(UTC)
+    updates["last_active"] = now
+    updates["last_tool_at"] = now
     updated = session.model_copy(update=updates)
     await state.relay.update_session(updated)
     return updated

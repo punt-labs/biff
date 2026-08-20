@@ -12,9 +12,9 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
-from typing import Literal
+from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _utc_now() -> datetime:
@@ -83,6 +83,17 @@ class UserSession(BaseModel):
     which compares ``last_active`` against a caller-supplied window
     (``PRESENCE_LIVENESS_SECONDS`` for presence surfaces) — the policy
     lives with the caller, not the model.
+
+    Two timestamps track two different questions.  ``last_active`` is
+    refreshed by the background heartbeat on a fixed interval regardless
+    of activity — it answers "is the process alive" and is what
+    :meth:`is_live` reads.  ``last_tool_at`` is refreshed only by a real
+    tool invocation (``update_current_session``) — it answers
+    "when did someone last actually do something", and is what the
+    presence surfaces (``/who`` IDLE, ``/finger`` idle) display.
+    Conflating the two made every live session's displayed idle time
+    read as 0-1 minutes no matter how long it had actually sat unused,
+    since the heartbeat kept the single shared field perpetually fresh.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
@@ -100,6 +111,15 @@ class UserSession(BaseModel):
     plan: str = ""
     plan_source: Literal["manual", "auto"] = "manual"
     last_active: datetime = Field(default_factory=_utc_now)
+    last_tool_at: datetime = Field(
+        default_factory=_utc_now,
+        description=(
+            "Timestamp of the last real tool invocation. "
+            "Never None: a session with no invocation yet reads as its "
+            "own start time, set at registration. Distinct from "
+            "last_active, which the heartbeat refreshes every tick."
+        ),
+    )
     biff_enabled: bool = True
     public_key: str = Field(
         default="",
@@ -110,9 +130,32 @@ class UserSession(BaseModel):
         description="Repo name where this session is running; empty for LocalRelay",
     )
 
-    @field_validator("last_active", mode="after")
+    @model_validator(mode="before")
     @classmethod
-    def _normalize_last_active(cls, v: datetime) -> datetime:
+    def _backfill_last_tool_at(cls, data: object) -> object:
+        """Fall back ``last_tool_at`` to ``last_active`` for records written
+        before this field existed.
+
+        A KV/JSONL row written by a server that predates this field carries
+        no ``last_tool_at`` key at all.  The field's own ``default_factory``
+        would fill that gap with ``now()`` — exactly the bug this field
+        exists to fix, since a long-dead session would then read as freshly
+        active.  The record's own ``last_active`` is the best available
+        approximation of when it was last touched, so backfill from that
+        instead of the field default.  A genuinely fresh construction (no
+        ``last_active`` in the input either) falls through to both fields'
+        own ``default_factory`` — the correct "session just started" value.
+        """
+        if not isinstance(data, dict):
+            return data
+        payload = cast("dict[str, object]", data)
+        if "last_tool_at" not in payload and "last_active" in payload:
+            return {**payload, "last_tool_at": payload["last_active"]}
+        return payload
+
+    @field_validator("last_active", "last_tool_at", mode="after")
+    @classmethod
+    def _normalize_activity_timestamps(cls, v: datetime) -> datetime:
         return _ensure_utc(v)
 
     def is_live(self, *, now: datetime, ttl_seconds: float) -> bool:
