@@ -6,7 +6,6 @@ the registered closure, verifying it reads/writes state correctly.
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -603,7 +602,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="hey, PR is ready")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
         assert unread[0].from_user == "kai"
@@ -615,7 +613,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
@@ -623,7 +620,6 @@ class TestSendMessageTool:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"@eric:{_ERIC_TTY}", message="hello")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
         assert unread[0].to_user == f"eric:{_ERIC_TTY}"
@@ -635,7 +631,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="urgent fix needed")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
 
@@ -643,9 +638,7 @@ class TestSendMessageTool:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"eric:{_ERIC_TTY}", message="first")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         await fn(to=f"eric:{_ERIC_TTY}", message="second")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 2
 
@@ -667,7 +660,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="nobody", message="hello")
         assert "nobody" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("nobody")
         assert len(unread) == 1
 
@@ -676,7 +668,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
@@ -686,9 +677,107 @@ class TestSendMessageTool:
         result = await fn(to="@offlineuser", message="offline msg")
         assert "offlineuser" in result
         assert "not found" not in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("offlineuser")
         assert len(unread) == 1
+
+    async def test_delivery_awaited_not_fire_and_forget(
+        self, state: ServerState
+    ) -> None:
+        """biff-0px: the message is in the recipient's inbox before write() returns.
+
+        The prior fire-and-forget design could return "Message sent" before
+        the background delivery task had even run — a caller inspecting the
+        inbox immediately after write() returned could observe it still
+        empty. Delivery is now awaited, so this is no longer racy.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        fn = await _get_tool_fn(state, "write")
+        await fn(to=f"eric:{_ERIC_TTY}", message="no race")
+        unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 1
+
+    async def test_recovers_on_retry_after_one_failure(
+        self, state: ServerState
+    ) -> None:
+        """A single transient failure is recovered by the retry-once.
+
+        Mirrors the observed recovery pattern (biff-brn): every
+        session-reported transport-error occurrence cleared on the very
+        next attempt.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        real_deliver = state.relay.deliver
+        calls = {"n": 0}
+
+        async def _flaky_deliver(*args: object, **kwargs: object) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                msg = "nats: timeout"
+                raise TimeoutError(msg)
+            await real_deliver(*args, **kwargs)  # type: ignore[arg-type]
+
+        state.relay.deliver = _flaky_deliver  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to=f"eric:{_ERIC_TTY}", message="retried ok")
+        assert "Message sent" in result
+        assert calls["n"] == 2
+        unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 1
+
+    async def test_reports_failure_distinctly_after_two_failures(
+        self, state: ServerState
+    ) -> None:
+        """biff-0px/biff-brn: a persistent failure must not read as success.
+
+        The prior fire-and-forget design would have returned "Message
+        sent" here regardless — the failure reached only a background log
+        line. It must now be visibly distinguishable from success, and the
+        message must not silently appear delivered when it was not.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> None:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state.relay.deliver = _always_fails  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to=f"eric:{_ERIC_TTY}", message="will not arrive")
+        assert "Message sent" not in result
+        assert "Could not deliver" in result
+        assert "not confirmed sent" in result.lower()
+        unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 0
+
+    async def test_partial_chunk_failure_retries_only_undelivered_chunks(
+        self, state: ServerState
+    ) -> None:
+        """A failure partway through a multi-chunk message doesn't redeliver
+        the chunks that already succeeded.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        real_deliver = state.relay.deliver
+        delivered_bodies: list[str] = []
+        calls = {"n": 0}
+
+        async def _fail_on_second_call(msg: object, **kwargs: object) -> None:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                err = "nats: timeout"
+                raise TimeoutError(err)
+            delivered_bodies.append(msg.body)  # type: ignore[attr-defined]
+            await real_deliver(msg, **kwargs)  # type: ignore[arg-type]
+
+        state.relay.deliver = _fail_on_second_call  # type: ignore[assignment]
+        fn = await _get_tool_fn(state, "write")
+        long_message = " ".join(f"word{i}" for i in range(400))  # forces 3+ chunks
+        result = await fn(to=f"eric:{_ERIC_TTY}", message=long_message)
+        assert "Message sent" in result
+        # Chunk 1 delivered once (call 1), chunk 2 failed (call 2) then
+        # delivered on retry (call 3), chunk 3 delivered once (call 4) —
+        # never four delivered bodies for a 3-chunk message, which would
+        # mean chunk 1 was redelivered.
+        assert len(delivered_bodies) == len(set(delivered_bodies))
 
 
 class TestCheckMessagesTool:
@@ -708,7 +797,6 @@ class TestCheckMessagesTool:
         # Use targeted delivery to kai's session
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="review my PR please")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()
@@ -726,7 +814,6 @@ class TestCheckMessagesTool:
         )
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="hello")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         await check_fn()
@@ -750,10 +837,8 @@ class TestCheckMessagesTool:
         )
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="from eric")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         priya_send = await _get_tool_fn(priya_state, "write")
         await priya_send(to=f"kai:{_KAI_TTY}", message="from priya")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()

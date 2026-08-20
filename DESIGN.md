@@ -2281,6 +2281,37 @@ relay `.deliver()` never executes and inbox assertions fail.
 - **Awaiting inline:** The previous design.  Correct but unnecessarily slow for
   the caller.
 
+### Amendment (2026-08-20): `write` reverts to awaited delivery (biff-0px)
+
+**Status:** SETTLED for `wall`/`talk`; REVERSED for `write`.
+
+The original decision weighed only caller latency against correctness never
+entered the trade-off. Field evidence showed the omission was not
+theoretical: two messages sent from one session were never delivered, with
+no error on either end — the sender's `write` call returned "Message sent",
+the recipient's inbox never received them, and nothing on either side
+recorded a failure. The fire-and-forget task's exception reached only
+`logger.warning` in `biff.log`, a channel the sender never reads.
+
+This is a stronger failure mode than a slow caller: a caller can tolerate
+latency, but has no way to act on a success report that misrepresents
+reality, and no log line reaches the coordination channel itself. `write`'s
+`fire_and_forget()` call is replaced with an awaited delivery, retried once
+from the first undelivered chunk on failure (not from the first chunk, so a
+partial failure cannot redeliver an already-sent one). A persistent failure
+after the retry returns an explicit, distinguishable failure string instead
+of the success string — matching the same "confirmed vs. could not
+determine" distinction applied to `read_messages` (biff-brn) for the same
+reason: a silent failure and a real success must never render identically.
+
+**`wall` and `talk` are unaffected and keep `fire_and_forget()`.** Both are
+broadcast/ephemeral by nature — `wall` is a team-wide post with a natural
+expiry, `talk` is a live, actively-monitored channel — where a single
+recipient's delivery gap is a materially different risk than a single
+targeted message that the sender believes arrived and the recipient never
+sees. Extending this reversal to them needs its own field evidence, not
+inherited from `write`'s.
+
 ## DES-025: CI Notification Workflow — Standalone `workflow_run` Trigger
 
 **Date:** 2026-03-08

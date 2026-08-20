@@ -17,7 +17,6 @@ from biff.models import Message
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
 from biff.server.tools._session import resolve_tty_name, update_current_session
-from biff.server.tools._tasks import fire_and_forget
 from biff.tty import build_session_key, parse_address
 
 if TYPE_CHECKING:
@@ -77,6 +76,69 @@ async def _resolve_recipient(
 _log = logging.getLogger(__name__)
 
 
+async def _deliver_with_retry(
+    state: ServerState,
+    *,
+    to_user: str,
+    target_repo: str | None,
+    chunks: list[str],
+    display: str,
+) -> str:
+    """Deliver chunks, retrying once from the first undelivered chunk on failure.
+
+    Returns the user-facing result string. Delivery is awaited here, not
+    fire-and-forget: the prior fire-and-forget design returned "Message
+    sent" before delivery was even attempted, so a publish failure —
+    surfaced only as a background log line nobody reads — left the sender
+    believing a message had arrived that never did, with no error on
+    either end and no recovery path (biff-0px). On failure, retry once
+    from the first undelivered chunk rather than restarting from the
+    first chunk, so a partial failure cannot redeliver an already-sent
+    one — mirroring the recovery pattern observed for read_messages
+    (biff-brn: every session-reported occurrence cleared on the very next
+    attempt).
+    """
+
+    async def _deliver_one(chunk: str) -> None:
+        msg = Message(
+            from_user=state.config.user,
+            from_tty=get_tty_name(),
+            to_user=to_user,
+            body=chunk,
+        )
+        await state.relay.deliver(
+            msg, sender_key=state.session_key, target_repo=target_repo
+        )
+
+    delivered = 0
+    try:
+        for chunk in chunks:
+            await _deliver_one(chunk)
+            delivered += 1
+    except Exception:  # noqa: BLE001 — retry boundary, re-raised below on retry failure
+        try:
+            for chunk in chunks[delivered:]:
+                await _deliver_one(chunk)
+                delivered += 1
+        except Exception as exc:  # noqa: BLE001 — MCP tool boundary, reported to caller
+            _log.warning(
+                "Message delivery to %s failed twice (delivered %d/%d parts): %s",
+                display,
+                delivered,
+                len(chunks),
+                exc,
+                exc_info=exc,
+            )
+            return (
+                f"Could not deliver to {display} — failed twice ({exc}). "
+                f"{delivered}/{len(chunks)} part(s) confirmed sent; "
+                "the rest may not have arrived. Not confirmed sent."
+            )
+    parts = len(chunks)
+    suffix = f" ({parts} parts)" if parts > 1 else ""
+    return f"Message sent to {display}.{suffix}"
+
+
 async def _fetch_companion_unread(
     state: ServerState,
 ) -> tuple[list[Message], list[Message]]:
@@ -133,27 +195,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             return str(exc)
         chunks = chunk_message(message)
         await refresh_read_messages(mcp, state)
-
-        async def _deliver_chunks() -> None:
-            for chunk in chunks:
-                msg = Message(
-                    from_user=state.config.user,
-                    from_tty=get_tty_name(),
-                    to_user=to_user,
-                    body=chunk,
-                )
-                await state.relay.deliver(
-                    msg, sender_key=state.session_key, target_repo=target_repo
-                )
-
-        fire_and_forget(
-            _deliver_chunks(),
-            logger=_log,
-            description="message delivery",
+        return await _deliver_with_retry(
+            state,
+            to_user=to_user,
+            target_repo=target_repo,
+            chunks=chunks,
+            display=display,
         )
-        parts = len(chunks)
-        suffix = f" ({parts} parts)" if parts > 1 else ""
-        return f"Message sent to {display}.{suffix}"
 
     @mcp.tool(
         name="read_messages",
