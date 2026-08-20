@@ -150,9 +150,24 @@ All punt-labs repos are indexed in quarry (local semantic search) as separate co
 
 Use quarry first when answering questions about prior design decisions, TTL values, protocol details, or "why was X built this way." It is faster than grepping through DESIGN.md's 100+ pages.
 
+### Repository Layout: the `plugin/` Surface
+
+Everything the Claude Code plugin ships lives under `plugin/`, and nothing else does:
+
+| Path | Contents |
+|------|----------|
+| `plugin/.claude-plugin/plugin.json` | Plugin manifest. `mcpServers.tty` runs `biff mcp` — the `biff` binary on `PATH`, from PyPI — so no Python code ships with the plugin. |
+| `plugin/.claude-plugin/agents/` | Plugin-shipped agent definitions. |
+| `plugin/commands/` | Slash commands (`name.md` + `name-dev.md` pairs). |
+| `plugin/hooks/` | Hook dispatcher scripts and `hooks.json`. |
+
+The marketplace installs this directory with Claude Code's `git-subdir` source (`"source": "git-subdir"`, `"path": "plugin"`), which is a blobless partial clone plus `git sparse-checkout set --cone plugin` — so an install never fetches `src/`, `tests/`, `docs/`, `scripts/`, `research/`, `spikes/`, `.github/`, `.beads/`, or this repo's own `.punt-labs/` and `.claude/` working state. Cone mode does always materialize the files sitting in the *repo root*, so the large root documents (`DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`) still travel with an install; only whole directories are excluded.
+
+One rule follows from that, and it is load-bearing: **the plugin surface must not reach outside itself at runtime.** A hook script may use `$HOME`, the `biff`/`biff-hook` binaries, and paths under the *consumer's* repo root; it may not reference a file elsewhere in this repo, because that file will not exist on an installed plugin. `${CLAUDE_PLUGIN_ROOT}` is `plugin/`.
+
 ### Installer Is Source of Truth
 
-User-facing config (`~/.claude/commands/`, `~/.claude/plugins/biff/`, MCP registration, status line) is deployed by `biff install`. Do not hand-edit these paths — changes will be overwritten on next install. To change command behavior, edit the bundled source in `src/biff/plugins/biff/commands/` and re-run `biff install`.
+`biff install` deposits the user-scope agent guide (`~/.punt-labs/biff/CLAUDE.md` plus the `@` import in `~/.claude/CLAUDE.md`), deploys this clone's `.git/hooks` dispatchers, and installs the plugin from the punt-labs marketplace. Do not hand-edit the installed plugin cache under `~/.claude/plugins/` — a `claude plugin update` overwrites it. To change command or hook behavior, edit `plugin/commands/` or `plugin/hooks/` here and release; to try a change without releasing, run Claude Code with `--plugin-dir` pointed at this repo's `plugin/` directory.
 
 ### Release Process
 
@@ -165,7 +180,7 @@ Version lives in two files that must stay in sync:
 | File | Field |
 |------|-------|
 | `pyproject.toml` | `version = "X.Y.Z"` |
-| `.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
+| `plugin/.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
 
 The release process edits both files and runs `uv lock` to update `uv.lock`.
 
@@ -179,7 +194,7 @@ creating a phantom release (COE: docs/coe-v1.11-release.md).
 The version on main between releases stays at the last released
 version.
 
-**IMPORTANT:** `plugin.json` must always have `"name": "biff-dev"` on main. Release scripts (`scripts/release-plugin.sh`) swap to `"biff"` on the tagged commit only; `scripts/restore-dev-plugin.sh` restores `"biff-dev"` afterward. This prevents namespace collisions when developing with `--plugin-dir` alongside the installed production plugin. Dev commands (`commands/*-dev.md`) route to `mcp__plugin_biff-dev_tty__*`; prod commands route to `mcp__plugin_biff_tty__*`.
+**IMPORTANT:** `plugin.json` must always have `"name": "biff-dev"` on main. Release scripts (`scripts/release-plugin.sh`) swap to `"biff"` on the tagged commit only; `scripts/restore-dev-plugin.sh` restores `"biff-dev"` afterward. This prevents namespace collisions when developing with `--plugin-dir` alongside the installed production plugin. Dev commands (`plugin/commands/*-dev.md`) route to `mcp__plugin_biff-dev_tty__*`; prod commands route to `mcp__plugin_biff_tty__*`.
 
 **IMPORTANT:** Never use `uv tool install --force --editable .` as a release or testing step. Local editable installs break the status line (see DESIGN.md DES-011b) and do not represent what users experience. The only way to test is to release through the real channels.
 
