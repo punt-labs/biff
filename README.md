@@ -17,7 +17,7 @@ Named after the Berkeley dog whose 1980 mail notification program was part of th
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/78545b9/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/fb35c9d/install.sh | sh
 ```
 
 Restart Claude Code twice. Type `/who` to see your team.
@@ -29,14 +29,14 @@ non-Claude harness (Codex, Cursor, a plain terminal) or an org that blocks
 plugin installation --- pass `--no-plugin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/78545b9/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/fb35c9d/install.sh | sh -s -- --no-plugin
 ```
 
 The `BIFF_NO_PLUGIN=1` environment variable does the same, for contexts that
 cannot pass arguments through the pipe:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/78545b9/install.sh | BIFF_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/fb35c9d/install.sh | BIFF_NO_PLUGIN=1 sh
 ```
 
 Missing `claude` or `git` auto-skips the plugin the same way. In CLI-only mode
@@ -59,7 +59,7 @@ biff doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/78545b9/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/fb35c9d/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
@@ -407,6 +407,14 @@ make lint                  # Lint and format check
 make format                # Auto-format code
 make help                  # List all targets
 ```
+
+Everything the Claude Code plugin ships lives under `plugin/` — the manifest
+(`plugin/.claude-plugin/plugin.json`), the slash commands (`plugin/commands/`),
+and the hook dispatchers (`plugin/hooks/`). The marketplace installs that one
+directory via Claude Code's `git-subdir` source, so an install never fetches
+`src/`, `tests/`, or `docs/`. `${CLAUDE_PLUGIN_ROOT}` is therefore `plugin/`:
+to run a local change without releasing, point Claude Code at
+`claude --plugin-dir "$PWD/plugin"`.
 
 ## License
 

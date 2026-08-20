@@ -18,7 +18,13 @@ from biff.server.state import create_state
 from biff.server.tools._descriptions import TALK_BASE_DESCRIPTION, _talk_description
 from biff.talk_state import TalkState
 
-_COMMANDS = Path(__file__).resolve().parents[2] / "commands"
+_COMMANDS = Path(__file__).resolve().parents[2] / "plugin" / "commands"
+
+if not _COMMANDS.is_dir():
+    # A relocated plugin surface must fail collection, not quietly flip
+    # ``_DEV_PLUGIN`` to False and turn the dev-command assertions below into
+    # skips that report as a passing run.
+    raise RuntimeError(f"plugin commands directory not found: {_COMMANDS}")
 
 # The ``*-dev.md`` command files are a dev-plugin-only artifact:
 # ``scripts/release-plugin.sh`` deletes them when swapping to the prod plugin

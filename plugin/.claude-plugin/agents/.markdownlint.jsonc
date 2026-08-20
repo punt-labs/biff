@@ -1,0 +1,6 @@
+{
+  // Three levels up from plugin/.claude-plugin/agents/ to the repo root.
+  "extends": "../../../.markdownlint.jsonc",
+  // Agent files use YAML frontmatter before prose sections
+  "MD041": false
+}

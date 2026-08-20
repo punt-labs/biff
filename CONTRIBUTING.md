@@ -8,6 +8,7 @@ Thank you for your interest in contributing to biff. This guide covers what you 
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) for dependency management
+- [shellcheck](https://www.shellcheck.net/) for the hook and installer scripts
 - [NATS server](https://nats.io/) (optional, for NATS integration tests)
 
 ### Setup
@@ -23,12 +24,14 @@ uv sync --all-extras
 ```bash
 uv run ruff check .
 uv run ruff format --check .
+shellcheck plugin/hooks/*.sh install.sh scripts/*.sh
 uv run mypy src/ tests/
 uv run pyright
 uv run pytest
 ```
 
-All five must pass with zero errors before any commit.
+All six must pass with zero errors before any commit. `make check` runs them
+together (plus `markdownlint`) and is the gate CI enforces.
 
 ## Development Workflow
 
@@ -69,6 +72,7 @@ Every commit must pass:
 ```bash
 uv run ruff check .           # Linting
 uv run ruff format --check .  # Formatting
+shellcheck plugin/hooks/*.sh install.sh scripts/*.sh  # Shell linting
 uv run mypy src/ tests/       # Type checking (mypy)
 uv run pyright                 # Type checking (pyright)
 uv run pytest                  # Tests (tiers 1-2)
