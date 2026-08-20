@@ -154,6 +154,23 @@ class TestWedgeOnsetRecovery:
         health.record_success()
         assert health.consecutive_timeouts == 0
 
+    def test_cumulative_counters_never_reset(self) -> None:
+        # biff-brn: a silent client-side retry makes a timeout unobservable
+        # to a caller. These counters exist so an operator can still measure
+        # the real rate, so unlike consecutive_timeouts they must survive a
+        # success (wedge clear) and a reconnect (record_connected).
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        for _ in range(3):
+            health.record_attempt()
+        health.record_timeout("stream_info", is_connected=True)
+        health.record_attempt()
+        health.record_success()  # clears consecutive_timeouts
+        health.record_connected(5.0, is_new_connection=True)  # reconnect
+        assert health.total_attempts == 4
+        assert health.total_timeouts == 1
+        assert health.consecutive_timeouts == 0
+
     @pytest.mark.anyio()
     async def test_not_found_response_is_liveness_proof(self) -> None:
         # A KeyNotFoundError is the server answering "no such key" — the

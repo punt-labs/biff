@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import signal
+import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
@@ -40,6 +41,15 @@ from biff.session_id import SessionHint
 from biff.tty import build_session_key, claim_tty_name, validate_reclaimable_name
 
 logger = logging.getLogger(__name__)
+
+# Org-repo discovery is non-critical (stale data is acceptable, per
+# ``_refresh_org_repos``'s own docstring) but was running every 60s heartbeat
+# tick on the same shared connection as user-facing calls like
+# ``read_messages``, accounting for 70% of captured runtime timeouts and
+# tripping the wedge-detection reconnect threshold on their behalf
+# (biff-cf9). Throttling this call to a slower cadence shrinks its share of
+# that shared budget without touching the wedge-detection machinery itself.
+_ORG_REPOS_REFRESH_INTERVAL = 600.0  # seconds
 
 
 class _SessionCaptureMiddleware(Middleware):
@@ -426,10 +436,20 @@ async def _refresh_org_repos(state: ServerState) -> None:
     """Re-discover org repos and update state if changed.
 
     Non-critical — a stale ``org_repos`` is acceptable, so errors
-    are logged at DEBUG and swallowed.
+    are logged at DEBUG and swallowed. Throttled to
+    ``_ORG_REPOS_REFRESH_INTERVAL`` (independent of the heartbeat tick
+    interval) so this call stops dominating the shared connection's
+    timeout budget (biff-cf9) — the throttle timestamp is recorded before
+    the attempt, on both success and failure, so a failing relay cannot
+    turn this into a hot retry loop every tick.
     """
     if not state.config.orgs or not isinstance(state.relay, NatsRelay):
         return
+    now = time.monotonic()
+    refreshed_at = state.org_repos_refreshed_at
+    if refreshed_at is not None and now - refreshed_at < _ORG_REPOS_REFRESH_INTERVAL:
+        return
+    object.__setattr__(state, "org_repos_refreshed_at", now)
     try:
         org_results = await asyncio.gather(
             *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)

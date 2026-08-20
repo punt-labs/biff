@@ -63,6 +63,11 @@ class ServerState:
     dormant: bool = False
     repo_root: Path | None = None
     org_repos: frozenset[str] = field(default_factory=lambda: frozenset[str]())
+    # ``time.monotonic()`` of the last org-repos refresh attempt (success or
+    # failure). ``None`` before the first attempt. Throttles ``_refresh_org_repos``
+    # so this non-critical, stale-tolerant call stops competing with user-facing
+    # calls for the shared connection's wedge-detection budget (biff-cf9).
+    org_repos_refreshed_at: float | None = None
     companion: CompanionSession | None = None
     talk: TalkState = field(init=False)
 

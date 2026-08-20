@@ -192,6 +192,15 @@ class _ConnectionHealth:
         self._timeout_count = 0
         self._wedge_onset_at: float | None = None
         self._force_reconnect_fired = False
+        # Cumulative, session-lifetime counters — unlike ``_timeout_count``
+        # (which resets on every success, since it only exists to gate
+        # wedge detection) these never reset. A silent client-side retry
+        # makes a timeout unobservable to a caller; these are the
+        # server-side record that lets an operator measure the real rate
+        # instead of relying on which timeouts happened to be noticed
+        # (biff-brn).
+        self._total_attempts = 0
+        self._total_timeouts = 0
 
     @staticmethod
     def _host_of(url: str) -> str:
@@ -219,6 +228,20 @@ class _ConnectionHealth:
     def consecutive_timeouts(self) -> int:
         """Runtime JS/KV timeouts since the last success (biff-3hp foundation)."""
         return self._timeout_count
+
+    @property
+    def total_attempts(self) -> int:
+        """Cumulative tracked-request attempts since server start. Never resets."""
+        return self._total_attempts
+
+    @property
+    def total_timeouts(self) -> int:
+        """Cumulative tracked-request timeouts since server start. Never resets."""
+        return self._total_timeouts
+
+    def record_attempt(self) -> None:
+        """Record one tracked-request attempt, before its outcome is known."""
+        self._total_attempts += 1
 
     def record_connected(self, provision_ms: float, *, is_new_connection: bool) -> None:
         """Record a successful connect + provision.
@@ -391,6 +414,7 @@ class _ConnectionHealth:
                 self._seconds_since_ok(),
             )
         self._timeout_count += 1
+        self._total_timeouts += 1
 
     def _seconds_since_ok(self) -> str:
         """Return a human phrase for staleness since the last good request."""
@@ -541,6 +565,7 @@ class NatsRelay:
         # (``get_unread_summary``, ``heartbeat``) re-fetch the handle before the
         # second one to preserve this.
         owner = self._nc
+        self._health.record_attempt()
         try:
             result = await awaitable
         except TimeoutError:
@@ -911,6 +936,16 @@ class NatsRelay:
     def wtmp_available(self) -> bool:
         """Whether the wtmp stream was successfully provisioned."""
         return self._wtmp_available
+
+    @property
+    def total_attempts(self) -> int:
+        """Cumulative tracked-request attempts since server start (biff-brn)."""
+        return self._health.total_attempts
+
+    @property
+    def total_timeouts(self) -> int:
+        """Cumulative tracked-request timeouts since server start (biff-brn)."""
+        return self._health.total_timeouts
 
     @property
     def connection_generation(self) -> int:

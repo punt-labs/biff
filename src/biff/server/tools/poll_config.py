@@ -10,6 +10,7 @@ import re
 from typing import TYPE_CHECKING
 
 from biff.config import ensure_gitignore_yaml, load_yaml_local, write_yaml_config
+from biff.nats_relay import NatsRelay
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -88,12 +89,27 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description="Show the current poll interval and whether polling is active.",
     )
     async def get_poll_status() -> str:
-        """Return current polling configuration."""
+        """Return current polling configuration.
+
+        Appends a cumulative relay-timeout count when the relay is NATS-backed
+        and at least one request has been attempted. A silent client-side
+        retry (see the ``/biff:read`` and ``/biff:poll`` command prompts)
+        would otherwise make relay timeouts unmeasurable to a caller — this
+        line is the server-side record a caller or operator can check instead
+        of relying on which timeouts happened to be noticed (biff-brn).
+        """
         interval = state.config.poll_interval
         if interval <= 0:
-            return "Polling: disabled"
-        if interval >= 60 and interval % 60 == 0:
-            display = f"{interval / 60:g}m"
+            status = "Polling: disabled"
+        elif interval >= 60 and interval % 60 == 0:
+            status = f"Polling: active, interval={interval / 60:g}m ({interval:g}s)"
         else:
-            display = f"{interval:g}s"
-        return f"Polling: active, interval={display} ({interval:g}s)"
+            status = f"Polling: active, interval={interval:g}s ({interval:g}s)"
+
+        relay = state.relay
+        if isinstance(relay, NatsRelay) and relay.total_attempts > 0:
+            status += (
+                f"\nNATS relay: {relay.total_timeouts} timeout(s) / "
+                f"{relay.total_attempts} request(s) this session"
+            )
+        return status

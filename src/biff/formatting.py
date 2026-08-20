@@ -763,6 +763,10 @@ def format_read_dual(
     :func:`format_read` is: an unbounded value would widen FROM for every
     row in a section's table, and collapse the MESSAGE wrap budget shared
     by every message in that section.
+
+    Each section header carries its own count, derived from that
+    section's own message list — same synchronization guarantee as
+    :func:`format_read` (biff-9cz).
     """
     sections: list[str] = []
     for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
@@ -778,12 +782,14 @@ def format_read_dual(
         # leading HEADER_PREFIX on the column-header line with
         # ROW_PREFIX so it aligns as a sub-table row.
         indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
-        sections.append(f"{HEADER_PREFIX}{user}\n{indented_table}")
+        count = len(msgs)
+        noun = "message" if count == 1 else "messages"
+        sections.append(f"{HEADER_PREFIX}{user} ({count} new {noun})\n{indented_table}")
     return "\n\n".join(sections)
 
 
 def format_read(messages: list[Message]) -> str:
-    """Format messages in BSD ``from(1)`` style.
+    """Format messages in BSD ``from(1)`` style, with a leading count.
 
     The FROM column renders a copy-pasteable reply address:
     ``user:ttyNN`` when the sender's tty is known, ``user`` otherwise.
@@ -793,10 +799,23 @@ def format_read(messages: list[Message]) -> str:
     it for every row) and MESSAGE is the table's variable/wrap column
     (unbounded FROM content shrinks the shared wrap budget toward its
     floor for every row) — :func:`sanitized_address` bounds both.
+
+    The count in the leading line is derived from ``len(messages)`` —
+    the same list the table below renders — never from a separately
+    polled summary. The tool description's "(N unread)" marker is
+    computed on an independent timer and can be stale relative to a
+    live fetch; a caller reading that marker and this return value as
+    two counts of the same fetch will see them disagree. This return
+    value is the only count guaranteed synchronized with what it is
+    printed next to (biff-9cz).
     """
     rows: list[list[str]] = []
     for m in messages:
         ts = m.timestamp.strftime("%a %b %d %H:%M")
         sender = sanitized_address(m.from_user, m.from_tty)
         rows.append([sender, ts, terminal_safe(m.body)])
-    return format_table(READ_SPECS, rows)
+    table = format_table(READ_SPECS, rows)
+    count = len(messages)
+    noun = "message" if count == 1 else "messages"
+    indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
+    return f"{HEADER_PREFIX}{count} new {noun}\n{indented_table}"

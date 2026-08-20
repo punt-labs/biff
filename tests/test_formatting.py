@@ -731,6 +731,26 @@ class TestFormatRead:
         assert "@kai" not in result
         assert "hey there" in result
 
+    def test_leading_count_matches_message_count(self) -> None:
+        # biff-9cz: the count reported to the caller must come from the
+        # same list the table renders, not a separately polled summary
+        # that can be stale relative to this fetch.
+        messages = [
+            Message(from_user="kai", to_user="eric", body="one"),
+            Message(from_user="rmh", to_user="eric", body="two"),
+            Message(from_user="alpha", to_user="eric", body="three"),
+        ]
+        result = format_read(messages)
+        assert result.startswith("▶  3 new messages")
+        data_lines = [line for line in result.splitlines() if "one" in line]
+        assert len(data_lines) == 1
+
+    def test_leading_count_singular_noun(self) -> None:
+        m = Message(from_user="kai", to_user="eric", body="hey there")
+        result = format_read([m])
+        assert result.startswith("▶  1 new message\n")
+        assert "1 new messages" not in result
+
     def test_giant_sender_renders_bounded(self) -> None:
         # Message.from_user/from_tty have no max_length on the wire. FROM
         # is a fixed READ_SPECS column (widens for every row) and MESSAGE
