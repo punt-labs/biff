@@ -95,6 +95,29 @@ class TestSignalCleanupStepsNeverPropagate:
         )
         assert written == [_UNEXPECTED_CLEANUP_ERROR]
 
+    def test_failed_stderr_write_does_not_propagate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A closed/invalid fd 2 must not stop the loop from returning.
+
+        Reporting a step's failure is itself a write to fd 2 -- if that
+        write raised uncaught, the exception would escape
+        ``_run_signal_cleanup_steps`` and skip the terminating
+        ``os.kill`` that follows it in ``_signal_handler``,
+        reintroducing the exact orphan-process hang this handler exists to
+        prevent -- on the failure-reporting path itself.
+        """
+
+        def _closed_fd_write(_fd: int, _data: bytes) -> int:
+            raise OSError("Bad file descriptor")
+
+        monkeypatch.setattr("os.write", _closed_fd_write)
+
+        def _fails() -> None:
+            raise OSError("disk full")
+
+        _run_signal_cleanup_steps([(_fails, (OSError,), b"specific label\n")])
+
     def test_keyboard_interrupt_does_not_propagate(self, written: list[bytes]) -> None:
         """KeyboardInterrupt (a BaseException, not Exception) must also be
         swallowed here -- a second signal arriving mid-cleanup is exactly

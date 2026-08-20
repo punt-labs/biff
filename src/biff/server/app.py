@@ -228,6 +228,23 @@ _SignalCleanupStep = tuple[Callable[[], None], tuple[type[Exception], ...], byte
 _UNEXPECTED_CLEANUP_ERROR = b"biff: signal cleanup: unexpected error\n"
 
 
+def _report_cleanup_failure(label: bytes) -> None:
+    """Write *label* to fd 2, swallowing a failed write itself.
+
+    Called only from inside ``_run_signal_cleanup_steps``.  fd 2 can be
+    closed or redirected to a broken pipe by the time the signal handler
+    runs; if ``os.write`` itself raised uncaught here, that exception
+    would escape the cleanup loop and skip the terminating ``os.kill``
+    that follows it in ``_signal_handler`` -- reintroducing the exact
+    orphan-process hang this handler exists to prevent, on the failure
+    path.  ``OSError`` is the specific, narrow exception ``os.write``
+    raises for a bad fd (PY-EH-6: this single ``write()`` call is a true
+    system boundary).
+    """
+    with suppress(OSError):
+        os.write(2, label)
+
+
 def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
     """Run best-effort signal-handler cleanup steps, reporting failures.
 
@@ -246,7 +263,7 @@ def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
         try:
             step()
         except errors:
-            os.write(2, label)
+            _report_cleanup_failure(label)
         except BaseException:  # noqa: BLE001 -- see below (PY-EH-6)
             # A step can only be trusted to raise the types it declared
             # *today*.  If a future step's callee starts raising something
@@ -265,7 +282,7 @@ def _run_signal_cleanup_steps(steps: Sequence[_SignalCleanupStep]) -> None:
             # this broad.  BaseException (not Exception) is deliberate:
             # KeyboardInterrupt or a second signal arriving mid-cleanup is
             # exactly the case where the exit path must not be lost.
-            os.write(2, _UNEXPECTED_CLEANUP_ERROR)
+            _report_cleanup_failure(_UNEXPECTED_CLEANUP_ERROR)
 
 
 async def _reap_sentinels(state: ServerState) -> None:
