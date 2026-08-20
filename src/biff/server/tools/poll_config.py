@@ -101,10 +101,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         interval = state.config.poll_interval
         if interval <= 0:
             status = "Polling: disabled"
-        elif interval >= 60 and interval % 60 == 0:
-            status = f"Polling: active, interval={interval / 60:g}m ({interval:g}s)"
         else:
-            status = f"Polling: active, interval={interval:g}s ({interval:g}s)"
+            if interval >= 60 and interval % 60 == 0:
+                display = f"{interval / 60:g}m"
+            else:
+                display = f"{interval:g}s"
+            status = f"Polling: active, interval={display} ({interval:g}s)"
 
         relay = state.relay
         if isinstance(relay, NatsRelay) and relay.total_attempts > 0:
