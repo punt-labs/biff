@@ -27,6 +27,8 @@ from typing import NamedTuple
 
 import pytest
 
+from biff._stdlib import get_repo_slug, sanitize_repo_name
+
 pytestmark = pytest.mark.subprocess
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,10 +36,16 @@ _STARTUP_MARKER = "Starting MCP server"
 _STARTUP_TIMEOUT = 15.0
 _GRACE_PERIOD = 5.0
 
+# The running server resolves its own sanitized repo name the same way
+# (config.py's ``_load_base_config``: ``get_repo_slug`` falls back to the
+# repo directory name) -- computing it here instead of hardcoding a
+# literal keeps this test passing on forks and renamed remotes.
+_REPO_NAME = sanitize_repo_name(get_repo_slug(_REPO_ROOT) or _REPO_ROOT.name)
+
 
 def _sentinel_dir(home: Path) -> Path:
     """Sentinel directory the running server writes to under isolated HOME."""
-    return home / ".punt-labs" / "biff" / "sentinels" / "punt-labs__biff"
+    return home / ".punt-labs" / "biff" / "sentinels" / _REPO_NAME
 
 
 def _start_stderr_pump(proc: subprocess.Popen[str]) -> queue.Queue[str | None]:
