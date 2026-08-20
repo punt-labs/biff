@@ -126,6 +126,7 @@ class TestGetPollStatus:
         relay = NatsRelay(url="nats://localhost:4222", stream_prefix="biff-dev")
         for _ in range(20):
             relay._health.record_attempt()
+        relay._health.record_timeout_attempt()
         relay._health.record_timeout("read_messages", is_connected=True)
         object.__setattr__(state, "relay", relay)
         fn = await _get_tool_fn(state, "get_poll_status")

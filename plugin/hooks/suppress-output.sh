@@ -80,10 +80,18 @@ fi
 if [[ "$TOOL_NAME" == "read_messages" ]]; then
   if [[ "$RESULT" == "No new messages." ]]; then
     emit_simple "$RESULT"
+  elif [[ "$RESULT" == "Could not check mail"* ]]; then
+    emit_simple "check failed"
   else
-    # Data rows start with 3-space indent + user:tty address.
-    # Header row starts with ▶. Skip it.
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [^ ]')
+    # format_read emits one "N new message(s)" count line; format_read_dual
+    # emits one per identity section. Sum the counts from those ▶-prefixed
+    # header lines rather than counting data rows: a naive row count also
+    # matches the (now differently indented) column-header row, and — more
+    # generally — cannot distinguish a data row from a message body that
+    # happens to start with the same indent, while the count the tool
+    # itself computed is guaranteed synchronized with what was rendered
+    # (biff-9cz).
+    COUNT=$(printf '%s' "$RESULT" | grep '^▶' | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
     emit "${COUNT} new" "$RESULT"
   fi
   exit 0

@@ -1130,6 +1130,9 @@ async def _active_lifespan(
             *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
         )
         org_repos = frozenset[str]().union(*org_results)
+        # Counts as the first refresh attempt, so the first heartbeat tick's
+        # _refresh_org_repos doesn't immediately re-query on top of this one.
+        object.__setattr__(state, "org_repos_refreshed_at", time.monotonic())
         logger.info(
             "Org discovery: found %d repos: %s",
             len(org_repos),

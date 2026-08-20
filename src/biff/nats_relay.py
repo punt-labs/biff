@@ -397,6 +397,13 @@ class _ConnectionHealth:
         The wording tracks the actual state: a still-connected socket that
         stops answering is half-open; a socket that is mid-reconnect is
         described as such, so the line never overstates the diagnosis.
+
+        Only for wedge-gating purposes — bumps :attr:`consecutive_timeouts`,
+        which the force-reconnect gate reads.  Callers on a superseded
+        client (owner mismatch in ``_tracked``) must not reach this method,
+        since it is not their wedge episode to attribute — but the timeout
+        is still real and must still reach :meth:`record_timeout_attempt`,
+        which every caller reaches unconditionally.
         """
         if self._timeout_count == 0:
             self._wedge_onset_at = time.monotonic()
@@ -414,6 +421,16 @@ class _ConnectionHealth:
                 self._seconds_since_ok(),
             )
         self._timeout_count += 1
+
+    def record_timeout_attempt(self) -> None:
+        """Bump the cumulative timeout counter. Called for every real timeout.
+
+        Unlike :meth:`record_timeout`, this is unconditional — a timeout on
+        a superseded client (owner mismatch in ``_tracked``) still re-raises
+        to the caller as a real timeout, and must still count toward the
+        measurable rate (biff-brn), even though it isn't this connection's
+        wedge episode to attribute for gating purposes.
+        """
         self._total_timeouts += 1
 
     def _seconds_since_ok(self) -> str:
@@ -569,6 +586,10 @@ class NatsRelay:
         try:
             result = await awaitable
         except TimeoutError:
+            # Unconditional: a real timeout counts toward the measurable
+            # rate (biff-brn) regardless of which client owns the wedge
+            # episode below.
+            self._health.record_timeout_attempt()
             if self._nc is owner:
                 is_connected = owner is not None and owner.is_connected
                 self._health.record_timeout(operation, is_connected=is_connected)
@@ -1197,16 +1218,30 @@ class NatsRelay:
         Receivers use this to reject self-echo (same user, different tty).
         If ``sender_key`` fails validation (bad format, user mismatch),
         it is silently dropped rather than propagated.
+
+        Publishes with ``Nats-Msg-Id`` set to ``message.id``, so JetStream's
+        server-side deduplication catches a redelivery of the SAME message
+        (a caller retrying after an ack timeout, per biff-0px) within the
+        stream's duplicate window — a publish that actually landed on the
+        server but whose ack was lost does not create a second copy.  This
+        only dedupes when the caller reuses the same ``Message`` instance
+        (and therefore the same ``id``) across a retry; a freshly
+        constructed ``Message`` for what is logically the same send will
+        not be recognized as a duplicate.
         """
         self._validate_user(message.from_user)
         sender_key = self._validated_sender_key(sender_key, message.from_user)
         js, _ = await self._ensure_connected()
+        headers = {"Nats-Msg-Id": str(message.id)}
 
         if ":" in message.to_user:
             # Targeted delivery — TTY subject
             subject = self._subject_for_key(message.to_user, target_repo=target_repo)
             await self._tracked(
-                "publish", js.publish(subject, message.model_dump_json().encode())
+                "publish",
+                js.publish(
+                    subject, message.model_dump_json().encode(), headers=headers
+                ),
             )
         else:
             # Broadcast — single user subject, no session lookup
@@ -1218,7 +1253,10 @@ class NatsRelay:
             else:
                 subject = self._user_subject(message.to_user)
             await self._tracked(
-                "publish", js.publish(subject, message.model_dump_json().encode())
+                "publish",
+                js.publish(
+                    subject, message.model_dump_json().encode(), headers=headers
+                ),
             )
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).

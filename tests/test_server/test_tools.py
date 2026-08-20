@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from fastmcp.tools.function_tool import FunctionTool
 
 from biff._formatting import TABLE_WIDTH, visible_width
+from biff.chunking import chunk_message
 from biff.formatting import _NO_PRINTABLE_TEXT
 from biff.models import BiffConfig, Message, UserSession
 from biff.server.app import create_server
@@ -771,13 +772,15 @@ class TestSendMessageTool:
         state.relay.deliver = _fail_on_second_call  # type: ignore[assignment]
         fn = await _get_tool_fn(state, "write")
         long_message = " ".join(f"word{i}" for i in range(400))  # forces 3+ chunks
+        expected_chunks = chunk_message(long_message)
+        assert len(expected_chunks) >= 3, "test needs 3+ chunks to exercise the retry"
         result = await fn(to=f"eric:{_ERIC_TTY}", message=long_message)
         assert "Message sent" in result
         # Chunk 1 delivered once (call 1), chunk 2 failed (call 2) then
         # delivered on retry (call 3), chunk 3 delivered once (call 4) —
-        # never four delivered bodies for a 3-chunk message, which would
-        # mean chunk 1 was redelivered.
-        assert len(delivered_bodies) == len(set(delivered_bodies))
+        # pins the resume semantics exactly: each chunk delivered exactly
+        # once, in order, never a redelivery of chunk 1.
+        assert delivered_bodies == expected_chunks
 
 
 class TestCheckMessagesTool:

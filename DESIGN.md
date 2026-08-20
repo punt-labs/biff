@@ -2312,6 +2312,15 @@ targeted message that the sender believes arrived and the recipient never
 sees. Extending this reversal to them needs its own field evidence, not
 inherited from `write`'s.
 
+**Worst-case latency bound.** Each JetStream publish can block up to
+nats-py's ~5s request timeout before raising. With a retry-once policy over
+the undelivered remainder, worst case is roughly ``2 × chunks × 5s`` —
+every chunk in the first pass individually reaching the timeout, then every
+still-undelivered chunk reaching it again on the retry. Callers with their
+own timeout on the `write` MCP tool call should account for this; it is not
+bounded to a single request's timeout the way the prior fire-and-forget
+design's caller-visible latency was.
+
 ## DES-025: CI Notification Workflow — Standalone `workflow_run` Trigger
 
 **Date:** 2026-03-08

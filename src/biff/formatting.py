@@ -748,6 +748,29 @@ READ_SPECS: list[ColumnSpec] = [
 ]
 
 
+def _render_message_rows(messages: list[Message]) -> tuple[int, str, str]:
+    """Return ``(count, noun, indented_table)`` for a list of messages.
+
+    Shared by :func:`format_read` and :func:`format_read_dual` so the count
+    is always derived from the exact list it's rendered beside — never
+    computed twice and never able to disagree between the two call sites
+    (biff-9cz).
+    """
+    rows: list[list[str]] = []
+    for m in messages:
+        ts = m.timestamp.strftime("%a %b %d %H:%M")
+        sender = sanitized_address(m.from_user, m.from_tty)
+        rows.append([sender, ts, terminal_safe(m.body)])
+    table = format_table(READ_SPECS, rows)
+    count = len(messages)
+    noun = "message" if count == 1 else "messages"
+    # Indent the table under a section/count header: replace the leading
+    # HEADER_PREFIX on the column-header line with ROW_PREFIX so it aligns
+    # as a sub-table row.
+    indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
+    return count, noun, indented_table
+
+
 def format_read_dual(
     human_user: str,
     human_msgs: list[Message],
@@ -772,18 +795,7 @@ def format_read_dual(
     for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
         if not msgs:
             continue
-        rows: list[list[str]] = []
-        for m in msgs:
-            ts = m.timestamp.strftime("%a %b %d %H:%M")
-            sender = sanitized_address(m.from_user, m.from_tty)
-            rows.append([sender, ts, terminal_safe(m.body)])
-        table = format_table(READ_SPECS, rows)
-        # Indent the table under the section header: replace the
-        # leading HEADER_PREFIX on the column-header line with
-        # ROW_PREFIX so it aligns as a sub-table row.
-        indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
-        count = len(msgs)
-        noun = "message" if count == 1 else "messages"
+        count, noun, indented_table = _render_message_rows(msgs)
         sections.append(f"{HEADER_PREFIX}{user} ({count} new {noun})\n{indented_table}")
     return "\n\n".join(sections)
 
@@ -809,13 +821,5 @@ def format_read(messages: list[Message]) -> str:
     value is the only count guaranteed synchronized with what it is
     printed next to (biff-9cz).
     """
-    rows: list[list[str]] = []
-    for m in messages:
-        ts = m.timestamp.strftime("%a %b %d %H:%M")
-        sender = sanitized_address(m.from_user, m.from_tty)
-        rows.append([sender, ts, terminal_safe(m.body)])
-    table = format_table(READ_SPECS, rows)
-    count = len(messages)
-    noun = "message" if count == 1 else "messages"
-    indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
+    count, noun, indented_table = _render_message_rows(messages)
     return f"{HEADER_PREFIX}{count} new {noun}\n{indented_table}"
