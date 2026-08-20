@@ -75,6 +75,41 @@ async def _resolve_recipient(
 
 _log = logging.getLogger(__name__)
 
+_UnreadFetch = tuple[list[Message], list[Message], list[Message], list[Message]]
+
+
+async def _fetch_all_unread(state: ServerState) -> _UnreadFetch:
+    """Fetch primary (tty + user broadcast) and companion (DES-039) unread."""
+    tty_unread = await state.relay.fetch(state.session_key)
+    user_unread = await state.relay.fetch_user_inbox(state.config.user)
+    comp_tty, comp_user = await _fetch_companion_unread(state)
+    return tty_unread, user_unread, comp_tty, comp_user
+
+
+async def _fetch_unread_with_retry(state: ServerState) -> _UnreadFetch | str:
+    """Fetch unread messages, retrying once on a transport error.
+
+    Returns the four message lists on success, or a distinguishable
+    failure string on a persistent failure. A raised transport error here
+    previously propagated as an opaque MCP tool error — indistinguishable,
+    to a caller that doesn't retry, from an empty inbox (biff-brn). Retry
+    lives at the code level, not in prompt instructions, for the same
+    reason write()'s delivery retry (biff-0px) is code-level: a retry that
+    depends on an LLM correctly following prose on every invocation is a
+    materially weaker guarantee than one the tool itself enforces.
+    """
+    try:
+        return await _fetch_all_unread(state)
+    except Exception:  # noqa: BLE001 — retry boundary, re-raised below on retry failure
+        try:
+            return await _fetch_all_unread(state)
+        except Exception as exc:  # noqa: BLE001 — MCP tool boundary, reported to caller
+            _log.warning("read_messages failed twice: %s", exc, exc_info=exc)
+            return (
+                f"Could not check mail — failed twice ({exc}). "
+                "Inbox state unknown, not confirmed empty."
+            )
+
 
 async def _deliver_with_retry(
     state: ServerState,
@@ -226,12 +261,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         session_key = state.session_key
         user = state.config.user
 
-        # Fetch from primary inboxes (per-TTY + per-user broadcast).
-        tty_unread = await state.relay.fetch(session_key)
-        user_unread = await state.relay.fetch_user_inbox(user)
-
-        # Fetch from companion inboxes (DES-039).
-        comp_tty, comp_user = await _fetch_companion_unread(state)
+        fetched = await _fetch_unread_with_retry(state)
+        if isinstance(fetched, str):
+            return fetched
+        tty_unread, user_unread, comp_tty, comp_user = fetched
 
         all_unread = sorted(
             tty_unread + user_unread + comp_tty + comp_user,

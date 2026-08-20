@@ -786,6 +786,54 @@ class TestCheckMessagesTool:
         result = await fn()
         assert "No new messages" in result
 
+    async def test_recovers_on_retry_after_one_failure(
+        self, state: ServerState
+    ) -> None:
+        """biff-brn: a single transient fetch failure is recovered by the
+        code-level retry-once, matching the observed recovery pattern —
+        every session-reported occurrence cleared on the very next attempt.
+        """
+        real_fetch = state.relay.fetch
+        calls = {"n": 0}
+
+        async def _flaky_fetch(*args: object, **kwargs: object) -> list[Message]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                msg = "nats: timeout"
+                raise TimeoutError(msg)
+            return await real_fetch(*args, **kwargs)  # type: ignore[arg-type]
+
+        state.relay.fetch = _flaky_fetch  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "read_messages")
+        result = await fn()
+        assert "Could not check mail" not in result
+        # >= 2: retry happened. The exact total also includes
+        # refresh_read_messages's own get_unread_summary()->fetch() call
+        # after a successful retry, which is unrelated to the retry logic
+        # under test.
+        assert calls["n"] >= 2
+
+    async def test_reports_failure_distinctly_after_two_failures(
+        self, state: ServerState
+    ) -> None:
+        """biff-brn: a persistent transport failure must not render as, or
+        be silently treated as, a confirmed-empty inbox. The tool itself
+        (not just the /biff:read prompt) must return a distinguishable
+        result rather than raising, so a caller cannot swallow an
+        unhandled exception into silence.
+        """
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> list[Message]:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state.relay.fetch = _always_fails  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "read_messages")
+        result = await fn()
+        assert "No new messages" not in result
+        assert "Could not check mail" in result
+        assert "not confirmed empty" in result.lower()
+
     async def test_shows_unread(self, state: ServerState, tmp_path: Path) -> None:
         # Register kai so eric can resolve the targeted address.
         await state.relay.update_session(UserSession(user="kai", tty=_KAI_TTY))
