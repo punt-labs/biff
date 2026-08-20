@@ -9,12 +9,19 @@ interactive REPL session (``cli_session(interactive=True)``) that meant
 REPL showed a monotonically growing idle time instead of resetting on
 every command. ``biff.commands._session.update_current_session`` is the
 shared fix; these tests exercise it through each CLI command.
+
+The REPL's talk sub-loop had the same bug: ``_set_talk_plan`` and
+``_clear_talk_plan`` (``biff.__main__``) wrote the ``plan`` field via a
+bare ``model_copy`` and never routed through ``update_current_session``,
+so a long-lived ``talk`` conversation read as increasingly idle even
+while the operator was actively talking.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from biff.__main__ import _clear_talk_plan, _set_talk_plan
 from biff.cli_session import CliContext
 from biff.commands.mesg import mesg
 from biff.commands.plan import plan
@@ -66,5 +73,39 @@ class TestCliActivityResetsOnRealCommand:
 
         session = await relay.get_session(ctx.session_key)
         assert session is not None
+        assert session.last_tool_at > backdated
+        assert session.last_active > backdated
+
+
+class TestReplTalkActivityResetsOnRealActivity:
+    """The REPL talk sub-loop must reset last_tool_at, not just last_active."""
+
+    async def test_set_talk_plan_resets_idle(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await plan(ctx, "baseline")
+        backdated = datetime.now(UTC) - timedelta(minutes=10)
+        await _backdate(relay, ctx.session_key, backdated)
+
+        await _set_talk_plan(ctx, "eric:tty2")
+
+        session = await relay.get_session(ctx.session_key)
+        assert session is not None
+        assert session.plan == "talking to eric:tty2"
+        assert session.last_tool_at > backdated
+        assert session.last_active > backdated
+
+    async def test_clear_talk_plan_resets_idle(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await _set_talk_plan(ctx, "eric:tty2")
+        backdated = datetime.now(UTC) - timedelta(minutes=10)
+        await _backdate(relay, ctx.session_key, backdated)
+
+        await _clear_talk_plan(ctx)
+
+        session = await relay.get_session(ctx.session_key)
+        assert session is not None
+        assert session.plan == ""
         assert session.last_tool_at > backdated
         assert session.last_active > backdated
