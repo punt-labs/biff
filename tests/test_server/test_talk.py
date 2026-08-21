@@ -817,7 +817,7 @@ class TestAgentAutoAcceptPublish:
 class TestDoTalkNoClobber:
     """Starting a new invite must never clobber a live talk (silent data loss).
 
-    While CONNECTED to A, ``talk @B`` (B is a different online user with no
+    While CONNECTED to A, ``talk B`` (B is a different online user with no
     pending invite) must refuse — leave the phase CONNECTED to A and send no
     frame — rather than overwrite the live connection with a fresh invite to B.
     """
@@ -869,7 +869,7 @@ class TestDoTalkNoClobber:
         state.talk.drain_idle()
 
     async def test_connected_to_a_talk_b_refuses_and_keeps_connection(self) -> None:
-        """``talk @B`` while connected to A blocks, keeps A, sends nothing."""
+        """``talk B`` while connected to A blocks, keeps A, sends nothing."""
         state, nc = self._state(self._sessions())
         state.talk.begin_connected(
             partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
@@ -884,7 +884,7 @@ class TestDoTalkNoClobber:
         nc.publish.assert_not_called()  # no invite frame sent to B
 
     async def test_connected_to_a_talk_a_still_sends_message(self) -> None:
-        """``talk @A`` while connected to A still routes to the send branch."""
+        """``talk A`` while connected to A still routes to the send branch."""
         state, nc = self._state(self._sessions())
         state.talk.begin_connected(
             partner="jfreeman", partner_tty="tty6", partner_key="jfreeman:75abc665"
@@ -899,7 +899,7 @@ class TestDoTalkNoClobber:
         assert payload["body"] == "hi"
 
     async def test_idle_talk_b_still_starts_invite(self) -> None:
-        """``talk @B`` while idle still starts a fresh invite (unchanged)."""
+        """``talk B`` while idle still starts a fresh invite (unchanged)."""
         state, nc = self._state(self._sessions())
         result = await talk_commands.talk(cast("TalkContext", state), "@eric:tty9", "")
         assert "invite sent" in result.text.lower()
@@ -909,7 +909,7 @@ class TestDoTalkNoClobber:
         assert payload["type"] == "invite"
 
     async def test_inviting_b_talk_c_refuses(self) -> None:
-        """``talk @C`` while an invite to B is outstanding blocks, sends nothing."""
+        """``talk C`` while an invite to B is outstanding blocks, sends nothing."""
         state, nc = self._state(
             [
                 *self._sessions(),
