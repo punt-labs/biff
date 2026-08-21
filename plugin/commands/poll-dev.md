@@ -77,8 +77,15 @@ If `$ARGUMENTS` is `force`, run both pulls unconditionally.
 3. **Mail** — pull only if the `read_messages` description contains the marker
    `unread)` (the "(N unread)" form emitted by refresh_read_messages; the base
    is "Check your inbox for new messages. Marks all as read." with no marker):
-   - Call `mcp__plugin_biff-dev_tty__read_messages`.
-   - Emit the tool output exactly as returned — character for character,
+   - Call `mcp__plugin_biff-dev_tty__read_messages`. The tool retries a transport
+     error once internally, per inbox, and never raises for one.
+   - If the result starts with "Could not check ", surface it plainly — this
+     is the automated path, so a silently-swallowed failure here persists the
+     longest (biff-brn). It can appear standalone or as a leading line before
+     rendered messages (one inbox failed, another succeeded) — either way, do
+     not treat it as, or report it like, an empty inbox, and do not drop it
+     to make the output look clean if messages follow it.
+   - Otherwise emit the result exactly as returned — character for character,
      including the leading ▶ unicode character. Do not reformat, add commentary,
      wrap in code fences, convert to markdown tables, or add boxes (same rule as
      /biff-dev:read-dev).
