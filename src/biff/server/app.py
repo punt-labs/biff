@@ -1064,8 +1064,19 @@ async def _lifespan_cleanup(
     is still healthy.
     """
     reaper.cancel()
-    with suppress(asyncio.CancelledError):
+    try:
         await reaper
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001
+        # _reap_loop can fail on its own (e.g. an unhandled error inside
+        # _reap_sentinels) before this ever cancels it, in which case
+        # ``await reaper`` re-raises that stored exception rather than
+        # CancelledError -- letting it propagate would skip the sentinel
+        # write and _release_relay below, same as _shutdown_tasks's
+        # gather(..., return_exceptions=True) already protects the other
+        # background tasks against (Cursor Bugbot, High).
+        logger.warning("Reaper task failed during shutdown", exc_info=True)
     if state.owns_relay:
         _write_reap_fallback_sentinels(state)
         await _append_logout_event(state)

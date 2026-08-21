@@ -297,3 +297,69 @@ class TestReleaseSessionSentinelRemovalDoesNotAbort:
         await _release_session(
             state, user=state.config.user, session_key=state.session_key, tty_name=None
         )
+
+
+class TestLifespanCleanupSurvivesFailedReaper:
+    """A reaper that failed with its own exception before cancellation
+    must not abort the rest of ``_lifespan_cleanup``.
+
+    ``_reap_loop`` has no try/except around ``_reap_sentinels``, so an
+    unhandled error there leaves the task done-with-exception rather than
+    cancelled; a bare ``await reaper`` re-raises that stored exception,
+    skipping the sentinel write and ``_release_relay`` -- the exact
+    failure mode ``_shutdown_tasks``'s ``gather(..., return_exceptions=True)``
+    already protects the other background tasks against (Cursor Bugbot,
+    High).
+    """
+
+    async def test_reaper_runtime_error_does_not_abort_cleanup(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        async def _failing_reaper() -> None:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        async def _fake_append_logout(_state: ServerState) -> None:
+            calls.append("append_logout")
+
+        async def _fake_append_companion_logout(_state: ServerState) -> None:
+            calls.append("append_companion_logout")
+
+        async def _fake_shutdown_tasks(
+            _shutdown: asyncio.Event, _tasks: list[asyncio.Task[None]]
+        ) -> None:
+            calls.append("shutdown_tasks")
+
+        def _fake_write_sentinels(_state: ServerState) -> None:
+            calls.append("write_sentinels")
+
+        async def _fake_release_relay(_state: ServerState) -> None:
+            calls.append("release_relay")
+
+        async def _fake_drain() -> None:
+            return None
+
+        monkeypatch.setattr(app, "_append_logout_event", _fake_append_logout)
+        monkeypatch.setattr(
+            app, "_append_companion_logout_event", _fake_append_companion_logout
+        )
+        monkeypatch.setattr(app, "_shutdown_tasks", _fake_shutdown_tasks)
+        monkeypatch.setattr(
+            app, "_write_reap_fallback_sentinels", _fake_write_sentinels
+        )
+        monkeypatch.setattr(app, "_release_relay", _fake_release_relay)
+        monkeypatch.setattr("biff.integration.vox.drain_background_tasks", _fake_drain)
+
+        reaper = asyncio.create_task(_failing_reaper())
+        await asyncio.sleep(0)  # let the reaper task actually run and raise
+        await _lifespan_cleanup(state, asyncio.Event(), reaper, [])
+
+        assert calls == [
+            "write_sentinels",
+            "append_logout",
+            "append_companion_logout",
+            "shutdown_tasks",
+            "release_relay",
+        ]
