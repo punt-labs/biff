@@ -12,6 +12,7 @@ from biff.server import app
 from biff.server.app import (
     _UNEXPECTED_CLEANUP_ERROR,
     _lifespan_cleanup,
+    _release_session,
     _run_signal_cleanup_steps,
     _write_sentinel,
     create_server,
@@ -207,19 +208,31 @@ class TestWriteSentinelRuntimeError:
 
 
 class TestLifespanCleanupSentinelOrdering:
-    """The reap-fallback sentinel must not be written until the reap loop
-    (part of ``tasks``, stopped by ``_shutdown_tasks``) has stopped ticking.
+    """The reap-fallback sentinel must be written after the reaper stops
+    ticking, but before any network-bound teardown step that could hang.
 
-    Writing it earlier races ``_reap_sentinels``, which treats any sentinel
-    matching this session's own key as a prior incarnation and discards it
-    unreaped (biff-7ak) -- consuming the fallback before a later timed-out
-    ``_release_relay`` ever needs it (Cursor Bugbot, High).
+    Writing it before the reaper stops races ``_reap_sentinels``, which
+    treats any sentinel matching this session's own key as a prior
+    incarnation and discards it unreaped (biff-7ak) -- consuming the
+    fallback before a later timed-out ``_release_relay`` ever needs it
+    (Cursor Bugbot, High). Writing it only after the logout/task-shutdown
+    awaits reopens the same failure from the other side: those awaits sit
+    inside FastMCP's cancellable disconnect budget, so a cancellation
+    before they complete would again leave no sentinel at all (Cursor
+    Bugbot, High, on an earlier version of this fix).
     """
 
-    async def test_sentinel_written_after_shutdown_tasks_stops_reaper(
+    async def test_sentinel_written_between_reaper_stop_and_logout(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls: list[str] = []
+
+        async def _stoppable_reaper() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                calls.append("reaper_cancelled")
+                raise
 
         async def _fake_append_logout(_state: ServerState) -> None:
             calls.append("append_logout")
@@ -252,7 +265,35 @@ class TestLifespanCleanupSentinelOrdering:
         monkeypatch.setattr(app, "_release_relay", _fake_release_relay)
         monkeypatch.setattr("biff.integration.vox.drain_background_tasks", _fake_drain)
 
-        await _lifespan_cleanup(state, asyncio.Event(), [])
+        reaper = asyncio.create_task(_stoppable_reaper())
+        await asyncio.sleep(0)  # let the reaper task actually start running
+        await _lifespan_cleanup(state, asyncio.Event(), reaper, [])
 
-        assert calls.index("shutdown_tasks") < calls.index("write_sentinels")
-        assert calls.index("write_sentinels") < calls.index("release_relay")
+        assert calls.index("reaper_cancelled") < calls.index("write_sentinels")
+        assert calls.index("write_sentinels") < calls.index("append_logout")
+        assert calls.index("append_logout") < calls.index("shutdown_tasks")
+        assert calls.index("shutdown_tasks") < calls.index("release_relay")
+
+
+class TestReleaseSessionSentinelRemovalDoesNotAbort:
+    """A failure removing the now-stale sentinel must not skip the rest of
+    teardown (companion release, ``relay.close()``) -- the row itself is
+    already gone, so re-processing it on the next reaper tick is harmless,
+    unlike losing steps still queued after this one (Cursor Bugbot, Medium).
+    """
+
+    async def test_oserror_removing_sentinel_does_not_propagate(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _boom(_repo_name: str, _session_key: str) -> None:
+            msg = "disk full"
+            raise OSError(msg)
+
+        monkeypatch.setattr(app, "_remove_sentinel", _boom)
+
+        # delete_session succeeds even for a session key LocalRelay has
+        # never seen, so this reaches the sentinel-removal branch without
+        # needing a full session registered first.
+        await _release_session(
+            state, user=state.config.user, session_key=state.session_key, tty_name=None
+        )

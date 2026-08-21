@@ -961,7 +961,18 @@ async def _release_session(
     except Exception:  # noqa: BLE001
         logger.warning("Failed to delete session %s", session_key, exc_info=True)
     else:
-        _remove_sentinel(state.config.repo_name, session_key)
+        try:
+            _remove_sentinel(state.config.repo_name, session_key)
+        except (OSError, RuntimeError):
+            # Best-effort: the row is already gone, so a failure to remove
+            # its now-stale sentinel must not abort the rest of teardown
+            # (companion release, relay.close) -- the next reaper tick
+            # re-processing an already-deleted session is harmless, unlike
+            # skipping the steps still queued after this one (Cursor
+            # Bugbot, Medium).
+            logger.warning(
+                "Failed to remove sentinel for %s", session_key, exc_info=True
+            )
 
 
 async def _release_relay(state: ServerState) -> None:
@@ -998,9 +1009,13 @@ def _write_reap_fallback_sentinels(state: ServerState) -> None:
     only once its session's KV row is actually deleted, so a healthy
     shutdown leaves nothing behind for the reaper to redundantly process.
     """
+    # (OSError, RuntimeError): matches the signal handler's tuple for the
+    # same helper -- sentinel_dir() -> biff_data_dir() calls Path.home()
+    # fresh on every call, which raises RuntimeError (not OSError) when
+    # HOME is unset (Cursor Bugbot, Low).
     try:
         _write_sentinel(state.config.repo_name, state.session_key)
-    except OSError:
+    except (OSError, RuntimeError):
         # This sentinel is the only durable signal that a timed-out
         # teardown below needs reaping -- unlike the signal handler's sync
         # cleanup, this path is not itself a signal handler, so logging is
@@ -1013,7 +1028,7 @@ def _write_reap_fallback_sentinels(state: ServerState) -> None:
     if state.companion:
         try:
             _write_sentinel(state.config.repo_name, state.companion.session_key)
-        except OSError:
+        except (OSError, RuntimeError):
             logger.warning(
                 "Failed to write companion reap-fallback sentinel for %s",
                 state.companion.session_key,
@@ -1024,16 +1039,35 @@ def _write_reap_fallback_sentinels(state: ServerState) -> None:
 async def _lifespan_cleanup(
     state: ServerState,
     shutdown: asyncio.Event,
+    reaper: asyncio.Task[None],
     tasks: list[asyncio.Task[None]],
 ) -> None:
     """Shutdown sequence for the active lifespan.
 
-    Write logout FIRST — before stopping tasks or closing
-    anything.  The MCP subprocess may be killed at any moment
-    after Claude Code closes stdio, so the logout publish
-    must happen while the NATS connection is still healthy.
+    The reaper is stopped first and separately from the other background
+    tasks, and the fallback sentinel is written immediately after: writing
+    it any earlier races the still-ticking ``_reap_loop``, which treats any
+    sentinel matching this session's own key as a prior incarnation and
+    discards it unreaped (biff-7ak) -- consuming the fallback before a
+    later timed-out ``_release_relay`` ever needs it (Cursor Bugbot, High).
+    ``reaper.cancel()`` interrupts an in-flight NATS call immediately
+    rather than waiting on it, so this step is bounded regardless of what
+    the reaper happened to be doing -- unlike routing it through the
+    logout/teardown awaits below, which sit inside FastMCP's 5s disconnect
+    budget and would reopen the same race from the other side (Cursor
+    Bugbot, High, on an earlier version of this fix that moved the write
+    after those awaits instead).
+
+    Logout is written next, before closing anything else -- the MCP
+    subprocess may be killed at any moment after Claude Code closes
+    stdio, so the logout publish must happen while the NATS connection
+    is still healthy.
     """
+    reaper.cancel()
+    with suppress(asyncio.CancelledError):
+        await reaper
     if state.owns_relay:
+        _write_reap_fallback_sentinels(state)
         await _append_logout_event(state)
         await _append_companion_logout_event(state)
     await _shutdown_tasks(shutdown, tasks)
@@ -1047,14 +1081,6 @@ async def _lifespan_cleanup(
         with suppress(FileNotFoundError):
             state.unread_path.unlink()
     if state.owns_relay:
-        # Written only after _shutdown_tasks has stopped the reap loop
-        # (above) -- writing it earlier races _reap_sentinels, which is
-        # still ticking on its own 2s interval and treats any sentinel
-        # matching this session's own key as a prior incarnation to
-        # discard unreaped (biff-7ak), consuming the fallback before a
-        # timed-out _release_relay below ever needs it (Cursor Bugbot,
-        # High).
-        _write_reap_fallback_sentinels(state)
         await _release_relay(state)
     with suppress(OSError):
         remove_active_session(state.session_key)
@@ -1312,7 +1338,8 @@ async def _active_lifespan(
         await _lifespan_cleanup(
             state,
             shutdown,
-            [t for t in [poller, reaper, heartbeat, watcher] if t is not None],
+            reaper,
+            [t for t in [poller, heartbeat, watcher] if t is not None],
         )
 
 
