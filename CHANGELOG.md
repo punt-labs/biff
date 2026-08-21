@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-08-21
+
 ### Removed
 
 - **The deprecated repo-root config files `.biff`, `.ethos/missions.jsonl`, and `.lux/config.md` (this repo's own copies, not the read paths), plus the now-unused `.biff.local` `.gitignore` entry.** `.biff` predates the `.punt-labs/biff/config.yaml`/`config.local.yaml` config location and is read by nothing — `is_enabled()` and the config loader only ever look under `.punt-labs/biff/`. `.ethos/missions.jsonl` predates `.punt-labs/ethos.yaml` + `.punt-labs/ethos/identities/`, which is what `resolve_agent_identity_from_disk()` and the ethos CLI integration actually read; nothing in this repo reads bare `.ethos/`. `.lux/config.md` is different: `is_lux_enabled()` in `src/biff/_stdlib.py` still reads exactly that path today — but this repo's own copy already had `display: "n"`, so the panel was already off for this repo; removing the file leaves that behavior unchanged rather than turning anything off. `.biff.local` was already gitignored (never tracked), so it isn't part of this diff — only its now-pointless `.gitignore` entry is; the file itself was deleted locally as a byproduct of this cleanup, not by this commit.
