@@ -112,7 +112,7 @@ or display concerns.
 ```python
 async with cli_session(user="kai") as kai:
     async with cli_session(user="eric") as eric:
-        await commands.write(kai, "@eric", "review the PR")
+        await commands.write(kai, "eric", "review the PR")
         result = await commands.read(eric)
         assert "review the PR" in result.text
 ```

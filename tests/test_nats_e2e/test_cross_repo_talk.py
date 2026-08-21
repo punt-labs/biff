@@ -2,7 +2,7 @@
 
 Talk's NATS subject is the globally-unique ``user:tty`` identity and nothing
 else (talk.tex ``subjectOf~k = k``): neither repository nor organization is a
-routing coordinate.  A frame reaches the addressed ``@user:tty`` whichever repo
+routing coordinate.  A frame reaches the addressed ``user:tty`` whichever repo
 or org either party runs in.  The one gate is visibility — you can only talk to
 a session you can see (it must be in ``visible_repos``), enforced at resolution,
 never on the subject.

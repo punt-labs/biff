@@ -1,11 +1,11 @@
 ---
 description: Show session login/logout history
-argument-hint: "[@user] [count]"
+argument-hint: "[user] [count]"
 allowed-tools: ["ToolSearch", "mcp__plugin_biff_tty__last"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-Call `mcp__plugin_biff_tty__last` with optional `user` (e.g. `@kai`) and `count` (default 25) arguments.
+Call `mcp__plugin_biff_tty__last` with optional `user` (e.g. `kai`) and `count` (default 25) arguments.
 
 If the result says "No session history.", say "No session history available."
 

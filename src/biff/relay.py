@@ -114,9 +114,9 @@ class Relay(Protocol):
 
     Two mailbox types exist per user:
 
-    - **User mailbox**: receives broadcast messages (``/write @user``).
+    - **User mailbox**: receives broadcast messages (``/write user``).
       POP semantics — first reader consumes.
-    - **TTY mailbox**: receives targeted messages (``/write @user:tty``).
+    - **TTY mailbox**: receives targeted messages (``/write user:tty``).
       One per session.
     """
 

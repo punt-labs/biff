@@ -11,9 +11,9 @@ next activity, or when a poll fires.
 ## Sending and coordinating
 
 - `/who` — list active agents and what each is working on.
-- `/finger @user` — check one agent's status and availability.
-- `/write @user:tty <message>` — send direct mail. Address with the full
-  `@user:tty`; run `/who` first to confirm the current tty.
+- `/finger user` — check one agent's status and availability.
+- `/write user:tty <message>` — send direct mail. Address with the full
+  `user:tty`; run `/who` first to confirm the current tty.
 - `/read` — read your inbox.
 - `/wall <message>` — broadcast to your team (team-scoped, not the world).
 - `/plan <summary>` — publish what you are working on (shown in `/who`).

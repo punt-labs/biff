@@ -1,6 +1,6 @@
 ---
 description: Start a real-time conversation with a teammate or agent
-argument-hint: "@user [message]"
+argument-hint: "user [message]"
 allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__talk", "mcp__plugin_biff-dev_tty__talk_end", "mcp__plugin_biff-dev_tty__write"]
 ---
 <!-- markdownlint-disable MD041 -->
@@ -13,8 +13,8 @@ Parse as: first token is the recipient username (strip leading `@` if present), 
 
 Examples:
 
-- `@kai` → `to="kai"`
-- `@kai hey, got a minute?` → `to="kai"`, `message="hey, got a minute?"`
+- `kai` → `to="kai"`
+- `kai hey, got a minute?` → `to="kai"`, `message="hey, got a minute?"`
 
 ## Task
 

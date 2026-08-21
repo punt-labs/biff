@@ -166,8 +166,8 @@ class TalkState:
         """The partner's tty, or our own when idle (sentinel).
 
         Names the connected partner's session so the connected hint reads as
-        ``talk @user:tty`` (session-scoped, DES-043) rather than a bare
-        ``@user`` that fails resolution when the partner has several sessions.
+        ``talk user:tty`` (session-scoped, DES-043) rather than a bare
+        ``user`` that fails resolution when the partner has several sessions.
         """
         return self._partner_tty
 
@@ -180,7 +180,7 @@ class TalkState:
     def partner_display(self) -> str:
         """The partner address as ``user:tty`` (or bare ``user`` when tty-less).
 
-        The session-scoped form ``/who`` shows and ``talk @user:tty`` resolves,
+        The session-scoped form ``/who`` shows and ``talk user:tty`` resolves,
         used when naming the current partner in a "already in a talk" refusal.
         """
         return (
@@ -321,7 +321,7 @@ class TalkState:
         Construction is the single validation gate: a frame whose session key
         does not name a session is rejected by :meth:`PendingInvite.from_notification`
         and dropped here with a debug log rather than recorded, since it could
-        only render a bare ``talk @user`` hint that fails at the prompt
+        only render a bare ``talk user`` hint that fails at the prompt
         (HintNamesSession).  The newest invite from a user supersedes the older.
 
         *arrived* carries the frame's original enqueue time so the TTL window is
@@ -572,7 +572,7 @@ class TalkState:
         usable invite exists.  Keyless invites are never recorded, so a
         returned invite always names a session and carries the inviter's
         display tty — the caller sets ``partner_tty`` from it so the connected
-        hint reads ``talk @user:ttyN``, never the opaque session-key hex.
+        hint reads ``talk user:ttyN``, never the opaque session-key hex.
         """
         return self._pending.pop(user, None)
 

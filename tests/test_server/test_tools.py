@@ -290,7 +290,7 @@ class TestFingerTool:
         assert "Messages: on" in result
 
     async def test_targeted_finger(self, state: ServerState) -> None:
-        """@user:tty shows a specific session."""
+        """user:tty shows a specific session."""
         await state.relay.update_session(
             UserSession(user="eric", tty=_ERIC_TTY, plan="coding")
         )
@@ -300,7 +300,7 @@ class TestFingerTool:
         assert "Login: eric" in result
 
     async def test_targeted_finger_missing_tty(self, state: ServerState) -> None:
-        """@user:tty with unknown tty reports no session."""
+        """user:tty with unknown tty reports no session."""
         fn = await _get_tool_fn(state, "finger")
         result = await fn(user="eric:unknown")
         assert "No session on tty unknown" in result

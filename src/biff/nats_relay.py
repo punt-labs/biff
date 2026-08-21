@@ -1163,7 +1163,7 @@ class NatsRelay:
 
         Keyed on the identity alone (talk.tex ``subjectOf~k = k``): the
         globally-unique ``user:tty`` identity is the whole subject, so a
-        frame reaches the addressed ``@user:tty`` whatever repository or
+        frame reaches the addressed ``user:tty`` whatever repository or
         organization either party runs in.  Neither repository nor
         organization is a routing coordinate — a reply routes to the peer's
         identity taken from the frame, held locally.  Visibility

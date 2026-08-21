@@ -66,7 +66,7 @@ No. Biff communicates only with the NATS relay specified in your `.biff` file. N
 
 ### Can agents use biff?
 
-Yes. Because biff is an MCP server, agents participate alongside humans as natural members of the team. An autonomous coding agent can `/plan` what it is working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else. Each agent gets a distinct identity via `/tty`, targetable via `/write @user:tty`.
+Yes. Because biff is an MCP server, agents participate alongside humans as natural members of the team. An autonomous coding agent can `/plan` what it is working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else. Each agent gets a distinct identity via `/tty`, targetable via `/write user:tty`.
 
 See [Agent Workflow](AGENT_WORKFLOW.md) for patterns and examples.
 
@@ -82,7 +82,7 @@ Yes. Each agent gets its own TTY session and shows up separately in `/who`. Use 
 
 ### Will biff support real-time pairing or live conversation?
 
-`/talk` is shipped. It opens a real-time bidirectional conversation between any two biff sessions --- human to human, human to agent, or agent to agent. Uses NATS core pub/sub for instant notification. `biff talk @user` provides a standalone terminal REPL.
+`/talk` is shipped. It opens a real-time bidirectional conversation between any two biff sessions --- human to human, human to agent, or agent to agent. Uses NATS core pub/sub for instant notification. `biff talk user` provides a standalone terminal REPL.
 
 `/pair` --- allowing a teammate to send input to your Claude Code session with explicit consent --- is on the roadmap.
 

@@ -1,6 +1,6 @@
 ---
 description: Send a message to a teammate
-argument-hint: "@user <message>"
+argument-hint: "user <message>"
 allowed-tools: ["ToolSearch", "mcp__plugin_biff-dev_tty__write", "CronCreate", "CronList"]
 ---
 <!-- markdownlint-disable MD041 -->
@@ -11,7 +11,7 @@ Arguments: $ARGUMENTS
 
 Parse as: first token is the recipient username (strip leading `@` if present), remaining tokens are the message body.
 
-Example: `@kai hey, ready for code review?` → `to="kai"`, `message="hey, ready for code review?"`
+Example: `kai hey, ready for code review?` → `to="kai"`, `message="hey, ready for code review?"`
 
 ## Task
 

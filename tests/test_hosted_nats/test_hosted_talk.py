@@ -17,7 +17,7 @@ different* repositories and organizations, and — mirroring production
 relay computes for the peer identity.  A relay that keyed that subject on its
 own repository or organization would compute a subject the peer never
 subscribes to, so the frame would be lost.  Because the subject is identity-only
-the frame instead reaches the addressed ``@user:tty`` across every boundary,
+the frame instead reaches the addressed ``user:tty`` across every boundary,
 and reverting the routing to repo- or org-keying makes these tests go red.
 
 Four properties are proven end to end on the real relay:
@@ -161,7 +161,7 @@ class _Endpoint:
     Binds a relay connection to a session identity, subscribes to that
     identity's own subject (``subjectOf~k = k``), and captures every frame the
     broker delivers there so a test can assert exactly what reached the
-    addressed ``@user:tty``.
+    addressed ``user:tty``.
     """
 
     _relay: NatsRelay
@@ -295,7 +295,7 @@ class TestHostedIdentitySubject:
         ``talk_notify_subject`` is a pure function of the stream prefix and the
         peer identity; neither the relay's repository nor its organization
         enters.  Two relays configured for different organizations and
-        repositories therefore compute one subject for a given ``@user:tty`` —
+        repositories therefore compute one subject for a given ``user:tty`` —
         the concrete form of ``subjectOf~k = k`` that makes cross-org delivery
         possible.  No connection is opened; only the pure routing function runs.
         """

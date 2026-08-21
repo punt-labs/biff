@@ -236,12 +236,12 @@ class TestPendingInvite:
     def test_accept_command_uses_display_tty(self) -> None:
         """The hint names the session by the display tty ``/who`` shows.
 
-        Not the opaque session-key hex — ``talk @eric:tty2`` is what the
+        Not the opaque session-key hex — ``talk eric:tty2`` is what the
         recipient types and what ``resolve_talk_target`` matches.
         """
         inv = PendingInvite(user="eric", session_key=OTHER_KEY, tty="tty2", arrived=0.0)
         assert inv.accept_command == "talk eric:tty2"
-        assert ":" in inv.accept_command  # never a bare @user
+        assert ":" in inv.accept_command  # never a bare user
 
     def test_accept_command_falls_back_to_key_without_tty(self) -> None:
         """A frame with no display tty still renders a runnable session hint."""
@@ -261,7 +261,7 @@ class TestPendingInvite:
     def test_empty_user_key_rejected(self) -> None:
         """HintNamesSession: a ``:tty`` key with an empty user is malformed.
 
-        It would render ``talk @:def67890``, which names no user and fails at
+        It would render ``talk :def67890``, which names no user and fails at
         the prompt, so it must be rejected at construction like the other halves.
         """
         with pytest.raises(ValueError, match="user:tty"):
