@@ -29,7 +29,20 @@ if [[ -z "$RELEASE_PREP_COMMIT" ]]; then
 fi
 
 echo "Restoring dev state from parent of ${RELEASE_PREP_COMMIT:0:12}"
-git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- "$PLUGIN_JSON"
+
+# Swap the name back to -dev on the CURRENT (post-release-prep) plugin.json,
+# rather than checking out the whole file from the parent commit. The parent
+# predates release-plugin.sh's version bump too, so a whole-file checkout
+# would silently revert the version along with the name -- exactly the drift
+# this pair of scripts exists to prevent.
+python3 -c "
+import json, pathlib
+p = pathlib.Path('${PLUGIN_JSON}')
+d = json.loads(p.read_text())
+if not d['name'].endswith('-dev'):
+    d['name'] = d['name'] + '-dev'
+p.write_text(json.dumps(d, indent=2) + '\n')
+"
 
 # Restore dev commands if the parent commit had a plugin/commands/ directory.
 # The `add` belongs inside this branch, beside the checkout that populates the

@@ -7,6 +7,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_JSON="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
+PYPROJECT="${REPO_ROOT}/pyproject.toml"
 COMMANDS_DIR="${REPO_ROOT}/plugin/commands"
 
 # Preflight: the commands directory must exist. The `find` below runs inside a
@@ -35,11 +36,28 @@ if [[ "$current_name" == "$prod_name" ]]; then
 fi
 
 echo "Swapping plugin name: ${current_name} → ${prod_name}"
+
+# plugin.json's version has its own field, independent of pyproject.toml's,
+# and nothing else in this pipeline keeps them in sync -- without this, the
+# name swap below is the only edit this script makes, and version drifts
+# silently release after release (confirmed stuck at 1.13.0 through two
+# later releases before this fix). pyproject.toml is the source of truth by
+# this point in the pipeline: phase 2's version-bump commit has already
+# merged to main before release-prep runs.
+pyproject_version="$(python3 -c "
+import pathlib, re
+text = pathlib.Path('${PYPROJECT}').read_text()
+match = re.search(r'^version = \"([^\"]+)\"', text, re.MULTILINE)
+print(match.group(1))
+")"
+echo "Syncing plugin.json version to pyproject.toml: ${pyproject_version}"
+
 python3 -c "
 import json, pathlib
 p = pathlib.Path('${PLUGIN_JSON}')
 d = json.loads(p.read_text())
 d['name'] = '${prod_name}'
+d['version'] = '${pyproject_version}'
 p.write_text(json.dumps(d, indent=2) + '\n')
 "
 
