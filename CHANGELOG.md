@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-08-21
+
 ### Fixed
 
 - **`plugin.json`'s version silently drifted from `pyproject.toml` on every release.** `release-plugin.sh` swapped the plugin name (`biff-dev` -> `biff`) at tag time but never touched the `version` field, so the marketplace-facing plugin manifest stayed pinned to `1.13.0` through the v1.13.1 and v1.14.0 releases while PyPI and `install.sh` moved on. `release-plugin.sh` now syncs `version` from `pyproject.toml` alongside the name swap; `restore-dev-plugin.sh` no longer reverts the whole file from before that bump when restoring dev state, only the name field, so the version stays current on main between releases too. See biff-cbn (also covers propagating the release to the `claude-plugins` marketplace registry, tracked separately).
