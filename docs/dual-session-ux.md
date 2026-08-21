@@ -241,40 +241,45 @@ the human's identity and TTY name.
 ### (b) read_messages With Both Sections
 
 ```text
-^  jfreeman
+^  jfreeman (2 new messages)
    FROM         DATE              MESSAGE
    kai:tty2     Mon Apr 14 15:30  hey Jim, review PR #205?
    ada:tty7     Mon Apr 14 15:32  CI is green on punt-kit
 
-^  claude
+^  claude (2 new messages)
    FROM         DATE              MESSAGE
    rmh:tty3     Mon Apr 14 15:45  implementation done, ready for review
    bwk:tty5     Mon Apr 14 15:48  go module updated
 ```
 
-Human section listed first. Each section has its own header and
-column headers. Messages sorted chronologically within each section.
+Human section listed first. Each section header carries its own count
+(biff-9cz — derived from that section's own message list, so it can
+never disagree with the rows rendered beneath it) followed by column
+headers. Messages sorted chronologically within each section.
 
 ### (c) read_messages With Only Human Messages
 
 ```text
-^  jfreeman
+^  jfreeman (1 new message)
    FROM         DATE              MESSAGE
    kai:tty2     Mon Apr 14 15:30  hey Jim, review PR #205?
 ```
 
 Only the section with messages appears. No empty `claude` section.
 
-### (d) Single-Session (Unchanged)
+### (d) Single-Session
 
 ```text
+^  2 new messages
    FROM         DATE              MESSAGE
    kai:tty2     Mon Apr 14 15:30  hey, review PR #205?
    rmh:tty3     Mon Apr 14 15:45  implementation done
 ```
 
-No section headers. Identical to current output. The `format_read`
-path is taken when `state.companion is None`.
+No per-identity section headers, but (biff-9cz) a single leading count
+line is now always present — same reasoning as (b)/(c), just one
+section instead of two. The `format_read` path is taken when
+`state.companion is None`.
 
 ## 5. Files Changed
 

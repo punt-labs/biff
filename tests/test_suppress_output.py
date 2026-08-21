@@ -45,12 +45,21 @@ def _panel_summary(output: dict[str, object]) -> str:
 
 
 class TestReadMessagesCount:
-    """read_messages row counting — data rows matched by indent pattern."""
+    """read_messages row counting — reads the count format_read/_dual emits.
+
+    biff-9cz: the panel count is parsed from the tool's own "N new
+    message(s)" header line(s), never recounted from data rows — a row
+    count also matches the (now differently indented) column-header row,
+    and cannot in general distinguish a data row from a message body that
+    happens to share the same indent. Fixtures below mirror the real
+    format_read/format_read_dual output shape exactly.
+    """
 
     def test_data_rows_counted(self) -> None:
-        """Rows starting with user:tty are counted correctly."""
+        """The count line's number is read, not the row count."""
         response = (
-            "\u25b6  FROM              DATE              BODY\n"
+            "\u25b6  2 new messages\n"
+            "   FROM              DATE              MESSAGE\n"
             "   kai:tty01         Mon Mar 31 14:00  hello\n"
             "   eric:tty02        Mon Mar 31 14:05  world"
         )
@@ -59,9 +68,10 @@ class TestReadMessagesCount:
         assert summary == "2 new"
 
     def test_single_row(self) -> None:
-        """Single message row produces '1 new'."""
+        """Singular count line produces '1 new'."""
         response = (
-            "\u25b6  FROM              DATE              BODY\n"
+            "\u25b6  1 new message\n"
+            "   FROM              DATE              MESSAGE\n"
             "   kai:tty01         Mon Mar 31 14:00  ping"
         )
         output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
@@ -74,12 +84,46 @@ class TestReadMessagesCount:
         summary = _panel_summary(output)
         assert summary == "No new messages."
 
-    def test_user_without_tty(self) -> None:
-        """Rows with user (no tty) are also counted."""
+    def test_could_not_check_mail_is_not_reported_as_zero_new(self) -> None:
+        """biff-brn: a failure must not render like a confirmed-empty inbox.
+
+        Before this branch, a persistent-failure result would have fallen
+        into the counting branch and, matching no '^▶' lines, reported
+        '0 new' — indistinguishable in the panel from a genuinely empty
+        inbox. It must instead be surfaced as a failure.
+        """
         response = (
-            "\u25b6  FROM              DATE              BODY\n"
+            "Could not check mail — failed twice (nats: timeout). "
+            "Inbox state unknown, not confirmed empty."
+        )
+        output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
+        summary = _panel_summary(output)
+        assert summary == "check failed"
+        assert summary != "0 new"
+
+    def test_user_without_tty(self) -> None:
+        """Rows with user (no tty) are also counted correctly."""
+        response = (
+            "\u25b6  1 new message\n"
+            "   FROM              DATE              MESSAGE\n"
             "   kai               Mon Mar 31 14:00  hello"
         )
         output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
         summary = _panel_summary(output)
         assert summary == "1 new"
+
+    def test_dual_section_counts_summed(self) -> None:
+        """format_read_dual's per-identity counts sum to the panel total."""
+        response = (
+            "\u25b6  jfreeman (1 new message)\n"
+            "   FROM   DATE              MESSAGE\n"
+            "   kai    Mon Mar 31 14:00  hey\n"
+            "\n"
+            "\u25b6  claude (2 new messages)\n"
+            "   FROM   DATE              MESSAGE\n"
+            "   rmh    Mon Mar 31 14:00  done\n"
+            "   alpha  Mon Mar 31 14:01  ping"
+        )
+        output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
+        summary = _panel_summary(output)
+        assert summary == "3 new"

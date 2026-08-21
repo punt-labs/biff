@@ -35,6 +35,26 @@ class TestDeliver:
         assert len(unread) == 1
         assert unread[0].body == "hello"
 
+    async def test_redelivering_same_message_id_is_deduplicated(
+        self, relay: NatsRelay
+    ) -> None:
+        """biff-0px review finding: a retry that reuses the same Message
+        (same id) must not create a second copy if the original publish
+        actually landed and only its ack was lost. deliver() sets
+        Nats-Msg-Id to message.id, so JetStream's own dedup window catches
+        this — verified here against a real server, since a mock cannot
+        prove server-side dedup behavior.
+        """
+        msg = Message(
+            from_user="kai",
+            to_user=f"eric:{_ERIC_TTY}",
+            body="only once",
+        )
+        await relay.deliver(msg)
+        await relay.deliver(msg)  # same instance, same id — simulates a retry
+        unread = await relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 1
+
     async def test_deliver_multiple(self, relay: NatsRelay) -> None:
         for i in range(3):
             await relay.deliver(

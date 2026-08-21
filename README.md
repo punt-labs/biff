@@ -105,7 +105,8 @@ Message sent to kai.
 ```text
 > /read
 
-▶  FROM   DATE              MESSAGE
+▶  3 new messages
+   FROM   DATE              MESSAGE
    kai    Sat Feb 15 14:01  hey, ready for review?
    eric   Sat Feb 15 13:45  pushed the fix for the flaky test
    priya  Sat Feb 15 12:30  can you look at the migration script?

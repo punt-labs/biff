@@ -7,6 +7,7 @@ from pathlib import Path
 from fastmcp.tools.function_tool import FunctionTool
 
 from biff.models import BiffConfig
+from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 
@@ -104,6 +105,33 @@ class TestGetPollStatus:
         fn = await _get_tool_fn(state, "get_poll_status")
         result = await fn()
         assert "2m" in result
+
+    async def test_no_timeout_line_before_any_attempt(self, tmp_path: Path) -> None:
+        # LocalRelay (the default test relay) never appends the line at
+        # all; a fresh NatsRelay with zero attempts must not either — an
+        # empty "0 timeout(s) / 0 request(s)" line would be noise, not
+        # signal.
+        state = _make_state(tmp_path)
+        relay = NatsRelay(url="nats://localhost:4222", stream_prefix="biff-dev")
+        object.__setattr__(state, "relay", relay)
+        fn = await _get_tool_fn(state, "get_poll_status")
+        result = await fn()
+        assert "NATS relay:" not in result
+
+    async def test_timeout_line_reports_cumulative_counts(self, tmp_path: Path) -> None:
+        # biff-brn: this line is the server-side record that lets an
+        # operator measure the real timeout rate instead of relying on
+        # which timeouts happened to be noticed client-side.
+        state = _make_state(tmp_path)
+        relay = NatsRelay(url="nats://localhost:4222", stream_prefix="biff-dev")
+        for _ in range(20):
+            relay._health.record_attempt()
+        relay._health.record_timeout_attempt()
+        relay._health.record_timeout("read_messages", is_connected=True)
+        object.__setattr__(state, "relay", relay)
+        fn = await _get_tool_fn(state, "get_poll_status")
+        result = await fn()
+        assert "NATS relay: 1 timeout(s) / 20 request(s) since server start" in result
 
 
 class TestParseInterval:

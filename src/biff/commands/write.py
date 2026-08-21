@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from biff.chunking import chunk_message
 from biff.cli_session import CliContext
+from biff.commands._messaging import deliver_with_retry
 from biff.commands._result import CommandResult
-from biff.models import Message
 from biff.server.tools._session import resolve_tty_name
 from biff.tty import build_session_key, parse_address
 
@@ -51,25 +51,32 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
 
     chunks = chunk_message(message)
     try:
-        for chunk in chunks:
-            msg = Message(
-                from_user=ctx.user,
-                from_tty=ctx.tty_name,
-                to_user=relay_key,
-                body=chunk,
-            )
-            await ctx.relay.deliver(
-                msg, sender_key=ctx.session_key, target_repo=target_repo
-            )
-    except Exception as exc:  # noqa: BLE001
+        result_text = await deliver_with_retry(
+            ctx.relay,
+            from_user=ctx.user,
+            from_tty=ctx.tty_name,
+            session_key=ctx.session_key,
+            to_user=relay_key,
+            target_repo=target_repo,
+            chunks=chunks,
+            display=display,
+        )
+    except ValueError as exc:
+        # A deterministic validation failure (deliver_with_retry does not
+        # retry these) — same reporting shape as the recipient-resolution
+        # errors above.
         return CommandResult(
             text=str(exc),
             json_data={"status": "error", "to": to, "error": str(exc)},
             error=True,
         )
-    parts = len(chunks)
-    suffix = f" ({parts} parts)" if parts > 1 else ""
+    if result_text.startswith("Could not deliver"):
+        return CommandResult(
+            text=result_text,
+            json_data={"status": "error", "to": to, "error": result_text},
+            error=True,
+        )
     return CommandResult(
-        text=f"Message sent to {display}.{suffix}",
-        json_data={"status": "sent", "to": display, "parts": parts},
+        text=result_text,
+        json_data={"status": "sent", "to": display, "parts": len(chunks)},
     )
