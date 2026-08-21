@@ -5,7 +5,7 @@ on:
     # filename. `biff enable` renders this list from the target repo's own
     # .github/workflows/*.yml and *.yaml name: fields, so a fixed list can't
     # watch the wrong workflows in a repo whose names differ from biff's.
-    workflows: ["Docs", "Hosted NATS E2E", "Lint", "Release", "Tests"]
+    workflows: ["Docs", "Hosted NATS E2E", "Lint", "Release", "Subprocess Tests", "Tests"]
     types: [completed]
 
 permissions:
