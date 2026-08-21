@@ -149,3 +149,20 @@ class TestWhoCount:
         output = _run_hook("mcp__plugin_biff_tty__who", response)
         summary = _panel_summary(output)
         assert summary == "0 online"
+
+    def test_wrapped_footnote_continuation_not_counted(self) -> None:
+        """A footnote long enough to wrap must not inflate the count either.
+
+        Continuation lines share ROW_PREFIX but never contain "stopped
+        responding" themselves -- a line-by-line filter on that phrase alone
+        would miss them (Cursor Bugbot, Medium).
+        """
+        response = (
+            "▶  NAME  IDLE\n"
+            "   kai:tty01  0:03\n"
+            "   3 sessions stopped responding (last seen 3 hours, 1 day 2\n"
+            "   hours, 5 days)"
+        )
+        output = _run_hook("mcp__plugin_biff_tty__who", response)
+        summary = _panel_summary(output)
+        assert summary == "1 online"
