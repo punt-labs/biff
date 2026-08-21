@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 
 from biff.models import Message, UserSession
-from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay, live_sessions
+from biff.relay import (
+    DEAD_REPORT_SECONDS,
+    PRESENCE_LIVENESS_SECONDS,
+    LocalRelay,
+    dead_sessions,
+    live_sessions,
+)
 
 
 @pytest.fixture
@@ -33,6 +39,47 @@ class TestLiveSessions:
 
     def test_empty(self) -> None:
         assert live_sessions([]) == []
+
+
+class TestDeadSessions:
+    """`dead_sessions` finds KV rows that outlived their process (DES-057)."""
+
+    def test_reports_row_past_dead_report_threshold(self) -> None:
+        now = datetime.now(UTC)
+        orphan = UserSession(
+            user="orphan",
+            tty="a",
+            last_active=now - timedelta(seconds=DEAD_REPORT_SECONDS + 60),
+        )
+        assert [s.user for s in dead_sessions([orphan])] == ["orphan"]
+
+    def test_live_row_is_not_reported(self) -> None:
+        now = datetime.now(UTC)
+        live = UserSession(user="live", tty="a", last_active=now)
+        assert dead_sessions([live]) == []
+
+    def test_flapping_row_within_tolerance_is_not_reported(self) -> None:
+        """A row past PRESENCE_LIVENESS_SECONDS but within
+        DEAD_REPORT_SECONDS (a single missed heartbeat: laptop sleep, GC
+        pause) is hidden from the main table but must not yet be reported
+        as dead -- it self-heals on the next tick."""
+        now = datetime.now(UTC)
+        flapping = UserSession(
+            user="flapping",
+            tty="a",
+            last_active=now - timedelta(seconds=PRESENCE_LIVENESS_SECONDS + 30),
+        )
+        assert dead_sessions([flapping]) == []
+
+    def test_cleanly_removed_row_is_not_reported(self) -> None:
+        """A session that shut down cleanly deletes its own KV row, so it
+        never reaches dead_sessions -- there is nothing to filter out of an
+        empty sequence, which is exactly the point: the caller's sessions
+        list (sourced from the KV) simply never contains it."""
+        assert dead_sessions([]) == []
+
+    def test_empty(self) -> None:
+        assert dead_sessions([]) == []
 
 
 # -- Deliver --

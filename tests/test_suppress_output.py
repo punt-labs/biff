@@ -127,3 +127,42 @@ class TestReadMessagesCount:
         output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
         summary = _panel_summary(output)
         assert summary == "3 new"
+
+
+class TestWhoCount:
+    """who row counting excludes the dead-session footnote (DES-057)."""
+
+    def test_dead_footnote_not_counted_as_online(self) -> None:
+        """The footnote shares ROW_PREFIX with live rows but is not a session."""
+        response = (
+            "▶  NAME  IDLE\n"
+            "   kai:tty01  0:03\n"
+            "   1 session stopped responding (last seen 3 hours)"
+        )
+        output = _run_hook("mcp__plugin_biff_tty__who", response)
+        summary = _panel_summary(output)
+        assert summary == "1 online"
+
+    def test_all_dead_reports_zero_online(self) -> None:
+        """When only orphans remain, the online count must not inflate to 1+."""
+        response = "No sessions.\n   2 sessions stopped responding (last seen 3 hours)"
+        output = _run_hook("mcp__plugin_biff_tty__who", response)
+        summary = _panel_summary(output)
+        assert summary == "0 online"
+
+    def test_wrapped_footnote_continuation_not_counted(self) -> None:
+        """A footnote long enough to wrap must not inflate the count either.
+
+        Continuation lines share ROW_PREFIX but never contain "stopped
+        responding" themselves -- a line-by-line filter on that phrase alone
+        would miss them (Cursor Bugbot, Medium).
+        """
+        response = (
+            "▶  NAME  IDLE\n"
+            "   kai:tty01  0:03\n"
+            "   3 sessions stopped responding (last seen 3 hours, 1 day 2\n"
+            "   hours, 5 days)"
+        )
+        output = _run_hook("mcp__plugin_biff_tty__who", response)
+        summary = _panel_summary(output)
+        assert summary == "1 online"

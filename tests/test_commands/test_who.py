@@ -121,7 +121,9 @@ class TestWho:
     async def test_all_dead_returns_no_sessions(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
-        """When every session is stale, who reports no sessions."""
+        """When every session is stale, the main table reports no sessions,
+        but a session dead long enough is still name-free in the footnote
+        (DES-057) -- the exact orphan case that motivated this bead."""
         from datetime import UTC, datetime, timedelta
 
         now = datetime.now(UTC)
@@ -134,5 +136,8 @@ class TestWho:
             )
         )
         result = await who(ctx)
-        assert result.text == "No sessions."
+        assert result.text == (
+            "No sessions.\n   1 session stopped responding (last seen 12h)"
+        )
+        assert "ghost" not in result.text
         assert result.json_data == []

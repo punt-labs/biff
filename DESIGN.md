@@ -6495,3 +6495,123 @@ external link into `DESIGN.md`.
   punt-kit learns the `plugin/` location, biff's release cannot bump the
   plugin version or read its committed name — this is tracked as a
   cross-repo prerequisite, not a biff-local fix.
+
+---
+
+## DES-057: `/who` Footnotes Sessions That Died Without Deregistering
+
+**Date:** 2026-08-14
+**Status:** Settled
+**Beads:** biff-b3e
+**Related:** biff-mue (`live_sessions()`, the filter this decision
+deliberately leaves untouched), DES-056 (closed the *live-but-idle*
+half of biff-b3e's premise; this closes the *dead* half)
+
+### Problem
+
+`live_sessions()` (biff-mue) hides any KV row whose heartbeat is older
+than `PRESENCE_LIVENESS_SECONDS` (120s) from `/who` and `/finger`. That
+is the correct behavior for the main table — a dead session should not
+render as present. But it is also the *only* filter: a row that fails
+liveness simply disappears from every surface, with no distinction
+between "shut down cleanly a minute ago" and "has been dead for five
+weeks."
+
+The cost was not hypothetical. The same investigation that produced
+DES-056 found a `biff mcp` process orphaned since Jul 17 — five weeks —
+plus a Claude session and its server orphaned from the previous day.
+Nothing on `/who`, `/finger`, or anywhere else showed either, because
+hiding is exactly what `live_sessions()` does, by design, for every row
+past the window.
+
+DES-056 closed half of biff-b3e's original premise: a *live but idle*
+session now reports its own true idle time instead of a heartbeat-reset
+`0m`, so an operator reading `/who` no longer mistakes "alive and idle"
+for "just started." What DES-056 left open is the other half — the
+*dead* case is still hidden outright, which is what let the five-week
+orphan sit unnoticed in the first place.
+
+### Decision
+
+**A KV row that fails liveness but is still present is, by
+construction, the orphan signature.** A session that shuts down cleanly
+deletes its own KV row and writes a wtmp logout event
+(`server/app.py`'s exit path). A row `get_sessions_for_repos` still
+returns that nonetheless fails `is_live()` is therefore a session that
+died without deregistering — killed, wedged, or a host that vanished.
+`relay.dead_sessions()` computes exactly that set, and `/who` (both the
+MCP tool and the CLI command) appends a trailing footnote reporting it:
+
+```text
+▶  NAME       K  REPO  IDLE  S  P  HOST
+   kai:tty1      biff  3m    +  +  laptop
+   2 sessions stopped responding (last seen 6m, 35d)
+```
+
+**The footnote never names a session.** Unlike `WHO_SPECS`'s `NAME`/
+`HOST` columns, there is no fixed table column here for an unbounded
+`user`/`tty_name`/`hostname` to widen — the footnote is a single
+formatted sentence built from a count and a list of durations, both
+computed server-side from timestamps, not copied from the wire. There
+is therefore nothing on this render path that needs `sanitized_address`
+or `clip_to_width`; `format_dead_footnote` still routes its text through
+`wrap_cells` at `TABLE_WIDTH` like every other multi-line render site,
+because the duration list itself has no upper bound on how many dead
+sessions it can enumerate.
+
+**A wider threshold than `PRESENCE_LIVENESS_SECONDS`, to avoid
+flapping.** A session that misses exactly one heartbeat tick — a
+laptop going to sleep mid-tick, a GC pause, a scheduler hiccup — already
+drops out of `live_sessions()` for that one poll and self-heals on the
+next tick once the heartbeat resumes. Reporting that same row as "dead"
+in the footnote at the same threshold would flap it into the footnote
+and back out one poll later: a false alarm for a session that was never
+actually orphaned. `DEAD_REPORT_SECONDS` is set to
+`3 * PRESENCE_LIVENESS_SECONDS` (360s) — wide enough to absorb several
+consecutive missed ticks before a row is called dead, while still
+surfacing a genuine orphan within minutes rather than the 3-day storage
+TTL. The two thresholds are deliberately independent constants in
+`relay.py`, not one multiplied at each call site, so the tolerance
+policy is visible and changeable in one place.
+
+**`PRESENCE_LIVENESS_SECONDS` itself is left at 120s — recommendation,
+not a change.** The bead separately asked whether the 120s window (a
+tight 2x margin over the 60s heartbeat interval) should widen, on the
+same flapping concern: a single missed heartbeat can briefly hide a
+still-alive session from the main table before the next tick heals it.
+That tradeoff is real, but widening `PRESENCE_LIVENESS_SECONDS` changes
+who is shown as *present* on every surface that reads it (`/who`'s main
+table, `/finger`, `_close_orphaned_logins`'s wtmp reconciliation at
+startup) — a strictly larger blast radius than this footnote, which is
+purely additive. Recommendation: widen to 180s (3x the heartbeat
+interval) if the flapping is observed in practice to be a real operator
+annoyance rather than a theoretical one; until then, 120s stays as
+biff-mue set it. This decision does not make that change — a widening
+of `PRESENCE_LIVENESS_SECONDS` should be its own decision, logged
+separately, because unlike the footnote it is not reversible-by-adding
+and needs its own evidence.
+
+### Rejected: naming the dead sessions in the footnote
+
+The bead's own phrasing ("N stale sessions hidden") and a distinct
+"stale" row status were both on the table. Naming sessions would have
+required routing `user`/`tty_name` through `sanitized_address` the same
+way `WHO_SPECS` does, reopening the exact fixed-column-widening and
+label-injection surface `sanitized_address`/`clip_to_width` exist to
+close (biff-lbj) — for a summary line whose whole value is being small
+and skimmable. A count-plus-durations sentence carries the operationally
+useful signal (something died; roughly how long ago) without growing
+that surface, and keeps the change to the smallest addition that
+restores the lost signal, per this repo's standing note that the
+display pipeline is fragile and represents 12-16 hours of prior
+iteration.
+
+### Full detail
+
+See `relay.py`'s `DEAD_REPORT_SECONDS` and `dead_sessions()`;
+`formatting.py`'s `format_dead_footnote`; `server/tools/who.py` and
+`commands/who.py`'s composition of table + footnote; and their tests in
+`tests/test_relay.py::TestDeadSessions`,
+`tests/test_formatting.py::TestFormatDeadFootnote`,
+`tests/test_server/test_tools.py::TestWhoTool::test_hides_dead_sessions`,
+and `tests/test_commands/test_who.py::TestWho::test_all_dead_returns_no_sessions`.

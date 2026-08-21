@@ -379,7 +379,9 @@ class TestWhoTool:
         assert "1m" in result
 
     async def test_hides_dead_sessions(self, state: ServerState) -> None:
-        """Sessions past the liveness window are dropped from /who (biff-mue)."""
+        """Sessions past the liveness window are dropped from the main table
+        (biff-mue) but still surfaced, unnamed, in the dead-session footnote
+        (DES-057) once they exceed the wider DEAD_REPORT_SECONDS threshold."""
         old_time = datetime.now(UTC) - timedelta(days=2)
         recent_time = datetime.now(UTC) - timedelta(seconds=30)
         await state.relay.update_session(
@@ -394,7 +396,7 @@ class TestWhoTool:
         result = await fn()
         assert "recent" in result
         assert "old" not in result
-        assert "2d" not in result
+        assert "stopped responding (last seen 2d)" in result
 
     async def test_sorted_by_idle_time(self, state: ServerState) -> None:
         now = datetime.now(UTC)
