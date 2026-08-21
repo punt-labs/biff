@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`restore-dev-plugin.sh` committed internally, breaking punt-kit's release Phase 9.** Phase 9 re-stamps `plugin.json`'s version onto the files this script restores and commits the combined result itself — its documented contract is that the script stages but does not commit. This script always committed anyway, so by the time Phase 9 tried to commit there was nothing left staged and it failed with "nothing to commit," as happened on the v1.14.1 release (completed manually via PR #369). The script now stops after staging.
+
 ## [1.14.1] - 2026-08-21
 
 ### Fixed

@@ -6490,11 +6490,12 @@ external link into `DESIGN.md`.
 - Repo-relative references to the surface had to move with it:
   `tests/test_hooks_registration.py`, `tests/test_suppress_output.py`,
   `scripts/release-plugin.sh`, and `scripts/restore-dev-plugin.sh`.
-- `punt release` and `punt audit` resolve `plugin.json` at
-  `<root>/.claude-plugin/plugin.json` in punt-kit's own code. Until
-  punt-kit learns the `plugin/` location, biff's release cannot bump the
-  plugin version or read its committed name — this is tracked as a
-  cross-repo prerequisite, not a biff-local fix.
+- `punt release` and `punt audit` resolve `plugin.json` via
+  `PLUGIN_MANIFEST_CANDIDATES` in punt-kit's `detect.py`, which includes
+  `plugin/.claude-plugin/plugin.json` as of punt-kit v0.15.0 — a locally
+  stale punt-kit install (pre-v0.15.0) will misdetect this repo as
+  `project_type="package"` and silently skip plugin.json version bumps
+  and marketplace propagation; `uv tool upgrade punt-kit` fixes it.
 
 ---
 

@@ -8,6 +8,16 @@ set -euo pipefail
 #
 # If no argument is given, auto-detects the last "prepare plugin for release"
 # commit and restores from its parent.
+#
+# CONTRACT: this script stages the restored files but does NOT commit them.
+# punt-kit's release Phase 9 re-stamps plugin.json's version (the restored
+# dev commit's version field is stale) onto the same staged changes and
+# commits the combined result itself. Committing here would leave nothing
+# staged for punt-kit's commit, which then fails with "nothing to commit".
+# The caller owns the commit's properties too: Phase 9's commit message
+# already carries "[skip ci]" so the restore doesn't trigger a push-CI run,
+# and deliberately omits --no-verify (org policy bans it) so local hooks
+# still run against the restored files.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_JSON="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
@@ -61,13 +71,11 @@ git -C "$REPO_ROOT" add "$PLUGIN_JSON"
 # The name-only edit above (unlike the old whole-file checkout) can be a
 # genuine no-op -- e.g. re-running this script when the name is already
 # -dev-suffixed and there were no dev commands to restore. Check explicitly
-# rather than letting `git commit` fail on nothing staged: that failure is
-# not silent (set -e still catches it), but its generic message gives no
-# hint that an idempotent no-op is a normal outcome here, not a broken
-# pipeline (review finding).
+# and report it, since the caller (punt-kit Phase 9) commits separately and
+# would otherwise see an empty diff with no explanation.
 if git -C "$REPO_ROOT" diff --cached --quiet; then
-  echo "Nothing to restore — plugin.json is already dev state and no dev commands were removed. Skipping commit."
+  echo "Nothing to restore — plugin.json is already dev state and no dev commands were removed."
   exit 0
 fi
 
-git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state [skip ci]"
+echo "Staged dev plugin state restore (not committed — see CONTRACT above)."
