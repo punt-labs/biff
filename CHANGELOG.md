@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-08-21
+
 ### Fixed
 
 - **Tier-3b NATS integration tests (`pytest -m nats`) no longer hang indefinitely on session teardown.** Every step of session shutdown (`_append_logout_event`, `_append_companion_logout_event`, `_release_relay`) made a NATS/JetStream round-trip with no ceiling of its own; nats-py reconnects indefinitely on a lost connection by design, so a best-effort teardown call issued while nats-py is mid-reconnect could block far past any nominal per-request timeout. Each of these calls is now wrapped in `asyncio.wait_for` with a bounded ceiling, so a wedged connection during shutdown costs a few seconds per step instead of hanging the whole test session.
