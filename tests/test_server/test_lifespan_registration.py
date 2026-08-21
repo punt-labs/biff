@@ -590,7 +590,7 @@ class TestOrgReposRefresh:
     ) -> None:
         """A second call inside the throttle window makes no relay call.
 
-        biff-cf9: this non-critical, stale-tolerant call was running on
+        This non-critical, stale-tolerant call was running on
         every 60s heartbeat tick and accounted for 70% of captured relay
         timeouts, tripping the shared connection's wedge-detection
         reconnect on behalf of unrelated user-facing calls. Throttling it

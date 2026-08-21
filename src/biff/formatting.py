@@ -778,8 +778,7 @@ def _render_message_rows(messages: list[Message]) -> tuple[int, str, str]:
 
     Shared by :func:`format_read` and :func:`format_read_dual` so the count
     is always derived from the exact list it's rendered beside — never
-    computed twice and never able to disagree between the two call sites
-    (biff-9cz).
+    computed twice and never able to disagree between the two call sites.
     """
     rows: list[list[str]] = []
     for m in messages:
@@ -814,7 +813,7 @@ def format_read_dual(
 
     Each section header carries its own count, derived from that
     section's own message list — same synchronization guarantee as
-    :func:`format_read` (biff-9cz).
+    :func:`format_read`.
     """
     sections: list[str] = []
     for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
@@ -844,7 +843,7 @@ def format_read(messages: list[Message]) -> str:
     live fetch; a caller reading that marker and this return value as
     two counts of the same fetch will see them disagree. This return
     value is the only count guaranteed synchronized with what it is
-    printed next to (biff-9cz).
+    printed next to.
     """
     count, noun, indented_table = _render_message_rows(messages)
     return f"{HEADER_PREFIX}{count} new {noun}\n{indented_table}"

@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 # ``_refresh_org_repos``'s own docstring) but was running every 60s heartbeat
 # tick on the same shared connection as user-facing calls like
 # ``read_messages``, accounting for 70% of captured runtime timeouts and
-# tripping the wedge-detection reconnect threshold on their behalf
-# (biff-cf9). Throttling this call to a slower cadence shrinks its share of
+# tripping the wedge-detection reconnect threshold on their behalf.
+# Throttling this call to a slower cadence shrinks its share of
 # that shared budget without touching the wedge-detection machinery itself.
 _ORG_REPOS_REFRESH_INTERVAL = 600.0  # seconds
 
@@ -58,7 +58,7 @@ _ORG_REPOS_REFRESH_INTERVAL = 600.0  # seconds
 # so a request issued while nats-py is mid-reconnect can ride that policy
 # and block far past its nominal request timeout.  Shutdown code has
 # already decided the session is ending regardless of server
-# acknowledgment (biff-7xd) — every step below already treats failure as
+# acknowledgment — every step below already treats failure as
 # "log and move on," so bounding each step to a few seconds turns a
 # wedged connection into a slow-but-finite teardown instead of the tier
 # hanging indefinitely.
@@ -249,7 +249,7 @@ def _remove_sentinel(repo_name: str, session_key: str) -> None:
     """Remove a sentinel once its session has genuinely been cleaned up.
 
     Pairs with :func:`_write_sentinel` — a sentinel written defensively
-    before a best-effort teardown attempt (biff-7xd) must be cleared once
+    before a best-effort teardown attempt must be cleared once
     that attempt actually succeeds, or every future reaper tick would
     redundantly re-process an already-deleted session.
     """
@@ -464,7 +464,7 @@ async def _refresh_org_repos(state: ServerState) -> None:
     are logged at DEBUG and swallowed. Throttled to
     ``_ORG_REPOS_REFRESH_INTERVAL`` (independent of the heartbeat tick
     interval) so this call stops dominating the shared connection's
-    timeout budget (biff-cf9) — the throttle timestamp is recorded before
+    timeout budget — the throttle timestamp is recorded before
     the attempt, on both success and failure, so a failing relay cannot
     turn this into a hot retry loop every tick.
     """
@@ -939,7 +939,7 @@ async def _release_session(
     """Release one session's TTY reservation and KV row.
 
     Removes the reap-fallback sentinel written by :func:`_lifespan_cleanup`
-    before teardown started (biff-7xd) only once ``delete_session`` actually
+    before teardown started, only once ``delete_session`` actually
     succeeds.  A call that times out or raises leaves the sentinel in place,
     so a reaper — this server's own periodic :func:`_reap_loop`, another
     running server's, or the next startup's :func:`_reap_sentinels` —
@@ -999,8 +999,8 @@ async def _release_relay(state: ServerState) -> None:
 def _write_reap_fallback_sentinels(state: ServerState) -> None:
     """Write reap-fallback sentinels before the best-effort NATS teardown.
 
-    Every step of that teardown is now bounded (``_TEARDOWN_STEP_TIMEOUT``,
-    biff-7xd) and can abort partway through a wedged connection.  Before
+    Every step of that teardown is now bounded (``_TEARDOWN_STEP_TIMEOUT``)
+    and can abort partway through a wedged connection.  Before
     this, only the signal-triggered shutdown path
     (``_active_lifespan._signal_handler``) wrote a sentinel first — normal
     shutdown had no equivalent, so a timed-out ``delete_session`` here
@@ -1048,7 +1048,7 @@ async def _lifespan_cleanup(
     tasks, and the fallback sentinel is written immediately after: writing
     it any earlier races the still-ticking ``_reap_loop``, which treats any
     sentinel matching this session's own key as a prior incarnation and
-    discards it unreaped (biff-7ak) -- consuming the fallback before a
+    discards it unreaped -- consuming the fallback before a
     later timed-out ``_release_relay`` ever needs it (Cursor Bugbot, High).
     ``reaper.cancel()`` interrupts an in-flight NATS call immediately
     rather than waiting on it, so this step is bounded regardless of what

@@ -686,7 +686,7 @@ class TestSendMessageTool:
     async def test_delivery_awaited_not_fire_and_forget(
         self, state: ServerState
     ) -> None:
-        """biff-0px: the message is in the recipient's inbox before write() returns.
+        """The message is in the recipient's inbox before write() returns.
 
         The prior fire-and-forget design could return "Message sent" before
         the background delivery task had even run — a caller inspecting the
@@ -704,7 +704,7 @@ class TestSendMessageTool:
     ) -> None:
         """A single transient failure is recovered by the retry-once.
 
-        Mirrors the observed recovery pattern (biff-brn): every
+        Mirrors the observed recovery pattern: every
         session-reported transport-error occurrence cleared on the very
         next attempt.
         """
@@ -730,7 +730,7 @@ class TestSendMessageTool:
     async def test_reports_failure_distinctly_after_two_failures(
         self, state: ServerState
     ) -> None:
-        """biff-0px/biff-brn: a persistent failure must not read as success.
+        """A persistent failure must not read as success.
 
         The prior fire-and-forget design would have returned "Message
         sent" here regardless — the failure reached only a background log
@@ -794,7 +794,7 @@ class TestCheckMessagesTool:
     async def test_recovers_on_retry_after_one_failure(
         self, state: ServerState
     ) -> None:
-        """biff-brn: a single transient fetch failure is recovered by the
+        """A single transient fetch failure is recovered by the
         code-level retry-once, matching the observed recovery pattern —
         every session-reported occurrence cleared on the very next attempt.
         """
@@ -821,7 +821,7 @@ class TestCheckMessagesTool:
     async def test_reports_failure_distinctly_after_two_failures(
         self, state: ServerState
     ) -> None:
-        """biff-brn: a persistent transport failure must not render as, or
+        """A persistent transport failure must not render as, or
         be silently treated as, a confirmed-empty inbox. The tool itself
         (not just the /biff:read prompt) must return a distinguishable
         result rather than raising, so a caller cannot swallow an

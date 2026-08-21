@@ -38,7 +38,7 @@ class TestDeliver:
     async def test_redelivering_same_message_id_is_deduplicated(
         self, relay: NatsRelay
     ) -> None:
-        """biff-0px review finding: a retry that reuses the same Message
+        """Review finding: a retry that reuses the same Message
         (same id) must not create a second copy if the original publish
         actually landed and only its ack was lost. deliver() sets
         Nats-Msg-Id to message.id, so JetStream's own dedup window catches

@@ -198,8 +198,7 @@ class _ConnectionHealth:
         # wedge detection) these never reset. A silent client-side retry
         # makes a timeout unobservable to a caller; these are the
         # server-side record that lets an operator measure the real rate
-        # instead of relying on which timeouts happened to be noticed
-        # (biff-brn).
+        # instead of relying on which timeouts happened to be noticed.
         self._total_attempts = 0
         self._total_timeouts = 0
 
@@ -428,7 +427,7 @@ class _ConnectionHealth:
         Unlike :meth:`record_timeout`, this is unconditional — a timeout on
         a superseded client (owner mismatch in ``_tracked``) still re-raises
         to the caller as a real timeout, and must still count toward the
-        measurable rate (biff-brn), even though it isn't this connection's
+        measurable rate, even though it isn't this connection's
         wedge episode to attribute for gating purposes.
         """
         self._total_timeouts += 1
@@ -587,8 +586,7 @@ class NatsRelay:
             result = await awaitable
         except TimeoutError:
             # Unconditional: a real timeout counts toward the measurable
-            # rate (biff-brn) regardless of which client owns the wedge
-            # episode below.
+            # rate regardless of which client owns the wedge episode below.
             self._health.record_timeout_attempt()
             if self._nc is owner:
                 is_connected = owner is not None and owner.is_connected
@@ -961,12 +959,12 @@ class NatsRelay:
 
     @property
     def total_attempts(self) -> int:
-        """Cumulative tracked-request attempts since server start (biff-brn)."""
+        """Cumulative tracked-request attempts since server start."""
         return self._health.total_attempts
 
     @property
     def total_timeouts(self) -> int:
-        """Cumulative tracked-request timeouts since server start (biff-brn)."""
+        """Cumulative tracked-request timeouts since server start."""
         return self._health.total_timeouts
 
     @property
@@ -1222,7 +1220,7 @@ class NatsRelay:
 
         Publishes with ``Nats-Msg-Id`` set to ``message.id``, so JetStream's
         server-side deduplication catches a redelivery of the SAME message
-        (a caller retrying after an ack timeout, per biff-0px) within the
+        (a caller retrying after an ack timeout) within the
         stream's duplicate window — a publish that actually landed on the
         server but whose ack was lost does not create a second copy.  This
         only dedupes when the caller reuses the same ``Message`` instance

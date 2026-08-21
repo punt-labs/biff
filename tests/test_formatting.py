@@ -772,7 +772,7 @@ class TestFormatRead:
         assert "hey there" in result
 
     def test_leading_count_matches_message_count(self) -> None:
-        # biff-9cz: the count reported to the caller must come from the
+        # The count reported to the caller must come from the
         # same list the table renders, not a separately polled summary
         # that can be stale relative to this fetch.
         messages = [

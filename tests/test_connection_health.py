@@ -155,7 +155,7 @@ class TestWedgeOnsetRecovery:
         assert health.consecutive_timeouts == 0
 
     def test_cumulative_counters_never_reset(self) -> None:
-        # biff-brn: a silent client-side retry makes a timeout unobservable
+        # A silent client-side retry makes a timeout unobservable
         # to a caller. These counters exist so an operator can still measure
         # the real rate, so unlike consecutive_timeouts they must survive a
         # success (wedge clear) and a reconnect (record_connected).
@@ -173,7 +173,7 @@ class TestWedgeOnsetRecovery:
         assert health.consecutive_timeouts == 0
 
     def test_total_timeouts_counts_even_on_superseded_client(self) -> None:
-        # biff-brn review finding: record_timeout() is only reached when
+        # Review finding: record_timeout() is only reached when
         # _tracked's owner check passes (this connection's own wedge
         # episode). A timeout on a client _tracked has already superseded
         # still re-raises to the caller as a real timeout, so
