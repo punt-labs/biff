@@ -213,7 +213,7 @@ class TestLifespanCleanupSentinelOrdering:
 
     Writing it before the reaper stops races ``_reap_sentinels``, which
     treats any sentinel matching this session's own key as a prior
-    incarnation and discards it unreaped (biff-7ak) -- consuming the
+    incarnation and discards it unreaped -- consuming the
     fallback before a later timed-out ``_release_relay`` ever needs it
     (Cursor Bugbot, High). Writing it only after the logout/task-shutdown
     awaits reopens the same failure from the other side: those awaits sit

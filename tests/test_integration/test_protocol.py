@@ -47,7 +47,7 @@ def _text(result: CallToolResult) -> str:
 
 
 class TestSessionCapture:
-    """Verify CaptureSession: session captured during initialize (biff-8g0 fix)."""
+    """Verify CaptureSession: session captured during initialize."""
 
     async def test_session_captured_on_initialize(
         self,
@@ -70,7 +70,7 @@ class TestSessionCapture:
         self,
         tracked_client: tuple[Client[Any], NotificationTracker],
     ) -> None:
-        """Suspenders notification works before any tool call (biff-8g0 fix).
+        """Suspenders notification works before any tool call.
 
         Calls notify_tool_list_changed() outside tool context.  Before the
         fix, this was a no-op (session None).  After the fix, the stored

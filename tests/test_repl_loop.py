@@ -647,7 +647,7 @@ class TestMultiCommandSequence:
 
 
 # -----------------------------------------------------------------------
-# Timestamps toggle (biff-4uq)
+# Timestamps toggle
 # -----------------------------------------------------------------------
 
 
@@ -716,7 +716,7 @@ class TestTimestampsCommand:
         `timestamps on`, the SAME display object makes the renderer prefix
         incoming messages with ``[HH:MM]``.  This connects the command path
         (`_repl_loop`) to the render path (`_format_talk_lines`) on one
-        display, showing the user-observable behavior change (biff-4uq).
+        display, showing the user-observable behavior change.
         """
         from biff.__main__ import _format_talk_lines
         from biff.talk_types import TalkNotification
@@ -761,7 +761,7 @@ class TestTimestampsCommand:
 
 
 # -----------------------------------------------------------------------
-# Prompt/output ordering (biff-1xt5)
+# Prompt/output ordering
 # -----------------------------------------------------------------------
 
 
@@ -773,7 +773,7 @@ class TestPromptOutputOrdering:
     command output printed by ``_repl_loop`` is not flushed first, the
     prompt overtakes the still-buffered output and collides with its first
     line.  Every gate release routes through ``_release_prompt`` which flushes
-    first; this guards the whole bug class.  See biff-1xt5 and docs/repl.tex
+    first; this guards the whole bug class.  See docs/repl.tex
     prompt-gate synchronization.
     """
 

@@ -67,7 +67,7 @@ class TestFormatTalkMessages:
         assert format_talk_messages([]) == ""
 
     def test_cjk_body_wraps_within_the_table_width(self) -> None:
-        """A CJK-heavy backlog message must wrap, not overflow (biff-2sw)."""
+        """A CJK-heavy backlog message must wrap, not overflow."""
         from biff._formatting import TABLE_WIDTH, visible_width
 
         msg = Message(
@@ -107,7 +107,7 @@ class TestFormatAgentDrain:
         assert "75abc665" not in rendered
 
     def test_escapes_neutralized(self) -> None:
-        """Remote body/sender can't inject terminal escapes (biff-lbj)."""
+        """Remote body/sender can't inject terminal escapes."""
         msg = Message(
             from_user="ev\x1b[2Kil",
             to_user="kai",
@@ -124,10 +124,10 @@ class TestFormatAgentDrain:
         fallback line.
 
         Both fields are attacker-controlled (DES-046): a tty that is empty only
-        after neutralisation must not leave a dangling ``user:`` label
-        (biff-7g7).  A body that neutralises to empty still arrived — it must
+        after neutralisation must not leave a dangling ``user:`` label.
+        A body that neutralises to empty still arrived — it must
         produce a line, not silence, matching the recipient-visible fallback
-        used everywhere else (biff-2sw round 6).
+        used everywhere else.
         """
         ctrl_tty = TalkNotification.from_payload(
             {
@@ -164,7 +164,7 @@ class TestFormatAgentDrain:
 
         Spaces survive terminal_safe (they are printable) — nothing was
         stripped, so the fallback wording must say so, not claim the body had
-        "no printable text" — both surfaces agree (biff-2sw round 6).
+        "no printable text" — both surfaces agree.
         """
         blank = TalkNotification.from_payload(
             {
@@ -194,7 +194,7 @@ class TestFormatAgentDrain:
         assert rendered == expected
 
     def test_invite_uses_shared_arrow_not_phone(self) -> None:
-        """The agent drain shares the ``▶`` idiom — no ``📞`` prefix (biff-7g7)."""
+        """The agent drain shares the ``▶`` idiom — no ``📞`` prefix."""
         invite = PendingInvite(
             user="jfreeman",
             session_key="jfreeman:75abc665",
@@ -467,7 +467,7 @@ class TestTalkEndResilience:
 class TestDoTalk:
     """commands.talk.talk: the invite hint is a runnable address; accept names tty.
 
-    Addresses render without an ``@`` sigil (biff-5gb); the invite body carries a
+    Addresses render without an ``@`` sigil; the invite body carries a
     bare ``talk user:tty`` hint.  Uses a mock NatsRelay so publish-failure paths
     can be injected; the state object structurally satisfies ``TalkContext``.
     """
@@ -518,7 +518,7 @@ class TestDoTalk:
     async def test_invite_hint_reflects_renamed_tty(self) -> None:
         """After a rename syncs state.talk, the invite hint carries the NEW tty.
 
-        The MCP ``tty`` rename tool syncs ``state.talk.set_tty_name`` (biff-uin);
+        The MCP ``tty`` rename tool syncs ``state.talk.set_tty_name``;
         the invite reply hint reads ``state.talk.my_tty_name``, so a subsequent
         invite must advertise the renamed address — never the stale one whose
         reservation DES-035 has released.

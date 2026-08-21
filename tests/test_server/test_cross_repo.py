@@ -21,7 +21,7 @@ from biff.server.tools._session import get_or_create_session
 
 
 class TestDisplayRepoName:
-    """display_repo_name converts sanitized names back to owner/repo (biff-7e03)."""
+    """display_repo_name converts sanitized names back to owner/repo."""
 
     def test_owner_repo(self) -> None:
         assert display_repo_name("punt-labs__biff") == "punt-labs/biff"
@@ -37,7 +37,7 @@ class TestDisplayRepoName:
 
 
 class TestWhoDisplaysSlash:
-    """format_who shows owner/repo, not owner__repo (biff-7e03)."""
+    """format_who shows owner/repo, not owner__repo."""
 
     def test_who_shows_slash_repo(self) -> None:
         sessions = [
@@ -311,7 +311,7 @@ class TestTalkNotifySubjectIdentityKeyed:
 
     talk.tex ``subjectOf k = k``: the globally-unique ``user:tty`` identity
     is the whole subject, so a reply reaches the addressed identity whatever
-    repository or organization either party runs in (biff-e9u).  Visibility
+    repository or organization either party runs in.  Visibility
     is the only gate, enforced at resolution, not on the subject.
     """
 

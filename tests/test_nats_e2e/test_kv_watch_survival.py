@@ -1,4 +1,4 @@
-"""E2E test: KV watcher survives snapshot-done and receives live updates (biff-udp).
+"""E2E test: KV watcher survives snapshot-done and receives live updates.
 
 Exercises ``_run_kv_watch`` against a real local NATS server to prove that
 post-snapshot KV writes are delivered without restarting the watcher.

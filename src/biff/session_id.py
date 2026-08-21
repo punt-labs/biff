@@ -1,7 +1,7 @@
 """Claude session-id routing identity — the durable, non-recycled anchor.
 
 Biff routes on the Claude Code ``session_id``, which is stable across
-``claude --resume``/``--continue`` and fresh on ``--fork-session`` (biff-7ak).
+``claude --resume``/``--continue`` and fresh on ``--fork-session``.
 The MCP server never observes ``session_id`` directly (DES-011): only the
 SessionStart hook sees it, on stdin.  This module is the bridge.
 
@@ -145,7 +145,7 @@ class SessionHint:
         routing-token charset ``[0-9a-fA-F-]``, so a ``{session_id}:{role}``
         composite — whose ``:`` would collide with the session-key
         separator — is never used.  The companion (human) session derives
-        its id this way so it is not volatile (biff-7ak amendment 3).
+        its id this way so it is not volatile.
         """
         digest = blake2b(
             f"{session_id}:{role}".encode(), digest_size=_DERIVE_DIGEST_BYTES
@@ -266,8 +266,8 @@ def _process_start_time(pid: int) -> float:
 
     Uses ``psutil.Process.create_time()`` — uniform across Linux, macOS, and
     Windows Unix-emulation (WSL/Cygwin/Git-Bash) — so no per-OS ``/proc`` vs
-    ``ps`` parsing is needed (biff-7ak amendment 4a).  ``0.0`` (a value no
-    real process reports) means "unknown", which fails the recycle guard.
+    ``ps`` parsing is needed.  ``0.0`` (a value no real process reports)
+    means "unknown", which fails the recycle guard.
     """
     try:
         return psutil.Process(pid).create_time()

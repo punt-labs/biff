@@ -19,10 +19,10 @@ def sync_plan_marker(message: str) -> None:
     marker, so a CLI-only session (every ethos-mission worker in this
     org) could run ``biff plan`` and see a success message while the
     ``PreToolUse`` gate kept denying edits: the marker it reads was never
-    written (PL-PA-3, biff-ar1's occurrence 3).  Root and identity are
+    written.  Root and identity are
     resolved fresh on every call — never cached at process startup — so a
     long-running MCP server and a one-shot CLI invocation always resolve
-    the same key the hook itself resolves (design biff-ar1/om9 §3a/§3c).
+    the same key the hook itself resolves.
     """
     root = get_repo_common_root()
     identity = SessionHint.resolve_routing_id()

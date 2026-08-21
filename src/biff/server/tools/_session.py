@@ -33,8 +33,9 @@ async def get_or_create_session(state: ServerState) -> UserSession:
     where a tool runs before ``register_session`` has completed.  It
     backfills ``tty_name`` from the session-local stash (set by the
     lifespan after claim) so a created-on-tool-call row is never
-    written with an empty ``tty_name`` — guarding against the v1.8.0
-    biff-dzqc defect resurfacing from a different code path.
+    written with an empty ``tty_name`` — guarding against a v1.8.0
+    defect (the companion TTY name going unset) resurfacing from a
+    different code path.
     """
     session = await state.relay.get_session(state.session_key)
     if session is None:
@@ -44,7 +45,7 @@ async def get_or_create_session(state: ServerState) -> UserSession:
         # ``get_tty_name()`` may not be set yet if lifespan startup was
         # interrupted; fall back to the hex-slice placeholder that
         # ``_format_who_name`` uses so display stays consistent and the
-        # v1.8.0 biff-dzqc invariant (no empty ``tty_name`` rows) holds.
+        # v1.8.0 invariant (no empty ``tty_name`` rows) holds.
         stashed = get_tty_name()
         if stashed:
             # tty_name was already reserved, so lifespan registration ran

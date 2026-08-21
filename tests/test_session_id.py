@@ -1,4 +1,4 @@
-"""Tests for Claude session-id routing identity (biff-7ak)."""
+"""Tests for Claude session-id routing identity."""
 
 from __future__ import annotations
 

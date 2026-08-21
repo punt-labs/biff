@@ -1,7 +1,7 @@
 """Status set tool — ``/plan "msg"``.
 
 Sets the current user's plan (what they're working on).
-Auto-expands bead IDs to include the issue title (biff-5zq).
+Auto-expands bead IDs to include the issue title.
 """
 
 from __future__ import annotations

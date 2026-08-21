@@ -415,7 +415,7 @@ class TestHandleSessionResume:
 
 
 class TestCaptureSessionHint:
-    """SessionStart persists the Claude session_id for the server (biff-7ak)."""
+    """SessionStart persists the Claude session_id for the server."""
 
     def test_writes_hint_from_payload(self, tmp_path: Path) -> None:
         import biff.session_id as sid_mod
@@ -1302,7 +1302,12 @@ class TestHandlePreToolUse:
         assert result is None
 
     def test_gate_never_invokes_bd(self) -> None:
-        """The gate path must not shell out to ``bd`` (biff-84a)."""
+        """The gate must never shell out to ``bd`` to re-validate the marker.
+
+        The gate trusts the marker as ground truth; a hard-blocking gate
+        that re-validated via subprocess on every edit would hang tool
+        calls on ``bd``'s latency and availability.
+        """
         m_active, m_wt, m_plan = _gate_mocks(plan=False)
         with (
             m_active,
@@ -1411,7 +1416,7 @@ class TestPreToolUseFailsClosed:
         assert "bd" not in reason
 
 
-# ── Z spec invariant coverage (biff-g9b) ─────────────────────────────
+# ── Z spec invariant coverage ─────────────────────────────────────────
 
 
 class TestZSpecPlanConsistency:
@@ -1526,7 +1531,7 @@ class TestZSpecSessionEndCleanup:
         assert (active_dir / "kai-xyz99999").exists()
 
 
-# ── Lux consumer hooks (biff-og4p, biff-g75a) ─────────────────────────
+# ── Lux consumer hooks ─────────────────────────────────────────────────
 
 
 def _lux_mocks(*, beads: bool = True, lux: bool = True):
@@ -1538,7 +1543,7 @@ def _lux_mocks(*, beads: bool = True, lux: bool = True):
 
 
 class TestLuxBeadsBoardRefresh:
-    """biff-og4p: refresh lux beads board on bd state changes."""
+    """Refresh lux beads board on bd state changes."""
 
     def test_bd_create_with_lux_nudges_refresh(self) -> None:
         data: dict[str, object] = {
@@ -1637,7 +1642,7 @@ class TestLuxBeadsBoardRefresh:
 
 
 class TestLuxPrDashboard:
-    """biff-g75a: render PR dashboard in lux on PR creation."""
+    """Render PR dashboard in lux on PR creation."""
 
     def test_create_pr_with_lux_nudges_dashboard(self) -> None:
         data: dict[str, object] = {

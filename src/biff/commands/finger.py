@@ -18,7 +18,7 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
     addresses = user.split()
     # Availability check: only consider sessions that are actually live
     # (heartbeat within the liveness window), not dead ones lingering in
-    # the KV until the storage TTL (biff-mue).
+    # the KV until the storage TTL.
     all_sessions = live_sessions(
         await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     )

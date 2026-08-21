@@ -1,6 +1,6 @@
 """Latency comparison: KV watch vs NATS core subscription.
 
-Diagnostic test for biff-8g0 — talk push notifications not reaching
+Diagnostic test for talk push notifications not reaching
 MCP session from CLI client while wall push works.  Isolates whether
 the latency difference is in NATS delivery or the MCP callback chain.
 

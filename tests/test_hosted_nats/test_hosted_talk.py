@@ -1,8 +1,8 @@
-"""Hosted NATS: talk routes on identity alone, verified on the real relay (biff-e9u).
+"""Hosted NATS: talk routes on identity alone, verified on the real relay.
 
 The ``-m hosted`` suite exercises presence and messaging against a real hosted
 NATS server; this module extends it to *talk*, the one subsystem whose routing
-changed under biff-e9u and whose delivery-soundness invariant (talk.tex
+changed most recently and whose delivery-soundness invariant (talk.tex
 invariant 12, R1/R3) had never been checked against real infrastructure.
 
 Talk's NATS subject is the globally-unique ``user:tty`` identity and nothing
@@ -22,7 +22,8 @@ and reverting the routing to repo- or org-keying makes these tests go red.
 
 Four properties are proven end to end on the real relay:
 
-* Same org, different repos complete a full talk (the biff-e9u regression).
+* Same org, different repos complete a full talk (a former repo-keying
+  regression).
 * Different orgs, mutually visible, complete a full talk — org over-scoped
   exactly as repo did.
 * A withdraw frame (ntWithdraw) routes on identity too, cross-org.
@@ -74,8 +75,8 @@ _STREAM_PREFIX = "biff-dev"
 # deterministic within a run (computed once at import).
 _SALT = uuid4().hex[:8]
 
-# Same organization (org-alpha), two repositories — the pair biff-e9u mis-routed
-# under repo keying.  The org/repo lives only in each relay's configuration; it
+# Same organization (org-alpha), two repositories — repo-keyed routing used to
+# mis-route this pair.  The org/repo lives only in each relay's configuration; it
 # never enters the identity-only subject.
 _KAI_BIFF = f"htkai{_SALT}:htkaibiff{_SALT}"
 _ERIC_VOX = f"hteric{_SALT}:htericvox{_SALT}"
@@ -120,7 +121,7 @@ async def alpha_vox_relay(
 
     A different repository of the *same* org as :func:`alpha_biff_relay`, so a
     talk between the two crosses a repository boundary but not an org boundary —
-    the exact pair biff-e9u stranded under repo keying.
+    the exact pair repo-keyed routing used to strand.
     """
     relay = NatsRelay(
         url=hosted_nats_url,
@@ -317,7 +318,7 @@ class TestHostedIdentitySubject:
 
 
 class TestHostedSameOrgTalk:
-    """Same org, different repos complete a full talk — the biff-e9u guard.
+    """Same org, different repos complete a full talk — the repo-keying guard.
 
     kai runs in org-alpha's biff repo and eric in org-alpha's vox repo: a talk
     between them crosses a repository boundary within one org.  Because kai's

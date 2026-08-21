@@ -96,7 +96,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         retry (see the ``/biff:read`` and ``/biff:poll`` command prompts)
         would otherwise make relay timeouts unmeasurable to a caller — this
         line is the server-side record a caller or operator can check instead
-        of relying on which timeouts happened to be noticed (biff-brn).
+        of relying on which timeouts happened to be noticed.
         """
         interval = state.config.poll_interval
         if interval <= 0:

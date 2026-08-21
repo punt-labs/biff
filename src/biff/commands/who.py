@@ -13,7 +13,7 @@ async def who(ctx: CliContext) -> CommandResult:
 
     Sessions whose last heartbeat is older than the liveness window are
     dead (shut down, killed, or wedged) but may linger in the KV until the
-    longer storage TTL; they are hidden from the main table (biff-mue). A
+    longer storage TTL; they are hidden from the main table. A
     session dead long enough to rule out a single missed heartbeat is
     still surfaced, unnamed, in a trailing footnote (DES-057).
     """

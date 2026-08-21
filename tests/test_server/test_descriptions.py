@@ -418,7 +418,7 @@ class TestTalkDescriptionConnectedHint:
 
 
 class TestRefreshWallSenderBounds:
-    """A forged sender must not blow up the ``wall`` tool description (biff-2sw).
+    """A forged sender must not blow up the ``wall`` tool description.
 
     Neither ``WallPost.from_user`` nor ``WallPost.from_tty`` has a
     ``max_length`` on the wire. ``refresh_wall`` composed them into the
@@ -455,7 +455,7 @@ class TestRefreshWallSenderBounds:
     async def test_giant_sender_bounded_in_vox_announcement(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The vox announcement must clip ``from_user`` too (biff-2sw).
+        """The vox announcement must clip ``from_user`` too.
 
         A giant ``from_user`` bypassing ``sanitized_sender`` here would
         embed unboundedly in subprocess argv passed to ``vox unmute``,
@@ -676,8 +676,8 @@ class TestPollInbox:
         *during* a nap — advancing ``connection_generation`` with no ``_safe_tick``
         involved.  If the reconcile were gated behind the nap-skip, the always-on
         talk SUB would stay orphaned on the dead client until the nap ended, and
-        an unsolicited invite to the idle agent would be silently dropped
-        (biff-9la).  The reconcile must run on the cheap nap tick even though the
+        an unsolicited invite to the idle agent would be silently dropped.
+        The reconcile must run on the cheap nap tick even though the
         expensive relay poll is skipped.
         """
         events: list[tuple[str, int]] = []
@@ -823,7 +823,7 @@ def _fixed_generation(value: int) -> Callable[[ServerState], int]:
 
 
 class TestReconcileTalkSub:
-    """The generation-tracked re-subscribe: the biff-3hp x biff-9la fix.
+    """The generation-tracked re-subscribe: the wedge x orphaned-SUB fix.
 
     ``nats-relay.tex`` ``talkSubGen``: the always-on talk SUB must be
     re-established when the relay dials a new client (``_force_reconnect`` /
@@ -876,7 +876,7 @@ class TestReconcileTalkSub:
     ) -> None:
         """A new client (generation advanced) re-establishes the SUB.
 
-        This is the biff-9la failure the is-None probe misses: the orphaned
+        This is the failure the is-None probe misses: the orphaned
         handle is still non-None, so only the generation comparison fires.
         """
         stale = AsyncMock()

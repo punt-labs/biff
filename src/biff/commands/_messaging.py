@@ -38,10 +38,10 @@ async def deliver_with_retry(
     before delivery is even attempted leaves a publish failure — surfaced
     only as a background log line nobody reads — reporting a message as
     arrived when it never did, with no error on either end and no recovery
-    path (biff-0px). On a transport failure, retry once from the first
+    path. On a transport failure, retry once from the first
     undelivered chunk rather than restarting from the first chunk —
-    mirroring the recovery pattern observed for read_messages (biff-brn:
-    every session-reported occurrence cleared on the very next attempt).
+    mirroring the recovery pattern observed for read_messages (every
+    session-reported occurrence cleared on the very next attempt).
 
     Each chunk's ``Message`` (and therefore its ``id``) is built once, up
     front, and the SAME instance is reused if a retry is needed —

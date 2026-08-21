@@ -75,7 +75,7 @@ class TestParseAddress:
         ``lstrip('@')`` stripped *all* leading ``@`` — ``@@kai`` became a
         valid ``kai``.  ``removeprefix`` strips exactly one, so a malformed
         ``@@kai`` stays malformed (``@kai``) instead of being silently
-        normalized into a valid address (biff-5gb).
+        normalized into a valid address.
         """
         assert parse_address("@@kai") == ("@kai", None)
 
@@ -88,7 +88,7 @@ class TestParseAddress:
 
 
 class TestFormatAddress:
-    """Canonical address rendering is bare — no ``@`` sigil (biff-5gb)."""
+    """Canonical address rendering is bare — no ``@`` sigil."""
 
     def test_user_and_tty(self) -> None:
         assert format_address("kai", "tty1") == "kai:tty1"
@@ -145,7 +145,7 @@ class TestValidateRoutingId:
 
 
 class TestValidateReclaimableName:
-    """The team-writable reclaim hint value must pass a tight guard (biff-7ak)."""
+    """The team-writable reclaim hint value must pass a tight guard."""
 
     def test_accepts_ttyn(self) -> None:
         assert validate_reclaimable_name("tty16") is None
@@ -177,7 +177,7 @@ class TestValidateReclaimableName:
 
 
 class TestIsNotificationForSession:
-    """to_key filtering for targeted vs broadcast notifications (biff-gvoj)."""
+    """to_key filtering for targeted vs broadcast notifications."""
 
     def test_broadcast_accepted(self) -> None:
         """No to_key means broadcast — accepted by all sessions."""
@@ -197,7 +197,7 @@ class TestIsNotificationForSession:
 
 
 class TestValidateTtyName:
-    """TTY name allowlist prevents terminal escape injection (biff-gvoj)."""
+    """TTY name allowlist prevents terminal escape injection."""
 
     def test_valid_alphanumeric(self) -> None:
         assert validate_tty_name("tty1") is None
@@ -273,7 +273,7 @@ class TestClaimTtyName:
 
         On resume the session key is identical ({user}:{session_id} is stable),
         so a reservation still held by our just-exited session is ours to take
-        back — the exit->resume overlap must not force a fresh alias (biff-7ak).
+        back — the exit->resume overlap must not force a fresh alias.
         """
         from pathlib import Path
 

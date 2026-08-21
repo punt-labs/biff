@@ -1,4 +1,4 @@
-"""Unit tests for _run_kv_watch — snapshot-done survival (biff-udp).
+"""Unit tests for _run_kv_watch — snapshot-done survival.
 
 Verifies that the KV watcher loop continues processing entries after
 the snapshot-done ``None`` marker, rather than terminating the iterator.
@@ -111,8 +111,9 @@ class TestKvWatchSnapshotSurvival:
     ) -> None:
         """Entries arriving after None (snapshot-done) are still processed.
 
-        This is the core regression test for biff-udp: the old ``async for``
-        pattern terminated on None, so post-snapshot entries were missed.
+        This is the core regression test for the snapshot-done survival fix:
+        the old ``async for`` pattern terminated on None, so post-snapshot
+        entries were missed.
         """
         shutdown = asyncio.Event()
         wall_key = f"{_TEST_REPO}.wall"

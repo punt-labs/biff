@@ -1,4 +1,4 @@
-"""Malformed-frame handling in ``NatsRelay._fetch_from_subject`` (biff-cuy).
+"""Malformed-frame handling in ``NatsRelay._fetch_from_subject``.
 
 A frame that fails ``Message`` validation must never be acked: acking
 removes it from the WORK_QUEUE as if delivered, silently destroying the

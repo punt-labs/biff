@@ -44,12 +44,12 @@ class NotifyState:
             remaining = format_remaining(wall.expires_at) if wall else ""
             # Wall fields are remote-controlled; strip terminal escapes and
             # cap the label length before this line is printed to the REPL
-            # between commands (biff-lbj). ``WallPost.from_user`` has no
+            # between commands. ``WallPost.from_user`` has no
             # ``max_length`` and feeds directly into the wrap-width budget
             # below — an uncapped sender collapses ``width`` toward 1 and
-            # explodes into one hard-broken line per glyph (biff-2sw).
+            # explodes into one hard-broken line per glyph.
             from_user = sanitized_sender(wall.from_user) if wall else ""
-            # Wall text can run up to 512 chars (biff-2sw) — a CJK/emoji-heavy
+            # Wall text can run up to 512 chars — a CJK/emoji-heavy
             # post must wrap the same way format_wall/format_wall_status_line
             # already do, and a control-only post must show the same
             # visible_text fallback instead of rendering an empty-looking
@@ -82,7 +82,7 @@ def _format_wall_banner(from_user: str, text: str, remaining: str) -> str:
     Shares :func:`biff.formatting.format_wall_status_line`'s wrap treatment
     — wall text can run up to 512 chars and is potentially CJK/emoji-heavy,
     so it must wrap like every other wall render site instead of overflowing
-    80 columns on one unbounded line (biff-2sw). The ``\\033[1;31m`` /
+    80 columns on one unbounded line. The ``\\033[1;31m`` /
     ``\\033[0m`` color wrapper is applied to the whole composed block —
     opening before the first line, closing after the last — rather than
     embedded per line, so a wrap boundary can never land inside the escape.

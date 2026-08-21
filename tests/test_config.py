@@ -570,7 +570,7 @@ class TestLoadCliConfig:
     ) -> None:
         """A ``GH_TOKEN`` pinned to a bot PAT must not silently become the CLI user.
 
-        Regression for biff-if2: every Claude Agento session sources a
+        Every Claude Agento session sources a
         bot ``GH_TOKEN`` into its shell (org CLAUDE.md). Once ``gh api
         user`` resolves to that bot, the CLI must reject it and fall
         back to the OS user rather than silently identifying the human
@@ -623,7 +623,7 @@ class TestLoadCliConfig:
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """End-to-end regression for the live-reproduced biff-if2 gap.
+        """End-to-end regression for a live-reproduced bot-identity gap.
 
         The bot's own identity file (the one that would prove
         ``claude-puntlabs`` is a bot, not a human) is unreadable --
@@ -990,7 +990,7 @@ def _write_identity_yaml(repo_root: Path, handle: str, body: str) -> Path:
 class TestReadIdentityYaml:
     """Every failure mode of ``_read_identity_yaml`` must be observable in
     logs -- this is the function ``_known_agent_github_logins`` depends on
-    for the bot-identity cross-check (biff-if2); a silent failure here
+    for the bot-identity cross-check; a silent failure here
     reopens that exact hole.
     """
 
@@ -1161,7 +1161,7 @@ class TestKnownAgentGithubLogins:
     def test_declared_but_uninitialized_submodule_is_incomplete_with_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Reproduces this worktree's exact live state (biff-if2 review).
+        """Reproduces this worktree's exact live state.
 
         ``.gitmodules`` declares the ``.punt-labs/ethos`` submodule, but
         it was never checked out -- a plain ``git clone`` or
@@ -1269,7 +1269,7 @@ class TestKnownAgentGithubLogins:
     def test_corrupted_bot_identity_file_not_silently_trusted(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Regression for the live-reproduced biff-if2 gap: the bot's OWN
+        """Regression for a live-reproduced gap: the bot's OWN
         identity file being corrupted (chmod 000) must not silently zero
         out the known-agent set. The scan must report itself incomplete
         (so callers refuse to trust an unverifiable GitHub login instead

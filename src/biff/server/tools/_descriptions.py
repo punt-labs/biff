@@ -325,11 +325,11 @@ async def refresh_wall(
         remaining = format_remaining(current.expires_at)
         # Wall text/sender are remote-controlled; strip terminal escapes and
         # cap the sender length before they reach the tool description and
-        # status line (biff-lbj). Neither ``from_user`` nor ``from_tty`` has
+        # status line. Neither ``from_user`` nor ``from_tty`` has
         # a ``max_length`` on the wire, so both are clipped together via
         # sanitized_sender — clipping ``from_user`` alone before
         # concatenating an unbounded ``from_tty`` would leave the composed
-        # label just as unboundable (biff-2sw).
+        # label just as unboundable.
         wall_text = terminal_safe(current.text)
         sender = sanitized_sender(current.from_user, current.from_tty)
         tool.description = (
@@ -367,7 +367,7 @@ async def refresh_wall(
 
                 spoken = terminal_safe(current.text)
                 # from_user has no max_length on the wire; sanitized_sender
-                # bounds it before it reaches subprocess argv (biff-2sw).
+                # bounds it before it reaches subprocess argv.
                 speak_fire_and_forget(
                     f"Wall from {sanitized_sender(current.from_user)}: {spoken}",
                     vibe_tags=vibes_from_text(spoken),
@@ -495,7 +495,7 @@ async def subscribe_talk(
     """Establish the always-on talk subscription feeding the held ``TalkState``.
 
     Started once at poller start (ungated — a fresh agent must receive an
-    unsolicited invite, biff-9la).  Every talk frame flows into
+    unsolicited invite).  Every talk frame flows into
     ``state.talk.receive`` (self-echo and session-scope filtering happen
     there) and wakes the poller so the next active tick refreshes the tool
     description and fires the list-changed push.  NATS-only.
@@ -559,7 +559,7 @@ async def _reconcile_talk_sub(
     requires (``nats-relay.tex`` ``Subscribe`` guard ``talkSubGen <
     generation``): a wedge teardown orphans the SUB on the closed client while
     leaving the handle object non-``None``, so the is-None test never fires and
-    talk dies silently (the biff-9la counterexample).  An in-place nats-py
+    talk dies silently.  An in-place nats-py
     reconnect keeps the same generation and replays every SUB, so it is left
     untouched.  The new generation is bound only on a successful re-subscribe.
     """
@@ -680,7 +680,7 @@ async def poll_inbox(
     no NATS operations are interrupted mid-flight.
 
     Establishes an always-on NATS subscription for talk notifications
-    (ungated — a fresh agent must receive an unsolicited invite, biff-9la):
+    (ungated — a fresh agent must receive an unsolicited invite):
     every frame flows into the shared ``TalkState`` and the tool
     description tracks it so the model is prompted to call ``talk_read``.
     """
@@ -713,7 +713,7 @@ async def poll_inbox(
             # *during* the nap, independent of this poller, and orphan the
             # always-on talk SUB on the dead client.  Gating the reconcile behind
             # this skip would drop an unsolicited invite to the idle agent until
-            # the nap ends (biff-9la).  Reconcile is a cheap no-op — a generation
+            # the nap ends.  Reconcile is a cheap no-op — a generation
             # compare, no relay call — when nothing changed.
             cheap_nap = (
                 tracker.napping and tracker.seconds_since_nap_poll() < nap_interval

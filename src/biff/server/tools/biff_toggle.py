@@ -4,7 +4,7 @@ Lets an agent turn biff on or off for the current repo from within a
 Claude Code session.  Both actions route through
 :class:`~biff.enablement.RepoEnablement`, the same definition the
 ``biff enable`` / ``biff disable`` CLI verbs use, so the two front-ends
-produce an identical committed result (DES-052, biff-j5u).
+produce an identical committed result (DES-052).
 
 ``action="enable"`` fully activates this clone: it writes the committed
 marker ``.punt-labs/biff/enabled`` and CI notify workflow

@@ -91,7 +91,7 @@ class TestTty:
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
         """A rename refreshes the session_id->ttyN hint so the next resume
-        reclaims the RENAMED alias, not the stale one (biff-7ak)."""
+        reclaims the RENAMED alias, not the stale one."""
         result = await tty(ctx, "deploy")
         assert not result.error
         assert await relay.get_session_tty_hint(ctx.user, ctx.tty) == "deploy"

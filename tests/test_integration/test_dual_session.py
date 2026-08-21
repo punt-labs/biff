@@ -83,8 +83,8 @@ async def dual_client(dual_state: ServerState) -> AsyncIterator[Client[Any]]:
 
     mcp = create_server(dual_state)
     async with Client(FastMCPTransport(mcp)) as client:
-        # Companion registration is deferred to the heartbeat loop
-        # (biff-8fg3). Tests that need a registered companion invoke
+        # Companion registration is deferred to the heartbeat loop.
+        # Tests that need a registered companion invoke
         # the helper directly after the lifespan opens, simulating
         # the first heartbeat tick.
         await _register_companion(dual_state)

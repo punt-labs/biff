@@ -47,7 +47,7 @@ def _panel_summary(output: dict[str, object]) -> str:
 class TestReadMessagesCount:
     """read_messages row counting — reads the count format_read/_dual emits.
 
-    biff-9cz: the panel count is parsed from the tool's own "N new
+    The panel count is parsed from the tool's own "N new
     message(s)" header line(s), never recounted from data rows — a row
     count also matches the (now differently indented) column-header row,
     and cannot in general distinguish a data row from a message body that
@@ -85,7 +85,7 @@ class TestReadMessagesCount:
         assert summary == "No new messages."
 
     def test_could_not_check_mail_is_not_reported_as_zero_new(self) -> None:
-        """biff-brn: a failure must not render like a confirmed-empty inbox.
+        """A failure must not render like a confirmed-empty inbox.
 
         Before this branch, a persistent-failure result would have fallen
         into the counting branch and, matching no '^▶' lines, reported

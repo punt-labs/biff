@@ -24,7 +24,7 @@ def relay(tmp_path: Path) -> LocalRelay:
 
 
 class TestLiveSessions:
-    """`live_sessions` drops sessions past the liveness window (biff-mue)."""
+    """`live_sessions` drops sessions past the liveness window."""
 
     def test_keeps_live_drops_dead(self) -> None:
         now = datetime.now(UTC)
@@ -692,7 +692,7 @@ class TestMalformedSessions:
 
 
 class TestSessionTtyHint:
-    """session_id -> last tty_name reclaim hint (biff-7ak).
+    """session_id -> last tty_name reclaim hint.
 
     Session ids are realistic routing tokens (UUID / hex) matching
     ``validate_routing_id``'s charset — the value a live session actually

@@ -101,8 +101,8 @@ async def _fetch_unread_with_retry(
     after one inbox already succeeded would re-fetch an inbox that has
     nothing left to return, silently discarding the messages the first
     attempt already pulled (review finding on this branch — the retry
-    added to fix biff-brn's indistinguishability problem introduced a
-    worse, silent data-loss failure mode of its own).
+    added to make a timeout distinguishable from a confirmed-empty
+    inbox introduced a worse, silent data-loss failure mode of its own).
 
     An inbox still failing after its own retry is named in ``warning``
     rather than rendered as empty; its slot in ``fetched`` stays empty

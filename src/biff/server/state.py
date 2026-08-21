@@ -49,7 +49,7 @@ class ServerState:
     # coordination (wall marker path, ``write_active_session`` third line so
     # ``_detect_collisions`` matches across linked worktrees) — the per-worktree
     # ``repo_root`` stays as-is for write-through to per-worktree files
-    # (biff-ar1/om9 broad-scope, DES-054).  Required: ``create_state`` resolves
+    # (DES-054).  Required: ``create_state`` resolves
     # ``None`` inputs to ``repo_root`` (matching the loader's fallback), so the
     # field's runtime type is always ``Path`` and every reader is unconditional.
     repo_common_root: Path
@@ -66,7 +66,7 @@ class ServerState:
     # ``time.monotonic()`` of the last org-repos refresh attempt (success or
     # failure). ``None`` before the first attempt. Throttles ``_refresh_org_repos``
     # so this non-critical, stale-tolerant call stops competing with user-facing
-    # calls for the shared connection's wedge-detection budget (biff-cf9).
+    # calls for the shared connection's wedge-detection budget.
     org_repos_refreshed_at: float | None = None
     companion: CompanionSession | None = None
     talk: TalkState = field(init=False)

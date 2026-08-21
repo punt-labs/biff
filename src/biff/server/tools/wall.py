@@ -186,7 +186,7 @@ def _update_wall_marker(state: ServerState, wall: WallPost | None) -> None:
     ``/wall`` from a linked worktree is discoverable by SessionStart in
     every linked worktree of the same repo -- the marker path hashes on
     this string, and the hook side already reads the common-root hash
-    via ``_hint_dir(data)`` (biff-ar1/om9 broad-scope, DES-054).
+    via ``_hint_dir(data)`` (DES-054).
     """
     from biff.markers import clear_wall_marker, write_wall_marker  # noqa: PLC0415
 

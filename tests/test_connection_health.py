@@ -1,4 +1,4 @@
-"""Unit tests for NatsRelay connection-health diagnostic logging (biff-6px).
+"""Unit tests for NatsRelay connection-health diagnostic logging.
 
 Covers the ``_ConnectionHealth`` single-source log points and the
 ``_tracked`` wedge onset/recovery choke point:
@@ -61,7 +61,7 @@ def _connected_nc() -> MagicMock:
 
 def _onset_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     # INFO, not WARNING: the wedge onset is a transient, self-recovering event
-    # that must stay off the CLI's WARNING stderr floor (biff-9la).
+    # that must stay off the CLI's WARNING stderr floor.
     return [
         r
         for r in caplog.records
@@ -155,7 +155,7 @@ class TestWedgeOnsetRecovery:
         assert health.consecutive_timeouts == 0
 
     def test_cumulative_counters_never_reset(self) -> None:
-        # biff-brn: a silent client-side retry makes a timeout unobservable
+        # A silent client-side retry makes a timeout unobservable
         # to a caller. These counters exist so an operator can still measure
         # the real rate, so unlike consecutive_timeouts they must survive a
         # success (wedge clear) and a reconnect (record_connected).
@@ -173,7 +173,7 @@ class TestWedgeOnsetRecovery:
         assert health.consecutive_timeouts == 0
 
     def test_total_timeouts_counts_even_on_superseded_client(self) -> None:
-        # biff-brn review finding: record_timeout() is only reached when
+        # Review finding: record_timeout() is only reached when
         # _tracked's owner check passes (this connection's own wedge
         # episode). A timeout on a client _tracked has already superseded
         # still re-raises to the caller as a real timeout, so
@@ -240,7 +240,7 @@ class TestWedgeOnsetRecovery:
 
 
 class TestForceReconnectLatch:
-    """The proactive force-reconnect fires once per wedge episode (biff-3hp).
+    """The proactive force-reconnect fires once per wedge episode.
 
     ``_ConnectionHealth`` owns the consecutive-timeout counter and the
     once-per-episode latch; ``NatsRelay._tracked`` acts on the decision.
@@ -339,7 +339,7 @@ class TestLifecycleContext:
 
         (record,) = [r for r in caplog.records if "Disconnected" in r.getMessage()]
         # INFO, not WARNING: a disconnect is transient/auto-recovering and must
-        # stay off the CLI terminal — file only (biff-9la).
+        # stay off the CLI terminal — file only.
         assert record.levelno == logging.INFO
         assert "after 30s connected" in record.getMessage()
 

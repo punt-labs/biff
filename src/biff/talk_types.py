@@ -53,8 +53,8 @@ MAX_FIELD_LEN = 64
 A user handle, a display tty name, and a frame type are all short by
 construction; an inbound field longer than this is forged.  Clamping at the
 boundary stops a megabyte ``from``/``from_tty`` from being stored in the queue
-or amplified by the renderer (biff-7g7) — a giant sender label drives the
-per-line wrap indent, turning one frame into O(label x body) output.
+or amplified by the renderer — a giant sender label drives the per-line wrap
+indent, turning one frame into O(label x body) output.
 """
 
 MAX_KEY_LEN = MAX_FIELD_LEN * 2 + 1
@@ -196,9 +196,9 @@ class TalkNotification:
         A custom publisher can post any payload to the per-identity subject
         (DES-046), bypassing the sender-side ``MAX_BODY_LEN`` truncation, so a
         forged megabyte ``from``/``body`` would otherwise be enqueued whole and
-        amplified O(label x body) by the renderer (biff-7g7).  Clamping is
-        length-only; :func:`terminal_safe` neutralises control characters at the
-        render boundary.
+        amplified O(label x body) by the renderer.  Clamping is length-only;
+        :func:`terminal_safe` neutralises control characters at the render
+        boundary.
 
         Each field is also *type*-guarded via :meth:`_trusted`: only a ``str`` is
         trusted, so a forged ``null`` (JSON None), number, or nested dict/list

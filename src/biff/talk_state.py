@@ -45,7 +45,7 @@ MAX_TALK_QUEUE = 100
 An unbounded queue is a flood/DoS vector: a peer can enqueue faster than
 the 2s poll drains, growing memory without limit.  The queue is capped
 with drop-oldest so the newest ``MAX_TALK_QUEUE`` notifications are
-always retained (biff-vr4).
+always retained.
 """
 
 MAX_PENDING_INVITES = 100
@@ -63,7 +63,7 @@ PENDING_INVITE_TTL = 300.0
 ``maxInviteAge`` / ``ExpirePendingInvite``).
 
 An invite whose inviter never returns and never sends an ``ntWithdraw``
-would otherwise strand the ``[TALK]`` marker forever (biff-9la).  The poller
+would otherwise strand the ``[TALK]`` marker forever.  The poller
 reaps invites older than this on its tick.  Five minutes comfortably exceeds
 several talk poll cycles (~1 min each), so a genuinely-waiting invite is
 never reaped before the agent can act, while a stranded marker still
@@ -146,7 +146,7 @@ class TalkState:
 
         The single source for the ``reply_to`` address an invite body carries,
         so both front-ends render the same ``talk user:ttyN`` hint (canonical
-        bare address, no ``@`` — biff-5gb) without one reaching for the
+        bare address, no ``@``) without one reaching for the
         server-global ``get_tty_name`` and the other for ``CliContext.tty_name``.
         """
         return self._my_tty_name
@@ -632,8 +632,8 @@ class TalkState:
 
         Routes on ``(myOrg, to_key)`` = ``subjectOf(peer)`` (talk.tex): the
         organization is our own, and the peer's globally-unique identity is
-        the frame's ``to_key`` — no repository is consulted or persisted
-        (biff-e9u).  No-op for non-NATS relays.
+        the frame's ``to_key`` — no repository is consulted or persisted.
+        No-op for non-NATS relays.
 
         Every frame body is truncated to ``MAX_BODY_LEN`` here — the single
         DoS/footprint bound — so an oversized invite or accept body (both carry

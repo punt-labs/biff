@@ -327,9 +327,10 @@ class TestPollAccept:
         The mutual-glare auto-accept tiebreak is guarded by the same session-key
         scrutiny (#279) as the accept branch: an ``invite`` whose ``from_key`` is
         not the invited session's key cannot trigger auto-accept, even though our
-        key is lexicographically higher.  biff-9la widened the set of legitimate
-        invite emitters, so a forged mutual-invite must be rejected here exactly
-        as a forged accept is — it becomes a third-party banner, never a connect.
+        key is lexicographically higher.  A prior fix widened the set of
+        legitimate invite emitters, so a forged mutual-invite must be rejected
+        here exactly as a forged accept is — it becomes a third-party banner,
+        never a connect.
         """
         # A forged key BELOW ours: the ``my_key > partner_key`` tiebreak alone
         # would favour auto-accept, so only the ``from_key == partner_key``

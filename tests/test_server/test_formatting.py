@@ -373,7 +373,7 @@ class TestFormatTable:
 
 
 class TestFormatReadFromTty:
-    """format_read renders a single FROM column with reply address (biff-q0mf)."""
+    """format_read renders a single FROM column with reply address."""
 
     def test_from_column_includes_tty(self) -> None:
         msgs = [Message(from_user="kai", to_user="eric", body="hey", from_tty="tty1")]

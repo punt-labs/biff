@@ -119,7 +119,7 @@ class TestGetPollStatus:
         assert "NATS relay:" not in result
 
     async def test_timeout_line_reports_cumulative_counts(self, tmp_path: Path) -> None:
-        # biff-brn: this line is the server-side record that lets an
+        # This line is the server-side record that lets an
         # operator measure the real timeout rate instead of relying on
         # which timeouts happened to be noticed client-side.
         state = _make_state(tmp_path)

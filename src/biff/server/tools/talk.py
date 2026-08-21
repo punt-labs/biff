@@ -59,8 +59,7 @@ def format_talk_messages(messages: list[Message]) -> str:
 
     Reuses :func:`format_talk_line`'s wrap/hang-indent treatment instead of
     embedding each up-to-512-char, potentially CJK/emoji-heavy body on one
-    unbounded line — the same defect class fixed for who/read/wall/finger
-    (biff-2sw).
+    unbounded line — the same defect class fixed for who/read/wall/finger.
     """
     lines: list[str] = []
     for m in messages:
@@ -94,7 +93,7 @@ def format_agent_drain(drain: AgentDrain) -> str:
     whitespace — alignment padding that aids a human reader but is only
     noise in model input.  Every field is length-clamped at
     the :meth:`TalkNotification.from_payload` ingress boundary, so a
-    single line stays bounded without a render-side cap (biff-7g7).
+    single line stays bounded without a render-side cap.
 
     A frame with no body at all (an accept, or an invite sent with no
     opening line) contributes no line — there is nothing to report.  A
@@ -102,7 +101,7 @@ def format_agent_drain(drain: AgentDrain) -> str:
     (whitespace-only or control-only) still contributes a line naming the
     sender: the agent must see that a message arrived even when it had
     nothing visible to show, matching :func:`~biff.formatting.format_talk_line`
-    on the terminal side (biff-7g7, biff-2sw round 6).
+    on the terminal side.
     """
     lines: list[str] = []
     for _user, invite in sorted(drain.pending.items()):
@@ -133,8 +132,7 @@ async def _publish_agent_auto_accept(state: ServerState, drain: AgentDrain) -> b
 
     Returns whether the accept was published.  ``True`` when there was no glare to
     publish; ``False`` only after both attempts fail — the caller surfaces that to
-    the agent, which cannot see ``biff.log`` (biff-9la: talk is never silently
-    dropped).
+    the agent, which cannot see ``biff.log``, so talk is never silently dropped.
     """
     notif = drain.auto_accept
     if notif is None:
@@ -203,7 +201,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         Returns who wants to talk (with the accept hint) plus any queued
         messages.  Reads from the server-held ``TalkState`` — never the
         durable inbox — so an unsolicited invite is surfaced even to a
-        fresh agent (biff-9la).
+        fresh agent.
         """
         if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."

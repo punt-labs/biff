@@ -122,7 +122,7 @@ def clip_to_width(text: str, width: int, *, ellipsis: str = "…") -> str:
 
 
 def terminal_safe(text: str) -> str:
-    """Strip non-printable characters from remote-controlled text (biff-lbj).
+    """Strip non-printable characters from remote-controlled text.
 
     Message bodies, wall text, sender names, plans, hostnames, and dirs all
     arrive from other users over the relay and are rendered straight to the
