@@ -28,7 +28,7 @@ if [[ -z "$RELEASE_PREP_COMMIT" ]]; then
   fi
 fi
 
-echo "Restoring dev state from parent of ${RELEASE_PREP_COMMIT:0:12}"
+echo "Restoring dev state from release-prep commit ${RELEASE_PREP_COMMIT:0:12}"
 
 # Swap the name back to -dev on the CURRENT (post-release-prep) plugin.json,
 # rather than checking out the whole file from the parent commit. The parent
