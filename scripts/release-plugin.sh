@@ -65,9 +65,9 @@ def _tup(v):
         raise SystemExit(f\"version '{v}' is not X.Y.Z semver\")
     return tuple(int(p) for p in parts)
 
-if _tup(new_version) <= _tup(old_version):
+if _tup(new_version) < _tup(old_version):
     raise SystemExit(
-        f'refusing to sync backwards/no-op plugin.json version: '
+        f'refusing to sync backwards plugin.json version: '
         f'{old_version} -> {new_version}'
     )
 
