@@ -35,6 +35,26 @@ class TestDeliver:
         assert len(unread) == 1
         assert unread[0].body == "hello"
 
+    async def test_redelivering_same_message_id_is_deduplicated(
+        self, relay: NatsRelay
+    ) -> None:
+        """biff-0px review finding: a retry that reuses the same Message
+        (same id) must not create a second copy if the original publish
+        actually landed and only its ack was lost. deliver() sets
+        Nats-Msg-Id to message.id, so JetStream's own dedup window catches
+        this — verified here against a real server, since a mock cannot
+        prove server-side dedup behavior.
+        """
+        msg = Message(
+            from_user="kai",
+            to_user=f"eric:{_ERIC_TTY}",
+            body="only once",
+        )
+        await relay.deliver(msg)
+        await relay.deliver(msg)  # same instance, same id — simulates a retry
+        unread = await relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 1
+
     async def test_deliver_multiple(self, relay: NatsRelay) -> None:
         for i in range(3):
             await relay.deliver(
@@ -332,6 +352,23 @@ class TestHeartbeat:
         result = await relay.get_session(f"kai:{_KAI_TTY}")
         assert result is None
 
+    async def test_warns_once_on_missing_session(
+        self, relay: NatsRelay, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A session vanishing under a live heartbeat loop is anomalous.
+
+        The loop runs on a fixed interval for the life of the process, so
+        the warning must fire once per key, not on every tick.
+        """
+        key = f"kai:{_KAI_TTY}"
+        with caplog.at_level("WARNING"):
+            await relay.heartbeat(key)
+            await relay.heartbeat(key)
+            await relay.heartbeat(key)
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert key in warnings[0].message
+
     async def test_updates_last_active(self, relay: NatsRelay) -> None:
         old_time = datetime.now(UTC) - timedelta(seconds=300)
         await relay.update_session(
@@ -373,6 +410,25 @@ class TestHeartbeat:
         result = await relay.get_session(f"kai:{_KAI_TTY}")
         assert result is not None
         assert result.tty_name == "dev-laptop"
+
+    async def test_does_not_advance_last_tool_at(self, relay: NatsRelay) -> None:
+        """Regression: heartbeat must not touch last_tool_at.
+
+        last_tool_at is the idle time /who and /finger display; only a real
+        tool invocation (update_current_session) may advance it. Heartbeat
+        runs unconditionally on a fixed interval and must leave it alone —
+        it may bump last_active (liveness) as always.
+        """
+        old_tool_at = datetime.now(UTC) - timedelta(minutes=10)
+        await relay.update_session(
+            UserSession(user="kai", tty=_KAI_TTY, last_tool_at=old_tool_at)
+        )
+        await relay.heartbeat(f"kai:{_KAI_TTY}")
+        await relay.heartbeat(f"kai:{_KAI_TTY}")
+        result = await relay.get_session(f"kai:{_KAI_TTY}")
+        assert result is not None
+        assert result.last_tool_at == old_tool_at
+        assert result.last_active > old_tool_at
 
 
 # -- Cross-relay (simulates two MCP servers) --

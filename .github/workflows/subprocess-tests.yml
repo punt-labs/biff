@@ -1,0 +1,33 @@
+name: Subprocess Tests
+
+# Tier 3a (tests/test_subprocess/): real biff subprocesses over stdio,
+# exercising the wire protocol, CLI argument parsing, and process
+# lifecycle -- including the SIGTERM/SIGINT/SIGHUP regression tests in
+# test_signal_handling.py. Deselected from the default `uv run pytest`
+# by pyproject.toml addopts, so it needs its own job to ever run in CI.
+# `--relay-url ""` in the fixtures forces the local relay, so the tier
+# has no external dependency (no nats-server, no API key) beyond time
+# (~75-105s).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  subprocess:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --extra dev
+      - run: uv run pytest -m subprocess

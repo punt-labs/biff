@@ -585,6 +585,77 @@ class TestOrgReposRefresh:
 
         assert state.org_repos == frozenset()
 
+    async def test_throttled_within_interval(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second call inside the throttle window makes no relay call.
+
+        biff-cf9: this non-critical, stale-tolerant call was running on
+        every 60s heartbeat tick and accounted for 70% of captured relay
+        timeouts, tripping the shared connection's wedge-detection
+        reconnect on behalf of unrelated user-facing calls. Throttling it
+        to a slower cadence is the fix — this test is the guarantee that
+        the throttle actually suppresses the relay call, not just the
+        state update.
+        """
+        from unittest.mock import AsyncMock
+
+        from biff.server.app import _refresh_org_repos
+
+        config = BiffConfig(
+            user="kai",
+            display_name="Kai",
+            kind="human",
+            repo_name="_test-org-throttle",
+            orgs=("punt-labs",),
+        )
+        state = create_state(
+            config, tmp_path, tty="a1b2c3d4", hostname="test-host", pwd="/test"
+        )
+        discover = AsyncMock(return_value=frozenset({"_test-org-throttle"}))
+        state.relay.discover_repos_for_org = discover  # type: ignore[attr-defined]
+        monkeypatch.setattr("biff.server.app.NatsRelay", type(state.relay))
+
+        await _refresh_org_repos(state)
+        assert discover.call_count == 1
+
+        await _refresh_org_repos(state)
+        assert discover.call_count == 1  # still 1 — throttled, no relay call
+
+    async def test_refresh_runs_again_after_interval_elapses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Past the throttle window, the next tick refreshes again."""
+        import time
+        from unittest.mock import AsyncMock
+
+        from biff.server import app as app_module
+        from biff.server.app import _refresh_org_repos
+
+        config = BiffConfig(
+            user="kai",
+            display_name="Kai",
+            kind="human",
+            repo_name="_test-org-throttle-elapsed",
+            orgs=("punt-labs",),
+        )
+        state = create_state(
+            config, tmp_path, tty="a1b2c3d4", hostname="test-host", pwd="/test"
+        )
+        discover = AsyncMock(return_value=frozenset({"_test-org-throttle-elapsed"}))
+        state.relay.discover_repos_for_org = discover  # type: ignore[attr-defined]
+        monkeypatch.setattr("biff.server.app.NatsRelay", type(state.relay))
+
+        clock = [1000.0]
+        monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+
+        await _refresh_org_repos(state)
+        assert discover.call_count == 1
+
+        clock[0] += app_module._ORG_REPOS_REFRESH_INTERVAL + 1.0
+        await _refresh_org_repos(state)
+        assert discover.call_count == 2
+
 
 class TestResumeReclaim:
     """Routing on the Claude session_id cures LOST and MISROUTED messages.

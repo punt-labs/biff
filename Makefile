@@ -6,9 +6,10 @@ help: ## Show available targets
 test: ## Run tests (unit + integration)
 	uv run pytest
 
-lint: ## Lint and format check
+lint: ## Lint and format check (ruff + shellcheck)
 	uv run ruff check .
 	uv run ruff format --check .
+	shellcheck plugin/hooks/*.sh install.sh scripts/*.sh
 
 type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/

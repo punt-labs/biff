@@ -44,6 +44,7 @@ import biff.commands.talk as talk_commands
 from biff import commands
 from biff.cli_session import CliContext, cli_session
 from biff.commands import CommandResult
+from biff.commands._session import update_current_session
 from biff.config import (
     find_git_root,
     is_enabled,
@@ -452,15 +453,7 @@ async def _repl_talk(
         ctx.talk.reset()
         current_prompt[0] = repl_prompt
         # Clear the talk plan when exiting talk mode.
-        try:
-            session = await ctx.relay.get_session(ctx.session_key)
-            if session is not None:
-                updated = session.model_copy(update={"plan": ""})
-                await ctx.relay.update_session(updated)
-        except Exception:  # noqa: BLE001
-            logging.getLogger(__name__).debug(
-                "Failed to clear talk plan", exc_info=True
-            )
+        await _clear_talk_plan(ctx)
 
     # Clear any stale prompt the stdin thread may have printed.
     print(f"\r\033[KTalk with {display} ended.")
@@ -631,25 +624,24 @@ async def _wait_for_talk_accept(
 async def _set_talk_plan(ctx: CliContext, display: str) -> None:
     """Best-effort set the session plan to ``talking to {display}`` (presence).
 
-    A wedged relay must never crash the REPL over a cosmetic presence update, so
-    the get/update pair is guarded and logged at DEBUG.
+    Routes through :func:`update_current_session` so an active REPL talk
+    session advances ``last_tool_at`` the same way ``plan``/``tty``/``mesg``
+    do -- otherwise a long-lived talk conversation reads as increasingly
+    idle the longer it runs, since only the background heartbeat loop would
+    otherwise touch this session's timestamps.  A wedged relay must never
+    crash the REPL over a cosmetic presence update, so the call is guarded
+    and logged at DEBUG.
     """
     try:
-        session = await ctx.relay.get_session(ctx.session_key)
-        if session is not None:
-            await ctx.relay.update_session(
-                session.model_copy(update={"plan": f"talking to {display}"})
-            )
+        await update_current_session(ctx, plan=f"talking to {display}")
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).debug("Failed to set talk plan", exc_info=True)
 
 
 async def _clear_talk_plan(ctx: CliContext) -> None:
-    """Best-effort clear the talk plan when a talk cancels or withdraws."""
+    """Best-effort clear the talk plan when a talk cancels, withdraws, or ends."""
     try:
-        session = await ctx.relay.get_session(ctx.session_key)
-        if session is not None:
-            await ctx.relay.update_session(session.model_copy(update={"plan": ""}))
+        await update_current_session(ctx, plan="")
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).debug("Failed to clear talk plan", exc_info=True)
 
@@ -1841,10 +1833,7 @@ async def _talk_interactive(to: str, opening: str) -> None:
             )
 
             # Update plan to show talk activity.
-            session = await ctx.relay.get_session(ctx.session_key)
-            if session is not None:
-                updated = session.model_copy(update={"plan": f"talking to {display}"})
-                await ctx.relay.update_session(updated)
+            await update_current_session(ctx, plan=f"talking to {display}")
 
             if opening:
                 body = opening[:512]

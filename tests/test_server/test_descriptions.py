@@ -99,6 +99,28 @@ class TestRefreshReadMessages:
         assert desc is not None
         assert "2 unread" in desc
 
+    async def test_relay_failure_does_not_crash_caller(
+        self, state: ServerState
+    ) -> None:
+        """A relay hiccup here must never crash the primary tool call that
+        called this as a best-effort side-channel update. Review finding:
+        surfaced by a test where read_messages() had already successfully
+        fetched and rendered real messages, and this side-channel call
+        raising on its own separate relay call would have discarded that
+        already-good result with an unhandled exception.
+        """
+        mcp = create_server(state)
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> UnreadSummary:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state.relay.get_unread_summary = _always_fails  # type: ignore[method-assign]
+        await refresh_read_messages(mcp, state)  # must not raise
+        tool = await mcp.get_tool("read_messages")
+        assert tool is not None
+        assert tool.description == _READ_MESSAGES_BASE  # unchanged, not crashed
+
     async def test_reverts_to_base_when_cleared(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(
@@ -182,6 +204,27 @@ class TestUnreadFile:
         await refresh_read_messages(mcp, state_with_path)
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
+
+    async def test_get_session_failure_does_not_crash_caller(
+        self, state_with_path: ServerState
+    ) -> None:
+        """Bugbot review finding: refresh_read_messages' own guard around
+        get_unread_summary did not cover this function's own get_session
+        call for the plan field — a relay hiccup there could still crash
+        the caller's already-succeeded primary result. get_unread_summary
+        succeeds here; only get_session fails, isolating this specific
+        call site from the one already covered by another test.
+        """
+        mcp = create_server(state_with_path)
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> None:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state_with_path.relay.get_session = _always_fails  # type: ignore[method-assign]
+        await refresh_read_messages(mcp, state_with_path)  # must not raise
+        assert state_with_path.unread_path is not None
+        assert not state_with_path.unread_path.exists()  # write skipped, not crashed
 
     async def test_clamps_unread_count_at_max(self, tmp_path: Path) -> None:
         path = tmp_path / "unread.json"

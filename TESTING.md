@@ -265,10 +265,20 @@ uv run pytest -m "not hosted and not sdk"
 
 ## CI
 
-GitHub Actions runs **Lint** and **Tests** (tiers 1-2) on every
-push and PR. The **Hosted NATS E2E** workflow is manual-only
-(`workflow_dispatch`) because session-scoped NATS connections hang in
-GitHub Actions' asyncio environment.
+GitHub Actions runs **Lint**, **Tests** (tiers 1-2), and
+**Subprocess Tests** (tier 3a) on every push and PR.
+`subprocess-tests.yml` runs `uv run pytest -m subprocess` and fails
+the build on any error or failure — the tier has no external
+dependency (fixtures pass `--relay-url ""` to force `LocalRelay`)
+beyond the ~75-105s real subprocesses take to spawn and tear down.
+
+Tier 3b (local NATS) has no CI job: it requires a local `nats-server`
+binary, and currently hangs outright (biff-7xd) — do not wire it into
+CI until that bug is fixed. The **Hosted NATS E2E** workflow (tier 3c)
+is manual-only (`workflow_dispatch`) because session-scoped NATS
+connections hang in GitHub Actions' asyncio environment. Tier 4 (SDK)
+requires `ANTHROPIC_API_KEY` and costs real money per run, so it stays
+local-only by design.
 
 ## Coverage
 

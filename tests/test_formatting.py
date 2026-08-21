@@ -15,6 +15,7 @@ from biff.formatting import (
     _NO_PRINTABLE_TEXT,
     _NO_VISIBLE_CONTENT,
     _TALK_WRAP_MIN,
+    format_dead_footnote,
     format_finger,
     format_finger_multi,
     format_last,
@@ -132,6 +133,45 @@ class TestFormatWhoKindTags:
         )
         result = format_who([session])
         assert "[A]" not in result
+
+
+class TestFormatDeadFootnote:
+    def test_empty_is_absent(self) -> None:
+        assert format_dead_footnote([]) == ""
+
+    def test_single_dead_session_singular_noun(self) -> None:
+        dead = UserSession(
+            user="ghost",
+            tty="abcd1234",
+            last_active=datetime.now(UTC) - timedelta(hours=12),
+        )
+        result = format_dead_footnote([dead])
+        assert "1 session stopped responding (last seen 12h)" in result
+
+    def test_multiple_dead_sessions_plural_noun_and_ages(self) -> None:
+        now = datetime.now(UTC)
+        recent = UserSession(
+            user="recent-ghost", tty="a", last_active=now - timedelta(minutes=6)
+        )
+        stale = UserSession(
+            user="old-ghost", tty="b", last_active=now - timedelta(days=35)
+        )
+        result = format_dead_footnote([recent, stale])
+        assert "2 sessions stopped responding" in result
+        assert "6m" in result
+        assert "35d" in result
+
+    def test_does_not_name_the_dead_sessions(self) -> None:
+        """The footnote reports counts and ages only, never `user`/`tty_name`
+        -- there is no fixed column here for an unbounded field to widen, so
+        there is nothing to sanitize (DES-057)."""
+        dead = UserSession(
+            user="orphaned-agent",
+            tty="a",
+            last_active=datetime.now(UTC) - timedelta(hours=1),
+        )
+        result = format_dead_footnote([dead])
+        assert "orphaned-agent" not in result
 
 
 class TestFormatFinger:
@@ -730,6 +770,26 @@ class TestFormatRead:
         assert "kai" in result
         assert "@kai" not in result
         assert "hey there" in result
+
+    def test_leading_count_matches_message_count(self) -> None:
+        # biff-9cz: the count reported to the caller must come from the
+        # same list the table renders, not a separately polled summary
+        # that can be stale relative to this fetch.
+        messages = [
+            Message(from_user="kai", to_user="eric", body="one"),
+            Message(from_user="rmh", to_user="eric", body="two"),
+            Message(from_user="alpha", to_user="eric", body="three"),
+        ]
+        result = format_read(messages)
+        assert result.startswith("▶  3 new messages")
+        data_lines = [line for line in result.splitlines() if "one" in line]
+        assert len(data_lines) == 1
+
+    def test_leading_count_singular_noun(self) -> None:
+        m = Message(from_user="kai", to_user="eric", body="hey there")
+        result = format_read([m])
+        assert result.startswith("▶  1 new message\n")
+        assert "1 new messages" not in result
 
     def test_giant_sender_renders_bounded(self) -> None:
         # Message.from_user/from_tty have no max_length on the wire. FROM

@@ -63,7 +63,13 @@ if [[ "$TOOL_NAME" == "who" ]]; then
   if [[ "$RESULT" == "No sessions." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [^ ]')
+    # Exclude the dead-session footnote (DES-057) -- it shares ROW_PREFIX
+    # with live table rows, so an unfiltered count would report orphaned
+    # sessions as online. The footnote can wrap onto continuation lines
+    # that also carry ROW_PREFIX but not the "stopped responding" text, so
+    # drop everything from the footnote's first line onward rather than
+    # filtering line-by-line.
+    COUNT=$(printf '%s' "$RESULT" | sed -E '/^   [0-9]+ sessions? stopped responding/,$d' | grep -c '^   [^ ]')
     emit "${COUNT} online" "$RESULT"
   fi
   exit 0
@@ -81,10 +87,31 @@ if [[ "$TOOL_NAME" == "read_messages" ]]; then
   if [[ "$RESULT" == "No new messages." ]]; then
     emit_simple "$RESULT"
   else
-    # Data rows start with 3-space indent + user:tty address.
-    # Header row starts with ▶. Skip it.
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [^ ]')
-    emit "${COUNT} new" "$RESULT"
+    # format_read emits one "N new message(s)" count line; format_read_dual
+    # emits one per identity section, as "user (N new message(s))". Sum
+    # only digits immediately followed by " new message(s)" rather than
+    # every digit on a ▶-prefixed line — a bare digit sum would also
+    # count digits embedded in a dual-session identity's username (e.g.
+    # "kai2 (1 new message)" -> 2 + 1, not 1). Never recount data rows: a
+    # row count also matches the (differently indented) column-header
+    # row, and cannot in general distinguish a data row from a message
+    # body sharing the same indent, while the count the tool itself
+    # computed is guaranteed synchronized with what was rendered
+    # (biff-9cz).
+    COUNT=$(printf '%s' "$RESULT" | grep '^▶' | grep -oE '[0-9]+ new messages?' | grep -oE '^[0-9]+' | awk '{s+=$1} END{print s+0}')
+    if [[ "$RESULT" == "Could not check "* ]]; then
+      # A per-inbox failure can stand alone or prefix rendered messages
+      # from the inboxes that DID succeed (biff-brn review finding) —
+      # either way this must read as a failure, never as a plain count
+      # that could be mistaken for a confirmed total.
+      if [[ "$COUNT" == "0" ]]; then
+        emit "check failed" "$RESULT"
+      else
+        emit "${COUNT} new (partial — check failed)" "$RESULT"
+      fi
+    else
+      emit "${COUNT} new" "$RESULT"
+    fi
   fi
   exit 0
 fi

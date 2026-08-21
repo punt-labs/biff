@@ -154,6 +154,38 @@ class TestWedgeOnsetRecovery:
         health.record_success()
         assert health.consecutive_timeouts == 0
 
+    def test_cumulative_counters_never_reset(self) -> None:
+        # biff-brn: a silent client-side retry makes a timeout unobservable
+        # to a caller. These counters exist so an operator can still measure
+        # the real rate, so unlike consecutive_timeouts they must survive a
+        # success (wedge clear) and a reconnect (record_connected).
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_connected(5.0, is_new_connection=True)
+        for _ in range(3):
+            health.record_attempt()
+        health.record_timeout_attempt()
+        health.record_timeout("stream_info", is_connected=True)
+        health.record_attempt()
+        health.record_success()  # clears consecutive_timeouts
+        health.record_connected(5.0, is_new_connection=True)  # reconnect
+        assert health.total_attempts == 4
+        assert health.total_timeouts == 1
+        assert health.consecutive_timeouts == 0
+
+    def test_total_timeouts_counts_even_on_superseded_client(self) -> None:
+        # biff-brn review finding: record_timeout() is only reached when
+        # _tracked's owner check passes (this connection's own wedge
+        # episode). A timeout on a client _tracked has already superseded
+        # still re-raises to the caller as a real timeout, so
+        # record_timeout_attempt() must be reachable independently of
+        # record_timeout(), or total_timeouts under-counts total_attempts.
+        health = _ConnectionHealth("tls://fake:4222")
+        health.record_attempt()
+        health.record_timeout_attempt()  # the owner-mismatch path in _tracked
+        assert health.total_attempts == 1
+        assert health.total_timeouts == 1
+        assert health.consecutive_timeouts == 0  # not this episode's wedge
+
     @pytest.mark.anyio()
     async def test_not_found_response_is_liveness_proof(self) -> None:
         # A KeyNotFoundError is the server answering "no such key" — the

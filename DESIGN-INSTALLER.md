@@ -12,6 +12,31 @@ This document describes the architecture of biff's installation system — how t
 
 ## Installation Architecture
 
+**The diagram below is the original two-phase design and three of its boxes
+are now historical.** It is kept because the decisions further down this log
+refer to it, but do not read it as current state:
+
+- **There is no bundled plugin inside the wheel.** `src/biff/plugins/biff/`
+  and `installer.py` are both gone; the plugin ships through the marketplace,
+  so `claude plugin update` is the upgrade path for prompts and hooks. Since
+  DES-055 the surface lives in `plugin/` at the repo root
+  (`plugin/.claude-plugin/`, `plugin/commands/`, `plugin/hooks/`) and the
+  marketplace fetches only that directory via the `git-subdir` source.
+- **`biff install` is not a five-step copier.** `install_cmd`
+  (`src/biff/__main__.py`) deposits the user-scope agent guide, deploys this
+  clone's `.git/hooks` dispatchers, and shells out to
+  `claude plugin install biff@punt-labs --scope user`. A missing `claude` is a
+  successful CLI-only install, not a partial failure.
+- **Top-level `~/.claude/commands/*.md` deployment moved into the plugin.**
+  `plugin/hooks/session-start.sh` copies them from `${CLAUDE_PLUGIN_ROOT}/commands/`
+  on first run, skipping the `*-dev.md` files and skipping the step entirely
+  when the manifest name ends in `-dev` (the prod plugin owns those files).
+
+The statusline stash-and-wrap box is still accurate: `install-statusline`
+stashes the original `statusLine` at `~/.punt-labs/biff/statusline-original.json`,
+and `plugin/hooks/session-start.sh` treats the absence of that stash as "not
+yet installed".
+
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                        User's Machine                                    │

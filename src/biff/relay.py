@@ -51,6 +51,15 @@ SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends; KV storage retentio
 # TTL — used to hide dead sessions from presence before their KV entry
 # expires.
 PRESENCE_LIVENESS_SECONDS = 120.0
+# Threshold for reporting a session as "stopped responding" in the /who
+# footnote (DES-057).  Wider than PRESENCE_LIVENESS_SECONDS on purpose: a
+# session that misses a single heartbeat tick (laptop sleep, GC pause)
+# already drops out of live_sessions() for that one poll and self-heals on
+# the next tick.  Reporting it as dead in the same breath would flap it
+# into and back out of the footnote.  3x the liveness window tolerates
+# several consecutive missed ticks (~4 missed heartbeats past the liveness
+# cutoff) before treating the row as a genuine orphan.
+DEAD_REPORT_SECONDS = PRESENCE_LIVENESS_SECONDS * 3
 
 
 def live_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
@@ -63,6 +72,22 @@ def live_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
     now = datetime.now(UTC)
     return [
         s for s in sessions if s.is_live(now=now, ttl_seconds=PRESENCE_LIVENESS_SECONDS)
+    ]
+
+
+def dead_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
+    """Return KV rows that outlived the process that wrote them.
+
+    A session that shuts down cleanly deletes its own KV row and writes a
+    wtmp logout event (``server/app.py``'s exit path). A row that is still
+    PRESENT here but fails :meth:`~biff.models.UserSession.is_live` at
+    :data:`DEAD_REPORT_SECONDS` is therefore a session that died without
+    deregistering — killed, wedged, or a host that vanished — the orphan
+    signature :func:`live_sessions` silently drops (DES-057).
+    """
+    now = datetime.now(UTC)
+    return [
+        s for s in sessions if not s.is_live(now=now, ttl_seconds=DEAD_REPORT_SECONDS)
     ]
 
 
@@ -317,6 +342,10 @@ class LocalRelay:
 
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
+        # Session keys for which heartbeat() has already logged a missing-
+        # session warning -- caps the warning at once per key rather than
+        # once per heartbeat tick, which runs on a fixed interval forever.
+        self._heartbeat_missing_warned: set[str] = set()
 
     @staticmethod
     def _validate_user(user: str) -> str:
@@ -476,17 +505,39 @@ class LocalRelay:
         ]
 
     async def heartbeat(self, session_key: str) -> None:
-        """Update last_active timestamp, creating session if needed."""
+        """Update ``last_active`` for an existing session; skip if missing.
+
+        Matches :meth:`NatsRelay.heartbeat`: a missing session (expired,
+        deleted, or not yet created) is skipped rather than replaced with
+        a bare ``UserSession(user, tty)``, which would destroy
+        ``tty_name``, ``repo``, ``pwd``, ``hostname``, ``plan``, and every
+        other field that only the lifespan or a tool handler knows how
+        to set.
+
+        Deliberately touches only ``last_active`` (liveness) — never
+        ``last_tool_at``, the idle time ``/who``/``/finger`` display.
+        ``model_copy(update=...)`` below only overwrites the keys named
+        in its ``update`` mapping, so ``last_tool_at`` on the existing
+        session survives unchanged.
+        """
         self._validate_session_key(session_key)
         sessions = self._read_sessions()
         existing = sessions.get(session_key)
-        if existing:
-            sessions[session_key] = existing.model_copy(
-                update={"last_active": datetime.now(UTC)}
-            )
-        else:
-            user, tty = session_key.split(":", maxsplit=1)
-            sessions[session_key] = UserSession(user=user, tty=tty)
+        if existing is None:
+            # A session vanishing under a running heartbeat loop is
+            # anomalous (expired, deleted, or never created) -- warn once
+            # per key, not on every tick, since the loop runs on a fixed
+            # interval for the lifetime of the process.
+            if session_key not in self._heartbeat_missing_warned:
+                self._heartbeat_missing_warned.add(session_key)
+                logger.warning(
+                    "Heartbeat found no session for %s; skipping", session_key
+                )
+            return
+        self._heartbeat_missing_warned.discard(session_key)
+        sessions[session_key] = existing.model_copy(
+            update={"last_active": datetime.now(UTC)}
+        )
         self._write_sessions(sessions)
 
     async def get_sessions(self) -> list[UserSession]:
@@ -508,7 +559,16 @@ class LocalRelay:
     def delete_session_sync(self, session_key: str) -> None:
         """Remove a session from storage (sync, safe from signal handlers)."""
         self._validate_session_key(session_key)
-        sessions = self._read_sessions()
+        try:
+            sessions = self._parse_sessions_file()
+        except (ValidationError, ValueError, json.JSONDecodeError, AttributeError):
+            # No logger here: unlike _read_sessions, this method also runs
+            # from inside a signal handler's cleanup step
+            # (server.app._run_signal_cleanup_steps), where a logging call
+            # can deadlock on the module's lock.  A corrupt file has no
+            # valid session to remove anyway, so swallowing silently here
+            # is honest -- the caller only wanted this one key gone.
+            return
         if session_key in sessions:
             del sessions[session_key]
             self._write_sessions(sessions)
@@ -731,14 +791,24 @@ class LocalRelay:
         """Atomically rewrite a session's TTY inbox."""
         self._write_inbox_file(self._inbox_path_for_key(session_key), messages)
 
-    def _read_sessions(self) -> dict[str, UserSession]:
-        """Read all sessions."""
+    def _parse_sessions_file(self) -> dict[str, UserSession]:
+        """Parse sessions.json, raising on corruption.
+
+        No logging and no fallback here -- callers decide how to handle
+        corruption.  Split out of ``_read_sessions`` so
+        ``delete_session_sync`` (also reachable from a signal handler's
+        cleanup step) can swallow corruption without calling ``logger``.
+        """
         path = self._data_dir / "sessions.json"
         if not path.exists():
             return {}
+        data = json.loads(path.read_text())
+        return {k: UserSession.model_validate(v) for k, v in data.items()}
+
+    def _read_sessions(self) -> dict[str, UserSession]:
+        """Read all sessions, logging (and starting fresh) on corruption."""
         try:
-            data = json.loads(path.read_text())
-            return {k: UserSession.model_validate(v) for k, v in data.items()}
+            return self._parse_sessions_file()
         except (ValidationError, ValueError, json.JSONDecodeError, AttributeError):
             logger.warning("Corrupt sessions file, starting fresh")
             return {}

@@ -2281,6 +2281,46 @@ relay `.deliver()` never executes and inbox assertions fail.
 - **Awaiting inline:** The previous design.  Correct but unnecessarily slow for
   the caller.
 
+### Amendment (2026-08-20): `write` reverts to awaited delivery (biff-0px)
+
+**Status:** SETTLED for `wall`/`talk`; REVERSED for `write`.
+
+The original decision weighed only caller latency against correctness never
+entered the trade-off. Field evidence showed the omission was not
+theoretical: two messages sent from one session were never delivered, with
+no error on either end — the sender's `write` call returned "Message sent",
+the recipient's inbox never received them, and nothing on either side
+recorded a failure. The fire-and-forget task's exception reached only
+`logger.warning` in `biff.log`, a channel the sender never reads.
+
+This is a stronger failure mode than a slow caller: a caller can tolerate
+latency, but has no way to act on a success report that misrepresents
+reality, and no log line reaches the coordination channel itself. `write`'s
+`fire_and_forget()` call is replaced with an awaited delivery, retried once
+from the first undelivered chunk on failure (not from the first chunk, so a
+partial failure cannot redeliver an already-sent one). A persistent failure
+after the retry returns an explicit, distinguishable failure string instead
+of the success string — matching the same "confirmed vs. could not
+determine" distinction applied to `read_messages` (biff-brn) for the same
+reason: a silent failure and a real success must never render identically.
+
+**`wall` and `talk` are unaffected and keep `fire_and_forget()`.** Both are
+broadcast/ephemeral by nature — `wall` is a team-wide post with a natural
+expiry, `talk` is a live, actively-monitored channel — where a single
+recipient's delivery gap is a materially different risk than a single
+targeted message that the sender believes arrived and the recipient never
+sees. Extending this reversal to them needs its own field evidence, not
+inherited from `write`'s.
+
+**Worst-case latency bound.** Each JetStream publish can block up to
+nats-py's ~5s request timeout before raising. With a retry-once policy over
+the undelivered remainder, worst case is roughly ``2 × chunks × 5s`` —
+every chunk in the first pass individually reaching the timeout, then every
+still-undelivered chunk reaching it again on the retry. Callers with their
+own timeout on the `write` MCP tool call should account for this; it is not
+bounded to a single request's timeout the way the prior fire-and-forget
+design's caller-visible latency was.
+
 ## DES-025: CI Notification Workflow — Standalone `workflow_run` Trigger
 
 **Date:** 2026-03-08
@@ -6209,3 +6249,369 @@ tests in `tests/test_stdlib.py`, `tests/test_markers.py`,
 `tests/test_hooks_registration.py`, and `tests/test_plan_gate_scoping.py`
 (the four documented-occurrence regressions, each reproduced against a
 real git repo rather than a git mock).
+
+---
+
+## DES-056: Liveness and Activity Are Two Clocks — `last_active` vs `last_tool_at`
+
+**Date:** 2026-08-14
+**Status:** Settled
+**Beads:** biff-liu, biff-teh, biff-r91, biff-hvi
+**Related:** biff-mue (the liveness filter this decision deliberately
+leaves untouched), biff-b3e (the still-open question of whether dead
+sessions should be shown as stale rather than hidden), DES-011a
+(process-tree walk, the mechanism behind the orphan class below)
+
+### Problem
+
+`UserSession.last_active` was answering two questions that have
+different answers, and one of them was wrong.
+
+`is_live()` asks *is this process alive?* The heartbeat answers it
+correctly by rewriting `last_active` to `now()` on every tick.
+
+The `IDLE` column in `/who` and the `idle H:MM` field in `/finger` ask
+*is anyone actually doing anything?* They read the same field — so the
+heartbeat destroyed the answer. Worse, both surfaces render only
+sessions that heartbeated within `PRESENCE_LIVENESS_SECONDS` (120s), so
+every visible row had a `last_active` under two minutes old **by
+construction**. The column could not render anything but `0m` or `1m`.
+Observed 2026-08-14: all sixteen rows read `0m` simultaneously — not
+sixteen coincidences, a field structurally incapable of varying.
+
+The operator cost was not cosmetic. A Claude session orphaned on Aug 13
+displayed `idle 0:00` beside a live-looking plan and was read as an
+active agent; its plan was five weeks stale. A `biff mcp` server
+orphaned on Jul 17 ran for five weeks unnoticed. Nothing on any presence
+surface distinguished either from a session being typed in that second.
+
+Two adjacent defects surfaced from the same investigation and are fixed
+in the same change, because each one independently defeats the others:
+
+- **biff-teh** — `_active_lifespan`'s `_signal_handler` wrote its
+  sentinel and *returned*. `signal.signal()` replaces the platform's
+  default terminate disposition, so `kill <pid>` did nothing but touch a
+  file. That is where the orphans came from.
+- **biff-r91** — the entire tier-3 subprocess suite had been erroring on
+  collection ("No such option: `--transport`") since the `serve`/`mcp`
+  CLI split. Tier 3 is deselected by default and CI runs tiers 1–2, so
+  nothing reported it.
+
+### Decision
+
+**Add a second clock; do not repurpose the first.**
+`UserSession.last_tool_at` is written only on real tool invocations, via
+`update_current_session()` at the top of every `track_activity`-decorated
+handler and via the shared CLI writer in `commands/_session.py`.
+`last_active`, `is_live`, `PRESENCE_LIVENESS_SECONDS` and
+`live_sessions` are unchanged — which sessions appear and which are
+hidden is exactly as before. `IDLE`/`idle` and the `/who` and
+`/finger` sort orders read `last_tool_at`.
+
+**Rejected: renaming `last_active` to `last_heartbeat` and reusing the
+good name for activity.** It reads better and it is the wrong call. The
+KV record is a wire format shared across a mixed-version fleet — this
+org runs PyPI installs and local builds side by side. An older server
+writing heartbeat semantics into a field a newer server reads as
+activity produces a silently wrong idle time, which is precisely the bug
+class being fixed here. Additive only. The new name was also chosen to
+be unmistakable beside `last_active` in a diff: `last_activity` would
+have been a maintenance trap.
+
+**Never `Optional`.** `last_tool_at` is initialised at session
+registration, so a session nobody has touched reports time since it
+started — the correct answer, not a null. Records written by
+pre-DES-056 servers lack the key entirely; a `model_validator(mode=
+"before")` backfills from that record's own `last_active` rather than
+from `now()`, which is the closest available approximation and avoids an
+epoch-era idle appearing in the table.
+
+**Termination re-delivers the signal rather than raising `SystemExit`.**
+`sys.exit()` was implemented first and rejected on evidence. `SystemExit`
+*does* unwind cleanly out of the blocking selector call — verified with a
+stack dump taken from inside the handler. The hang is one layer further
+down: `mcp.server.stdio.stdio_server()` reads stdin on a **non-daemon**
+AnyIO worker thread, blocked in a real `read()` on a stdin that will
+never see EOF — exactly the state of every real orphan, parent gone and
+pipe never closed. CPython's interpreter shutdown joins every non-daemon
+thread before exiting, so a clean `SystemExit` still hangs forever on
+that join, silently, with no error and no traceback. `signal.signal(
+signum, SIG_DFL)` followed by `os.kill(os.getpid(), signum)` terminates
+at the kernel level, never enters that path, and yields the standard
+128+signum status. The sentinel and best-effort cleanup have already run
+and are on disk by that point.
+
+### Why the writer audit was the work
+
+The bug is one writer refreshing a field it should not, so an incomplete
+audit relocates it rather than fixing it. Every path that touches either
+timestamp was enumerated and its behaviour stated: the two `heartbeat()`
+implementations (`last_active` only — `model_copy` never names the new
+field), `heartbeat()`'s no-session fallback, `update_current_session()`
+(the single activity writer), `get_or_create_session()`'s auto-create
+branch, `register_session()` and the companion path, and
+`cli_session`'s registration and heartbeat loop.
+
+The first pass drew that boundary around the model and display layers
+and **missed the CLI command surface** — a leader scoping error, not a
+worker one. `commands/plan.py`, `tty.py` and `mesg.py` each called
+`update_session()` with a `model_copy` that never named `last_tool_at`,
+so a long-lived interactive REPL would have shown a *monotonically
+growing* idle time while in active use. That would have replaced one
+wrong number with another. Those three writers now share a single
+construction path in `commands/_session.py`, which is also where
+biff-hvi is fixed: the same three fallbacks were dropping `repo`
+(leaving `/who`'s repo column and `/finger`'s `Dir` line free to
+disagree — observed live, one session reporting `punt-labs/lux` and
+`.../vox` simultaneously) and hardcoding `tty_name="cli"`, discarding
+the claimed `ttyN` and making the session unaddressable by `/write`. One
+helper, one place where a CLI session record is built, all fields
+populated consistently. The triplicated construction is why this rotted
+in the first place.
+
+### Known limitation: a mixed-version fleet reports mixed truth
+
+The backfill makes an old record *readable*; it cannot make it *correct*.
+A session served by a server predating this change writes no
+`last_tool_at` at all, and its `last_active` is refreshed by that
+server's own heartbeat on every tick. Reading such a record therefore
+backfills a timestamp that is always fresh, and the idle column shows
+`0m` for it — the original bug, persisting for exactly as long as that
+old server keeps running.
+
+This is not a defect in the backfill; there is no better source. It does
+mean the fix lands per-process rather than per-fleet: until every
+running server is upgraded, `/who` shows correct idle for upgraded
+sessions and the old always-zero for the rest, with nothing on the
+surface distinguishing the two. Worth knowing when reading a mixed
+fleet during a rollout, and worth remembering before concluding from a
+single `0m` row that the fix did not work.
+
+### Consequence for biff-b3e
+
+biff-b3e was filed on the reasoning that hiding dead sessions costs the
+operator the cue that something died — trading a visible anomaly
+(`idle 5h`) for an invisible one. That premise shifts here. A *live but
+untouched* session now reports its own real idle time, which is most of
+the signal that bead wanted. What remains genuinely uncovered is the
+*dead* case, still hidden outright by the 120s filter — which is what
+let a five-week orphan sit unnoticed.
+
+### Full detail
+
+See `models.py`'s `last_tool_at` field and its before-validator;
+`server/tools/_activity.py` and `_session.py`'s
+`update_current_session`; `commands/_session.py`; the `who`/`finger`
+row builders and sorts in `formatting.py`, `server/tools/who.py` and
+`commands/who.py`; `server/app.py`'s `_signal_handler`; and their tests
+in `tests/test_server/test_activity_timestamp.py`,
+`tests/test_commands/test_activity_timestamp.py`,
+`tests/test_integration/test_who_ordering.py`,
+`tests/test_subprocess/test_signal_handling.py` (real subprocesses
+receiving real signals — an in-process handler call cannot observe a
+process staying alive), and the revived tier-3 suite.
+
+---
+
+## DES-055: The Shippable Plugin Surface Lives in `plugin/` — `git-subdir` Marketplace Source
+
+**Date**: 2026-08-19
+**Status**: Implemented
+
+### Problem
+
+`claude plugin install biff@punt-labs` clones this whole repository onto
+every user's machine. The marketplace entry used the `url` source, which
+is a full (shallow) git clone: `src/`, `tests/`, `docs/`, `research/`,
+`spikes/`, `.github/`, `.beads/`, the 300 KB `DESIGN.md`, and this repo's
+own `.punt-labs/` and `.claude/` working state all landed on disk to
+deliver four directories of markdown, JSON, and shell.
+
+That is not only waste. It is the same class of problem as the ethos
+submodule (DES-052's neighbour, the `.punt-labs/ethos` gitlink removal):
+everything tracked here ships to every consumer, so the repo layout is a
+distribution decision, not an internal preference.
+
+### Decision
+
+The shippable surface moves into a single directory, `plugin/`:
+
+```text
+plugin/
+├── .claude-plugin/
+│   ├── plugin.json          manifest — mcpServers.tty runs `biff mcp`
+│   └── agents/              plugin-shipped agent definitions
+├── commands/                slash commands (name.md + name-dev.md)
+└── hooks/                   hook dispatchers + hooks.json
+```
+
+The marketplace entry then uses Claude Code's `git-subdir` source
+(`"source": "git-subdir"`, `"path": "plugin"`), which is a blobless
+partial clone plus `git sparse-checkout set --cone plugin`. Whole
+directories outside `plugin/` are never fetched.
+
+Nothing in the surface reaches outside itself at runtime, which is what
+makes the split safe: `hooks.json` addresses every script as
+`${CLAUDE_PLUGIN_ROOT}/hooks/<name>.sh` and the whole `hooks/` directory
+moved together, so those paths are unchanged; the MCP server is the
+`biff` binary on `PATH` from PyPI, not code in the plugin; and each hook
+script depends only on `$HOME`, the `biff-hook` binary, and the
+consumer's own `$REPO_ROOT/.punt-labs/biff/enabled` marker.
+
+### Cone mode still ships the repo root
+
+`sparse-checkout --cone` excludes directories, not files. Every file
+sitting in the repo *root* — `DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`,
+`prfaq.tex`, `press-release-v0.11.4.pdf`, `README.md`, `CLAUDE.md` — is
+still materialized by an install. Roughly 1 MB of root documents travels
+with a plugin that is itself ~150 KB. Shrinking that remainder means
+moving root documents into a subdirectory; this decision does not
+attempt it, and any future attempt has to weigh it against every
+external link into `DESIGN.md`.
+
+### Alternatives rejected
+
+- **A separate published plugin repo.** Two repos to keep in sync, and
+  the plugin would stop being reviewable in the same PR as the code it
+  drives. The two channels already have to release together (marketplace
+  config + PyPI binary); splitting the repo doubles the coordination.
+- **Bundling the plugin inside the wheel.** biff did this once
+  (`biff.plugins.biff` + `installer.py`, both long gone) and moved to the
+  marketplace deliberately: `claude plugin update` is the users' upgrade
+  path for prompts and hooks, not `uv tool upgrade`.
+- **Leaving the surface at the repo root and accepting the full clone.**
+  This is what was measured as the cost; see the CHANGELOG entry for the
+  before/after numbers.
+
+### Consequences for anyone working in this repo
+
+- `${CLAUDE_PLUGIN_ROOT}` is `plugin/`. A dev install is
+  `claude --plugin-dir <repo>/plugin`, not `--plugin-dir <repo>`.
+- Repo-relative references to the surface had to move with it:
+  `tests/test_hooks_registration.py`, `tests/test_suppress_output.py`,
+  `scripts/release-plugin.sh`, and `scripts/restore-dev-plugin.sh`.
+- `punt release` and `punt audit` resolve `plugin.json` at
+  `<root>/.claude-plugin/plugin.json` in punt-kit's own code. Until
+  punt-kit learns the `plugin/` location, biff's release cannot bump the
+  plugin version or read its committed name — this is tracked as a
+  cross-repo prerequisite, not a biff-local fix.
+
+---
+
+## DES-057: `/who` Footnotes Sessions That Died Without Deregistering
+
+**Date:** 2026-08-14
+**Status:** Settled
+**Beads:** biff-b3e
+**Related:** biff-mue (`live_sessions()`, the filter this decision
+deliberately leaves untouched), DES-056 (closed the *live-but-idle*
+half of biff-b3e's premise; this closes the *dead* half)
+
+### Problem
+
+`live_sessions()` (biff-mue) hides any KV row whose heartbeat is older
+than `PRESENCE_LIVENESS_SECONDS` (120s) from `/who` and `/finger`. That
+is the correct behavior for the main table — a dead session should not
+render as present. But it is also the *only* filter: a row that fails
+liveness simply disappears from every surface, with no distinction
+between "shut down cleanly a minute ago" and "has been dead for five
+weeks."
+
+The cost was not hypothetical. The same investigation that produced
+DES-056 found a `biff mcp` process orphaned since Jul 17 — five weeks —
+plus a Claude session and its server orphaned from the previous day.
+Nothing on `/who`, `/finger`, or anywhere else showed either, because
+hiding is exactly what `live_sessions()` does, by design, for every row
+past the window.
+
+DES-056 closed half of biff-b3e's original premise: a *live but idle*
+session now reports its own true idle time instead of a heartbeat-reset
+`0m`, so an operator reading `/who` no longer mistakes "alive and idle"
+for "just started." What DES-056 left open is the other half — the
+*dead* case is still hidden outright, which is what let the five-week
+orphan sit unnoticed in the first place.
+
+### Decision
+
+**A KV row that fails liveness but is still present is, by
+construction, the orphan signature.** A session that shuts down cleanly
+deletes its own KV row and writes a wtmp logout event
+(`server/app.py`'s exit path). A row `get_sessions_for_repos` still
+returns that nonetheless fails `is_live()` is therefore a session that
+died without deregistering — killed, wedged, or a host that vanished.
+`relay.dead_sessions()` computes exactly that set, and `/who` (both the
+MCP tool and the CLI command) appends a trailing footnote reporting it:
+
+```text
+▶  NAME       K  REPO  IDLE  S  P  HOST
+   kai:tty1      biff  3m    +  +  laptop
+   2 sessions stopped responding (last seen 6m, 35d)
+```
+
+**The footnote never names a session.** Unlike `WHO_SPECS`'s `NAME`/
+`HOST` columns, there is no fixed table column here for an unbounded
+`user`/`tty_name`/`hostname` to widen — the footnote is a single
+formatted sentence built from a count and a list of durations, both
+computed server-side from timestamps, not copied from the wire. There
+is therefore nothing on this render path that needs `sanitized_address`
+or `clip_to_width`; `format_dead_footnote` still routes its text through
+`wrap_cells` at `TABLE_WIDTH` like every other multi-line render site,
+because the duration list itself has no upper bound on how many dead
+sessions it can enumerate.
+
+**A wider threshold than `PRESENCE_LIVENESS_SECONDS`, to avoid
+flapping.** A session that misses exactly one heartbeat tick — a
+laptop going to sleep mid-tick, a GC pause, a scheduler hiccup — already
+drops out of `live_sessions()` for that one poll and self-heals on the
+next tick once the heartbeat resumes. Reporting that same row as "dead"
+in the footnote at the same threshold would flap it into the footnote
+and back out one poll later: a false alarm for a session that was never
+actually orphaned. `DEAD_REPORT_SECONDS` is set to
+`3 * PRESENCE_LIVENESS_SECONDS` (360s) — wide enough to absorb several
+consecutive missed ticks before a row is called dead, while still
+surfacing a genuine orphan within minutes rather than the 3-day storage
+TTL. The two thresholds are deliberately independent constants in
+`relay.py`, not one multiplied at each call site, so the tolerance
+policy is visible and changeable in one place.
+
+**`PRESENCE_LIVENESS_SECONDS` itself is left at 120s — recommendation,
+not a change.** The bead separately asked whether the 120s window (a
+tight 2x margin over the 60s heartbeat interval) should widen, on the
+same flapping concern: a single missed heartbeat can briefly hide a
+still-alive session from the main table before the next tick heals it.
+That tradeoff is real, but widening `PRESENCE_LIVENESS_SECONDS` changes
+who is shown as *present* on every surface that reads it (`/who`'s main
+table, `/finger`, `_close_orphaned_logins`'s wtmp reconciliation at
+startup) — a strictly larger blast radius than this footnote, which is
+purely additive. Recommendation: widen to 180s (3x the heartbeat
+interval) if the flapping is observed in practice to be a real operator
+annoyance rather than a theoretical one; until then, 120s stays as
+biff-mue set it. This decision does not make that change — a widening
+of `PRESENCE_LIVENESS_SECONDS` should be its own decision, logged
+separately, because unlike the footnote it is not reversible-by-adding
+and needs its own evidence.
+
+### Rejected: naming the dead sessions in the footnote
+
+The bead's own phrasing ("N stale sessions hidden") and a distinct
+"stale" row status were both on the table. Naming sessions would have
+required routing `user`/`tty_name` through `sanitized_address` the same
+way `WHO_SPECS` does, reopening the exact fixed-column-widening and
+label-injection surface `sanitized_address`/`clip_to_width` exist to
+close (biff-lbj) — for a summary line whose whole value is being small
+and skimmable. A count-plus-durations sentence carries the operationally
+useful signal (something died; roughly how long ago) without growing
+that surface, and keeps the change to the smallest addition that
+restores the lost signal, per this repo's standing note that the
+display pipeline is fragile and represents 12-16 hours of prior
+iteration.
+
+### Full detail
+
+See `relay.py`'s `DEAD_REPORT_SECONDS` and `dead_sessions()`;
+`formatting.py`'s `format_dead_footnote`; `server/tools/who.py` and
+`commands/who.py`'s composition of table + footnote; and their tests in
+`tests/test_relay.py::TestDeadSessions`,
+`tests/test_formatting.py::TestFormatDeadFootnote`,
+`tests/test_server/test_tools.py::TestWhoTool::test_hides_dead_sessions`,
+and `tests/test_commands/test_who.py::TestWho::test_all_dead_returns_no_sessions`.

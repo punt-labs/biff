@@ -6,7 +6,6 @@ the registered closure, verifying it reads/writes state correctly.
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,6 +14,7 @@ from typing import TYPE_CHECKING
 from fastmcp.tools.function_tool import FunctionTool
 
 from biff._formatting import TABLE_WIDTH, visible_width
+from biff.chunking import chunk_message
 from biff.formatting import _NO_PRINTABLE_TEXT
 from biff.models import BiffConfig, Message, UserSession
 from biff.server.app import create_server
@@ -379,7 +379,9 @@ class TestWhoTool:
         assert "1m" in result
 
     async def test_hides_dead_sessions(self, state: ServerState) -> None:
-        """Sessions past the liveness window are dropped from /who."""
+        """Sessions past the liveness window are dropped from the main table
+        but still surfaced, unnamed, in the dead-session footnote
+        (DES-057) once they exceed the wider DEAD_REPORT_SECONDS threshold."""
         old_time = datetime.now(UTC) - timedelta(days=2)
         recent_time = datetime.now(UTC) - timedelta(seconds=30)
         await state.relay.update_session(
@@ -394,7 +396,7 @@ class TestWhoTool:
         result = await fn()
         assert "recent" in result
         assert "old" not in result
-        assert "2d" not in result
+        assert "stopped responding (last seen 2d)" in result
 
     async def test_sorted_by_idle_time(self, state: ServerState) -> None:
         now = datetime.now(UTC)
@@ -603,7 +605,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="hey, PR is ready")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
         assert unread[0].from_user == "kai"
@@ -615,7 +616,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
@@ -623,7 +623,6 @@ class TestSendMessageTool:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"@eric:{_ERIC_TTY}", message="hello")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
         assert unread[0].to_user == f"eric:{_ERIC_TTY}"
@@ -635,7 +634,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to=f"eric:{_ERIC_TTY}", message="urgent fix needed")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 1
 
@@ -643,9 +641,7 @@ class TestSendMessageTool:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         await fn(to=f"eric:{_ERIC_TTY}", message="first")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         await fn(to=f"eric:{_ERIC_TTY}", message="second")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
         assert len(unread) == 2
 
@@ -667,7 +663,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="nobody", message="hello")
         assert "nobody" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("nobody")
         assert len(unread) == 1
 
@@ -676,7 +671,6 @@ class TestSendMessageTool:
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric", message="hello")
         assert "eric" in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("eric")
         assert len(unread) == 1
 
@@ -686,9 +680,109 @@ class TestSendMessageTool:
         result = await fn(to="@offlineuser", message="offline msg")
         assert "offlineuser" in result
         assert "not found" not in result
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         unread = await state.relay.fetch_user_inbox("offlineuser")
         assert len(unread) == 1
+
+    async def test_delivery_awaited_not_fire_and_forget(
+        self, state: ServerState
+    ) -> None:
+        """biff-0px: the message is in the recipient's inbox before write() returns.
+
+        The prior fire-and-forget design could return "Message sent" before
+        the background delivery task had even run — a caller inspecting the
+        inbox immediately after write() returned could observe it still
+        empty. Delivery is now awaited, so this is no longer racy.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        fn = await _get_tool_fn(state, "write")
+        await fn(to=f"eric:{_ERIC_TTY}", message="no race")
+        unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 1
+
+    async def test_recovers_on_retry_after_one_failure(
+        self, state: ServerState
+    ) -> None:
+        """A single transient failure is recovered by the retry-once.
+
+        Mirrors the observed recovery pattern (biff-brn): every
+        session-reported transport-error occurrence cleared on the very
+        next attempt.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        real_deliver = state.relay.deliver
+        calls = {"n": 0}
+
+        async def _flaky_deliver(*args: object, **kwargs: object) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                msg = "nats: timeout"
+                raise TimeoutError(msg)
+            await real_deliver(*args, **kwargs)  # type: ignore[arg-type]
+
+        state.relay.deliver = _flaky_deliver  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to=f"eric:{_ERIC_TTY}", message="retried ok")
+        assert "Message sent" in result
+        assert calls["n"] == 2
+        unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 1
+
+    async def test_reports_failure_distinctly_after_two_failures(
+        self, state: ServerState
+    ) -> None:
+        """biff-0px/biff-brn: a persistent failure must not read as success.
+
+        The prior fire-and-forget design would have returned "Message
+        sent" here regardless — the failure reached only a background log
+        line. It must now be visibly distinguishable from success, and the
+        message must not silently appear delivered when it was not.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> None:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state.relay.deliver = _always_fails  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "write")
+        result = await fn(to=f"eric:{_ERIC_TTY}", message="will not arrive")
+        assert "Message sent" not in result
+        assert "Could not deliver" in result
+        assert "not confirmed sent" in result.lower()
+        unread = await state.relay.fetch(f"eric:{_ERIC_TTY}")
+        assert len(unread) == 0
+
+    async def test_partial_chunk_failure_retries_only_undelivered_chunks(
+        self, state: ServerState
+    ) -> None:
+        """A failure partway through a multi-chunk message doesn't redeliver
+        the chunks that already succeeded.
+        """
+        await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
+        real_deliver = state.relay.deliver
+        delivered_bodies: list[str] = []
+        calls = {"n": 0}
+
+        async def _fail_on_second_call(msg: object, **kwargs: object) -> None:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                err = "nats: timeout"
+                raise TimeoutError(err)
+            delivered_bodies.append(msg.body)  # type: ignore[attr-defined]
+            await real_deliver(msg, **kwargs)  # type: ignore[arg-type]
+
+        state.relay.deliver = _fail_on_second_call  # type: ignore[assignment]
+        fn = await _get_tool_fn(state, "write")
+        long_message = " ".join(f"word{i}" for i in range(400))  # forces 3+ chunks
+        expected_chunks = chunk_message(long_message)
+        assert len(expected_chunks) >= 3, "test needs 3+ chunks to exercise the retry"
+        result = await fn(to=f"eric:{_ERIC_TTY}", message=long_message)
+        assert "Message sent" in result
+        # Chunk 1 delivered once (call 1), chunk 2 failed (call 2) then
+        # delivered on retry (call 3), chunk 3 delivered once (call 4) —
+        # pins the resume semantics exactly: each chunk delivered exactly
+        # once, in order, never a redelivery of chunk 1.
+        assert delivered_bodies == expected_chunks
 
 
 class TestCheckMessagesTool:
@@ -696,6 +790,114 @@ class TestCheckMessagesTool:
         fn = await _get_tool_fn(state, "read_messages")
         result = await fn()
         assert "No new messages" in result
+
+    async def test_recovers_on_retry_after_one_failure(
+        self, state: ServerState
+    ) -> None:
+        """biff-brn: a single transient fetch failure is recovered by the
+        code-level retry-once, matching the observed recovery pattern —
+        every session-reported occurrence cleared on the very next attempt.
+        """
+        real_fetch = state.relay.fetch
+        calls = {"n": 0}
+
+        async def _flaky_fetch(*args: object, **kwargs: object) -> list[Message]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                msg = "nats: timeout"
+                raise TimeoutError(msg)
+            return await real_fetch(*args, **kwargs)  # type: ignore[arg-type]
+
+        state.relay.fetch = _flaky_fetch  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "read_messages")
+        result = await fn()
+        assert "Could not check" not in result
+        # >= 2: retry happened. The exact total also includes
+        # refresh_read_messages's own get_unread_summary()->fetch() call
+        # after a successful retry, which is unrelated to the retry logic
+        # under test.
+        assert calls["n"] >= 2
+
+    async def test_reports_failure_distinctly_after_two_failures(
+        self, state: ServerState
+    ) -> None:
+        """biff-brn: a persistent transport failure must not render as, or
+        be silently treated as, a confirmed-empty inbox. The tool itself
+        (not just the /biff:read prompt) must return a distinguishable
+        result rather than raising, so a caller cannot swallow an
+        unhandled exception into silence.
+        """
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> list[Message]:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state.relay.fetch = _always_fails  # type: ignore[method-assign]
+        fn = await _get_tool_fn(state, "read_messages")
+        result = await fn()
+        assert "No new messages" not in result
+        assert "Could not check" in result
+        assert "not confirmed empty" in result.lower()
+
+    async def test_successful_inbox_never_refetched_or_lost_on_sibling_failure(
+        self, state: ServerState
+    ) -> None:
+        """HIGH-severity review finding, fixed here: a naive whole-batch
+        retry would re-call fetch() on the tty inbox even though it
+        already succeeded. On NatsRelay, fetch() destructively acks
+        (deletes) messages from the stream as a side effect of a
+        successful pull — a second call for the same reason a retry would
+        make returns nothing, silently discarding the messages the first
+        call already returned. The fix retries only the inbox that
+        actually failed (fetch_user_inbox here), never the one that
+        already succeeded (fetch).
+
+        Exercises _fetch_unread_with_retry directly rather than through
+        the full read_messages tool: the tool's own downstream
+        refresh_read_messages() call legitimately calls fetch() again
+        afterwards (for the unrelated tool-description unread count), so
+        a call count taken at the read_messages level can't isolate
+        whether THIS function's own retry re-fetched the succeeded inbox.
+        """
+        from biff.server.tools.messaging import _fetch_unread_with_retry
+
+        real_fetch = state.relay.fetch
+        fetch_calls = {"n": 0}
+
+        async def _fetch_once_then_empty(
+            *args: object, **kwargs: object
+        ) -> list[Message]:
+            fetch_calls["n"] += 1
+            if fetch_calls["n"] > 1:
+                return []  # simulates WORK_QUEUE: nothing left after the ack
+            return await real_fetch(*args, **kwargs)  # type: ignore[arg-type]
+
+        async def _user_inbox_always_fails(
+            *_args: object, **_kwargs: object
+        ) -> list[Message]:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        await state.relay.deliver(
+            Message(from_user="kai", to_user=f"kai:{_KAI_TTY}", body="tty message")
+        )
+        state.relay.fetch = _fetch_once_then_empty  # type: ignore[method-assign]
+        state.relay.fetch_user_inbox = _user_inbox_always_fails  # type: ignore[method-assign]
+
+        (
+            (tty_unread, user_unread, comp_tty, comp_user),
+            warning,
+        ) = await _fetch_unread_with_retry(state)
+
+        assert fetch_calls["n"] == 1, "the succeeded fetch must never be retried"
+        assert [m.body for m in tty_unread] == ["tty message"], (
+            "the already-fetched message must not be lost"
+        )
+        assert user_unread == []
+        assert comp_tty == []
+        assert comp_user == []
+        assert warning is not None
+        assert "your broadcast inbox" in warning
 
     async def test_shows_unread(self, state: ServerState, tmp_path: Path) -> None:
         # Register kai so eric can resolve the targeted address.
@@ -708,7 +910,6 @@ class TestCheckMessagesTool:
         # Use targeted delivery to kai's session
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="review my PR please")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()
@@ -726,7 +927,6 @@ class TestCheckMessagesTool:
         )
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="hello")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         await check_fn()
@@ -750,10 +950,8 @@ class TestCheckMessagesTool:
         )
         eric_send = await _get_tool_fn(eric_state, "write")
         await eric_send(to=f"kai:{_KAI_TTY}", message="from eric")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
         priya_send = await _get_tool_fn(priya_state, "write")
         await priya_send(to=f"kai:{_KAI_TTY}", message="from priya")
-        await asyncio.sleep(0)  # let fire-and-forget delivery complete
 
         check_fn = await _get_tool_fn(state, "read_messages")
         result = await check_fn()

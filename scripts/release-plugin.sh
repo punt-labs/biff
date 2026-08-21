@@ -6,8 +6,18 @@ set -euo pipefail
 # from it.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PLUGIN_JSON="${REPO_ROOT}/.claude-plugin/plugin.json"
-COMMANDS_DIR="${REPO_ROOT}/commands"
+PLUGIN_JSON="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
+COMMANDS_DIR="${REPO_ROOT}/plugin/commands"
+
+# Preflight: the commands directory must exist. The `find` below runs inside a
+# process substitution, so `set -e` does not see its failure — a missing or
+# wrong COMMANDS_DIR would silently yield zero `*-dev.md` matches, take the
+# "name swap only" branch, and ship a release-prep commit that never stripped
+# the dev commands.
+if [[ ! -d "$COMMANDS_DIR" ]]; then
+  echo "Error: commands directory not found: $COMMANDS_DIR" >&2
+  exit 1
+fi
 
 # Preflight: abort if repo has uncommitted changes
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain -uno)" ]]; then

@@ -36,6 +36,7 @@ __all__ = [
     "READ_SPECS",
     "WHO_SPECS",
     "ColumnSpec",
+    "format_dead_footnote",
     "format_finger",
     "format_finger_multi",
     "format_idle",
@@ -341,7 +342,7 @@ def format_who(sessions: list[UserSession]) -> str:
             _format_who_name(s),
             _format_who_kind(s),
             display_repo_name(s.repo) or "-",
-            format_idle(s.last_active),
+            format_idle(s.last_tool_at),
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
             _truncate(terminal_safe(s.hostname), _MAX_LABEL_WIDTH) or "-",
@@ -349,6 +350,31 @@ def format_who(sessions: list[UserSession]) -> str:
         for s in sessions
     ]
     return format_table(WHO_SPECS, rows)
+
+
+def format_dead_footnote(dead: list[UserSession]) -> str:
+    """Render a trailing summary line for KV rows that died without deregistering.
+
+    A session that shuts down cleanly deletes its own KV row, so a row
+    :func:`~biff.relay.dead_sessions` still finds is a session that stopped
+    heartbeating without cleanup — killed, wedged, or its host vanished
+    (DES-057). The main ``/who`` table only ever renders *live* rows, so
+    this signal would otherwise be invisible until the 3-day storage TTL
+    reaps the row.
+
+    Deliberately reports counts and idle durations only, never a `user` or
+    `tty_name` — unlike :data:`WHO_SPECS`, there is no fixed column here for
+    an unbounded field to widen, so there is nothing to sanitize or clip.
+    Returns ``""`` when *dead* is empty so callers can append unconditionally.
+    """
+    if not dead:
+        return ""
+    by_recency = sorted(dead, key=lambda s: s.last_active, reverse=True)
+    ages = ", ".join(format_idle(s.last_active) for s in by_recency)
+    noun = "session" if len(dead) == 1 else "sessions"
+    text = f"{len(dead)} {noun} stopped responding (last seen {ages})"
+    chunks = wrap_cells(text, _ROW_TEXT_WIDTH, preserve_whitespace=True) or [""]
+    return "\n".join(ROW_PREFIX + chunk for chunk in chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -398,8 +424,14 @@ def format_user_header(session: UserSession) -> str:
 
 
 def format_tty_block(session: UserSession) -> str:
-    """Format per-TTY details (on-since, host/dir, plan)."""
-    idle = _format_finger_idle(session.last_active)
+    """Format per-TTY details (on-since, host/dir, plan).
+
+    ``idle`` reads ``last_tool_at`` — the last real tool invocation —
+    not ``last_active``, which the background heartbeat refreshes every
+    tick regardless of activity and would otherwise make idle read as
+    0-1 minutes for every live session.
+    """
+    idle = _format_finger_idle(session.last_tool_at)
     since = session.last_active.strftime("%a %b %d %H:%M (%Z)")
     tty_label = terminal_safe(session.tty_name) or (
         session.tty[:8] if session.tty else "?"
@@ -428,8 +460,14 @@ def format_finger(session: UserSession) -> str:
 
 
 def format_finger_multi(sessions: list[UserSession]) -> str:
-    """Format all sessions for a user (header once, multiple tty blocks)."""
-    by_idle = sorted(sessions, key=lambda s: s.last_active, reverse=True)
+    """Format all sessions for a user (header once, multiple tty blocks).
+
+    Ordered most-recently-active first by ``last_tool_at``, matching the
+    idle time each block renders (:func:`format_tty_block`) — sorting on
+    ``last_active`` instead would order by heartbeat recency, which is
+    unrelated to the idle value shown.
+    """
+    by_idle = sorted(sessions, key=lambda s: s.last_tool_at, reverse=True)
     header = format_user_header(by_idle[0])
     tty_blocks = [format_tty_block(s) for s in by_idle]
     return header + "\n" + "\n".join(tty_blocks)
@@ -735,6 +773,29 @@ READ_SPECS: list[ColumnSpec] = [
 ]
 
 
+def _render_message_rows(messages: list[Message]) -> tuple[int, str, str]:
+    """Return ``(count, noun, indented_table)`` for a list of messages.
+
+    Shared by :func:`format_read` and :func:`format_read_dual` so the count
+    is always derived from the exact list it's rendered beside — never
+    computed twice and never able to disagree between the two call sites
+    (biff-9cz).
+    """
+    rows: list[list[str]] = []
+    for m in messages:
+        ts = m.timestamp.strftime("%a %b %d %H:%M")
+        sender = sanitized_address(m.from_user, m.from_tty)
+        rows.append([sender, ts, terminal_safe(m.body)])
+    table = format_table(READ_SPECS, rows)
+    count = len(messages)
+    noun = "message" if count == 1 else "messages"
+    # Indent the table under a section/count header: replace the leading
+    # HEADER_PREFIX on the column-header line with ROW_PREFIX so it aligns
+    # as a sub-table row.
+    indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
+    return count, noun, indented_table
+
+
 def format_read_dual(
     human_user: str,
     human_msgs: list[Message],
@@ -750,27 +811,22 @@ def format_read_dual(
     :func:`format_read` is: an unbounded value would widen FROM for every
     row in a section's table, and collapse the MESSAGE wrap budget shared
     by every message in that section.
+
+    Each section header carries its own count, derived from that
+    section's own message list — same synchronization guarantee as
+    :func:`format_read` (biff-9cz).
     """
     sections: list[str] = []
     for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
         if not msgs:
             continue
-        rows: list[list[str]] = []
-        for m in msgs:
-            ts = m.timestamp.strftime("%a %b %d %H:%M")
-            sender = sanitized_address(m.from_user, m.from_tty)
-            rows.append([sender, ts, terminal_safe(m.body)])
-        table = format_table(READ_SPECS, rows)
-        # Indent the table under the section header: replace the
-        # leading HEADER_PREFIX on the column-header line with
-        # ROW_PREFIX so it aligns as a sub-table row.
-        indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
-        sections.append(f"{HEADER_PREFIX}{user}\n{indented_table}")
+        count, noun, indented_table = _render_message_rows(msgs)
+        sections.append(f"{HEADER_PREFIX}{user} ({count} new {noun})\n{indented_table}")
     return "\n\n".join(sections)
 
 
 def format_read(messages: list[Message]) -> str:
-    """Format messages in BSD ``from(1)`` style.
+    """Format messages in BSD ``from(1)`` style, with a leading count.
 
     The FROM column renders a copy-pasteable reply address:
     ``user:ttyNN`` when the sender's tty is known, ``user`` otherwise.
@@ -780,10 +836,15 @@ def format_read(messages: list[Message]) -> str:
     it for every row) and MESSAGE is the table's variable/wrap column
     (unbounded FROM content shrinks the shared wrap budget toward its
     floor for every row) — :func:`sanitized_address` bounds both.
+
+    The count in the leading line is derived from ``len(messages)`` —
+    the same list the table below renders — never from a separately
+    polled summary. The tool description's "(N unread)" marker is
+    computed on an independent timer and can be stale relative to a
+    live fetch; a caller reading that marker and this return value as
+    two counts of the same fetch will see them disagree. This return
+    value is the only count guaranteed synchronized with what it is
+    printed next to (biff-9cz).
     """
-    rows: list[list[str]] = []
-    for m in messages:
-        ts = m.timestamp.strftime("%a %b %d %H:%M")
-        sender = sanitized_address(m.from_user, m.from_tty)
-        rows.append([sender, ts, terminal_safe(m.body)])
-    return format_table(READ_SPECS, rows)
+    count, noun, indented_table = _render_message_rows(messages)
+    return f"{HEADER_PREFIX}{count} new {noun}\n{indented_table}"

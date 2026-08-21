@@ -35,11 +35,18 @@ class TestServerStartup:
         names = {t.name for t in tools}
         expected = {
             "biff",
+            "biff_relay",
             "finger",
+            "get_poll_status",
             "last",
             "mesg",
             "plan",
             "read_messages",
+            "set_poll_interval",
+            "talk",
+            "talk_end",
+            "talk_listen",
+            "talk_read",
             "tty",
             "wall",
             "who",
@@ -100,12 +107,17 @@ class TestCrossProcessState:
         eric_client: Client[Any],
         shared_data_dir: Path,
     ) -> None:
-        """kai's plan is visible to eric via separate subprocess."""
+        """kai's plan is visible to eric via separate subprocess.
+
+        The plan message itself only appears on ``finger``, not ``who``
+        (the ``who`` table shows name/repo/idle/status columns only).
+        """
         await kai_client.call_tool("plan", {"message": "cross-process test"})
-        result = await eric_client.call_tool("who", {})
-        text = _text(result)
-        assert "kai" in text
-        assert "cross-process test" in text
+        who_result = await eric_client.call_tool("who", {})
+        assert "kai" in _text(who_result)
+
+        finger_result = await eric_client.call_tool("finger", {"user": "kai"})
+        assert "cross-process test" in _text(finger_result)
 
     async def test_both_visible_in_who(
         self,

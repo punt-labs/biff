@@ -31,15 +31,13 @@ def _make_transport(user: str, data_dir: Path) -> StdioTransport:
         args=[
             "run",
             "biff",
-            "serve",
+            "mcp",
             "--user",
             user,
             "--data-dir",
             str(data_dir),
             "--relay-url",
             "",
-            "--transport",
-            "stdio",
         ],
     )
 

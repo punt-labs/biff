@@ -6,6 +6,30 @@ I am a principal engineer. Every change I make leaves the codebase in a better s
 
 There is no such thing as a "pre-existing" issue. If you see a problem — in code you wrote, code a reviewer flagged, or code you happen to be reading — you fix it. Do not classify issues as "pre-existing" to justify ignoring them. Do not suggest that something is "outside the scope of this change." If it is broken and you can see it, it is your problem now.
 
+## No Git Submodules
+
+**This repo is cloned onto every user's machine.** `claude plugin install biff@punt-labs` clones it, and it clones **with submodules**. Everything tracked here ships to every consumer.
+
+So the org-wide rule "every project adds `punt-labs/team` as a submodule at `.punt-labs/ethos/`" does **not** apply to biff. It was added, and it broke keyless installs: `.gitmodules` used the SSH URL `git@github.com:punt-labs/team.git`, so any user without a GitHub SSH key hit
+
+```text
+fatal: clone of 'git@github.com:punt-labs/team.git' into submodule path ... failed
+Failed to clone '.punt-labs/ethos' a second time, aborting
+```
+
+`punt-labs/team` being public does not help — SSH auth fails before repo visibility is consulted. An HTTPS URL would fix the auth failure but still push 1.1 MB of internal identity data onto every user's disk. Do not re-add it.
+
+What remains under `.punt-labs/` is ordinary tracked content, not a submodule, and it is deliberately two files:
+
+| File | Why it stays |
+|------|--------------|
+| `.punt-labs/ethos.yaml` | Names this repo's agent (`claude`). Located by `_find_ethos_config()`, then parsed by `_read_agent_handle()` for the `agent` field. |
+| `.punt-labs/ethos/identities/claude.yaml` | The only file biff's runtime consumes from the org registry — see below. |
+
+`claude.yaml` is not an arbitrary subset. `resolve_agent_identity_from_disk()` (DES-040) reads it to give an agent session agent-first identity, and `_known_agent_github_logins()` (DES-053) scans that directory for every `kind: agent` identity's `github` login so a leaked bot PAT can be rejected. `claude.yaml` is the only agent identity in the entire org registry carrying a `github` field, so it alone carries that security property. The global `~/.punt-labs/ethos/` cannot substitute — it holds the human identity, not `claude`.
+
+The rest of the registry is gitignored. Clone `punt-labs/team` into `.punt-labs/ethos/` locally if you want the full roster; git will keep it untracked. Everything else resolves from the `ethos` CLI at runtime.
+
 ## Standards
 
 Follow [punt-kit standards](../punt-kit/standards/) for Python, workflow, GitHub, CLI, and plugins. Below are biff-specific overrides and additions.
@@ -27,14 +51,14 @@ Follow [punt-kit standards](../punt-kit/standards/) for Python, workflow, GitHub
 
 Four tiers, each testing a different boundary. New features should have tests at tiers 1-2 minimum; tiers 3-4 for integration-critical paths.
 
-| Tier | Directory | Transport | What It Tests | Speed |
-|------|-----------|-----------|---------------|-------|
-| **1. Unit** | `tests/test_server/`, `tests/test_storage/` | Direct function calls | Tool logic, storage, data models | ~1s total |
-| **2. Integration** | `tests/test_integration/` | `FastMCPTransport` (in-memory) | MCP protocol, tool discovery, cross-user state | ~2s total |
-| **3. Subprocess** | `tests/test_subprocess/` | `StdioTransport` (stdio pipes) | Wire protocol, CLI args, process lifecycle | ~5s total |
-| **3b. NATS E2E** | `tests/test_nats_e2e/` | `FastMCPTransport` + local NATS | Presence, messaging via NATS KV + JetStream | ~3s total |
-| **3c. Hosted NATS** | `tests/test_hosted_nats/` | `FastMCPTransport` + hosted NATS | Same as 3b against Synadia Cloud / self-hosted | ~10s total |
-| **4. SDK** | `tests/test_sdk/` | Claude Agent SDK (real Claude sessions) | End-to-end: Claude discovers tools, decides what to call, results flow back | ~30s per test, costs ~$0.02/call |
+| Tier | Directory | Transport | What It Tests | Speed | Runs in CI |
+|------|-----------|-----------|---------------|-------|------------|
+| **1. Unit** | `tests/test_server/`, `tests/test_storage/` | Direct function calls | Tool logic, storage, data models | ~1s total | Yes |
+| **2. Integration** | `tests/test_integration/` | `FastMCPTransport` (in-memory) | MCP protocol, tool discovery, cross-user state | ~2s total | Yes |
+| **3a. Subprocess** | `tests/test_subprocess/` | `StdioTransport` (stdio pipes) | Wire protocol, CLI args, process lifecycle | ~75-105s total | Yes |
+| **3b. NATS E2E** | `tests/test_nats_e2e/` | `FastMCPTransport` + local NATS | Presence, messaging via NATS KV + JetStream | ~3s total | No — requires local `nats-server`; currently hangs (biff-7xd), do not add until fixed |
+| **3c. Hosted NATS** | `tests/test_hosted_nats/` | `FastMCPTransport` + hosted NATS | Same as 3b against Synadia Cloud / self-hosted | ~10s total | No — manual-only (`workflow_dispatch`) |
+| **4. SDK** | `tests/test_sdk/` | Claude Agent SDK (real Claude sessions) | End-to-end: Claude discovers tools, decides what to call, results flow back | ~30s per test, costs ~$0.02/call | No — costs money per run |
 
 ### Running Tests
 
@@ -49,7 +73,7 @@ uv run pytest -m "subprocess or sdk"   # Tiers 3-4 together
 
 ### CI vs Local Tests
 
-GitHub Actions runs **Lint** and **Tests** (tiers 1-2) on every push/PR. The **Hosted NATS E2E** workflow is manual-only (`workflow_dispatch`) because session-scoped NATS connections hang in GitHub Actions' asyncio environment. Run hosted NATS tests locally before merging relay changes:
+GitHub Actions runs **Lint**, **Tests** (tiers 1-2), and **Subprocess Tests** (tier 3a) on every push/PR — `subprocess-tests.yml` runs `uv run pytest -m subprocess` and fails the build on any error, since the tier has no external dependency (`--relay-url ""` forces the local relay) beyond the ~75-105s real subprocesses take to spawn and tear down. The **Hosted NATS E2E** workflow is manual-only (`workflow_dispatch`) because session-scoped NATS connections hang in GitHub Actions' asyncio environment. Tier 3b (local NATS) has no CI job: it needs a local `nats-server` binary, and currently hangs outright (biff-7xd) — do not wire it into CI until that bug is fixed. Tier 4 (SDK) needs `ANTHROPIC_API_KEY` and costs real money per run, so it stays local-only by design. Run hosted NATS tests locally before merging relay changes:
 
 ```bash
 BIFF_TEST_NATS_URL=tls://connect.ngs.global \
@@ -126,9 +150,24 @@ All punt-labs repos are indexed in quarry (local semantic search) as separate co
 
 Use quarry first when answering questions about prior design decisions, TTL values, protocol details, or "why was X built this way." It is faster than grepping through DESIGN.md's 100+ pages.
 
+### Repository Layout: the `plugin/` Surface
+
+Everything the Claude Code plugin ships lives under `plugin/`, and nothing else does:
+
+| Path | Contents |
+|------|----------|
+| `plugin/.claude-plugin/plugin.json` | Plugin manifest. `mcpServers.tty` runs `biff mcp` — the `biff` binary on `PATH`, from PyPI — so no Python code ships with the plugin. |
+| `plugin/.claude-plugin/agents/` | Plugin-shipped agent definitions. |
+| `plugin/commands/` | Slash commands (`name.md` + `name-dev.md` pairs). |
+| `plugin/hooks/` | Hook dispatcher scripts and `hooks.json`. |
+
+The marketplace installs this directory with Claude Code's `git-subdir` source (`"source": "git-subdir"`, `"path": "plugin"`), which is a blobless partial clone plus `git sparse-checkout set --cone plugin` — so an install never fetches `src/`, `tests/`, `docs/`, `scripts/`, `research/`, `spikes/`, `.github/`, `.beads/`, or this repo's own `.punt-labs/` and `.claude/` working state. Cone mode does always materialize the files sitting in the *repo root*, so the large root documents (`DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`) still travel with an install; only whole directories are excluded.
+
+One rule follows from that, and it is load-bearing: **the plugin surface must not reach outside itself at runtime.** A hook script may use `$HOME`, the `biff`/`biff-hook` binaries, and paths under the *consumer's* repo root; it may not reference a file elsewhere in this repo, because that file will not exist on an installed plugin. `${CLAUDE_PLUGIN_ROOT}` is `plugin/`.
+
 ### Installer Is Source of Truth
 
-User-facing config (`~/.claude/commands/`, `~/.claude/plugins/biff/`, MCP registration, status line) is deployed by `biff install`. Do not hand-edit these paths — changes will be overwritten on next install. To change command behavior, edit the bundled source in `src/biff/plugins/biff/commands/` and re-run `biff install`.
+`biff install` deposits the user-scope agent guide (`~/.punt-labs/biff/CLAUDE.md` plus the `@` import in `~/.claude/CLAUDE.md`), deploys this clone's `.git/hooks` dispatchers, and installs the plugin from the punt-labs marketplace. Do not hand-edit the installed plugin cache under `~/.claude/plugins/` — a `claude plugin update` overwrites it. To change command or hook behavior, edit `plugin/commands/` or `plugin/hooks/` here and release; to try a change without releasing, run Claude Code with `--plugin-dir` pointed at this repo's `plugin/` directory.
 
 ### Release Process
 
@@ -141,7 +180,7 @@ Version lives in two files that must stay in sync:
 | File | Field |
 |------|-------|
 | `pyproject.toml` | `version = "X.Y.Z"` |
-| `.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
+| `plugin/.claude-plugin/plugin.json` | `"version": "X.Y.Z"` |
 
 The release process edits both files and runs `uv lock` to update `uv.lock`.
 
@@ -155,7 +194,7 @@ creating a phantom release (COE: docs/coe-v1.11-release.md).
 The version on main between releases stays at the last released
 version.
 
-**IMPORTANT:** `plugin.json` must always have `"name": "biff-dev"` on main. Release scripts (`scripts/release-plugin.sh`) swap to `"biff"` on the tagged commit only; `scripts/restore-dev-plugin.sh` restores `"biff-dev"` afterward. This prevents namespace collisions when developing with `--plugin-dir` alongside the installed production plugin. Dev commands (`commands/*-dev.md`) route to `mcp__plugin_biff-dev_tty__*`; prod commands route to `mcp__plugin_biff_tty__*`.
+**IMPORTANT:** `plugin.json` must always have `"name": "biff-dev"` on main. Release scripts (`scripts/release-plugin.sh`) swap to `"biff"` on the tagged commit only; `scripts/restore-dev-plugin.sh` restores `"biff-dev"` afterward. This prevents namespace collisions when developing with `--plugin-dir` alongside the installed production plugin. Dev commands (`plugin/commands/*-dev.md`) route to `mcp__plugin_biff-dev_tty__*`; prod commands route to `mcp__plugin_biff_tty__*`.
 
 **IMPORTANT:** Never use `uv tool install --force --editable .` as a release or testing step. Local editable installs break the status line (see DESIGN.md DES-011b) and do not represent what users experience. The only way to test is to release through the real channels.
 

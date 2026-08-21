@@ -227,6 +227,10 @@ async def cli_session(
             )
             org_repos = frozenset[str]().union(*org_results)
 
+        # Both activity timestamps start identical: a session that has
+        # never invoked a tool reads idle as time-since-registration, its
+        # own meaningful start time.
+        registered_at = datetime.now(UTC)
         session = UserSession(
             user=user,
             tty=tty,
@@ -235,6 +239,8 @@ async def cli_session(
             pwd=get_pwd(),
             repo=config.repo_name,
             kind=config.kind,
+            last_active=registered_at,
+            last_tool_at=registered_at,
         )
         await relay.update_session(session)
         registered = True
