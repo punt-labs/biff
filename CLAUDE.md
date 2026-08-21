@@ -55,7 +55,7 @@ Four tiers, each testing a different boundary. New features should have tests at
 |------|-----------|-----------|---------------|-------|------------|
 | **1. Unit** | `tests/test_server/`, `tests/test_storage/` | Direct function calls | Tool logic, storage, data models | ~1s total | Yes |
 | **2. Integration** | `tests/test_integration/` | `FastMCPTransport` (in-memory) | MCP protocol, tool discovery, cross-user state | ~2s total | Yes |
-| **3. Subprocess** | `tests/test_subprocess/` | `StdioTransport` (stdio pipes) | Wire protocol, CLI args, process lifecycle | ~75-105s total | Yes |
+| **3a. Subprocess** | `tests/test_subprocess/` | `StdioTransport` (stdio pipes) | Wire protocol, CLI args, process lifecycle | ~75-105s total | Yes |
 | **3b. NATS E2E** | `tests/test_nats_e2e/` | `FastMCPTransport` + local NATS | Presence, messaging via NATS KV + JetStream | ~3s total | No — requires local `nats-server`; currently hangs (biff-7xd), do not add until fixed |
 | **3c. Hosted NATS** | `tests/test_hosted_nats/` | `FastMCPTransport` + hosted NATS | Same as 3b against Synadia Cloud / self-hosted | ~10s total | No — manual-only (`workflow_dispatch`) |
 | **4. SDK** | `tests/test_sdk/` | Claude Agent SDK (real Claude sessions) | End-to-end: Claude discovers tools, decides what to call, results flow back | ~30s per test, costs ~$0.02/call | No — costs money per run |
@@ -73,7 +73,7 @@ uv run pytest -m "subprocess or sdk"   # Tiers 3-4 together
 
 ### CI vs Local Tests
 
-GitHub Actions runs **Lint**, **Tests** (tiers 1-2), and **Subprocess Tests** (tier 3) on every push/PR — `subprocess-tests.yml` runs `uv run pytest -m subprocess` and fails the build on any error, since the tier has no external dependency (`--relay-url ""` forces the local relay) beyond the ~75-105s real subprocesses take to spawn and tear down. The **Hosted NATS E2E** workflow is manual-only (`workflow_dispatch`) because session-scoped NATS connections hang in GitHub Actions' asyncio environment. Tier 3b (local NATS) has no CI job: it needs a local `nats-server` binary, and currently hangs outright (biff-7xd) — do not wire it into CI until that bug is fixed. Tier 4 (SDK) needs `ANTHROPIC_API_KEY` and costs real money per run, so it stays local-only by design. Run hosted NATS tests locally before merging relay changes:
+GitHub Actions runs **Lint**, **Tests** (tiers 1-2), and **Subprocess Tests** (tier 3a) on every push/PR — `subprocess-tests.yml` runs `uv run pytest -m subprocess` and fails the build on any error, since the tier has no external dependency (`--relay-url ""` forces the local relay) beyond the ~75-105s real subprocesses take to spawn and tear down. The **Hosted NATS E2E** workflow is manual-only (`workflow_dispatch`) because session-scoped NATS connections hang in GitHub Actions' asyncio environment. Tier 3b (local NATS) has no CI job: it needs a local `nats-server` binary, and currently hangs outright (biff-7xd) — do not wire it into CI until that bug is fixed. Tier 4 (SDK) needs `ANTHROPIC_API_KEY` and costs real money per run, so it stays local-only by design. Run hosted NATS tests locally before merging relay changes:
 
 ```bash
 BIFF_TEST_NATS_URL=tls://connect.ngs.global \

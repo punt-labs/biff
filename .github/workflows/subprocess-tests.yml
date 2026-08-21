@@ -1,6 +1,6 @@
 name: Subprocess Tests
 
-# Tier 3 (tests/test_subprocess/): real biff subprocesses over stdio,
+# Tier 3a (tests/test_subprocess/): real biff subprocesses over stdio,
 # exercising the wire protocol, CLI argument parsing, and process
 # lifecycle -- including the SIGTERM/SIGINT/SIGHUP regression tests in
 # test_signal_handling.py. Deselected from the default `uv run pytest`
