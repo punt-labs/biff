@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 from fastmcp import FastMCP
 
+from biff.server import app
 from biff.server.app import (
     _UNEXPECTED_CLEANUP_ERROR,
+    _lifespan_cleanup,
     _run_signal_cleanup_steps,
     _write_sentinel,
     create_server,
@@ -201,3 +204,55 @@ class TestWriteSentinelRuntimeError:
             ]
         )
         assert written == [b"biff: signal cleanup: sentinel write failed\n"]
+
+
+class TestLifespanCleanupSentinelOrdering:
+    """The reap-fallback sentinel must not be written until the reap loop
+    (part of ``tasks``, stopped by ``_shutdown_tasks``) has stopped ticking.
+
+    Writing it earlier races ``_reap_sentinels``, which treats any sentinel
+    matching this session's own key as a prior incarnation and discards it
+    unreaped (biff-7ak) -- consuming the fallback before a later timed-out
+    ``_release_relay`` ever needs it (Cursor Bugbot, High).
+    """
+
+    async def test_sentinel_written_after_shutdown_tasks_stops_reaper(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        async def _fake_append_logout(_state: ServerState) -> None:
+            calls.append("append_logout")
+
+        async def _fake_append_companion_logout(_state: ServerState) -> None:
+            calls.append("append_companion_logout")
+
+        async def _fake_shutdown_tasks(
+            _shutdown: asyncio.Event, _tasks: list[asyncio.Task[None]]
+        ) -> None:
+            calls.append("shutdown_tasks")
+
+        def _fake_write_sentinels(_state: ServerState) -> None:
+            calls.append("write_sentinels")
+
+        async def _fake_release_relay(_state: ServerState) -> None:
+            calls.append("release_relay")
+
+        async def _fake_drain() -> None:
+            return None
+
+        monkeypatch.setattr(app, "_append_logout_event", _fake_append_logout)
+        monkeypatch.setattr(
+            app, "_append_companion_logout_event", _fake_append_companion_logout
+        )
+        monkeypatch.setattr(app, "_shutdown_tasks", _fake_shutdown_tasks)
+        monkeypatch.setattr(
+            app, "_write_reap_fallback_sentinels", _fake_write_sentinels
+        )
+        monkeypatch.setattr(app, "_release_relay", _fake_release_relay)
+        monkeypatch.setattr("biff.integration.vox.drain_background_tasks", _fake_drain)
+
+        await _lifespan_cleanup(state, asyncio.Event(), [])
+
+        assert calls.index("shutdown_tasks") < calls.index("write_sentinels")
+        assert calls.index("write_sentinels") < calls.index("release_relay")

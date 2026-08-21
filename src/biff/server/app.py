@@ -782,11 +782,18 @@ async def _append_logout_event(state: ServerState) -> None:
         await asyncio.wait_for(
             state.relay.append_wtmp(logout_event), timeout=_TEARDOWN_STEP_TIMEOUT
         )
-        # Flush ensures the publish hits the wire before process exit.
-        if isinstance(state.relay, NatsRelay):
-            await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to append wtmp logout event", exc_info=True)
+        return
+    # Flush ensures the publish hits the wire before process exit.  Separate
+    # try/except from the append above: a flush failure means the append
+    # already succeeded, so logging it as an append failure would be
+    # misleading (Copilot).
+    if isinstance(state.relay, NatsRelay):
+        try:
+            await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to flush wtmp logout event", exc_info=True)
 
 
 async def _append_companion_login_event(state: ServerState) -> None:
@@ -834,10 +841,14 @@ async def _append_companion_logout_event(state: ServerState) -> None:
         await asyncio.wait_for(
             state.relay.append_wtmp(logout_event), timeout=_TEARDOWN_STEP_TIMEOUT
         )
-        if isinstance(state.relay, NatsRelay):
-            await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to append companion wtmp logout event", exc_info=True)
+        return
+    if isinstance(state.relay, NatsRelay):
+        try:
+            await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to flush companion wtmp logout event", exc_info=True)
 
 
 def _find_orphaned_logins(
@@ -987,11 +998,27 @@ def _write_reap_fallback_sentinels(state: ServerState) -> None:
     only once its session's KV row is actually deleted, so a healthy
     shutdown leaves nothing behind for the reaper to redundantly process.
     """
-    with suppress(OSError):
+    try:
         _write_sentinel(state.config.repo_name, state.session_key)
+    except OSError:
+        # This sentinel is the only durable signal that a timed-out
+        # teardown below needs reaping -- unlike the signal handler's sync
+        # cleanup, this path is not itself a signal handler, so logging is
+        # safe here (Copilot).
+        logger.warning(
+            "Failed to write reap-fallback sentinel for %s",
+            state.session_key,
+            exc_info=True,
+        )
     if state.companion:
-        with suppress(OSError):
+        try:
             _write_sentinel(state.config.repo_name, state.companion.session_key)
+        except OSError:
+            logger.warning(
+                "Failed to write companion reap-fallback sentinel for %s",
+                state.companion.session_key,
+                exc_info=True,
+            )
 
 
 async def _lifespan_cleanup(
@@ -1007,7 +1034,6 @@ async def _lifespan_cleanup(
     must happen while the NATS connection is still healthy.
     """
     if state.owns_relay:
-        _write_reap_fallback_sentinels(state)
         await _append_logout_event(state)
         await _append_companion_logout_event(state)
     await _shutdown_tasks(shutdown, tasks)
@@ -1021,6 +1047,14 @@ async def _lifespan_cleanup(
         with suppress(FileNotFoundError):
             state.unread_path.unlink()
     if state.owns_relay:
+        # Written only after _shutdown_tasks has stopped the reap loop
+        # (above) -- writing it earlier races _reap_sentinels, which is
+        # still ticking on its own 2s interval and treats any sentinel
+        # matching this session's own key as a prior incarnation to
+        # discard unreaped (biff-7ak), consuming the fallback before a
+        # timed-out _release_relay below ever needs it (Cursor Bugbot,
+        # High).
+        _write_reap_fallback_sentinels(state)
         await _release_relay(state)
     with suppress(OSError):
         remove_active_session(state.session_key)
