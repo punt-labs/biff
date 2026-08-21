@@ -75,6 +75,12 @@ async def deliver_with_retry(
                 await _deliver_one(msg)
                 delivered += 1
         except Exception as exc:  # noqa: BLE001 — MCP tool / CLI boundary, reported to caller
+            # Never interpolate str(exc) into the returned text: this
+            # string reaches the model / chat transcript verbatim
+            # (/biff:write echoes it), and NatsRelay's own docstrings
+            # already flag that exception text from this layer can embed
+            # transport URLs or raw frame content. The exception itself
+            # is logged server-side only.
             _log.warning(
                 "Message delivery to %s failed twice (delivered %d/%d parts): %s",
                 display,
@@ -84,7 +90,7 @@ async def deliver_with_retry(
                 exc_info=exc,
             )
             return (
-                f"Could not deliver to {display} — failed twice ({exc}). "
+                f"Could not deliver to {display} — failed twice. "
                 f"{delivered}/{len(chunks)} part(s) confirmed sent; "
                 "the rest may not have arrived. Not confirmed sent."
             )

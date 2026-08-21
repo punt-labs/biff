@@ -205,6 +205,27 @@ class TestUnreadFile:
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 0
 
+    async def test_get_session_failure_does_not_crash_caller(
+        self, state_with_path: ServerState
+    ) -> None:
+        """Bugbot review finding: refresh_read_messages' own guard around
+        get_unread_summary did not cover this function's own get_session
+        call for the plan field — a relay hiccup there could still crash
+        the caller's already-succeeded primary result. get_unread_summary
+        succeeds here; only get_session fails, isolating this specific
+        call site from the one already covered by another test.
+        """
+        mcp = create_server(state_with_path)
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> None:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state_with_path.relay.get_session = _always_fails  # type: ignore[method-assign]
+        await refresh_read_messages(mcp, state_with_path)  # must not raise
+        assert state_with_path.unread_path is not None
+        assert not state_with_path.unread_path.exists()  # write skipped, not crashed
+
     async def test_clamps_unread_count_at_max(self, tmp_path: Path) -> None:
         path = tmp_path / "unread.json"
         summary = UnreadSummary(count=999)

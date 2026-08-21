@@ -192,17 +192,31 @@ async def _sync_unread_file(
 
     Pass *summary* to reuse an already-fetched :class:`UnreadSummary`
     and avoid a redundant relay call.
+
+    Best-effort: called from refresh_read_messages, refresh_wall, and
+    refresh_talk, all of which run after their own primary tool
+    operation has already succeeded — the status file this writes is an
+    external convenience for the Claude Code status bar, not something
+    any of those primary operations depend on. A relay hiccup fetching
+    the summary or session for it must not crash the caller's
+    already-succeeded result (Bugbot review finding: refresh_read_messages'
+    own guard around get_unread_summary did not cover this function's own
+    relay calls).
     """
     if state.unread_path is None:
         return
-    if summary is None:
-        summary = await state.relay.get_unread_summary(state.session_key)
+    try:
+        if summary is None:
+            summary = await state.relay.get_unread_summary(state.session_key)
+        # Fetch plan from the relay session (lives in NATS KV, not display queue).
+        plan = ""
+        session = await state.relay.get_session(state.session_key)
+        if session is not None:
+            plan = session.plan
+    except Exception:  # noqa: BLE001 — best-effort side channel, see docstring
+        logger.debug("_sync_unread_file: relay call failed", exc_info=True)
+        return
     items = state.display_queue.snapshot()
-    # Fetch plan from the relay session (lives in NATS KV, not display queue).
-    plan = ""
-    session = await state.relay.get_session(state.session_key)
-    if session is not None:
-        plan = session.plan
     if state.companion is not None:
         status_user = state.companion.user
         status_tty = state.companion.tty_name
