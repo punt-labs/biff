@@ -42,7 +42,7 @@ class TestLiveSessions:
 
 
 class TestDeadSessions:
-    """`dead_sessions` finds KV rows that outlived their process (DES-056)."""
+    """`dead_sessions` finds KV rows that outlived their process (DES-057)."""
 
     def test_reports_row_past_dead_report_threshold(self) -> None:
         now = datetime.now(UTC)

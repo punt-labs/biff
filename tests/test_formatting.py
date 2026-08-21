@@ -164,7 +164,7 @@ class TestFormatDeadFootnote:
     def test_does_not_name_the_dead_sessions(self) -> None:
         """The footnote reports counts and ages only, never `user`/`tty_name`
         -- there is no fixed column here for an unbounded field to widen, so
-        there is nothing to sanitize (DES-056)."""
+        there is nothing to sanitize (DES-057)."""
         dead = UserSession(
             user="orphaned-agent",
             tty="a",

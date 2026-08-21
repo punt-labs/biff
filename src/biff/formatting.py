@@ -359,7 +359,7 @@ def format_dead_footnote(dead: list[UserSession]) -> str:
     A session that shuts down cleanly deletes its own KV row, so a row
     :func:`~biff.relay.dead_sessions` still finds is a session that stopped
     heartbeating without cleanup — killed, wedged, or its host vanished
-    (DES-056). The main ``/who`` table only ever renders *live* rows, so
+    (DES-057). The main ``/who`` table only ever renders *live* rows, so
     this signal would otherwise be invisible until the 3-day storage TTL
     reaps the row.
 

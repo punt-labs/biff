@@ -52,7 +52,7 @@ SESSION_TTL_SECONDS = 259_200  # 3 days — covers weekends; KV storage retentio
 # expires (biff-mue).
 PRESENCE_LIVENESS_SECONDS = 120.0
 # Threshold for reporting a session as "stopped responding" in the /who
-# footnote (DES-056).  Wider than PRESENCE_LIVENESS_SECONDS on purpose: a
+# footnote (DES-057).  Wider than PRESENCE_LIVENESS_SECONDS on purpose: a
 # session that misses a single heartbeat tick (laptop sleep, GC pause)
 # already drops out of live_sessions() for that one poll and self-heals on
 # the next tick.  Reporting it as dead in the same breath would flap it
@@ -83,7 +83,7 @@ def dead_sessions(sessions: Sequence[UserSession]) -> list[UserSession]:
     PRESENT here but fails :meth:`~biff.models.UserSession.is_live` at
     :data:`DEAD_REPORT_SECONDS` is therefore a session that died without
     deregistering — killed, wedged, or a host that vanished — the orphan
-    signature :func:`live_sessions` silently drops (DES-056).
+    signature :func:`live_sessions` silently drops (DES-057).
     """
     now = datetime.now(UTC)
     return [

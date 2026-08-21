@@ -381,7 +381,7 @@ class TestWhoTool:
     async def test_hides_dead_sessions(self, state: ServerState) -> None:
         """Sessions past the liveness window are dropped from the main table
         (biff-mue) but still surfaced, unnamed, in the dead-session footnote
-        (DES-056) once they exceed the wider DEAD_REPORT_SECONDS threshold."""
+        (DES-057) once they exceed the wider DEAD_REPORT_SECONDS threshold."""
         old_time = datetime.now(UTC) - timedelta(days=2)
         recent_time = datetime.now(UTC) - timedelta(seconds=30)
         await state.relay.update_session(

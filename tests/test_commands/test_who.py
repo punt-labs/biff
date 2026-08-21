@@ -122,8 +122,8 @@ class TestWho:
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
         """When every session is stale, the main table reports no sessions,
-        but a session dead long enough is still named-free in the footnote
-        (DES-056) -- the exact orphan case that motivated this bead."""
+        but a session dead long enough is still name-free in the footnote
+        (DES-057) -- the exact orphan case that motivated this bead."""
         from datetime import UTC, datetime, timedelta
 
         now = datetime.now(UTC)

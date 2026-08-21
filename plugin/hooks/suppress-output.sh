@@ -63,7 +63,10 @@ if [[ "$TOOL_NAME" == "who" ]]; then
   if [[ "$RESULT" == "No sessions." ]]; then
     emit_simple "$RESULT"
   else
-    COUNT=$(printf '%s' "$RESULT" | grep -c '^   [^ ]')
+    # Exclude the dead-session footnote (DES-057) -- it shares ROW_PREFIX
+    # with live table rows, so an unfiltered count would report orphaned
+    # sessions as online.
+    COUNT=$(printf '%s' "$RESULT" | grep -v 'stopped responding' | grep -c '^   [^ ]')
     emit "${COUNT} online" "$RESULT"
   fi
   exit 0

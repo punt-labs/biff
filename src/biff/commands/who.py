@@ -15,7 +15,7 @@ async def who(ctx: CliContext) -> CommandResult:
     dead (shut down, killed, or wedged) but may linger in the KV until the
     longer storage TTL; they are hidden from the main table (biff-mue). A
     session dead long enough to rule out a single missed heartbeat is
-    still surfaced, unnamed, in a trailing footnote (DES-056).
+    still surfaced, unnamed, in a trailing footnote (DES-057).
     """
     sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     live = live_sessions(sessions)
