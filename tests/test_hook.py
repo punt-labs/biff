@@ -1306,7 +1306,7 @@ class TestHandlePreToolUse:
 
         The gate trusts the marker as ground truth; a hard-blocking gate
         that re-validated via subprocess on every edit would hang tool
-        calls on `bd`'s latency and availability.
+        calls on ``bd``'s latency and availability.
         """
         m_active, m_wt, m_plan = _gate_mocks(plan=False)
         with (
