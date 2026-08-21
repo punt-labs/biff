@@ -112,6 +112,6 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if isinstance(relay, NatsRelay) and relay.total_attempts > 0:
             status += (
                 f"\nNATS relay: {relay.total_timeouts} timeout(s) / "
-                f"{relay.total_attempts} request(s) this session"
+                f"{relay.total_attempts} request(s) since server start"
             )
         return status

@@ -99,6 +99,28 @@ class TestRefreshReadMessages:
         assert desc is not None
         assert "2 unread" in desc
 
+    async def test_relay_failure_does_not_crash_caller(
+        self, state: ServerState
+    ) -> None:
+        """A relay hiccup here must never crash the primary tool call that
+        called this as a best-effort side-channel update. Review finding:
+        surfaced by a test where read_messages() had already successfully
+        fetched and rendered real messages, and this side-channel call
+        raising on its own separate relay call would have discarded that
+        already-good result with an unhandled exception.
+        """
+        mcp = create_server(state)
+
+        async def _always_fails(*_args: object, **_kwargs: object) -> UnreadSummary:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        state.relay.get_unread_summary = _always_fails  # type: ignore[method-assign]
+        await refresh_read_messages(mcp, state)  # must not raise
+        tool = await mcp.get_tool("read_messages")
+        assert tool is not None
+        assert tool.description == _READ_MESSAGES_BASE  # unchanged, not crashed
+
     async def test_reverts_to_base_when_cleared(self, state: ServerState) -> None:
         mcp = create_server(state)
         await state.relay.deliver(

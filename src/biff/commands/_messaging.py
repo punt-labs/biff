@@ -64,7 +64,7 @@ async def deliver_with_retry(
         for msg in messages:
             await _deliver_one(msg)
             delivered += 1
-    except (TimeoutError, NatsError):
+    except (TimeoutError, NatsError, OSError):
         # Only retry transport-shaped failures. A ValueError from
         # deliver()'s own validation (from_user/to_user/repo) is
         # deterministic — retrying it wastes a round trip and always

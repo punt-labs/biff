@@ -131,7 +131,7 @@ class TestGetPollStatus:
         object.__setattr__(state, "relay", relay)
         fn = await _get_tool_fn(state, "get_poll_status")
         result = await fn()
-        assert "NATS relay: 1 timeout(s) / 20 request(s) this session" in result
+        assert "NATS relay: 1 timeout(s) / 20 request(s) since server start" in result
 
 
 class TestParseInterval:

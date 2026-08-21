@@ -9,7 +9,8 @@ them read.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 from biff.chunking import chunk_message
 from biff.commands._messaging import deliver_with_retry
@@ -78,53 +79,81 @@ _log = logging.getLogger(__name__)
 
 _UnreadFetch = tuple[list[Message], list[Message], list[Message], list[Message]]
 
-
-async def _fetch_all_unread(state: ServerState) -> _UnreadFetch:
-    """Fetch primary (tty + user broadcast) and companion (DES-039) unread."""
-    tty_unread = await state.relay.fetch(state.session_key)
-    user_unread = await state.relay.fetch_user_inbox(state.config.user)
-    comp_tty, comp_user = await _fetch_companion_unread(state)
-    return tty_unread, user_unread, comp_tty, comp_user
-
-
-async def _fetch_unread_with_retry(state: ServerState) -> _UnreadFetch | str:
-    """Fetch unread messages, retrying once on a transport error.
-
-    Returns the four message lists on success, or a distinguishable
-    failure string on a persistent failure. A raised transport error here
-    previously propagated as an opaque MCP tool error — indistinguishable,
-    to a caller that doesn't retry, from an empty inbox (biff-brn). Retry
-    lives at the code level, not in prompt instructions, for the same
-    reason write()'s delivery retry (biff-0px) is code-level: a retry that
-    depends on an LLM correctly following prose on every invocation is a
-    materially weaker guarantee than one the tool itself enforces.
-    """
-    try:
-        return await _fetch_all_unread(state)
-    except Exception:  # noqa: BLE001 — retry boundary, re-raised below on retry failure
-        try:
-            return await _fetch_all_unread(state)
-        except Exception as exc:  # noqa: BLE001 — MCP tool boundary, reported to caller
-            _log.warning("read_messages failed twice: %s", exc, exc_info=exc)
-            return (
-                f"Could not check mail — failed twice ({exc}). "
-                "Inbox state unknown, not confirmed empty."
-            )
+# Fetch-step labels, in the order results are unpacked into _UnreadFetch.
+_TTY, _USER, _COMP_TTY, _COMP_USER = (
+    "your tty inbox",
+    "your broadcast inbox",
+    "companion tty inbox",
+    "companion broadcast inbox",
+)
 
 
-async def _fetch_companion_unread(
+async def _fetch_unread_with_retry(
     state: ServerState,
-) -> tuple[list[Message], list[Message]]:
-    """Fetch unread messages from the companion's inboxes.
+) -> tuple[_UnreadFetch, str | None]:
+    """Fetch unread messages, retrying only the inboxes that failed.
 
-    Returns ``(tty_unread, user_unread)`` — both empty when no companion.
+    Returns ``(fetched, warning)``. Each of the (up to four) inboxes is
+    fetched independently and retried at most once on its own — NEVER as
+    part of restarting the whole batch. ``NatsRelay.fetch``/
+    ``fetch_user_inbox`` ack (destructively delete) messages from the
+    stream as a side effect of a successful pull; retrying the whole batch
+    after one inbox already succeeded would re-fetch an inbox that has
+    nothing left to return, silently discarding the messages the first
+    attempt already pulled (review finding on this branch — the retry
+    added to fix biff-brn's indistinguishability problem introduced a
+    worse, silent data-loss failure mode of its own).
+
+    An inbox still failing after its own retry is named in ``warning``
+    rather than rendered as empty; its slot in ``fetched`` stays empty
+    because nothing was lost there — nothing was successfully acked from
+    it either. ``fetched`` always reflects every inbox that DID succeed,
+    even when another inbox's warning is also present, so a partial
+    failure never costs the caller messages that were already pulled.
     """
     companion = state.companion
-    if companion is None:
-        return [], []
-    tty = await state.relay.fetch(companion.session_key)
-    user = await state.relay.fetch_user_inbox(companion.user)
-    return tty, user
+    steps: dict[str, Callable[[], Coroutine[Any, Any, list[Message]]]] = {
+        _TTY: lambda: state.relay.fetch(state.session_key),
+        _USER: lambda: state.relay.fetch_user_inbox(state.config.user),
+    }
+    if companion is not None:
+        steps[_COMP_TTY] = lambda: state.relay.fetch(companion.session_key)
+        steps[_COMP_USER] = lambda: state.relay.fetch_user_inbox(companion.user)
+
+    results: dict[str, list[Message]] = {}
+    pending = list(steps)
+    last_exc: Exception | None = None
+    for _attempt in range(2):  # first pass + one retry, per still-pending step only
+        if not pending:
+            break
+        still_pending: list[str] = []
+        for label in pending:
+            try:
+                results[label] = await steps[label]()
+            except Exception as exc:  # noqa: BLE001 — retried once per inbox below
+                last_exc = exc
+                still_pending.append(label)
+        pending = still_pending
+
+    fetched: _UnreadFetch = (
+        results.get(_TTY, []),
+        results.get(_USER, []),
+        results.get(_COMP_TTY, []),
+        results.get(_COMP_USER, []),
+    )
+    warning: str | None = None
+    if pending:
+        _log.warning(
+            "read_messages could not check %s after retry: %s",
+            ", ".join(pending),
+            last_exc,
+            exc_info=last_exc,
+        )
+        warning = (
+            f"Could not check {', '.join(pending)} — failed twice. "
+            "State unknown for that inbox, not confirmed empty."
+        )
+    return fetched, warning
 
 
 async def _mark_companion_read(
@@ -203,10 +232,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         session_key = state.session_key
         user = state.config.user
 
-        fetched = await _fetch_unread_with_retry(state)
-        if isinstance(fetched, str):
-            return fetched
-        tty_unread, user_unread, comp_tty, comp_user = fetched
+        (
+            (tty_unread, user_unread, comp_tty, comp_user),
+            warning,
+        ) = await _fetch_unread_with_retry(state)
 
         all_unread = sorted(
             tty_unread + user_unread + comp_tty + comp_user,
@@ -214,6 +243,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         )
 
         if not all_unread:
+            if warning is not None:
+                return warning
             await refresh_read_messages(mcp, state)
             return "No new messages."
 
@@ -231,10 +262,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         if state.companion is not None:
             human_msgs = sorted(comp_tty + comp_user, key=lambda m: m.timestamp)
             agent_msgs = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
-            return format_read_dual(
+            result = format_read_dual(
                 state.companion.user,
                 human_msgs,
                 state.config.user,
                 agent_msgs,
             )
-        return format_read(all_unread)
+        else:
+            result = format_read(all_unread)
+        return f"{warning}\n\n{result}" if warning is not None else result

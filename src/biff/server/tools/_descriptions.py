@@ -234,17 +234,32 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
 
     If ``state.unread_path`` is set, also writes the unread summary to
     a JSON file for status bar consumption.
+
+    Best-effort: this is a side-channel description update, called after
+    the primary operation of many tools (read_messages, write, finger,
+    mesg, plan, who, tty) has already succeeded. A relay hiccup here must
+    never crash that already-succeeded primary result — the caller has
+    real data to return; losing it to a failure in an unrelated status
+    update would be its own instance of the silent-failure class this
+    codebase works to avoid, just inverted (a successful read reported as
+    a crash instead of a failure reported as a success).
     """
     tool = await mcp.get_tool("read_messages")
     if tool is None:
         return
-    primary = await state.relay.get_unread_summary(state.session_key)
-    companion_count = 0
-    if state.companion_session_key:
-        companion_summary = await state.relay.get_unread_summary(
-            state.companion_session_key
+    try:
+        primary = await state.relay.get_unread_summary(state.session_key)
+        companion_count = 0
+        if state.companion_session_key:
+            companion_summary = await state.relay.get_unread_summary(
+                state.companion_session_key
+            )
+            companion_count = companion_summary.count
+    except Exception:  # noqa: BLE001 — best-effort side channel, see docstring
+        logger.debug(
+            "refresh_read_messages: unread summary fetch failed", exc_info=True
         )
-        companion_count = companion_summary.count
+        return
     total = primary.count + companion_count
     old_desc = tool.description
     if total == 0:

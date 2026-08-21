@@ -809,7 +809,7 @@ class TestCheckMessagesTool:
         state.relay.fetch = _flaky_fetch  # type: ignore[method-assign]
         fn = await _get_tool_fn(state, "read_messages")
         result = await fn()
-        assert "Could not check mail" not in result
+        assert "Could not check" not in result
         # >= 2: retry happened. The exact total also includes
         # refresh_read_messages's own get_unread_summary()->fetch() call
         # after a successful retry, which is unrelated to the retry logic
@@ -834,8 +834,68 @@ class TestCheckMessagesTool:
         fn = await _get_tool_fn(state, "read_messages")
         result = await fn()
         assert "No new messages" not in result
-        assert "Could not check mail" in result
+        assert "Could not check" in result
         assert "not confirmed empty" in result.lower()
+
+    async def test_successful_inbox_never_refetched_or_lost_on_sibling_failure(
+        self, state: ServerState
+    ) -> None:
+        """HIGH-severity review finding, fixed here: a naive whole-batch
+        retry would re-call fetch() on the tty inbox even though it
+        already succeeded. On NatsRelay, fetch() destructively acks
+        (deletes) messages from the stream as a side effect of a
+        successful pull — a second call for the same reason a retry would
+        make returns nothing, silently discarding the messages the first
+        call already returned. The fix retries only the inbox that
+        actually failed (fetch_user_inbox here), never the one that
+        already succeeded (fetch).
+
+        Exercises _fetch_unread_with_retry directly rather than through
+        the full read_messages tool: the tool's own downstream
+        refresh_read_messages() call legitimately calls fetch() again
+        afterwards (for the unrelated tool-description unread count), so
+        a call count taken at the read_messages level can't isolate
+        whether THIS function's own retry re-fetched the succeeded inbox.
+        """
+        from biff.server.tools.messaging import _fetch_unread_with_retry
+
+        real_fetch = state.relay.fetch
+        fetch_calls = {"n": 0}
+
+        async def _fetch_once_then_empty(
+            *args: object, **kwargs: object
+        ) -> list[Message]:
+            fetch_calls["n"] += 1
+            if fetch_calls["n"] > 1:
+                return []  # simulates WORK_QUEUE: nothing left after the ack
+            return await real_fetch(*args, **kwargs)  # type: ignore[arg-type]
+
+        async def _user_inbox_always_fails(
+            *_args: object, **_kwargs: object
+        ) -> list[Message]:
+            msg = "nats: timeout"
+            raise TimeoutError(msg)
+
+        await state.relay.deliver(
+            Message(from_user="kai", to_user=f"kai:{_KAI_TTY}", body="tty message")
+        )
+        state.relay.fetch = _fetch_once_then_empty  # type: ignore[method-assign]
+        state.relay.fetch_user_inbox = _user_inbox_always_fails  # type: ignore[method-assign]
+
+        (
+            (tty_unread, user_unread, comp_tty, comp_user),
+            warning,
+        ) = await _fetch_unread_with_retry(state)
+
+        assert fetch_calls["n"] == 1, "the succeeded fetch must never be retried"
+        assert [m.body for m in tty_unread] == ["tty message"], (
+            "the already-fetched message must not be lost"
+        )
+        assert user_unread == []
+        assert comp_tty == []
+        assert comp_user == []
+        assert warning is not None
+        assert "your broadcast inbox" in warning
 
     async def test_shows_unread(self, state: ServerState, tmp_path: Path) -> None:
         # Register kai so eric can resolve the targeted address.
