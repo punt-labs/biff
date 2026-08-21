@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
 __all__ = ["ClaudeMdImport"]
 
@@ -227,7 +227,7 @@ class ClaudeMdImport:
     # ── I/O ────────────────────────────────────────────────────────────
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self) -> Generator[None]:
         """Hold an exclusive lock on the sibling lock file for the whole RMW."""
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock_path.open("w", encoding="utf-8") as lock:
