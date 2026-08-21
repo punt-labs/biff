@@ -1,0 +1,840 @@
+%
+% sentinel-reap.tex
+%
+% Z Specification for Biff's Sentinel/Reaper Logout Mechanism
+%
+% Models sentinel-file writing, reaping, the own-key skip, and the
+% liveness relationship between a sentinel and the KV row it refers to.
+%
+% Type-check: fuzz sentinel-reap.tex
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff Sentinel/Reaper Logout: A Z Specification}
+\author{Punt Labs}
+\date{August 2026}
+\hypersetup{
+  pdftitle={Biff Sentinel/Reaper Logout: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+%%----------------------------------------------------------------------
+
+Every biff session owns exactly one row in the sessions KV bucket,
+modelled in \texttt{nats-relay.tex} as $SessionStore$
+(\texttt{sessions~:~SESSIONKEY~\pfun~KVVALUE}).  That specification is
+deliberately silent on how a row is \emph{removed} when its owning
+process goes away: $DeleteSession$'s commentary reads only ``triggered
+by explicit delete or KV TTL expiry,'' and \texttt{session-model.tex}
+lists ``heartbeats, TTLs, orphan detection, crash recovery'' among what
+it does not cover.  The mechanism that fills that gap is the sentinel
+and its reaper, implemented in \texttt{src/biff/server/app.py} and,
+until this document, present nowhere in the specification corpus.
+
+A sentinel is a file at
+\texttt{\textasciitilde/.punt-labs/biff/sentinels/\{repo\}/\{session\_key\}}
+(\texttt{\_write\_sentinel}), written just before a session's owning
+process attempts to tear itself down.  Any running server's periodic
+reaper (\texttt{\_reap\_loop}, every two seconds) or the initial call in
+\texttt{\_active\_lifespan} at startup scans the sentinel directory
+(\texttt{\_reap\_sentinels}) and, for each sentinel whose session key is
+not its own, deletes the KV row, releases the TTY name, appends a
+logout event, and removes the sentinel (\texttt{\_reap\_dead\_session}).
+For a sentinel matching \emph{its own} session key, it discards the
+sentinel without touching the row --- the ``own-key skip'':
+
+\begin{quote}
+\texttt{if session\_key in live\_keys:\\
+\hphantom{xx}\# Our own prior incarnation --- consume the sentinel\\
+\hphantom{xx}\# without a logout, reservation release, or KV delete.\\
+\hphantom{xx}sentinel.unlink(missing\_ok=True)\\
+\hphantom{xx}continue}
+\end{quote}
+
+Until the PR that motivates this specification (biff-7xd, \#350), only
+the signal handler (\texttt{SIGTERM}/\texttt{SIGINT}/\texttt{SIGHUP})
+wrote a sentinel.  A normal shutdown --- an MCP client disconnecting,
+which runs \texttt{\_lifespan\_cleanup} through ordinary coroutine
+control flow rather than a signal --- had no sentinel and so no reaper
+coverage: a \texttt{delete\_session} call that timed out under the new
+per-step bound (\texttt{\_TEARDOWN\_STEP\_TIMEOUT}, biff-7xd) silently
+orphaned the row.  \#350 closes that gap by writing the same sentinel
+unconditionally at the top of \texttt{\_lifespan\_cleanup}
+(\texttt{\_write\_reap\_fallback\_sentinels}), \emph{before} the bounded,
+best-effort teardown runs, so the sentinel mechanism is now the primary
+logout path for both routes: signal-triggered and ordinary disconnect.
+
+This specification models that mechanism from the point of view of one
+distinguished, currently-running incarnation, and asks the question the
+bead (biff-lx2) poses directly: is there a reachable state in which a
+KV row has no live process behind it and no sentinel left to reclaim
+it?  \S\ref{sec:modelcheck} answers in two parts.  The trivial part ---
+a process killed with \texttt{SIGKILL} never gets to write a sentinel
+at all --- is a known, already-documented gap (biff-teh's discovery
+notes: ``SIGKILL bypasses the sentinel write, so force-killed sessions
+linger in KV until the 120s liveness window expires''), backstopped by
+KV TTL and the presence-liveness filter, and outside what a sentinel
+mechanism can promise; the model reproduces it in one step and moves
+on, following \texttt{nats-relay.tex}'s own precedent of leaving TTL
+expiry unmodelled as a live transition.  The non-trivial part is new:
+\S\ref{sec:race} exhibits a five-step counterexample, internal to the
+mechanism \#350 ships, in which the reaping incarnation's \emph{own}
+background reap loop races its \emph{own} fallback-sentinel write
+during an ordinary, non-crashing shutdown --- no signal, no crash, and
+no resume involved.
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  [SESSIONKEY]
+\end{zed}
+
+$SESSIONKEY$ is the composite $\{user\}:\{tty\}$ identifier, exactly as
+in \texttt{nats-relay.tex} --- redeclared here because each Z document
+in this corpus is independently type-checked and so restates the basic
+types it needs, not because the concept differs.  As in
+\texttt{session-model.tex}'s $SESSION$, a $SESSIONKEY$ is stable across
+\texttt{claude --resume}: the routing token (\texttt{tty\_hex}) is
+derived from the Claude \texttt{session\_id}, so a resumed session
+recovers the \emph{same} key rather than minting a fresh one.  That
+stability is exactly what makes the own-key skip meaningful --- and, as
+\S\ref{sec:race} shows, exactly what makes it unable to distinguish a
+legitimately resumed incarnation from the very incarnation that wrote
+the sentinel still running.
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+%%----------------------------------------------------------------------
+\section{Global Constants}
+\label{sec:own}
+%%----------------------------------------------------------------------
+
+\begin{axdef}
+  own : SESSIONKEY
+\end{axdef}
+
+$own$ is the session key of the incarnation whose perspective this
+model takes --- the value of \texttt{state.session\_key} inside one
+running \texttt{biff mcp} process.  It is a fixed, arbitrary element of
+$SESSIONKEY$: the model does not care \emph{which} key it is, only that
+every operation below agrees on it, exactly as \texttt{\_reap\_sentinels}
+compares every sentinel it finds against the one value
+\texttt{state.session\_key} for the life of the process.  Companion
+sessions (\texttt{state.companion\_session\_key}) are a second,
+independent instance of the same $own$-relative machinery --- the code
+folds both into one \texttt{live\_keys} set --- and are not modelled
+separately; every property proved of $own$ applies unchanged to a
+companion key.
+
+%%----------------------------------------------------------------------
+\section{State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{SentinelWorld}
+  rowPresent : \power SESSIONKEY \\
+  sentinelPresent : \power SESSIONKEY \\
+  sentinelWriteAttempted : ZBOOL \\
+  shutdownSignaled : ZBOOL \\
+  releaseAttempted : ZBOOL \\
+  exited : ZBOOL \\
+  crashed : ZBOOL \\
+  resumed : ZBOOL
+\end{schema}
+
+$rowPresent$ is the set of session keys with a live KV row --- the
+domain of \texttt{nats-relay.tex}'s $SessionStore.sessions$, projected
+down to presence, since this specification is not concerned with a
+row's contents.  $sentinelPresent$ is the set of session keys with a
+sentinel file currently on disk for this repo.  $sentinelWriteAttempted$
+is a per-incarnation latch: \emph{this} incarnation of $own$ has called
+\texttt{\_write\_reap\_fallback\_sentinels} or the signal handler's
+sentinel write at least once.  It is a ghost, not an observable of the
+real system, needed because \texttt{\_shutdown\_tasks} is called
+\emph{after} the sentinel write in program order
+(\texttt{\_lifespan\_cleanup}'s sequence is: write sentinel, append
+logout events, \emph{then} shut down background tasks) regardless of
+whether the sentinel it wrote is still sitting on disk by the time
+$shutdownSignaled$ is set --- and a state predicate on
+$sentinelPresent$ cannot express a fact about program order once the
+file itself may already have been raced away.  $shutdownSignaled$
+records whether $own$'s background \texttt{\_reap\_loop} has been told
+to stop (its \texttt{asyncio.Event} set) --- once true, that task can no
+longer tick and so can no longer run $OwnOrphanReapTick$ below.
+$releaseAttempted$ is a second per-incarnation latch: $own$'s
+\texttt{\_release\_session} has been called at least once, whether or
+not \texttt{delete\_session} succeeded.  \texttt{\_lifespan\_cleanup}
+always calls \texttt{\_release\_relay} --- and so always attempts
+\texttt{\_release\_session} on $own$ --- between $shutdownSignaled$
+becoming true and the function returning, so $ExitProcess$ below is
+gated on it: a process cannot exit through this, the graceful path,
+without release having at least been tried.  $exited$
+records whether $own$'s OS process has actually terminated.  $crashed$
+is a latch, in the manner of \texttt{session-model.tex}'s $lostF$ and
+$misF$, flipped only by the one operation that models an unannounced
+death (\S\ref{sec:crash}); it exists purely to let
+\S\ref{sec:modelcheck} separate the trivial crash counterexample from
+the non-trivial race one.  $resumed$ is a second ghost latch, in the
+same style as $sentinelWriteAttempted$: it records only whether
+\emph{some} $ResumeOwn$ has fired on this run, and is needed for the
+same structural reason $sentinelWriteAttempted$ is --- $exited$ and
+$shutdownSignaled$ are themselves reset by $ResumeOwn$
+(\S\ref{sec:resume-safe}), so neither can serve as a state predicate
+that distinguishes ``reachable only via a resume'' from ``reachable
+without one'' once a full shutdown/exit cycle has happened again since
+the resume.
+
+No structural invariant is stated in $SentinelWorld$ itself.  Unlike
+\texttt{nats-relay.tex}'s $Connection$ invariant (which holds in every
+reachable state), the natural candidate invariant here ---
+``$exited = ztrue$ implies $shutdownSignaled = ztrue$'' --- is
+\emph{false} of the system as a whole: that is precisely what a crash
+is.  Following \texttt{session-model.tex}'s treatment of delivery
+soundness, the properties this specification proves are stated as
+reachability goals over $SentinelWorld$ (\S\ref{sec:modelcheck}), not as
+a state invariant that would have to be weakened to accommodate a case
+the mechanism was never meant to cover.
+
+%%----------------------------------------------------------------------
+\section{Initial State}
+%%----------------------------------------------------------------------
+
+The model starts with $own$ freshly registered: a live row, no
+sentinel, no shutdown in progress, not exited, nothing crashed.
+
+\begin{schema}{Init}
+  SentinelWorld'
+  \where
+  rowPresent' = \{ own \} \\
+  sentinelPresent' = \emptyset \\
+  sentinelWriteAttempted' = zfalse \\
+  shutdownSignaled' = zfalse \\
+  releaseAttempted' = zfalse \\
+  exited' = zfalse \\
+  crashed' = zfalse \\
+  resumed' = zfalse
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Operations on $own$}
+%%----------------------------------------------------------------------
+
+%%----------------------------------------------------------------------
+\subsection{WriteOwnSentinel}
+%%----------------------------------------------------------------------
+
+Corresponds to \texttt{\_write\_reap\_fallback\_sentinels} (called at
+the top of \texttt{\_lifespan\_cleanup}) and to the sentinel write in
+\texttt{\_active\_lifespan}'s \texttt{\_signal\_handler}: both call
+\texttt{\_write\_sentinel(repo, state.session\_key)} and are, at this
+level of abstraction, the same event.  It can fire more than once for
+one incarnation --- a signal can arrive and then the MCP transport can
+also detect disconnect --- which is why the effect is idempotent
+($\cup$, not requiring absence first) and why $sentinelWriteAttempted$,
+once set, is never cleared by this operation.
+
+\begin{schema}{WriteOwnSentinel}
+  \Delta SentinelWorld
+  \where
+  exited = zfalse \\
+  %%
+  sentinelPresent' = sentinelPresent \cup \{ own \} \\
+  sentinelWriteAttempted' = ztrue \\
+  %%
+  rowPresent' = rowPresent \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{OwnOrphanReapTick}
+%%----------------------------------------------------------------------
+
+The own-key skip.  Models one tick of $own$'s background
+\texttt{\_reap\_loop} (or the explicit call in
+\texttt{\_active\_lifespan} before that task exists) finding a sentinel
+that names $own$ itself, and discarding it \emph{without} deleting the
+row, releasing the TTY reservation, or appending a logout event ---
+exactly the \texttt{if session\_key in live\_keys} branch quoted in
+\S\ref{sec:intro}.  Enabled only while the loop has not yet been told to
+stop ($shutdownSignaled = zfalse$), mirroring
+\texttt{while not shutdown.is\_set()} --- and only while $own$'s process
+is still alive ($exited = zfalse$): the tick is a step of $own$'s
+\emph{own} \texttt{\_reap\_loop}, which dies with the process, so a
+prior $CrashNoSentinel$ (which sets $exited' = ztrue$ in the same step
+it sets $crashed' = ztrue$) must disable it too, or a crash-left
+sentinel would be reachable for discard by a task that no longer
+exists (Cursor Bugbot).
+
+\begin{schema}{OwnOrphanReapTick}
+  \Delta SentinelWorld
+  \where
+  shutdownSignaled = zfalse \\
+  exited = zfalse \\
+  own \in sentinelPresent \\
+  %%
+  sentinelPresent' = sentinelPresent \setminus \{ own \} \\
+  %%
+  rowPresent' = rowPresent \\
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{SignalShutdown}
+%%----------------------------------------------------------------------
+
+Corresponds to \texttt{\_shutdown\_tasks} setting the
+\texttt{asyncio.Event} that stops the poller, reaper, heartbeat, and KV
+watcher tasks.  In \texttt{\_lifespan\_cleanup} this always happens
+\emph{after} the fallback sentinel write and the logout-event appends,
+which is why the precondition is $sentinelWriteAttempted = ztrue$ ---
+the program-order fact --- rather than $own \in sentinelPresent$, which
+by the time this fires may already have been raced away by
+$OwnOrphanReapTick$.
+
+\begin{schema}{SignalShutdown}
+  \Delta SentinelWorld
+  \where
+  shutdownSignaled = zfalse \\
+  sentinelWriteAttempted = ztrue \\
+  %%
+  shutdownSignaled' = ztrue \\
+  %%
+  rowPresent' = rowPresent \\
+  sentinelPresent' = sentinelPresent \\
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  releaseAttempted' = releaseAttempted \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ReleaseOwnSuccess}
+%%----------------------------------------------------------------------
+
+Corresponds to \texttt{\_release\_session} succeeding: \texttt{delete\_
+session} returns without raising, so \texttt{\_remove\_sentinel} is
+called unconditionally afterwards.  Removing an absent sentinel is a
+no-op (\texttt{missing\_ok=True}), so the effect on $sentinelPresent$
+is safe whether or not $OwnOrphanReapTick$ has already consumed it.
+
+\begin{schema}{ReleaseOwnSuccess}
+  \Delta SentinelWorld
+  \where
+  shutdownSignaled = ztrue \\
+  own \in rowPresent \\
+  %%
+  rowPresent' = rowPresent \setminus \{ own \} \\
+  sentinelPresent' = sentinelPresent \setminus \{ own \} \\
+  releaseAttempted' = ztrue \\
+  %%
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ReleaseOwnFails}
+%%----------------------------------------------------------------------
+
+Corresponds to \texttt{delete\_session} raising or timing out inside
+\texttt{\_release\_session}'s \texttt{\_TEARDOWN\_STEP\_TIMEOUT} bound
+(biff-7xd) --- a ``log and move on'' failure.  Per the code,
+\texttt{\_remove\_sentinel} is only reached in the \texttt{else} branch
+of the \texttt{try}, so on failure the sentinel --- if $OwnOrphanReapTick$
+has not already removed it --- is left exactly as it was.
+
+\begin{schema}{ReleaseOwnFails}
+  \Delta SentinelWorld
+  \where
+  shutdownSignaled = ztrue \\
+  own \in rowPresent \\
+  %%
+  rowPresent' = rowPresent \\
+  sentinelPresent' = sentinelPresent \\
+  releaseAttempted' = ztrue \\
+  %%
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ExitProcess}
+%%----------------------------------------------------------------------
+
+The OS process backing $own$ actually terminates --- the end of
+\texttt{\_lifespan\_cleanup}'s \texttt{finally} block, or (post
+biff-teh) the kernel-level re-delivery of the caught signal.  Gated on
+$shutdownSignaled = ztrue \land releaseAttempted = ztrue$:
+\texttt{\_shutdown\_tasks} is awaited, and \texttt{\_release\_relay} ---
+which always attempts \texttt{\_release\_session} on $own$ --- runs,
+strictly before \texttt{\_lifespan\_cleanup} returns and the process can
+exit through this, the graceful path.
+
+\begin{schema}{ExitProcess}
+  \Delta SentinelWorld
+  \where
+  shutdownSignaled = ztrue \\
+  releaseAttempted = ztrue \\
+  exited = zfalse \\
+  %%
+  exited' = ztrue \\
+  %%
+  rowPresent' = rowPresent \\
+  sentinelPresent' = sentinelPresent \\
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{CrashNoSentinel}
+\label{sec:crash}
+%%----------------------------------------------------------------------
+
+\texttt{SIGKILL}, OOM, or power loss: the process is gone with no
+warning and so with no chance to run \texttt{\_write\_sentinel} or
+\texttt{\_shutdown\_tasks}.  This is the case biff-teh's own discovery
+notes name explicitly as the sentinel mechanism's known limit, backstopped
+outside this model by KV TTL and the 120-second presence-liveness window
+--- neither of which is given a live transition here, in the same spirit
+in which \texttt{nats-relay.tex}'s $DeleteSession$ leaves TTL expiry as
+commentary rather than an operation.
+
+\begin{schema}{CrashNoSentinel}
+  \Delta SentinelWorld
+  \where
+  exited = zfalse \\
+  own \in rowPresent \\
+  %%
+  exited' = ztrue \\
+  crashed' = ztrue \\
+  %%
+  rowPresent' = rowPresent \\
+  sentinelPresent' = sentinelPresent \\
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{ResumeOwn}
+%%----------------------------------------------------------------------
+
+A fresh incarnation registers under the \emph{same}, resume-stable
+$own$ key --- \texttt{register\_session}'s claim-then-write, whose
+\texttt{update\_session} call overwrites the KV row unconditionally
+regardless of what was there before.  This is one of the two
+``accidental backstops'' the bead names; here it is encoded as the
+actual overwrite the code performs, not assumed safe.
+
+\begin{schema}{ResumeOwn}
+  \Delta SentinelWorld
+  \where
+  exited = ztrue \\
+  %%
+  rowPresent' = rowPresent \cup \{ own \} \\
+  sentinelWriteAttempted' = zfalse \\
+  shutdownSignaled' = zfalse \\
+  releaseAttempted' = zfalse \\
+  exited' = zfalse \\
+  %%
+  sentinelPresent' = sentinelPresent \\
+  crashed' = crashed \\
+  resumed' = ztrue
+\end{schema}
+
+Resume does not itself touch $sentinelPresent$: \texttt{register\_
+session} claims the TTY name and overwrites the KV row, but never reads
+or writes the sentinel directory.  A stale sentinel for $own$ left by
+the departed prior incarnation is cleared later, by the resumed
+incarnation's own first $OwnOrphanReapTick$ --- \texttt{\_active\_
+lifespan} calls \texttt{\_reap\_sentinels} explicitly, immediately after
+\texttt{register\_session} and before the periodic reaper task is even
+created.  $ResumeOwn$'s postcondition $rowPresent' \ni own$ is what
+makes that later discard harmless: see \S\ref{sec:resume-safe}.
+
+%%----------------------------------------------------------------------
+\section{Operations on Foreign Keys}
+%%----------------------------------------------------------------------
+
+The remaining three operations model a session key other than $own$
+--- a different, already-departing incarnation, reaped correctly
+because the reaping incarnation's key differs from the sentinel's key
+(the bead's ``never-resumes case'').
+
+%%----------------------------------------------------------------------
+\subsection{RegisterForeign}
+%%----------------------------------------------------------------------
+
+\begin{schema}{RegisterForeign}
+  \Delta SentinelWorld \\
+  sk? : SESSIONKEY
+  \where
+  sk? \neq own \\
+  sk? \notin rowPresent \\
+  %%
+  rowPresent' = rowPresent \cup \{ sk? \} \\
+  %%
+  sentinelPresent' = sentinelPresent \\
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{WriteForeignSentinel}
+%%----------------------------------------------------------------------
+
+\begin{schema}{WriteForeignSentinel}
+  \Delta SentinelWorld \\
+  sk? : SESSIONKEY
+  \where
+  sk? \neq own \\
+  %%
+  sentinelPresent' = sentinelPresent \cup \{ sk? \} \\
+  %%
+  rowPresent' = rowPresent \\
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\subsection{OwnReapForeign / OwnReapForeignFails}
+%%----------------------------------------------------------------------
+
+The good path: $own$'s reaper finds a sentinel for a key that is not
+its own and reaps it fully --- \texttt{\_reap\_dead\_session} deleting
+the row, releasing the TTY reservation, appending the logout event, and
+the sentinel being removed on success.  $OwnReapForeignFails$ models
+\texttt{delete\_session} raising: both row and sentinel are left in
+place for a later retry, never producing an orphaned row.
+
+\begin{schema}{OwnReapForeign}
+  \Delta SentinelWorld \\
+  sk? : SESSIONKEY
+  \where
+  sk? \neq own \\
+  sk? \in sentinelPresent \\
+  sk? \in rowPresent \\
+  %%
+  rowPresent' = rowPresent \setminus \{ sk? \} \\
+  sentinelPresent' = sentinelPresent \setminus \{ sk? \} \\
+  %%
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+\begin{schema}{OwnReapForeignFails}
+  \Delta SentinelWorld \\
+  sk? : SESSIONKEY
+  \where
+  sk? \neq own \\
+  sk? \in sentinelPresent \\
+  %%
+  rowPresent' = rowPresent \\
+  sentinelPresent' = sentinelPresent \\
+  %%
+  sentinelWriteAttempted' = sentinelWriteAttempted \\
+  shutdownSignaled' = shutdownSignaled \\
+  releaseAttempted' = releaseAttempted \\
+  exited' = exited \\
+  crashed' = crashed \\
+  resumed' = resumed
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{Properties and Model Checking}
+\label{sec:modelcheck}
+%%----------------------------------------------------------------------
+
+The property the bead asks for is
+
+$$BadOrphan \;\widehat{=}\; own \in rowPresent \land own \notin sentinelPresent
+\land exited = ztrue,$$
+
+read as ``$own$'s row has no live process behind it and no sentinel
+left to reclaim it.''  Two reachability goals are checked against it.
+
+\subsection{(G1) The known gap: crash reaches $BadOrphan$ in one step}
+\label{sec:crash-goal}
+
+\begin{verbatim}
+probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+  -card SESSIONKEY 2 \
+  -goal "own : rowPresent & not(own : sentinelPresent) & exited=ztrue"
+\end{verbatim}
+
+ProB finds the goal at the shortest possible distance --- one
+operation, $Init$; $CrashNoSentinel$.  $Init$ already has $own \in
+rowPresent$ and
+$exited = zfalse$, so the crash operation is enabled immediately.  This
+is not a new finding --- it is the mechanism doing exactly what
+biff-teh's own discovery notes already say it does: a process killed
+without warning gets no sentinel, and the row survives until KV TTL or
+the liveness window closes it, neither of which this specification
+models as a live transition.  It is reported here because the bead asks
+the literal property to be checked, not assumed, and because it fixes
+the baseline against which \S\ref{sec:race} is the interesting result.
+
+\subsection{(G2) The new finding: the fallback sentinel races its own reaper}
+\label{sec:race}
+
+Restricting the goal to $crashed = zfalse$ rules out (G1)'s trivial
+witness and forces ProB to search for a route to $BadOrphan$ that goes
+through no crash at all:
+
+\begin{verbatim}
+probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+  -card SESSIONKEY 2 \
+  -goal "own : rowPresent & not(own : sentinelPresent) \
+         & exited=ztrue & crashed=zfalse"
+\end{verbatim}
+
+ProB finds it, five operations from $Init$:
+
+\begin{enumerate}
+  \item $WriteOwnSentinel$ --- $own$'s incarnation begins an ordinary,
+    non-signal shutdown; \texttt{\_write\_reap\_fallback\_sentinels}
+    writes the sentinel.  $sentinelPresent = \{ own \}$,
+    $sentinelWriteAttempted = ztrue$.
+  \item $OwnOrphanReapTick$ --- before \texttt{\_shutdown\_tasks} has
+    run, $own$'s \emph{own} background \texttt{\_reap\_loop} ticks
+    (its two-second interval elapses during one of the \texttt{await}s
+    in \texttt{\_append\_logout\_event} / \texttt{\_append\_companion\_
+    logout\_event}, each bounded at three seconds), finds its own
+    sentinel, and discards it under the own-key skip.
+    $sentinelPresent = \emptyset$; $rowPresent$ is untouched.
+  \item $SignalShutdown$ --- \texttt{\_shutdown\_tasks} now runs,
+    stopping the reap loop for good.  Enabled because
+    $sentinelWriteAttempted = ztrue$ from step 1, regardless of the
+    sentinel's fate since.
+  \item $ReleaseOwnFails$ --- \texttt{\_release\_session}'s
+    \texttt{delete\_session} call times out or raises within its
+    three-second bound.  $rowPresent$ still contains $own$;
+    $sentinelPresent$ is still empty.
+  \item $ExitProcess$ --- \texttt{\_lifespan\_cleanup} finishes anyway
+    (every step in it is best-effort) and the process exits.
+\end{enumerate}
+
+The resulting state has $own \in rowPresent$, $own \notin
+sentinelPresent$, $exited = ztrue$, $crashed = zfalse$: $BadOrphan$,
+reached with no signal, no crash, and no resume anywhere in the trace.
+This is a genuine defect internal to the mechanism \#350 ships, not a
+restatement of the already-known SIGKILL gap: it is the interaction of
+two of \#350's own changes --- an unconditional, unguarded fallback
+sentinel write early in \texttt{\_lifespan\_cleanup}, and a per-step
+teardown bound that lets \texttt{delete\_session} fail without
+retrying inline --- with a reap loop that was never told to stand down
+until \texttt{\_shutdown\_tasks} runs several awaits later.  Nothing in
+the shipped code prevents $own$'s own periodic tick from firing in that
+window; \texttt{\_reap\_loop}'s only guard is
+\texttt{shutdown.is\_set()}, which is false for the entire duration of
+steps 1--3.  \textbf{This is a finding for the operator to route, not a
+defect this specification task fixes.}  The Python-level repair belongs
+to whoever owns \texttt{app.py}: candidates include stopping the reap
+loop (or at minimum excluding $own$'s own key from
+\texttt{\_reap\_sentinels}) before \texttt{\_write\_reap\_fallback\_
+sentinels} runs, or making the own-key skip conditional on
+$shutdownSignaled$ rather than unconditional.
+
+\subsection{Resume clears the immediate race, but not the next cycle}
+\label{sec:resume-safe}
+
+The bead poses a specific question: is the resume case ``correct by two
+accidental backstops'' (\texttt{register\_session}'s stale-TTY
+self-release and \texttt{update\_session}'s unconditional overwrite),
+or is it correct for a more principled reason?  An earlier draft of
+this section answered ``resume never reaches $BadOrphan$,'' using a
+goal that constrained the search with $shutdownSignaled = zfalse$ as a
+proxy for ``on the resume path.''  That proxy was wrong: $ExitProcess$
+requires $shutdownSignaled = ztrue$ as a precondition and never resets
+it, and $CrashNoSentinel$ is excluded by the goal's own $crashed =
+zfalse$ conjunct, so $exited = ztrue \land shutdownSignaled = zfalse$
+is unreachable \emph{by construction}, independent of $ResumeOwn$ ---
+deleting $ResumeOwn$ from the model entirely would not change the
+result.  The goal was vacuously true and proved nothing about resume
+(Cursor Bugbot).
+
+The one thing that \emph{is} true by construction: $rowPresent$ is
+touched by exactly two operations on $own$, $ResumeOwn$ (always
+\emph{adds} $own$) and $ReleaseOwnSuccess$ (always \emph{removes} it,
+together with $own$ from $sentinelPresent$, in the same step), and
+$ResumeOwn$'s postcondition sets $exited' = zfalse$ --- so a stale
+sentinel discarded by $OwnOrphanReapTick$ in the instant right after a
+resume cannot itself satisfy $BadOrphan$'s third conjunct, because
+$exited$ is false at that instant.  That much survives the correction.
+
+What does not survive it: resume confers no protection beyond that one
+instant.  A resumed incarnation is exactly as exposed to
+\S\ref{sec:race}'s five-step race on its \emph{own} subsequent
+shutdown as a fresh one is --- resuming only replays $Init$'s effect on
+$rowPresent$ and the ghost latches, it does not change how
+$OwnOrphanReapTick$, $SignalShutdown$, and $ReleaseOwnFails$ interact.
+A ghost latch $resumed$ (added to $SentinelWorld$, set by $ResumeOwn$,
+otherwise unchanged by every other operation, in the manner of
+$sentinelWriteAttempted$) makes ``reachable via some resume'' a real
+state predicate instead of a proxy that collides with the
+$exited$/$shutdownSignaled$ machinery:
+
+\begin{verbatim}
+probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+  -card SESSIONKEY 2 \
+  -goal "own : rowPresent & not(own : sentinelPresent) \
+         & exited=ztrue & crashed=zfalse & resumed=ztrue"
+\end{verbatim}
+
+ProB finds a 15-step witness: $WriteOwnSentinel$, $SignalShutdown$,
+$ReleaseOwnFails$, $ExitProcess$ (the first, ordinary exit) --- then
+$ResumeOwn$, and from there the same shape as \S\ref{sec:race}'s
+five-step race ($WriteOwnSentinel$, $OwnOrphanReapTick$,
+$SignalShutdown$, \ldots, $ReleaseOwnFails$, $ExitProcess$) reaches
+$BadOrphan$ a second time.  Resume is therefore not an independent
+safety mechanism; it is a state reset that a subsequent shutdown can
+race exactly as any first shutdown can, and \S\ref{sec:race}'s fix ---
+stopping the reaper before the sentinel write, on \emph{every}
+incarnation --- is what closes it, not anything specific to resuming.
+The two mechanisms the bead named (stale-TTY self-release, unconditional
+KV overwrite) are real and both fire in production on resume, but
+neither one, nor $ResumeOwn$'s call-order property established above,
+extends past that first instant.
+
+\subsection{Foreign reaping never partially strands a row}
+
+This one is read off the schemas rather than searched for, in the
+manner of \texttt{session-model.tex}'s ``two facts~\ldots~here by
+construction rather than as invariants to be checked'' (\S 5.2 there).
+For a foreign key $sk?$, exactly one operation ever removes it from
+$sentinelPresent$: $OwnReapForeign$, whose single effect clause removes
+it from $rowPresent$ \emph{in the same schema}, i.e.\ the same atomic
+state transition.  There is no foreign-key counterpart to
+$OwnOrphanReapTick$ --- no operation discards a foreign sentinel while
+leaving its row behind.  $OwnReapForeignFails$, the only other operation
+touching a foreign sentinel, leaves \emph{both} $rowPresent$ and
+$sentinelPresent$ untouched, so it can only prolong the recoverable
+``row and sentinel both present, awaiting retry'' state, never produce
+one where the sentinel is gone and the row is not.  The own-key race of
+\S\ref{sec:race} is therefore specific to $own$: it exploits the split
+between $OwnOrphanReapTick$ (sentinel-only) and $ReleaseOwn{}^*$
+(row-and-sentinel, gated separately on $shutdownSignaled$), a split that
+exists only because a reaper is never allowed to fully reap its own key
+--- the very split the own-key skip introduces to protect the resume
+case.  The foreign path has no such split and so no such race.
+
+%%----------------------------------------------------------------------
+\section{Model-Checking Scope}
+%%----------------------------------------------------------------------
+
+The full state space is checked exhaustively at $\mathtt{-card\
+SESSIONKEY\ 2}$ --- one element for $own$, one for a foreign key,
+enough to exercise every operation including $RegisterForeign$,
+$WriteForeignSentinel$, $OwnReapForeign$, and
+$OwnReapForeignFails$, which all need a second $SESSIONKEY$ distinct
+from $own$:
+
+\begin{verbatim}
+probcli docs/sentinel-reap.tex -model_check -noass -nodead \
+  -card SESSIONKEY 2 -p MAX_OPERATIONS 20000 -p TIME_OUT 60000 -coverage
+\end{verbatim}
+
+probcli visits $221$ states ($220$ live plus the search root) via
+$1108$ fired transitions, reports \texttt{ALL OPERATIONS COVERED}, zero
+deadlocks, and zero invariant violations (there being no state
+invariant left to check --- \S\ref{sec:intro} explains why).  Every
+operation is enabled from some reachable state and $ResumeOwn$ alone is
+always enabled whenever $exited = ztrue$, so the system can never get
+permanently stuck once a process has gone, crashed or not.
+
+%%----------------------------------------------------------------------
+\section{Discussion}
+%%----------------------------------------------------------------------
+
+\subsection{What this model captures}
+
+\begin{itemize}
+  \item Sentinel writing, unified across the signal-handler path and
+    the \#350 fallback path as one operation ($WriteOwnSentinel$),
+    matching the code's own convergence onto \texttt{\_write\_sentinel}.
+  \item Sentinel consumption, split into the own-key skip
+    ($OwnOrphanReapTick$, no row effect) and the foreign path
+    ($OwnReapForeign$/$OwnReapForeignFails$, atomic row-and-sentinel
+    removal on success).
+  \item KV row deletion ($ReleaseOwnSuccess$, $OwnReapForeign$) and
+    row orphaning --- the state $BadOrphan$ that both goals target.
+  \item The liveness relationship between a sentinel and the row it
+    refers to: a sentinel's only job is to trigger the row's deletion;
+    \S\ref{sec:race} shows that job can be discharged (the sentinel
+    consumed) without the row actually being deleted, which is the
+    exact failure mode the mechanism exists to prevent.
+\end{itemize}
+
+\subsection{What this model does not cover}
+
+\begin{itemize}
+  \item \textbf{KV TTL and the presence-liveness window} --- the
+    backstop for $CrashNoSentinel$, deliberately left as commentary
+    rather than a live transition, following \texttt{nats-relay.tex}'s
+    own treatment of $DeleteSession$.
+  \item \textbf{Multiple concurrent reaping servers} --- the model
+    takes the perspective of one incarnation reaping foreign keys; two
+    servers racing to reap the \emph{same} foreign sentinel is a
+    different, narrower race (both attempt $OwnReapForeign$ on the same
+    $sk?$; the loser's \texttt{delete\_session} finds nothing to
+    delete) that the code's own commentary in \texttt{\_handle\_kv\_
+    delete} already accepts as harmless duplication, not a correctness
+    hazard for this specification's property.
+  \item \textbf{Companion sessions as a distinct carrier} --- folded
+    into $own$ by the remark in \S\ref{sec:own}, not given a second
+    constant; every property proved of $own$ transfers unchanged.
+  \item \textbf{The content of a KV row} --- $rowPresent$ is presence
+    only, matching this document's use of \texttt{nats-relay.tex}'s
+    $SessionStore$ for the underlying storage model.
+\end{itemize}
+
+\end{document}
