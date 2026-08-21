@@ -156,7 +156,8 @@ companion key.
   shutdownSignaled : ZBOOL \\
   releaseAttempted : ZBOOL \\
   exited : ZBOOL \\
-  crashed : ZBOOL
+  crashed : ZBOOL \\
+  resumed : ZBOOL
 \end{schema}
 
 $rowPresent$ is the set of session keys with a live KV row --- the
@@ -191,7 +192,15 @@ is a latch, in the manner of \texttt{session-model.tex}'s $lostF$ and
 $misF$, flipped only by the one operation that models an unannounced
 death (\S\ref{sec:crash}); it exists purely to let
 \S\ref{sec:modelcheck} separate the trivial crash counterexample from
-the non-trivial race one.
+the non-trivial race one.  $resumed$ is a second ghost latch, in the
+same style as $sentinelWriteAttempted$: it records only whether
+\emph{some} $ResumeOwn$ has fired on this run, and is needed for the
+same structural reason $sentinelWriteAttempted$ is --- $exited$ and
+$shutdownSignaled$ are themselves reset by $ResumeOwn$
+(\S\ref{sec:resume-safe}), so neither can serve as a state predicate
+that distinguishes ``reachable only via a resume'' from ``reachable
+without one'' once a full shutdown/exit cycle has happened again since
+the resume.
 
 No structural invariant is stated in $SentinelWorld$ itself.  Unlike
 \texttt{nats-relay.tex}'s $Connection$ invariant (which holds in every
@@ -220,7 +229,8 @@ sentinel, no shutdown in progress, not exited, nothing crashed.
   shutdownSignaled' = zfalse \\
   releaseAttempted' = zfalse \\
   exited' = zfalse \\
-  crashed' = zfalse
+  crashed' = zfalse \\
+  resumed' = zfalse
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -253,7 +263,8 @@ once set, is never cleared by this operation.
   shutdownSignaled' = shutdownSignaled \\
   releaseAttempted' = releaseAttempted \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -268,12 +279,19 @@ row, releasing the TTY reservation, or appending a logout event ---
 exactly the \texttt{if session\_key in live\_keys} branch quoted in
 \S\ref{sec:intro}.  Enabled only while the loop has not yet been told to
 stop ($shutdownSignaled = zfalse$), mirroring
-\texttt{while not shutdown.is\_set()}.
+\texttt{while not shutdown.is\_set()} --- and only while $own$'s process
+is still alive ($exited = zfalse$): the tick is a step of $own$'s
+\emph{own} \texttt{\_reap\_loop}, which dies with the process, so a
+prior $CrashNoSentinel$ (which sets $exited' = ztrue$ in the same step
+it sets $crashed' = ztrue$) must disable it too, or a crash-left
+sentinel would be reachable for discard by a task that no longer
+exists (Cursor Bugbot).
 
 \begin{schema}{OwnOrphanReapTick}
   \Delta SentinelWorld
   \where
   shutdownSignaled = zfalse \\
+  exited = zfalse \\
   own \in sentinelPresent \\
   %%
   sentinelPresent' = sentinelPresent \setminus \{ own \} \\
@@ -283,7 +301,8 @@ stop ($shutdownSignaled = zfalse$), mirroring
   shutdownSignaled' = shutdownSignaled \\
   releaseAttempted' = releaseAttempted \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -312,7 +331,8 @@ $OwnOrphanReapTick$.
   sentinelWriteAttempted' = sentinelWriteAttempted \\
   releaseAttempted' = releaseAttempted \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -338,7 +358,8 @@ is safe whether or not $OwnOrphanReapTick$ has already consumed it.
   sentinelWriteAttempted' = sentinelWriteAttempted \\
   shutdownSignaled' = shutdownSignaled \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -365,7 +386,8 @@ has not already removed it --- is left exactly as it was.
   sentinelWriteAttempted' = sentinelWriteAttempted \\
   shutdownSignaled' = shutdownSignaled \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -395,7 +417,8 @@ exit through this, the graceful path.
   sentinelWriteAttempted' = sentinelWriteAttempted \\
   shutdownSignaled' = shutdownSignaled \\
   releaseAttempted' = releaseAttempted \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -425,7 +448,8 @@ commentary rather than an operation.
   sentinelPresent' = sentinelPresent \\
   sentinelWriteAttempted' = sentinelWriteAttempted \\
   shutdownSignaled' = shutdownSignaled \\
-  releaseAttempted' = releaseAttempted
+  releaseAttempted' = releaseAttempted \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -451,7 +475,8 @@ actual overwrite the code performs, not assumed safe.
   exited' = zfalse \\
   %%
   sentinelPresent' = sentinelPresent \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = ztrue
 \end{schema}
 
 Resume does not itself touch $sentinelPresent$: \texttt{register\_
@@ -491,7 +516,8 @@ because the reaping incarnation's key differs from the sentinel's key
   shutdownSignaled' = shutdownSignaled \\
   releaseAttempted' = releaseAttempted \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -511,7 +537,8 @@ because the reaping incarnation's key differs from the sentinel's key
   shutdownSignaled' = shutdownSignaled \\
   releaseAttempted' = releaseAttempted \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -540,7 +567,8 @@ place for a later retry, never producing an orphaned row.
   shutdownSignaled' = shutdownSignaled \\
   releaseAttempted' = releaseAttempted \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 \begin{schema}{OwnReapForeignFails}
@@ -557,7 +585,8 @@ place for a later retry, never producing an orphaned row.
   shutdownSignaled' = shutdownSignaled \\
   releaseAttempted' = releaseAttempted \\
   exited' = exited \\
-  crashed' = crashed
+  crashed' = crashed \\
+  resumed' = resumed
 \end{schema}
 
 %%----------------------------------------------------------------------
@@ -655,50 +684,66 @@ loop (or at minimum excluding $own$'s own key from
 sentinels} runs, or making the own-key skip conditional on
 $shutdownSignaled$ rather than unconditional.
 
-\subsection{Resume is safe by construction, not by the two named backstops}
+\subsection{Resume clears the immediate race, but not the next cycle}
 \label{sec:resume-safe}
 
 The bead poses a specific question: is the resume case ``correct by two
 accidental backstops'' (\texttt{register\_session}'s stale-TTY
 self-release and \texttt{update\_session}'s unconditional overwrite),
-or is it correct for a more principled reason?  The model answers
-directly, without assuming the answer.  $rowPresent$ is touched by
-exactly two operations: $ResumeOwn$, which always \emph{adds} $own$,
-and $ReleaseOwnSuccess$, which always \emph{removes} it --- and removes
-$own$ from $sentinelPresent$ in the very same step.  So the only way to
-reach a state with $own \in rowPresent \land own \notin sentinelPresent$
-is for $ReleaseOwnSuccess$ to \emph{not} have been the most recent
-sentinel-affecting event on $own$; in particular, immediately after
-$ResumeOwn$, $exited' = zfalse$, so $BadOrphan$'s third conjunct is
-false regardless of what $OwnOrphanReapTick$ does next.  A stale
-sentinel discarded by the resumed incarnation's own reap tick is
-harmless not because the TTY-reservation release or the KV overwrite
-happen to compensate for it, but because $ResumeOwn$'s postcondition
-already re-establishes $own \in rowPresent$ \emph{before} any reap tick
-can run --- \texttt{\_active\_lifespan} calls \texttt{register\_session}
-and then \texttt{\_reap\_sentinels} in that fixed order, and the
-periodic reaper task does not even exist until afterwards.  Confirmed
-by a third goal:
+or is it correct for a more principled reason?  An earlier draft of
+this section answered ``resume never reaches $BadOrphan$,'' using a
+goal that constrained the search with $shutdownSignaled = zfalse$ as a
+proxy for ``on the resume path.''  That proxy was wrong: $ExitProcess$
+requires $shutdownSignaled = ztrue$ as a precondition and never resets
+it, and $CrashNoSentinel$ is excluded by the goal's own $crashed =
+zfalse$ conjunct, so $exited = ztrue \land shutdownSignaled = zfalse$
+is unreachable \emph{by construction}, independent of $ResumeOwn$ ---
+deleting $ResumeOwn$ from the model entirely would not change the
+result.  The goal was vacuously true and proved nothing about resume
+(Cursor Bugbot).
+
+The one thing that \emph{is} true by construction: $rowPresent$ is
+touched by exactly two operations on $own$, $ResumeOwn$ (always
+\emph{adds} $own$) and $ReleaseOwnSuccess$ (always \emph{removes} it,
+together with $own$ from $sentinelPresent$, in the same step), and
+$ResumeOwn$'s postcondition sets $exited' = zfalse$ --- so a stale
+sentinel discarded by $OwnOrphanReapTick$ in the instant right after a
+resume cannot itself satisfy $BadOrphan$'s third conjunct, because
+$exited$ is false at that instant.  That much survives the correction.
+
+What does not survive it: resume confers no protection beyond that one
+instant.  A resumed incarnation is exactly as exposed to
+\S\ref{sec:race}'s five-step race on its \emph{own} subsequent
+shutdown as a fresh one is --- resuming only replays $Init$'s effect on
+$rowPresent$ and the ghost latches, it does not change how
+$OwnOrphanReapTick$, $SignalShutdown$, and $ReleaseOwnFails$ interact.
+A ghost latch $resumed$ (added to $SentinelWorld$, set by $ResumeOwn$,
+otherwise unchanged by every other operation, in the manner of
+$sentinelWriteAttempted$) makes ``reachable via some resume'' a real
+state predicate instead of a proxy that collides with the
+$exited$/$shutdownSignaled$ machinery:
 
 \begin{verbatim}
 probcli docs/sentinel-reap.tex -model_check -noass -nodead \
   -card SESSIONKEY 2 \
   -goal "own : rowPresent & not(own : sentinelPresent) \
-         & exited=ztrue & crashed=zfalse & shutdownSignaled=zfalse"
+         & exited=ztrue & crashed=zfalse & resumed=ztrue"
 \end{verbatim}
 
-This restricts the search to states reachable \emph{without} a
-completed $SignalShutdown$ since the state last had $exited = ztrue$
---- i.e., states that could only have arisen from a resume path, since
-$ResumeOwn$ is the only operation that clears $shutdownSignaled$ back
-to $zfalse$ once $exited$ has been $ztrue$.  ProB visits the entire
-reachable space at $\mathtt{-card\ SESSIONKEY\ 2}$ (136 states) and
-reports no counterexample: the resume path never reaches $BadOrphan$.
-The two mechanisms the bead named are real and both fire in production,
-but neither is what makes resume safe in this model; what makes it safe
-is the fixed call order in \texttt{\_active\_lifespan}, which the model
-encodes as $ResumeOwn$'s postcondition running strictly before any
-$OwnOrphanReapTick$ can matter.
+ProB finds a 15-step witness: $WriteOwnSentinel$, $SignalShutdown$,
+$ReleaseOwnFails$, $ExitProcess$ (the first, ordinary exit) --- then
+$ResumeOwn$, and from there the same shape as \S\ref{sec:race}'s
+five-step race ($WriteOwnSentinel$, $OwnOrphanReapTick$,
+$SignalShutdown$, \ldots, $ReleaseOwnFails$, $ExitProcess$) reaches
+$BadOrphan$ a second time.  Resume is therefore not an independent
+safety mechanism; it is a state reset that a subsequent shutdown can
+race exactly as any first shutdown can, and \S\ref{sec:race}'s fix ---
+stopping the reaper before the sentinel write, on \emph{every}
+incarnation --- is what closes it, not anything specific to resuming.
+The two mechanisms the bead named (stale-TTY self-release, unconditional
+KV overwrite) are real and both fire in production on resume, but
+neither one, nor $ResumeOwn$'s call-order property established above,
+extends past that first instant.
 
 \subsection{Foreign reaping never partially strands a row}
 
@@ -738,8 +783,8 @@ probcli docs/sentinel-reap.tex -model_check -noass -nodead \
   -card SESSIONKEY 2 -p MAX_OPERATIONS 20000 -p TIME_OUT 60000 -coverage
 \end{verbatim}
 
-probcli visits $137$ states ($136$ live plus the search root) via $699$
-fired transitions, reports \texttt{ALL OPERATIONS COVERED}, zero
+probcli visits $221$ states ($220$ live plus the search root) via
+$1108$ fired transitions, reports \texttt{ALL OPERATIONS COVERED}, zero
 deadlocks, and zero invariant violations (there being no state
 invariant left to check --- \S\ref{sec:intro} explains why).  Every
 operation is enabled from some reachable state and $ResumeOwn$ alone is
