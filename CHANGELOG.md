@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-08-22
+
 ### Fixed
 
 - **`ghcr.io/punt-labs/biff-relay` was amd64-only, failing to pull on Apple Silicon without an explicit `--platform` override.** v1.15.0's first published image only built for the GitHub Actions runner's native platform. Docker Desktop runs natively on arm64 on Apple Silicon, which most individual/team users targeted by this image are running. The `docker` job now builds and pushes a `linux/amd64,linux/arm64` multi-platform manifest via `docker/setup-qemu-action` + `buildx`.
