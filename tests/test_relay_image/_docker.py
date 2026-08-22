@@ -29,10 +29,15 @@ _BUILD_TIMEOUT_S: Final[float] = 180.0
 
 @dataclass(frozen=True, slots=True)
 class RelayContainer:
-    """A running, authenticated biff-relay container ready for connections."""
+    """A running biff-relay container ready for connections.
+
+    ``token`` is ``None`` for a container started via ``start_default()`` --
+    the no-mounted-config path selects ``base.conf``, which has no
+    ``authorization`` block at all.
+    """
 
     url: str
-    token: str
+    token: str | None
     name: str
 
 
@@ -118,6 +123,90 @@ class DockerRelay:
         self.wait_healthy(name)
         return RelayContainer(url=f"nats://127.0.0.1:{port}", token=token, name=name)
 
+    def bridge_ip(self, name: str) -> str:
+        """Return ``name``'s IP address on Docker's default bridge network.
+
+        Used to reach the container from a sibling container over the
+        Docker network -- distinct from, and more portable than, reaching
+        it via a host-published port. Host-side port publishing goes
+        through per-platform proxy/NAT machinery (e.g. Docker Desktop's
+        vpnkit on macOS forwards published ports straight into a
+        container's loopback interface, unlike Linux's iptables DNAT,
+        which cannot reach a loopback-only bind) -- so it can't reliably
+        prove a loopback-only bind refuses outside connections. A sibling
+        container reaching this container's own bridge IP behaves the same
+        genuine Linux bridge networking on every host.
+        """
+        result = subprocess.run(  # noqa: S603
+            [
+                self._docker,
+                "inspect",
+                "--format",
+                "{{.NetworkSettings.Networks.bridge.IPAddress}}",
+                name,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.stdout.strip()
+
+    def probe_http_reachable(self, image: str, host: str, port: int) -> bool:
+        """Return whether ``http://<host>:<port>/healthz`` answers.
+
+        Runs ``image``'s own BusyBox ``wget`` (``--entrypoint`` overrides
+        ``/entrypoint.sh``) in a one-shot sibling container attached to the
+        default bridge network, so no extra probe image needs pulling.
+        """
+        result = subprocess.run(  # noqa: S603
+            [
+                self._docker,
+                "run",
+                "--rm",
+                "--entrypoint",
+                "wget",
+                image,
+                "-q",
+                "-T",
+                "2",
+                "--spider",
+                f"http://{host}:{port}/healthz",
+            ],
+            capture_output=True,
+            timeout=_DOCKER_TIMEOUT_S,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def start_default(self, image: str, name: str) -> RelayContainer:
+        """Start ``image`` with no mounted ``nats.conf`` -- the default path.
+
+        Matches the individual-tier ``docker run`` example in
+        ``docs/self-hosted-relay.md``: no ``-v`` mount at all, so
+        ``entrypoint.sh`` selects ``base.conf`` instead of
+        ``base-with-user.conf``, and no authentication is configured or
+        required -- that is this tier's documented trust model.
+        """
+        port = _find_free_port()
+        subprocess.run(  # noqa: S603
+            [
+                self._docker,
+                "run",
+                "-d",
+                "--name",
+                name,
+                "-p",
+                f"127.0.0.1:{port}:4222",
+                image,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=_DOCKER_TIMEOUT_S,
+        )
+        self.wait_healthy(name)
+        return RelayContainer(url=f"nats://127.0.0.1:{port}", token=None, name=name)
+
     def run_to_exit(
         self, image: str, conf_dir: Path, conf_text: str, name: str
     ) -> subprocess.CompletedProcess[str]:
@@ -125,28 +214,36 @@ class DockerRelay:
 
         For asserting ``entrypoint.sh``'s exit-1 auth-refusal path: no
         healthcheck wait, no background container, just the process's own
-        exit code and stderr. ``--rm`` cleans up the container on exit
-        either way.
+        exit code and stderr. ``--rm`` cleans up the container on exit --
+        but only on exit. If the auth-refusal guard regresses and the
+        container keeps running instead of exiting, ``subprocess.run``'s
+        ``timeout`` fires and ``--rm`` never gets to run, leaking a live
+        container; force-remove it before re-raising so a regression here
+        doesn't also leak infrastructure.
         """
         conf_dir.mkdir(parents=True, exist_ok=True)
         conf_path = conf_dir / "nats.conf"
         conf_path.write_text(conf_text)
-        return subprocess.run(  # noqa: S603
-            [
-                self._docker,
-                "run",
-                "--rm",
-                "--name",
-                name,
-                "-v",
-                f"{conf_path}:/etc/nats/nats.conf:ro",
-                image,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=_DOCKER_TIMEOUT_S,
-            check=False,
-        )
+        try:
+            return subprocess.run(  # noqa: S603
+                [
+                    self._docker,
+                    "run",
+                    "--rm",
+                    "--name",
+                    name,
+                    "-v",
+                    f"{conf_path}:/etc/nats/nats.conf:ro",
+                    image,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=_DOCKER_TIMEOUT_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            self.remove(name)
+            raise
 
     def wait_healthy(self, name: str, timeout: float = _HEALTHY_TIMEOUT_S) -> None:
         """Poll ``docker inspect``'s ``Health.Status`` until healthy or timeout."""
@@ -199,9 +296,15 @@ class DockerRelay:
         self.wait_healthy(name)
 
     def remove(self, name: str) -> None:
-        """Stop and remove ``name``, never raising -- always safe in teardown."""
+        """Stop and remove ``name`` and its anonymous volumes.
+
+        ``-v`` is required: plain ``docker rm -f`` leaves the Dockerfile's
+        anonymous ``VOLUME /data`` behind, so every test run without it
+        would leak one volume per container. Never raises -- always safe
+        in teardown.
+        """
         subprocess.run(  # noqa: S603
-            [self._docker, "rm", "-f", name],
+            [self._docker, "rm", "-fv", name],
             check=False,
             capture_output=True,
             timeout=_DOCKER_TIMEOUT_S,
