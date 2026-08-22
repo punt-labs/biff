@@ -102,9 +102,10 @@ tests/test_integration/
 **Transport**: `FastMCPTransport` — in-process, no serialization overhead.
 Same MCP protocol as production but without stdio or HTTP.
 
-### Tier 2b: CLI multi-user tests (planned — biff-s8d)
+### Tier 2b: CLI multi-user tests
 
-Two `cli_session()` instances sharing a local NATS server. Tests
+Shipped (`tests/test_cli_multi_user/`, #biff-s8d). Two `cli_session()`
+instances sharing a local NATS server. Tests
 multi-user scenarios using `biff.commands` pure async functions —
 the same code path as the interactive REPL, but without stdin threads
 or display concerns.
