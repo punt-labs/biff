@@ -34,7 +34,10 @@ jobs:
           retention-days: 1
 
   docker:
-    needs: build
+    # Gated on pypi, not just build, so a tag can never end up with a
+    # Docker image published on GHCR but no matching PyPI release (or
+    # vice versa) -- both channels ship together (see CLAUDE.md).
+    needs: pypi
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
