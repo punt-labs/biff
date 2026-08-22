@@ -6869,20 +6869,25 @@ JetStream's file store lives at `/data`, declared with `VOLUME /data` in
 the Dockerfile. Docker allocates an anonymous volume for any declared
 `VOLUME`, so `docker run` without an explicit volume flag still persists
 data across a `docker stop` / `docker start` cycle — the individual
-audience's normal restart path. What it doesn't survive is `docker rm`,
-which deletes anonymous volumes along with the container.
+audience's normal restart path. `docker rm` doesn't delete the volume
+outright, but it does orphan it: nothing references it afterward, and
+the next `docker run` allocates a new anonymous volume rather than
+reattaching to the old one. Reaching the old data means finding it by ID
+(`docker volume ls -f dangling=true`) and mounting it explicitly — in
+practice, indistinguishable from data loss unless the operator knows to
+look.
 
 | Audience | Command | Volume | Survives `docker rm`? |
 |----------|---------|--------|------------------------|
-| Individual | `docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:X.Y.Z` | anonymous | No |
+| Individual | `docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:X.Y.Z` | anonymous | No (orphaned, not reattached) |
 | Team | `docker-compose.yml` (below), with a token configured in `nats.conf` before the port is published beyond localhost | named (`biff-relay-data`) | Yes |
+| Enterprise POV | Kubernetes `PersistentVolumeClaim` (manifest, below) | cluster-managed PV | Yes, governed by the PVC's retention policy |
 
 The individual command binds to `127.0.0.1`, not `0.0.0.0` — the default
 must match the no-auth trust model, not merely be documented alongside
 it. There is no bare `docker run -p 4222:4222 ...` (all-interfaces, no
 auth) example anywhere in this design; the only path to a
 network-reachable relay goes through the team tier's token setup.
-| Enterprise POV | Kubernetes `PersistentVolumeClaim` (manifest, below) | cluster-managed PV | Yes, governed by the PVC's retention policy |
 
 No ephemeral-by-design mode and no tmpfs option. Docker's own `VOLUME`
 semantics already make the zero-config path durable-across-restart, so

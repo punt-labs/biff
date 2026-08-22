@@ -65,11 +65,16 @@ messages, and wtmp log.
 
 - `docker stop biff-relay` / `docker start biff-relay` — data survives.
   This is the normal restart path (reboots, Docker Desktop restarts).
-- `docker rm biff-relay` — data is gone. Removing the container deletes
-  its anonymous volume with it.
+- `docker rm biff-relay` — the volume itself isn't deleted, but nothing
+  keeps track of it either. It becomes a dangling volume, and the next
+  `docker run` in the [Install and run](#install-and-run) command above
+  allocates a *new* anonymous volume, not the old one. In practice, your
+  data is inaccessible unless you go find the orphaned volume by ID
+  (`docker volume ls -f dangling=true`) and mount it explicitly.
 
-If you want data to survive `docker rm` too, use the named-volume command
-from the [team section](#persistence-2) below. Same image, one extra flag.
+If you want data to survive `docker rm` and come back automatically on
+the next run, use the named-volume command from the
+[team section](#persistence-2) below. Same image, one extra flag.
 
 ### Auth
 
@@ -87,18 +92,21 @@ docker stop biff-relay && docker rm biff-relay
 docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:1.1.0
 ```
 
-This loses the anonymous-volume data, which is expected on this path. To
-upgrade without losing state, switch to a named volume first (team
-section).
+The new container gets a fresh anonymous volume, so this orphans the old
+one, same as a plain `docker rm` above. To upgrade without losing state,
+switch to a named volume first (team section).
 
 ### Teardown
 
 ```bash
-docker rm -f biff-relay
+docker rm -fv biff-relay
 ```
 
-Switch `.punt-labs/biff/config.yaml`'s `relay.url` back to the demo relay,
-or to another relay, and you're done.
+The `-v` flag removes the anonymous volume along with the container —
+without it, `docker rm -f` leaves the volume dangling on disk (see
+[Persistence](#persistence) above). Switch
+`.punt-labs/biff/config.yaml`'s `relay.url` back to the demo relay, or to
+another relay, and you're done.
 
 ---
 
