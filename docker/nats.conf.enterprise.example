@@ -1,0 +1,16 @@
+# Enterprise proof-of-value auth template (biff-syr / DES-059).
+#
+# Copy this file into the Secret your k8s/ manifests mount at
+# /etc/nats/nats.conf, fill in real values, and mount your cluster's TLS
+# secret (`kubectl create secret tls ...` or a cert-manager-issued
+# secret) at /etc/nats/certs. TLS + credentials are required at this
+# tier, unlike the small-team tier where a token alone is the minimum
+# bar. See ../docs/self-hosted-relay.md's enterprise section.
+tls {
+  cert_file: "/etc/nats/certs/tls.crt"
+  key_file:  "/etc/nats/certs/tls.key"
+}
+authorization {
+  token: "REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+  # or a full users/permissions block for per-caller scoping
+}

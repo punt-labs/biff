@@ -1,0 +1,14 @@
+# Small-team tier auth template (biff-syr / DES-059).
+#
+# Copy this file to nats.conf next to docker-compose.yml, replace the
+# token below with a long random value, then `docker compose up -d`.
+# nats.conf is bind-mounted read-only at /etc/nats/nats.conf --
+# entrypoint.sh picks it up automatically and passes base-with-user.conf
+# (baked into the image, which `include`s this file) to `nats-server -c`.
+# entrypoint.sh also refuses to start if this file doesn't define
+# authorization/accounts/nkeys, or still has the placeholder token below
+# unedited. See ../docs/self-hosted-relay.md's small-team section for the
+# full walkthrough.
+authorization {
+  token: "REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+}

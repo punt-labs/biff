@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A self-hosted relay Docker image (`ghcr.io/punt-labs/biff-relay`) for individuals, small teams, and enterprise proof-of-value evaluation, replacing the shared demo relay's shared namespace with full isolation (biff-syr).** Wraps a pinned upstream `nats-server` with JetStream persistence (`VOLUME /data`), a loopback-only monitoring endpoint (never `EXPOSE 8222` — `/varz`, `/connz`, and `/jsz` have no auth of their own), and a `HEALTHCHECK` against `/healthz`. Individual and small-team use share the image and a `docker-compose.yml`; the enterprise tier additionally gets a minimal Kubernetes manifest set (`Deployment`, `PersistentVolumeClaim`, `Service`, optional Prometheus sidecar) with `exec`-based readiness/liveness probes, since the kubelet's `httpGet` probe can't reach a loopback-bound port from outside the pod's network namespace. The image never provisions biff's NATS streams — biff's own `NatsRelay` client creates `biff-inbox`, `biff-sessions`, and `biff-wtmp` idempotently on first connection, per DES-016. See [`docs/self-hosted-relay.md`](docs/self-hosted-relay.md) and DES-059 in DESIGN.md.
+
 ### Fixed
 
 - **Documentation across the repo still instructed users to create a `.biff` file, described `biff doctor` as running six checks, and named a `pip install biff`/`uv tool install --editable .` onboarding path.** `.biff` was removed in v1.13.1; the live config is `.punt-labs/biff/config.yaml` + `config.local.yaml`, and `biff doctor` now runs ten checks. Following the README's old "Create a `.biff` file" setup step, or `prfaq.tex`'s onboarding instructions, would not have worked. Corrected README.md, AGENTS.md, TESTING.md, DESIGN.md, DESIGN-INSTALLER.md, CLAUDE.md, docs/INSTALLING.md, docs/TROUBLESHOOTING.md, docs/FAQ.md, docs/CLAUDE_SETUP.md, docs/design-gap-analysis.md, docs/biff_coordination_use_cases_v0.2.md, prfaq.tex, press-release-v0.11.4.tex, and research/agentic-engineering-landscape-2026.md.

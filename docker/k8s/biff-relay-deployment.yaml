@@ -1,0 +1,100 @@
+# Enterprise proof-of-value tier of ghcr.io/punt-labs/biff-relay
+# (biff-syr / DES-059). See ../../docs/self-hosted-relay.md's enterprise
+# section for the full guide.
+#
+# Single replica -- clustering (3+ node HA) is out of scope for this POV
+# manifest set, see DES-059's Rejected section. `strategy: Recreate`
+# because the PVC above is ReadWriteOnce and can't be attached to two
+# pods at once during a rolling update.
+#
+# Before applying: create the two Secrets this Deployment references,
+# e.g.
+#   kubectl create secret generic biff-relay-nats-conf \
+#     --from-file=nats.conf=nats.conf.enterprise.example
+#   kubectl create secret tls biff-relay-tls --cert=tls.crt --key=tls.key
+#
+# nats.conf holds the authorization token/nkeys -- it is a Secret, not a
+# ConfigMap, because ConfigMaps aren't Kubernetes secret objects: broader
+# default RBAC read access, plaintext in `kubectl get cm -o yaml`, and
+# casual inclusion in etcd backups/dumps that don't distinguish object
+# kinds. Matches how biff-relay-tls is already handled below.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: biff-relay
+  labels:
+    app: biff-relay
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: biff-relay
+  template:
+    metadata:
+      labels:
+        app: biff-relay
+    spec:
+      containers:
+        - name: biff-relay
+          image: ghcr.io/punt-labs/biff-relay:X.Y.Z # pin to your biff version, never :latest
+          ports:
+            - name: client
+              containerPort: 4222
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: nats-conf
+              mountPath: /etc/nats/nats.conf
+              subPath: nats.conf
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/nats/certs
+              readOnly: true
+          # Monitoring (8222) binds to 127.0.0.1 inside the container (see
+          # DES-059), so the kubelet's httpGet probe -- which connects from
+          # outside the container's network namespace -- can't reach it.
+          # exec runs the request inside that namespace instead.
+          #
+          # -q --spider only -- this image's BusyBox wget has no GNU
+          # --no-verbose/--tries flags; see Dockerfile's HEALTHCHECK comment.
+          readinessProbe:
+            exec:
+              command:
+                ["wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                ["wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        # Optional: scrape the same :8222 monitoring port with upstream
+        # NATS's own Prometheus exporter -- no biff-specific format to
+        # learn. Uncomment and point your existing Prometheus at this
+        # sidecar's metrics port.
+        # - name: nats-exporter
+        #   image: natsio/prometheus-nats-exporter:0.15.0
+        #   args: ["-varz", "-connz", "-jsz=all", "http://127.0.0.1:8222"]
+        #   ports:
+        #     - name: metrics
+        #       containerPort: 7777
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: biff-relay-data
+        - name: nats-conf
+          secret:
+            secretName: biff-relay-nats-conf
+        - name: tls-certs
+          secret:
+            secretName: biff-relay-tls

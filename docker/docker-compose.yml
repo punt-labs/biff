@@ -1,0 +1,25 @@
+# Small-team tier of ghcr.io/punt-labs/biff-relay (biff-syr / DES-059).
+# See ../docs/self-hosted-relay.md for the full guide.
+#
+# Copy nats.conf.team.example to nats.conf next to this file, replace the
+# token placeholder, then `docker compose up -d`.
+services:
+  biff-relay:
+    image: ghcr.io/punt-labs/biff-relay:X.Y.Z  # pin to your biff version, never :latest
+    container_name: biff-relay
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+    volumes:
+      - biff-relay-data:/data
+      - ./nats.conf:/etc/nats/nats.conf:ro
+    healthcheck:
+      # -q --spider only -- this image's BusyBox wget has no GNU
+      # --no-verbose/--tries flags; see Dockerfile's HEALTHCHECK comment.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  biff-relay-data:

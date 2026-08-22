@@ -15,9 +15,8 @@ connection (see
 [DES-016](../DESIGN.md#des-016-shared-nats-streams--encryption-aware-design)).
 The image's job is to run a correctly configured, durable `nats-server`.
 
-**This is a design document.** The Docker image, `docker-compose.yml`, and
-Kubernetes manifests referenced below are not built yet. Once they ship,
-this doc will link directly to them.
+The Docker image, `docker-compose.yml`, and Kubernetes manifests
+referenced below live in [`docker/`](../docker/) in this repo.
 
 This guide covers three ways to run the relay, because "self-hosted"
 means different things depending on who's running it:
@@ -41,8 +40,11 @@ setup beyond one command.
 ### Install and run
 
 ```bash
-docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:1.0.0
+docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:X.Y.Z
 ```
+
+Replace `X.Y.Z` with the version of biff you're running (`biff --version`) —
+the image is tagged to match every `punt-biff` release.
 
 No config file, no auth setup. The port is bound to `127.0.0.1`, so only
 processes on this machine can reach it — that's what makes running with
@@ -89,7 +91,7 @@ adds a token before opening the port to the network.
 
 ```bash
 docker stop biff-relay && docker rm biff-relay
-docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:1.1.0
+docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:X.Y.Z
 ```
 
 The new container gets a fresh anonymous volume, so this orphans the old
@@ -136,7 +138,7 @@ Then `docker-compose.yml`:
 ```yaml
 services:
   biff-relay:
-    image: ghcr.io/punt-labs/biff-relay:1.0.0  # pin the version, never :latest
+    image: ghcr.io/punt-labs/biff-relay:X.Y.Z  # pin the version, never :latest
     container_name: biff-relay
     restart: unless-stopped
     ports:
@@ -145,7 +147,7 @@ services:
       - biff-relay-data:/data
       - ./nats.conf:/etc/nats/nats.conf:ro
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -158,16 +160,23 @@ volumes:
 docker compose up -d
 ```
 
-If you'd rather use a bare `docker run`, mount the same `nats.conf` and
-pass `-c`:
+If you'd rather use a bare `docker run`, mount the same `nats.conf` at
+the same path -- `entrypoint.sh` detects it and layers it in itself, so
+don't pass your own `-c` flag: appending one here would replace
+`entrypoint.sh`'s own config selection outright, including the loopback
+monitor bind (see [DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)).
+`entrypoint.sh` also refuses to start if the mounted `nats.conf` doesn't
+define `authorization`/`accounts`/`nkeys`, or still has the placeholder
+token below unedited — a file existing at that path isn't the same thing
+as auth being configured, and 4222 is published on all interfaces at this
+tier:
 
 ```bash
 docker run -d --name biff-relay \
   -p 4222:4222 \
   -v biff-relay-data:/data \
   -v "$(pwd)/nats.conf:/etc/nats/nats.conf:ro" \
-  ghcr.io/punt-labs/biff-relay:1.0.0 \
-  -c /etc/nats/nats.conf
+  ghcr.io/punt-labs/biff-relay:X.Y.Z
 ```
 
 ### Configure biff to use it
@@ -219,14 +228,22 @@ authorization {
 ```
 
 Restart the container after adding this file. `entrypoint.sh` picks up
-`/etc/nats/nats.conf` if present and passes it to `nats-server -c`.
+`/etc/nats/nats.conf` if present and passes `base-with-user.conf` (baked
+into the image, which `include`s your mounted `nats.conf`) to
+`nats-server -c` -- don't pass your own `-c` flag (see the bare `docker
+run` alternative above), and don't leave the file empty or with the
+placeholder token unedited: `entrypoint.sh` checks for an actual
+`authorization`/`accounts`/`nkeys` block and refuses to start otherwise.
 
 ### Health check
 
 The container's `HEALTHCHECK` and `docker compose ps` both read from NATS's
-own monitoring endpoint, `http://localhost:8222/healthz`. `docker inspect
-biff-relay --format '{{.State.Health.Status}}'` shows `healthy`/`unhealthy`
-directly.
+own monitoring endpoint, `http://127.0.0.1:8222/healthz` -- the literal
+IPv4 address, not `localhost`: this image's musl libc resolves `localhost`
+to `::1` first, and nats-server's monitor only binds the IPv4 loopback
+address, so `localhost` fails here even though the port is genuinely up.
+`docker inspect biff-relay --format '{{.State.Health.Status}}'` shows
+`healthy`/`unhealthy` directly.
 
 ### Upgrade without losing data
 
@@ -282,11 +299,20 @@ image the other two tiers use.
 
 ### Install and run
 
-Apply the manifests (`Deployment` or single-replica `StatefulSet`,
-`PersistentVolumeClaim`, `Service`, optional `prometheus-nats-exporter`
-sidecar) against your own cluster:
+Create the two Secrets the `Deployment` mounts, copying from
+[`nats.conf.enterprise.example`](../docker/nats.conf.enterprise.example)
+rather than hand-transcribing the block below, then apply the manifests
+(`Deployment`, `PersistentVolumeClaim`, `Service`, optional
+`prometheus-nats-exporter` sidecar) against your own cluster. `nats.conf`
+holds the authorization token/nkeys, so it's a Secret, not a ConfigMap —
+ConfigMaps aren't Kubernetes secret objects (broader default RBAC read
+access, plaintext in `kubectl get cm -o yaml`, casual inclusion in
+backups):
 
 ```bash
+kubectl create secret generic biff-relay-nats-conf \
+  --from-file=nats.conf=nats.conf.enterprise.example
+kubectl create secret tls biff-relay-tls --cert=tls.crt --key=tls.key
 kubectl apply -f k8s/biff-relay-pvc.yaml
 kubectl apply -f k8s/biff-relay-deployment.yaml
 kubectl apply -f k8s/biff-relay-service.yaml
@@ -348,22 +374,23 @@ inside that namespace instead:
 ```yaml
 readinessProbe:
   exec:
-    command: ["wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+    command: ["wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
   initialDelaySeconds: 5
   periodSeconds: 10
 livenessProbe:
   exec:
-    command: ["wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+    command: ["wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
   initialDelaySeconds: 10
   periodSeconds: 15
 ```
 
 ### Observability
 
-The manifest set includes an optional `prometheus-nats-exporter` sidecar,
-scraping the same `:8222` monitoring port. Point your existing Prometheus
-at the sidecar's metrics port — it's upstream NATS's own exporter, no
-biff-specific format to learn.
+`biff-relay-deployment.yaml` includes an optional `prometheus-nats-exporter`
+sidecar, commented out by default -- uncomment it to scrape the same
+`:8222` monitoring port. Point your existing Prometheus at the sidecar's
+metrics port — it's upstream NATS's own exporter, no biff-specific format
+to learn.
 
 ### Upgrade
 
@@ -371,7 +398,7 @@ Same principle as the team tier (state lives outside the container, in
 the PVC), but the mechanism is a rolling update:
 
 ```bash
-kubectl set image deployment/biff-relay biff-relay=ghcr.io/punt-labs/biff-relay:1.1.0
+kubectl set image deployment/biff-relay biff-relay=ghcr.io/punt-labs/biff-relay:X.Y.Z
 kubectl rollout status deployment/biff-relay
 ```
 

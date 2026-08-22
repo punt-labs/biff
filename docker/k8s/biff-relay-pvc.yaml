@@ -1,0 +1,21 @@
+# Enterprise proof-of-value tier of ghcr.io/punt-labs/biff-relay
+# (biff-syr / DES-059). See ../../docs/self-hosted-relay.md's enterprise
+# section for the full guide.
+#
+# The PVC is the only persistence mechanism at this tier -- there's no
+# single Docker host to hold a named volume. Swap storageClassName for
+# whatever your cluster provides, and check its reclaim policy (Retain
+# vs. Delete) before assuming a namespace delete keeps or discards data.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: biff-relay-data
+  labels:
+    app: biff-relay
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard # swap for your cluster's storage class
+  resources:
+    requests:
+      storage: 10Gi
