@@ -8,6 +8,7 @@ PR #376 added, and JetStream persistence across a real container restart.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from typing import TYPE_CHECKING
 
@@ -176,3 +177,65 @@ class TestAuthGuard:
         )
         assert result.returncode == 1, (result.stdout, result.stderr)
         assert "placeholder token" in result.stderr
+
+
+class TestMonitorBind:
+    """The loopback-only monitor bind (DES-059) refuses outside access."""
+
+    def test_monitor_port_unreachable_from_sibling_container(
+        self, relay_driver: DockerRelay, relay_image: str, tmp_path: Path
+    ) -> None:
+        """A sibling container on the same Docker network can't reach 8222.
+
+        Reaching in from a sibling container on the same bridge network --
+        not through a host-published port -- is what actually proves the
+        loopback-only bind, and does so the same way on every host. A
+        published host port goes through per-platform proxy machinery
+        (Docker Desktop's vpnkit on macOS forwards published ports
+        straight into a container's loopback interface, unlike Linux's
+        iptables DNAT, which can't reach a loopback-only bind), so it
+        can't reliably distinguish a correct loopback bind from a
+        regression to ``0.0.0.0:8222`` -- confirmed by rebuilding this
+        image with ``base-with-user.conf``'s ``http`` directive changed to
+        ``0.0.0.0:8222`` and observing this exact probe flip from refused
+        to reachable. No other test in this tier reaches 8222 from
+        outside the container at all.
+        """
+        name = f"biff-relay-pytest-monitor-{uuid.uuid4().hex[:12]}"
+        try:
+            container = relay_driver.start(
+                relay_image, secrets.token_hex(32), tmp_path / "monitor", name
+            )
+            ip = relay_driver.bridge_ip(container.name)
+            assert not relay_driver.probe_http_reachable(relay_image, ip, 8222)
+        finally:
+            relay_driver.remove(name)
+
+
+class TestDefaultConfig:
+    """No mounted ``nats.conf`` selects ``base.conf`` -- no auth required.
+
+    Every other test in this tier mounts a token-bearing ``nats.conf``, so
+    ``entrypoint.sh`` always selects ``base-with-user.conf``. This is the
+    only test that exercises the no-mount default path documented for the
+    individual tier in ``docs/self-hosted-relay.md``.
+    """
+
+    async def test_starts_healthy_with_no_config_mounted(
+        self, relay_driver: DockerRelay, relay_image: str
+    ) -> None:
+        name = f"biff-relay-pytest-default-{uuid.uuid4().hex[:12]}"
+        try:
+            container = relay_driver.start_default(relay_image, name)
+            relay = NatsRelay(url=container.url, auth=RelayAuth(), repo_name=_TEST_REPO)
+            try:
+                await relay.deliver(
+                    Message(from_user="kai", to_user="eric:tty1", body="no auth needed")
+                )
+                messages = await relay.fetch("eric:tty1")
+                assert [m.body for m in messages] == ["no auth needed"]
+            finally:
+                await relay.delete_infrastructure()
+                await relay.close()
+        finally:
+            relay_driver.remove(name)
