@@ -71,6 +71,37 @@ def topmost_claude_pid() -> int | None:
     return topmost_claude
 
 
+def is_live_ancestor(pid: int) -> bool:
+    """True when *pid* is currently one of this process's own ancestors.
+
+    Re-derives the live ancestry chain from the OS on every call (the same
+    ``ps`` parse :func:`topmost_claude_pid` uses), so a PID delivered via
+    an env var captured once at process-spawn time (``CLAUDE_PID``) can be
+    corroborated against the *actual, current* process tree rather than
+    trusted on its bare existence. A long-lived process's cached env can
+    outlive the ancestor it names -- if the OS later recycles that PID for
+    an unrelated process, the env var still parses to a valid, currently
+    running PID, but this walk will no longer find it among the caller's
+    real ancestors, catching exactly that case.
+    """
+    try:
+        table = _read_process_table()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    walk = os.getpid()
+    for _ in range(10):  # safety bound — process trees are shallow
+        if walk == pid:
+            return True
+        entry = table.get(walk)
+        if entry is None:
+            break
+        ppid, _comm = entry
+        if ppid == walk or ppid == 0:
+            break  # reached init / root
+        walk = ppid
+    return False
+
+
 # Cache (module-level, set once per process lifetime) -------------------------
 
 _cached_key: int | None = None

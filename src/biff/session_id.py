@@ -2,14 +2,39 @@
 
 Biff routes on the Claude Code ``session_id``, which is stable across
 ``claude --resume``/``--continue`` and fresh on ``--fork-session``.
-The MCP server never observes ``session_id`` directly (DES-011): only the
-SessionStart hook sees it, on stdin.  This module is the bridge.
+
+Claude Code sets ``CLAUDE_PID`` directly in the environment of every
+subprocess it spawns — hooks and the MCP server alike — as of Claude Code
+2.1.234 (DES-011's original claim that no session-scoped channel existed
+is stale). It names the *owning claude process's own PID*, delivered
+directly rather than inferred by walking the process tree, and — unlike
+that walk — it is distinct per nested claude process rather than
+collapsing every nesting level onto one shared "topmost ancestor" PID.
+:func:`_resolve_claude_pid` and :meth:`SessionHint.resolve_routing_id`
+both prefer it, falling back to the process-tree walk only for older
+Claude Code versions or a genuinely headless/CI/SDK context where the
+env var is absent.
+
+A ``CLAUDE_CODE_SESSION_ID`` env var also exists but is *not* read here:
+it is frozen at subprocess-spawn time, so the long-lived MCP server's own
+copy goes stale the moment ``/clear`` (or any other in-place session-id
+change) fires — the hook subprocess sees the fresh value on its next
+invocation, but the server does not, silently reopening the same
+misrouting this module exists to prevent. ``CLAUDE_PID`` has no such
+problem: it names the owning *process*, which does not change on
+``/clear``, only the session_id within it does — and the hint file below
+is rewritten fresh on every SessionStart, including a ``/clear``-sourced
+one, so reading it (rather than caching the raw session_id) stays live
+across the process's whole lifetime.
 
 A SessionStart hook writes a :class:`SessionHint` to
-``~/.punt-labs/biff/sessions/{claude_pid}.json``.  The server, a descendant
-of the same ``claude`` process, walks the process tree to that PID and reads
-the hint back.  The value becomes the routing token carried in the session
-key (``{user}:{session_id}``), replacing the volatile random hex.
+``~/.punt-labs/biff/sessions/{claude_pid}.json``, keyed by
+``CLAUDE_PID`` — never by the process-tree walk's topmost ancestor,
+which previously collapsed a nested claude process onto its parent's
+key and let the nested session's hint overwrite the parent's. The
+server reads the hint back from the same key. The value becomes the
+routing token carried in the session key (``{user}:{session_id}``),
+replacing the volatile random hex.
 
 The recycle guard is ``(pid, process-start-time)``: a leftover hint from a
 dead session whose PID was later reused by a *different* claude is rejected
@@ -32,7 +57,7 @@ from typing import TYPE_CHECKING, Self, cast
 import psutil
 
 from biff._stdlib import biff_data_dir
-from biff.session_key import topmost_claude_pid
+from biff.session_key import is_live_ancestor, topmost_claude_pid
 from biff.tty import validate_routing_id
 
 if TYPE_CHECKING:
@@ -61,13 +86,13 @@ class SessionHint:
 
     @classmethod
     def capture(cls, session_id: str, source: str) -> Self:
-        """Build a hint for the current process's topmost ``claude`` ancestor.
+        """Build a hint keyed on this process's owning ``claude`` PID.
 
-        Called from the SessionStart hook, which is a descendant of the
-        ``claude`` process it must key on.  The start time is best-effort:
-        if it cannot be read the hint is still written with ``0.0``, which
-        simply forfeits reclaim (the guard rejects it) rather than
-        misrouting.
+        Called from the SessionStart hook, a descendant of the ``claude``
+        process it must key on; see :func:`_resolve_claude_pid` for how
+        that PID is found. The start time is best-effort: if it cannot be
+        read the hint is still written with ``0.0``, which simply forfeits
+        reclaim (the guard rejects it) rather than misrouting.
         """
         pid = _resolve_claude_pid()
         return cls(
@@ -108,15 +133,49 @@ class SessionHint:
     def resolve_routing_id(cls) -> str | None:
         """Return the routing ``session_id`` for this server, or ``None``.
 
-        Walks to the topmost ``claude`` ancestor, reads the hint that the
-        SessionStart hook left for it, and validates the recycle guard and
-        token shape.  Returns ``None`` — the caller then mints a fresh hex
-        via :func:`biff.tty.generate_tty` — when there is no ``claude``
+        Keys the hint-file lookup on ``CLAUDE_PID`` when present —
+        corroborated against this process's *current, live* ancestry via
+        :func:`biff.session_key.is_live_ancestor` before it is trusted.
+        ``CLAUDE_PID`` is captured once, at this process's own spawn time,
+        and never re-observed after that; a long-lived server holding a
+        stale value whose real ancestor has since died and had its PID
+        recycled by an unrelated, legitimate claude session would
+        otherwise pass the recycle guard below too — that guard only
+        checks "does *someone's* start time at this PID match the hint,"
+        which a fresh, self-consistent hint from the recycling session
+        satisfies trivially. Live-ancestry corroboration is the check that
+        actually answers "is this PID still *my* ancestor." Falls back to
+        the topmost-ancestor process-tree walk when the env var is absent
+        or fails corroboration — older Claude Code versions, a genuinely
+        headless/CI/SDK context, or exactly the stale-PID scenario above.
+
+        Reads the hint that the SessionStart hook left for the resolved
+        PID, and validates the recycle guard and token shape.  Returns
+        ``None`` — the caller then mints a fresh hex via
+        :func:`biff.tty.generate_tty` — when there is no ``claude``
         ancestor (headless/CI/SDK), no hint, a recycled-PID mismatch, or a
         malformed token.  A short bounded retry covers the rare case where
         the server reads before the hook has finished writing.
         """
-        pid = topmost_claude_pid()
+        pid = _claude_pid_from_env()
+        pid_source = "CLAUDE_PID"
+        if pid is not None and not is_live_ancestor(pid):
+            # Two distinct causes collapse to the same False here: a stale
+            # env value (real ancestor died, its PID recycled by an
+            # unrelated session) or a transient failure reading the
+            # process table (is_live_ancestor's own try/except). The
+            # message stays neutral rather than asserting the former --
+            # falling back to the walk is the correct response either way.
+            logger.warning(
+                "CLAUDE_PID=%d could not be corroborated as a live "
+                "ancestor of this process; falling back to the "
+                "process-tree walk",
+                pid,
+            )
+            pid = None
+        if pid is None:
+            pid = topmost_claude_pid()
+            pid_source = "process-tree walk"
         if pid is None:
             return None  # not under Claude Code — headless/CI/SDK, no warning
         for attempt in range(_RESOLVE_ATTEMPTS):
@@ -124,14 +183,16 @@ class SessionHint:
             if hint is not None:
                 routing_id = hint._validated_routing_id(pid)
                 if routing_id is not None:
+                    logger.debug("Routing id resolved via %s (pid %d)", pid_source, pid)
                     return routing_id
                 break  # hint present but invalid — retrying cannot help
             if attempt < _RESOLVE_ATTEMPTS - 1:
                 time.sleep(_RESOLVE_DELAY_S)
         logger.warning(
-            "under Claude Code (pid %d) but no valid session hint; routing on "
-            "a volatile id — resume-reclaim disabled",
+            "under Claude Code (pid %d, via %s) but no valid session hint; "
+            "routing on a volatile id — resume-reclaim disabled",
             pid,
+            pid_source,
         )
         return None
 
@@ -250,15 +311,54 @@ def _hint_path(pid: int) -> Path:
     return _sessions_dir() / f"{pid}.json"
 
 
-def _resolve_claude_pid() -> int:
-    """Return the topmost ``claude`` PID for the hook's own process tree.
+def _claude_pid_from_env() -> int | None:
+    """Return the owning claude process's PID from ``CLAUDE_PID``, or ``None``.
 
-    The hook runs under ``claude``; :func:`topmost_claude_pid` returns that
-    PID.  When it cannot (``ps`` failure), fall back to the parent PID so a
-    hint is still written under *some* stable key — the server's recycle
-    guard rejects a mismatch, so a wrong key only forfeits reclaim.
+    Delivered directly by Claude Code on every hook and MCP-server
+    subprocess (2.1.234+) — distinct per nested claude process, unlike
+    the topmost-ancestor walk, which deliberately collapses every nesting
+    level onto one shared PID.  ``None`` when absent (older Claude Code)
+    or unparseable, never a wrong PID silently used.
     """
-    return topmost_claude_pid() or os.getppid()
+    raw = os.environ.get("CLAUDE_PID")
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+    except ValueError:
+        logger.warning("CLAUDE_PID=%r is not a valid integer; ignoring", raw)
+        return None
+    if pid <= 0:
+        # int() accepts "-1"/"+0"; psutil.Process(pid<=0) raises ValueError,
+        # which _process_start_time's except (psutil.Error, OSError) does
+        # NOT catch -- an uncaught crash in the SessionStart hook, not a
+        # clean fallback. No real process ever reports a PID <= 0.
+        logger.warning("CLAUDE_PID=%r is not a valid pid; ignoring", raw)
+        return None
+    return pid
+
+
+def _resolve_claude_pid() -> int:
+    """Return this process's owning claude PID: env first, then the walk.
+
+    Prefers ``CLAUDE_PID`` (see :func:`_claude_pid_from_env`). Falls back
+    to :func:`topmost_claude_pid`, and finally to the parent PID so a hint
+    is still written under *some* stable key when both are unavailable —
+    the server's recycle guard rejects a mismatch, so a wrong key only
+    forfeits reclaim. Every step is an explicit ``is not None`` check, not
+    an ``or`` chain: ``_claude_pid_from_env`` and ``topmost_claude_pid``
+    are already guaranteed non-zero/positive by their own validation, but
+    an ``or`` chain would silently misinterpret a legitimate falsy int
+    (were one ever possible) as absence — cheap to rule out entirely
+    rather than rely on that guarantee holding forever.
+    """
+    pid = _claude_pid_from_env()
+    if pid is not None:
+        return pid
+    pid = topmost_claude_pid()
+    if pid is not None:
+        return pid
+    return os.getppid()
 
 
 def _process_start_time(pid: int) -> float:
