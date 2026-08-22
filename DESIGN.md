@@ -6781,3 +6781,243 @@ change to that same variable within the current process); and
 stripping the real `CLAUDE_PID` from every test process so the suite's
 own Claude Code session doesn't leak into PID-walk-path tests that
 expect it absent.
+
+---
+
+## DES-059: Self-Hosted Relay Docker Image
+
+**Date:** 2026-08-22
+**Status:** SETTLED (design; not yet implemented — tracked as biff-syr)
+**Topic:** Packaging a self-hosted NATS relay as a Docker image for three
+audiences with different requirements
+**Related:** DES-007/DES-007a (namespace scoping, unaffected — the image
+runs `nats-server` and doesn't touch namespacing), DES-016 (shared streams
+— governs why the image doesn't provision streams itself), biff-bv5
+(hosted paid tier), biff-3pn (per-repo credentials, hosted-only)
+
+### Problem
+
+biff-syr's original bead described one artifact for one audience:
+`docker run -d -p 4222:4222 pkit-labs/biff-relay`. In practice this needs
+to serve three audiences with different requirements:
+
+1. **Individual** — one developer, multi-repo, single machine. Wants zero
+   config. Losing sessions/messages on every `docker rm` is a real cost,
+   even if it's a cheap one to pay alone.
+2. **Small team** — a shared, always-on relay reachable over the network.
+   JetStream state must survive a container restart. DES-016 established
+   that the three shared streams (`biff-inbox`, `biff-sessions`,
+   `biff-wtmp`) are the only NATS state biff depends on, and losing them
+   loses every team's plan/message/session history at once, not just one
+   user's. No auth by default becomes a real liability once the port
+   leaves localhost.
+3. **Enterprise proof-of-value** — an org piloting biff at scale before
+   deciding between self-hosting indefinitely or paying for the hosted
+   tier (biff-bv5). Needs TLS, real auth, observability hooks, and a clean
+   teardown, since this is evaluation infrastructure, not a production
+   commitment.
+
+Also: the bead names the image `pkit-labs/biff-relay`. The org's actual
+GitHub namespace, used everywhere else in this project (plugin
+marketplace, PyPI ownership, `claude-puntlabs` account scope), is
+`punt-labs`. `pkit-labs` doesn't exist as an org — this is a stale
+placeholder from an earlier drafting pass.
+
+### Design
+
+One image, `ghcr.io/punt-labs/biff-relay`, wraps upstream `nats-server`
+unmodified. Individual and team share the image and a
+`docker-compose.yml`; enterprise POV additionally gets a Kubernetes
+manifest set.
+
+#### Image name
+
+`ghcr.io/punt-labs/biff-relay`, published via GitHub Container Registry
+from this repo's own release pipeline, same tag cadence as the
+plugin/PyPI releases in `release.yml`. No new registry, credential, or
+release process.
+
+#### What the image contains
+
+A thin wrapper around the official `nats:2.10-alpine` base image, pinned
+to an exact patch version (e.g. `nats:2.10.24-alpine3.20`, not a floating
+tag). Three additions on top of upstream:
+
+- `entrypoint.sh` — invokes `nats-server -js -sd /data -m 127.0.0.1:8222`,
+  plus an optional `-c /etc/nats/nats.conf` if a config file is
+  bind-mounted at that path (this is where enterprise auth/TLS config
+  layers on). Monitoring binds to loopback inside the container, not
+  `0.0.0.0` — `/varz`, `/connz`, and `/jsz` on that port have no auth of
+  their own and would otherwise leak client IPs, subjects, and JetStream
+  topology to anything that can reach the container.
+- `VOLUME /data` — JetStream's `store_dir`. `EXPOSE 4222` only; port 8222
+  is loopback-only and never published.
+- `HEALTHCHECK` — see below.
+
+The image does not provision streams. Per DES-016,
+`biff.nats_relay`'s `NatsRelay` creates `biff-inbox`, `biff-sessions`, and
+`biff-wtmp` idempotently on first connection, using
+`js.add_stream()`/`update_stream()`, never delete-and-recreate. Adding
+stream-creation logic to the image would create a second writer racing
+the client's own provisioning — the same "no single instance has
+authority to delete shared infrastructure" invariant DES-016 already
+establishes for the client side.
+
+#### Persistence
+
+JetStream's file store lives at `/data`, declared with `VOLUME /data` in
+the Dockerfile. Docker allocates an anonymous volume for any declared
+`VOLUME`, so `docker run` without an explicit volume flag still persists
+data across a `docker stop` / `docker start` cycle — the individual
+audience's normal restart path. `docker rm` doesn't delete the volume
+outright, but it does orphan it: nothing references it afterward, and
+the next `docker run` allocates a new anonymous volume rather than
+reattaching to the old one. Reaching the old data means finding it by ID
+(`docker volume ls -f dangling=true`) and mounting it explicitly — in
+practice, indistinguishable from data loss unless the operator knows to
+look.
+
+| Audience | Command | Volume | Survives `docker rm`? |
+|----------|---------|--------|------------------------|
+| Individual | `docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:X.Y.Z` | anonymous | No (orphaned, not reattached) |
+| Team | `docker-compose.yml` (below), with a token configured in `nats.conf` before the port is published beyond localhost | named (`biff-relay-data`) | Yes |
+| Enterprise POV | Kubernetes `PersistentVolumeClaim` (manifest, below) | cluster-managed PV | Yes, governed by the PVC's retention policy |
+
+The individual command binds to `127.0.0.1`, not `0.0.0.0` — the default
+must match the no-auth trust model, not merely be documented alongside
+it. There is no bare `docker run -p 4222:4222 ...` (all-interfaces, no
+auth) example anywhere in this design; the only path to a
+network-reachable relay goes through the team tier's token setup.
+
+No ephemeral-by-design mode and no tmpfs option. Docker's own `VOLUME`
+semantics already make the zero-config path durable-across-restart, so
+the individual command persists data by default; the team command adds
+one flag (`-v biff-relay-data:/data`) to make it durable across `docker
+rm` too, with the same image and no config changes.
+
+#### Auth
+
+| Audience | Default | Mechanism |
+|----------|---------|-----------|
+| Individual | No auth | Loopback/private-network use is the assumed threat model, unsafe to expose past `localhost` or a private LAN as-is |
+| Team | No auth by default; token auth required once the port is reachable off-box | `nats.conf` mounted at `/etc/nats/nats.conf` setting `authorization: { token: "..." }` |
+| Enterprise POV | TLS + credentials required | `nats.conf` with a `tls` block (cert/key bind-mounted read-only) plus token or NATS user/password auth |
+
+No-auth-on-localhost is acceptable for the individual case, the same
+trust boundary as running `nats-server` directly on a laptop, and
+unacceptable once the relay is reachable over a network. The image
+doesn't attempt automatic mutual-TLS or credential provisioning — that's
+biff-3pn's job for the hosted tier specifically. Self-hosted teams own
+their own NATS auth, as the original bead already said.
+
+#### Health check
+
+`nats-server -m 127.0.0.1:8222` enables the built-in HTTP monitoring
+port, bound to loopback, exposing `/healthz` (available since NATS 2.10).
+The image's `HEALTHCHECK` instruction hits that same endpoint from inside
+the container, where `localhost` reaches it:
+
+```dockerfile
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8222/healthz || exit 1
+```
+
+The Kubernetes manifest's `readinessProbe`/`livenessProbe` use `exec`
+probes running the same `wget` command inside the container, not
+`httpGet` probes — a kubelet's `httpGet` probe connects to the pod IP
+from outside the container's network namespace, which loopback-bound
+monitoring would refuse. `exec` runs inside that namespace and reaches
+`127.0.0.1:8222` the same way the Docker `HEALTHCHECK` does. Docker and
+Kubernetes still read one health signal from one process; only the probe
+mechanism differs, driven by the loopback bind.
+
+#### Upgrade path
+
+State lives in the named volume (or PVC), never in the container's
+writable layer, so upgrading is `docker compose pull && docker compose up
+-d` (or a rolling `StatefulSet` update on Kubernetes). The new container
+mounts the same `/data`, sees the same JetStream file store, and biff's
+`NatsRelay` reconnects to a `nats-server` that already has its streams.
+
+1. Pin image tags in `docker-compose.yml`, never `:latest`. An
+   uncontrolled `:latest` pull on `docker compose up` can jump multiple
+   NATS minor versions in one upgrade.
+2. Read the upstream `nats-server` release notes before crossing a major
+   version (2.10 → 2.11) for JetStream file-format changes. Within a
+   major version, JetStream's storage format is forward-compatible across
+   minor/patch releases.
+
+Downgrade isn't supported — JetStream file formats aren't guaranteed
+backward-compatible, so rolling back the image tag without also restoring
+a pre-upgrade volume snapshot risks data the image can't recover.
+
+#### Enterprise POV needs a second artifact
+
+A single Docker image and `docker-compose.yml` are enough for individual
+and team. They aren't enough for enterprise proof-of-value, which needs a
+Kubernetes manifest set too.
+
+An org evaluating biff "at scale" before a paid-tier decision is usually
+testing on infrastructure that resembles what they'd run in production,
+and for most orgs above small-team size that's Kubernetes. A
+`docker-compose.yml` can't express what that audience needs to evaluate:
+a `PersistentVolumeClaim` with the org's real storage class, a
+`readinessProbe`/`livenessProbe` wired to `/healthz`, resource
+requests/limits for capacity planning, a `Service` (optionally
+`Ingress`/TLS termination matching the org's own ingress controller), and
+the ability to point Prometheus at a `prometheus-nats-exporter` sidecar.
+None of that translates from a compose file — the evaluating team would
+redo it once they committed to self-hosting for real or the hosted tier.
+
+What ships: a documented, minimal Kubernetes manifest set — `Deployment`
+or single-replica `StatefulSet` (clustering is out of scope, see
+Rejected), `PersistentVolumeClaim`, `Service`, and an optional
+`prometheus-nats-exporter` sidecar — under `docs/self-hosted-relay.md`'s
+enterprise section, referencing the same `ghcr.io/punt-labs/biff-relay`
+image the other two audiences use. Not a maintained Helm chart (see
+Rejected). These manifests are a starting point for a POV, not a
+production recommendation — the guide points an org moving past POV into
+a real production commitment at the upstream
+[`nats-io/k8s`](https://github.com/nats-io/k8s) Helm chart, or at the
+hosted tier (biff-bv5).
+
+### Rejected
+
+**A biff-authored Helm chart.** Upstream `nats-io/k8s` already publishes
+and maintains a production-grade NATS Helm chart with clustering, mTLS,
+and JetStream tuning. A biff-specific chart would either shadow that
+chart's features poorly or duplicate its maintenance burden for a
+POV-only use case. The plain manifest set stays deliberately smaller —
+single-replica, POV-only — so it doesn't compete with the real Helm chart
+as a production recommendation.
+
+**Building `nats-server` from source.** Buys nothing over the official
+`nats:2.10-alpine` base — no biff-specific patch is needed, and building
+from source means re-deriving upstream's own security patch cadence
+instead of inheriting it via `FROM nats:...`. A wrapper Dockerfile pinned
+to an exact upstream tag is a smaller, more auditable artifact than a
+from-source build biff would then own patching indefinitely.
+
+**Automatic TLS/credential provisioning baked into the image** — e.g.
+self-signed cert generation on first boot, or an embedded credential
+minting endpoint. This is biff-3pn's problem (per-repo NATS credentials
+via GitHub identity), and biff-3pn is scoped to the hosted tier
+specifically. Self-hosted teams run their own NATS instance and own their
+own auth material, the same way anyone running Postgres or Redis
+themselves owns their own credentials. Building provisioning into this
+image would blur a line the two beads already agree on.
+
+**Ephemeral-by-default with an opt-in persistence flag**, matching the
+original bead's "ephemeral state is probably fine" framing literally.
+Docker's own `VOLUME` semantics already make the zero-config path
+durable-across-restart for free. An explicit `--ephemeral` flag would be
+worse than the default — a mode that throws away state a user likely
+wants back, for no benefit over just not passing `-v`.
+
+**NATS clustering (3+ node HA) as part of this bead.** Considered for the
+enterprise manifest set, since "at scale" evaluation might reasonably
+want to test failover. A clustered NATS deployment needs its own design
+pass (route URLs, cluster auth, split-brain behavior) disproportionate to
+what a proof-of-value pilot needs to answer, which is "does biff work for
+our team," not "does our NATS survive a node failure." The guide points
+that evaluation at the upstream Helm chart instead.
