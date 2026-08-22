@@ -1,3 +1,166 @@
+# === Punt Labs canonical .gitignore ===
+# Source of truth: .bin/gitignore-canonical.template
+# Rollout:         .bin/gitignore-canonical-rollout.sh
+# Repo-specific additions belong BELOW the "# === Repo-specific ===" marker.
+# Everything above it is managed by the rollout script.
+
+# --- Secrets & local overrides ---
+.env
+.env.*
+.env*.local
+!.env.example
+.envrc.local
+.biff.local
+.claude/settings.local.json
+.claude/settings.local.*
+.claude/mcp.local.json
+.mcp.local.json
+*.local
+*.local.*
+.*.local
+.*.local.*
+
+# --- Punt Labs runtime state (never commit) ---
+.punt-labs/local/
+.punt-labs/**/local/**
+.punt-labs/**/*.local.*
+.punt-labs/quarry/captures/
+.punt-labs/vox/ephemeral/
+.punt-labs/vox/vox.local.md
+.punt-labs/lux.md
+
+# --- Claude Code runtime state ---
+.claude/*
+!.claude/settings.json
+!.claude/commands/
+!.claude/hooks/
+!.claude/agents/
+!.claude/rules/
+!.claude/skills/
+.claude/scheduled_tasks*
+.claude/worktrees/
+.claude/projects/
+.claude/beadle.poll.*
+*/**/.claude/
+
+# --- Lock files (except uv.lock) ---
+.*.lock
+*.punt-import.lock
+.CLAUDE.md.lock
+.CLAUDE.md.punt-import.lock
+**/.create.lock
+
+# --- Beads runtime state ---
+.beads/bd.sock*
+.beads/beads.db*
+.beads/daemon-*
+.beads/daemon.log
+.beads/daemon-error
+.beads/.local_version
+
+# --- Scratch / temp ---
+# .tmp/ is the repo-local TMPDIR (set via .envrc). We keep the directory but
+# ignore its contents. Do NOT add a bare `*.tmp` pattern here — it would match
+# the `.tmp` directory itself, preventing git from descending, and then the
+# `!.tmp/.gitkeep` negation could not re-include the tracked marker.
+.tmp/*
+!.tmp/.gitkeep
+CLAUDE.md.tmp
+
+# --- Worktrees ---
+.worktrees/
+
+# --- OS junk ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# --- Editors / IDEs ---
+.idea/
+.vscode/
+.cursor/
+.codex/
+.accio/
+.claude-flow/
+*.swp
+*.swo
+*~
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+dist/
+build/
+*.egg
+*.egg-info/
+.eggs/
+.mypy_cache/
+.pyright/
+.pytest_cache/
+.pytest-work/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+uv.toml
+
+# --- Node / web ---
+node_modules/
+.astro/
+.vercel/
+
+# --- Go ---
+coverage.out
+*.test
+
+# --- Swift / Xcode ---
+# (Do NOT ignore *.xcodeproj / *.xcworkspace — those directories are tracked;
+# only ignore user-specific state INSIDE them.)
+xcuserdata/
+DerivedData/
+CoverageDerived/
+*.xccheckout
+*.xcresult
+*.xcscmblueprint
+*.hmap
+*.dSYM
+*.dSYM.zip
+*.ipa
+.swiftpm/
+Package.pin
+Package.resolved
+Carthage/Build/
+Carthage/Checkout
+Pods/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+iOSInjectionProject/
+playground.xcworkspace
+timeline.xctimeline
+
+# --- LaTeX build artifacts ---
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# === Repo-specific ===
 __pycache__/
 *.py[cod]
 *$py.class
@@ -36,7 +199,6 @@ tests/transcripts/
 .ruff_cache/
 
 # Environment
-.env
 
 # LaTeX (root-level artifacts from prfaq.tex compilation)
 *.aux
@@ -68,8 +230,6 @@ tests/transcripts/
 # the root one where bare `.claude/` covered every depth; `*/**/.claude/`
 # restores that. Nested .claude dirs hold settings.local.json, which carries
 # machine-local MCP config and absolute-path allow rules — never commit it.
-.claude/*
-!.claude/settings.json
 */**/.claude/
 docs/fuzz.sty
 docs/*.mf
@@ -84,14 +244,9 @@ docs/*.pdf
 docs/*.synctex.gz
 
 # Scratch/temp directory (TMPDIR set via .envrc)
-.tmp/
 
 # Plugin runtime state (tts, vox, quarry, lux)
 .tts/
-.punt-labs/vox/
-.punt-labs/quarry/captures/
-.punt-labs/lux.md
-.punt-labs/local/
 
 # Ethos org registry — this repo has NO submodule at .punt-labs/ethos (see
 # CLAUDE.md, "No Git Submodules"). A local clone of punt-labs/team at this
@@ -99,6 +254,9 @@ docs/*.synctex.gz
 # biff's own runtime reads (src/biff/config.py, DES-040 and DES-053).
 # The `dir/*` + negation form is required: git cannot re-include a file whose
 # parent directory is itself excluded, so each level is opened explicitly.
+# NOT covered by the canonical .gitignore template -- restored here after
+# the canonical rollout (2026-08-22) stripped it as if it were, which would
+# have exposed missions/ and sessions/ (local audit logs, 0700 dirs) to git.
 .punt-labs/ethos/*
 !.punt-labs/ethos/identities/
 .punt-labs/ethos/identities/*
@@ -117,4 +275,3 @@ Lux.ini
 
 # Local uv overrides (depot find-links, etc.)
 uv.toml
-.envrc.local
