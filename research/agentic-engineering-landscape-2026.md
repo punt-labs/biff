@@ -61,8 +61,8 @@ When engineering teams adopt AI agents, six distinct problems emerge. Each opera
 
 **Who's building:**
 
-- **[Biff](https://github.com/punt-labs/biff)** — MCP-native slash commands for team communication inside Claude Code sessions (and any MCP-compatible client). BSD Unix vocabulary: `/who`, `/finger`, `/plan`, `/write`, `/read`, `/tty`, `/mesg`, `/wall`. NATS relay for cross-machine messaging. `.biff` file scopes communication to the current repo.
-  - Identity model: persistent (user identity in `.biff`, survives sessions)
+- **[Biff](https://github.com/punt-labs/biff)** — MCP-native slash commands for team communication inside Claude Code sessions (and any MCP-compatible client). BSD Unix vocabulary: `/who`, `/finger`, `/plan`, `/write`, `/read`, `/tty`, `/mesg`, `/wall`. NATS relay for cross-machine messaging. `.punt-labs/biff/config.yaml` scopes communication to the current repo.
+  - Identity model: persistent (user identity resolved from GitHub, survives sessions)
   - Participant model: hybrid (humans and agents are co-equal, both have presence, plans, mailboxes)
   - Scope: repo-scoped, cross-machine, any MCP client
   - 7 shipped commands, `/wall` next
@@ -117,7 +117,7 @@ When engineering teams adopt AI agents, six distinct problems emerge. Each opera
 | Dimension | Agent Teams | Biff |
 |---|---|---|
 | Scope | Single session, single machine | Cross-machine, cross-session |
-| Identity | Ephemeral (no resume) | Persistent (.biff, NATS identity) |
+| Identity | Ephemeral (no resume) | Persistent (config.yaml, NATS identity) |
 | Participants | Agents only; human is operator | Humans + agents as peers |
 | Protocol | Claude Code proprietary | MCP (any client) |
 | Communication | Mailbox (message, broadcast) | /write, /read, /wall |
@@ -374,7 +374,7 @@ Ideas for how biff can draw from what others are building, without becoming thos
 3. **Composability.** Biff becomes the presence layer for the entire stack, not just for humans and agents. Each tool in the layer cake can register itself without biff knowing anything about what that tool does.
 4. **Network effects.** Every tool that registers presence in biff makes `/who` more valuable. Biff becomes the "team dashboard" by default, not by building dashboards.
 
-**Design consideration:** Tool presence should be opt-in and configurable per repo (in `.biff`). Not every project wants `@entire` broadcasting checkpoint summaries. The team decides which tools get presence, just like they decide which humans get `/mesg on`.
+**Design consideration:** Tool presence should be opt-in and configurable per repo (in `.punt-labs/biff/config.yaml`). Not every project wants `@entire` broadcasting checkpoint summaries. The team decides which tools get presence, just like they decide which humans get `/mesg on`.
 
 ---
 

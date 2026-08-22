@@ -379,7 +379,7 @@ Two design logs exist. Both follow the same rules: consult before changing, do n
 | Log | Scope | Covers |
 |-----|-------|--------|
 | `DESIGN.md` | Runtime system | Display pipeline, session keys, transport, push notifications, relay protocol, config format |
-| `DESIGN-INSTALLER.md` | Installation system | Two-phase install, plugin file delivery, MCP registration, status line stash-and-wrap, doctor checks, identity resolution, `.biff` init, uninstall |
+| `DESIGN-INSTALLER.md` | Installation system | Two-phase install, marketplace plugin delivery, MCP registration via plugin manifest, status line stash-and-wrap, doctor checks, identity resolution, per-repo config, uninstall |
 
 **The display pipeline is fragile.** The PostToolUse hooks, skill command prompts, status line, and push notification system have non-obvious interactions and represent 12-16 hours of iteration. The split between `updatedMCPToolOutput` (panel summary) and `additionalContext` (model-emitted full output) exists because multi-line MCP output gets truncated behind a "Control-O for more" prompt. Changes that look simple can break the display pipeline in ways that are difficult to debug and easy to repeat.
 
