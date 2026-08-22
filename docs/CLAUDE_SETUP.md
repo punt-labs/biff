@@ -27,8 +27,8 @@ After `biff install`, these files exist:
 
 | Path | Purpose |
 |------|---------|
-| `~/.claude/plugins/biff/` | Plugin root (commands, hooks, agents) |
-| `~/.claude/plugins/biff/.claude-plugin/plugin.json` | Plugin manifest |
+| `~/.claude/plugins/cache/punt-labs/biff/<version>/` | Plugin root (commands, hooks, agents), fetched via the marketplace |
+| `~/.claude/plugins/cache/punt-labs/biff/<version>/.claude-plugin/plugin.json` | Plugin manifest, includes the `mcpServers` entry |
 | `~/.punt-labs/biff/` | Runtime state directory |
 | `~/.punt-labs/biff/unread/` | Per-session unread status files (for status bar) |
 | `~/.punt-labs/biff/statusline-original.json` | Stashed original status line (if any) |

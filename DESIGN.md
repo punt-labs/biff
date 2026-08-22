@@ -381,7 +381,7 @@ Implemented in biff-faz. Commit `3101515` (replace /on /off with /mesg y|n), PR 
 1. **LocalRelay** — Filesystem-based. JSONL inboxes in `{data_dir}/`. JSON session files. Works out of the box with no infrastructure. Repo-scoped by directory path.
 2. **NatsRelay** — NATS KV for sessions/presence, JetStream for messaging. Requires a NATS server. Enables cross-machine communication.
 
-Selection is automatic: if `.biff` config has `relay_url`, use NatsRelay. Otherwise, LocalRelay.
+Selection is automatic, driven by `config.relay_url` (`.punt-labs/biff/config.yaml` + `config.local.yaml`, per DES-037 — not a `.biff` file, which was removed in v1.13.1): set, use NatsRelay; unset, use LocalRelay. In practice `relay_url` is rarely unset — `_apply_demo_relay_default` fills it with the bundled demo relay whenever no explicit URL is configured, so NatsRelay against the demo relay is the effective default, not LocalRelay (`ServerState`'s relay-selection docstring in `src/biff/server/state.py`).
 
 ### Message Semantics: POP (Read-Once)
 
@@ -661,8 +661,8 @@ Biff writes to `27528.json`; status line looks for `30234.json`. File not found,
 ## DES-012: Config File — .biff TOML
 
 **Date:** 2026-02-14
-**Status:** SETTLED
-**Topic:** Per-repo configuration format
+**Status:** SUPERSEDED by DES-037 — `.biff` was removed in v1.13.1 (see CHANGELOG.md); current config is `.punt-labs/biff/config.yaml` + `config.local.yaml`
+**Topic:** Per-repo configuration format (historical)
 
 ### Design
 
@@ -1420,7 +1420,7 @@ sees the plan nudge.
 - Update `hooks/hooks.json` with SessionStart matchers and SessionEnd
 - biff-5zq: plan auto-expand in the plan tool
 
-**Files:** `src/biff/cli/hook.py` (new), `hooks/hooks.json`, `hooks/session-end.sh` (new), `src/biff/server/tools/plan.py`
+**Files:** `src/biff/hook.py` (this phase's plan used the never-adopted path `src/biff/cli/hook.py` — the actual dispatcher landed at `src/biff/hook.py`), `hooks/hooks.json`, `hooks/session-end.sh` (new), `src/biff/server/tools/plan.py`
 
 #### Phase 2: Git Hooks (next)
 
@@ -1430,7 +1430,7 @@ sees the plan nudge.
 - pre-push suggests `/wall` for default branch pushes
 - Consolidate post-bash.sh (absorbs bead-claim.sh, adds git checkout detection as fallback)
 
-**Files:** `src/biff/cli/hook.py`, `src/biff/installer.py`, git hook templates
+**Files:** `src/biff/hook.py`, `src/biff/git_hooks.py`, `src/biff/_hook_entry.py` (this phase's plan named the never-adopted `src/biff/installer.py` — that module doesn't exist; git hook deployment lives in `git_hooks.py`), git hook templates
 
 #### Phase 3: Heartbeat and Context (after beads MCP)
 
@@ -3927,7 +3927,7 @@ guidance.
 ## DES-037: Zero-Config — Config Migration and Owner Derivation
 
 **Date:** 2026-04-12
-**Status:** PROPOSED
+**Status:** SETTLED — implemented and shipped; `.biff` removed entirely in v1.13.1 (see CHANGELOG.md)
 **Topic:** Move config to `.punt-labs/biff/`, YAML format, derive org
 scope from git remote, make explicit config optional
 **Related:** DES-007a (slug-based namespace), DES-012 (config file),
@@ -6843,13 +6843,19 @@ A thin wrapper around the official `nats:2.10-alpine` base image, pinned
 to an exact patch version (e.g. `nats:2.10.24-alpine3.20`, not a floating
 tag). Three additions on top of upstream:
 
-- `entrypoint.sh` — invokes `nats-server -js -sd /data -m 127.0.0.1:8222`,
-  plus an optional `-c /etc/nats/nats.conf` if a config file is
-  bind-mounted at that path (this is where enterprise auth/TLS config
-  layers on). Monitoring binds to loopback inside the container, not
-  `0.0.0.0` — `/varz`, `/connz`, and `/jsz` on that port have no auth of
-  their own and would otherwise leak client IPs, subjects, and JetStream
-  topology to anything that can reach the container.
+- `entrypoint.sh` — invokes `nats-server -js -sd /data -c <conf>`, where
+  `<conf>` is one of two config files baked into the image at build
+  time, selected by whether an operator's `nats.conf` is bind-mounted at
+  `/etc/nats/nats.conf` (this is where enterprise auth/TLS config layers
+  on, via an `include`). `nats-server`'s `-m`/`--http_port` CLI flag only
+  takes a bare port and always binds to the same host as the client
+  listener (`-a`, default `0.0.0.0`) — there is no CLI-flag equivalent of
+  a loopback-only monitoring bind, so the baked-in config sets `http:
+  "127.0.0.1:8222"` directly. Monitoring binds to loopback inside the
+  container, not `0.0.0.0` — `/varz`, `/connz`, and `/jsz` on that port
+  have no auth of their own and would otherwise leak client IPs,
+  subjects, and JetStream topology to anything that can reach the
+  container.
 - `VOLUME /data` — JetStream's `store_dir`. `EXPOSE 4222` only; port 8222
   is loopback-only and never published.
 - `HEALTHCHECK` — see below.
@@ -6912,14 +6918,16 @@ their own NATS auth, as the original bead already said.
 
 #### Health check
 
-`nats-server -m 127.0.0.1:8222` enables the built-in HTTP monitoring
-port, bound to loopback, exposing `/healthz` (available since NATS 2.10).
-The image's `HEALTHCHECK` instruction hits that same endpoint from inside
-the container, where `localhost` reaches it:
+The baked-in config's `http: "127.0.0.1:8222"` directive (see above)
+enables the built-in HTTP monitoring port, bound to loopback, exposing
+`/healthz` (available since NATS 2.10). The image's `HEALTHCHECK`
+instruction hits that same endpoint from inside the container, using the
+literal `127.0.0.1` rather than `localhost` — the Alpine base's musl libc
+resolves `localhost` to `::1` first, and the monitor only binds IPv4:
 
 ```dockerfile
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8222/healthz || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:8222/healthz || exit 1
 ```
 
 The Kubernetes manifest's `readinessProbe`/`livenessProbe` use `exec`

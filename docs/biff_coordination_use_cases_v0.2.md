@@ -671,8 +671,8 @@ file ownership, and recommend git worktrees for isolation.
        BIFF_NATS_TOKEN: ${{ secrets.BIFF_NATS_TOKEN }}
    ```
 
-3. **Identity configuration:** A `.biff` config or environment variables
-   that identify the CI runner as `github-actions` user. The session
+3. **Identity configuration:** A `.punt-labs/biff/config.yaml` config or
+   environment variables that identify the CI runner as `github-actions` user. The session
    registers on workflow start and expires on completion.
 
 **No biff code changes required.** The CLI already supports all the
@@ -701,7 +701,7 @@ commands. The work is credential provisioning and workflow configuration.
    or polling).
 
 4. **Authentication:** The app needs NATS credentials and user identity.
-   Could reuse the same `.biff` config or have its own provisioning flow.
+   Could reuse the same `.punt-labs/biff/config.yaml` config or have its own provisioning flow.
 
 **This is a separate project** (like `quarry-menubar` is to `quarry`).
 The biff library API is already designed for this — `CliContext` +

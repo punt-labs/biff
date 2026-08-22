@@ -9,31 +9,27 @@ bd ready --limit=99   # Find available work (show all)
 bd show <id>          # View issue details
 bd update <id> --status in_progress  # Claim work
 bd close <id>         # Complete work
-bd sync               # Sync with git
 ```
 
-## Workflow Tiers
+## Workflow
 
-Match the workflow to the bead's scope. See CLAUDE.md for full details.
-
-| Tier | Tool | When |
-|------|------|------|
-| **T1: Forge** | `/feature-forge` | Epics, cross-cutting, design ambiguity |
-| **T2: Feature Dev** | `/feature-dev` | Features, multi-file, needs exploration |
-| **T3: Direct** | Plan mode or manual | Tasks, bugs, obvious path |
+This repo delegates non-trivial work through ethos missions, not a
+tiered slash-command system — see "Workflow: Ethos Missions and
+Pipelines" in `CLAUDE.md` for mission archetypes (`implement`, `design`,
+`test`, `review`, `report`, `task`) and pipeline selection (`quick`,
+`standard`, `full`, `product`, `formal`, `docs`, `coe`, `coverage`).
 
 ## Session Close Protocol
 
 Follow the protocol in CLAUDE.md. The short version:
 
 1. **File issues** for remaining work (`bd create`)
-2. **Quality gates** must pass (ruff, mypy, pytest)
+2. **Quality gates** must pass (`make check`)
 3. **Close beads** for finished work (`bd close <id>`)
 4. **Push to remote** — work is NOT complete until `git push` succeeds:
 
    ```bash
    git pull --rebase
-   bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -55,7 +51,6 @@ Follow the protocol in CLAUDE.md. The short version:
 
    ```bash
    git pull --rebase
-   bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```

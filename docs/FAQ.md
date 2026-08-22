@@ -4,7 +4,7 @@
 
 ### What is biff and who is it for?
 
-Biff is a terminal-native communication tool for software engineers who use Claude Code or other MCP-compatible systems. If you spend your working day in a terminal and resent switching to a browser to talk to your team, biff is for you. It provides ten slash commands covering messaging, presence, broadcast, real-time conversation, session identity, and availability control --- all without leaving your session.
+Biff is a terminal-native communication tool for software engineers who use Claude Code or other MCP-compatible systems. If you spend your working day in a terminal and resent switching to a browser to talk to your team, biff is for you. It provides twelve slash commands covering messaging, presence, broadcast, real-time conversation, session identity, and availability control --- all without leaving your session.
 
 ### How is biff different from Slack?
 
@@ -12,7 +12,7 @@ Slack is a workplace chat platform designed around channels, threads, and contin
 
 In Slack, the default state is "available and monitoring." In biff, the default state is "heads down; interrupt me if it matters." Slack is optimized for managers who need visibility. Biff is optimized for engineers who need concentration.
 
-Structurally, biff runs inside your existing development environment as MCP slash commands. There is no separate app, no browser tab, no notification center. Communication happens where your code already lives. And because team configuration lives in a `.biff` file committed to the repo, communication is scoped to the project you are working on right now. Slack shows you every channel from every project simultaneously; biff shows you only the teammates and messages relevant to the code in your terminal.
+Structurally, biff runs inside your existing development environment as MCP slash commands. There is no separate app, no browser tab, no notification center. Communication happens where your code already lives. And because team configuration lives in `.punt-labs/biff/config.yaml` committed to the repo, communication is scoped to the project you are working on right now. Slack shows you every channel from every project simultaneously; biff shows you only the teammates and messages relevant to the code in your terminal.
 
 ### How is biff different from Discord?
 
@@ -34,7 +34,7 @@ Run the one-line installer, restart Claude Code twice, and type `/who`:
 curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/419ac99/install.sh | sh
 ```
 
-Biff ships with a shared demo relay on Synadia Cloud, so there is no infrastructure to provision. If your repo has a `.biff` file (committed by a teammate), biff picks up the team roster automatically. Your display name is resolved from your GitHub identity. No account creation, no workspace to configure.
+Biff ships with a shared demo relay on Synadia Cloud, so there is no infrastructure to provision. If your repo has `.punt-labs/biff/config.yaml` (committed by a teammate), biff picks up the team roster automatically. Your display name is resolved from your GitHub identity. No account creation, no workspace to configure.
 
 See [Installing](INSTALLING.md) for the full guide.
 
@@ -60,7 +60,7 @@ Today, messages are encrypted in transit via TLS between your client and the NAT
 
 ### Does biff send data to Anthropic or any third party?
 
-No. Biff communicates only with the NATS relay specified in your `.biff` file. No telemetry, no analytics, no data shared with Anthropic or anyone else.
+No. Biff communicates only with the NATS relay specified in your `.punt-labs/biff/config.yaml`. No telemetry, no analytics, no data shared with Anthropic or anyone else.
 
 ## Agents
 

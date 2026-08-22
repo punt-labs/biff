@@ -37,6 +37,23 @@ stashes the original `statusLine` at `~/.punt-labs/biff/statusline-original.json
 and `plugin/hooks/session-start.sh` treats the absence of that stash as "not
 yet installed".
 
+**There is no `.biff` file and no `biff init` command.** Both were removed
+in v1.13.1 (see CHANGELOG.md). Per-repo config lives at
+`.punt-labs/biff/config.yaml` (shared, committed) and
+`.punt-labs/biff/config.local.yaml` (per-user, gitignored) — see DES-037
+(config migration) and DES-052 (enablement marker) in `DESIGN.md`. INS-002,
+INS-003, INS-005 through INS-008 below describe the old `installer.py` /
+`.biff init` architecture and are superseded; each carries a short note
+pointing at current behavior. INS-004, INS-009, and INS-010 are unaffected
+and still describe current behavior.
+
+**MCP registration has no dual path.** The server is registered entirely
+through the plugin's own `mcpServers` entry in
+`plugin/.claude-plugin/plugin.json`, which Claude Code reads when the
+plugin loads. There is no `claude mcp add` step and no `_ensure_mcp_server()`
+reconciliation in `statusline.py` — `install()` there only stashes and
+replaces `statusLine`.
+
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                        User's Machine                                    │
@@ -148,13 +165,15 @@ yet installed".
 
 | Path | Written By | Purpose |
 |------|-----------|---------|
-| `~/.claude.json` | `claude mcp add` + `statusline.py` | MCP server registration |
-| `~/.claude/plugins/biff/` | `installer.py` | Plugin files (commands, hooks) |
-| `~/.claude/commands/` | `installer.py` | Top-level user commands (`.md`) |
-| `~/.claude/plugins/installed_plugins.json` | `installer.py` | Plugin registry |
-| `~/.claude/settings.json` | `installer.py` + `statusline.py` | Plugin enable + status line |
+| `~/.claude/plugins/installed_plugins.json` | `claude plugin install` | Plugin registry (marketplace-managed) |
+| `~/.claude/plugins/cache/punt-labs/biff/<version>/` | `claude plugin install` | Cached plugin files (commands, hooks, `plugin.json` with `mcpServers`) |
+| `~/.claude/commands/` | `install_cmd` (`_deploy_user_commands`) | Top-level user commands (`.md`) |
+| `~/.claude/CLAUDE.md` | `install_cmd` (`_register_user_scope`) | Single `@`-import line pointing at the deposited guide |
+| `~/.punt-labs/biff/CLAUDE.md` | `install_cmd` (`_register_user_scope`) | Deposited agent-facing guide (INS-010) |
+| `~/.claude/settings.json` | `statusline.py` | Status line entry only (plugin enable/registry lives in the two paths above) |
 | `~/.punt-labs/biff/statusline-original.json` | `statusline.py` | Stashed original status line |
 | `~/.punt-labs/biff/unread/*.json` | MCP server (runtime) | Per-project unread counts |
+| `.punt-labs/biff/config.yaml` / `config.local.yaml` (per repo) | user, via `biff enable` / hand-edit | Team roster, relay URL/auth (DES-037, DES-052) |
 
 ---
 
@@ -173,107 +192,95 @@ pip install punt-biff    # Phase 1: Python package + CLI
 biff install            # Phase 2: Claude Code integration
 ```
 
-Phase 1 (`pip install`) provides the `biff` CLI and the MCP server code. Phase 2 (`biff install`) registers everything with Claude Code: MCP server, plugin files, plugin registry, and plugin settings.
+Phase 1 (`pip install` / `uv tool install`) provides the `biff` CLI and the
+MCP server code. Phase 2 (`biff install`) deposits the user-scope agent guide
+(`~/.punt-labs/biff/CLAUDE.md` + the `@`-import), deploys this clone's git
+hooks, and installs the Claude Code plugin via `claude plugin install
+biff@punt-labs --scope user` (see the current `install_cmd` in
+`src/biff/__main__.py`). MCP server registration is not a separate step —
+it's part of what the plugin itself declares in `plugin.json`'s
+`mcpServers`, loaded automatically once the plugin is installed.
 
 ### Why Two Phases
 
-`pip install` cannot run `claude mcp add` or write to `~/.claude/` because:
+`pip install` cannot install the Claude Code plugin because:
 
 - `claude` may not be on PATH during pip install (CI, virtualenvs, Docker).
 - Writing to user config files from a pip post-install hook is fragile and non-standard.
 - The user may install the package before installing Claude Code.
 
-Keeping Phase 2 as a separate explicit command (`biff install`) means it runs when the user is ready and Claude Code is present.
+Keeping Phase 2 as a separate explicit command (`biff install`) means it runs when the user is ready and Claude Code is present. A missing `claude` binary makes Phase 2 a successful CLI-only install (the guide and git hooks still land), not a partial failure.
 
 ### Idempotency
 
-`biff install` is idempotent. Every step checks for existing state:
-
-- `claude mcp add` reports "already exists" → step passes.
-- Plugin files are removed and re-copied (handles upgrades).
-- Registry entry is overwritten with current metadata.
-- Settings entry is set to `true` (no-op if already enabled).
+`biff install` is idempotent: the user-scope guide is overwritten wholesale on
+every run, the `@`-import is only added if not already present, git hooks are
+redeployed, and `claude plugin install` itself no-ops (with a warning) if the
+plugin is already at that version.
 
 ### Bootstrap Script
 
-`install.sh` chains all steps for zero-thought setup:
-
-```bash
-pip install punt-biff
-biff install
-biff doctor
-```
+`install.sh` chains all steps for zero-thought setup: install the `biff`
+CLI via `uv tool install`, register the `punt-labs` marketplace, install
+the plugin, then run `biff doctor` to verify. See `install.sh` at the repo
+root for the exact steps, including the CLI-only (`--no-plugin`) path.
 
 ---
 
 ## INS-002: Plugin Source — importlib.resources, Not Symlinks
 
 **Date:** 2026-02-15
-**Status:** SETTLED
+**Status:** SUPERSEDED by DES-055 (`DESIGN.md`)
 **Topic:** How plugin files get from the package to `~/.claude/plugins/`
 
-### Design
+### What Actually Happens Now
 
-The installer reads plugin files from `importlib.resources.files("biff.plugins")` and copies them via `shutil.copytree` to `~/.claude/plugins/biff/`. The source is the `src/biff/plugins/biff/` directory bundled in the wheel.
+There is no bundled plugin in the wheel and no `importlib.resources` copy
+step. Since DES-055, the plugin surface lives at `plugin/` in this repo's
+root (`plugin/.claude-plugin/`, `plugin/commands/`, `plugin/hooks/`) and is
+installed straight from GitHub via `claude plugin install biff@punt-labs`,
+which the marketplace resolves through a `git-subdir` source
+(`punt-labs/claude-plugins`). Upgrades are `claude plugin update`, not a
+new PyPI release plus a re-copy. See DES-055 for the full rationale
+(single source of truth for prompts/hooks, no drift between the wheel's
+bundled copy and what ships).
 
-### Why Copy, Not Symlink
+### Original Design (historical)
 
-- Symlinks break when the virtualenv moves, the package upgrades, or `pip uninstall` runs.
-- `importlib.resources` provides a stable, version-correct path to package data regardless of installation method (editable, wheel, sdist).
-- Copying creates a self-contained plugin directory that survives package changes.
-
-### Why Not the Local Marketplace Pattern
-
-Claude Code has a "local marketplace" pattern with symlinks + `marketplace.json`. This was rejected because:
-
-- It requires maintaining a marketplace manifest separate from the package.
-- The symlink approach ties the plugin to a specific filesystem location.
-- The copy approach is simpler: one step, no manifest, no symlink management.
-
-The `biff@local` key in the registry mimics the local plugin convention without the marketplace indirection.
+The installer used to read plugin files from
+`importlib.resources.files("biff.plugins")` and copy them via
+`shutil.copytree` to `~/.claude/plugins/biff/`, sourced from
+`src/biff/plugins/biff/` in the wheel. That directory, `installer.py`, and
+the `biff@local` registry key this section originally described are all
+gone.
 
 ---
 
-## INS-003: MCP Server Registration — Dual Path
+## INS-003: MCP Server Registration — Via Plugin Manifest, Not `claude mcp add`
 
 **Date:** 2026-02-15
-**Status:** SETTLED
+**Status:** SUPERSEDED by DES-055 (`DESIGN.md`)
 **Topic:** How the MCP server gets registered in Claude Code
 
-### Design
+### What Actually Happens Now
 
-The MCP server is registered through two mechanisms that converge on the same target:
+There is no `claude mcp add` step and no dual-path reconciliation. The MCP
+server is declared once, in `plugin/.claude-plugin/plugin.json`'s
+`mcpServers` entry, which Claude Code reads and spawns automatically when
+the plugin loads — the same mechanism as any other plugin-provided MCP
+server. `statusline.py`'s `install()` only stashes and replaces
+`statusLine`; it no longer touches `~/.claude.json` or reconciles an MCP
+entry (its own docstring says as much: "The MCP server is registered via
+the plugin's `mcpServers` in `plugin.json`, not here").
 
-1. **`installer.py`** calls `claude mcp add --scope user biff -- biff serve --transport stdio`. This writes to `~/.claude.json` (the global MCP config).
+### Original Design (historical)
 
-2. **`statusline.py`** calls `_ensure_mcp_server()` which directly writes the MCP server entry to `~/.claude.json`. This runs during `biff install-statusline` and on every status line install as an idempotent reconciliation.
-
-Both paths produce identical entries:
-
-```json
-{
-  "mcpServers": {
-    "biff": {
-      "type": "stdio",
-      "command": "/path/to/biff",
-      "args": ["serve", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-### Why Dual Path
-
-The `claude mcp add` CLI is the "proper" way to register but has failure modes (claude not on PATH, version differences). The direct-write path in `statusline.py` serves as a reconciliation mechanism — if the entry is missing or stale, installing the status line fixes it.
-
-### Command Resolution
-
-Both paths resolve the `biff` command identically via `shutil.which("biff")`:
-
-- **Found:** Use the absolute path to `biff` (e.g., `/Users/kai/.local/bin/biff`).
-- **Not found:** Fall back to `sys.executable -m biff` (Python module invocation).
-
-This handles editable installs, `uv tool install`, and standard pip installs.
+The MCP server used to be registered through two converging mechanisms:
+`installer.py` running `claude mcp add --scope user biff -- biff serve
+--transport stdio`, and `statusline.py` calling a since-removed
+`_ensure_mcp_server()` as an idempotent reconciliation on every status
+line install. Both wrote to `~/.claude.json` directly. Neither exists
+today.
 
 ---
 
@@ -319,18 +326,25 @@ Status line installation is a separate command (`biff install-statusline`) becau
 
 ### Design
 
-`biff doctor` runs six diagnostic checks:
+`biff doctor` runs ten diagnostic checks (`check_environment()` in
+`src/biff/doctor.py`):
 
 | Check | Required | What It Tests |
 |-------|----------|---------------|
-| `gh` CLI | Yes | GitHub CLI installed and authenticated |
-| MCP server | Yes | `biff` registered in `claude mcp list` |
-| Plugin commands | Yes | `~/.claude/plugins/biff/commands/` exists with `.md` files |
+| `gh` CLI | No | GitHub CLI installed and authenticated |
+| Plugin | Yes | `biff@punt-labs` present in `~/.claude/plugins/installed_plugins.json` |
+| User commands | No | Top-level command files exist in `~/.claude/commands/` |
+| Agent guide | No | The `@`-import is registered in `~/.claude/CLAUDE.md` |
 | NATS relay | Yes | Can connect to the configured relay URL |
-| `.biff` file | No | `.biff` exists in the current git repo |
+| Config | No | `.punt-labs/biff/config.yaml` exists, or zero-config (defaults from git remote) |
+| Enabled | No | `is_enabled()` — the committed `.punt-labs/biff/enabled` marker is a regular file (not a symlink) AND `biff` is on PATH (DES-052) |
+| Git hooks | No | This clone's `.git/hooks` dispatchers are deployed |
+| CI workflow | No | The biff-notify GitHub Actions workflow is present |
 | Status line | No | Status line stash file exists |
 
-Required checks must all pass (exit code 0). Informational checks (`.biff`, status line) report status but don't fail the command.
+Only two checks are required (`required=True`, must pass for exit code 0):
+**Plugin** and **NATS relay**. Every other check is informational — it
+reports status but never fails the command.
 
 ### Why Doctor, Not Install Verification
 
@@ -338,93 +352,122 @@ Required checks must all pass (exit code 0). Informational checks (`.biff`, stat
 
 ### NATS Connectivity Check
 
-Doctor resolves relay config the same way the server does: `.biff` file → demo relay fallback → bundled demo credentials. The connection test uses a 3-second timeout and `asyncio.run()` (blocking, since doctor is a CLI command).
+Doctor resolves relay config the same way the server does: read
+`.punt-labs/biff/config.yaml` + `config.local.yaml` (DES-037), then fall back
+to the demo relay with bundled demo credentials if no `relay.url` is set. The
+connection test uses a 3-second timeout and `asyncio.run()` (blocking, since
+doctor is a CLI command).
 
 ---
 
 ## INS-006: Identity Resolution — GitHub First
 
 **Date:** 2026-02-15
-**Status:** SETTLED
-**Topic:** How `biff init` and `biff serve` determine the user's identity
+**Status:** SETTLED, with a correction — there is no `biff init` command
+**Topic:** How biff determines the user's identity
 
 ### Design
 
-Identity resolution chain:
+Identity resolution chain (`get_github_identity()` and its callers in
+`src/biff/config.py`):
 
-1. `--user` CLI override (explicit).
+1. `--user` CLI override (explicit), where a command accepts one.
 2. `gh api user --jq .login` (GitHub CLI, uses stored OAuth token).
 3. `getpass.getuser()` (OS username fallback).
 
-`biff init` resolves identity to display it during setup. `biff serve` resolves identity to register the session. Both use the same `get_github_identity()` function.
+`biff serve` resolves identity to register the session. There is no `biff
+init` command — it does not exist in `src/biff/__main__.py` and never
+shipped under that name; per-repo config is written by hand or via `biff
+enable` (see INS-007's replacement below), not a dedicated init wizard.
 
-### Why Not Stored in `.biff`
+### Why Not Stored in Committed Config
 
-Identity is per-user, not per-repo. Storing it in `.biff` (which is committed) would force all team members to share identity config. GitHub login is already available via `gh auth` — no extra config step needed.
+Identity is per-user, not per-repo. Storing it in
+`.punt-labs/biff/config.yaml` (which is committed) would force all team
+members to share identity config. GitHub login is already available via
+`gh auth` — no extra config step needed.
 
 ---
 
-## INS-007: `.biff` File — Per-Repo Config
+## INS-007: Per-Repo Config — `.punt-labs/biff/config.yaml`
 
-**Date:** 2026-02-14
-**Status:** SETTLED
-**Topic:** What `biff init` creates and why
+**Date:** 2026-02-14 (original); corrected 2026-08-22
+**Status:** SETTLED — original design (a `.biff` TOML file created by
+`biff init`) never shipped this way; see DES-037 in `DESIGN.md` for the
+actual migration history
+**Topic:** Where per-repo config lives and what it contains
 
 ### Design
 
-`biff init` creates a `.biff` TOML file at the git repo root:
+Per-repo config lives at `.punt-labs/biff/config.yaml` (shared, committed)
+and `.punt-labs/biff/config.local.yaml` (per-user, gitignored):
 
-```toml
-[team]
-members = ["kai", "eric"]
-
-[relay]
-url = "tls://connect.ngs.global"
+```yaml
+# .punt-labs/biff/config.yaml — committed
+team:
+  members: ["kai", "eric"]
+relay:
+  url: "tls://connect.ngs.global"
 ```
 
-The file is committed to the repo. All team members share it.
+```yaml
+# .punt-labs/biff/config.local.yaml — gitignored
+relay:
+  auth:
+    credentials: "/path/to/private.creds"
+```
+
+Nothing in this repo reads a `.biff` file or a `.biff init` command — both
+were removed in v1.13.1 (see CHANGELOG.md) and, per DES-037, replaced by
+the schema above before that removal.
 
 ### What It Contains
 
-| Section | Field | Purpose |
-|---------|-------|---------|
-| `[team]` | `members` | List of team usernames |
-| `[relay]` | `url` | NATS relay URL |
-| `[relay]` | `token` / `nkeys_seed` / `user_credentials` | Auth (pick one) |
+| File | Field | Purpose |
+|------|-------|---------|
+| `config.yaml` | `team.members` | List of team usernames |
+| `config.yaml` | `relay.url` | NATS relay URL |
+| `config.local.yaml` | `relay.auth.{token,nkeys_seed,credentials}` | Auth (pick one, per-user, never committed) |
 
 ### What It Does NOT Contain
 
 - **User identity** — resolved from GitHub (INS-006).
-- **Plugin config** — managed by `biff install`, not the `.biff` file.
+- **Plugin config** — managed by `biff install`, not this file.
 - **Status line config** — managed by `biff install-statusline`.
 
 ### Demo Relay Default
 
-`biff init` defaults the relay URL to `tls://connect.ngs.global` (Synadia NGS). Demo NATS credentials are bundled in the package at `biff/data/demo.creds` and auto-loaded when the relay URL matches the demo URL and no explicit auth is configured.
+If `relay.url` is unset (or the repo has no `config.yaml` at all), biff
+defaults to the demo relay (`DEMO_RELAY_URL`, `tls://connect.ngs.global`
+via Synadia NGS). Demo NATS credentials are bundled in the package at
+`biff/data/demo.creds` and auto-loaded when the relay URL matches the demo
+URL and no explicit auth is configured (`_apply_demo_relay_default` in
+`src/biff/config.py`).
 
 ---
 
 ## INS-008: Uninstall — Reverse Every Step
 
-**Date:** 2026-02-15
+**Date:** 2026-02-15 (corrected 2026-08-22)
 **Status:** SETTLED
 **Topic:** How `biff uninstall` cleanly removes everything
 
 ### Design
 
-`biff uninstall` reverses the install in order:
+`uninstall_cmd` (`src/biff/__main__.py`) reverses the install:
 
-1. **Disable plugin** — Remove `biff@local` from `settings.json` `enabledPlugins`.
-2. **Unregister plugin** — Remove `biff@local` from `installed_plugins.json`.
-3. **Remove plugin files** — `shutil.rmtree(~/.claude/plugins/biff/)`.
-4. **Remove user commands** — Delete biff command files from `~/.claude/commands/`.
-5. **Remove MCP server** — `claude mcp remove biff`.
-6. **Remove status line** — Restore stashed original, delete stash file, remove MCP entry from `~/.claude.json`.
+1. **Uninstall plugin** — `claude plugin uninstall biff@punt-labs --scope user` (skipped with a message if `claude` isn't on PATH; a failure here doesn't skip the rest).
+2. **Remove this clone's git hooks** — `_remove_repo_git_hooks()`. Only this checkout's `.git/hooks` dispatchers; the committed marker and CI workflow are repo policy, untouched here (`biff disable` owns those).
+3. **User-scope teardown** — `UserScope().uninstall()` always runs, regardless of whether step 1 succeeded, so a failed or skipped plugin uninstall never strands the `@`-import: removes the `@~/.punt-labs/biff/CLAUDE.md` line from `~/.claude/CLAUDE.md`. The deposited guide file itself is left in place, dormant (INS-010's §2.9).
+
+`biff uninstall-statusline` is separate (as install is): restores the
+stashed original `statusLine`, deletes the stash file.
 
 ### What It Does NOT Remove
 
-- The `.biff` file (repo config, committed to git).
-- The `biff` CLI itself (managed by pip).
+- `.punt-labs/biff/config.yaml` / `config.local.yaml` (repo config, committed and per-user respectively).
+- The deposited `~/.punt-labs/biff/CLAUDE.md` guide itself (left dormant, not deleted).
+- The `biff` CLI itself (managed by pip / `uv tool`).
 - `~/.punt-labs/biff/unread/` directory (runtime state, harmless).
 
 ---
@@ -432,51 +475,63 @@ The file is committed to the repo. All team members share it.
 ## Installation Flow — End to End
 
 ```text
-User                     pip              biff CLI           Claude Code Files
+User                     uv/pip           biff CLI           Claude Code / disk
  │                        │                  │                      │
- │  pip install punt-biff  │                  │                      │
+ │  uv tool install       │                  │                      │
+ │  punt-biff             │                  │                      │
  ├───────────────────────►│                  │                      │
  │                        │  install pkg     │                      │
  │                        │  + CLI entry     │                      │
  │                        │◄─────────────────┤                      │
  │                        │                  │                      │
+ │  claude plugin         │                  │                      │
+ │  marketplace add       │                  │                      │
+ │  punt-labs/claude-plugins ────────────────────────────────────► │
+ │                        │                  │                      │
+ │  claude plugin install │                  │                      │
+ │  biff@punt-labs        │                  │                      │
+ ├────────────────────────────────────────────────────────────────►│
+ │                        │                  │  git-subdir fetch    │
+ │                        │                  │  of plugin/ from     │
+ │                        │                  │  punt-labs/biff      │
+ │                        │                  │  → plugin cache +    │
+ │                        │                  │    mcpServers entry  │
+ │                        │                  │◄─────────────────────┤
+ │                        │                  │                      │
  │  biff install          │                  │                      │
  ├──────────────────────────────────────────►│                      │
- │                        │                  │  claude mcp add      │
+ │                        │                  │  deposit guide        │
  │                        │                  ├─────────────────────►│
- │                        │                  │  ~/.claude.json      │
+ │                        │                  │  ~/.punt-labs/biff/  │
+ │                        │                  │  CLAUDE.md            │
  │                        │                  │                      │
- │                        │                  │  copytree plugins    │
+ │                        │                  │  add @-import         │
  │                        │                  ├─────────────────────►│
- │                        │                  │  ~/.claude/plugins/  │
+ │                        │                  │  ~/.claude/CLAUDE.md │
  │                        │                  │                      │
- │                        │                  │  write registry      │
+ │                        │                  │  deploy git hooks     │
  │                        │                  ├─────────────────────►│
- │                        │                  │  installed_plugins   │
- │                        │                  │                      │
- │                        │                  │  enable plugin       │
- │                        │                  ├─────────────────────►│
- │                        │                  │  settings.json       │
- │                        │                  │                      │
- │  ✓ MCP server          │                  │                      │
- │  ✓ Plugin files        │                  │                      │
- │  ✓ User commands       │                  │                      │
- │  ✓ Plugin registry     │                  │                      │
- │  ✓ Plugin enabled      │                  │                      │
+ │                        │                  │  <clone>/.git/hooks  │
  │  "Restart Claude Code" │                  │                      │
  │◄──────────────────────────────────────────┤                      │
  │                        │                  │                      │
  │  biff doctor           │                  │                      │
  ├──────────────────────────────────────────►│                      │
- │                        │                  │  ✓ gh CLI            │
- │                        │                  │  ✓ MCP server        │
- │                        │                  │  ✓ Plugin commands   │
+ │                        │                  │  ○ gh CLI            │
+ │                        │                  │  ✓ Plugin            │
+ │                        │                  │  ○ User commands     │
+ │                        │                  │  ○ Agent guide       │
  │                        │                  │  ✓ NATS relay        │
- │                        │                  │  ○ .biff file        │
+ │                        │                  │  ○ Config            │
+ │                        │                  │  ○ Enabled           │
+ │                        │                  │  ○ Git hooks         │
+ │                        │                  │  ○ CI workflow       │
  │                        │                  │  ○ Status line       │
  │  "All checks passed"   │                  │                      │
  │◄──────────────────────────────────────────┤                      │
 ```
+
+(✓ = required, must pass; ○ = informational, reports status only — see INS-005)
 
 ---
 
@@ -488,7 +543,7 @@ Before `biff install` can succeed, the user needs:
 |--------------|-----|---------------|
 | Python 3.13+ | Package requires modern Python | `brew install python` or system package manager |
 | `pip` / `uv` | Install the PyPI package | Bundled with Python |
-| Claude Code (`claude` CLI) | MCP server registration via `claude mcp add` | `npm install -g @anthropic-ai/claude-code` |
+| Claude Code (`claude` CLI) | Plugin install/marketplace registration | `npm install -g @anthropic-ai/claude-code` |
 | GitHub CLI (`gh`) | Identity resolution | `brew install gh && gh auth login` |
 
 `biff doctor` validates all of these post-install.

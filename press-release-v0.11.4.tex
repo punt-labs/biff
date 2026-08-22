@@ -236,11 +236,11 @@ plugin. The second activates biff in the current repository and deploys
 git hooks for workflow integration. Restart Claude Code, and you are live.
 
 Biff ships with a shared relay on Synadia Cloud, so there is zero
-infrastructure to provision. Team configuration lives in a \texttt{.biff}
-file committed to the git repository --- the repo is both the codebase and
+infrastructure to provision. Team configuration lives in \texttt{.punt-labs/biff/config.yaml}
+committed to the git repository --- the repo is both the codebase and
 the communication scope. Display names are resolved automatically from
-GitHub identity. When a teammate clones a repo that has a \texttt{.biff}
-file, biff connects them to the right team automatically. There is no
+GitHub identity. When a teammate clones a repo that has that file, biff
+connects them to the right team automatically. There is no
 account to create, no workspace to configure, and no browser to open. Type
 \texttt{/who} to see your teammates.
 

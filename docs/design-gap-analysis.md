@@ -16,9 +16,10 @@ already exists implicitly across the full distributed topology.
 
 **Current representation: Implicit in credentials.**
 
-The `.biff` file's `[relay]` section and its credentials (token, NKey
-seed, `.creds` file) define who can connect to a shared NATS server.
-The `[team]` roster names the members. Together these define the
+`.punt-labs/biff/config.yaml`'s `relay` section, plus per-user
+credentials (token, NKey seed, `.creds` file) in the gitignored
+`config.local.yaml`, define who can connect to a shared NATS server.
+The `team.members` roster names the members. Together these define the
 organization: a set of identities sharing a communication namespace
 with mutual trust.
 
@@ -74,8 +75,8 @@ capabilities does it have? Who spawned it?
 
 **Gap:** Members are assumed to be humans with GitHub accounts. Agent
 identities have no registration path. The `team` roster is static (read
-from `.biff` at startup) — agents can't dynamically join or leave a
-team.
+from `.punt-labs/biff/config.yaml` at startup) — agents can't
+dynamically join or leave a team.
 
 ### `machines` — The Physical Topology
 
@@ -281,7 +282,7 @@ plan. The human's plan ("reviewing PR #42") and the agent's plan
 #### `orgs` — multi-tenancy
 
 Variant 1 doesn't formalize the org layer. Teams are still defined by
-shared `.biff` config and relay credentials. Becomes important when biff
+shared `.punt-labs/biff/config.yaml` config and relay credentials. Becomes important when biff
 coordinates across org boundaries.
 
 #### Cross-repo discovery
@@ -300,7 +301,7 @@ answer "which machines have this repo cloned?"
 
 #### Dynamic membership
 
-`members` remains a static roster in `.biff`. Agents can't dynamically
+`members` remains a static roster in `.punt-labs/biff/config.yaml`. Agents can't dynamically
 register as team members. The membership model needs to become
 dynamic — processes announce themselves, and the org decides whether to
 accept them.

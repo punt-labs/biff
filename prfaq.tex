@@ -271,15 +271,15 @@ startup
 \prsection{Getting Started}
 
 Getting started with biff takes three commands:
-\texttt{pip install biff}, then \texttt{biff install} to register the MCP
-server and slash commands, then \texttt{biff doctor} to verify the setup.
-Restart Claude Code, and you are live. Biff ships with a shared relay
+\texttt{uv tool install punt-biff}, then \texttt{biff install} to register
+the MCP server and slash commands, then \texttt{biff doctor} to verify the
+setup. Restart Claude Code, and you are live. Biff ships with a shared relay
 on Synadia Cloud with end-to-end encryption, so there is zero infrastructure
-to provision. Team configuration lives in a \texttt{.biff} file committed to
-your git repository --- it only needs a team member list; the relay URL
-defaults to the shared relay. Your display name is resolved automatically
-from your GitHub identity. When you clone a repo that has a \texttt{.biff}
-file, biff automatically connects you to the right team. There is no account
+to provision. Team configuration lives in \texttt{.punt-labs/biff/config.yaml}
+committed to your git repository --- it only needs a team member list; the
+relay URL defaults to the shared relay. Your display name is resolved
+automatically from your GitHub identity. When you clone a repo that has
+that file, biff automatically connects you to the right team. There is no account
 to create, no workspace to configure, and no browser to open. Type
 \texttt{/who} to see your teammates. Within five minutes of installation, you
 can send your first message, see your team's presence, and set your plan.
@@ -305,7 +305,7 @@ purposeful, not ambient.''
 
 Biff is open source and available today at
 \href{https://github.com/punt-labs/biff}{github.com/punt-labs/biff}.
-Install with \texttt{pip install biff}, then run \texttt{biff install}
+Install with \texttt{uv tool install punt-biff}, then run \texttt{biff install}
 and \texttt{biff doctor}. The core tool, end-to-end encryption, and the
 shared relay are free and always will be. For larger teams that need uptime
 guarantees, audit logs, and admin controls, biff teams is available as a
@@ -327,7 +327,7 @@ paid tier.
   Biff is a terminal-native communication tool for software engineers who
   use Claude Code or other MCP-compatible systems. If you spend your working
   day in a terminal and resent switching to a browser to talk to your team,
-  biff is for you. It provides eight slash commands covering messaging,
+  biff is for you. It provides twelve slash commands covering messaging,
   presence, broadcast, session identity, and availability control --- all without
   leaving your session. See Appendix~A for the full command reference.
 \end{faqpair}
@@ -344,8 +344,8 @@ paid tier.
   Structurally, biff runs inside your existing development environment as
   MCP slash commands. There is no separate app, no browser tab, no
   notification center. Communication happens where your code already lives.
-  And because team configuration lives in a \texttt{.biff} file committed to
-  the repo, communication is scoped to the project you are working on right
+  And because team configuration lives in \texttt{.punt-labs/biff/config.yaml}
+  committed to the repo, communication is scoped to the project you are working on right
   now. Slack shows you every channel from every project simultaneously; biff
   shows you only the teammates and messages relevant to the code in your
   terminal.
@@ -360,11 +360,11 @@ paid tier.
 \end{faqpair}
 
 \begin{faqpair}{How do I get started?}\label{faq:get-started}
-  Run \texttt{pip install biff}, then \texttt{biff install} to register
+  Run \texttt{uv tool install punt-biff}, then \texttt{biff install} to register
   the MCP server and slash commands, then \texttt{biff doctor} to verify the
   setup. Restart Claude Code. Biff ships with a shared demo relay on Synadia
-  Cloud, so there is no infrastructure to provision. If your repo has a
-  \texttt{.biff} file (committed by a teammate), biff picks up the team
+  Cloud, so there is no infrastructure to provision. If your repo has
+  \texttt{.punt-labs/biff/config.yaml} (committed by a teammate), biff picks up the team
   roster automatically. Your display name is resolved from your GitHub
   identity. Type \texttt{/who} to see your team. No account creation, no
   workspace to configure. You are communicating within five minutes.
@@ -506,8 +506,8 @@ paid tier.
   Three channels, in order of expected impact:
 
   \begin{enumerate}[leftmargin=1.5em]
-    \item \textbf{Viral loop via \texttt{.biff} file.} When a team member
-    commits a \texttt{.biff} file to a shared repo, every engineer who
+    \item \textbf{Viral loop via committed config.} When a team member
+    commits \texttt{.punt-labs/biff/config.yaml} to a shared repo, every engineer who
     clones that repo gets the team roster and relay configuration
     automatically --- the project carries its own communication context.
     The install path is two commands. This
@@ -522,7 +522,7 @@ paid tier.
     \item \textbf{Content and conference talks.} Blog posts on
     terminal-native communication, talks at developer conferences. The
     open-source model means the project itself is the marketing --- every
-    GitHub star, every fork, every \texttt{.biff} file committed is a
+    GitHub star, every fork, every config file committed is a
     distribution event.
   \end{enumerate}
 
@@ -532,7 +532,7 @@ paid tier.
   giving conference talks, and nurturing early adopters through the
   first-week onboarding. The remaining 20\% is modest spend on
   conference sponsorships and targeted ads. The product itself is free
-  and the viral loop is built into the protocol (\texttt{.biff} commits
+  and the viral loop is built into the protocol (config commits
   with the repo), so the monetary CAC is near zero --- but the time
   investment to reach critical mass on each team is the true bottleneck.
 \end{faqpair}
@@ -618,9 +618,9 @@ paid tier.
     to mature.
 
     \item \textbf{Adoption chicken-and-egg (high risk).} Biff is only
-    useful if your teammates also use it. Mitigation: the \texttt{.biff}
-    file committed to the repo means the second person on a team only
-    needs to clone, run \texttt{uv tool install --editable .} and
+    useful if your teammates also use it. Mitigation: the committed
+    \texttt{.punt-labs/biff/config.yaml} means the second person on a team
+    only needs to clone, run \texttt{uv tool install punt-biff} and
     \texttt{biff install} --- the configuration is already there. The demo relay eliminates
     infrastructure setup. The \texttt{/plan}, \texttt{/finger}, and
     \texttt{/who} commands provide value to individual users even without
@@ -653,10 +653,10 @@ paid tier.
   \texttt{/wall} broadcasts time-limited announcements to all terminals
   with duration-based expiry and poll-based cross-session refresh.
 
-  Today, messages traverse the relay in cleartext. The \texttt{.biff}
-  file in the repository contains the team member list and optional relay
-  configuration. It is the root of trust: adding your username to
-  \texttt{.biff} and committing it proves you have commit access to the
+  Today, messages traverse the relay in cleartext.
+  \texttt{.punt-labs/biff/config.yaml} in the repository contains the team
+  member list and optional relay configuration. It is the root of trust:
+  adding your username to it and committing it proves you have commit access to the
   repo, which is what makes you a team member. End-to-end encryption
   ships with biff 1.0 and will make the relay unable to read message
   contents. See \faqref{faq:timeline} for the encryption roadmap.
@@ -946,16 +946,15 @@ paid tier.
 \riskitem{Usability}{%
   \textbf{Low risk.} The slash-command interface mirrors patterns engineers
   already use (git commands, Unix utilities, Claude Code slash commands).
-  Installation is four commands (\texttt{git clone},
-  \texttt{uv tool install --editable .}, \texttt{biff install},
-  \texttt{biff doctor}). Time-to-value is under five minutes. The
-  primary usability risk is discoverability: new users need to learn the
-  command vocabulary. Mitigation: the vocabulary is small (8 shipped
-  commands), the names are intuitive (borrowed from Unix), and the tool
-  descriptions are self-documenting within Claude Code. The secondary
+  Installation is three commands (\texttt{uv tool install punt-biff},
+  \texttt{biff install}, \texttt{biff doctor}). Time-to-value is under five
+  minutes. The primary usability risk is discoverability: new users need to
+  learn the command vocabulary. Mitigation: the vocabulary is small (12
+  shipped commands), the names are intuitive (borrowed from Unix), and the
+  tool descriptions are self-documenting within Claude Code. The secondary
   usability risk is the empty-room experience: a solo installer sees no
   teammates and may not persist long enough for network effects to form.
-  Mitigation: the \texttt{.biff} file viral loop means most users arrive
+  Mitigation: the committed-config viral loop means most users arrive
   on a team that already has at least one other member.}
 
 \riskitem{Feasibility}{%
@@ -1046,9 +1045,10 @@ paid tier.
   max 3d). Does not go to inboxes --- it is a banner, not a message.
   Cross-session poll-based refresh. \\
 
-  \texttt{/biff y} | \texttt{n} & BSD \texttt{biff} &
-  Per-project activation toggle. \texttt{/biff y} (or \texttt{biff enable}
-  from CLI) opts in via \texttt{.biff.local}; \texttt{/biff n} opts out.
+  \texttt{/biff enable} | \texttt{disable} & BSD \texttt{biff} &
+  Per-project activation toggle. \texttt{/biff enable} (or \texttt{biff enable}
+  from CLI) opts in by writing the committed \texttt{.punt-labs/biff/enabled}
+  marker; \texttt{/biff disable} opts out and removes it.
   Dormant mode: no NATS connection, no consumers, no status line until
   opted in. Persistent NATS connection with nap mode: after 2 minutes idle,
   polling reduces to 30s but connection stays alive for KV watches and
@@ -1067,8 +1067,8 @@ paid tier.
 
   Workflow hooks & --- &
   Claiming a bead suggests \texttt{/plan}. Creating or merging a PR
-  suggests \texttt{/wall} announcement. Hooks gate on \texttt{.biff.local}
-  --- silent when biff is not enabled. \\
+  suggests \texttt{/wall} announcement. Hooks gate on the committed
+  \texttt{.punt-labs/biff/enabled} marker --- silent when biff is not enabled. \\
 
   CLI parity & --- &
   Every MCP tool is also a CLI command: \texttt{biff who},

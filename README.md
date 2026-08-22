@@ -217,7 +217,7 @@ biff                                       # Launch interactive REPL
 ```
 
 ```text
-biff 0.15.1 — kai:tty1
+biff 1.14.1 — kai:tty1
 Commands: finger, last, mesg, plan, read, status, tty, wall, who, write, talk, timestamps, exit
 
 kai:tty1 ▶ who
@@ -310,21 +310,25 @@ All 10 product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall
 
 Biff requires a git repo and a GitHub identity. Your username and display name are resolved automatically from `gh auth` --- no manual configuration needed.
 
-### Create a `.biff` file
+### Create `.punt-labs/biff/config.yaml`
 
-Commit a `.biff` file in your repo root (TOML format):
+Commit `.punt-labs/biff/config.yaml` in your repo root (YAML format):
 
-```toml
-[team]
-members = ["kai", "eric", "priya"]
+```yaml
+team:
+  members: ["kai", "eric", "priya"]
 
-[relay]
-url = "tls://connect.ngs.global"
+relay:
+  url: "tls://connect.ngs.global"
 
-[peers]
-orgs = ["my-org"]           # auto-discover repos in this GitHub org
-repos = ["my-org/other-repo"]  # explicit peers (always visible)
+peers:
+  orgs: ["my-org"]              # auto-discover repos in this GitHub org
+  repos: ["my-org/other-repo"]  # explicit peers (always visible)
 ```
+
+Per-user auth (a token, nkeys seed, or credentials path) goes in the
+gitignored `.punt-labs/biff/config.local.yaml` instead, never in the
+committed file — see [Installing](docs/INSTALLING.md) for the schema.
 
 Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see [relay configuration](docs/INSTALLING.md#relay-configuration).
 
