@@ -381,7 +381,7 @@ Implemented in biff-faz. Commit `3101515` (replace /on /off with /mesg y|n), PR 
 1. **LocalRelay** — Filesystem-based. JSONL inboxes in `{data_dir}/`. JSON session files. Works out of the box with no infrastructure. Repo-scoped by directory path.
 2. **NatsRelay** — NATS KV for sessions/presence, JetStream for messaging. Requires a NATS server. Enables cross-machine communication.
 
-Selection is automatic: if `.biff` config has `relay_url`, use NatsRelay. Otherwise, LocalRelay.
+Selection is automatic, driven by `config.relay_url` (`.punt-labs/biff/config.yaml` + `config.local.yaml`, per DES-037 — not a `.biff` file, which was removed in v1.13.1): set, use NatsRelay; unset, use LocalRelay. In practice `relay_url` is rarely unset — `_apply_demo_relay_default` fills it with the bundled demo relay whenever no explicit URL is configured, so NatsRelay against the demo relay is the effective default, not LocalRelay (`ServerState`'s relay-selection docstring in `src/biff/server/state.py`).
 
 ### Message Semantics: POP (Read-Once)
 
@@ -661,8 +661,8 @@ Biff writes to `27528.json`; status line looks for `30234.json`. File not found,
 ## DES-012: Config File — .biff TOML
 
 **Date:** 2026-02-14
-**Status:** SETTLED
-**Topic:** Per-repo configuration format
+**Status:** SUPERSEDED by DES-037 — `.biff` was removed in v1.13.1 (see CHANGELOG.md); current config is `.punt-labs/biff/config.yaml` + `config.local.yaml`
+**Topic:** Per-repo configuration format (historical)
 
 ### Design
 
@@ -1420,7 +1420,7 @@ sees the plan nudge.
 - Update `hooks/hooks.json` with SessionStart matchers and SessionEnd
 - biff-5zq: plan auto-expand in the plan tool
 
-**Files:** `src/biff/cli/hook.py` (new), `hooks/hooks.json`, `hooks/session-end.sh` (new), `src/biff/server/tools/plan.py`
+**Files:** `src/biff/hook.py` (this phase's plan used the never-adopted path `src/biff/cli/hook.py` — the actual dispatcher landed at `src/biff/hook.py`), `hooks/hooks.json`, `hooks/session-end.sh` (new), `src/biff/server/tools/plan.py`
 
 #### Phase 2: Git Hooks (next)
 
@@ -1430,7 +1430,7 @@ sees the plan nudge.
 - pre-push suggests `/wall` for default branch pushes
 - Consolidate post-bash.sh (absorbs bead-claim.sh, adds git checkout detection as fallback)
 
-**Files:** `src/biff/cli/hook.py`, `src/biff/installer.py`, git hook templates
+**Files:** `src/biff/hook.py`, `src/biff/git_hooks.py`, `src/biff/_hook_entry.py` (this phase's plan named the never-adopted `src/biff/installer.py` — that module doesn't exist; git hook deployment lives in `git_hooks.py`), git hook templates
 
 #### Phase 3: Heartbeat and Context (after beads MCP)
 
@@ -3927,7 +3927,7 @@ guidance.
 ## DES-037: Zero-Config — Config Migration and Owner Derivation
 
 **Date:** 2026-04-12
-**Status:** PROPOSED
+**Status:** SETTLED — implemented and shipped; `.biff` removed entirely in v1.13.1 (see CHANGELOG.md)
 **Topic:** Move config to `.punt-labs/biff/`, YAML format, derive org
 scope from git remote, make explicit config optional
 **Related:** DES-007a (slug-based namespace), DES-012 (config file),
