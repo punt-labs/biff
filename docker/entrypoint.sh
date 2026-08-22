@@ -22,7 +22,10 @@ set -eu
 # start rather than silently run an unauthenticated, network-reachable
 # relay.
 if [ -f /etc/nats/nats.conf ]; then
-  if ! grep -qE '^\s*(authorization|accounts|nkeys)\b' /etc/nats/nats.conf; then
+  # POSIX ERE only -- \s and \b are GNU extensions BusyBox grep on this
+  # Alpine base doesn't reliably support; [[:space:]] and an explicit
+  # boundary class are portable.
+  if ! grep -qE '^[[:space:]]*(authorization|accounts|nkeys)([[:space:]]|\{|:|$)' /etc/nats/nats.conf; then
     echo "entrypoint: /etc/nats/nats.conf does not define authorization," \
       "accounts, or nkeys -- refusing to start an unauthenticated," \
       "network-reachable relay. See docs/self-hosted-relay.md." >&2
