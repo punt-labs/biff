@@ -1,6 +1,6 @@
 # Enterprise proof-of-value auth template (biff-syr / DES-059).
 #
-# Copy this file into the ConfigMap/Secret your k8s/ manifests mount at
+# Copy this file into the Secret your k8s/ manifests mount at
 # /etc/nats/nats.conf, fill in real values, and mount your cluster's TLS
 # secret (`kubectl create secret tls ...` or a cert-manager-issued
 # secret) at /etc/nats/certs. TLS + credentials are required at this

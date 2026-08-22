@@ -7,11 +7,17 @@
 # because the PVC above is ReadWriteOnce and can't be attached to two
 # pods at once during a rolling update.
 #
-# Before applying: create the ConfigMap and Secret this Deployment
-# references, e.g.
-#   kubectl create configmap biff-relay-nats-conf \
+# Before applying: create the two Secrets this Deployment references,
+# e.g.
+#   kubectl create secret generic biff-relay-nats-conf \
 #     --from-file=nats.conf=nats.conf.enterprise.example
 #   kubectl create secret tls biff-relay-tls --cert=tls.crt --key=tls.key
+#
+# nats.conf holds the authorization token/nkeys -- it is a Secret, not a
+# ConfigMap, because ConfigMaps aren't Kubernetes secret objects: broader
+# default RBAC read access, plaintext in `kubectl get cm -o yaml`, and
+# casual inclusion in etcd backups/dumps that don't distinguish object
+# kinds. Matches how biff-relay-tls is already handled below.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,7 +38,7 @@ spec:
     spec:
       containers:
         - name: biff-relay
-          image: ghcr.io/punt-labs/biff-relay:1.0.0 # pin the version, never :latest
+          image: ghcr.io/punt-labs/biff-relay:X.Y.Z # pin to your biff version, never :latest
           ports:
             - name: client
               containerPort: 4222
@@ -50,28 +56,19 @@ spec:
           # DES-059), so the kubelet's httpGet probe -- which connects from
           # outside the container's network namespace -- can't reach it.
           # exec runs the request inside that namespace instead.
+          #
+          # -q --spider only -- this image's BusyBox wget has no GNU
+          # --no-verbose/--tries flags; see Dockerfile's HEALTHCHECK comment.
           readinessProbe:
             exec:
               command:
-                [
-                  "wget",
-                  "--no-verbose",
-                  "--tries=1",
-                  "--spider",
-                  "http://127.0.0.1:8222/healthz",
-                ]
+                ["wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             exec:
               command:
-                [
-                  "wget",
-                  "--no-verbose",
-                  "--tries=1",
-                  "--spider",
-                  "http://127.0.0.1:8222/healthz",
-                ]
+                ["wget", "-q", "--spider", "http://127.0.0.1:8222/healthz"]
             initialDelaySeconds: 10
             periodSeconds: 15
           resources:
@@ -96,8 +93,8 @@ spec:
           persistentVolumeClaim:
             claimName: biff-relay-data
         - name: nats-conf
-          configMap:
-            name: biff-relay-nats-conf
+          secret:
+            secretName: biff-relay-nats-conf
         - name: tls-certs
           secret:
             secretName: biff-relay-tls
