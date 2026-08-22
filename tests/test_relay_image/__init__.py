@@ -1,4 +1,4 @@
-"""Tier 3d: tests against the real ghcr.io/punt-labs/biff-relay Docker image.
+"""Tier 3b: tests against the real ghcr.io/punt-labs/biff-relay Docker image.
 
 Builds the image from this checkout's ``docker/`` directory (never a
 published tag) and runs it as an actual container, so this tier exercises

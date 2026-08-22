@@ -243,7 +243,7 @@ Before creating a PR, verify:
 - [ ] **`plugin.json` name is `"biff-dev"`** (not `"biff"` — release scripts handle the swap)
 - [ ] **Documentation updated** per [Documentation Discipline](#documentation-discipline) (CHANGELOG, README, PR/FAQ as applicable)
 - [ ] **Quality gates pass**
-- [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m hosted -v`
+- [ ] **Hosted NATS tests pass locally** if relay code changed — `BIFF_TEST_NATS_URL=tls://connect.ngs.global BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds uv run pytest -m nats_hosted -v`
 
 ### Workflow: Ethos Missions and Pipelines
 

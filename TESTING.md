@@ -285,7 +285,7 @@ choice unless stated otherwise.
 ### In CI
 
 What's actually enforced on every push/PR (`subprocess-tests.yml` and
-friends): **tiers 1, 2, and 3a.** Nothing merges without these green.
+friends): **tiers 1, 2, 3a, and 3b.** Nothing merges without these green.
 That's the whole gate today.
 
 Everything else is deliberately outside that gate, for reasons that
