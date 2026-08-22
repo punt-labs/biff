@@ -18,6 +18,16 @@ The image's job is to run a correctly configured, durable `nats-server`.
 The Docker image, `docker-compose.yml`, and Kubernetes manifests
 referenced below live in [`docker/`](../docker/) in this repo.
 
+**Does the image actually work?** Check
+[`tests/test_relay_image/`](../tests/test_relay_image/) rather than
+manually running `docker build`/`docker run`/`wget` yourself — it builds
+the image fresh from this checkout's `docker/` directory and runs it as a
+real container, asserting presence, message write/read, JetStream
+persistence across a `docker stop`/`start` cycle, and `entrypoint.sh`'s
+auth-refusal guard actually exiting 1. It's the same tier CI runs on every
+push/PR (`relay-image` job in `.github/workflows/subprocess-tests.yml`);
+run it locally with `uv run pytest -m nats_docker -v` (requires Docker).
+
 This guide covers three ways to run the relay, because "self-hosted"
 means different things depending on who's running it:
 

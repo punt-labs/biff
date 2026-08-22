@@ -5,7 +5,7 @@ Each session gets a real NatsRelay connection with KV presence,
 JetStream messaging, and wtmp events — the same code path as
 the interactive REPL, but without stdin threads or display.
 
-Uses ``@pytest.mark.nats`` — requires local ``nats-server``.
+Uses ``@pytest.mark.cli_multi_user`` — requires local ``nats-server``.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from biff.models import BiffConfig
 
 _TEST_REPO = "_test-cli-multi"
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.cli_multi_user
 
 
 def _make_resolved(user: str, nats_url: str, tmp_path: Path) -> ResolvedConfig:

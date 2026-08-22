@@ -17,7 +17,7 @@ from biff.nats_relay import NatsRelay
 from biff.server.app import _run_kv_watch
 from biff.server.state import create_state
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 _TEST_REPO = "_test-kv-survival"
 

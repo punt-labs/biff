@@ -14,7 +14,7 @@ import pytest
 from biff.models import Message, UserSession
 from biff.nats_relay import NatsRelay
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 _KAI_TTY = "tty1"
 _ERIC_TTY = "tty2"

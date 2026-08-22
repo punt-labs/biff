@@ -42,7 +42,7 @@ from biff.tty import build_session_key
 
 pytestmark = [
     pytest.mark.stress,
-    pytest.mark.hosted,
+    pytest.mark.nats_hosted,
     pytest.mark.asyncio(loop_scope="session"),
 ]
 

@@ -1,6 +1,6 @@
 """Hosted NATS: talk routes on identity alone, verified on the real relay.
 
-The ``-m hosted`` suite exercises presence and messaging against a real hosted
+The ``-m nats_hosted`` suite exercises presence and messaging against a real hosted
 NATS server; this module extends it to *talk*, the one subsystem whose routing
 changed most recently and whose delivery-soundness invariant (talk.tex
 invariant 12, R1/R3) had never been checked against real infrastructure.
@@ -38,7 +38,7 @@ cross-deliver.
 Run:
     BIFF_TEST_NATS_URL=tls://connect.ngs.global \\
         BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \\
-        uv run pytest -m hosted -v
+        uv run pytest -m nats_hosted -v
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
 
     from biff.models import RelayAuth
 
-pytestmark = [pytest.mark.hosted, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [pytest.mark.nats_hosted, pytest.mark.asyncio(loop_scope="session")]
 
 _STREAM_PREFIX = "biff-dev"
 

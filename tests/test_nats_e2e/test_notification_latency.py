@@ -21,7 +21,7 @@ import pytest
 if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 _TEST_REPO = "_test-latency"
 _TRIALS = 5
@@ -132,7 +132,7 @@ async def _measure_core_nats_latency(
     return latencies
 
 
-@pytest.mark.nats
+@pytest.mark.nats_local
 class TestNotificationLatency:
     """Compare KV watch vs NATS core subscription delivery latency."""
 

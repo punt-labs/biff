@@ -21,7 +21,7 @@ from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.testing import RecordingClient, Transcript
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 
 class TestCrossUserVisibility:

@@ -4,7 +4,7 @@ name: Hosted NATS E2E
 # on GitHub Actions (event loop / asyncio interaction).  Run locally:
 #   BIFF_TEST_NATS_URL=tls://connect.ngs.global \
 #   BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
-#   uv run pytest -m hosted -v
+#   uv run pytest -m nats_hosted -v
 on:
   workflow_dispatch:
 
@@ -26,7 +26,7 @@ jobs:
       - run: uv sync --frozen --extra dev
 
       - name: Run hosted NATS tests (demo relay)
-        run: uv run pytest -m hosted -v
+        run: uv run pytest -m nats_hosted -v
         env:
           BIFF_TEST_NATS_URL: "tls://connect.ngs.global"
           BIFF_TEST_NATS_CREDS: "src/biff/data/demo.creds"

@@ -1,10 +1,14 @@
 # Testing
 
-Biff has a seven-tier testing pyramid. Each tier tests a different
+Biff has an eight-tier testing pyramid. Each tier tests a different
 boundary, at a different transport, with different infrastructure
 requirements. Run `uv run pytest --collect-only` for current test
 counts per tier — this file doesn't print them, because they drift
 with every PR and a stale number in a doc is worse than no number.
+
+Every tier above unit/integration has its own pytest marker, and no
+marker is shared between two different tiers — `pytest -m <marker>`
+always selects exactly one tier, never a superset.
 
 ## Pyramid
 
@@ -12,18 +16,17 @@ with every PR and a stale number in a doc is worse than no number.
                     ┌───────────┐
                     │  Tier 4   │  SDK — Claude picks the tools
                     ├───────────┤
-                 ┌──┤  Tier 3c  │  Hosted NATS — real remote relay
+                 ┌──┤  Tier 3d  │  Hosted NATS — real remote relay
                  │  │           │  (Synadia demo, or your own deploy)
                  │  ├───────────┤
-              ┌──┤  │  Tier 3b  │  Local NATS — bare nats-server binary
-              │  │  │           │  (+ tests/test_nats/, undocumented
-              │  │  │           │   split below no longer applies)
+              ┌──┤  │  Tier 3c  │  Local NATS — bare nats-server binary
+              │  │  │           │
               │  │  ├───────────┤
-        ┌─────┤  │  │ Docker    │  Relay image — the actual
-        │     │  │  │ image     │  ghcr.io/punt-labs/biff-relay
-        │     │  │  │ (biff-kmv)│  container, built fresh per test run
-        │     │  │  ├───────────┤
-        │  ┌──┤  │  │  Tier 3a  │  Subprocess — stdio pipes
+           ┌──┤  │  │  Tier 3b  │  Docker relay image — the real
+           │  │  │  │           │  ghcr.io/punt-labs/biff-relay
+           │  │  │  │           │  container, built fresh per run
+           │  │  │  ├───────────┤
+        ┌──┤  │  │  │  Tier 3a  │  Subprocess — stdio pipes
         │  │  │  │  │           │
         │  │  │  │  ├───────────┤
         │  │  │  │  │  Tier 2b  │  CLI multi-user — cli_session + NATS
@@ -37,10 +40,30 @@ with every PR and a stale number in a doc is worse than no number.
         └──┴──┴──┴──┴───────────┘
 ```
 
-The Docker-image tier is landing via biff-kmv (in flight) and slots in
-next to tier 3b — it's the first tier that validates the *packaged*
-relay (`docker/`) rather than a bare `nats-server` binary or an
-external cloud deployment.
+Tiers 3b, 3c, and 3d all exercise real NATS protocol, but against three
+different deployments — a locally-built Docker image, a bare local
+binary, and a real remote server — because those are three genuinely
+different things to get wrong, and a bug in one doesn't imply a bug in
+another. The Docker-image tier (biff-kmv) shipped alongside this doc update.
+
+## Markers
+
+| Tier | Marker | What it requires |
+|------|--------|-------------------|
+| 1, 2 | *(none — default collection)* | Nothing |
+| 2b | `cli_multi_user` | Local `nats-server` binary on `PATH` |
+| 3a | `subprocess` | Nothing (forces `LocalRelay` via `--relay-url ""`) |
+| 3b | `nats_docker` | Docker running locally |
+| 3c | `nats_local` | Local `nats-server` binary on `PATH` |
+| 3d | `nats_hosted` | `BIFF_TEST_NATS_URL` / `BIFF_TEST_NATS_CREDS` (or `_TOKEN` / `_NKEYS_SEED`) pointed at a real relay |
+| 3d (subset) | `stress` | Same as `nats_hosted` — scale stress tests specifically (`tests/test_hosted_nats/test_stress.py`) |
+| 4 | `sdk` | `ANTHROPIC_API_KEY` |
+
+`cli_multi_user` and `nats_local` both need a bare `nats-server` binary,
+but they're deliberately distinct tiers with distinct markers — 2b
+tests the CLI/`cli_session()` code path, 3c tests the full MCP server
+over `FastMCPTransport`. Selecting one never accidentally pulls in the
+other.
 
 ## Tiers
 
@@ -115,10 +138,11 @@ Same MCP protocol as production but without stdio or HTTP.
 
 ### Tier 2b: CLI multi-user tests
 
-`tests/test_cli_multi_user/`. Two `cli_session()` instances sharing a
-local NATS server. Tests multi-user scenarios using `biff.commands`
-pure async functions — the same code path as the interactive REPL, but
-without stdin threads or display concerns.
+`tests/test_cli_multi_user/`, marker `cli_multi_user`. Two
+`cli_session()` instances sharing a local NATS server. Tests
+multi-user scenarios using `biff.commands` pure async functions —
+the same code path as the interactive REPL, but without stdin threads
+or display concerns.
 
 ```python
 async with cli_session(user="kai") as kai:
@@ -129,7 +153,7 @@ async with cli_session(user="kai") as kai:
 ```
 
 This tier fills the gap between tier 2 (`LocalRelay`, no NATS) and
-tier 3b (full MCP server over NATS). It exercises real NATS paths
+tier 3c (full MCP server over NATS). It exercises real NATS paths
 (JetStream messaging, KV presence, talk notifications) at a fraction
 of the complexity of MCP E2E tests.
 
@@ -139,7 +163,7 @@ talk handshake, session cleanup, wtmp history, mesg off.
 No MCP protocol, no subprocess overhead.
 
 ```bash
-uv run pytest -m nats  # Shares the local NATS marker
+uv run pytest -m cli_multi_user
 ```
 
 ### Tier 3a: Subprocess tests
@@ -155,24 +179,7 @@ uv run pytest -m subprocess
 **Transport**: `StdioTransport` — real process, real stdio pipes. Uses
 `--relay-url ""` to force `LocalRelay` (no NATS dependency).
 
-### Tier 3b: Local NATS E2E
-
-Full MCP servers backed by `NatsRelay`, connected via
-`FastMCPTransport`. Requires a local `nats-server` binary. Two
-directories share this tier: `tests/test_nats_e2e/` (MCP-level
-scenarios — presence, messaging, wall, talk, KV watch survival,
-notification latency) and `tests/test_nats/` (`NatsRelay` unit-level
-tests against real NATS KV/JetStream — mirrors `tests/test_relay.py`
-but exercises the NATS backend instead of the filesystem).
-
-```bash
-uv run pytest -m nats
-```
-
-**Cleanup**: An autouse fixture deletes NATS streams after each test
-for full isolation.
-
-### Docker relay image tests (landing via biff-kmv)
+### Tier 3b: Docker relay image tests
 
 Builds `ghcr.io/punt-labs/biff-relay` fresh from this checkout's
 `docker/` directory, runs the real container, and exercises it the
@@ -186,13 +193,34 @@ This is the one tier that validates the *packaged* image rather than a
 bare `nats-server` binary — config-file layering (`base.conf` vs
 `base-with-user.conf`), the loopback-only monitoring bind, and the
 auth guard added after PR #376's review cycle are only real for this
-tier; tier 3b and 3c never touch `docker/` at all.
+tier; tier 3c and 3d never touch `docker/` at all.
+
+```bash
+uv run pytest -m nats_docker
+```
 
 Requires Docker running locally (or in the CI runner).
 
-### Tier 3c: Hosted NATS E2E
+### Tier 3c: Local NATS E2E
 
-Same as 3b but against a real remote relay — the shared demo relay on
+Full MCP servers backed by `NatsRelay`, connected via
+`FastMCPTransport`. Requires a local `nats-server` binary. Two
+directories share this tier: `tests/test_nats_e2e/` (MCP-level
+scenarios — presence, messaging, wall, talk, KV watch survival,
+notification latency) and `tests/test_nats/` (`NatsRelay` unit-level
+tests against real NATS KV/JetStream — mirrors `tests/test_relay.py`
+but exercises the NATS backend instead of the filesystem).
+
+```bash
+uv run pytest -m nats_local
+```
+
+**Cleanup**: An autouse fixture deletes NATS streams after each test
+for full isolation.
+
+### Tier 3d: Hosted NATS E2E
+
+Same as 3c but against a real remote relay — the shared demo relay on
 Synadia Cloud by default, or any hosted/self-hosted NATS server you
 point it at. Manual-only, both locally and in CI (see
 [Dev box vs CI](#dev-box-vs-ci) below).
@@ -200,7 +228,7 @@ point it at. Manual-only, both locally and in CI (see
 ```bash
 BIFF_TEST_NATS_URL=tls://connect.ngs.global \
 BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
-uv run pytest -m hosted -v
+uv run pytest -m nats_hosted -v
 ```
 
 **Connection budget**: Hosted accounts have low connection limits (e.g. 5
@@ -211,7 +239,12 @@ connections total, reused across all tests.
 intact. Avoids propagation delays from rapid create/delete cycles on
 hosted servers.
 
-Run locally before merging any relay code changes.
+**Stress subset**: `tests/test_hosted_nats/test_stress.py` carries its
+own `stress` marker on top of `nats_hosted` — scale/load scenarios
+against the same hosted relay, run separately (`uv run pytest -m
+stress`) since they're deliberately heavier than the rest of the tier.
+
+Run tier 3d locally before merging any relay code changes.
 
 ### Tier 4: SDK tests
 
@@ -243,35 +276,35 @@ choice unless stated otherwise.
 |------|---------|-----------------|
 | 1, 2 | `uv run pytest` (default) | Constantly. No external dependency; this is your inner loop. |
 | 3a | `uv run pytest -m subprocess` | Before pushing anything touching CLI wiring or process lifecycle. No extra infra — forces `LocalRelay`. |
-| 2b, 3b | `uv run pytest -m nats` | When touching `NatsRelay`, relay selection, or anything JetStream/KV-shaped. Needs `nats-server` on `PATH`; the fixture skips itself (not an error) if it's missing. |
-| Docker image (biff-kmv) | see tier docs above, once landed | When touching `docker/`. Needs Docker running locally. |
-| 3c | `uv run pytest -m hosted -v` (with `BIFF_TEST_NATS_URL`/`BIFF_TEST_NATS_CREDS` set) | Before merging any relay code change — this is the only tier that proves the code works against a real, non-local NATS deployment. Deliberate and occasional, never in a loop (see connection budget above). |
+| 2b | `uv run pytest -m cli_multi_user` | When touching the CLI multi-user code path (`biff.commands` over a real relay). Needs `nats-server` on `PATH`; the fixture skips itself (not an error) if it's missing. |
+| 3b | `uv run pytest -m nats_docker` | When touching `docker/`. Needs Docker running locally. |
+| 3c | `uv run pytest -m nats_local` | When touching `NatsRelay`, relay selection, or anything JetStream/KV-shaped at the MCP-server level. Same `nats-server`-on-`PATH` requirement as 2b, distinct marker. |
+| 3d | `uv run pytest -m nats_hosted -v` (with `BIFF_TEST_NATS_URL`/`BIFF_TEST_NATS_CREDS` set) | Before merging any relay code change — this is the only tier that proves the code works against a real, non-local NATS deployment. Deliberate and occasional, never in a loop (see connection budget above). |
 | 4 | `uv run pytest -m sdk` | Rare, deliberate — before a change to MCP tool descriptions or anything the model's tool-selection depends on. Costs real money per run. |
 
 ### In CI
 
 What's actually enforced on every push/PR (`subprocess-tests.yml` and
-friends): **tiers 1, 2, and 3a.** Nothing merges without these green.
+friends): **tiers 1, 2, 3a, and 3b.** Nothing merges without these green.
 That's the whole gate today.
 
 Everything else is deliberately outside that gate, for reasons that
 are either a known, tracked gap or a genuine permanent constraint —
 these are not the same thing, and the doc should never blur them:
 
-- **Tier 2b / 3b (local NATS)** — no CI job. Blocked by biff-7xd:
+- **Tier 2b / 3c (local NATS)** — no CI job. Blocked by biff-7xd:
   `nats-server` hangs outright in the CI environment. This is a *gap*,
   not a design choice — fix the hang, then wire it in.
-- **Tier 3c (hosted)** — `hosted-nats.yml` exists but is
+- **Tier 3d (hosted)** — `hosted-nats.yml` exists but is
   `workflow_dispatch` only. Session-scoped NATS connections hang in
   GitHub Actions' asyncio environment. Run it locally before merging
   relay changes instead; don't wait for a CI green that will never
   come from this tier.
 - **Tier 4 (SDK)** — local-only *by design*, not a gap. It costs real
   money per test; it will never be a default CI job.
-- **Docker image tier** — this is the one gap actively being closed.
-  biff-kmv's contract requires it to run in CI on every push/PR once
-  it lands, the same trigger as the existing subprocess job. Until
-  then, the Docker image has zero automated coverage anywhere.
+- **Tier 3b (Docker image)** — the one gap that's now closed (biff-kmv).
+  It runs in CI on every push/PR, the same trigger as the existing
+  subprocess job (`relay-image` job in `subprocess-tests.yml`).
 
 ## Fixture model
 
@@ -284,7 +317,7 @@ sharing state through whatever transport that tier exercises.
 | Integration | `RecordingClient` | `await kai.call("who")` |
 | CLI multi-user | `CliContext` + `NatsRelay` | `await commands.who(kai)` |
 | Subprocess | `RecordingClient` | `await kai.call("who")` |
-| NATS E2E | `RecordingClient` | `await kai.call("who")` |
+| Local NATS E2E | `RecordingClient` | `await kai.call("who")` |
 | Hosted NATS | `RecordingClient` | `await kai.call("who")` |
 | SDK | `SDKClient` | `await kai.prompt('Call the "who" tool.')` |
 
@@ -321,13 +354,19 @@ uv run pytest
 # Subprocess (tier 3a)
 uv run pytest -m subprocess
 
-# Local NATS (tiers 2b + 3b, requires nats-server)
-uv run pytest -m nats
+# CLI multi-user (tier 2b, requires nats-server)
+uv run pytest -m cli_multi_user
 
-# Hosted NATS (tier 3c, local only)
+# Docker relay image (tier 3b, requires Docker)
+uv run pytest -m nats_docker
+
+# Local NATS (tier 3c, requires nats-server)
+uv run pytest -m nats_local
+
+# Hosted NATS (tier 3d, local only)
 BIFF_TEST_NATS_URL=tls://connect.ngs.global \
 BIFF_TEST_NATS_CREDS=src/biff/data/demo.creds \
-uv run pytest -m hosted -v
+uv run pytest -m nats_hosted -v
 
 # SDK (tier 4, requires ANTHROPIC_API_KEY)
 uv run pytest -m sdk
@@ -336,7 +375,7 @@ uv run pytest -m sdk
 ## Coverage
 
 Coverage has two structural floors, not incidental gaps: `nats_relay.py`
-needs a live NATS server (tier 3b+) to exercise at all, and
+needs a live NATS server (tier 3c+) to exercise at all, and
 `__main__.py` contains interactive REPL/talk loops that can't be fully
 driven from unit tests. Everything else is expected to be near-total —
 `commands/*` in particular has no legitimate excuse for a gap, since
