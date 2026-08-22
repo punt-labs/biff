@@ -6843,10 +6843,15 @@ A thin wrapper around the official `nats:2.10-alpine` base image, pinned
 to an exact patch version (e.g. `nats:2.10.24-alpine3.20`, not a floating
 tag). Three additions on top of upstream:
 
-- `entrypoint.sh` — invokes `nats-server -js -sd /data -m 8222`, plus an
-  optional `-c /etc/nats/nats.conf` if a config file is bind-mounted at
-  that path (this is where enterprise auth/TLS config layers on).
-- `VOLUME /data` — JetStream's `store_dir`. `EXPOSE 4222 8222`.
+- `entrypoint.sh` — invokes `nats-server -js -sd /data -m 127.0.0.1:8222`,
+  plus an optional `-c /etc/nats/nats.conf` if a config file is
+  bind-mounted at that path (this is where enterprise auth/TLS config
+  layers on). Monitoring binds to loopback inside the container, not
+  `0.0.0.0` — `/varz`, `/connz`, and `/jsz` on that port have no auth of
+  their own and would otherwise leak client IPs, subjects, and JetStream
+  topology to anything that can reach the container.
+- `VOLUME /data` — JetStream's `store_dir`. `EXPOSE 4222` only; port 8222
+  is loopback-only and never published.
 - `HEALTHCHECK` — see below.
 
 The image does not provision streams. Per DES-016,
@@ -6869,8 +6874,14 @@ which deletes anonymous volumes along with the container.
 
 | Audience | Command | Volume | Survives `docker rm`? |
 |----------|---------|--------|------------------------|
-| Individual | `docker run -d --name biff-relay -p 4222:4222 ghcr.io/punt-labs/biff-relay:X.Y.Z` | anonymous | No |
-| Team | `docker run -d --name biff-relay -p 4222:4222 -v biff-relay-data:/data ghcr.io/punt-labs/biff-relay:X.Y.Z` (or `docker-compose.yml`, below) | named (`biff-relay-data`) | Yes |
+| Individual | `docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:X.Y.Z` | anonymous | No |
+| Team | `docker-compose.yml` (below), with a token configured in `nats.conf` before the port is published beyond localhost | named (`biff-relay-data`) | Yes |
+
+The individual command binds to `127.0.0.1`, not `0.0.0.0` — the default
+must match the no-auth trust model, not merely be documented alongside
+it. There is no bare `docker run -p 4222:4222 ...` (all-interfaces, no
+auth) example anywhere in this design; the only path to a
+network-reachable relay goes through the team tier's token setup.
 | Enterprise POV | Kubernetes `PersistentVolumeClaim` (manifest, below) | cluster-managed PV | Yes, governed by the PVC's retention policy |
 
 No ephemeral-by-design mode and no tmpfs option. Docker's own `VOLUME`
@@ -6896,18 +6907,24 @@ their own NATS auth, as the original bead already said.
 
 #### Health check
 
-`nats-server -m 8222` enables the built-in HTTP monitoring port, exposing
-`/healthz` (available since NATS 2.10). The image's `HEALTHCHECK`
-instruction hits that same endpoint:
+`nats-server -m 127.0.0.1:8222` enables the built-in HTTP monitoring
+port, bound to loopback, exposing `/healthz` (available since NATS 2.10).
+The image's `HEALTHCHECK` instruction hits that same endpoint from inside
+the container, where `localhost` reaches it:
 
 ```dockerfile
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:8222/healthz || exit 1
 ```
 
-The Kubernetes manifest's `readinessProbe`/`livenessProbe` point at the
-same path and port, so Docker and Kubernetes read one health signal from
-one process.
+The Kubernetes manifest's `readinessProbe`/`livenessProbe` use `exec`
+probes running the same `wget` command inside the container, not
+`httpGet` probes — a kubelet's `httpGet` probe connects to the pod IP
+from outside the container's network namespace, which loopback-bound
+monitoring would refuse. `exec` runs inside that namespace and reaches
+`127.0.0.1:8222` the same way the Docker `HEALTHCHECK` does. Docker and
+Kubernetes still read one health signal from one process; only the probe
+mechanism differs, driven by the loopback bind.
 
 #### Upgrade path
 

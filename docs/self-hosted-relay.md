@@ -41,18 +41,20 @@ setup beyond one command.
 ### Install and run
 
 ```bash
-docker run -d --name biff-relay -p 4222:4222 ghcr.io/punt-labs/biff-relay:1.0.0
+docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:1.0.0
 ```
 
-No config file, no auth setup.
+No config file, no auth setup. The port is bound to `127.0.0.1`, so only
+processes on this machine can reach it — that's what makes running with
+no auth safe.
 
 ### Configure biff to use it
 
-In each repo's `.biff`:
+In each repo's `.punt-labs/biff/config.yaml`:
 
-```toml
-[relay]
-url = "nats://localhost:4222"
+```yaml
+relay:
+  url: "nats://localhost:4222"
 ```
 
 ### Persistence
@@ -72,16 +74,17 @@ from the [team section](#persistence-2) below. Same image, one extra flag.
 ### Auth
 
 None, by default. This is the same trust boundary as running `nats-server`
-directly on your laptop: nothing else on your machine, or your LAN if
-you've bound the port beyond `127.0.0.1`, is untrusted. Don't publish port
-4222 to a public interface or the open internet in this mode — see
-[Small team](#auth) for how to add a token.
+directly on your laptop: nothing else on your machine is untrusted, and
+the `127.0.0.1` bind above means nothing off your machine can reach it
+either. If you later want to reach this relay from another machine, don't
+just republish the port — follow the [Small team](#auth) setup, which
+adds a token before opening the port to the network.
 
 ### Upgrade
 
 ```bash
 docker stop biff-relay && docker rm biff-relay
-docker run -d --name biff-relay -p 4222:4222 ghcr.io/punt-labs/biff-relay:1.1.0
+docker run -d --name biff-relay -p 127.0.0.1:4222:4222 ghcr.io/punt-labs/biff-relay:1.1.0
 ```
 
 This loses the anonymous-volume data, which is expected on this path. To
@@ -94,8 +97,8 @@ section).
 docker rm -f biff-relay
 ```
 
-Switch `.biff`'s `[relay] url` back to the demo relay, or to another relay,
-and you're done.
+Switch `.punt-labs/biff/config.yaml`'s `relay.url` back to the demo relay,
+or to another relay, and you're done.
 
 ---
 
@@ -108,16 +111,19 @@ are both required at this tier.
 
 ### Install and run
 
-Same as the individual command, but with a named volume instead of an
-anonymous one:
+Unlike the individual tier, this relay is reachable over the network, so
+set up a token before starting the container — there's no bare, no-auth
+`docker run` command for this tier, on purpose.
 
-```bash
-docker run -d --name biff-relay -p 4222:4222 \
-  -v biff-relay-data:/data \
-  ghcr.io/punt-labs/biff-relay:1.0.0
+Create `nats.conf` with a random token:
+
+```text
+authorization {
+  token: "REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+}
 ```
 
-For anything long-running, use `docker-compose.yml` instead:
+Then `docker-compose.yml`:
 
 ```yaml
 services:
@@ -129,7 +135,7 @@ services:
       - "4222:4222"
     volumes:
       - biff-relay-data:/data
-      - ./nats.conf:/etc/nats/nats.conf:ro   # see Auth, below
+      - ./nats.conf:/etc/nats/nats.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
       interval: 10s
@@ -144,18 +150,41 @@ volumes:
 docker compose up -d
 ```
 
-### Configure biff to use it
+If you'd rather use a bare `docker run`, mount the same `nats.conf` and
+pass `-c`:
 
-Every team member's `.biff` (commit this — it's shared team config):
-
-```toml
-[relay]
-url = "nats://your-relay-host:4222"
+```bash
+docker run -d --name biff-relay \
+  -p 4222:4222 \
+  -v biff-relay-data:/data \
+  -v "$(pwd)/nats.conf:/etc/nats/nats.conf:ro" \
+  ghcr.io/punt-labs/biff-relay:1.0.0 \
+  -c /etc/nats/nats.conf
 ```
 
-If you set token auth (below), distribute the token out of band, not
-committed to `.biff`. See the `NATS_AUTH` env var convention biff's relay
-client reads from.
+### Configure biff to use it
+
+Commit the URL in `.punt-labs/biff/config.yaml`, which is shared team
+config:
+
+```yaml
+relay:
+  url: "nats://your-relay-host:4222"
+```
+
+Put the token in `.punt-labs/biff/config.local.yaml` instead. This file
+is per-user and gitignored, so it never reaches the shared repo:
+
+```yaml
+relay:
+  auth:
+    token: "REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+```
+
+`nkeys_seed` and `credentials` (a path to a credentials file) are the
+alternatives under `auth:` if you're using NATS nkeys or a credentials
+file instead of a plain token — same rule either way: the secret goes in
+`config.local.yaml`, never in `config.yaml`.
 
 ### Persistence
 
@@ -261,9 +290,9 @@ provides, and swap the `Service` type (`ClusterIP`, `LoadBalancer`, or an
 
 ### Configure biff to use it
 
-```toml
-[relay]
-url = "tls://biff-relay.your-namespace.svc.cluster.local:4222"
+```yaml
+relay:
+  url: "tls://biff-relay.your-namespace.svc.cluster.local:4222"
 ```
 
 Or the external DNS name / LoadBalancer IP if biff clients run outside the
@@ -300,25 +329,26 @@ this tier, unlike the team tier where a token is the minimum bar.
 
 ### Health check
 
-`readinessProbe` and `livenessProbe` in the manifest point at the same
-endpoint the Docker `HEALTHCHECK` uses:
+`readinessProbe` and `livenessProbe` in the manifest hit the same
+`/healthz` endpoint the Docker `HEALTHCHECK` uses, but as `exec` probes,
+not `httpGet`. The monitoring port binds to `127.0.0.1` inside the
+container (see [DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)),
+so a `httpGet` probe — which connects from the kubelet, outside the
+container's network namespace — can't reach it. `exec` runs the request
+inside that namespace instead:
 
 ```yaml
 readinessProbe:
-  httpGet:
-    path: /healthz
-    port: 8222
+  exec:
+    command: ["wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
   initialDelaySeconds: 5
   periodSeconds: 10
 livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 8222
+  exec:
+    command: ["wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
   initialDelaySeconds: 10
   periodSeconds: 15
 ```
-
-Same `/healthz` endpoint for both Docker and Kubernetes.
 
 ### Observability
 
@@ -347,8 +377,9 @@ kubectl delete -f k8s/biff-relay-service.yaml
 kubectl delete -f k8s/biff-relay-pvc.yaml   # deletes the PVC; underlying volume fate depends on your storage class's reclaim policy
 ```
 
-No other biff state depends on this relay having existed. Point `.biff`
-back at the demo relay, or delete the file, and the pilot is over.
+No other biff state depends on this relay having existed. Point
+`.punt-labs/biff/config.yaml`'s `relay.url` back at the demo relay, or
+delete the file, and the pilot is over.
 
 ### If the POV succeeds
 
@@ -377,6 +408,6 @@ Two paths from here:
 All three tiers above assume you want to run `nats-server` yourself. If
 that stops being worth it — team growth, compliance requirements, or you'd
 simply rather not operate infrastructure — the paid hosted tier (biff-bv5)
-is a drop-in replacement: same `.biff` `[relay] url` field, pointed at a
-managed endpoint instead of your own container or cluster. Only who runs
-the relay changes.
+is a drop-in replacement: same `relay.url` field in
+`.punt-labs/biff/config.yaml`, pointed at a managed endpoint instead of
+your own container or cluster. Only who runs the relay changes.
