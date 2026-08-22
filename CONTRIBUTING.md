@@ -82,12 +82,11 @@ uv run pytest                  # Tests (tiers 1-2)
 
 ```bash
 uv run pytest                          # Tiers 1-2 (unit + integration, fast)
-uv run pytest -m subprocess            # Tier 3: subprocess/wire protocol
-uv run pytest -m nats                  # Tier 3b: local NATS (requires nats-server)
-uv run pytest -m sdk                   # Tier 4: SDK tests (requires ANTHROPIC_API_KEY)
 ```
 
-New features should have tests at tiers 1-2 minimum.
+Everything else needs an explicit `-m <marker>` and local infrastructure —
+see [TESTING.md](TESTING.md) for the full tier list, markers, and what each
+one requires. New features should have tests at tiers 1-2 minimum.
 
 ## Code Standards
 
