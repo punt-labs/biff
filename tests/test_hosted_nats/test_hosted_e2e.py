@@ -7,7 +7,7 @@ management work identically to local NATS tests.
 
 Run:
     BIFF_TEST_NATS_URL=tls://... BIFF_TEST_NATS_CREDS=/path/to.creds \
-        uv run pytest -m hosted -v
+        uv run pytest -m nats_hosted -v
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pytest
 
 from biff.testing import RecordingClient
 
-pytestmark = [pytest.mark.hosted, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [pytest.mark.nats_hosted, pytest.mark.asyncio(loop_scope="session")]
 
 
 class TestCrossUserVisibility:

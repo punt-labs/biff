@@ -23,7 +23,7 @@ from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 
 @pytest.fixture

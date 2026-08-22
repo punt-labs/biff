@@ -7,7 +7,7 @@ selection, the loopback monitor bind, and the auth-refusal guard PR #376
 added. Neither of the other two NATS tiers reaches the image itself:
 ``tests/test_nats_e2e/`` spawns a bare ``nats-server`` binary with no Docker
 and no auth, and ``tests/test_hosted_nats/`` points at Synadia Cloud's
-managed relay. Requires Docker; gated behind the ``relay_image`` marker so
+managed relay. Requires Docker; gated behind the ``nats_docker`` marker so
 the default ``uv run pytest`` does not run it.
 """
 

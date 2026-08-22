@@ -19,7 +19,7 @@ from biff.models import BiffConfig
 from biff.server.app import _register_companion, create_server
 from biff.server.state import CompanionSession, create_state
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 _TEST_REPO = "_test-dual-lifespan"
 

@@ -20,7 +20,7 @@ from biff.testing import RecordingClient
 
 from .conftest import _KAI_TTY
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 _TEST_REPO = "_test-nats-e2e"
 

@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     from ._docker import DockerRelay, RelayContainer
 
-pytestmark = pytest.mark.relay_image
+pytestmark = pytest.mark.nats_docker
 
 _TEST_REPO = "_test-relay-image"
 _KAI_TTY = "aaaa0011"

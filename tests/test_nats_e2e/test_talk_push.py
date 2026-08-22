@@ -29,7 +29,7 @@ from biff.testing import NotificationTracker
 if TYPE_CHECKING:
     from fastmcp import Client
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 
 async def _publish_talk_frame(

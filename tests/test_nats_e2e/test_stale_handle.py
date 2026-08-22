@@ -14,7 +14,7 @@ import pytest
 
 from biff.nats_relay import NatsRelay
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 
 class TestStaleHandleRecovery:

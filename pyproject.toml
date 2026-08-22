@@ -161,7 +161,7 @@ reportPrivateUsage = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not nats and not hosted and not stress and not relay_image'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not cli_multi_user and not nats_local and not nats_docker and not nats_hosted and not stress'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Per-test ceiling so a regression REPORTS (with every thread's stack
@@ -178,10 +178,11 @@ markers = [
     "slow: marks tests as slow (run with -m slow)",
     "subprocess: marks tests that spawn biff subprocesses (run with -m subprocess)",
     "sdk: marks tests that require Claude Agent SDK and an API key (run with -m sdk)",
-    "nats: marks tests that require a running nats-server (run with -m nats)",
-    "hosted: marks tests that require a hosted NATS account (run with -m hosted)",
+    "cli_multi_user: marks CLI multi-user tests over a local nats-server (run with -m cli_multi_user)",
+    "nats_local: marks tests that require a locally-spawned nats-server binary (run with -m nats_local)",
+    "nats_docker: marks tests that build and run the ghcr.io/punt-labs/biff-relay Docker image (run with -m nats_docker)",
+    "nats_hosted: marks tests that require a hosted NATS account (run with -m nats_hosted)",
     "stress: marks scale stress tests against hosted NATS (run with -m stress)",
-    "relay_image: marks tests that build and run the biff-relay Docker image (run with -m relay_image)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
     "vox: marks tests that manage vox mocking themselves (opts out of _silence_vox)",
 ]

@@ -16,7 +16,7 @@ import pytest
 from biff import commands
 from biff.cli_session import CliContext
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.cli_multi_user
 
 
 class TestPresence:

@@ -26,7 +26,7 @@ real container, asserting presence, message write/read, JetStream
 persistence across a `docker stop`/`start` cycle, and `entrypoint.sh`'s
 auth-refusal guard actually exiting 1. It's the same tier CI runs on every
 push/PR (`relay-image` job in `.github/workflows/subprocess-tests.yml`);
-run it locally with `uv run pytest -m relay_image -v` (requires Docker).
+run it locally with `uv run pytest -m nats_docker -v` (requires Docker).
 
 This guide covers three ways to run the relay, because "self-hosted"
 means different things depending on who's running it:

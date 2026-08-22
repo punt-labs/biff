@@ -39,7 +39,7 @@ from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 # Same organization, two repositories (sanitized ``owner__repo``): repo-keyed
 # routing used to mis-route this pair.

@@ -13,7 +13,7 @@ import pytest
 from biff.nats_relay import NatsRelay
 from biff.tty import claim_tty_name
 
-pytestmark = pytest.mark.nats
+pytestmark = pytest.mark.nats_local
 
 _TEST_REPO = "_test-tty-reservation"
 _prefix_counter = 0
