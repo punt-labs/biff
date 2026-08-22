@@ -8,7 +8,7 @@ Run `biff doctor` to diagnose common issues:
 biff doctor
 ```
 
-This checks: Python version, uv installation, Claude Code CLI, MCP server registration, plugin files, status bar configuration, and `.biff` team file.
+This runs ten checks (two required: plugin installed, NATS relay reachable; the rest informational): `gh` CLI, plugin installation, user commands, agent guide `@`-import, NATS relay, `.punt-labs/biff/config.yaml`, enablement, git hooks, CI workflow, and status line.
 
 ## Common Issues
 

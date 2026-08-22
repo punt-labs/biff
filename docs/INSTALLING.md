@@ -84,14 +84,14 @@ All hooks coexist with existing git hooks, gate on the committed marker, and are
 
 ## Team Configuration
 
-Commit a `.biff` file in your repo root:
+Commit `.punt-labs/biff/config.yaml` in your repo root:
 
-```toml
-[team]
-members = ["kai", "eric", "priya"]
+```yaml
+team:
+  members: ["kai", "eric", "priya"]
 
-[relay]
-url = "tls://connect.ngs.global"
+relay:
+  url: "tls://connect.ngs.global"
 ```
 
 The `members` list controls who appears in `/who`. The `relay` section configures the NATS server for cross-machine communication.
@@ -100,16 +100,21 @@ Biff ships with a shared demo relay on Synadia Cloud so your team can start imme
 
 ## Relay Configuration
 
-The demo relay works out of the box. To run your own NATS server:
+The demo relay works out of the box. To run your own NATS server, set the URL in the committed `config.yaml`:
 
-```toml
-[relay]
-url = "tls://your-nats-server:4222"
+```yaml
+relay:
+  url: "tls://your-nats-server:4222"
+```
 
-# Authentication (pick at most one):
-# token = "s3cret"                          # shared secret
-# nkeys_seed = "/path/to/user.nk"          # NKey seed file
-# user_credentials = "/path/to/user.creds" # JWT + NKey creds (Synadia Cloud)
+Authentication goes in the gitignored `.punt-labs/biff/config.local.yaml` instead — never in the committed file (pick at most one):
+
+```yaml
+relay:
+  auth:
+    token: "s3cret"                          # shared secret
+    # nkeys_seed: "/path/to/user.nk"          # NKey seed file
+    # credentials: "/path/to/user.creds"      # JWT + NKey creds (Synadia Cloud)
 ```
 
 Use `nats://` for unencrypted local connections, `tls://` for encrypted remote connections.
@@ -144,4 +149,4 @@ Run `biff doctor` at any time to check:
 biff doctor
 ```
 
-It verifies: Python version, uv installation, Claude Code CLI, MCP server registration, plugin files, status bar configuration, and `.biff` team file.
+It runs ten checks (two required: plugin installed, NATS relay reachable; the rest informational): `gh` CLI, plugin installation, user commands, agent guide `@`-import, NATS relay, `.punt-labs/biff/config.yaml`, enablement, git hooks, CI workflow, and status line.
