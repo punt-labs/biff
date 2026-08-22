@@ -479,3 +479,5 @@ make check
 | `punt audit` | Check compliance against Punt Labs standards |
 | `punt audit --fix` | Auto-create missing mechanical files |
 | `/punt reconcile` | LLM-powered contextual reconciliation (workflows, CLAUDE.md, permissions) |
+
+@.punt-labs/vox/CLAUDE.md
