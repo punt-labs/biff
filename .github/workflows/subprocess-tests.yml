@@ -31,3 +31,25 @@ jobs:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
       - run: uv run pytest -m subprocess
+
+  relay-image:
+    # Tier 3d (tests/test_relay_image/): builds ghcr.io/punt-labs/biff-relay
+    # from THIS checkout's docker/ directory (never a published tag) and
+    # runs it as a real container, so this job exercises whatever a PR
+    # actually changed in docker/ -- entrypoint.sh's config selection, the
+    # loopback monitor bind, and the auth-refusal guard PR #376 added.
+    # Neither tier 3b (bare nats-server, no Docker) nor tier 3c (Synadia
+    # Cloud) reaches the image itself. `ubuntu-latest` ships Docker
+    # preinstalled, so no extra setup step is needed beyond the checkout.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --extra dev
+      - run: uv run pytest -m relay_image
