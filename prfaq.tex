@@ -1045,10 +1045,10 @@ paid tier.
   max 3d). Does not go to inboxes --- it is a banner, not a message.
   Cross-session poll-based refresh. \\
 
-  \texttt{/biff y} | \texttt{n} & BSD \texttt{biff} &
-  Per-project activation toggle. \texttt{/biff y} (or \texttt{biff enable}
+  \texttt{/biff enable} | \texttt{disable} & BSD \texttt{biff} &
+  Per-project activation toggle. \texttt{/biff enable} (or \texttt{biff enable}
   from CLI) opts in by writing the committed \texttt{.punt-labs/biff/enabled}
-  marker; \texttt{/biff n} opts out and removes it.
+  marker; \texttt{/biff disable} opts out and removes it.
   Dormant mode: no NATS connection, no consumers, no status line until
   opted in. Persistent NATS connection with nap mode: after 2 minutes idle,
   polling reduces to 30s but connection stays alive for KV watches and

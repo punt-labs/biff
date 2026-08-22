@@ -65,7 +65,7 @@ When engineering teams adopt AI agents, six distinct problems emerge. Each opera
   - Identity model: persistent (user identity resolved from GitHub, survives sessions)
   - Participant model: hybrid (humans and agents are co-equal, both have presence, plans, mailboxes)
   - Scope: repo-scoped, cross-machine, any MCP client
-  - 7 shipped commands, `/wall` next
+  - 12 shipped commands (`/who`, `/finger`, `/last`, `/plan`, `/tty`, `/talk`, `/wall`, `/mesg`, `/biff:poll`, `/write`, `/read`, `/biff`)
 
 **Nobody else is building this.** This is the core finding of the [agent coordination landscape research](research-2026-02-17-agent-coordination-landscape.md). Every pure-agent framework (CrewAI, LangGraph, A2A, Swarms, claude-flow) treats humans as external operators. Entire and SageOx address trust and memory, not real-time presence and messaging. Agent Teams (below) has a mailbox but it's ephemeral, single-session, and agent-only.
 

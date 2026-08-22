@@ -251,7 +251,10 @@ def _check_user_import() -> CheckResult:
 
 
 def _check_enabled() -> CheckResult:
-    """Check whether biff is enabled via ``config.local.yaml`` (informational)."""
+    """Check whether the committed ``.punt-labs/biff/enabled`` marker exists.
+
+    Informational.
+    """
     repo_root = find_git_root()
     if repo_root is None:
         return CheckResult(
@@ -261,7 +264,9 @@ def _check_enabled() -> CheckResult:
             required=False,
         )
     if is_enabled(repo_root):
-        return CheckResult("Enabled", True, "yes (config.local.yaml)", required=False)
+        return CheckResult(
+            "Enabled", True, "yes (.punt-labs/biff/enabled)", required=False
+        )
     return CheckResult(
         "Enabled",
         False,

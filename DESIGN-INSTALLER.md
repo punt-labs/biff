@@ -337,7 +337,7 @@ Status line installation is a separate command (`biff install-statusline`) becau
 | Agent guide | No | The `@`-import is registered in `~/.claude/CLAUDE.md` |
 | NATS relay | Yes | Can connect to the configured relay URL |
 | Config | No | `.punt-labs/biff/config.yaml` exists, or zero-config (defaults from git remote) |
-| Enabled | No | `is_enabled()` — reads `config.local.yaml`, or the committed marker (see DES-052) |
+| Enabled | No | `is_enabled()` — the committed `.punt-labs/biff/enabled` marker is a regular file (not a symlink) AND `biff` is on PATH (DES-052) |
 | Git hooks | No | This clone's `.git/hooks` dispatchers are deployed |
 | CI workflow | No | The biff-notify GitHub Actions workflow is present |
 | Status line | No | Status line stash file exists |
