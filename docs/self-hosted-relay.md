@@ -275,7 +275,7 @@ A single Docker image and `docker-compose.yml` aren't enough here. An org
 piloting biff "at scale" is usually testing on infrastructure that
 resembles what it would actually run, and for most orgs at this size
 that's Kubernetes. See
-[DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image--one-image-three-deployment-shapes)
+[DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)
 for the full reasoning. This section ships a second artifact — a minimal
 Kubernetes manifest set — on top of the same `ghcr.io/punt-labs/biff-relay`
 image the other two tiers use.
@@ -406,7 +406,7 @@ Two paths from here:
   (clustering, mTLS between NATS nodes, operator-managed accounts)
   instead of this guide's minimal manifests. This project doesn't
   maintain a competing Helm chart; see
-  [DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image--one-image-three-deployment-shapes)'s
+  [DES-059](../DESIGN.md#des-059-self-hosted-relay-docker-image)'s
   Rejected section for why.
 
 ---
