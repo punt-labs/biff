@@ -344,7 +344,7 @@ class TestResolveRoutingIdEnvVar:
             SessionHint.resolve_routing_id()
         assert any(
             "CLAUDE_PID" in r.message
-            and "live ancestors" in r.message
+            and "live ancestor" in r.message
             and r.levelno == logging.WARNING
             for r in caplog.records
         )

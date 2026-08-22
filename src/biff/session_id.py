@@ -160,10 +160,16 @@ class SessionHint:
         pid = _claude_pid_from_env()
         pid_source = "CLAUDE_PID"
         if pid is not None and not is_live_ancestor(pid):
+            # Two distinct causes collapse to the same False here: a stale
+            # env value (real ancestor died, its PID recycled by an
+            # unrelated session) or a transient failure reading the
+            # process table (is_live_ancestor's own try/except). The
+            # message stays neutral rather than asserting the former --
+            # falling back to the walk is the correct response either way.
             logger.warning(
-                "CLAUDE_PID=%d is not among this process's live ancestors "
-                "(stale env, real ancestor likely died and its PID was "
-                "recycled); falling back to the process-tree walk",
+                "CLAUDE_PID=%d could not be corroborated as a live "
+                "ancestor of this process; falling back to the "
+                "process-tree walk",
                 pid,
             )
             pid = None
