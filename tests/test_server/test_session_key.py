@@ -9,6 +9,7 @@ import biff.session_key as session_key_mod
 from biff.session_key import (
     _is_claude,
     find_session_key,
+    is_live_ancestor,
     topmost_claude_pid,
 )
 
@@ -125,6 +126,90 @@ class TestTopmostClaudePid:
         table[pids[-1]] = (pids[-1], "python3")  # self-referential root
         with patch("biff.session_key._read_process_table", return_value=table):
             assert topmost_claude_pid() is None
+
+
+class TestIsLiveAncestor:
+    """``is_live_ancestor`` corroborates an env-delivered PID (DES-058)."""
+
+    def test_direct_ancestor_matches(self) -> None:
+        my_pid = os.getpid()
+        claude_pid = 10000
+        table = _make_table(
+            {
+                my_pid: (claude_pid, "python3"),
+                claude_pid: (500, "claude"),
+                500: (1, "/sbin/launchd"),
+            }
+        )
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert is_live_ancestor(claude_pid) is True
+
+    def test_further_ancestor_matches(self) -> None:
+        """A non-immediate ancestor (grandparent+) still corroborates."""
+        my_pid = os.getpid()
+        child_claude = 57369
+        main_claude = 19147
+        table = _make_table(
+            {
+                my_pid: (child_claude, "python3"),
+                child_claude: (main_claude, "claude"),
+                main_claude: (500, "claude"),
+                500: (1, "/sbin/launchd"),
+            }
+        )
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert is_live_ancestor(main_claude) is True
+
+    def test_self_matches(self) -> None:
+        """The calling process's own PID trivially corroborates."""
+        my_pid = os.getpid()
+        table = _make_table({my_pid: (1, "/sbin/launchd")})
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert is_live_ancestor(my_pid) is True
+
+    def test_unrelated_pid_does_not_match(self) -> None:
+        """The recycled-PID corroboration scenario DES-058 exists for:
+        a live, real PID that is simply not among this process's own
+        ancestors -- e.g. an unrelated claude session that happens to
+        have been assigned the PID a stale env var still names.
+        """
+        my_pid = os.getpid()
+        claude_pid = 10000
+        unrelated_pid = 99999
+        table = _make_table(
+            {
+                my_pid: (claude_pid, "python3"),
+                claude_pid: (500, "claude"),
+                500: (1, "/sbin/launchd"),
+            }
+        )
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert is_live_ancestor(unrelated_pid) is False
+
+    def test_ps_failure_returns_false(self) -> None:
+        with patch(
+            "biff.session_key._read_process_table",
+            side_effect=OSError("ps not found"),
+        ):
+            assert is_live_ancestor(10000) is False
+
+    def test_current_process_not_in_table_returns_false(self) -> None:
+        table = _make_table({999: (1, "init")})
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert is_live_ancestor(999) is False
+
+    def test_safety_bound_prevents_infinite_loop(self) -> None:
+        """Circular parent chain doesn't hang, and the target isn't
+        anywhere in the (non-matching) chain, so it correctly reports
+        False rather than looping forever."""
+        my_pid = os.getpid()
+        table: dict[int, tuple[int, str]] = {}
+        pids = list(range(my_pid, my_pid + 15))
+        for i, pid in enumerate(pids[:-1]):
+            table[pid] = (pids[i + 1], "python3")
+        table[pids[-1]] = (pids[-1], "python3")  # self-referential root
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert is_live_ancestor(999999) is False
 
 
 class TestFindSessionKey:

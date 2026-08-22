@@ -35,6 +35,27 @@ def _confine_git_walk(  # pyright: ignore[reportUnusedFunction]
 
 
 @pytest.fixture(autouse=True)
+def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strip ``CLAUDE_PID`` so tests run under Claude Code itself don't leak
+    the real running process's PID into code paths that prefer it
+    (``SessionHint.resolve_routing_id``, ``_resolve_claude_pid``). Tests
+    that want to exercise the env-var path set it explicitly via
+    ``monkeypatch.setenv``.
+
+    Deliberately suite-wide, not scoped to ``test_session_id.py``: this also
+    reaches subprocess-tier tests that spawn a real ``biff mcp`` process
+    (``subprocess.Popen`` inherits the parent's stripped environment). If a
+    second consumer of ``CLAUDE_PID`` is ever added, its tests inherit this
+    stripping by default too -- that is the point, not an oversight, so a
+    future author debugging a missing env var in an unrelated test should
+    look here first.
+    """
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_description_globals() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
     """Clear ``_descriptions`` module globals around every test.
 

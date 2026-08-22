@@ -601,7 +601,7 @@ The original design used `~/.punt-labs/biff/unread/{repo-name}.json` with the st
 
 | Alternative | Rejected Because |
 |-------------|-----------------|
-| Env var from Claude Code | Claude Code does not expose `session_id` as an env var to MCP server child processes |
+| Env var from Claude Code | Rejected at the time (2026-02-15) — Claude Code did not yet expose `session_id` as an env var. **Stale as of Claude Code 2.1.234**: `CLAUDE_PID`/`CLAUDE_CODE_SESSION_ID` are now set directly on every hook and MCP server subprocess. Not usable for the statusline's cross-process discovery problem (see DES-011b), but DES-058 uses `CLAUDE_PID` to fix a different, later-discovered bug in the session-key routing path. |
 | MCP initialize handshake | `clientInfo` contains only `name` and `version`, no session identity |
 | Scan all per-TTY files | Status line wouldn't know which file is "mine" — showing all TTYs is noisy and unusable |
 | Session ID from stdin JSON | Available to the status line but not to the MCP server — no way to agree on a file key |
@@ -5458,8 +5458,13 @@ hours later is legitimate. (b) *A stable random id minted once and persisted by
 biff* — that is biff's identity, not Claude's; a fork would inherit it and
 mis-share one inbox. Deriving from the Claude `session_id` makes fork-vs-resume
 fall out for free (fork gets a new `session_id`, resume keeps it). (c) *Expose
-`session_id` to the MCP server directly* — the server has no access to it
-(DES-011); the SessionStart-hook → PPID-walk bridge is the only channel.
+`session_id` to the MCP server directly* — at the time, the server had no
+access to it (DES-011); the SessionStart-hook → PPID-walk bridge was the
+only channel. **Superseded by DES-058**: Claude Code 2.1.234 sets
+`CLAUDE_PID` directly on MCP server subprocesses, closing a real
+clobbering bug the PPID-walk bridge alone could not — the server still
+does not observe `session_id` directly, but it no longer needs to,
+since `CLAUDE_PID` disambiguates which hint file is its own.
 
 **Evidence.** `docs/session-model.tex` was extended (`ResumeSession`/`ForkSession`,
 injective `ttyalias`, identity-keyed send-time `Deliver`) and model-checked with
@@ -6616,3 +6621,163 @@ See `relay.py`'s `DEAD_REPORT_SECONDS` and `dead_sessions()`;
 `tests/test_formatting.py::TestFormatDeadFootnote`,
 `tests/test_server/test_tools.py::TestWhoTool::test_hides_dead_sessions`,
 and `tests/test_commands/test_who.py::TestWho::test_all_dead_returns_no_sessions`.
+
+---
+
+## DES-058: `CLAUDE_PID` Env Var Corrects DES-011's Rejected Alternative
+
+**Date:** 2026-08-22
+**Status:** Settled
+**Related:** DES-011 (recorded the now-stale rejection), DES-050 (the
+PID-walk hint-file mechanism this decision re-keys, without removing)
+
+### Problem
+
+A nested `claude` process sharing a topmost ancestor PID with its
+parent session — spawned explicitly (`claude -p` via a Bash tool call)
+or automatically (confirmed live via `pstree`: the `security-guidance`
+plugin's own hook spawns a nested `claude --output-format stream-json`
+subprocess for review) — has its `SessionStart` hook walk to the *same*
+topmost `claude` ancestor PID as its parent (`session_key.py`'s
+`topmost_claude_pid()` deliberately keeps overwriting on every ancestor
+match up to root). Both sessions resolve to one PID, so the nested
+session's hint write overwrites `sessions/{pid}.json`, clobbering the
+parent's `SessionHint`. The parent keeps reading its own live, correct
+`session_id` from every hook payload, but `SessionHint.resolve_routing_id()`
+— used both by the plan-gate marker sync (`commands/plan.py`) and by the
+MCP server's own startup routing-id (`__main__.py:_create_mcp_server`) —
+now returns the nested session's id. The two never agree again for the
+parent's remaining lifetime: every Edit/Write is permanently denied,
+and the server's NATS session key is silently wrong too.
+
+DES-011's "Alternatives Considered" table recorded: "Env var from Claude
+Code | Claude Code does not expose `session_id` as an env var to MCP
+server child processes." That statement was true when written and is
+false as of Claude Code 2.1.234 — but the direct fix this first suggests
+(read `CLAUDE_CODE_SESSION_ID` and return it) has its own defect,
+below.
+
+### Decision
+
+`SessionHint.resolve_routing_id()` and `_resolve_claude_pid()` (the
+read and write sides of the same hint-file mechanism) now prefer
+`CLAUDE_PID` from `os.environ` — the owning `claude` process's own PID,
+delivered directly rather than inferred by walking the process tree —
+to key the hint-file lookup/write, falling back to the existing
+`topmost_claude_pid()` walk only when the env var is absent (an older
+Claude Code version, or a genuinely headless/CI/SDK context). The hint
+file's *content* (`session_id`, the recycle guard, the validation
+ladder) is unchanged — only which PID selects the file changed.
+
+Unlike the topmost-ancestor walk, `CLAUDE_PID` is set to each spawned
+process's *own* PID, distinct per nesting level: a nested `claude -p`
+gets its own `CLAUDE_PID`, not its parent's. Two sessions sharing a
+topmost ancestor under the old walk now key their hint files under
+different PIDs — nothing to clobber, because there is no longer a
+single shared file being consulted for either of them.
+
+**Verified directly** (2026-08-22, Claude Code 2.1.234, this machine): a
+Bash-tool subprocess's own `env` shows `CLAUDE_PID` matching the owning
+session's PID; a running `biff mcp` server process's environment
+(`ps eww <pid>`) carries the same variable, stable for the process's
+whole lifetime. Also present: `CLAUDE_CODE_SESSION_ID` and
+`CLAUDE_CODE_CHILD_SESSION=1` (set on nested sessions specifically — a
+possible future signal, not consumed by this decision).
+
+**Corroborated, not trusted outright.** Unlike the process-tree walk —
+re-derived live from the OS on every call, so it can never keep
+believing in a dead ancestor — `CLAUDE_PID` is captured once, at this
+process's own spawn time, and never re-observed after that. A
+long-lived server whose real ancestor later died, with that PID then
+recycled by an *unrelated but legitimate* claude session, would have
+its stale `CLAUDE_PID` still parse to a real, live PID whose hint file
+(freshly written by the recycling session's own hook) would pass the
+existing recycle guard trivially — that guard only checks "does
+*someone's* start time at this PID match the hint," not "is this PID
+still *my* ancestor." `session_key.py` gained `is_live_ancestor(pid)`,
+re-deriving the caller's *current* live ancestry on every call (the
+same `ps` parse `topmost_claude_pid()` already used) and checking
+membership; `resolve_routing_id()` calls it before trusting an
+env-sourced PID, falling back to the walk if corroboration fails.
+
+**Scope, deliberately narrow.** This decision does not touch the
+statusline consumer's `find_session_key()` (DES-011/DES-011a/DES-011b).
+Not because a per-process env var can't help there — `CLAUDE_PID` is
+identical across every subprocess of one owning `claude`, exactly the
+shared property `find_session_key()` already relies on the walk for, so
+the same re-keying would apply cleanly — but because that consumer has
+its own accumulated complexity (DES-011b's local-plugin process-tree
+divergence is still an open problem) that deserves dedicated attention
+rather than a same-session scope expansion. Tracked as a follow-up
+(biff-qou): `find_session_key()`'s topmost-ancestor walk still collapses
+a nested claude process onto its parent for the *unread-count* file the
+same way this decision fixes for the *plan-gate* file — a
+lower-severity version of the same defect class, left open. The PID-walk fallback is left
+fully intact for both consumers of `session_id.py` and still covers
+headless/CI/SDK contexts and any Claude Code version predating the env
+var.
+
+### Rejected
+
+**Read `CLAUDE_CODE_SESSION_ID` directly and return it as the routing
+id**, the first form of this fix. Broke across `/clear` (and any other
+in-place session-id change): Claude Code freezes each subprocess's copy
+of that env var at spawn time, and its own conversation-reset path
+updates the variable only in *its own* process — the long-lived MCP
+server never sees the update. `sync_plan_marker` would then write the
+plan marker under the stale pre-clear id forever, while the
+`PreToolUse` gate reads the fresh post-clear `session_id` from every
+hook payload — the exact permanent-denial failure mode this decision
+exists to fix, reopened through a different door. `CLAUDE_PID` has no
+such problem: it names the owning *process*, which `/clear` does not
+change, and the hint file it selects is rewritten fresh by every
+SessionStart invocation (including a `/clear`-sourced one), so reading
+the file — rather than caching the raw session_id in the server's own
+frozen environment — stays live for the process's whole lifetime.
+
+**Directory-per-`(pid, session_id)` hint files**, an earlier proposal.
+Same read-side gap `CLAUDE_PID` closes directly: the MCP server, per
+DES-011's original premise, has no live `session_id` of its own to pick
+which of several per-PID files is its own. `CLAUDE_PID` sidesteps the
+question rather than deferring it — the server doesn't need
+`session_id` to pick a file, it needs its own PID, and it has it
+directly.
+
+**Fix `topmost_claude_pid()` to stop at the nearest ancestor instead of
+the topmost one**, considered before `CLAUDE_PID` was known to exist.
+Would have separated the parent's and nested session's hint files for
+the write path, but has the identical read-side gap as
+directory-per-session above — the walk still can't tell the server
+which of possibly-several nearby files is its own without a live
+`session_id` to compare against. Superseded once `CLAUDE_PID` was
+confirmed to exist and deliver the needed information directly.
+
+**A full `docs/session-model.tex` extension before any code change**,
+per this repo's standing policy that a twice-patched session-lifecycle
+mechanism needs its Z spec extended and model-checked first. Judged
+disproportionate here: this change only re-keys which PID selects an
+existing hint file — the hint file's content, validation, and recycle
+guard are all unmodified — and closes exactly the gap the bug report
+demonstrates without making any previously-reachable state more
+reachable. `session-model.tex` should still gain the `CLAUDE_PID`-keyed
+behavior as its coverage is progressively closed against code that
+touches this area (per this repo's progressive-coverage policy), not as
+a precondition for landing a narrow, evidence-backed, non-destructive
+fix.
+
+### Full detail
+
+See `session_id.py`'s `_claude_pid_from_env()`, `_resolve_claude_pid()`,
+and `SessionHint.resolve_routing_id()`, plus the module docstring;
+regression tests in `tests/test_session_id.py`
+(`TestResolveClaudePidFromEnv` for the env-var parsing itself;
+`TestResolveRoutingIdEnvVar` for nested-session key separation, the
+`CLAUDE_PID`-vs-walk preference, this design surviving `/clear`, and —
+separately — a standalone reproduction of *why* the rejected
+direct-env-var-return design specifically would have failed across
+`/clear`: capturing an env var's value once does not observe a later
+change to that same variable within the current process); and
+`tests/conftest.py::_clear_claude_session_env`, an autouse fixture
+stripping the real `CLAUDE_PID` from every test process so the suite's
+own Claude Code session doesn't leak into PID-walk-path tests that
+expect it absent.

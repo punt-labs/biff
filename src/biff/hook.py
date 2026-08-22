@@ -677,9 +677,10 @@ def _capture_session_hint(data: dict[str, object]) -> None:
     """Persist the Claude ``session_id`` for the MCP server.
 
     SessionStart is the only hook that sees ``session_id`` (on stdin); the
-    server, unable to observe it (DES-011), reads the hint back by walking
-    the shared ``claude`` process tree.  A missing/empty id is a no-op — the
-    server then routes on a fresh hex fallback.
+    server reads the hint back from the same ``CLAUDE_PID``-keyed file this
+    hook writes to (DES-058), falling back to the process-tree walk only
+    when the env var is absent (DES-011).  A missing/empty id is a no-op —
+    the server then routes on a fresh hex fallback.
     """
     session_id = data.get("session_id")
     if not isinstance(session_id, str) or not session_id:
