@@ -161,7 +161,7 @@ reportPrivateUsage = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not nats and not hosted and not stress'"
+addopts = "-ra -q -m 'not slow and not subprocess and not sdk and not nats and not hosted and not stress and not relay_image'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Per-test ceiling so a regression REPORTS (with every thread's stack
@@ -181,6 +181,7 @@ markers = [
     "nats: marks tests that require a running nats-server (run with -m nats)",
     "hosted: marks tests that require a hosted NATS account (run with -m hosted)",
     "stress: marks scale stress tests against hosted NATS (run with -m stress)",
+    "relay_image: marks tests that build and run the biff-relay Docker image (run with -m relay_image)",
     "transcript: marks tests that generate demo transcripts (run with -m transcript)",
     "vox: marks tests that manage vox mocking themselves (opts out of _silence_vox)",
 ]
