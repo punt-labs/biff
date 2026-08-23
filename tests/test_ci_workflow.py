@@ -41,6 +41,13 @@ def _write_workflow(root: Path, filename: str, name: str | None) -> None:
 _LIVE_SETUP_UV_SHA = "c771a70e6277c0a99b617c7a806ffedaca235ff9"
 _DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
 
+# actions/checkout@v7.0.1, matching the SHA every other workflow in this repo
+# already pins (test.yml, lint.yml, docs.yml, release.yml, subprocess-tests.yml,
+# hosted-nats.yml) -- verified against actions/checkout's tag refs.
+_LIVE_CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+
+_PINNED_BIFF_VERSION = "1.15.2"
+
 
 # ── template action pins ───────────────────────────────────────────
 
@@ -53,6 +60,10 @@ class TestTemplateActionPins:
         assert _LIVE_SETUP_UV_SHA in content
         assert _DEAD_SETUP_UV_SHA not in content
 
+    def test_checkout_pinned_to_live_sha_matching_sibling_workflows(self) -> None:
+        content = _template_content()
+        assert _LIVE_CHECKOUT_SHA in content
+
     def test_template_carries_exactly_one_placeholder(self) -> None:
         """The template⇄constant invariant: render()'s str.replace needs a match.
 
@@ -61,6 +72,47 @@ class TestTemplateActionPins:
         watching nothing. Pin the invariant so drift fails at test time.
         """
         assert _template_content().count(_WORKFLOWS_PLACEHOLDER) == 1
+
+
+class TestTemplateHardening:
+    """CI-notify job hardening: pinned checkout ref, no persisted creds, pinned
+    package version, and a timeout that survives a cold ``uvx`` install.
+    """
+
+    def test_checkout_pins_ref_to_triggering_commit(self) -> None:
+        """``workflow_run`` checkouts default to the default-branch HEAD, which
+        can drift from the commit that actually failed -- pin ``ref`` to the
+        triggering run's head SHA.
+        """
+        content = _template_content()
+        assert "ref: ${{ github.event.workflow_run.head_sha }}" in content
+
+    def test_checkout_does_not_persist_credentials(self) -> None:
+        """The very next step downloads and executes third-party code
+        (``uvx --from punt-biff``) -- the checkout must not leave a
+        ``GITHUB_TOKEN`` in ``.git/config`` for that code to read.
+        """
+        content = _template_content()
+        assert "persist-credentials: false" in content
+
+    def test_biff_package_pinned_to_known_version(self) -> None:
+        """``uvx --from punt-biff`` unpinned resolves latest at runtime --
+        non-reproducible and a supply-chain risk for a job that runs with a
+        live token in scope.
+        """
+        content = _template_content()
+        assert f"punt-biff=={_PINNED_BIFF_VERSION}" in content
+
+    def test_timeout_survives_cold_uv_install(self) -> None:
+        """2 minutes is too tight for ``setup-uv`` + a cold ``uvx`` install of
+        ``punt-biff`` -- a slow cold start silently drops the failure notice.
+        """
+        content = _template_content()
+        assert "timeout-minutes: 10" in content
+
+    def test_setup_uv_cache_enabled(self) -> None:
+        content = _template_content()
+        assert "enable-cache: true" in content
 
 
 class TestRenderPlaceholderGuard:
