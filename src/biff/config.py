@@ -980,6 +980,16 @@ class _ConfigFields:
     # must opt in explicitly before an ambient BIFF_RELAY_* env var can
     # override it. Defaults False -- silence means "no," not "maybe."
     relay_allow_env_override: bool = False
+    # Whether the SHARED config.yaml itself (never config.local.yaml, never
+    # the merged result) declares a relay.url. relay_url above is the
+    # merged, local-inclusive value -- gating _apply_env_relay_overrides on
+    # it would block every developer with a personal config.local.yaml
+    # relay entry, not just repos with a team-committed relay. Both this
+    # flag and relay_allow_env_override must come from the shared file
+    # alone, or a gitignored config.local.yaml could set
+    # allow_env_override: true and authorize ambient env vars without a
+    # team commit.
+    relay_committed: bool = False
 
 
 def _has_orgs_key(raw: dict[str, object]) -> bool:
@@ -1034,7 +1044,14 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         fields = extract_biff_fields(merged)
         poll_interval = _extract_poll_interval(merged)
         cf = _ConfigFields(*fields, poll_interval=poll_interval)
-        cf = replace(cf, relay_allow_env_override=_relay_allow_env_override(merged))
+        # Both read from yaml_shared alone, never the merged config -- see
+        # _ConfigFields.relay_committed for why.
+        shared_relay_url, _, _ = _extract_relay(yaml_shared)
+        cf = replace(
+            cf,
+            relay_allow_env_override=_relay_allow_env_override(yaml_shared),
+            relay_committed=shared_relay_url is not None,
+        )
         # Derive orgs from remote only when the peers.orgs key is
         # ABSENT from the merged config. An explicit empty list
         # (peers.orgs: []) is honored — it means "no org discovery."
@@ -1153,9 +1170,11 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
     Precedence: ``config.yaml`` < ``config.local.yaml`` < env vars < the
     CLI ``--relay-url`` override applied later in :func:`_load_base_config`
     (docs/relay-env-overrides.md Sec 1). No-ops unless the repo-scoping
-    gate (Sec 0) is satisfied: the file-resolved relay URL is unset, or
-    the repo's config explicitly opts in via
-    ``relay.allow_env_override: true``.
+    gate (Sec 0) is satisfied: the SHARED ``config.yaml`` has no committed
+    ``relay.url`` of its own (:attr:`_ConfigFields.relay_committed` is
+    ``False`` -- this covers both true zero-config and a personal
+    ``config.local.yaml`` relay entry), or that same shared file explicitly
+    opts in via ``relay.allow_env_override: true``.
 
     Raises :class:`SystemExit` when two or more of ``BIFF_RELAY_TOKEN``,
     ``BIFF_RELAY_NKEYS_SEED``, and ``BIFF_RELAY_USER_CREDENTIALS`` are set
@@ -1166,11 +1185,14 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
     override with nothing to authenticate against would otherwise silently
     apply to the demo relay fallback.
     """
-    if cf.relay_url is not None and not cf.relay_allow_env_override:
+    if cf.relay_committed and not cf.relay_allow_env_override:
         return cf
 
-    auth_env = {name: _env_or_none(name) for name in _AUTH_ENV_FIELDS}
-    fired_auth = [name for name, value in auth_env.items() if value is not None]
+    # Conflict check reads only names, never values, before deciding
+    # whether to fetch the one fired var's value -- a SystemExit here must
+    # never leave a dict of raw credential values sitting in this frame's
+    # locals for a traceback to retain.
+    fired_auth = [name for name in _AUTH_ENV_FIELDS if _env_or_none(name) is not None]
     if len(fired_auth) > 1:
         names = ", ".join(sorted(fired_auth))
         raise SystemExit(
@@ -1186,7 +1208,7 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
 
     if fired_auth:
         (auth_var,) = fired_auth
-        relay_auth = _resolved_auth_override(auth_var, auth_env[auth_var])
+        relay_auth = _resolved_auth_override(auth_var, _env_or_none(auth_var))
         fired.append(auth_var)
 
     url_env = _env_or_none("BIFF_RELAY_URL")

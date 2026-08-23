@@ -330,7 +330,7 @@ Per-user auth (a token, nkeys seed, or credentials path) goes in the
 gitignored `.punt-labs/biff/config.local.yaml` instead, never in the
 committed file — see [Installing](docs/INSTALLING.md) for the schema.
 
-Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see [relay configuration](docs/INSTALLING.md#relay-configuration).
+Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see [relay configuration](docs/INSTALLING.md#relay-configuration). For CI, containers, or other headless invocations, five `BIFF_RELAY_*` environment variables can override the relay config for that process only — see [environment-variable relay overrides](docs/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd).
 
 The `[peers]` section enables cross-repo commands (`/who`, `/write`, `/finger`). `orgs` auto-discovers repos with active sessions; `repos` lists peers that are always visible. Both are optional.
 

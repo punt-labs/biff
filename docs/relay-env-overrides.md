@@ -9,11 +9,13 @@ Ticket: biff-xvv. Mission: m-2026-08-23-005 (design), m-2026-08-23-006
 ## Why a standalone doc, not a `DESIGN.md` ADR
 
 `DESIGN.md` records *settled* decisions (DES-NNN entries) after implementation.
-This document is a proposal awaiting review — writing it as a DES entry would
-imply a decision that hasn't been made. Once this design is ratified and
-implemented, the accepted shape gets a DES-NNN entry in `DESIGN.md` that
+This document was drafted, reviewed, and revised as a proposal before
+ratification — writing it as a DES entry from the start would have implied a
+decision that hadn't been made yet. Now that this design is ratified and
+implemented, the accepted shape has a DES-060 entry in `DESIGN.md` that
 points back here for the rejected-alternatives detail, per the existing
-convention (e.g. DES-016's amendment chain).
+convention (e.g. DES-016's amendment chain). This document remains the
+detailed record; `DESIGN.md` carries the settled-decision summary.
 
 ## Problem
 
@@ -102,8 +104,9 @@ shell export with no repo boundary at all.
 
 **Defense-in-depth: the `config.yaml` opt-in gate, kept but demoted to
 secondary.** `_apply_env_relay_overrides` (§1) still checks one precondition
-before reading any `BIFF_RELAY_*` variable: the file-resolved
-`_ConfigFields.relay_url` is `None` **or** `config.yaml` sets
+before reading any `BIFF_RELAY_*` variable: the SHARED `config.yaml` (never
+`config.local.yaml`, never the merged result of the two) has no committed
+`relay.url` of its own **or** that same shared file sets
 `relay.allow_env_override: true` explicitly. This remains worth keeping —
 `.envrc.local` scoping protects a well-behaved operator's shell, but it does
 not protect against a `BIFF_RELAY_*` value set some other way (a systemd
@@ -116,14 +119,28 @@ not the primary fix:
 - **CI's case is unaffected.** `biff-notify.yml`'s sparse checkout of
   `.punt-labs/biff` has no `relay:` section in `config.yaml` at all today
   (there is no committed relay config for CI to conflict with) — so the
-  "file-resolved `relay_url` is `None`" branch of the precondition is exactly
-  the CI path, and env overrides apply with zero new config needed.
+  "shared `config.yaml` has no committed `relay.url`" branch of the
+  precondition is exactly the CI path, and env overrides apply with zero new
+  config needed.
 - **A repo that already has its own committed `relay.url`/`relay_auth`
   cannot be silently overridden by an ambient env var.** If Team A's
   `config.yaml` declares a relay, `_apply_env_relay_overrides` no-ops unless
   that same `config.yaml` explicitly adds `relay.allow_env_override: true` —
   a decision Team A makes and commits, not one an unrelated operator's shell
   history (or `.envrc.local`, or systemd unit) makes for them.
+- **A personal `config.local.yaml` relay entry does not close the gate, and
+  a personal `config.local.yaml` opt-in cannot open it.** The gate must read
+  the SHARED file specifically for both the committed-relay check and the
+  opt-in check — gating on the merged, local-inclusive
+  `_ConfigFields.relay_url` (the value `_load_base_config` actually connects
+  with) would block every developer with a personal relay entry in
+  `config.local.yaml`, not just repos with a team-committed relay; reading
+  the opt-in bit from the merged config would let a gitignored
+  `config.local.yaml` authorize ambient env vars to override a *different*
+  team-committed relay without anyone committing that decision. Both bits
+  are computed straight from `config.yaml`'s own parsed content before
+  `config.local.yaml` is merged in — see `_ConfigFields.relay_committed` and
+  `_resolve_config_fields`'s shared-file branch.
 - This is a new field on the existing `relay:` mapping in `_ConfigFields`
   (`config.py`'s `_extract_relay`), defaulting to `False` when absent, mirrors
   the strictness of the existing auth-conflict `SystemExit` (§2) — silence
@@ -390,10 +407,14 @@ Concrete requirements:
    `BIFF_RELAY_TOKEN`'s value into `config.local.yaml` or any cache file —
    this is exactly why rejected-alternative (a) in §6 loses to this design.
 5. **`biff doctor`'s existing relay-reachability output must not echo
-   auth values.** `doctor.py:208` already reports only `relay_url` in its
-   success/failure message — confirm this holds after wiring `doctor.py`
-   into the shared resolution (§1); it must keep reporting the URL only,
-   never the resolved `RelayAuth`.
+   auth values, and must not echo userinfo embedded in the URL either.**
+   `doctor.py:_check_relay` reports only the relay endpoint in its
+   success/failure message, never the resolved `RelayAuth` — and, because
+   `BIFF_RELAY_URL` can in principle carry `nats://user:pass@host` even
+   though operators are told not to put credentials there (§1), the
+   endpoint itself must go through `nats_relay.sanitize_relay_url` (the
+   same `host[:port]`-only sanitizer `_ConnectionHealth` already used for
+   log lines) before it reaches a `CheckResult` message, not the raw URL.
 6. **`repr=False` does not close the leak by itself — round 2 amendment.**
    Round 1 review (djb) confirmed the gap: `RelayAuth.as_nats_kwargs()`
    (`models.py:191-199`) converts the token into a plain `dict[str, str]`
@@ -409,46 +430,87 @@ Concrete requirements:
    traceback prints the token in clear text.
 
    Requirement: every call site that expands `**self._auth_kwargs()` (or
-   equivalent) into `nats.connect(...)` must wrap the connect attempt in a
-   narrow `try/except` that raises a **new**, redacted exception with
-   `from None`, and must clear the plain dict in a `finally` block —
-   not a bare re-raise, and not `except Exception as exc:` followed by
-   `raise` or `logger.exception(...)` on `exc` itself. Concretely:
+   equivalent) into `nats.connect(...)` must never raise the redacted
+   `RelayConnectError` from *inside* the `except`/`finally` handling the raw
+   `nats.connect()` failure — it must record only the failure kind, let the
+   `except`/`finally` clauses complete, and raise the redacted error
+   afterward, once no exception is being handled. Concretely:
 
    ```python
    auth_kwargs = self._auth_kwargs()
+   error_kind: str | None = None
+   nc: NatsClient | None = None
    try:
        nc = await nats.connect(url, **auth_kwargs, **tls_kwargs)
-   except Exception as exc:  # noqa: BLE001 — boundary: never let raw auth
-                              # kwargs escape via this frame's traceback
-       raise RelayConnectError(f"failed to connect to relay: {url}") from None
+   except Exception as exc:  # noqa: BLE001 — boundary: record only the
+       # exception kind here; never re-raise exc itself, or its frame
+       # (holding auth_kwargs) becomes reachable via __context__.
+       error_kind = type(exc).__name__
    finally:
        auth_kwargs.clear()
+   if error_kind is not None or nc is None:
+       raise RelayConnectError(f"failed to connect to relay: {url}")
    ```
 
-   **`from None` alone is not sufficient — round 2 evaluator correction
-   (djb).** `from None` sets `__suppress_context__`, which only changes how
-   `traceback` and most loggers *display* an exception chain by default. It
-   does not clear `__context__`: the original exception, its traceback, and
-   the frame locals holding the raw `auth_kwargs` dict remain reachable to
-   anything that walks `__context__` directly — a custom error reporter, a
-   debugger, an APM/Sentry-style integration that ignores
-   `__suppress_context__` by design, or `traceback.format_exception(chain=True)`
-   called explicitly. Verified empirically: `err.__context__.__traceback__
-   .tb_frame.f_locals["auth_kwargs"]` still yields the live dict with the raw
-   token after a `raise ... from None`.
+   **Round 2 evaluator correction (djb), and round 3 correction of round
+   2's own prescribed fix.** Round 2 found that `raise ... from None` inside
+   the `except` clause is insufficient: `from None` sets
+   `__suppress_context__`, which only changes how `traceback` and most
+   loggers *display* an exception chain by default — it does not clear
+   `__context__`, so the original exception and its traceback stay reachable
+   to anything that walks `__context__` directly (a debugger, an APM
+   integration that ignores `__suppress_context__`,
+   `traceback.format_exception(chain=True)` called explicitly). Round 2's
+   own fix — `finally: auth_kwargs.clear()`, reasoning that clearing the
+   dict in place empties it in every frame that references the same
+   object — is *itself* incomplete: `nats.connect(**options)` accepts
+   `**options` (verified against nats-py's signature), so Python's `**`
+   expansion builds a **new**, separate `options` dict inside
+   `nats.connect`'s own frame. Clearing our `auth_kwargs` local cannot reach
+   that separate object, so if the original exception's traceback (still
+   attached via `__context__`) includes `nats.connect`'s frame, the raw
+   token is still there in `options`, `finally: auth_kwargs.clear()`
+   notwithstanding.
 
-   The `finally: auth_kwargs.clear()` closes this structurally rather than
-   relying on a display flag: clearing the dict in place empties it in every
-   frame that references the same object, including the original exception's
-   traceback frame, so there is no raw token left to reach regardless of how
-   the exception is later inspected. This is a fourth security mechanism, in
-   addition to (not instead of) the `repr=False` fix in item 3 above —
-   `repr=False` prevents an *accidental* print/log of the `RelayAuth` object;
-   `finally: auth_kwargs.clear()` plus `from None` prevents an *exceptional*
-   traceback from exposing the post-`as_nats_kwargs()` plain dict, which
-   `repr=False` cannot reach because it is no longer a `RelayAuth` instance by
-   that point.
+   The structural fix that actually closes this: never let `__context__`
+   get set at all. Python only chains a newly raised exception onto
+   whatever exception is "currently being handled" — and an exception stops
+   being "currently handled" the moment its `except` clause finishes
+   normally (PEP 3110). Raising the redacted `RelayConnectError` *after*
+   the `try`/`except`/`finally` block has fully exited — not from inside
+   the `except` clause, `from None` or otherwise — means there is no
+   currently-handled exception left for Python to chain onto, so
+   `__context__` is genuinely `None`, not merely display-suppressed.
+   Verified empirically:
+
+   ```python
+   >>> def inner(): raise ValueError("boom", {"token": "secret"})
+   >>> def pattern_a():          # raise inside except, from None
+   ...     try: inner()
+   ...     except Exception: raise RelayConnectError("x") from None
+   >>> def pattern_b():          # raise after except/finally completes
+   ...     failed = False
+   ...     try: inner()
+   ...     except Exception: failed = True
+   ...     if failed: raise RelayConnectError("x")
+   >>> # pattern_a: err.__context__ is not None, and its traceback is walkable
+   >>> # pattern_b: err.__context__ is None
+   ```
+
+   `nc: NatsClient | None = None` (checked alongside `error_kind`) exists
+   for the same reason `finally: auth_kwargs.clear()` still matters even
+   though it no longer needs to structurally prevent exposure via
+   `__context__`: `auth_kwargs.clear()` is defense-in-depth against a caller
+   or debugger inspecting *this* frame's own locals directly (not via a
+   chained exception) after the call returns or raises — clearing it keeps
+   that surface closed too, cheaply, alongside the `__context__` fix. This
+   is a fourth security mechanism, in addition to (not instead of) the
+   `repr=False` fix in item 3 above — `repr=False` prevents an *accidental*
+   print/log of the `RelayAuth` object; the `__context__`-free raise plus
+   `finally: auth_kwargs.clear()` prevents an *exceptional* traceback from
+   exposing the post-`as_nats_kwargs()` plain dict, which `repr=False`
+   cannot reach because it is no longer a `RelayAuth` instance by that
+   point.
 
 ## 6. Rejected alternatives
 
@@ -551,7 +613,7 @@ of flags to `wall` (and every other CLI command CI might invoke).
   shell," it means the bare-export case specifically, not the
   `.envrc.local` case — see §0 for the full mechanism distinction.
 
-## 7. `biff-notify.yml` diff
+## 7. `biff-notify.yml` — as implemented
 
 **Round 2 amendment — `workflow_run` + fork-PR secret-safety analysis
 (previously missing, explicitly requested in the mission brief).** Round 1
@@ -580,41 +642,33 @@ fork-triggered access to the CI relay token. That must not happen silently;
 the gate needs a comment saying so, both in this diff and in the merged
 workflow file.
 
-```diff
---- a/.github/workflows/biff-notify.yml
-+++ b/.github/workflows/biff-notify.yml
-@@ -14,7 +14,11 @@ jobs:
-   notify:
-+    # event == 'push' is a secret-safety boundary, not just a notification
-+    # filter: this step's env: block carries secrets.BIFF_RELAY_TOKEN.
-+    # Widening this to include pull_request-sourced workflow_run completions
-+    # (e.g. to notify on fork-PR CI failures) reopens fork access to that
-+    # token unless paired with an explicit
-+    # `github.event.workflow_run.head_repository.full_name ==
-+    # github.repository` check, per GitHub's workflow_run-with-secrets
-+    # guidance. Do not relax this filter without adding that check.
-     if: >-
-       github.event.workflow_run.conclusion == 'failure'
-       && github.event.workflow_run.event == 'push'
-@@ -22,10 +26,14 @@ jobs:
-       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-         with:
-           sparse-checkout: .punt-labs/biff
-       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-       - env:
-           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
-           BRANCH: ${{ github.event.workflow_run.head_branch }}
-           RUN_URL: ${{ github.event.workflow_run.html_url }}
-+          BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
-+          BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
-+          BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
-         run: >-
-           uvx --from punt-biff biff --user github-actions wall
-           "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
-           --duration 2h
+`.github/workflows/biff-notify.yml` (and the bundled `biff enable` template,
+`src/biff/data/biff-notify.yml`, which must stay byte-identical apart from
+the `workflows:` list) is the authoritative source — this section explains
+the shape rather than reproducing it as a diff that would rot the moment
+either file changes further (as `.github/workflows/checkout` pin bumps and
+the CI-pin fix below already have). The relevant `env:` block:
+
+```yaml
+      - env:
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
+          BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
+          BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
+        run: >-
+          uvx --from punt-biff==1.15.2 biff --user github-actions wall
+          "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
+          --duration 2h
 ```
 
-Notes on this diff:
+**The `punt-biff==1.15.2` pin above predates this feature** — that release
+does not contain `_apply_env_relay_overrides`, so the `BIFF_RELAY_*` vars
+in the block above are inert until the pin is bumped to a release that
+does. Tracked as biff-ykw; see the CHANGELOG entry for this design.
+
+Notes on this shape:
 
 - `BIFF_RELAY_URL` and `BIFF_RELAY_TLS_HANDSHAKE_FIRST` come from repository
   **variables** (`vars.*`), not secrets — a relay URL and a boolean TLS mode
@@ -635,19 +689,24 @@ Notes on this diff:
   demo relay, not an error. No repo is forced onto this mechanism to keep
   `biff-notify.yml` working.
 - **A repo whose own `config.yaml` already commits a `relay:` section
-  needs one more change than this diff alone provides.** Per §0's
-  repo-scoping gate, `_apply_env_relay_overrides` no-ops when the
-  file-resolved `relay_url` is already set, unless that same `config.yaml`
-  also sets `relay.allow_env_override: true`. This diff, by itself, only
-  makes the env vars *effective* for a repo whose `.punt-labs/biff/
-  config.yaml` has no committed `relay:` section at all (the CI sparse
-  checkout's default today). A repo that has already committed its own
-  `relay.url`/`relay.auth` must additionally add
-  `relay.allow_env_override: true` to that same `config.yaml` for this
+  needs one more change than this workflow shape alone provides.** Per
+  §0's repo-scoping gate, `_apply_env_relay_overrides` no-ops when the
+  SHARED `config.yaml` itself declares `relay.url`
+  (`_ConfigFields.relay_committed` is `True`), unless that same shared
+  file also sets `relay.allow_env_override: true`. The gate reads the
+  shared file specifically, never the merged `config.yaml` +
+  `config.local.yaml` result and never `config.local.yaml` alone — so
+  this workflow's env vars are effective for a repo whose `.punt-labs/
+  biff/config.yaml` has no committed `relay:` section at all (the CI
+  sparse checkout's default today), and would remain effective even if a
+  developer's own `config.local.yaml` happened to carry a personal
+  relay entry. A repo that has already committed its own
+  `relay.url`/`relay.auth` in the shared `config.yaml` must additionally
+  add `relay.allow_env_override: true` to that same file for this
   workflow's env vars to take effect — otherwise the committed relay wins
   silently and the new `env:` block is a no-op.
 - No changes to `on.workflow_run.workflows`, `permissions`, or the *logic* of
-  the `if:` gate — this proposal is scoped to the relay-connection step plus
+  the `if:` gate — this design is scoped to the relay-connection step plus
   the one guardrail comment on the gate documented above. The comment is not
   optional decoration: it is the record of why `event == 'push'` may not be
   relaxed without an accompanying `head_repository.full_name == repository`

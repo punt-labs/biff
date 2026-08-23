@@ -146,6 +146,30 @@ async def safe_close(nc: NatsClient) -> None:
             raise
 
 
+def sanitize_relay_url(url: str) -> str:
+    """Return ``host[:port]`` from the first server in *url*, dropping creds.
+
+    A NATS URL may embed ``user:pass@`` and may be a comma-separated
+    cluster list. Never log or embed userinfo in a message -- log lines,
+    warnings, and exception text must use this instead of the raw
+    (credential-bearing) URL. Unparseable input yields a placeholder
+    rather than echoing the raw URL.
+    """
+    first = url.split(",", 1)[0].strip()
+    if "//" not in first:  # urlsplit needs a // authority to find creds/host
+        first = "//" + first
+    try:
+        parts = urlsplit(first)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "<unknown host>"
+    if host is None:
+        return "<unknown host>"
+    if ":" in host:  # IPv6 — bracket regardless of port
+        host = f"[{host}]"
+    return f"{host}:{port}" if port is not None else host
+
+
 def _scrub_validation_error(exc: ValidationError | ValueError) -> str:
     """Render a validation failure without leaking the frame content.
 
@@ -205,25 +229,8 @@ class _ConnectionHealth:
 
     @staticmethod
     def _host_of(url: str) -> str:
-        """Return ``host[:port]`` from the first server in *url*, dropping creds.
-
-        A NATS URL may embed ``user:pass@`` and may be a comma-separated
-        cluster list.  Never log userinfo (PII); unparseable input yields a
-        placeholder rather than echoing the raw (credentialed) URL.
-        """
-        first = url.split(",", 1)[0].strip()
-        if "//" not in first:  # urlsplit needs a // authority to find creds/host
-            first = "//" + first
-        try:
-            parts = urlsplit(first)
-            host, port = parts.hostname, parts.port
-        except ValueError:
-            return "<unknown host>"
-        if host is None:
-            return "<unknown host>"
-        if ":" in host:  # IPv6 — bracket regardless of port
-            host = f"[{host}]"
-        return f"{host}:{port}" if port is not None else host
+        """Return ``host[:port]`` from *url*. See :func:`sanitize_relay_url`."""
+        return sanitize_relay_url(url)
 
     @property
     def consecutive_timeouts(self) -> int:
@@ -781,6 +788,54 @@ class NatsRelay:
             "error_cb": _on_error,
         }
 
+    async def _dial(self) -> NatsClient:
+        """Call ``nats.connect()``, raising a redacted error on failure.
+
+        ``auth_kwargs`` is a plain dict holding the raw token/seed/creds
+        value once :meth:`_auth_kwargs` expands ``RelayAuth`` into it --
+        unlike ``RelayAuth`` itself, this dict has no ``repr=False``
+        protection. ``raise ... from None`` inside an ``except`` clause
+        does NOT prevent the raw exception (and the traceback frame
+        holding this dict) from staying reachable via the new exception's
+        ``__context__`` -- ``from None`` only suppresses *display* of the
+        chain, it does not clear ``__context__``. The structural fix used
+        here is to never raise while an exception is still being handled:
+        the ``except`` clause only records the failure kind, the
+        ``finally`` clause empties the dict, and the redacted
+        ``RelayConnectError`` is raised only after both complete --
+        verified empirically that this yields
+        ``RelayConnectError().__context__ is None``, not merely
+        display-suppressed.
+        """
+        auth_kwargs = self._auth_kwargs()
+        error_kind: str | None = None
+        nc: NatsClient | None = None
+        try:
+            nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
+                self._url,
+                name=self._name,
+                ping_interval=_PING_INTERVAL,
+                max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
+                max_reconnect_attempts=_MAX_RECONNECT_ATTEMPTS,
+                reconnect_time_wait=_RECONNECT_TIME_WAIT,
+                **self._connection_callbacks(self._generation),
+                **auth_kwargs,
+                **self._tls_kwargs(),
+            )
+        except Exception as exc:  # noqa: BLE001 — boundary: record only the
+            # exception kind here; never re-raise exc itself, or its frame
+            # (holding auth_kwargs) becomes reachable via __context__.
+            error_kind = type(exc).__name__
+        finally:
+            auth_kwargs.clear()
+        if error_kind is not None or nc is None:
+            host = sanitize_relay_url(self._url)
+            logger.warning(
+                "failed to connect to relay %s: %s", host, error_kind or "unknown"
+            )
+            raise RelayConnectError(f"failed to connect to relay: {host}")
+        return nc
+
     async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
         """Create a new NATS connection and provision infrastructure.
 
@@ -799,39 +854,7 @@ class NatsRelay:
             # epoch so it counts reconnects on *this* client only (nats-relay.tex
             # invariant connState in {disconnected, closed} => reconnectEpoch=0).
             self._reconnect_epoch = 0
-            # auth_kwargs is a plain dict holding the raw token/seed/creds
-            # path once _auth_kwargs() expands RelayAuth into it -- unlike
-            # RelayAuth itself, this dict has no repr=False protection.  If
-            # nats.connect() raises, that dict survives in the exception's
-            # traceback frame (reachable via __context__) even after
-            # `raise ... from None` -- from None only suppresses *display*
-            # of the chained exception, it doesn't clear __context__.  The
-            # finally block empties the dict in place, which also clears it
-            # in the traceback frame that still references the same object.
-            auth_kwargs = self._auth_kwargs()
-            try:
-                nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
-                    self._url,
-                    name=self._name,
-                    ping_interval=_PING_INTERVAL,
-                    max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
-                    max_reconnect_attempts=_MAX_RECONNECT_ATTEMPTS,
-                    reconnect_time_wait=_RECONNECT_TIME_WAIT,
-                    **self._connection_callbacks(self._generation),
-                    **auth_kwargs,
-                    **self._tls_kwargs(),
-                )
-            except Exception as exc:  # noqa: BLE001 — boundary: never let raw
-                # auth kwargs escape via this frame's traceback; see the
-                # auth_kwargs comment above.
-                logger.warning(
-                    "failed to connect to relay %s: %s", self._url, type(exc).__name__
-                )
-                raise RelayConnectError(
-                    f"failed to connect to relay: {self._url}"
-                ) from None
-            finally:
-                auth_kwargs.clear()
+            nc = await self._dial()
 
         provision_start = time.monotonic()
         try:

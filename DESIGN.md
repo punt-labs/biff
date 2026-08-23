@@ -7065,7 +7065,13 @@ answer for humans is `.envrc.local` (repo-scoped, unloaded on `cd`,
 already the org's standard pattern), and a secondary `config.yaml`
 `relay.allow_env_override: true` opt-in that keeps a repo's own
 committed relay from being silently overridden by an ambient
-`BIFF_RELAY_*` value from anywhere else. Auth env vars are mutually
+`BIFF_RELAY_*` value from anywhere else. Both the committed-relay check
+and the opt-in are read from the SHARED `config.yaml` specifically —
+never the merged `config.yaml` + `config.local.yaml` result, and never
+`config.local.yaml` alone — so a developer's personal relay entry in
+their gitignored `config.local.yaml` never closes the gate, and a
+`config.local.yaml` opt-in can never open it for a relay the team
+committed. Auth env vars are mutually
 exclusive and replace the file-resolved `RelayAuth` wholesale, never
 merged field-by-field. Setting `BIFF_RELAY_URL` without an auth var
 clears auth and TLS mode, mirroring `--relay-url`'s existing
@@ -7081,11 +7087,18 @@ relay `wall` actually connects to.
 `RelayAuth`'s three auth fields get `field(repr=False)` (a live secret
 leak the moment CI-sourced tokens flow through the object, not just a
 hypothetical one). Every `nats.connect(**auth_kwargs, ...)` call site
-wraps the connect in `try/except .../finally: auth_kwargs.clear()`,
-raising a redacted `RelayConnectError` `from None` — `from None` alone
-doesn't clear `__context__`, so the `finally` block is what actually
-keeps the raw auth dict from surviving in a caught exception's
-traceback frame.
+wraps the connect in `try/except .../finally: auth_kwargs.clear()`, but
+raises the redacted `RelayConnectError` only *after* that block
+completes, never from inside the `except` clause (`from None` or
+otherwise) — `raise ... from None` inside an `except` clause does not
+clear `__context__`, and `nats.connect(**options)` builds its own
+separate kwargs dict the caller's `finally` can never reach anyway, so
+the only fix that actually closes the leak is ensuring no exception is
+"currently being handled" at the point the redacted error is raised
+(verified empirically: `err.__context__ is None` only with this
+pattern). Relay endpoints reaching a log line, warning, or exception
+message go through a shared `sanitize_relay_url` host-only sanitizer
+first — a NATS URL may embed `user:pass@`.
 
 See docs/relay-env-overrides.md for the full rejected-alternatives
 comparison (CI-runtime `config.local.yaml` patching from a secret;

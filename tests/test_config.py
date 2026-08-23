@@ -1761,14 +1761,35 @@ class TestApplyEnvRelayOverrides:
     ) -> None:
         """A repo that already commits relay.url is not silently overridden."""
         monkeypatch.setenv("BIFF_RELAY_URL", "tls://attacker:4222")
-        cf = _ConfigFields(relay_url="tls://committed:4222")
+        cf = _ConfigFields(relay_url="tls://committed:4222", relay_committed=True)
         result = _apply_env_relay_overrides(cf)
         assert result == cf
+
+    def test_gate_open_when_url_only_from_local_yaml(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A personal config.local.yaml relay entry does not close the gate.
+
+        relay_committed tracks only the SHARED config.yaml -- the merged
+        relay_url (which includes config.local.yaml) must never be used for
+        the gate, or every developer with a personal relay override in
+        config.local.yaml would have BIFF_RELAY_* silently blocked, even
+        though the design's stated precedence is
+        config.yaml < config.local.yaml < env vars.
+        """
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
+        cf = _ConfigFields(
+            relay_url="tls://from-local-yaml:4222", relay_committed=False
+        )
+        result = _apply_env_relay_overrides(cf)
+        assert result.relay_url == "tls://from-env:4222"
 
     def test_gate_open_when_opted_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         cf = _ConfigFields(
-            relay_url="tls://committed:4222", relay_allow_env_override=True
+            relay_url="tls://committed:4222",
+            relay_committed=True,
+            relay_allow_env_override=True,
         )
         result = _apply_env_relay_overrides(cf)
         assert result.relay_url == "tls://from-env:4222"
@@ -1779,7 +1800,7 @@ class TestApplyEnvRelayOverrides:
         """Gate closure short-circuits before any env var is even read."""
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "x")
         monkeypatch.setenv("BIFF_RELAY_NKEYS_SEED", "/does-not-exist")
-        cf = _ConfigFields(relay_url="tls://committed:4222")
+        cf = _ConfigFields(relay_url="tls://committed:4222", relay_committed=True)
         result = _apply_env_relay_overrides(cf)
         assert result == cf
 
@@ -1919,3 +1940,48 @@ class TestApplyEnvRelayOverridesIntegration:
         monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_url == "tls://from-env:4222"
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_env_var_not_blocked_by_personal_local_yaml_relay(
+        self, _mock_gh: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relay committed only in config.local.yaml does not close the gate.
+
+        Regression for PR #386 review round 2: gating on the merged
+        relay_url (which includes config.local.yaml) blocked env overrides
+        for any developer with a personal relay entry, not just repos with
+        a team-committed relay.url in the shared config.yaml.
+        """
+        (tmp_path / ".git").mkdir()
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.local.yaml").write_text(
+            "relay:\n  url: nats://personal-relay:4222\n"
+        )
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
+        resolved = load_cli_config(start=tmp_path)
+        assert resolved.config.relay_url == "tls://from-env:4222"
+
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_local_yaml_opt_in_cannot_authorize_env_override(
+        self, _mock_gh: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """allow_env_override in config.local.yaml never opens a shared gate.
+
+        Regression for PR #386 review round 2: the opt-in bit must come
+        from the shared config.yaml alone. A gitignored config.local.yaml
+        setting relay.allow_env_override: true must not authorize ambient
+        env vars to override the team's committed relay -- that decision
+        belongs to what the team commits, not to one developer's untracked
+        file.
+        """
+        (tmp_path / ".git").mkdir()
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text("relay:\n  url: nats://localhost:4222\n")
+        (biff_dir / "config.local.yaml").write_text(
+            "relay:\n  allow_env_override: true\n"
+        )
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://attacker:4222")
+        resolved = load_cli_config(start=tmp_path)
+        assert resolved.config.relay_url == "nats://localhost:4222"

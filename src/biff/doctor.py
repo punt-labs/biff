@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from biff.config import find_git_root, is_enabled, resolve_relay_config
-from biff.models import RelayAuth, RelayConnectError
+from biff.models import RelayAuth
 from biff.statusline import SETTINGS_PATH
 
 PLUGIN_ID = "biff@punt-labs"
@@ -138,6 +138,12 @@ async def _test_nats_connection(
     (first run after install).  Suppresses nats.py ERROR log on
     the first attempt so a transient DNS timeout doesn't produce
     a scary traceback.
+
+    Never raises a redacted ``RelayConnectError`` here -- the raw
+    ``nats.connect()`` failure is caught, its occurrence noted for the
+    retry loop, and discarded; no exception object carrying the URL or
+    auth kwargs ever needs to escape this function's boundary, so there is
+    nothing to redact.
     """
     import logging
 
@@ -159,6 +165,7 @@ async def _test_nats_connection(
         # Rebuilt fresh each iteration -- clearing it after attempt 0's
         # failure must not starve the retry of its auth kwargs.
         auth_kwargs: dict[str, str] = dict(auth.as_nats_kwargs()) if auth else {}
+        connected = False
         try:
             try:
                 nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
@@ -167,26 +174,33 @@ async def _test_nats_connection(
                     **auth_kwargs,
                     **tls_kwargs,
                 )
-            except Exception:  # noqa: BLE001 — boundary: never let raw auth
-                # kwargs escape via this frame's traceback; see the
-                # matching comment in NatsRelay._open_connection.
-                raise RelayConnectError(f"failed to connect to relay: {url}") from None
             finally:
                 auth_kwargs.clear()
-            await safe_close(nc)
-            return True
         except Exception:  # noqa: BLE001 — retry once, then report unreachable
             if attempt == 0:
                 await asyncio.sleep(0.5)
+        else:
+            connected = True
+            await safe_close(nc)
         finally:
             if attempt == 0:
                 nats_logger.setLevel(saved_level)
+        if connected:
+            return True
     return False
 
 
 def _check_relay() -> CheckResult:
     """Check NATS relay is reachable."""
+    # Lazy import -- keep doctor's module-level imports free of nats_relay
+    # (and its eager `import nats`) for checks that don't need it.
+    from biff.nats_relay import sanitize_relay_url
+
     relay_url, relay_auth, tls_handshake_first = _resolve_relay_config()
+    # A NATS URL may embed user:pass@ -- doctor's success/failure messages
+    # go straight to the operator's terminal, so they must never echo the
+    # raw credential-bearing URL.
+    host = sanitize_relay_url(relay_url)
 
     try:
         reachable = asyncio.run(
@@ -195,11 +209,11 @@ def _check_relay() -> CheckResult:
             )
         )
     except Exception:  # noqa: BLE001
-        return CheckResult("NATS relay", False, f"connection error ({relay_url})")
+        return CheckResult("NATS relay", False, f"connection error ({host})")
 
     if reachable:
-        return CheckResult("NATS relay", True, f"reachable ({relay_url})")
-    return CheckResult("NATS relay", False, f"unreachable ({relay_url})")
+        return CheckResult("NATS relay", True, f"reachable ({host})")
+    return CheckResult("NATS relay", False, f"unreachable ({host})")
 
 
 def _check_biff_file() -> CheckResult:
