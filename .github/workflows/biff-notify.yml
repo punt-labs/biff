@@ -37,7 +37,10 @@ jobs:
           enable-cache: true
       - env:
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # head_branch is null for tag-triggered push events (e.g. a Release
+          # workflow on a tag push) -- fall back to the head SHA so the
+          # notification never carries a blank branch name.
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.event.workflow_run.head_sha }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: >-
           uvx --from punt-biff==1.15.2 biff --user github-actions wall
