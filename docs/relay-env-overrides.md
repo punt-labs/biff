@@ -1,7 +1,10 @@
 # Design: environment-variable relay overrides for headless invocations
 
-Status: **proposed** — not yet implemented, not yet ratified.
-Ticket: biff-xvv. Mission: m-2026-08-23-005.
+Status: **implemented** — ratified via mission m-2026-08-23-005 (PR #386),
+implemented via mission m-2026-08-23-006. See DES-060 in `DESIGN.md` for
+the settled-decision summary.
+Ticket: biff-xvv. Mission: m-2026-08-23-005 (design), m-2026-08-23-006
+(implementation).
 
 ## Why a standalone doc, not a `DESIGN.md` ADR
 
@@ -586,7 +589,7 @@ Notes on this diff:
   relaxed without an accompanying `head_repository.full_name == repository`
   check, now that a real secret sits downstream of it.
 
-## Open questions for the reviewer (djb)
+## Open questions for the reviewer (djb) — resolved by operator ruling
 
 1. Does the CI-scoped relay token need its own NATS user/permission set on
    the relay side (write-only to the `wall` subject, no read access to
@@ -594,9 +597,18 @@ Notes on this diff:
    assumes the token's *scope* is a relay-side authorization concern outside
    `biff`'s config layer, but it's worth confirming that assumption doesn't
    quietly become "CI has the same relay privileges as every human."
+
+   **Resolved:** out of scope for the implementation mission
+   (m-2026-08-23-006) — this is relay-side NATS authorization config,
+   tracked separately as bead biff-5m4.
 2. Should `_apply_env_relay_overrides` reject a `BIFF_RELAY_NKEYS_SEED` or
    `BIFF_RELAY_USER_CREDENTIALS` path that doesn't exist at resolution time
    (fail fast, before attempting to connect), the same way `RelayAuth` today
    defers that check to `nats.connect()`? CI failures from a missing
    credentials file would otherwise surface as an opaque NATS connection
    error rather than a clear config error.
+
+   **Resolved:** yes — implemented exactly as described.
+   `_apply_env_relay_overrides` raises `SystemExit` with a clear message
+   naming the missing path before returning, for both
+   `BIFF_RELAY_NKEYS_SEED` and `BIFF_RELAY_USER_CREDENTIALS`.
