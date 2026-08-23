@@ -1087,6 +1087,7 @@ def _apply_demo_relay_default(
 
 
 _TLS_TRUE_VALUES = frozenset({"1", "true", "yes"})
+_TLS_FALSE_VALUES = frozenset({"0", "false", "no"})
 
 _AUTH_ENV_FIELDS: dict[str, str] = {
     "BIFF_RELAY_TOKEN": "token",
@@ -1113,6 +1114,39 @@ def _env_or_none(name: str) -> str | None:
     return os.environ.get(name, "") or None
 
 
+def _resolved_auth_override(auth_var: str, path_value: str | None) -> RelayAuth:
+    """Build the ``RelayAuth`` for a single fired auth env var, or raise.
+
+    Fails fast for the two path-valued vars (``BIFF_RELAY_NKEYS_SEED``,
+    ``BIFF_RELAY_USER_CREDENTIALS``) rather than deferring to an opaque NATS
+    connect error later (docs/relay-env-overrides.md, open question 2).
+    """
+    if auth_var in _AUTH_ENV_PATH_FIELDS and not Path(cast("str", path_value)).exists():
+        raise SystemExit(
+            f"{auth_var} points to a file that does not exist: {path_value}"
+        )
+    # Wholesale replace -- never merge with the file-resolved RelayAuth
+    # (Sec 2): a token from a file and an nkeys_seed from the environment
+    # must never combine into one RelayAuth instance, which would violate
+    # RelayAuth's own single-field invariant.
+    return RelayAuth(**{_AUTH_ENV_FIELDS[auth_var]: path_value})
+
+
+def _tls_env_override() -> bool | None:
+    """Read ``BIFF_RELAY_TLS_HANDSHAKE_FIRST``, or ``None`` if it didn't fire.
+
+    ``True``/``False`` are both explicit, distinguishable overrides --
+    unlike the boolean's default, absence (``None``) means "leave whatever
+    value the URL/file resolution already settled on."
+    """
+    normalized = os.environ.get("BIFF_RELAY_TLS_HANDSHAKE_FIRST", "").strip().casefold()
+    if normalized in _TLS_TRUE_VALUES:
+        return True
+    if normalized in _TLS_FALSE_VALUES:
+        return False
+    return None
+
+
 def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
     """Layer ``BIFF_RELAY_*`` env vars over file-resolved relay fields.
 
@@ -1126,8 +1160,11 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
     Raises :class:`SystemExit` when two or more of ``BIFF_RELAY_TOKEN``,
     ``BIFF_RELAY_NKEYS_SEED``, and ``BIFF_RELAY_USER_CREDENTIALS`` are set
     simultaneously (naming the conflicting variables, never their values),
-    or when ``BIFF_RELAY_NKEYS_SEED``/``BIFF_RELAY_USER_CREDENTIALS`` names
-    a path that does not exist.
+    when ``BIFF_RELAY_NKEYS_SEED``/``BIFF_RELAY_USER_CREDENTIALS`` names a
+    path that does not exist, or when an auth env var fires with no relay
+    URL resolved (from ``BIFF_RELAY_URL`` or the file layers) -- an auth
+    override with nothing to authenticate against would otherwise silently
+    apply to the demo relay fallback.
     """
     if cf.relay_url is not None and not cf.relay_allow_env_override:
         return cf
@@ -1149,19 +1186,7 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
 
     if fired_auth:
         (auth_var,) = fired_auth
-        path_value = auth_env[auth_var]
-        if (
-            auth_var in _AUTH_ENV_PATH_FIELDS
-            and not Path(cast("str", path_value)).exists()
-        ):
-            raise SystemExit(
-                f"{auth_var} points to a file that does not exist: {path_value}"
-            )
-        # Wholesale replace -- never merge with the file-resolved RelayAuth
-        # (Sec 2): a token from a file and an nkeys_seed from the
-        # environment must never combine into one RelayAuth instance, which
-        # would violate RelayAuth's own single-field invariant.
-        relay_auth = RelayAuth(**{_AUTH_ENV_FIELDS[auth_var]: path_value})
+        relay_auth = _resolved_auth_override(auth_var, auth_env[auth_var])
         fired.append(auth_var)
 
     url_env = _env_or_none("BIFF_RELAY_URL")
@@ -1169,15 +1194,32 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
         relay_url = url_env
         fired.append("BIFF_RELAY_URL")
         if not fired_auth:
-            # URL-changes-clears-auth (Sec 2, direct #383 lineage): auth and
-            # TLS mode are properties of the relay being replaced, not
-            # portable to whatever BIFF_RELAY_URL now points at.
+            # URL-changes-clears-auth (Sec 2, direct #383 lineage): auth is a
+            # property of the relay being replaced, not portable to whatever
+            # BIFF_RELAY_URL now points at.
             relay_auth = None
-            tls_handshake_first = False
+        # TLS mode is likewise a property of the relay being replaced --
+        # reset it whenever the URL changes, even when an auth env var also
+        # fired in the same call. Without this, a stale file-resolved
+        # tls_handshake_first=True would leak onto the new relay in exactly
+        # the case docs/relay-env-overrides.md Sec 7 documents (URL + token
+        # set together), reopening the #383 footgun.
+        tls_handshake_first = False
 
-    tls_env = os.environ.get("BIFF_RELAY_TLS_HANDSHAKE_FIRST", "")
-    if tls_env.strip().casefold() in _TLS_TRUE_VALUES:
-        tls_handshake_first = True
+    if fired_auth and relay_url is None:
+        # An auth override with nothing to authenticate against would
+        # otherwise silently fall through to _apply_demo_relay_default and
+        # send a real secret to the shared public demo relay.
+        (auth_var,) = fired_auth
+        raise SystemExit(
+            f"{auth_var} is set but no relay URL is configured -- set "
+            "BIFF_RELAY_URL as well. An auth override with no relay URL "
+            "would otherwise silently apply to the demo relay."
+        )
+
+    tls_override = _tls_env_override()
+    if tls_override is not None:
+        tls_handshake_first = tls_override
         fired.append("BIFF_RELAY_TLS_HANDSHAKE_FIRST")
 
     for name in fired:

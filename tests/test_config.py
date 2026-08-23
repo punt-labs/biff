@@ -20,7 +20,9 @@ from biff.config import (
     _ethos_submodule_declared,
     _known_agent_github_logins,
     _read_identity_yaml,
+    _resolve_relay_fields,
     _SubmoduleDeclaration,
+    _tls_env_override,
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
@@ -1576,6 +1578,7 @@ class TestApplyEnvRelayOverrides:
         assert cf.relay_url == "tls://from-env:4222"
 
     def test_token_env_var_applies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "s3cret")
         cf = _apply_env_relay_overrides(_ConfigFields())
         assert cf.relay_auth == RelayAuth(token="s3cret")
@@ -1585,6 +1588,7 @@ class TestApplyEnvRelayOverrides:
     ) -> None:
         seed = tmp_path / "seed.nk"
         seed.write_text("seed")
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         monkeypatch.setenv("BIFF_RELAY_NKEYS_SEED", str(seed))
         cf = _apply_env_relay_overrides(_ConfigFields())
         assert cf.relay_auth == RelayAuth(nkeys_seed=str(seed))
@@ -1594,6 +1598,7 @@ class TestApplyEnvRelayOverrides:
     ) -> None:
         creds = tmp_path / "relay.creds"
         creds.write_text("creds")
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         monkeypatch.setenv("BIFF_RELAY_USER_CREDENTIALS", str(creds))
         cf = _apply_env_relay_overrides(_ConfigFields())
         assert cf.relay_auth == RelayAuth(user_credentials=str(creds))
@@ -1658,6 +1663,7 @@ class TestApplyEnvRelayOverrides:
         """One env auth var replaces the file's RelayAuth entirely, never merges."""
         seed = tmp_path / "seed.nk"
         seed.write_text("seed")
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         monkeypatch.setenv("BIFF_RELAY_NKEYS_SEED", str(seed))
         cf = _ConfigFields(relay_url=None, relay_auth=RelayAuth(token="from-file"))
         result = _apply_env_relay_overrides(cf)
@@ -1698,15 +1704,21 @@ class TestApplyEnvRelayOverrides:
     def test_no_url_env_var_leaves_auth_and_tls_untouched(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Env-only auth override (no URL) leaves TLS and URL as file-resolved."""
+        """Env-only auth override (no URL) leaves TLS and URL as file-resolved.
+
+        The file must already resolve a relay URL (or the auth override
+        would fall through to the demo relay -- rejected by the fail-fast
+        check this same override function performs).
+        """
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "rotated-token")
         cf = _ConfigFields(
-            relay_url=None,
+            relay_url="nats://committed:4222",
+            relay_allow_env_override=True,
             relay_auth=RelayAuth(token="stale-token"),
             relay_tls_handshake_first=True,
         )
         result = _apply_env_relay_overrides(cf)
-        assert result.relay_url is None
+        assert result.relay_url == "nats://committed:4222"
         assert result.relay_tls_handshake_first is True
         assert result.relay_auth == RelayAuth(token="rotated-token")
 
@@ -1739,6 +1751,7 @@ class TestApplyEnvRelayOverrides:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """BIFF_RELAY_TOKEN is a shared secret, not a path -- no fail-fast check."""
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "not-a-path")
         cf = _apply_env_relay_overrides(_ConfigFields())
         assert cf.relay_auth == RelayAuth(token="not-a-path")
@@ -1770,9 +1783,87 @@ class TestApplyEnvRelayOverrides:
         result = _apply_env_relay_overrides(cf)
         assert result == cf
 
+    def test_url_and_token_together_reset_stale_tls_handshake_first(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PR #386 review finding (bug 1): URL + auth set together must still
+        reset a stale file-resolved tls_handshake_first=True.
+
+        This is precisely the docs/relay-env-overrides.md Sec 7 CI shape --
+        BIFF_RELAY_URL and BIFF_RELAY_TOKEN set in the same env: block.
+        Before the fix, the reset only fired when no auth var accompanied
+        the URL change, so a stale flag would silently leak onto whatever
+        new relay BIFF_RELAY_URL now points at.
+        """
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "from-env-token")
+        cf = _ConfigFields(
+            relay_url=None,
+            relay_auth=RelayAuth(token="from-file"),
+            relay_tls_handshake_first=True,
+        )
+        result = _apply_env_relay_overrides(cf)
+        assert result.relay_tls_handshake_first is False
+
+    def test_url_and_token_with_explicit_tls_override_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The URL-change reset can still be overridden explicitly in the
+        same call, e.g. re-enabling handshake-first for the new relay."""
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "from-env-token")
+        monkeypatch.setenv("BIFF_RELAY_TLS_HANDSHAKE_FIRST", "true")
+        cf = _ConfigFields(relay_url=None, relay_tls_handshake_first=False)
+        result = _apply_env_relay_overrides(cf)
+        assert result.relay_tls_handshake_first is True
+
+    def test_auth_only_no_url_fails_fast_instead_of_demo_relay(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PR #386 review finding (bug 2): an auth-only override with no
+        resolved relay URL must raise, not silently resolve to the demo
+        relay via _apply_demo_relay_default -- this is the exact CI
+        misconfiguration shape (missing/typo'd vars.BIFF_RELAY_URL) that
+        would otherwise leak a real CI token to the shared public relay.
+        """
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "real-ci-secret")
+        with pytest.raises(SystemExit, match="BIFF_RELAY_TOKEN"):
+            _apply_env_relay_overrides(_ConfigFields())
+
+    def test_auth_only_no_url_error_does_not_name_demo_relay_as_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end: the auth-only-no-URL misconfiguration must never
+        resolve to DEMO_RELAY_URL -- verified via the full resolution
+        chain, not just the raw override function."""
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "real-ci-secret")
+        with pytest.raises(SystemExit):
+            _resolve_relay_fields(_ConfigFields())
+
+    @pytest.mark.parametrize("value", ["0", "false", "FALSE", "no", "No"])
+    def test_tls_handshake_first_explicit_false_is_distinguishable_from_unset(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        """PR #386 review finding (bug 1b): an explicit 'false' must reset a
+        stale True from the file layer -- and must be logged as fired,
+        proving it is a distinct code path from "unset" (which also
+        resolves to False but never appends to the fired list).
+        """
+        monkeypatch.setenv("BIFF_RELAY_TLS_HANDSHAKE_FIRST", value)
+        cf = _ConfigFields(relay_tls_handshake_first=True)
+        assert _tls_env_override() is False
+        result = _apply_env_relay_overrides(cf)
+        assert result.relay_tls_handshake_first is False
+
+    def test_tls_handshake_first_unset_is_none_not_false(self) -> None:
+        """Unset must be distinguishable from explicit false at the helper
+        level -- this is what makes bug 1b's fix possible."""
+        assert _tls_env_override() is None
+
     def test_fired_vars_logged_by_name(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "s3cret-value")
         with caplog.at_level(logging.INFO, logger=_CONFIG_LOGGER):
             _apply_env_relay_overrides(_ConfigFields())

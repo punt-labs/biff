@@ -153,11 +153,11 @@ never by presentation code:
 
 | Variable | Maps to | Notes |
 |---|---|---|
-| `BIFF_RELAY_URL` | `relay.url` | e.g. `tls://relay.example.com:4222` |
+| `BIFF_RELAY_URL` | `relay.url` | e.g. `tls://relay.example.com:4222`. **Never embed userinfo** (`nats://user:pass@host`) — §7 classifies `BIFF_RELAY_URL` as a non-secret repository *variable* (`vars.*`, visible in plaintext in the Settings UI and in workflow logs), so a URL carrying a password would leak it. Put credentials in one of the three `BIFF_RELAY_*` auth vars (sourced from `secrets.*`) instead; this is the operator's responsibility to avoid, not something `_apply_env_relay_overrides` validates or rejects today. |
 | `BIFF_RELAY_TOKEN` | `relay.auth.token` | mutually exclusive with the next two |
 | `BIFF_RELAY_NKEYS_SEED` | `relay.auth.nkeys_seed` | path to a `.nk` file, must exist at run time |
 | `BIFF_RELAY_USER_CREDENTIALS` | `relay.auth.user_credentials` | path to a `.creds` file |
-| `BIFF_RELAY_TLS_HANDSHAKE_FIRST` | `relay.tls_handshake_first` | `"1"`/`"true"`/`"yes"` (case-insensitive) → `True`; anything else, including unset → unchanged |
+| `BIFF_RELAY_TLS_HANDSHAKE_FIRST` | `relay.tls_handshake_first` | `"1"`/`"true"`/`"yes"` (case-insensitive) → `True`; `"0"`/`"false"`/`"no"` (case-insensitive) → `False`; anything else, including unset → unchanged |
 
 **Precedence, lowest to highest** (unchanged fields fall through to the next
 layer down — this is a *field-level* override, exactly like
@@ -256,25 +256,64 @@ committed relay config or has explicitly opted in via
 ### The URL-changes-clear-auth rule (direct #383 lineage)
 
 If `BIFF_RELAY_URL` is set **and** none of the three auth env vars is set,
-`_apply_env_relay_overrides` clears `relay_auth` and
-`relay_tls_handshake_first` to their empty defaults before returning — the
-exact same rule `_load_base_config` already applies to the CLI `--relay-url`
-override (`config.py:1153-1157`), for the exact same reason: auth and TLS
-mode are properties of the relay being replaced, not portable to whatever
+`_apply_env_relay_overrides` clears `relay_auth` to its empty default before
+returning — the same rule `_load_base_config` already applies to the CLI
+`--relay-url` override (`config.py:1153-1157`), for the same reason: auth is
+a property of the relay being replaced, not portable to whatever
 `BIFF_RELAY_URL` now points at. Concretely: a repo whose `config.yaml` has no
 `relay:` section resolves to the demo relay's URL *and* its bundled demo
 credentials (`_apply_demo_relay_default`); if CI sets only `BIFF_RELAY_URL`
 to a private relay without also setting an auth env var, silently carrying
 the demo creds forward would mean CI attempts to authenticate to the private
-relay with democreds — an even more confusing failure than "no auth
-configured." Clearing forces the operator to set the *pair*
-(`BIFF_RELAY_URL` + one of the three auth vars) together, which is also
-exactly the pairing `biff-notify.yml`'s new `env:` block will use (§7).
+relay with demo creds — an even more confusing failure than "no auth
+configured."
+
+**`relay_tls_handshake_first` is reset to `False` whenever `BIFF_RELAY_URL`
+fires, unconditionally — including when an auth env var fires in the same
+call.** This is stricter than the auth-clearing rule above on purpose: TLS
+handshake mode is a property of the relay endpoint, not of the auth
+credential, so it must not survive a URL change even when the operator also
+supplied fresh auth in the same breath. `biff-notify.yml`'s own CI shape
+(§7) sets `BIFF_RELAY_URL` and `BIFF_RELAY_TOKEN` together in one `env:`
+block — precisely the case where a stale file-resolved
+`tls_handshake_first: true` must not leak onto whatever new relay
+`BIFF_RELAY_URL` now points at, reopening the #383 footgun. An operator who
+needs the new relay to use handshake-first negotiation sets
+`BIFF_RELAY_TLS_HANDSHAKE_FIRST=true` explicitly in the same `env:` block;
+it is applied *after* the URL-triggered reset, so it wins.
 
 If `BIFF_RELAY_URL` is **not** set, none of this fires — env-only auth
 override (e.g. rotating just the token while `config.yaml`'s URL stays
 put) leaves `relay_tls_handshake_first` and the URL exactly as the files
 resolved them.
+
+### `BIFF_RELAY_TLS_HANDSHAKE_FIRST` is explicitly three-valued, not two
+
+Because `tls_handshake_first` can be reset to `False` by the URL-change rule
+above, the env var itself must be able to express "explicitly `False`" as
+distinct from "not set, leave whatever value URL/file resolution already
+produced." `_apply_env_relay_overrides` therefore treats
+`BIFF_RELAY_TLS_HANDSHAKE_FIRST` as three-valued: `"1"`/`"true"`/`"yes"`
+(case-insensitive) → `True`; `"0"`/`"false"`/`"no"` (case-insensitive) →
+`False`, recorded as fired and logged by name like every other override;
+anything else, including unset or empty, leaves the value untouched from
+whatever the URL/file resolution already settled on.
+
+### Auth env vars require a resolved relay URL — fail fast, never fall through to the demo relay
+
+If any of `BIFF_RELAY_TOKEN`, `BIFF_RELAY_NKEYS_SEED`, or
+`BIFF_RELAY_USER_CREDENTIALS` fires and, after applying `BIFF_RELAY_URL` (if
+it also fired), the resolved relay URL is still unset,
+`_apply_env_relay_overrides` raises `SystemExit` naming the auth var that
+fired, rather than letting `_apply_demo_relay_default` (called immediately
+afterward in `_resolve_relay_fields`) fill in `DEMO_RELAY_URL`. Without this
+check, a CI misconfiguration as small as a missing or typo'd
+`vars.BIFF_RELAY_URL` would silently send a real, secret CI token to the
+shared public demo relay (`tls://connect.ngs.global`) instead of failing
+loudly — exactly the class of secret-leak incident this design exists to
+prevent (§5). The pairing this enforces (`BIFF_RELAY_URL` + one of the three
+auth vars, set together) is the same pairing `biff-notify.yml`'s `env:`
+block already uses (§7).
 
 ## 3. Does `tls_handshake_first` need its own env var, or can it be inferred?
 
@@ -430,13 +469,17 @@ that shells out `yq` or a heredoc to materialize the file.
   (this is the same "two writers of one truth" failure class flagged for
   `doctor.py` in §1).
 - **The secret lands on disk**, even if the step is careful to avoid an `ls`
-  or `cat` afterward. Any GitHub Actions runner is a shared/reused VM image
-  for `ubuntu-latest`; any workflow debugging step (`actions/upload-artifact`
-  aimed too broadly, a crash dump, a coredump-on-panic) that captures the
-  working directory now captures the token in plaintext. An environment
-  variable sourced from `secrets.*` never touches the filesystem at all —
-  GitHub Actions injects it directly into the process environment of the
-  `run:` step.
+  or `cat` afterward. `ubuntu-latest` runners are ephemeral and single-job
+  (GitHub tears the VM down after the job completes; it is not shared or
+  reused across jobs) — the actual risk this alternative creates is exposure
+  to *later steps in the same job* (a workflow debugging step,
+  `actions/upload-artifact` aimed too broadly, a crash dump captured before
+  the job ends) and, separately, to **persistent self-hosted runners**,
+  where a plaintext file left on disk by a failed cleanup step genuinely
+  does survive into a later, unrelated job. An environment variable sourced
+  from `secrets.*` never touches the filesystem at all — GitHub Actions
+  injects it directly into the process environment of the `run:` step, so
+  neither exposure surface applies.
 - Cleanup is fallible: a `run:` step that fails *before* its own cleanup
   step runs leaves the plaintext file on the runner's disk for the remainder
   of the job (subsequent steps, artifact uploads) — an env var has no
@@ -492,12 +535,21 @@ of flags to `wall` (and every other CLI command CI might invoke).
   **This is not a point in favor of exported env vars either** — see §0,
   which retracts the idea that a human `export`ing `BIFF_RELAY_TOKEN` once
   per shell session is a safe alternative. Both a typed `--relay-token` flag
-  and an exported env var are footguns for interactive human use; the
+  and a **bare shell `export`** are footguns for interactive human use; the
   difference is that `--relay-token` additionally fails on the CLI-args
   exposure surface described above. Env vars remain the right mechanism, but
   strictly for non-interactive, single-identity processes (CI runners,
-  containers, systemd units) as scoped by §0 — never for a human's
-  multi-repo interactive shell.
+  containers, systemd units) *or* the direnv-scoped `.envrc.local` pattern
+  §0 endorses for humans — never a bare, un-scoped `export` in an
+  interactive shell or shell profile. **This is not a contradiction of §0's
+  `.envrc.local` guidance** — the two are structurally different mechanisms
+  that happen to share the same env var names. A bare `export` is ambient
+  for the rest of that shell's life across every repo (the exact cross-repo
+  leak §0 exists to close); `.envrc.local` is loaded and unloaded by direnv
+  on `cd` in/out of one specific repo, so it never outlives being in that
+  repo. Wherever this document says "never for a human's interactive
+  shell," it means the bare-export case specifically, not the
+  `.envrc.local` case — see §0 for the full mechanism distinction.
 
 ## 7. `biff-notify.yml` diff
 
@@ -582,6 +634,18 @@ Notes on this diff:
   behavior is byte-for-byte identical to today: the workflow degrades to the
   demo relay, not an error. No repo is forced onto this mechanism to keep
   `biff-notify.yml` working.
+- **A repo whose own `config.yaml` already commits a `relay:` section
+  needs one more change than this diff alone provides.** Per §0's
+  repo-scoping gate, `_apply_env_relay_overrides` no-ops when the
+  file-resolved `relay_url` is already set, unless that same `config.yaml`
+  also sets `relay.allow_env_override: true`. This diff, by itself, only
+  makes the env vars *effective* for a repo whose `.punt-labs/biff/
+  config.yaml` has no committed `relay:` section at all (the CI sparse
+  checkout's default today). A repo that has already committed its own
+  `relay.url`/`relay.auth` must additionally add
+  `relay.allow_env_override: true` to that same `config.yaml` for this
+  workflow's env vars to take effect — otherwise the committed relay wins
+  silently and the new `env:` block is a no-op.
 - No changes to `on.workflow_run.workflows`, `permissions`, or the *logic* of
   the `if:` gate — this proposal is scoped to the relay-connection step plus
   the one guardrail comment on the gate documented above. The comment is not
