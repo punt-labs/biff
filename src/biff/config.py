@@ -1193,6 +1193,33 @@ def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
     )
 
 
+def _resolve_relay_fields(cf: _ConfigFields) -> tuple[str, RelayAuth | None, bool]:
+    """Apply env overrides and the demo-relay fallback to resolved fields."""
+    cf = _apply_env_relay_overrides(cf)
+    relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
+    return relay_url, relay_auth, cf.relay_tls_handshake_first
+
+
+def resolve_relay_config(repo_root: Path | None) -> tuple[str, RelayAuth | None, bool]:
+    """Resolve relay URL, auth, and TLS handshake mode for *repo_root*.
+
+    Single source of truth for the file+env resolution chain --
+    ``config.yaml`` < ``config.local.yaml`` < ``BIFF_RELAY_*`` env vars <
+    the demo relay fallback. Shared by :func:`_load_base_config` and
+    :func:`biff.doctor._resolve_relay_config` so ``biff doctor`` reports
+    the same relay ``wall`` actually connects to, including under env
+    overrides -- ``doctor.py`` previously duplicated this chain
+    independently, which PR #383 had to hand-patch by hand once already
+    when ``tls_handshake_first`` was added (docs/relay-env-overrides.md
+    Sec 1).
+
+    *repo_root* may be ``None`` (not inside a git repo) -- resolves to
+    the demo relay fallback in that case, same as zero-config mode.
+    """
+    cf = _resolve_config_fields(repo_root) if repo_root is not None else _ConfigFields()
+    return _resolve_relay_fields(cf)
+
+
 _NO_USER_MSG = (
     "No user configured. Install the gh CLI and authenticate, or pass --user <handle>"
 )
@@ -1245,12 +1272,10 @@ def _load_base_config(
     repo_common_root = Path(common_str) if common_str else repo_root
 
     cf = _resolve_config_fields(repo_root)
-    cf = _apply_env_relay_overrides(cf)
-    relay_url_resolved, relay_auth = _apply_demo_relay_default(
-        cf.relay_url, cf.relay_auth
+    relay_url_resolved, relay_auth, relay_tls_handshake_first = _resolve_relay_fields(
+        cf
     )
     relay_url: str | None = relay_url_resolved
-    relay_tls_handshake_first = cf.relay_tls_handshake_first
 
     # CLI relay-url override: empty string -> local relay,
     # non-empty -> use it.  Always clear relay_auth and
