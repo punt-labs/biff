@@ -118,6 +118,17 @@ class TestTemplateHardening:
         content = _template_content()
         assert "enable-cache: true" in content
 
+    def test_branch_falls_back_to_head_sha_for_tag_triggers(self) -> None:
+        """``head_branch`` is null for tag-triggered push events (e.g. a
+        Release workflow on a tag push) -- without a fallback the
+        notification message carries a blank branch name.
+        """
+        content = _template_content()
+        assert (
+            "BRANCH: ${{ github.event.workflow_run.head_branch || "
+            "github.event.workflow_run.head_sha }}"
+        ) in content
+
 
 class TestRenderPlaceholderGuard:
     """render() fails loud, never silently deposits an unrendered template."""
