@@ -203,7 +203,7 @@ class RelayAuth:
         return {}
 
 
-class RelayConnectError(Exception):
+class RelayConnectError(ConnectionError):
     """Raised when ``nats.connect()`` fails, in place of the raw exception.
 
     Every call site that expands ``RelayAuth.as_nats_kwargs()`` into
@@ -212,6 +212,14 @@ class RelayConnectError(Exception):
     holds the plaintext auth kwargs dict via ``__context__``, which
     ``from None`` alone does not clear (only ``finally: auth_kwargs.clear()``
     at the call site does that).
+
+    Subclasses the builtin ``ConnectionError`` (itself an ``OSError``)
+    rather than ``Exception`` directly: existing best-effort callers along
+    the talk/REPL path already catch ``(NatsError, TimeoutError, OSError)``
+    around calls that indirectly redial through ``_ensure_connected()``.
+    Raising a bare ``Exception`` subclass here would silently fall through
+    those handlers and crash a loop that used to absorb the failure and
+    keep going.
     """
 
 

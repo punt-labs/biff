@@ -55,6 +55,7 @@ from pydantic import ValidationError
 from biff.models import (
     Message,
     RelayAuth,
+    RelayConnectError,
     SessionEvent,
     UnreadSummary,
     UserSession,
@@ -798,17 +799,37 @@ class NatsRelay:
             # epoch so it counts reconnects on *this* client only (nats-relay.tex
             # invariant connState in {disconnected, closed} => reconnectEpoch=0).
             self._reconnect_epoch = 0
-            nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
-                self._url,
-                name=self._name,
-                ping_interval=_PING_INTERVAL,
-                max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
-                max_reconnect_attempts=_MAX_RECONNECT_ATTEMPTS,
-                reconnect_time_wait=_RECONNECT_TIME_WAIT,
-                **self._connection_callbacks(self._generation),
-                **self._auth_kwargs(),
-                **self._tls_kwargs(),
-            )
+            # auth_kwargs is a plain dict holding the raw token/seed/creds
+            # path once _auth_kwargs() expands RelayAuth into it -- unlike
+            # RelayAuth itself, this dict has no repr=False protection.  If
+            # nats.connect() raises, that dict survives in the exception's
+            # traceback frame (reachable via __context__) even after
+            # `raise ... from None` -- from None only suppresses *display*
+            # of the chained exception, it doesn't clear __context__.  The
+            # finally block empties the dict in place, which also clears it
+            # in the traceback frame that still references the same object.
+            auth_kwargs = self._auth_kwargs()
+            try:
+                nc = await nats.connect(  # pyright: ignore[reportUnknownMemberType]
+                    self._url,
+                    name=self._name,
+                    ping_interval=_PING_INTERVAL,
+                    max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
+                    max_reconnect_attempts=_MAX_RECONNECT_ATTEMPTS,
+                    reconnect_time_wait=_RECONNECT_TIME_WAIT,
+                    **self._connection_callbacks(self._generation),
+                    **auth_kwargs,
+                    **self._tls_kwargs(),
+                )
+            except Exception as exc:  # noqa: BLE001 — boundary: never let raw
+                # auth kwargs escape via this frame's traceback; see the
+                # auth_kwargs comment above.
+                logger.warning("failed to connect to relay %s: %r", self._url, exc)
+                raise RelayConnectError(
+                    f"failed to connect to relay: {self._url}"
+                ) from None
+            finally:
+                auth_kwargs.clear()
 
         provision_start = time.monotonic()
         try:
