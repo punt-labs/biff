@@ -824,7 +824,9 @@ class NatsRelay:
             except Exception as exc:  # noqa: BLE001 — boundary: never let raw
                 # auth kwargs escape via this frame's traceback; see the
                 # auth_kwargs comment above.
-                logger.warning("failed to connect to relay %s: %r", self._url, exc)
+                logger.warning(
+                    "failed to connect to relay %s: %s", self._url, type(exc).__name__
+                )
                 raise RelayConnectError(
                     f"failed to connect to relay: {self._url}"
                 ) from None
