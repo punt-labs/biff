@@ -265,10 +265,14 @@ committed relay config or has explicitly opted in via
   `RelayAuth(token="…", nkeys_seed="…")` — that object violates `RelayAuth`'s
   own single-field invariant and `RelayAuth.as_nats_kwargs()` would silently
   pick just one of the two, hiding the conflict instead of failing on it.
+  This is the case that lets a team keep `relay.url` committed in
+  `config.yaml` while CI supplies only the token via `BIFF_RELAY_TOKEN` —
+  provided §0's repo-scoping gate is satisfied, i.e. that same `config.yaml`
+  also sets `relay.allow_env_override: true` (a committed relay is
+  protected by default; the auth-only env var alone does not bypass that).
 - If **none** is set, `relay_auth` falls through unchanged from
-  `config.yaml`/`config.local.yaml` resolution — this is the case that lets a
-  team keep `relay.url` committed in `config.yaml` while CI supplies only the
-  token via `BIFF_RELAY_TOKEN`.
+  `config.yaml`/`config.local.yaml` resolution — no auth env var fired, so
+  there is nothing for this layer to override.
 
 ### The URL-changes-clear-auth rule (direct #383 lineage)
 
@@ -681,13 +685,18 @@ Notes on this shape:
   to whatever the team's actual relay grants CI (least privilege — a
   CI-scoped token, not the same token a human's `config.local.yaml` carries,
   so rotating or revoking CI's access never touches a human's session).
-- If `vars.BIFF_RELAY_URL` is unset (repo hasn't opted in yet), the `env:`
-  entry evaluates to an empty string, `_apply_env_relay_overrides` treats an
-  empty `BIFF_RELAY_URL` as "not set" (consistent with how `config.py`
-  already treats absent-vs-empty elsewhere, e.g. `_has_orgs_key`), and
-  behavior is byte-for-byte identical to today: the workflow degrades to the
-  demo relay, not an error. No repo is forced onto this mechanism to keep
-  `biff-notify.yml` working.
+- If `vars.BIFF_RELAY_URL` is unset **and** `secrets.BIFF_RELAY_TOKEN` is
+  also unset (repo hasn't opted in yet), both `env:` entries evaluate to
+  empty strings, `_apply_env_relay_overrides` treats an empty value as "not
+  set" (consistent with how `config.py` already treats absent-vs-empty
+  elsewhere, e.g. `_has_orgs_key`), and behavior is byte-for-byte identical
+  to today: the workflow degrades to the demo relay, not an error. No repo
+  is forced onto this mechanism to keep `biff-notify.yml` working. **This
+  does NOT hold if only one of the two is configured** — a repo that sets
+  `secrets.BIFF_RELAY_TOKEN` but leaves `vars.BIFF_RELAY_URL` unset hits §2's
+  auth-requires-a-URL check and fails fast with `SystemExit` instead,
+  deliberately, rather than silently sending that secret to the demo relay.
+  Configure both together or neither.
 - **A repo whose own `config.yaml` already commits a `relay:` section
   needs one more change than this workflow shape alone provides.** Per
   §0's repo-scoping gate, `_apply_env_relay_overrides` no-ops when the
