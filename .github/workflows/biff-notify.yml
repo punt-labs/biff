@@ -13,6 +13,14 @@ permissions:
 
 jobs:
   notify:
+    # event == 'push' is a secret-safety boundary, not just a notification
+    # filter: this step's env: block carries secrets.BIFF_RELAY_TOKEN.
+    # Widening this to include pull_request-sourced workflow_run completions
+    # (e.g. to notify on fork-PR CI failures) reopens fork access to that
+    # token unless paired with an explicit
+    # `github.event.workflow_run.head_repository.full_name ==
+    # github.repository` check, per GitHub's workflow_run-with-secrets
+    # guidance. Do not relax this filter without adding that check.
     if: >-
       github.event.workflow_run.conclusion == 'failure'
       && github.event.workflow_run.event == 'push'
@@ -42,6 +50,15 @@ jobs:
           # notification never carries a blank branch name.
           BRANCH: ${{ github.event.workflow_run.head_branch || github.event.workflow_run.head_sha }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
+          BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
+          BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
+        # NOTE: 1.15.2 predates BIFF_RELAY_* env-var support
+        # (docs/relay-env-overrides.md, DES-060) -- until this pin is bumped
+        # to a release containing it, the BIFF_RELAY_* vars above are
+        # silently ignored and this step keeps falling through to the demo
+        # relay. Tracked in biff-ykw; bump this pin (and the copy in
+        # src/biff/data/biff-notify.yml) once that release ships.
         run: >-
           uvx --from punt-biff==1.15.2 biff --user github-actions wall
           "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"

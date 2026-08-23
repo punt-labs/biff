@@ -7029,3 +7029,78 @@ pass (route URLs, cluster auth, split-brain behavior) disproportionate to
 what a proof-of-value pilot needs to answer, which is "does biff work for
 our team," not "does our NATS survive a node failure." The guide points
 that evaluation at the upstream Helm chart instead.
+
+## DES-060: `BIFF_RELAY_*` Environment Variable Overrides
+
+**Date:** 2026-08-23
+**Status:** Settled
+**Topic:** Headless invocations (CI, containers, systemd units) need a way
+to point biff at a private relay without a committed config file
+**Related:** docs/relay-env-overrides.md (full design, rejected
+alternatives, and the round-by-round security review this decision went
+through), DES-041/PR #383 (the `tls_handshake_first` explicit-opt-in
+precedent this design inherits directly), DES-053 (the un-audited
+second-reader failure class `doctor.py`'s relay resolution repeated)
+
+### Problem
+
+`.github/workflows/biff-notify.yml` (and any other headless `biff`
+invocation — a container, a systemd unit) had no way to reach a
+private, token-authed relay: `config.py`'s resolution read only
+`config.yaml`/`config.local.yaml`, and `--relay-url` (where it existed
+at all, on `serve`/`mcp` only) cleared auth on override, so it could
+never point at an authenticated relay either. CI always fell back to
+the bundled demo relay, silently.
+
+### Decision
+
+Five new environment variables (`BIFF_RELAY_URL`, `BIFF_RELAY_TOKEN`,
+`BIFF_RELAY_NKEYS_SEED`, `BIFF_RELAY_USER_CREDENTIALS`,
+`BIFF_RELAY_TLS_HANDSHAKE_FIRST`), read only by
+`_apply_env_relay_overrides` in `config.py`, sit between
+`config.local.yaml` and the CLI `--relay-url` override in precedence.
+Two gates keep this from becoming an ambient-credential footgun (full
+reasoning in the design doc's Sec 0, added in review): the primary
+answer for humans is `.envrc.local` (repo-scoped, unloaded on `cd`,
+already the org's standard pattern), and a secondary `config.yaml`
+`relay.allow_env_override: true` opt-in that keeps a repo's own
+committed relay from being silently overridden by an ambient
+`BIFF_RELAY_*` value from anywhere else. Both the committed-relay check
+and the opt-in are read from the SHARED `config.yaml` specifically —
+never the merged `config.yaml` + `config.local.yaml` result, and never
+`config.local.yaml` alone — so a developer's personal relay entry in
+their gitignored `config.local.yaml` never closes the gate, and a
+`config.local.yaml` opt-in can never open it for a relay the team
+committed. Auth env vars are mutually
+exclusive and replace the file-resolved `RelayAuth` wholesale, never
+merged field-by-field. Setting `BIFF_RELAY_URL` without an auth var
+clears auth and TLS mode, mirroring `--relay-url`'s existing
+DES-041-established behavior. `BIFF_RELAY_NKEYS_SEED` /
+`BIFF_RELAY_USER_CREDENTIALS` fail fast with `SystemExit` if the named
+file doesn't exist, rather than surfacing as an opaque NATS error later.
+
+`doctor.py`'s independent relay-config reader (the second-reader
+failure class DES-053 names) is retired in favor of a shared
+`config.resolve_relay_config()`, so `biff doctor` reports the same
+relay `wall` actually connects to.
+
+`RelayAuth`'s three auth fields get `field(repr=False)` (a live secret
+leak the moment CI-sourced tokens flow through the object, not just a
+hypothetical one). Every `nats.connect(**auth_kwargs, ...)` call site
+wraps the connect in `try/except .../finally: auth_kwargs.clear()`, but
+raises the redacted `RelayConnectError` only *after* that block
+completes, never from inside the `except` clause (`from None` or
+otherwise) — `raise ... from None` inside an `except` clause does not
+clear `__context__`, and `nats.connect(**options)` builds its own
+separate kwargs dict the caller's `finally` can never reach anyway, so
+the only fix that actually closes the leak is ensuring no exception is
+"currently being handled" at the point the redacted error is raised
+(verified empirically: `err.__context__ is None` only with this
+pattern). Relay endpoints reaching a log line, warning, or exception
+message go through a shared `sanitize_relay_url` host-only sanitizer
+first — a NATS URL may embed `user:pass@`.
+
+See docs/relay-env-overrides.md for the full rejected-alternatives
+comparison (CI-runtime `config.local.yaml` patching from a secret;
+paired `--relay-token`-style flags) and the two-round security review
+this went through before implementation.

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from biff.doctor import (
     BIFF_COMMANDS,
@@ -19,8 +21,10 @@ from biff.doctor import (
     _check_user_import,
     _print_check,
     _resolve_relay_config,
+    _test_nats_connection,
     check_environment,
 )
+from biff.models import RelayAuth
 
 # -- Individual checks -------------------------------------------------------
 
@@ -267,6 +271,25 @@ class TestResolveRelayConfig:
             _url, _auth, tls_handshake_first = _resolve_relay_config()
         assert tls_handshake_first is True
 
+    def test_env_var_reaches_doctor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`biff doctor` must report the same relay env overrides send `wall` to.
+
+        Regression coverage for the "second, independent relay-config
+        reader" failure class docs/relay-env-overrides.md Sec 1 flags --
+        `_resolve_relay_config` now delegates to
+        `biff.config.resolve_relay_config`, the same chain
+        `_load_base_config` uses.
+        """
+        (tmp_path / ".git").mkdir()
+        monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
+        monkeypatch.setenv("BIFF_RELAY_TOKEN", "env-token")
+        with patch("biff.doctor.find_git_root", return_value=tmp_path):
+            url, auth, _tls_handshake_first = _resolve_relay_config()
+        assert url == "tls://from-env:4222"
+        assert auth == RelayAuth(token="env-token")
+
 
 class TestCheckRelay:
     @patch("biff.doctor._test_nats_connection", return_value=True)
@@ -290,6 +313,64 @@ class TestCheckRelay:
         result = _check_relay()
         assert not result.passed
         assert "connection error" in result.message
+
+    @patch("biff.doctor._test_nats_connection", return_value=True)
+    @patch("biff.doctor._resolve_relay_config")
+    def test_messages_never_embed_userinfo(
+        self, mock_config: object, _mock_conn: object
+    ) -> None:
+        """A credential-bearing relay URL never reaches the operator verbatim.
+
+        Regression for PR #386 review: doctor's success/failure messages
+        previously formatted the raw, potentially credential-bearing
+        relay_url directly.
+        """
+        mock_config.return_value = (  # type: ignore[attr-defined]
+            "tls://opuser:opsecret@relay.example.com:4222",
+            None,
+            False,
+        )
+        result = _check_relay()
+        assert result.passed
+        assert "opsecret" not in result.message
+        assert "relay.example.com:4222" in result.message
+
+
+class TestNatsConnectionAuthRedaction:
+    """`_test_nats_connection` must never let a connect failure surface raw auth."""
+
+    @pytest.mark.anyio()
+    async def test_connect_failure_reports_unreachable_not_a_crash(self) -> None:
+        auth = RelayAuth(token="s3cret-token")
+        connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
+        with (
+            patch("nats.connect", connect),
+            patch("biff.doctor.asyncio.sleep", AsyncMock()),
+        ):
+            reachable = await _test_nats_connection(
+                "tls://relay.example.com:4222", auth, tls_handshake_first=False
+            )
+        assert reachable is False
+
+    @pytest.mark.anyio()
+    async def test_retry_attempt_still_carries_auth_kwargs(self) -> None:
+        """Clearing auth_kwargs after attempt 0 must not starve the retry."""
+        auth = RelayAuth(token="s3cret-token")
+        seen_tokens: list[object] = []
+
+        async def _fake_connect(*_args: object, **kwargs: object) -> object:
+            seen_tokens.append(kwargs.get("token"))
+            raise TimeoutError("nats: timeout")
+
+        with (
+            patch("nats.connect", _fake_connect),
+            patch("biff.doctor.asyncio.sleep", AsyncMock()),
+        ):
+            reachable = await _test_nats_connection(
+                "tls://relay.example.com:4222", auth, tls_handshake_first=False
+            )
+        assert reachable is False
+        assert seen_tokens == ["s3cret-token", "s3cret-token"]
 
 
 # -- Output ------------------------------------------------------------------

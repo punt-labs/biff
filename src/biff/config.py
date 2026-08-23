@@ -19,10 +19,11 @@ import getpass
 import importlib.resources
 import json
 import logging
+import os
 import re
 import stat
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import cast
@@ -974,6 +975,21 @@ class _ConfigFields:
     peers: tuple[str, ...] = ()
     orgs: tuple[str, ...] = ()
     poll_interval: float = 2.0
+    # Defense-in-depth gate for _apply_env_relay_overrides (docs/relay-env
+    # -overrides.md Sec 0): a repo that already commits its own relay.url
+    # must opt in explicitly before an ambient BIFF_RELAY_* env var can
+    # override it. Defaults False -- silence means "no," not "maybe."
+    relay_allow_env_override: bool = False
+    # Whether the SHARED config.yaml itself (never config.local.yaml, never
+    # the merged result) declares a relay.url. relay_url above is the
+    # merged, local-inclusive value -- gating _apply_env_relay_overrides on
+    # it would block every developer with a personal config.local.yaml
+    # relay entry, not just repos with a team-committed relay. Both this
+    # flag and relay_allow_env_override must come from the shared file
+    # alone, or a gitignored config.local.yaml could set
+    # allow_env_override: true and authorize ambient env vars without a
+    # team commit.
+    relay_committed: bool = False
 
 
 def _has_orgs_key(raw: dict[str, object]) -> bool:
@@ -986,6 +1002,19 @@ def _has_orgs_key(raw: dict[str, object]) -> bool:
     return isinstance(peers, dict) and "orgs" in peers
 
 
+def _relay_allow_env_override(raw: dict[str, object]) -> bool:
+    """Check if the merged config explicitly opts into env-var relay overrides.
+
+    Absent or any non-``True`` value means "no" -- this gate defaults
+    closed (see :class:`_ConfigFields`).
+    """
+    relay_section = raw.get("relay")
+    if not isinstance(relay_section, dict):
+        return False
+    section = cast("dict[str, object]", relay_section)
+    return section.get("allow_env_override") is True
+
+
 def _enrich_team(cf: _ConfigFields) -> _ConfigFields:
     """Enrich team from ethos when no explicit team is configured."""
     if cf.team:
@@ -993,15 +1022,7 @@ def _enrich_team(cf: _ConfigFields) -> _ConfigFields:
     ethos_team = get_ethos_team()
     if ethos_team is None:
         return cf
-    return _ConfigFields(
-        team=ethos_team,
-        relay_url=cf.relay_url,
-        relay_auth=cf.relay_auth,
-        relay_tls_handshake_first=cf.relay_tls_handshake_first,
-        peers=cf.peers,
-        orgs=cf.orgs,
-        poll_interval=cf.poll_interval,
-    )
+    return replace(cf, team=ethos_team)
 
 
 def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
@@ -1023,20 +1044,20 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         fields = extract_biff_fields(merged)
         poll_interval = _extract_poll_interval(merged)
         cf = _ConfigFields(*fields, poll_interval=poll_interval)
+        # Both read from yaml_shared alone, never the merged config -- see
+        # _ConfigFields.relay_committed for why.
+        shared_relay_url, _, _ = _extract_relay(yaml_shared)
+        cf = replace(
+            cf,
+            relay_allow_env_override=_relay_allow_env_override(yaml_shared),
+            relay_committed=shared_relay_url is not None,
+        )
         # Derive orgs from remote only when the peers.orgs key is
         # ABSENT from the merged config. An explicit empty list
         # (peers.orgs: []) is honored — it means "no org discovery."
         if not _has_orgs_key(merged):
             owner = get_repo_owner(repo_root)
-            cf = _ConfigFields(
-                relay_url=cf.relay_url,
-                relay_auth=cf.relay_auth,
-                relay_tls_handshake_first=cf.relay_tls_handshake_first,
-                team=cf.team,
-                peers=cf.peers,
-                orgs=(owner,) if owner else (),
-                poll_interval=cf.poll_interval,
-            )
+            cf = replace(cf, orgs=(owner,) if owner else ())
         return _enrich_team(cf)
 
     # Zero-config: derive org from remote, use demo relay.
@@ -1047,38 +1068,28 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         fields = extract_biff_fields(yaml_local)
         poll_interval = _extract_poll_interval(yaml_local)
         cf = _ConfigFields(*fields, poll_interval=poll_interval)
-        # Apply demo relay default only when URL is demo or absent.
-        # _apply_demo_relay_default checks relay_url == DEMO_RELAY_URL
-        # before applying bundled creds — prevents sending demo creds
-        # to a custom relay.
-        relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
         # Derive owner only when peers.orgs key is absent.
         if _has_orgs_key(yaml_local):
             orgs = cf.orgs
         else:
             owner = get_repo_owner(repo_root)
             orgs = (owner,) if owner else ()
-        return _enrich_team(
-            _ConfigFields(
-                relay_url=relay_url,
-                relay_auth=relay_auth,
-                relay_tls_handshake_first=cf.relay_tls_handshake_first,
-                orgs=orgs,
-                team=cf.team,
-                peers=cf.peers,
-                poll_interval=cf.poll_interval,
-            )
-        )
+        # Leave relay_url/relay_auth as resolved from config.local.yaml
+        # (which may be None) -- _apply_demo_relay_default, called after
+        # _apply_env_relay_overrides in _load_base_config, is the single
+        # place that fills in the demo relay fallback.
+        return _enrich_team(replace(cf, orgs=orgs))
 
     owner = get_repo_owner(repo_root)
     orgs = (owner,) if owner else ()
-    return _enrich_team(
-        _ConfigFields(
-            relay_url=DEMO_RELAY_URL,
-            relay_auth=RelayAuth(user_credentials=str(demo_creds_path())),
-            orgs=orgs,
-        )
-    )
+    # Leave relay_url/relay_auth unset here -- _apply_demo_relay_default
+    # (called from _load_base_config, after _apply_env_relay_overrides) is
+    # the single place that fills in the demo relay fallback. Applying it
+    # eagerly here, before the env-override gate runs, would make every
+    # truly zero-config repo look identical to a repo that has committed
+    # its own relay.url, silently closing the gate that Sec 0 requires to
+    # stay open in exactly this case.
+    return _enrich_team(_ConfigFields(orgs=orgs))
 
 
 def _apply_demo_relay_default(
@@ -1090,6 +1101,187 @@ def _apply_demo_relay_default(
     if relay_url == DEMO_RELAY_URL and relay_auth is None:
         relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
     return relay_url, relay_auth
+
+
+_TLS_TRUE_VALUES = frozenset({"1", "true", "yes"})
+_TLS_FALSE_VALUES = frozenset({"0", "false", "no"})
+
+_AUTH_ENV_FIELDS: dict[str, str] = {
+    "BIFF_RELAY_TOKEN": "token",
+    "BIFF_RELAY_NKEYS_SEED": "nkeys_seed",
+    "BIFF_RELAY_USER_CREDENTIALS": "user_credentials",
+}
+
+# The two auth env vars that name a file on disk -- fail fast if the file
+# is missing rather than let it surface later as an opaque NATS connect
+# error (docs/relay-env-overrides.md, operator ruling on open question 2).
+_AUTH_ENV_PATH_FIELDS = frozenset(
+    {"BIFF_RELAY_NKEYS_SEED", "BIFF_RELAY_USER_CREDENTIALS"}
+)
+
+
+def _env_or_none(name: str) -> str | None:
+    """Read an environment variable, treating an empty string as absent.
+
+    Mirrors how ``config.py`` already treats absent-vs-empty elsewhere
+    (e.g. :func:`_has_orgs_key`) -- an unset repository *variable* in a
+    workflow's ``env:`` block expands to ``""``, which must behave
+    identically to the var never having been set at all.
+    """
+    return os.environ.get(name, "") or None
+
+
+def _resolved_auth_override(auth_var: str, path_value: str | None) -> RelayAuth:
+    """Build the ``RelayAuth`` for a single fired auth env var, or raise.
+
+    Fails fast for the two path-valued vars (``BIFF_RELAY_NKEYS_SEED``,
+    ``BIFF_RELAY_USER_CREDENTIALS``) rather than deferring to an opaque NATS
+    connect error later (docs/relay-env-overrides.md, open question 2).
+    """
+    if auth_var in _AUTH_ENV_PATH_FIELDS and not Path(cast("str", path_value)).exists():
+        raise SystemExit(
+            f"{auth_var} points to a file that does not exist: {path_value}"
+        )
+    # Wholesale replace -- never merge with the file-resolved RelayAuth
+    # (Sec 2): a token from a file and an nkeys_seed from the environment
+    # must never combine into one RelayAuth instance, which would violate
+    # RelayAuth's own single-field invariant.
+    return RelayAuth(**{_AUTH_ENV_FIELDS[auth_var]: path_value})
+
+
+def _tls_env_override() -> bool | None:
+    """Read ``BIFF_RELAY_TLS_HANDSHAKE_FIRST``, or ``None`` if it didn't fire.
+
+    ``True``/``False`` are both explicit, distinguishable overrides --
+    unlike the boolean's default, absence (``None``) means "leave whatever
+    value the URL/file resolution already settled on."
+    """
+    normalized = os.environ.get("BIFF_RELAY_TLS_HANDSHAKE_FIRST", "").strip().casefold()
+    if normalized in _TLS_TRUE_VALUES:
+        return True
+    if normalized in _TLS_FALSE_VALUES:
+        return False
+    return None
+
+
+def _apply_env_relay_overrides(cf: _ConfigFields) -> _ConfigFields:
+    """Layer ``BIFF_RELAY_*`` env vars over file-resolved relay fields.
+
+    Precedence: ``config.yaml`` < ``config.local.yaml`` < env vars < the
+    CLI ``--relay-url`` override applied later in :func:`_load_base_config`
+    (docs/relay-env-overrides.md Sec 1). No-ops unless the repo-scoping
+    gate (Sec 0) is satisfied: the SHARED ``config.yaml`` has no committed
+    ``relay.url`` of its own (:attr:`_ConfigFields.relay_committed` is
+    ``False`` -- this covers both true zero-config and a personal
+    ``config.local.yaml`` relay entry), or that same shared file explicitly
+    opts in via ``relay.allow_env_override: true``.
+
+    Raises :class:`SystemExit` when two or more of ``BIFF_RELAY_TOKEN``,
+    ``BIFF_RELAY_NKEYS_SEED``, and ``BIFF_RELAY_USER_CREDENTIALS`` are set
+    simultaneously (naming the conflicting variables, never their values),
+    when ``BIFF_RELAY_NKEYS_SEED``/``BIFF_RELAY_USER_CREDENTIALS`` names a
+    path that does not exist, or when an auth env var fires with no relay
+    URL resolved (from ``BIFF_RELAY_URL`` or the file layers) -- an auth
+    override with nothing to authenticate against would otherwise silently
+    apply to the demo relay fallback.
+    """
+    if cf.relay_committed and not cf.relay_allow_env_override:
+        return cf
+
+    # Conflict check reads only names, never values, before deciding
+    # whether to fetch the one fired var's value -- a SystemExit here must
+    # never leave a dict of raw credential values sitting in this frame's
+    # locals for a traceback to retain.
+    fired_auth = [name for name in _AUTH_ENV_FIELDS if _env_or_none(name) is not None]
+    if len(fired_auth) > 1:
+        names = ", ".join(sorted(fired_auth))
+        raise SystemExit(
+            f"Conflicting relay auth env vars: {names}\n"
+            "Set at most one of BIFF_RELAY_TOKEN, BIFF_RELAY_NKEYS_SEED, "
+            "or BIFF_RELAY_USER_CREDENTIALS."
+        )
+
+    fired: list[str] = []
+    relay_url = cf.relay_url
+    relay_auth = cf.relay_auth
+    tls_handshake_first = cf.relay_tls_handshake_first
+
+    if fired_auth:
+        (auth_var,) = fired_auth
+        relay_auth = _resolved_auth_override(auth_var, _env_or_none(auth_var))
+        fired.append(auth_var)
+
+    url_env = _env_or_none("BIFF_RELAY_URL")
+    if url_env is not None:
+        relay_url = url_env
+        fired.append("BIFF_RELAY_URL")
+        if not fired_auth:
+            # URL-changes-clears-auth (Sec 2, direct #383 lineage): auth is a
+            # property of the relay being replaced, not portable to whatever
+            # BIFF_RELAY_URL now points at.
+            relay_auth = None
+        # TLS mode is likewise a property of the relay being replaced --
+        # reset it whenever the URL changes, even when an auth env var also
+        # fired in the same call. Without this, a stale file-resolved
+        # tls_handshake_first=True would leak onto the new relay in exactly
+        # the case docs/relay-env-overrides.md Sec 7 documents (URL + token
+        # set together), reopening the #383 footgun.
+        tls_handshake_first = False
+
+    if fired_auth and relay_url is None:
+        # An auth override with nothing to authenticate against would
+        # otherwise silently fall through to _apply_demo_relay_default and
+        # send a real secret to the shared public demo relay.
+        (auth_var,) = fired_auth
+        raise SystemExit(
+            f"{auth_var} is set but no relay URL is configured -- set "
+            "BIFF_RELAY_URL as well. An auth override with no relay URL "
+            "would otherwise silently apply to the demo relay."
+        )
+
+    tls_override = _tls_env_override()
+    if tls_override is not None:
+        tls_handshake_first = tls_override
+        fired.append("BIFF_RELAY_TLS_HANDSHAKE_FIRST")
+
+    for name in fired:
+        # Log only which env var fired, never its value (Sec 5 item 2) --
+        # BIFF_RELAY_TOKEN's value must never reach a log line.
+        logger.info("relay override: %s set", name)
+
+    return replace(
+        cf,
+        relay_url=relay_url,
+        relay_auth=relay_auth,
+        relay_tls_handshake_first=tls_handshake_first,
+    )
+
+
+def _resolve_relay_fields(cf: _ConfigFields) -> tuple[str, RelayAuth | None, bool]:
+    """Apply env overrides and the demo-relay fallback to resolved fields."""
+    cf = _apply_env_relay_overrides(cf)
+    relay_url, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
+    return relay_url, relay_auth, cf.relay_tls_handshake_first
+
+
+def resolve_relay_config(repo_root: Path | None) -> tuple[str, RelayAuth | None, bool]:
+    """Resolve relay URL, auth, and TLS handshake mode for *repo_root*.
+
+    Single source of truth for the file+env resolution chain --
+    ``config.yaml`` < ``config.local.yaml`` < ``BIFF_RELAY_*`` env vars <
+    the demo relay fallback. Shared by :func:`_load_base_config` and
+    :func:`biff.doctor._resolve_relay_config` so ``biff doctor`` reports
+    the same relay ``wall`` actually connects to, including under env
+    overrides -- ``doctor.py`` previously duplicated this chain
+    independently, which PR #383 had to hand-patch by hand once already
+    when ``tls_handshake_first`` was added (docs/relay-env-overrides.md
+    Sec 1).
+
+    *repo_root* may be ``None`` (not inside a git repo) -- resolves to
+    the demo relay fallback in that case, same as zero-config mode.
+    """
+    cf = _resolve_config_fields(repo_root) if repo_root is not None else _ConfigFields()
+    return _resolve_relay_fields(cf)
 
 
 _NO_USER_MSG = (
@@ -1131,8 +1323,10 @@ def _load_base_config(
 
     Raises :class:`SystemExit` when *start* is not inside a git
     repository, the repo directory name fails
-    :func:`sanitize_repo_name`, ``config.yaml`` is malformed, or the
-    relay section contains conflicting auth keys.
+    :func:`sanitize_repo_name`, ``config.yaml`` is malformed, the relay
+    section contains conflicting auth keys, or ``BIFF_RELAY_*`` env vars
+    conflict or name a missing credentials file (see
+    :func:`_apply_env_relay_overrides`).
     """
     repo_root = find_git_root(start)
     if repo_root is None:
@@ -1142,11 +1336,10 @@ def _load_base_config(
     repo_common_root = Path(common_str) if common_str else repo_root
 
     cf = _resolve_config_fields(repo_root)
-    relay_url_resolved, relay_auth = _apply_demo_relay_default(
-        cf.relay_url, cf.relay_auth
+    relay_url_resolved, relay_auth, relay_tls_handshake_first = _resolve_relay_fields(
+        cf
     )
     relay_url: str | None = relay_url_resolved
-    relay_tls_handshake_first = cf.relay_tls_handshake_first
 
     # CLI relay-url override: empty string -> local relay,
     # non-empty -> use it.  Always clear relay_auth and

@@ -121,6 +121,34 @@ Use `nats://` for unencrypted local connections, `tls://` for encrypted remote c
 
 If your relay sits behind a TLS-terminating load balancer or proxy (rather than a `nats-server` doing its own native TLS), also set `relay.tls_handshake_first: true` in `config.yaml` — without it, connections hang indefinitely. See [self-hosted-relay.md](self-hosted-relay.md#tls-behind-a-load-balancer) for why.
 
+### Environment-variable relay overrides (CI, containers, systemd)
+
+For headless invocations — a CI runner, a container, a systemd unit — where committing `config.yaml`/`config.local.yaml` isn't practical, five environment variables override the relay config for that process only:
+
+| Variable | Maps to | Notes |
+|---|---|---|
+| `BIFF_RELAY_URL` | `relay.url` | e.g. `tls://relay.example.com:4222`. Never embed `user:pass@` — it is not masked in most CI variable UIs. |
+| `BIFF_RELAY_TOKEN` | `relay.auth.token` | mutually exclusive with the next two |
+| `BIFF_RELAY_NKEYS_SEED` | `relay.auth.nkeys_seed` | path to a `.nk` file, must exist at run time |
+| `BIFF_RELAY_USER_CREDENTIALS` | `relay.auth.user_credentials` | path to a `.creds` file |
+| `BIFF_RELAY_TLS_HANDSHAKE_FIRST` | `relay.tls_handshake_first` | `1`/`true`/`yes` → `true`; `0`/`false`/`no` → `false`; unset → unchanged |
+
+Precedence, lowest to highest: `config.yaml` < `config.local.yaml` < `BIFF_RELAY_*` env vars < the `--relay-url` CLI flag (`serve`/`mcp` only).
+
+**Repo-scoping gate.** Env vars only take effect when the SHARED `config.yaml` has no committed `relay.url` of its own, or that same shared file explicitly opts in:
+
+```yaml
+relay:
+  url: "tls://your-nats-server:4222"
+  allow_env_override: true   # required for BIFF_RELAY_* to override the line above
+```
+
+Without `allow_env_override: true`, a committed `relay.url` always wins — an ambient env var (a stray `export`, a misconfigured systemd unit) cannot silently redirect a team's traffic to a different relay. A personal relay entry in the gitignored `config.local.yaml` does **not** close this gate — only a relay committed in the shared `config.yaml` does.
+
+**Auth requires a URL.** Setting one of the three auth vars without a resolved relay URL (from `BIFF_RELAY_URL` or the file layers) fails fast with a clear error, rather than silently sending that credential to the bundled demo relay.
+
+**Human interactive use:** put `BIFF_RELAY_*` in that repo's `.envrc.local` (gitignored, direnv-scoped — unloaded automatically on `cd` out of the repo), not in a bare shell `export` or a shell profile such as `~/.zshrc`. A bare export is ambient for the rest of that shell session across every repo you `cd` into, which can leak one team's credential to another team's relay. See [relay-env-overrides.md](relay-env-overrides.md) for the full design rationale.
+
 ## Updating
 
 ```bash
