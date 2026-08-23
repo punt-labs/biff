@@ -236,9 +236,10 @@ class TestCheckStatusline:
 class TestResolveRelayConfig:
     @patch("biff.doctor.find_git_root", return_value=None)
     def test_defaults_to_demo_relay(self, _mock: object) -> None:
-        url, auth = _resolve_relay_config()
+        url, auth, tls_handshake_first = _resolve_relay_config()
         assert "ngs.global" in url
         assert auth is not None
+        assert tls_handshake_first is False
 
     def test_uses_yaml_config(self, tmp_path: Path) -> None:
         biff_dir = tmp_path / ".punt-labs" / "biff"
@@ -247,31 +248,45 @@ class TestResolveRelayConfig:
             "relay:\n  url: nats://custom:4222\n  auth:\n    token: s3cret\n"
         )
         with patch("biff.doctor.find_git_root", return_value=tmp_path):
-            url, auth = _resolve_relay_config()
+            url, auth, tls_handshake_first = _resolve_relay_config()
         assert url == "nats://custom:4222"
         assert auth is not None
         assert auth.token == "s3cret"
+        assert tls_handshake_first is False
+
+    def test_reads_tls_handshake_first(self, tmp_path: Path) -> None:
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "relay:\n"
+            "  url: tls://relay.example.com:4222\n"
+            "  auth:\n    token: s3cret\n"
+            "  tls_handshake_first: true\n"
+        )
+        with patch("biff.doctor.find_git_root", return_value=tmp_path):
+            _url, _auth, tls_handshake_first = _resolve_relay_config()
+        assert tls_handshake_first is True
 
 
 class TestCheckRelay:
     @patch("biff.doctor._test_nats_connection", return_value=True)
     @patch("biff.doctor._resolve_relay_config")
     def test_reachable(self, mock_config: object, _mock_conn: object) -> None:
-        mock_config.return_value = ("nats://localhost:4222", None)  # type: ignore[attr-defined]
+        mock_config.return_value = ("nats://localhost:4222", None, False)  # type: ignore[attr-defined]
         result = _check_relay()
         assert result.passed
 
     @patch("biff.doctor._test_nats_connection", return_value=False)
     @patch("biff.doctor._resolve_relay_config")
     def test_unreachable(self, mock_config: object, _mock_conn: object) -> None:
-        mock_config.return_value = ("nats://localhost:4222", None)  # type: ignore[attr-defined]
+        mock_config.return_value = ("nats://localhost:4222", None, False)  # type: ignore[attr-defined]
         result = _check_relay()
         assert not result.passed
 
     @patch("biff.doctor.asyncio.run", side_effect=Exception("boom"))
     @patch("biff.doctor._resolve_relay_config")
     def test_connection_error(self, mock_config: object, _mock_run: object) -> None:
-        mock_config.return_value = ("nats://localhost:4222", None)  # type: ignore[attr-defined]
+        mock_config.return_value = ("nats://localhost:4222", None, False)  # type: ignore[attr-defined]
         result = _check_relay()
         assert not result.passed
         assert "connection error" in result.message

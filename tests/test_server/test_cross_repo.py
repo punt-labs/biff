@@ -131,24 +131,24 @@ class TestExtractPeers:
     """extract_biff_fields parses [peers] section."""
 
     def test_no_peers_section(self) -> None:
-        _, _, _, peers, _ = extract_biff_fields({})
+        _, _, _, _, peers, _ = extract_biff_fields({})
         assert peers == ()
 
     def test_peers_with_repos(self) -> None:
         raw: dict[str, object] = {
             "peers": {"repos": ["punt-labs__vox", "punt-labs__quarry"]}
         }
-        _, _, _, peers, _ = extract_biff_fields(raw)
+        _, _, _, _, peers, _ = extract_biff_fields(raw)
         assert peers == ("punt-labs__vox", "punt-labs__quarry")
 
     def test_peers_empty_list(self) -> None:
         raw: dict[str, object] = {"peers": {"repos": []}}
-        _, _, _, peers, _ = extract_biff_fields(raw)
+        _, _, _, _, peers, _ = extract_biff_fields(raw)
         assert peers == ()
 
     def test_peers_non_string_filtered(self) -> None:
         raw: dict[str, object] = {"peers": {"repos": ["valid", 42, True]}}
-        _, _, _, peers, _ = extract_biff_fields(raw)
+        _, _, _, _, peers, _ = extract_biff_fields(raw)
         assert peers == ("valid",)
 
 
@@ -366,22 +366,22 @@ class TestExtractOrgs:
     """extract_biff_fields parses [peers].orgs."""
 
     def test_no_orgs(self) -> None:
-        _, _, _, _, orgs = extract_biff_fields({})
+        _, _, _, _, _, orgs = extract_biff_fields({})
         assert orgs == ()
 
     def test_orgs_parsed(self) -> None:
         raw: dict[str, object] = {"peers": {"orgs": ["punt-labs", "acme-corp"]}}
-        _, _, _, _, orgs = extract_biff_fields(raw)
+        _, _, _, _, _, orgs = extract_biff_fields(raw)
         assert orgs == ("punt-labs", "acme-corp")
 
     def test_orgs_empty_list(self) -> None:
         raw: dict[str, object] = {"peers": {"orgs": []}}
-        _, _, _, _, orgs = extract_biff_fields(raw)
+        _, _, _, _, _, orgs = extract_biff_fields(raw)
         assert orgs == ()
 
     def test_orgs_non_string_filtered(self) -> None:
         raw: dict[str, object] = {"peers": {"orgs": ["valid", 42]}}
-        _, _, _, _, orgs = extract_biff_fields(raw)
+        _, _, _, _, _, orgs = extract_biff_fields(raw)
         assert orgs == ("valid",)
 
     def test_orgs_coexist_with_repos(self) -> None:
@@ -391,7 +391,7 @@ class TestExtractOrgs:
                 "orgs": ["punt-labs"],
             }
         }
-        _, _, _, peers, orgs = extract_biff_fields(raw)
+        _, _, _, _, peers, orgs = extract_biff_fields(raw)
         assert peers == ("punt-labs__vox",)
         assert orgs == ("punt-labs",)
 

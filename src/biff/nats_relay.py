@@ -451,12 +451,15 @@ class NatsRelay:
         self,
         url: str = "nats://localhost:4222",
         auth: RelayAuth | None = None,
+        *,
+        tls_handshake_first: bool = False,
         name: str = "biff",
         repo_name: str = "_default",
         stream_prefix: str = _DEFAULT_STREAM_PREFIX,
     ) -> None:
         self._url = url
         self._auth = auth
+        self._tls_handshake_first = tls_handshake_first
         self._name = name
         self._repo_name = repo_name
         # Validate stream_prefix — must be a simple alphanumeric-dash token.
@@ -511,6 +514,27 @@ class NatsRelay:
         if self._auth is None:
             return {}
         return self._auth.as_nats_kwargs()
+
+    def _tls_kwargs(self) -> dict[str, bool]:
+        """Build TLS keyword arguments for ``nats.connect()``.
+
+        nats.py defaults to opportunistic TLS: connect in plaintext, read
+        the server's INFO line, then upgrade only if INFO advertises
+        ``tls_required``. That breaks against a TLS-terminating proxy in
+        front of a plaintext nats-server (e.g. a load balancer's TLS
+        listener) -- those expect a TLS ClientHello as the first bytes on
+        the wire, with no plaintext preamble, so the client hangs forever
+        waiting for an INFO line that never arrives.
+
+        The URL scheme alone can't distinguish this from a native-TLS
+        nats-server (which *is* opportunistic and must not get this
+        option): both are addressed as ``tls://``. ``self._tls_handshake_first``
+        is therefore an explicit operator opt-in (``relay.tls_handshake_first``
+        in config), not inferred from the URL.
+        """
+        if not self._tls_handshake_first:
+            return {}
+        return {"tls_handshake_first": True}
 
     def _cached_handles(
         self,
@@ -783,6 +807,7 @@ class NatsRelay:
                 reconnect_time_wait=_RECONNECT_TIME_WAIT,
                 **self._connection_callbacks(self._generation),
                 **self._auth_kwargs(),
+                **self._tls_kwargs(),
             )
 
         provision_start = time.monotonic()

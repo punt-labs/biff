@@ -245,6 +245,41 @@ run` alternative above), and don't leave the file empty or with the
 placeholder token unedited: `entrypoint.sh` checks for an actual
 `authorization`/`accounts`/`nkeys` block and refuses to start otherwise.
 
+### TLS behind a load balancer
+
+This image has no TLS config of its own — `nats-server` runs plaintext,
+which is fine on a private network but not over the open internet. A
+common shape is putting a TLS-terminating load balancer (an AWS Network
+Load Balancer TLS listener, stunnel, Envoy, etc.) in front of the
+plaintext container, so encryption covers the client-to-relay hop while
+`nats-server` itself never needs a certificate.
+
+If you do this, set `relay.tls_handshake_first: true` alongside
+`relay.url` in `config.yaml`:
+
+```yaml
+relay:
+  url: "tls://your-relay-host:4222"
+  tls_handshake_first: true
+```
+
+This is required, not optional, for a TLS-terminating proxy in front —
+without it, `biff who` (and every other command) hangs indefinitely.
+nats.py defaults to *opportunistic* TLS: connect in plaintext, read the
+server's `INFO` line, then upgrade only if it says TLS is required. A
+proxy terminating TLS itself expects a TLS handshake as the very first
+bytes on the wire, with no plaintext preamble, so the client waits
+forever for an `INFO` line that will never arrive. Setting this flag
+starts the handshake immediately instead.
+
+**Leave this unset when connecting to a real `nats-server` doing its own
+native TLS** (a `tls {}` block in `nats.conf`, not this image's default) —
+that path is the opportunistic negotiation nats.py already handles
+correctly, and forcing handshake-first onto it fails the same way in
+reverse (`SSL: WRONG_VERSION_NUMBER`). The setting is specifically for
+"something in front of this container speaks raw TLS," not a general
+"I'm using `tls://`" switch.
+
 ### Health check
 
 The container's `HEALTHCHECK` and `docker compose ps` both read from NATS's

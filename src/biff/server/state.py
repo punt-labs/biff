@@ -152,6 +152,7 @@ def create_state(
             relay = NatsRelay(
                 url=config.relay_url,
                 auth=config.relay_auth,
+                tls_handshake_first=config.relay_tls_handshake_first,
                 name=f"biff-{config.repo_name}-{config.user}",
                 repo_name=config.repo_name,
             )

@@ -121,31 +121,35 @@ def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:
     )
 
 
-def _resolve_relay_config() -> tuple[str, RelayAuth | None]:
-    """Resolve relay URL and auth without requiring user identity."""
+def _resolve_relay_config() -> tuple[str, RelayAuth | None, bool]:
+    """Resolve relay URL, auth, and TLS handshake mode without user identity."""
     repo_root = find_git_root()
     relay_url = DEMO_RELAY_URL
     relay_auth: RelayAuth | None = None
+    tls_handshake_first = False
 
     if repo_root is not None:
         shared = load_yaml_config(repo_root)
         local = load_yaml_local(repo_root)
         raw = merge_config(shared, local) if shared or local else {}
         if raw:
-            _, url, auth, _, _ = extract_biff_fields(raw)
+            _, url, auth, handshake_first, _, _ = extract_biff_fields(raw)
             if url:
                 relay_url = url
             if auth:
                 relay_auth = auth
+            tls_handshake_first = handshake_first
 
     # Auto-load demo credentials for demo relay
     if relay_url == DEMO_RELAY_URL and relay_auth is None:
         relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
 
-    return relay_url, relay_auth
+    return relay_url, relay_auth, tls_handshake_first
 
 
-async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
+async def _test_nats_connection(
+    url: str, auth: RelayAuth | None, *, tls_handshake_first: bool
+) -> bool:
     """Attempt a NATS connection with a short timeout.
 
     Retries once after 500ms on failure to handle cold DNS cache
@@ -159,7 +163,9 @@ async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
 
     from biff.nats_relay import safe_close
 
-    kwargs = auth.as_nats_kwargs() if auth else {}
+    kwargs: dict[str, str | bool] = dict(auth.as_nats_kwargs()) if auth else {}
+    if tls_handshake_first:
+        kwargs["tls_handshake_first"] = True
     nats_logger = logging.getLogger("nats")
     saved_level = nats_logger.level
 
@@ -187,10 +193,14 @@ async def _test_nats_connection(url: str, auth: RelayAuth | None) -> bool:
 
 def _check_relay() -> CheckResult:
     """Check NATS relay is reachable."""
-    relay_url, relay_auth = _resolve_relay_config()
+    relay_url, relay_auth, tls_handshake_first = _resolve_relay_config()
 
     try:
-        reachable = asyncio.run(_test_nats_connection(relay_url, relay_auth))
+        reachable = asyncio.run(
+            _test_nats_connection(
+                relay_url, relay_auth, tls_handshake_first=tls_handshake_first
+            )
+        )
     except Exception:  # noqa: BLE001
         return CheckResult("NATS relay", False, f"connection error ({relay_url})")
 
