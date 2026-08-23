@@ -22,10 +22,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Deliberately NOT github.event.workflow_run.head_sha: this job only
-          # reads .punt-labs/biff config (relay URL, auth) to decide where the
-          # notification goes. Checking out the failing commit -- which can be
-          # any branch that made a watched workflow fail, not just main --
-          # would let that branch's config.yaml redirect the notification (and
+          # reads .punt-labs/biff (the .punt-labs/biff/enabled marker, and
+          # .punt-labs/biff/config.yaml if this repo has one) to decide where
+          # the notification goes. Checking out the failing commit -- which
+          # can be any branch that made a watched workflow fail, not just
+          # main -- would let that branch introduce or rewrite
+          # .punt-labs/biff/config.yaml and redirect the notification (and
           # the github-actions identity) to an attacker-controlled relay.
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .punt-labs/biff
