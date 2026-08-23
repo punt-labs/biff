@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Security
+
+- **Hardened the `biff-notify.yml` CI workflow template deployed by `biff enable`.** GitHub Copilot review flagged real issues across the 8 downstream repos this template renders into: `actions/checkout` persisted `GITHUB_TOKEN` credentials into `.git/config` even though the very next step downloads and executes third-party code (`uvx --from punt-biff`) with that token in the job's environment; `uvx --from punt-biff` was unpinned, resolving latest at runtime; `timeout-minutes: 2` was too tight for `setup-uv` + a cold `uvx` install; and `setup-uv` wasn't caching. Fixed all four: added `persist-credentials: false` to the checkout step, pinned `punt-biff==1.15.2` in the `uvx` invocation, raised the timeout to 10 minutes (matching this repo's own workflow convention), and enabled `setup-uv`'s `enable-cache`. Also corrected the `actions/checkout` SHA — the prior pin resolved to `v4.3.1` mislabeled generically as `# v4`; the new pin (`3d3c42e5aac5ba805825da76410c181273ba90b1`) is `v7.0.1`, verified against `actions/checkout`'s tag refs and matching the SHA every other workflow in this repo already uses. Explicitly pinned `ref: ${{ github.event.repository.default_branch }}` on the checkout step rather than the triggering commit's SHA — a security review caught that this job only reads `.punt-labs/biff` config to route the notification, so checking out the failing commit (which can be any branch that made a watched workflow fail, not just main) would let that branch's `config.yaml` redirect the notification, and the `github-actions` identity, to an attacker-controlled relay.
+
 ## [1.15.2] - 2026-08-23
 
 ### Fixed

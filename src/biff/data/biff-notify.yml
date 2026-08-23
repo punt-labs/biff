@@ -17,17 +17,27 @@ jobs:
       github.event.workflow_run.conclusion == 'failure'
       && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Deliberately NOT github.event.workflow_run.head_sha: this job only
+          # reads .punt-labs/biff config (relay URL, auth) to decide where the
+          # notification goes. Checking out the failing commit -- which can be
+          # any branch that made a watched workflow fail, not just main --
+          # would let that branch's config.yaml redirect the notification (and
+          # the github-actions identity) to an attacker-controlled relay.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .punt-labs/biff
+          persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
       - env:
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: >-
-          uvx --from punt-biff biff --user github-actions wall
+          uvx --from punt-biff==1.15.2 biff --user github-actions wall
           "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
           --duration 2h
