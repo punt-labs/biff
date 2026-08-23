@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.15.2] - 2026-08-23
+
 ### Fixed
 
 - **`NatsRelay` hung indefinitely connecting to a relay behind a TLS-terminating proxy (e.g. a load balancer's TLS listener in front of a plaintext `nats-server`)** (biff-ums). nats.py's default TLS mode is opportunistic: connect in plaintext, read the server's `INFO` line, then upgrade only if it advertises `tls_required`. A proxy terminating TLS itself expects a TLS `ClientHello` as the very first bytes on the wire, with no plaintext preamble, so the client sat forever waiting for an `INFO` line that would never arrive — every command (`biff who`, etc.) hung until killed. Added an explicit `relay.tls_handshake_first: true` config option (`.punt-labs/biff/config.yaml` or `config.local.yaml`) that starts the TLS handshake immediately instead of negotiating for it. This is deliberately **not** inferred from the `tls://` URL scheme — a first attempt at that approach was caught in review before shipping: `tls://` also addresses the demo relay's native-TLS `nats-server` (`connect.ngs.global`), which genuinely needs the opportunistic flow and breaks (`WRONG_VERSION_NUMBER`) if handshake-first is forced on it. Both deployment shapes are indistinguishable from the URL alone, so this is an operator opt-in, off by default — existing configs (including the zero-config demo relay default) are unaffected. `biff doctor`'s relay-reachability check reads the same setting. Verified against a live ECS Fargate `biff-relay` deployment behind an ACM-terminated Network Load Balancer: `biff who` hung before the fix, returns immediately after with `relay.tls_handshake_first: true` set.
