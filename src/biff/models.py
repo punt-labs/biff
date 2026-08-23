@@ -10,7 +10,7 @@ All datetime fields are normalized to UTC; naive datetimes are rejected.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, tzinfo
 from typing import Literal, cast
 
@@ -179,13 +179,17 @@ class RelayAuth:
     at config-parse time in :func:`~biff.config.extract_biff_fields`.
     """
 
-    token: str | None = None
+    # repr=False on all three: a bare dataclass repr is a live secret leak
+    # once BIFF_RELAY_TOKEN carries CI-sourced secrets through this object
+    # (any accidental `logger.debug("%r", config)` or uncaught traceback
+    # would otherwise print the token in clear text).
+    token: str | None = field(default=None, repr=False)
     """Shared secret token."""
 
-    nkeys_seed: str | None = None
+    nkeys_seed: str | None = field(default=None, repr=False)
     """Path to an NKey seed file (``.nk``)."""
 
-    user_credentials: str | None = None
+    user_credentials: str | None = field(default=None, repr=False)
     """Path to a NATS credentials file (``.creds``)."""
 
     def as_nats_kwargs(self) -> dict[str, str]:
@@ -197,6 +201,18 @@ class RelayAuth:
         if self.user_credentials:
             return {"user_credentials": self.user_credentials}
         return {}
+
+
+class RelayConnectError(Exception):
+    """Raised when ``nats.connect()`` fails, in place of the raw exception.
+
+    Every call site that expands ``RelayAuth.as_nats_kwargs()`` into
+    ``nats.connect()`` must raise this ``from None`` rather than let the
+    original exception propagate -- the raw exception's traceback frame
+    holds the plaintext auth kwargs dict via ``__context__``, which
+    ``from None`` alone does not clear (only ``finally: auth_kwargs.clear()``
+    at the call site does that).
+    """
 
 
 class BiffConfig(BaseModel):

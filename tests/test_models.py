@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from biff.models import BiffConfig, Message, UnreadSummary, UserSession
+from biff.models import BiffConfig, Message, RelayAuth, UnreadSummary, UserSession
 
 
 class TestMessage:
@@ -334,3 +334,29 @@ class TestUserSessionLiveness:
         now = datetime.now(UTC)
         session = UserSession(user="kai", last_active=now - timedelta(hours=5))
         assert session.is_live(now=now, ttl_seconds=120.0) is False
+
+
+class TestRelayAuthRepr:
+    """RelayAuth's repr must never leak a token, seed path, or creds path."""
+
+    def test_token_not_in_repr(self) -> None:
+        auth = RelayAuth(token="super-secret-token")
+        assert "super-secret-token" not in repr(auth)
+
+    def test_nkeys_seed_not_in_repr(self) -> None:
+        auth = RelayAuth(nkeys_seed="/home/kai/.nats/seed.nk")
+        assert "/home/kai/.nats/seed.nk" not in repr(auth)
+
+    def test_user_credentials_not_in_repr(self) -> None:
+        auth = RelayAuth(user_credentials="/home/kai/.nats/relay.creds")
+        assert "/home/kai/.nats/relay.creds" not in repr(auth)
+
+    def test_repr_still_names_the_class(self) -> None:
+        # repr=False on fields hides values, not the class identity --
+        # a debugger or log line should still say "RelayAuth(...)".
+        auth = RelayAuth(token="x")
+        assert repr(auth).startswith("RelayAuth(")
+
+    def test_str_does_not_leak_token_either(self) -> None:
+        auth = RelayAuth(token="super-secret-token")
+        assert "super-secret-token" not in str(auth)
