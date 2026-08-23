@@ -119,6 +119,8 @@ relay:
 
 Use `nats://` for unencrypted local connections, `tls://` for encrypted remote connections.
 
+If your relay sits behind a TLS-terminating load balancer or proxy (rather than a `nats-server` doing its own native TLS), also set `relay.tls_handshake_first: true` in `config.yaml` — without it, connections hang indefinitely. See [self-hosted-relay.md](self-hosted-relay.md#tls-behind-a-load-balancer) for why.
+
 ## Updating
 
 ```bash

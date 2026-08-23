@@ -216,6 +216,19 @@ class BiffConfig(BaseModel):
     repo_name: str = Field(min_length=1)
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
+    relay_tls_handshake_first: bool = False
+    """Start TLS immediately on connect instead of negotiating.
+
+    ``tls://`` alone does not say who speaks first: a native-TLS
+    ``nats-server`` (the demo relay's ``connect.ngs.global``) sends a
+    plaintext INFO line and upgrades opportunistically, while a
+    TLS-terminating proxy (a load balancer's TLS listener in front of a
+    plaintext ``nats-server``) expects a TLS ClientHello as the very
+    first bytes and never sends that plaintext preamble. The two are
+    indistinguishable from the URL, so this is an explicit operator
+    opt-in (``relay.tls_handshake_first: true``) for the proxy case, not
+    inferred from the scheme.
+    """
     team: tuple[str, ...] = ()
     peers: tuple[str, ...] = ()
     orgs: tuple[str, ...] = ()

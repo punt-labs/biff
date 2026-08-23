@@ -276,32 +276,32 @@ class TestComputeDataDir:
 
 class TestExtractRelayAuth:
     def test_no_relay_section(self) -> None:
-        _, _, auth, _, _ = extract_biff_fields({})
+        _, _, auth, _, _, _ = extract_biff_fields({})
         assert auth is None
 
     def test_relay_url_only(self) -> None:
         raw: dict[str, object] = {"relay": {"url": "nats://localhost:4222"}}
-        _, url, auth, _, _ = extract_biff_fields(raw)
+        _, url, auth, _, _, _ = extract_biff_fields(raw)
         assert url == "nats://localhost:4222"
         assert auth is None
 
     def test_token_auth(self) -> None:
         raw: dict[str, object] = {"relay": {"url": "nats://host", "token": "s3cret"}}
-        _, _, auth, _, _ = extract_biff_fields(raw)
+        _, _, auth, _, _, _ = extract_biff_fields(raw)
         assert auth == RelayAuth(token="s3cret")
 
     def test_nkeys_seed_auth(self) -> None:
         raw: dict[str, object] = {
             "relay": {"url": "tls://host", "nkeys_seed": "/path/to.nk"}
         }
-        _, _, auth, _, _ = extract_biff_fields(raw)
+        _, _, auth, _, _, _ = extract_biff_fields(raw)
         assert auth == RelayAuth(nkeys_seed="/path/to.nk")
 
     def test_user_credentials_auth(self) -> None:
         raw: dict[str, object] = {
             "relay": {"url": "tls://host", "user_credentials": "/path/to.creds"}
         }
-        _, _, auth, _, _ = extract_biff_fields(raw)
+        _, _, auth, _, _, _ = extract_biff_fields(raw)
         assert auth == RelayAuth(user_credentials="/path/to.creds")
 
     def test_mutual_exclusivity_exits(self) -> None:
@@ -325,13 +325,47 @@ class TestExtractRelayAuth:
 
     def test_empty_string_auth_ignored(self) -> None:
         raw: dict[str, object] = {"relay": {"url": "nats://host", "token": ""}}
-        _, _, auth, _, _ = extract_biff_fields(raw)
+        _, _, auth, _, _, _ = extract_biff_fields(raw)
         assert auth is None
 
     def test_non_string_auth_ignored(self) -> None:
         raw: dict[str, object] = {"relay": {"url": "nats://host", "token": 42}}
-        _, _, auth, _, _ = extract_biff_fields(raw)
+        _, _, auth, _, _, _ = extract_biff_fields(raw)
         assert auth is None
+
+
+class TestExtractRelayTlsHandshakeFirst:
+    def test_no_relay_section_defaults_false(self) -> None:
+        _, _, _, tls_handshake_first, _, _ = extract_biff_fields({})
+        assert tls_handshake_first is False
+
+    def test_absent_defaults_false(self) -> None:
+        raw: dict[str, object] = {"relay": {"url": "tls://host"}}
+        _, _, _, tls_handshake_first, _, _ = extract_biff_fields(raw)
+        assert tls_handshake_first is False
+
+    def test_explicit_true(self) -> None:
+        raw: dict[str, object] = {
+            "relay": {"url": "tls://host", "tls_handshake_first": True}
+        }
+        _, _, _, tls_handshake_first, _, _ = extract_biff_fields(raw)
+        assert tls_handshake_first is True
+
+    def test_explicit_false(self) -> None:
+        raw: dict[str, object] = {
+            "relay": {"url": "tls://host", "tls_handshake_first": False}
+        }
+        _, _, _, tls_handshake_first, _, _ = extract_biff_fields(raw)
+        assert tls_handshake_first is False
+
+    def test_non_bool_value_ignored(self) -> None:
+        # Only a literal `True` opts in -- a stray string/int in the YAML
+        # (typo, wrong type) must not silently enable TLS handshake-first.
+        raw: dict[str, object] = {
+            "relay": {"url": "tls://host", "tls_handshake_first": "true"}
+        }
+        _, _, _, tls_handshake_first, _, _ = extract_biff_fields(raw)
+        assert tls_handshake_first is False
 
 
 # -- load_mcp_config / load_cli_config --
@@ -521,6 +555,30 @@ class TestLoadCliConfig:
 
     @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_relay_tls_handshake_first_flows_through(
+        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+    ) -> None:
+        """Regression: this value passes through several dataclass
+        reconstructions in config.py (_ConfigFields, _BaseConfig,
+        BiffConfig) that each re-list fields by hand -- a dropped field
+        in any of them would silently reset to the False default and
+        this test would catch it where the unit-level extract_biff_fields
+        tests (which stop before any of that reconstruction) cannot.
+        """
+        (tmp_path / ".git").mkdir()
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "relay:\n"
+            "  url: tls://proxy.example:4222\n"
+            "  auth:\n    token: s3cret\n"
+            "  tls_handshake_first: true\n"
+        )
+        resolved = load_cli_config(start=tmp_path)
+        assert resolved.config.relay_tls_handshake_first is True
+
+    @patch("biff.config.get_ethos_team", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_url_override_clears_auth(
         self, _mock_gh: object, _mock_team: object, tmp_path: Path
     ) -> None:
@@ -537,6 +595,33 @@ class TestLoadCliConfig:
         )
         assert resolved.config.relay_url == "tls://other.example"
         assert resolved.config.relay_auth is None
+
+    @patch("biff.config.get_ethos_team", return_value=None)
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_relay_url_override_clears_tls_handshake_first(
+        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+    ) -> None:
+        """Overriding relay URL must clear tls_handshake_first too.
+
+        It's a property of the relay being replaced (e.g. a
+        TLS-terminating proxy), not the override target -- carrying it
+        over could force it onto a native-TLS server (the demo relay)
+        that must never receive it.
+        """
+        (tmp_path / ".git").mkdir()
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.yaml").write_text(
+            "relay:\n"
+            "  url: tls://proxy.example:4222\n"
+            "  auth:\n    token: s3cret\n"
+            "  tls_handshake_first: true\n"
+        )
+        resolved = load_cli_config(
+            start=tmp_path, relay_url_override="tls://connect.ngs.global"
+        )
+        assert resolved.config.relay_url == "tls://connect.ngs.global"
+        assert resolved.config.relay_tls_handshake_first is False
 
     @patch("biff.config.get_github_identity", return_value=_KAI_NO_NAME)
     def test_empty_display_name_when_github_has_none(

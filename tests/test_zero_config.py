@@ -364,6 +364,29 @@ class TestLoadConfigZeroConfig:
         assert resolved.config.orgs == ()
         assert resolved.config.relay_url == DEMO_RELAY_URL
 
+    @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
+    @patch("biff.config.get_github_identity", return_value=_KAI)
+    def test_relay_tls_handshake_first_via_local_only(
+        self, _gh: object, _slug: object, tmp_path: Path
+    ) -> None:
+        """No config.yaml, relay set entirely via config.local.yaml (the
+        ``biff_relay --local`` path) -- a separate code branch from
+        TestLoadConfigYaml's shared-config.yaml case, with its own
+        _ConfigFields reconstruction that could independently drop the
+        field.
+        """
+        (tmp_path / ".git").mkdir()
+        biff_dir = tmp_path / ".punt-labs" / "biff"
+        biff_dir.mkdir(parents=True)
+        (biff_dir / "config.local.yaml").write_text(
+            "relay:\n"
+            "  url: tls://proxy.example:4222\n"
+            "  auth:\n    token: s3cret\n"
+            "  tls_handshake_first: true\n"
+        )
+        resolved = load_cli_config(start=tmp_path)
+        assert resolved.config.relay_tls_handshake_first is True
+
 
 class TestLoadConfigYaml:
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")

@@ -866,15 +866,16 @@ def _extract_peers(
 
 def _extract_relay(
     raw: dict[str, object],
-) -> tuple[str | None, RelayAuth | None]:
-    """Extract relay URL and auth from the ``relay`` section."""
+) -> tuple[str | None, RelayAuth | None, bool]:
+    """Extract relay URL, auth, and TLS handshake mode from the ``relay`` section."""
     relay_section: object = raw.get("relay")
     if not isinstance(relay_section, dict):
-        return None, None
+        return None, None, False
 
     section = cast("dict[str, object]", relay_section)
     url: object = section.get("url")
     relay_url = url if isinstance(url, str) else None
+    tls_handshake_first = section.get("tls_handshake_first") is True
 
     # Auth -- at most one of token, nkeys_seed, user_credentials.
     # TOML uses flat keys; YAML uses nested ``auth:`` mapping.
@@ -913,7 +914,7 @@ def _extract_relay(
     if relay_url == DEMO_RELAY_URL and relay_auth is None:
         relay_auth = RelayAuth(user_credentials=str(demo_creds_path()))
 
-    return relay_url, relay_auth
+    return relay_url, relay_auth, tls_handshake_first
 
 
 def _extract_team(raw: dict[str, object]) -> tuple[str, ...]:
@@ -948,14 +949,15 @@ def extract_biff_fields(
     tuple[str, ...],
     str | None,
     RelayAuth | None,
+    bool,
     tuple[str, ...],
     tuple[str, ...],
 ]:
-    """Extract team, relay_url, relay_auth, peers, and orgs."""
+    """Extract team, relay_url, relay_auth, relay_tls_handshake_first, peers, orgs."""
     team = _extract_team(raw)
-    relay_url, relay_auth = _extract_relay(raw)
+    relay_url, relay_auth, tls_handshake_first = _extract_relay(raw)
     peers, orgs = _extract_peers(raw)
-    return team, relay_url, relay_auth, peers, orgs
+    return team, relay_url, relay_auth, tls_handshake_first, peers, orgs
 
 
 RELAY_URL_UNSET = object()
@@ -968,6 +970,7 @@ class _ConfigFields:
     team: tuple[str, ...] = ()
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
+    relay_tls_handshake_first: bool = False
     peers: tuple[str, ...] = ()
     orgs: tuple[str, ...] = ()
     poll_interval: float = 2.0
@@ -994,6 +997,7 @@ def _enrich_team(cf: _ConfigFields) -> _ConfigFields:
         team=ethos_team,
         relay_url=cf.relay_url,
         relay_auth=cf.relay_auth,
+        relay_tls_handshake_first=cf.relay_tls_handshake_first,
         peers=cf.peers,
         orgs=cf.orgs,
         poll_interval=cf.poll_interval,
@@ -1027,6 +1031,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
             cf = _ConfigFields(
                 relay_url=cf.relay_url,
                 relay_auth=cf.relay_auth,
+                relay_tls_handshake_first=cf.relay_tls_handshake_first,
                 team=cf.team,
                 peers=cf.peers,
                 orgs=(owner,) if owner else (),
@@ -1057,6 +1062,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
             _ConfigFields(
                 relay_url=relay_url,
                 relay_auth=relay_auth,
+                relay_tls_handshake_first=cf.relay_tls_handshake_first,
                 orgs=orgs,
                 team=cf.team,
                 peers=cf.peers,
@@ -1107,6 +1113,7 @@ class _BaseConfig:
     data_dir: Path
     relay_url: str | None
     relay_auth: RelayAuth | None
+    relay_tls_handshake_first: bool
     team: tuple[str, ...]
     peers: tuple[str, ...]
     orgs: tuple[str, ...]
@@ -1139,13 +1146,20 @@ def _load_base_config(
         cf.relay_url, cf.relay_auth
     )
     relay_url: str | None = relay_url_resolved
+    relay_tls_handshake_first = cf.relay_tls_handshake_first
 
     # CLI relay-url override: empty string -> local relay,
-    # non-empty -> use it.  Always clear relay_auth on override.
+    # non-empty -> use it.  Always clear relay_auth and
+    # relay_tls_handshake_first on override -- both are properties of the
+    # relay being replaced, not the override target.  Leaving
+    # tls_handshake_first set would silently force it onto whatever the
+    # override points at (e.g. the demo relay, whose native-TLS
+    # nats-server must never get it -- WRONG_VERSION_NUMBER).
     if relay_url_override is not RELAY_URL_UNSET:
         override = str(relay_url_override) if relay_url_override else ""
         relay_url = override or None
         relay_auth = None
+        relay_tls_handshake_first = False
 
     repo_slug = get_repo_slug(repo_root)
     repo_name = sanitize_repo_name(repo_slug or repo_root.name)
@@ -1162,6 +1176,7 @@ def _load_base_config(
         data_dir=data_dir,
         relay_url=relay_url,
         relay_auth=relay_auth,
+        relay_tls_handshake_first=relay_tls_handshake_first,
         team=cf.team,
         peers=cf.peers,
         orgs=cf.orgs,
@@ -1256,6 +1271,7 @@ def _assemble_config(
         repo_name=base.repo_name,
         relay_url=base.relay_url,
         relay_auth=base.relay_auth,
+        relay_tls_handshake_first=base.relay_tls_handshake_first,
         team=base.team,
         peers=base.peers,
         orgs=base.orgs,
