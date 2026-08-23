@@ -79,13 +79,17 @@ class TestTemplateHardening:
     package version, and a timeout that survives a cold ``uvx`` install.
     """
 
-    def test_checkout_pins_ref_to_triggering_commit(self) -> None:
-        """``workflow_run`` checkouts default to the default-branch HEAD, which
-        can drift from the commit that actually failed -- pin ``ref`` to the
-        triggering run's head SHA.
+    def test_checkout_pins_ref_to_default_branch_explicitly(self) -> None:
+        """This job only reads ``.punt-labs/biff`` config to route the
+        notification -- it must stay pinned to the default branch, never the
+        failing commit. A failing commit can be any branch that made a
+        watched workflow fail, and that branch's config.yaml would otherwise
+        control where the notification (and the github-actions identity)
+        gets sent.
         """
         content = _template_content()
-        assert "ref: ${{ github.event.workflow_run.head_sha }}" in content
+        assert "ref: ${{ github.event.repository.default_branch }}" in content
+        assert "ref: ${{ github.event.workflow_run.head_sha }}" not in content
 
     def test_checkout_does_not_persist_credentials(self) -> None:
         """The very next step downloads and executes third-party code
