@@ -56,6 +56,18 @@ biff doctor
 </details>
 
 <details>
+<summary>Homebrew install (macOS/Linux)</summary>
+
+```bash
+brew tap punt-labs/tap
+brew install punt-labs/tap/biff
+biff install
+biff doctor
+```
+
+</details>
+
+<details>
 <summary>Verify before running</summary>
 
 ```bash

@@ -49,6 +49,15 @@ biff install
 biff doctor
 ```
 
+Or with Homebrew (macOS/Linux):
+
+```bash
+brew tap punt-labs/tap
+brew install punt-labs/tap/biff
+biff install
+biff doctor
+```
+
 ## What `biff install` Does
 
 1. Registers the biff MCP server with Claude Code

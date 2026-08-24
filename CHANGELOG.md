@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Homebrew install option** (`brew tap punt-labs/tap && brew install punt-labs/tap/biff`) documented in [README.md](README.md#quick-start) (alongside the existing `uv tool install` option) and [docs/INSTALLING.md](docs/INSTALLING.md#manual-install) (alongside `uv tool install` and `pip install`). The formula itself shipped in punt-labs/homebrew-tap#33.
+
 ### Fixed
 
 - **`biff-notify.yml` pinned `punt-biff==1.15.2`, which predates the `BIFF_RELAY_*` env-var override support it relies on** (biff-ykw). CI's notify step silently kept falling through to the demo relay regardless of the `BIFF_RELAY_URL`/`BIFF_RELAY_TOKEN`/`BIFF_RELAY_TLS_HANDSHAKE_FIRST` values configured, since the pinned CLI version had no code to read them. Bumped to `1.16.0` (the first release containing this feature) in both the deployed workflow and the bundled `biff enable` template.
