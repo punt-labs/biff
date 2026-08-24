@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Homebrew install option** (`brew tap punt-labs/tap && brew install punt-labs/tap/biff`) documented in [README.md](README.md#quick-start) (alongside the existing `uv tool install` option) and [docs/INSTALLING.md](docs/INSTALLING.md#manual-install) (alongside `uv tool install` and `pip install`). The formula itself shipped in `punt-labs/homebrew-tap` PR #33.
+- **Homebrew install option** (`brew tap punt-labs/tap && brew install punt-labs/tap/biff`) documented in [README.md](README.md#quick-start) (alongside the existing `uv tool install` option) and [docs/INSTALLING.md](docs/INSTALLING.md#manual-install) (alongside `uv tool install` and `pip install`). The formula itself shipped in punt-labs/homebrew-tap#33.
 
 ### Fixed
 
