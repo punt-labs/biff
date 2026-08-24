@@ -662,15 +662,15 @@ the CI-pin fix below already have). The relevant `env:` block:
           BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
           BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
         run: >-
-          uvx --from punt-biff==1.15.2 biff --user github-actions wall
+          uvx --from punt-biff==1.16.0 biff --user github-actions wall
           "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
           --duration 2h
 ```
 
-**The `punt-biff==1.15.2` pin above predates this feature** — that release
-does not contain `_apply_env_relay_overrides`, so the `BIFF_RELAY_*` vars
-in the block above are inert until the pin is bumped to a release that
-does. Tracked as biff-ykw; see the CHANGELOG entry for this design.
+`punt-biff` 1.16.0 is the first release containing `_apply_env_relay_overrides`
+— the pin above must stay at or above that version for the `BIFF_RELAY_*`
+vars in the block to have any effect (biff-ykw tracked bumping it once
+that release shipped; it has).
 
 Notes on this shape:
 
