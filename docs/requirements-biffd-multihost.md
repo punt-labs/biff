@@ -349,12 +349,14 @@ these.
 
 - **SP-1** `session.prompt()` semantics against a busy session: queue,
   interleave, or error? Determines R-OC.3.
-- **SP-2** `noReply: true` context injection: token cost, visibility to
-  the model, persistence across compaction. Determines R-OC.6 and
-  informs the org-wide ethos-on-opencode question.
+- **SP-2** `noReply: true` context injection: measured token usage,
+  visibility to the model, persistence across compaction. Determines
+  R-OC.6 and informs the org-wide ethos-on-opencode question.
 - **SP-3** Payload format: literal Nostr events over NATS vs.
-  Nostr-shaped envelope. Evaluate interop value (future Buzz/Nostr
-  federation) against implementation cost. Determines R-A.3's design.
+  Nostr-shaped envelope. Both candidates must satisfy R-A.2/R-A.10 in
+  full; the spike evaluates correctness, interop (future Buzz/Nostr
+  federation), and long-term maintenance risk. Determines R-A.3's
+  design.
 - **SP-4** opencode plugin lifecycle: restart behavior, crash
   isolation, and whether a plugin survives across sessions — affects
   where the biffd client connection lives.
