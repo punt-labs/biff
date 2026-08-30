@@ -161,8 +161,10 @@ The permissions portion is deliberately NOT Buzz's — see M3.
   message and who forwarded it — from the message alone. Forwards of
   forwards MUST verify as a chain, with a design-chosen maximum depth.
   Tampering with the inner payload MUST invalidate the whole envelope.
-  (This is the Nostr repost pattern; SP-3's literal-events option gets
-  it nearly for free.)
+  (The Nostr repost pattern is a proven prior art for nested signed
+  events; SP-3 evaluates it on correctness and interop grounds, and
+  whatever envelope design is chosen meets these requirements in
+  full.)
 - **R-A.11** Forwarded provenance MUST distinguish two origin classes,
   and verifiers and UIs MUST NOT conflate them:
   - **originator-signed** — the inner payload carries the original
@@ -379,8 +381,10 @@ these.
 
 1. **Spikes** (SP-1..SP-4) — small, parallel, source-level. Gate the
    design missions.
-2. **M1 biffd** — extraction with Claude Code parity (M4 rides along,
-   since parity is M1's acceptance test).
+2. **M1 biffd** — extraction with Claude Code parity. M4's parity
+   requirements (R-CC.1) are M1's acceptance criteria: M1 does not
+   close until the full existing test suite passes against the
+   daemon-backed path.
 3. **M2 authenticity** — keys, signing, ethos registry, delegation.
 4. **M3 permissions** — classification, policy, Z spec, config.
 5. **M5 opencode adapter** — delivery, tools, commands, npm channel.
