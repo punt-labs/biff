@@ -76,8 +76,14 @@ class TestStrippedCode:
         assert "--no-verify" not in _stripped_code(script)
 
     def test_unparseable_line_kept_verbatim(self, tmp_path: Path) -> None:
-        """A line that can't stand alone (e.g. opens a multi-line quote)
-        falls back to the raw line rather than being silently dropped."""
+        """A line that can't stand alone (e.g. an unterminated quote)
+        falls back to the raw line rather than being silently dropped.
+
+        The banned flag sits inside the unterminated quote itself, so
+        this fails if the fallback ever stops appending the raw line —
+        unlike a case where the flag lands on its own parseable line,
+        which would pass even if unparseable lines were dropped.
+        """
         script = tmp_path / "script.sh"
-        script.write_text('python3 -c "\n--no-verify\n"\n')
+        script.write_text('echo "unterminated --no-verify\n')
         assert "--no-verify" in _stripped_code(script)
