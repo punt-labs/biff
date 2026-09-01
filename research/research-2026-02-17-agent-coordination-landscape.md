@@ -1,7 +1,7 @@
 # Research: Competitive landscape for agent-to-agent coordination tools
 
 **Date:** 2026-02-17
-**Request:** Research the competitive landscape for pure agent-to-agent coordination tools, including: (1) shared memory / hive-mind solutions, (2) how pure-agent tools differ from human+agent tools, (3) whether a gap exists between pure-agent coordination and human+agent communication. .tex file: `biff/prfaq.tex` (workspace-relative)
+**Request:** Research the competitive landscape for pure agent-to-agent coordination tools, including: (1) shared memory / hive-mind solutions, (2) how pure-agent tools differ from human+agent tools, (3) whether a gap exists between pure-agent coordination and human+agent communication. Target: `prfaq.tex`.
 **Claims investigated:** 8
 
 ---
