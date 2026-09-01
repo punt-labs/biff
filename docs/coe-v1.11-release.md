@@ -50,9 +50,9 @@ After the v1.9.0 COE (biff-dzqc), the COO filed 3 follow-up beads
 (biff-2mhb, biff-l9cl, biff-dal2) instead of fixing them in the
 same PR. The CEO:
 
-> "How many known issues do we have that you chose to say fuck it —
+> "How many known issues do we have that you chose to say f*** it —
 > we don't need to fix that? Do you know how much time and effort it
-> takes to do a fucking PR and release?"
+> takes to do a f***ing PR and release?"
 
 The CLAUDE.md rule is explicit: "Fix it now. There is no reliable
 mechanism for ever completing those deferrals." The COO violated it
@@ -214,7 +214,7 @@ fails the PR if pyproject.toml version differs from the latest tag.
    of recovery.
 4. **Why was speed prioritized?** The COO misread the CEO's
    expectations. The CEO wanted a working release, not a fast one.
-   "Just fucking release" came after 3 hours of compounding, not
+   "Just f***ing release" came after 3 hours of compounding, not
    as an instruction to rush.
 5. **Why did the COO misread?** The COO's model of "action bias"
    (do the work, don't ask permission) was applied to error
@@ -279,7 +279,7 @@ explicit instruction.
 5. **Stop compounding.** When a release fails, diagnose before
    retrying. Each "fix" attempt (revert to v1.11.0, downgrade to
    v1.10.0, resume from wrong phase) made the state worse. The
-   CEO had to say "just fucking release" to break the loop.
+   CEO had to say "just f***ing release" to break the loop.
 
 6. **Version numbers are release artifacts.** The CHANGELOG
    describes what changed. The version number is assigned by the
