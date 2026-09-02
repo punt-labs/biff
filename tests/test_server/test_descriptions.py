@@ -985,3 +985,99 @@ class TestSubscribeTalkLatch:
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
         assert len(infos) == 1  # one recovery line
+
+
+class TestStartupNotificationRace:
+    """Pre-existing unread messages must notify the client after session capture.
+
+    The lifespan calls ``refresh_read_messages`` before the MCP client has
+    sent ``initialize`` — so ``_session`` is ``None`` and the
+    ``tools/list_changed`` notification is silently dropped.  By the time
+    ``_SessionCaptureMiddleware`` stores ``_session``, the tool description
+    text is already correct, so subsequent refreshes see no change and never
+    re-notify.  The client never learns about the unread messages.
+    """
+
+    @pytest.fixture()
+    def state(self, tmp_path: Path) -> ServerState:
+        return create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+        )
+
+    async def test_pre_existing_messages_notify_after_session_capture(
+        self, state: ServerState
+    ) -> None:
+        """After session capture, a notification must fire for any description
+        that diverged from its base during the pre-session lifespan window.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        await refresh_read_messages(mcp, state)
+        tool = await mcp.get_tool("read_messages")
+        assert tool is not None
+        assert "1 unread" in (tool.description or "")
+
+        fake_session = MagicMock(spec=ServerSession)
+        fake_session.send_tool_list_changed = AsyncMock()
+        _descriptions.capture_session(fake_session)
+
+        fake_session.send_tool_list_changed.assert_awaited_once()
+
+    async def test_poller_cannot_recover_lost_notification(
+        self, state: ServerState
+    ) -> None:
+        """The poller's first tick after session capture sees no description
+        change and skips re-notification — proving the poller alone cannot
+        recover from the lost startup notification.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hi")
+        )
+
+        await refresh_read_messages(mcp, state)
+        tool = await mcp.get_tool("read_messages")
+        assert tool is not None
+        assert "1 unread" in (tool.description or "")
+
+        fake_session = MagicMock(spec=ServerSession)
+        fake_session.send_tool_list_changed = AsyncMock()
+        _descriptions.capture_session(fake_session)
+
+        fake_session.send_tool_list_changed.reset_mock()
+        await refresh_read_messages(mcp, state)
+        fake_session.send_tool_list_changed.assert_not_awaited()
+
+    async def test_no_spurious_notify_when_inbox_empty_at_startup(
+        self, state: ServerState
+    ) -> None:
+        """When no messages exist at startup, session capture must not fire
+        a spurious notification — the description never diverged from base.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+
+        await refresh_read_messages(mcp, state)
+        tool = await mcp.get_tool("read_messages")
+        assert tool is not None
+        assert tool.description == _READ_MESSAGES_BASE
+
+        fake_session = MagicMock(spec=ServerSession)
+        fake_session.send_tool_list_changed = AsyncMock()
+        _descriptions.capture_session(fake_session)
+
+        fake_session.send_tool_list_changed.assert_not_awaited()
