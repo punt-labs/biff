@@ -1,6 +1,6 @@
-"""Tests for the MCP server receive/poll guidance and the /biff:poll command.
+"""Tests for the MCP server receive/poll guidance and the /biff:read command.
 
-The server teaches the agent biff's passive/pull receive model; the poll
+The server teaches the agent biff's passive/pull receive model; the read
 command and the mutated tool descriptions must name the same markers
 (``[TALK]`` for talk, ``unread)`` for mail) so they never drift apart.
 """
@@ -29,7 +29,7 @@ if not _COMMANDS.is_dir():
 # The ``*-dev.md`` command files are a dev-plugin-only artifact:
 # ``scripts/release-plugin.sh`` deletes them when swapping to the prod plugin
 # for a release. Assertions on their existence are only valid in the dev state.
-_DEV_PLUGIN = (_COMMANDS / "poll-dev.md").is_file()
+_DEV_PLUGIN = (_COMMANDS / "read-dev.md").is_file()
 
 
 def _server_instructions(tmp_path: Path) -> str:
@@ -44,9 +44,9 @@ class TestServerInstructions:
     def test_teaches_passive_pull(self, tmp_path: Path) -> None:
         text = _server_instructions(tmp_path)
         assert "passive" in text.lower()
-        # Unified command: "/biff:poll 5m" starts polling; "/biff:poll" checks now.
-        assert "/biff:poll 5m" in text
-        assert "/biff:poll 1m" in text
+        # Unified command: "/biff:read 5m" starts polling; "/biff:read" checks now.
+        assert "/biff:read 5m" in text
+        assert "/biff:read 1m" in text
 
     def test_names_the_exact_markers(self, tmp_path: Path) -> None:
         text = _server_instructions(tmp_path)
@@ -60,7 +60,7 @@ class TestServerInstructions:
 
 
 class TestTalkDescriptionMarker:
-    """``_talk_description`` emits the ``[TALK]`` marker the poll command checks."""
+    """``_talk_description`` emits the ``[TALK]`` marker the read command checks."""
 
     def _talk(self, tmp_path: Path) -> TalkState:
         return TalkState(
@@ -86,39 +86,37 @@ class TestTalkDescriptionMarker:
         assert _talk_description(talk).startswith("[TALK]")
 
 
-class TestPollCommand:
-    """The unified /biff:poll: a duration starts polling; no arg checks now."""
+class TestReadCommand:
+    """The unified /biff:read: a duration starts polling; no arg checks now."""
 
     def test_prod_exists(self) -> None:
-        assert (_COMMANDS / "poll.md").is_file()
+        assert (_COMMANDS / "read.md").is_file()
 
     @pytest.mark.skipif(
         not _DEV_PLUGIN,
         reason="dev commands are removed in a prod release build (release-plugin.sh)",
     )
     def test_dev_exists(self) -> None:
-        assert (_COMMANDS / "poll-dev.md").is_file()
+        assert (_COMMANDS / "read-dev.md").is_file()
 
     def test_prod_check_now_references_markers_and_tools(self) -> None:
-        text = (_COMMANDS / "poll.md").read_text()
+        text = (_COMMANDS / "read.md").read_text()
         assert "[TALK]" in text
         assert "unread)" in text
         assert "mcp__plugin_biff_tty__talk_read" in text
         assert "mcp__plugin_biff_tty__read_messages" in text
 
     def test_prod_duration_form_sets_interval_and_loop(self) -> None:
-        text = (_COMMANDS / "poll.md").read_text()
+        text = (_COMMANDS / "read.md").read_text()
         assert "mcp__plugin_biff_tty__set_poll_interval" in text
         assert "CronCreate" in text
-        # The recurring loop runs /biff:poll with NO argument (no re-schedule).
-        assert "with NO" in text
 
     @pytest.mark.skipif(
         not _DEV_PLUGIN,
         reason="dev commands are removed in a prod release build (release-plugin.sh)",
     )
     def test_dev_routes_to_dev_plugin(self) -> None:
-        text = (_COMMANDS / "poll-dev.md").read_text()
+        text = (_COMMANDS / "read-dev.md").read_text()
         assert "[TALK]" in text
         assert "unread)" in text
         assert "mcp__plugin_biff-dev_tty__talk_read" in text

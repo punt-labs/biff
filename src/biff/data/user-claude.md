@@ -27,8 +27,9 @@ descriptions: the `talk` tool gains a leading `[TALK] …`, and `read_messages`
 gains `(N unread)`. Nothing interrupts you between turns — you only see the
 change on your next tool activity.
 
-- `/biff:poll <interval>` — start polling on a cadence (e.g. `/biff:poll 1m` to
-  stay responsive). `/biff:poll` with no argument checks right now.
+- `/biff:read <interval>` — start polling on a cadence (e.g. `/biff:read 1m` to
+  stay responsive). `/biff:read n` stops. `/biff:read status` shows config.
+  Bare `/biff:read` checks right now.
 - When `talk` shows `[TALK]`, read pending invites and messages.
 - When `read_messages` shows `(N unread)`, read your mail.
 - Reply with `talk` or `/write`. Talk is real-time (~1m); mail is async

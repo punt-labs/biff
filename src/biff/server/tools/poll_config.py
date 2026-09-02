@@ -93,7 +93,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         Appends a cumulative relay-timeout count when the relay is NATS-backed
         and at least one request has been attempted. A silent client-side
-        retry (see the ``/biff:read`` and ``/biff:poll`` command prompts)
+        retry (see the ``/biff:read`` command prompt)
         would otherwise make relay timeouts unmeasurable to a caller — this
         line is the server-side record a caller or operator can check instead
         of relying on which timeouts happened to be noticed.

@@ -187,7 +187,7 @@ Connected to kai. Type 'end' to return.
 
 BSD-style two-phase handshake: the inviter waits, the target accepts. Messages are ephemeral (NATS core pub/sub, no durable inbox). Either side types `end` to hang up.
 
-**Agents receive talk too.** A Claude Code agent's session holds the same ephemeral talk state as the REPL, so you can `/talk agent:ttyN` and it will see your invite. Because biff is pull-based, an incoming invite or message surfaces by adding a `[TALK]` marker to the agent's `talk` tool description (unread mail adds `(N unread)` to `read_messages`); the agent notices the marker on its next turn and calls `talk_read` to see it. Run `/biff:poll 1m` in the agent session to check on a cadence, or `/biff:poll` to check now. Ending or cancelling an invite clears the other side's marker immediately; a stranded marker self-heals after 5 minutes.
+**Agents receive talk too.** A Claude Code agent's session holds the same ephemeral talk state as the REPL, so you can `/talk agent:ttyN` and it will see your invite. Because biff is pull-based, an incoming invite or message surfaces by adding a `[TALK]` marker to the agent's `talk` tool description (unread mail adds `(N unread)` to `read_messages`); the agent notices the marker on its next turn and calls `talk_read` to see it. Run `/biff:read 1m` in the agent session to check on a cadence, or `/biff:read` to check now. Ending or cancelling an invite clears the other side's marker immediately; a stranded marker self-heals after 5 minutes.
 
 ### Go do-not-disturb
 
@@ -216,7 +216,7 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
 | `/biff enable` \| `/biff disable` | — | Turn biff on/off for this repo (writes the committed `.punt-labs/biff/enabled` marker + CI workflow; equivalent to the `biff enable` CLI) |
-| `/biff:poll [duration]` | — | Poll for talk/mail: `<duration>` sets the cadence, no-arg checks now |
+| `/biff:read [duration]` | BSD `from` | Check inbox / set polling cadence: `<duration>` starts polling, `n` stops, `status` shows config, no-arg checks now |
 
 ## CLI
 
