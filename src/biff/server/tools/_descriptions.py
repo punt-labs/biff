@@ -95,10 +95,10 @@ async def capture_session(session: ServerSession) -> None:
     _pending_notify = False
     try:
         await session.send_tool_list_changed()
-    except Exception:  # noqa: BLE001 — matches notify_tool_list_changed's
-        # own best-effort suspenders-path pattern: notification delivery
-        # must never crash the caller, and a dead session is cleared so
-        # later callers don't hammer it.
+    except Exception:  # noqa: BLE001 — best-effort: a session that
+        # can't accept a notification at initialize time is broken;
+        # clear it so the background poller doesn't hammer a dead
+        # stream, and let the belt path re-capture on the next call.
         logger.warning(
             "Failed to flush pending tool list changed notification",
             exc_info=True,

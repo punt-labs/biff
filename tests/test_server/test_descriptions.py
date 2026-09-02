@@ -1081,3 +1081,29 @@ class TestStartupNotificationRace:
         await _descriptions.capture_session(fake_session)
 
         fake_session.send_tool_list_changed.assert_not_awaited()
+
+    async def test_flush_failure_clears_session_and_does_not_propagate(
+        self, state: ServerState
+    ) -> None:
+        """When the flush in capture_session raises, the exception must not
+        propagate, _session must be cleared (broken session ref), and
+        _pending_notify must be consumed (no infinite retry loop).
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="boom")
+        )
+
+        await refresh_read_messages(mcp, state)
+
+        fake_session = MagicMock(spec=ServerSession)
+        fake_session.send_tool_list_changed = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        await _descriptions.capture_session(fake_session)
+
+        assert _descriptions._session is None
+        assert not _descriptions._pending_notify
