@@ -66,8 +66,14 @@ Corresponds to ``maxUnreadCount`` in the Z specification
 # See notification.tex CaptureSession operation.
 _session: ServerSession | None = None
 
+# Set by notify_tool_list_changed() when a description changed with no
+# session yet available (the lifespan's pre-initialize window), so the
+# dropped notification is not lost — capture_session() flushes it once
+# the real session arrives.
+_pending_notify: bool = False
 
-def capture_session(session: ServerSession) -> None:
+
+async def capture_session(session: ServerSession) -> None:
     """Eagerly store the MCP session reference.
 
     Called from :class:`~biff.server.app._SessionCaptureMiddleware`
@@ -77,9 +83,27 @@ def capture_session(session: ServerSession) -> None:
     The belt path in :func:`notify_tool_list_changed` continues to
     refresh the reference on every tool call, keeping it current
     if the client reconnects.
+
+    If a description changed during the pre-initialize window (before
+    any session existed to notify), flushes that dropped notification
+    now via the newly captured session.
     """
-    global _session
+    global _session, _pending_notify
     _session = session
+    if not _pending_notify:
+        return
+    _pending_notify = False
+    try:
+        await session.send_tool_list_changed()
+    except Exception:  # noqa: BLE001 — best-effort: a session that
+        # can't accept a notification at initialize time is broken;
+        # clear it so the background poller doesn't hammer a dead
+        # stream, and let the belt path re-capture on the next call.
+        logger.warning(
+            "Failed to flush pending tool list changed notification",
+            exc_info=True,
+        )
+        _session = None
 
 
 # Set by the ``tty`` tool so the unread file includes the session name.
@@ -125,15 +149,17 @@ def set_biff_enabled(*, enabled: bool) -> None:
 def _reset_session() -> None:
     """Reset every module global — test isolation.
 
-    Clears the captured session, tty name, biff_enabled flag, and the
-    last-spoken wall key.  All four are process globals set as a side
-    effect of running a server (``_SessionCaptureMiddleware`` captures
-    ``_session`` on every client ``initialize``); left unreset they leak
-    a stale, closed session into the next test's background poller and
-    NATS callbacks, so a later test fails only under certain orderings.
+    Clears the captured session, pending-notify flag, tty name,
+    biff_enabled flag, and the last-spoken wall key.  All five are
+    process globals set as a side effect of running a server
+    (``_SessionCaptureMiddleware`` captures ``_session`` on every client
+    ``initialize``); left unreset they leak stale state — e.g. a closed
+    session — into the next test's background poller and NATS callbacks,
+    so a later test fails only under certain orderings.
     """
-    global _session, _tty_name, _biff_enabled, _spoken_wall_key
+    global _session, _pending_notify, _tty_name, _biff_enabled, _spoken_wall_key
     _session = None
+    _pending_notify = False
     _tty_name = ""
     _biff_enabled = True
     _spoken_wall_key = ("", "")
@@ -147,8 +173,13 @@ async def notify_tool_list_changed() -> None:
 
     Suspenders path (background poller): sends directly on the stored
     ServerSession when no request context is active.
+
+    Pre-session path (before the client's ``initialize`` has been
+    captured): no session exists to notify on, so the notification would
+    otherwise be silently dropped. Records it as pending instead;
+    :func:`capture_session` flushes it once the real session arrives.
     """
-    global _session
+    global _session, _pending_notify
 
     # Belt path — inside a tool handler, Context is available.
     try:
@@ -177,6 +208,10 @@ async def notify_tool_list_changed() -> None:
             # Session is dead — clear it so the poller stops
             # hammering a closed stream every tick.
             _session = None
+        return
+
+    # Pre-session path — no session captured yet, record the drop.
+    _pending_notify = True
 
 
 async def _sync_unread_file(
