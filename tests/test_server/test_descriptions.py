@@ -1029,7 +1029,7 @@ class TestStartupNotificationRace:
 
         fake_session = MagicMock(spec=ServerSession)
         fake_session.send_tool_list_changed = AsyncMock()
-        _descriptions.capture_session(fake_session)
+        await _descriptions.capture_session(fake_session)
 
         fake_session.send_tool_list_changed.assert_awaited_once()
 
@@ -1055,7 +1055,7 @@ class TestStartupNotificationRace:
 
         fake_session = MagicMock(spec=ServerSession)
         fake_session.send_tool_list_changed = AsyncMock()
-        _descriptions.capture_session(fake_session)
+        await _descriptions.capture_session(fake_session)
 
         fake_session.send_tool_list_changed.reset_mock()
         await refresh_read_messages(mcp, state)
@@ -1078,6 +1078,6 @@ class TestStartupNotificationRace:
 
         fake_session = MagicMock(spec=ServerSession)
         fake_session.send_tool_list_changed = AsyncMock()
-        _descriptions.capture_session(fake_session)
+        await _descriptions.capture_session(fake_session)
 
         fake_session.send_tool_list_changed.assert_not_awaited()

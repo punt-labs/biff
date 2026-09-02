@@ -86,7 +86,7 @@ class _SessionCaptureMiddleware(Middleware):
         result = await call_next(context)
         if context.fastmcp_context is not None:
             try:
-                capture_session(context.fastmcp_context.session)
+                await capture_session(context.fastmcp_context.session)
             except RuntimeError:
                 logger.debug("Session not available during initialize")
         return result
