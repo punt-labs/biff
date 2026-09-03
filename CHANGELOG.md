@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.18.1] - 2026-09-03
+
 ### Changed
 
 - **`/biff:read` absorbs `/biff:poll` — one command for inbox checking and polling (biff-yct).** `/biff:read <duration>` starts polling (e.g. `/biff:read 2m`), `/biff:read n` stops, `/biff:read status` shows config, bare `/biff:read` checks now. The separate `/biff:poll` command is removed. Matches beadle's `/inbox` pattern — no `/loop` wrapper needed.
