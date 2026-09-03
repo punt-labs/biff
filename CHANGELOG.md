@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **README install URLs pointed to v1.18.0 tag commit instead of v1.18.1.** Users running the curl command from the README installed v1.18.0. Updated all four install URLs to the v1.18.1 tag commit using full 40-character SHAs.
+- **README install URLs pointed to v1.18.0 tag commit instead of v1.18.1.** Users running the curl command from the README installed v1.18.0. Updated all four install URLs to the v1.18.1 tag commit.
 
 ## [1.18.1] - 2026-09-03
 
