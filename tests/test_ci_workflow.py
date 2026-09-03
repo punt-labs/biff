@@ -46,7 +46,7 @@ _DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
 # hosted-nats.yml) -- verified against actions/checkout's tag refs.
 _LIVE_CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 
-_PINNED_BIFF_VERSION = "1.18.0"
+_PINNED_BIFF_VERSION = "1.18.1"
 
 
 # ── template action pins ───────────────────────────────────────────
