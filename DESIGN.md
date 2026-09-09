@@ -7104,3 +7104,83 @@ See docs/relay-env-overrides.md for the full rejected-alternatives
 comparison (CI-runtime `config.local.yaml` patching from a secret;
 paired `--relay-token`-style flags) and the two-round security review
 this went through before implementation.
+
+## DES-061: Dropped-Notification Recovery — Re-arm on Every Send Failure, One Lock, Bounded Send
+
+**Date:** 2026-09-09
+**Status:** Settled
+**Topic:** `tools/list_changed` notifications must survive a mid-session send
+failure without permanently stranding the client on a stale cached tool list
+**Related:** DES-004 (the dynamic-tool-description push channel and the
+original "description correct but notification never fired" bug), DES-020 (a
+notification is a no-op unless the description actually changes), DES-021 /
+PR #410 (session captured at `initialize`; the pre-session dropped-notify
+flush — the *startup-window* instance of this same class), DES-045
+(`MarkerConsistent`, the `desc ≠ base ⟺ activity` biconditional), and the Z
+models `docs/notification.tex` + `docs/notification-race.tex` that make this
+decision machine-checkable
+
+### Problem
+
+`notify_tool_list_changed()`'s suspenders path cleared the dead `_session` on a
+send failure but never recorded that the notification had been dropped. Because
+the caller (`refresh_*`) mutates `tool.description` *before* attempting the
+notify, the `!= old_desc` change-gate then suppressed every later re-notify —
+the server-side description was correct but the client's cached tool list was
+never refreshed, so `/biff:read`'s marker read clean while a message waited.
+This is the DES-021/PR #410 "correct but invisible" class recurring *outside*
+the startup window. Local review surfaced the same class at two more send
+sites (`capture_session`'s reconnect flush; the belt path's non-`RuntimeError`
+transport errors) and a lost-update race where a belt success could clobber a
+concurrently-recorded suspenders drop.
+
+### Decision
+
+One uniform invariant across all three send sites (suspenders poller, belt
+in-handler, capture/reconnect flush): **every send failure re-arms
+`_pending_notify = True`; the flag is cleared only after a *confirmed*
+successful send.** A single module-level `asyncio.Lock` (`_notify_lock`), held
+across each site's whole read→send→write critical section, serializes them so
+no interleaving can clobber the flag. Each send is bounded by
+`_NOTIFY_SEND_TIMEOUT` (3.0s, mirroring `app.py`'s `_TEARDOWN_STEP_TIMEOUT`): a
+wedged/backpressured transport that never returns would otherwise hold the one
+lock forever and starve the poller and every belt-path tool call — the timeout
+routes into the same failure→re-arm path, so a wedge degrades to a recorded
+drop, not a hang.
+
+The suspenders *success* path deliberately does **not** touch `_pending_notify`
+(it reports only the current tick's own delivery), conforming to the model's
+`PollTickNotifyOk` transition; a stale flag left by an earlier belt failure is
+discharged by the next belt send or reconnect flush. Clearing it on suspenders
+success would remove one benign redundant refresh but requires amending the
+proven model first (a tracked follow-up), so the code conforms to the model as
+proven rather than diverging.
+
+### Why formal, and the scope boundary
+
+The subsystem is a state machine with a liveness property, exactly the DES-021
+pattern that was patched repeatedly because the model was too coarse. The Z
+models prove **safety**: `notification.tex` reproduces the marked-but-silent
+sink as a ProB counterexample and proves the fixed transitions leave it
+unreachable; `notification-race.tex` is an isolated 22-state machine proving the
+lost-update race reachable without the lock and unreachable with it
+(`raceLost = zfalse`, `notifyLost = zfalse`, all states visited, zero invariant
+violations). The send timeout is a **liveness** measure the atomic model does
+not express — a model that treats every send as an instantaneous step cannot
+see "held forever" — so it lives in the code with an explicit comment, and
+because a timeout is handled as a send failure it preserves the proven safety
+invariant.
+
+### Rejected
+
+Blind unconditional pull on every `/biff:read` tick (drops the marker-gate
+optimization DES-045 kept); three separate locks (the race is a cross-site
+property — one shared lock is the minimal correct scope, proven); an exhaustive
+model-check of the fully interleaved combined model (state-space explosion —
+6.5M states / 22 GB / non-terminating; re-scoped to the isolated
+`notification-race.tex` machine, which is the tractable, terminating proof).
+
+Root cause #2 — Claude Code resolving the tool via `ToolSearch` and reading the
+*cached base* description with no marker — is client-side behavior this server
+change cannot reach; the durable fix is native push (Channels), tracked as
+biff-5esx.
