@@ -5,6 +5,8 @@
 ### Fixed
 
 - **README install URLs pointed to v1.18.0 tag commit instead of v1.18.1.** Users running the curl command from the README installed v1.18.0. Updated all four install URLs to the v1.18.1 tag commit.
+- **Dropped mid-session `tools/list_changed` notification had no recovery path** (biff-ue2). `notify_tool_list_changed()`'s suspenders send-failure path cleared the dead session reference but never recorded the drop, so once a description had already changed, the change-gate suppressed every later re-notify attempt and the client's cached tool list went stale for the rest of the session. A suspenders failure now sets `_pending_notify`, and the belt path flushes any pending drop on its own next successful send (no double-send) — proven against a ProB-checked Z specification (`docs/notification.tex`, invariant `notifyLost = zfalse`) and an empirical repro (`tests/test_server/test_notify_reliability_repro.py`).
+- **Removed the deprecated `/biff:poll` command files.** `/biff:poll` was retired into `/biff:read` in 1.18.1 (biff-yct) but its command markdown (`plugin/commands/poll.md`, `poll-dev.md`) was never deleted — a leftover, still-shippable duplicate command whose independent cron-cleanup risked orphaned or duplicate polling loops alongside `/biff:read`'s.
 
 ## [1.18.1] - 2026-09-03
 
