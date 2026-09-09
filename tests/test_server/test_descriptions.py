@@ -1336,10 +1336,10 @@ class TestMidSessionDropRecovery:
         suspenders failure but *completes* after it would unconditionally
         clear ``_pending_notify = False`` on completion, silently
         discarding the drop the suspenders branch just recorded — the
-        notifyLost-forever failure mode this mission exists to close,
-        reached via a race between two concurrent tasks instead of a
-        single code path (confirmed empirically against the pre-lock
-        code: given a real chance to run to completion, the suspenders
+        notifyLost-forever failure mode, reached here via a race between
+        two concurrent tasks instead of a single code path (confirmed
+        empirically against the pre-lock code: given a real chance to run
+        to completion, the suspenders
         task's failure lands first, and the belt send's later,
         unconditional success then clobbers it). The belt task runs
         under its own copy of FastMCP's ``_current_context`` contextvar
@@ -1403,3 +1403,64 @@ class TestMidSessionDropRecovery:
         assert _descriptions._pending_notify
         session_after_race: object = _descriptions._session
         assert session_after_race is None
+
+
+class TestNotifySendTimeout:
+    """A wedged send under ``_notify_lock`` must not hold the lock forever.
+
+    notification.tex and notification-race.tex prove SAFETY treating every
+    send as atomic; neither has a notion of a send that never returns.
+    ``_NOTIFY_SEND_TIMEOUT`` is the liveness measure layered on top of that
+    proof — bounding the lock hold turns a stalled transport into the same
+    recorded drop a genuine send failure already produces (the timeout is
+    caught by the same ``except Exception`` the failure path uses), rather
+    than starving the poller and every belt-path tool call indefinitely.
+    """
+
+    async def test_suspenders_send_timeout_rearms_and_releases_lock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A suspenders send that never returns is bounded by
+        ``_NOTIFY_SEND_TIMEOUT``, re-arms the drop exactly like a raised
+        send failure, and — critically — releases the lock afterward, so a
+        subsequent notify is not permanently wedged behind it.
+        """
+        from mcp.server.session import ServerSession
+
+        # A short patched timeout, not a real wall-clock delay, keeps this
+        # test fast — the hang below never resolves on its own, so only
+        # the timeout ends the wait.
+        monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+
+        never_set = asyncio.Event()
+        wedged_session = MagicMock(spec=ServerSession)
+
+        async def _hang(*_args: object, **_kwargs: object) -> None:
+            await never_set.wait()
+
+        wedged_session.send_tool_list_changed = AsyncMock(side_effect=_hang)
+        _descriptions._session = wedged_session
+
+        # Wrapped in an outer wait_for as a safety net only: if the inner
+        # timeout failed to bound the send, this call would hang forever
+        # instead of failing the test with a clear timeout error.
+        await asyncio.wait_for(_descriptions.notify_tool_list_changed(), timeout=5.0)
+
+        wedged_session.send_tool_list_changed.assert_awaited_once()
+        # Re-armed exactly like a raised send failure — the timeout routes
+        # into the same failure->re-arm path, not a new one.
+        assert _descriptions._pending_notify
+        session_after_timeout: object = _descriptions._session
+        assert session_after_timeout is None  # dead/wedged session cleared
+
+        # Prove the lock was released, not left held by the timed-out
+        # send: it must not be locked, and a fresh notify (capture_session's
+        # flush, since _pending_notify is set) must complete immediately
+        # rather than blocking behind a wedged holder.
+        assert not _descriptions._notify_lock.locked()
+        reconnected = MagicMock(spec=ServerSession)
+        reconnected.send_tool_list_changed = AsyncMock()
+        await asyncio.wait_for(_descriptions.capture_session(reconnected), timeout=5.0)
+
+        reconnected.send_tool_list_changed.assert_awaited_once()
+        assert not _descriptions._pending_notify

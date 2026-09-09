@@ -85,6 +85,23 @@ _pending_notify: bool = False
 # while holding the lock, so there is no re-entrancy or deadlock risk.
 _notify_lock: asyncio.Lock = asyncio.Lock()
 
+# Bounds each individual send made while holding ``_notify_lock``. The Z
+# model (notification.tex, notification-race.tex) proves SAFETY — no lost
+# notification, no lost-update race — by treating every send as an atomic
+# step; it has no notion of a send that never returns. A wedged or
+# backpressured transport (client alive but not draining — a real
+# MCP-over-stdio failure mode) would otherwise hold this lock forever,
+# starving the poller and every belt-path tool call behind the same
+# unbounded ``await``. This timeout is the LIVENESS measure the atomic
+# model doesn't express, layered on top of it: a timeout is handled by the
+# same ``except Exception`` a send failure already hits (``TimeoutError``
+# subclasses ``OSError`` subclasses ``Exception``), so it re-arms
+# ``_pending_notify`` via the model's already-proven failure->re-arm
+# transition rather than a new, unverified code path. Mirrors
+# ``_TEARDOWN_STEP_TIMEOUT`` in server/app.py — same rationale, a bounded
+# best-effort step instead of an unbounded one.
+_NOTIFY_SEND_TIMEOUT: float = 3.0
+
 
 async def capture_session(session: ServerSession) -> None:
     """Eagerly store the MCP session reference.
@@ -113,12 +130,15 @@ async def capture_session(session: ServerSession) -> None:
         if not _pending_notify:
             return
         try:
-            await session.send_tool_list_changed()
+            async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                await session.send_tool_list_changed()
         except Exception:  # noqa: BLE001 — best-effort: a session that
-            # can't accept a notification at initialize time is broken;
-            # clear it so the background poller doesn't hammer a dead
-            # stream, and re-arm the pending flag so the next reconnect
-            # or belt call retries the flush instead of losing it.
+            # can't accept a notification at initialize time is broken
+            # (a wedged transport that never returns hits the timeout
+            # above and lands here too — see _NOTIFY_SEND_TIMEOUT); clear
+            # it so the background poller doesn't hammer a dead stream,
+            # and re-arm the pending flag so the next reconnect or belt
+            # call retries the flush instead of losing it.
             logger.warning(
                 "Failed to flush pending tool list changed notification",
                 exc_info=True,
@@ -226,7 +246,10 @@ async def notify_tool_list_changed() -> None:
     Every branch's read-decide-send-write sequence runs under
     ``_notify_lock`` — see that lock's docstring for why an unguarded
     ``await`` between the read and the write would let two branches
-    interleave and clobber ``_pending_notify``.
+    interleave and clobber ``_pending_notify``. Every locked send is
+    additionally bounded by ``_NOTIFY_SEND_TIMEOUT`` — see that constant's
+    docstring for why an unbounded send under this lock is a liveness
+    hazard the safety proof does not cover.
     """
     global _session, _pending_notify
 
@@ -245,11 +268,14 @@ async def notify_tool_list_changed() -> None:
     if ctx is not None:
         async with _notify_lock:
             try:
-                await ctx.send_notification(ToolListChangedNotification())
+                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                    await ctx.send_notification(ToolListChangedNotification())
             except Exception:  # noqa: BLE001 — best-effort, mirrors the
-                # suspenders except below: a transport error on the belt
-                # send must not crash the calling tool handler, and the
-                # drop it represents must be recorded, not swallowed.
+                # suspenders except below: a transport error (or a wedged
+                # transport hitting the timeout — see _NOTIFY_SEND_TIMEOUT)
+                # on the belt send must not crash the calling tool handler,
+                # and the drop it represents must be recorded, not
+                # swallowed.
                 logger.warning(
                     "Failed to send tool list changed notification (belt)",
                     exc_info=True,
@@ -270,18 +296,24 @@ async def notify_tool_list_changed() -> None:
     async with _notify_lock:
         if _session is not None:
             try:
-                await _session.send_tool_list_changed()
+                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                    await _session.send_tool_list_changed()
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "Failed to send tool list changed notification",
                     exc_info=True,
                 )
-                # Session is dead — clear it so the poller stops hammering
-                # a closed stream every tick, and record the drop so a
-                # later flush opportunity (session recapture or belt
-                # call) retries it.
+                # Session is dead (or wedged past _NOTIFY_SEND_TIMEOUT) —
+                # clear it so the poller stops hammering a closed stream
+                # every tick, and record the drop so a later flush
+                # opportunity (session recapture or belt call) retries it.
                 _session = None
                 _pending_notify = True
+            else:
+                # Conform to the model's *NotifyOk transition: a
+                # confirmed successful send covers any drop recorded
+                # earlier, same as the belt and capture-session paths.
+                _pending_notify = False
             return
 
         # Pre-session path — no session captured yet, record the drop.
