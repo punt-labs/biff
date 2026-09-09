@@ -1107,3 +1107,112 @@ class TestStartupNotificationRace:
 
         assert _descriptions._session is None
         assert not _descriptions._pending_notify
+
+
+class TestMidSessionDropRecovery:
+    """A mid-session suspenders drop must be recorded and flushed, never lost.
+
+    notification.tex sec:sessionloss: the suspenders send-failure path
+    (``PollTickNotifyFail``) must set ``pendingNotify`` rather than merely
+    clearing the dead session, and the belt path (``NotifyBelt``) must flush
+    any such pending notify on its own next successful send. Regression
+    coverage for the fix, alongside the empirical repro in
+    ``test_notify_reliability_repro.py`` (kept passing unchanged).
+    """
+
+    async def test_drop_then_reconnect_flushes(self, state: ServerState) -> None:
+        """A suspenders send failure followed by a reconnect (session
+        recapture) flushes the notification the client never saw — the
+        two-step recovery path when the client's own MCP transport dies and
+        Claude Code re-initializes a fresh session.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        dying_session = MagicMock(spec=ServerSession)
+        dying_session.send_tool_list_changed = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        _descriptions._session = dying_session
+
+        await refresh_read_messages(mcp, state)  # drops the notification
+        assert _descriptions._pending_notify
+
+        reconnected = MagicMock(spec=ServerSession)
+        reconnected.send_tool_list_changed = AsyncMock()
+        await _descriptions.capture_session(reconnected)
+
+        reconnected.send_tool_list_changed.assert_awaited_once()
+        assert not _descriptions._pending_notify
+
+    async def test_drop_then_belt_tool_call_flushes(self, state: ServerState) -> None:
+        """A suspenders send failure followed by an in-request (belt-path)
+        notify flushes the pending drop — the recovery path when the client's
+        transport survives and the agent simply makes another tool call
+        before any reconnect happens.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        dying_session = MagicMock(spec=ServerSession)
+        dying_session.send_tool_list_changed = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        _descriptions._session = dying_session
+
+        await refresh_read_messages(mcp, state)  # drops the notification
+        assert _descriptions._pending_notify
+
+        sent: list[object] = []
+
+        class _FakeContext:
+            session = object()
+
+            async def send_notification(self, notification: object) -> None:
+                sent.append(notification)
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(
+            "fastmcp.server.dependencies.get_context", lambda: _FakeContext()
+        )
+        try:
+            await _descriptions.notify_tool_list_changed()  # belt path fires
+        finally:
+            monkeypatch.undo()
+
+        assert len(sent) == 1
+        assert not _descriptions._pending_notify
+
+    async def test_belt_flush_does_not_double_send(self, state: ServerState) -> None:
+        """The belt path's flush is folded into its own single send — a
+        pending drop must not trigger a second notification on top of the
+        belt call's own.
+        """
+        sent: list[object] = []
+
+        class _FakeContext:
+            session = object()
+
+            async def send_notification(self, notification: object) -> None:
+                sent.append(notification)
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(
+            "fastmcp.server.dependencies.get_context", lambda: _FakeContext()
+        )
+        _descriptions._pending_notify = True
+        try:
+            await _descriptions.notify_tool_list_changed()
+        finally:
+            monkeypatch.undo()
+
+        assert len(sent) == 1  # exactly one send, not two
+        assert not _descriptions._pending_notify
