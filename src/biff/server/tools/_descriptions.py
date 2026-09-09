@@ -169,10 +169,21 @@ async def notify_tool_list_changed() -> None:
     """Fire ``notifications/tools/list_changed`` via the best available path.
 
     Belt path (inside a tool handler): queues the notification on the
-    FastMCP Context so it piggybacks on the tool response.
+    FastMCP Context so it piggybacks on the tool response. Also flushes
+    any ``_pending_notify`` left behind by an earlier suspenders failure —
+    this call's own successful send already carries it, since the client
+    re-reads the whole tool list rather than just the description that
+    triggered this particular notify.
 
     Suspenders path (background poller): sends directly on the stored
-    ServerSession when no request context is active.
+    ServerSession when no request context is active. A send failure here
+    means the client's MCP transport died independently of NATS
+    connectivity — the dead session reference is cleared *and* the drop
+    is recorded as pending, so the next session recapture (reconnect) or
+    belt call flushes it. Losing the reference without recording the
+    drop is root cause #1 (notification.tex sec:sessionloss): the
+    change-gate on tool.description suppresses every later re-notify,
+    so an unrecorded drop is never recovered.
 
     Pre-session path (before the client's ``initialize`` has been
     captured): no session exists to notify on, so the notification would
@@ -190,6 +201,8 @@ async def notify_tool_list_changed() -> None:
         await ctx.send_notification(ToolListChangedNotification())
         # Always update — the client may have reconnected with a new session.
         _session = ctx.session
+        # Flush exactly once: this send already covers the missed drop.
+        _pending_notify = False
         return
     except RuntimeError:
         pass
@@ -205,9 +218,11 @@ async def notify_tool_list_changed() -> None:
                 "Failed to send tool list changed notification",
                 exc_info=True,
             )
-            # Session is dead — clear it so the poller stops
-            # hammering a closed stream every tick.
+            # Session is dead — clear it so the poller stops hammering a
+            # closed stream every tick, and record the drop so a later
+            # flush opportunity (session recapture or belt call) retries it.
             _session = None
+            _pending_notify = True
         return
 
     # Pre-session path — no session captured yet, record the drop.
