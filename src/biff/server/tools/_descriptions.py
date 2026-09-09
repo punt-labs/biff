@@ -83,6 +83,23 @@ _pending_notify: bool = False
 # (notification.tex: the model treats each transition as atomic; the code
 # does not, without this lock). Neither guarded function calls the other
 # while holding the lock, so there is no re-entrancy or deadlock risk.
+#
+# Single-event-loop invariant: this module-global lock is instantiated once
+# at import time and never recreated. Since Python 3.10, asyncio.Lock() does
+# not bind to a loop at construction — it binds lazily to whichever loop is
+# running the first time it is awaited — so a "bound to a different event
+# loop" RuntimeError requires the process to run this lock across two
+# concurrently-alive loops, not merely to import the module before a loop
+# exists. biff's server has exactly one production entry point per process
+# (``serve()`` and ``mcp_cmd()`` in __main__.py), and each calls
+# FastMCP's ``server.run(...)`` exactly once, which owns a single
+# ``asyncio.run()`` for the process's lifetime. ``_reset_session()`` clears
+# ``_session``/``_pending_notify`` for test isolation but never touches this
+# lock or spawns a second loop — it is called only from test fixtures
+# (tests/conftest.py and friends), never from production code. If a future
+# change introduces a second production loop per process (e.g. a supervisor
+# that restarts the server in-process), this lock must be rebound to the new
+# loop at that point, not before.
 _notify_lock: asyncio.Lock = asyncio.Lock()
 
 # Bounds each individual send made while holding ``_notify_lock``. The Z
