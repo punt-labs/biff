@@ -1082,12 +1082,16 @@ class TestStartupNotificationRace:
 
         fake_session.send_tool_list_changed.assert_not_awaited()
 
-    async def test_flush_failure_clears_session_and_does_not_propagate(
+    async def test_flush_failure_clears_session_and_rearms_pending_notify(
         self, state: ServerState
     ) -> None:
         """When the flush in capture_session raises, the exception must not
         propagate, _session must be cleared (broken session ref), and
-        _pending_notify must be consumed (no infinite retry loop).
+        _pending_notify must be RE-ARMED — the reconnected session was
+        itself broken, so the drop is still unrecovered and must be
+        retried on the next reconnect or belt call, not silently
+        consumed. capture_session runs once per client ``initialize``, so
+        re-arming costs one retry per reconnect, not an infinite loop.
         """
         from mcp.server.session import ServerSession
 
@@ -1106,7 +1110,7 @@ class TestStartupNotificationRace:
         await _descriptions.capture_session(fake_session)
 
         assert _descriptions._session is None
-        assert not _descriptions._pending_notify
+        assert _descriptions._pending_notify
 
 
 class TestMidSessionDropRecovery:
