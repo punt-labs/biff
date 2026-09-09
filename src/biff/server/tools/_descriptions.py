@@ -41,6 +41,7 @@ _SENTINEL = _Sentinel()
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
+    from fastmcp.server.context import Context
     from mcp.server.session import ServerSession
 
     from biff.server.state import ServerState
@@ -72,6 +73,52 @@ _session: ServerSession | None = None
 # the real session arrives.
 _pending_notify: bool = False
 
+# Serializes every read-decide-send-write critical section that touches
+# _session/_pending_notify across notify_tool_list_changed()'s two branches
+# and capture_session()'s flush. Real ``await`` points sit between the read
+# and the write at each site, so two of these can otherwise interleave —
+# e.g. a belt send completing after a suspenders failure has recorded a
+# drop, clobbering pendingNotify back to false and re-creating the
+# notifyLost-forever failure mode via a race instead of a direct code path
+# (notification.tex: the model treats each transition as atomic; the code
+# does not, without this lock). Neither guarded function calls the other
+# while holding the lock, so there is no re-entrancy or deadlock risk.
+#
+# Single-event-loop invariant: this module-global lock is instantiated once
+# at import time and never recreated. Since Python 3.10, asyncio.Lock() does
+# not bind to a loop at construction — it binds lazily to whichever loop is
+# running the first time it is awaited — so a "bound to a different event
+# loop" RuntimeError requires the process to run this lock across two
+# concurrently-alive loops, not merely to import the module before a loop
+# exists. biff's server has exactly one production entry point per process
+# (``serve()`` and ``mcp_cmd()`` in __main__.py), and each calls
+# FastMCP's ``server.run(...)`` exactly once, which owns a single
+# ``asyncio.run()`` for the process's lifetime. ``_reset_session()`` clears
+# ``_session``/``_pending_notify`` for test isolation but never touches this
+# lock or spawns a second loop — it is called only from test fixtures
+# (tests/conftest.py and friends), never from production code. If a future
+# change introduces a second production loop per process (e.g. a supervisor
+# that restarts the server in-process), this lock must be rebound to the new
+# loop at that point, not before.
+_notify_lock: asyncio.Lock = asyncio.Lock()
+
+# Bounds each individual send made while holding ``_notify_lock``. The Z
+# model (notification.tex, notification-race.tex) proves SAFETY — no lost
+# notification, no lost-update race — by treating every send as an atomic
+# step; it has no notion of a send that never returns. A wedged or
+# backpressured transport (client alive but not draining — a real
+# MCP-over-stdio failure mode) would otherwise hold this lock forever,
+# starving the poller and every belt-path tool call behind the same
+# unbounded ``await``. This timeout is the LIVENESS measure the atomic
+# model doesn't express, layered on top of it: a timeout is handled by the
+# same ``except Exception`` a send failure already hits (``TimeoutError``
+# subclasses ``OSError`` subclasses ``Exception``), so it re-arms
+# ``_pending_notify`` via the model's already-proven failure->re-arm
+# transition rather than a new, unverified code path. Mirrors
+# ``_TEARDOWN_STEP_TIMEOUT`` in server/app.py — same rationale, a bounded
+# best-effort step instead of an unbounded one.
+_NOTIFY_SEND_TIMEOUT: float = 3.0
+
 
 async def capture_session(session: ServerSession) -> None:
     """Eagerly store the MCP session reference.
@@ -86,24 +133,37 @@ async def capture_session(session: ServerSession) -> None:
 
     If a description changed during the pre-initialize window (before
     any session existed to notify), flushes that dropped notification
-    now via the newly captured session.
+    now via the newly captured session. A failed flush — the reconnected
+    session is itself already broken — re-arms ``_pending_notify`` rather
+    than consuming it: this function runs once per client ``initialize``,
+    so re-arming costs exactly one retry on the *next* reconnect or belt
+    call, not an infinite loop. Consuming the flag on a failed flush would
+    repeat root cause #1 (notification.tex sec:sessionloss) at this second
+    boundary — the drop would be silently forgotten instead of retried.
     """
     global _session, _pending_notify
-    _session = session
-    if not _pending_notify:
-        return
-    _pending_notify = False
-    try:
-        await session.send_tool_list_changed()
-    except Exception:  # noqa: BLE001 — best-effort: a session that
-        # can't accept a notification at initialize time is broken;
-        # clear it so the background poller doesn't hammer a dead
-        # stream, and let the belt path re-capture on the next call.
-        logger.warning(
-            "Failed to flush pending tool list changed notification",
-            exc_info=True,
-        )
-        _session = None
+    async with _notify_lock:
+        _session = session
+        if not _pending_notify:
+            return
+        try:
+            async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                await session.send_tool_list_changed()
+        except Exception:  # noqa: BLE001 — best-effort: a session that
+            # can't accept a notification at initialize time is broken
+            # (a wedged transport that never returns hits the timeout
+            # above and lands here too — see _NOTIFY_SEND_TIMEOUT); clear
+            # it so the background poller doesn't hammer a dead stream,
+            # and re-arm the pending flag so the next reconnect or belt
+            # call retries the flush instead of losing it.
+            logger.warning(
+                "Failed to flush pending tool list changed notification",
+                exc_info=True,
+            )
+            _session = None
+            _pending_notify = True
+            return
+        _pending_notify = False
 
 
 # Set by the ``tty`` tool so the unread file includes the session name.
@@ -169,49 +229,114 @@ async def notify_tool_list_changed() -> None:
     """Fire ``notifications/tools/list_changed`` via the best available path.
 
     Belt path (inside a tool handler): queues the notification on the
-    FastMCP Context so it piggybacks on the tool response.
+    FastMCP Context so it piggybacks on the tool response, and also
+    flushes any ``_pending_notify`` left behind by an earlier suspenders
+    failure — this call's own successful send already carries it, since
+    the client re-reads the whole tool list rather than just the
+    description that triggered this particular notify. Probing for a
+    context (``get_context()``) and sending on it are two independently
+    fallible steps with different meanings on failure, so they are caught
+    separately: ``get_context()`` raising ``RuntimeError`` legitimately
+    means "no request in flight" and falls through to the suspenders path
+    below. A raised ``send_notification`` is a different failure — a real
+    transport error (e.g. anyio's ``ClosedResourceError`` /
+    ``BrokenResourceError``, both plain ``Exception`` subclasses, not
+    ``RuntimeError``) — and is handled in its own best-effort ``except``
+    so it neither escapes unrecorded nor propagates into the calling tool
+    handler.
 
     Suspenders path (background poller): sends directly on the stored
-    ServerSession when no request context is active.
+    ServerSession when no request context is active. A send failure here
+    means the client's MCP transport died independently of NATS
+    connectivity — the dead session reference is cleared *and* the drop
+    is recorded as pending, so the next session recapture (reconnect) or
+    belt call flushes it. Losing the reference without recording the
+    drop is root cause #1 (notification.tex sec:sessionloss): the
+    change-gate on tool.description suppresses every later re-notify,
+    so an unrecorded drop is never recovered.
 
     Pre-session path (before the client's ``initialize`` has been
     captured): no session exists to notify on, so the notification would
     otherwise be silently dropped. Records it as pending instead;
     :func:`capture_session` flushes it once the real session arrives.
+
+    Every branch's read-decide-send-write sequence runs under
+    ``_notify_lock`` — see that lock's docstring for why an unguarded
+    ``await`` between the read and the write would let two branches
+    interleave and clobber ``_pending_notify``. Every locked send is
+    additionally bounded by ``_NOTIFY_SEND_TIMEOUT`` — see that constant's
+    docstring for why an unbounded send under this lock is a liveness
+    hazard the safety proof does not cover.
     """
     global _session, _pending_notify
 
-    # Belt path — inside a tool handler, Context is available.
-    try:
-        from fastmcp.server.dependencies import get_context  # noqa: PLC0415
-        from mcp.types import ToolListChangedNotification  # noqa: PLC0415
+    # Belt path — inside a tool handler, Context is available. Only the
+    # context *probe* is RuntimeError-specific; a genuine send failure is
+    # handled below, inside the lock, alongside the state it must record.
+    from fastmcp.server.dependencies import get_context  # noqa: PLC0415
+    from mcp.types import ToolListChangedNotification  # noqa: PLC0415
 
+    ctx: Context | None
+    try:
         ctx = get_context()
-        await ctx.send_notification(ToolListChangedNotification())
-        # Always update — the client may have reconnected with a new session.
-        _session = ctx.session
-        return
     except RuntimeError:
-        pass
+        ctx = None
+
+    if ctx is not None:
+        async with _notify_lock:
+            try:
+                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                    await ctx.send_notification(ToolListChangedNotification())
+            except Exception:  # noqa: BLE001 — best-effort, mirrors the
+                # suspenders except below: a transport error (or a wedged
+                # transport hitting the timeout — see _NOTIFY_SEND_TIMEOUT)
+                # on the belt send must not crash the calling tool handler,
+                # and the drop it represents must be recorded, not
+                # swallowed.
+                logger.warning(
+                    "Failed to send tool list changed notification (belt)",
+                    exc_info=True,
+                )
+                # Always update — the client may have reconnected with a
+                # new session — then re-arm so a later flush retries it.
+                _session = ctx.session
+                _pending_notify = True
+                return
+            # Flush exactly once: this send already covers the missed drop.
+            _session = ctx.session
+            _pending_notify = False
+        return
 
     # Suspenders path — no request context, use stored session.
     # Bare Exception matches FastMCP's own _flush_notifications pattern —
     # notification delivery is best-effort and must never crash the poller.
-    if _session is not None:
-        try:
-            await _session.send_tool_list_changed()
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "Failed to send tool list changed notification",
-                exc_info=True,
-            )
-            # Session is dead — clear it so the poller stops
-            # hammering a closed stream every tick.
-            _session = None
-        return
+    async with _notify_lock:
+        if _session is not None:
+            try:
+                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                    await _session.send_tool_list_changed()
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to send tool list changed notification",
+                    exc_info=True,
+                )
+                # Session is dead (or wedged past _NOTIFY_SEND_TIMEOUT) —
+                # clear it so the poller stops hammering a closed stream
+                # every tick, and record the drop so a later flush
+                # opportunity (session recapture or belt call) retries it.
+                _session = None
+                _pending_notify = True
+            else:
+                # PollTickNotifyOk (notification.tex): a suspenders send
+                # reports only the current tick's own delivery; it does not
+                # touch _pending_notify, which tracks a drop recorded at a
+                # different tick — a later belt send or reconnect flush covers
+                # it, per the proven model.
+                pass
+            return
 
-    # Pre-session path — no session captured yet, record the drop.
-    _pending_notify = True
+        # Pre-session path — no session captured yet, record the drop.
+        _pending_notify = True
 
 
 async def _sync_unread_file(

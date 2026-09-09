@@ -381,3 +381,81 @@ class TestDynamicDescriptionProtocol:
         # Second call — no messages, description stays the same
         await client.call_tool("who", {})
         assert tracker.tool_list_changed_count == before
+
+
+class TestPendingNotifyRecoveryProtocol:
+    """Integration-tier coverage for the ``_pending_notify`` recovery path.
+
+    ``tests/test_server/test_notify_reliability_repro.py`` proves the
+    recovery contract at the unit tier against a ``MagicMock(spec=
+    ServerSession)``. This test drives the same drop-then-flush cycle
+    through a real ``FastMCPTransport`` client/session pair and asserts
+    the flush arrives as a genuine ``tools/list_changed`` notification
+    observed by a second, reconnected client — an end-to-end assertion
+    the unit tier cannot make, since it never has a live transport to
+    observe delivery on.
+
+    A faithful transport-level failure (severing the wire itself) isn't
+    reachable through ``FastMCPTransport`` — it's an in-memory transport
+    with no socket to sever. The closest honest failure injection is
+    patching the *real*, transport-bound ``ServerSession``'s
+    ``send_tool_list_changed`` for exactly one call, which reproduces
+    the same "session alive, send raises" failure mode the suspenders
+    path's ``except Exception`` branch is written to handle, without
+    faking or mocking the session object itself.
+    """
+
+    async def test_dropped_notification_flushes_on_reconnect(
+        self, state: ServerState
+    ) -> None:
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from biff.models import Message
+        from biff.server.tools import _descriptions
+        from biff.server.tools._descriptions import (
+            _reset_session,
+            refresh_read_messages,
+        )
+        from biff.testing import NotificationTracker
+
+        _reset_session()
+        mcp = create_server(state)
+        try:
+            async with Client(FastMCPTransport(mcp)):
+                assert _descriptions._session is not None
+                live_session = _descriptions._session
+
+                await state.relay.deliver(
+                    Message(from_user="eric", to_user=state.session_key, body="hi")
+                )
+                # Simulate a poller tick with no request Context active —
+                # the suspenders path — against the session this client
+                # actually captured at initialize, patched to fail for
+                # exactly this one send.
+                with patch.object(
+                    live_session,
+                    "send_tool_list_changed",
+                    AsyncMock(side_effect=RuntimeError("transport wedged")),
+                ):
+                    await refresh_read_messages(mcp, state)
+                assert _descriptions._pending_notify
+            # First client disconnects here; the drop above was never
+            # delivered to it — nothing in this test asserts on that
+            # client's tracker, because there is nothing more for it to see.
+
+            tracker = NotificationTracker()
+            async with Client(FastMCPTransport(mcp), message_handler=tracker):
+                # A genuine reconnect: on_initialize -> capture_session()
+                # sees _pending_notify still set and flushes it on the
+                # freshly captured session — observed here as a real
+                # tools/list_changed notification over the wire, not a
+                # module-global assertion.
+                await asyncio.sleep(0.05)
+                assert tracker.tool_list_changed_count >= 1, (
+                    "reconnect must flush the notification the first "
+                    "client's session never received"
+                )
+                assert not _descriptions._pending_notify
+        finally:
+            _reset_session()
