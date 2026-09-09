@@ -50,17 +50,29 @@ notification from the MCP server's own coroutine context.
 
 The session reference is captured eagerly during the server's lifespan
 startup, before the NATS connection is established and before the
-background poller begins.  This ensures the suspenders path always has
-a valid session reference whenever it needs to fire a notification.
+background poller begins---this is what closes the biff-8g0 defect
+class, in which the poller could wake before any session had ever been
+captured.  NATS callbacks and KV watchers do not fire notifications
+directly---they are unreliable from background coroutine
+contexts---but they wake the poller from napping, so the next active
+tick (2~seconds) detects the changes via its own reads and attempts
+the notification.
 
-The key invariant is: \emph{a connected NATS client implies a captured
-session}.  Since NATS subscription is the mechanism that delivers
-external talk messages, and since the session is captured before NATS
-connects, the poller always has a valid notification path.  NATS
-callbacks and KV watchers do not fire notifications directly---they
-are unreliable from background coroutine contexts---but they wake the
-poller from napping, so the next active tick (2~seconds) detects the
-changes via its own reads and fires the notification.
+\emph{Whether that attempt succeeds is a separate question from
+whether a session was ever captured, and Sections~\ref{sec:state}
+and~\ref{sec:sessionloss} correct an over-claim in earlier drafts on
+exactly this point.}  A send on the stored session reference can fail
+independently of NATS connectivity---the client's own MCP transport
+can die while the NATS connection underneath stays healthy---and
+root cause~\#1 (``dropped \texttt{tools/list\_changed} mid-session, no
+recovery,'' Section~\ref{sec:sessionloss}) is what happens when that
+failure is not recorded: the session reference is cleared, the
+description-changed flag is left set, and nothing tells the next
+client reconnect that a notification is owed.  The governing property
+is not ``the poller always has a valid session''---that is false, once
+a send can fail---but the accounting safety property $notifyLost =
+zfalse$: every suspenders failure is recorded, so recovery is
+guaranteed rather than accidental.
 
 This specification models the four state spaces---NATS connection,
 MCP server session, filesystem, and status bar---and the operations
@@ -80,6 +92,14 @@ originally built (biff-9la), was not.  The stale-marker defect is
 reproduced here as a reachable ProB state and then proved unreachable
 once the reconciling transitions of Section~\ref{sec:markerfix} are in
 place.
+
+A third defect sits underneath both marker channels rather than
+alongside them: the marker can be server-side correct---mutated,
+consistent with $MarkerConsistent$---while the notification that would
+tell Claude~Code to re-read it is silently lost.
+Section~\ref{sec:sessionloss} models this as root cause~\#1, reproduces
+it as a reachable ProB state, and proves the corresponding safety
+property once the suspenders failure is properly recorded.
 
 %%----------------------------------------------------------------------
 \section{Basic Types}
@@ -270,7 +290,9 @@ the status bar, and the last notification outcome.
   barLine2 : MSG \\
   barStale : ZBOOL \\
   lastNotifyResult : NotifyResult \\
-  staleWithdrawHit : ZBOOL
+  staleWithdrawHit : ZBOOL \\
+  pendingNotify : ZBOOL \\
+  notifyLost : ZBOOL
   \where
   \dom queueKinds = \ran queueItems \\
   \dom queueTexts = \ran queueItems \\
@@ -296,19 +318,41 @@ the status bar, and the last notification outcome.
   natsConn = natsConnected) \\
   (kvProvisioned = ztrue \implies
   natsConn = natsConnected) \\
-  (natsConn = natsConnected \implies
-  session = sessCaptured) \\
-  staleWithdrawHit = zfalse
+  staleWithdrawHit = zfalse \\
+  notifyLost = zfalse
 \end{schema}
 
 Key invariants: queue metadata maps have the same domain as the
 queue sequence range; subscription and KV require a live connection;
 the current index is always within bounds; the pending-invite set is
 bounded, $\# talkPending + \# talkBare \leq maxPending$, so no stream
-of forged inviters can grow it without limit.  The critical invariant
-is the last: \emph{a connected NATS client implies a captured session}.
-This ensures the suspenders notification path (the background poller)
-is always available when description-changed flags are set.
+of forged inviters can grow it without limit; and $notifyLost = zfalse$,
+established in Section~\ref{sec:sessionloss}, which says that a
+suspenders send failure is never silently absorbed.
+
+\paragraph{Erratum (root cause \#1, dropped \texttt{tools/list\_changed}
+mid-session).}  Earlier drafts of this section carried a further
+invariant, $natsConn = natsConnected \implies session = sessCaptured$,
+glossed as ``a connected NATS client implies a captured session,'' with
+the accompanying claim in Section~\ref{sec:sessioncapture} that ``once
+captured, the session reference is never invalidated.''  That claim is
+false of the running system.  $notify\_tool\_list\_changed()$'s
+suspenders branch clears the stored session reference to \texttt{None}
+when a send raises---a live NATS connection survives the send failure
+untouched, but the cached session reference does not---so
+$natsConn = natsConnected$ and $session = sessNone$ can co-occur in the
+real system.  The invariant as stated is refuted by exactly the
+transition that models this failure ($PollTickNotifyFail$,
+Section~\ref{sec:sessionloss}); keeping it would make that transition
+infeasible and hide the defect rather than expose it.  It is removed
+here.  The property it was protecting---that $EnsureConnected$ can only
+run after a session has been captured at least once, the biff-8g0
+guard---did not actually depend on session capture being permanent; it
+depended only on capture happening \emph{before the first connect}.
+That is now stated as an explicit precondition on $EnsureConnected$
+itself (Section~\ref{sec:ensureconnected}), where it belongs, rather
+than as a state invariant that also asserts something stronger and
+false.
 
 \paragraph{The tool-description channels.}  Three of the components above
 model tool descriptions that Claude~Code shows to the agent, and two more
@@ -390,23 +434,32 @@ factor at two rather than one per user.
   barLine2' = idleMarker \\
   barStale' = ztrue \\
   lastNotifyResult' = notifyDropped \\
-  staleWithdrawHit' = zfalse
+  staleWithdrawHit' = zfalse \\
+  pendingNotify' = zfalse \\
+  notifyLost' = zfalse
 \end{schema}
 
 The initial state has $session' = sessNone$ and
-$natsConn' = natsDisconnected$.  The invariant
-$natsConn = natsConnected \implies session = sessCaptured$
-holds vacuously because $natsConn \neq natsConnected$.
+$natsConn' = natsDisconnected$: nothing has connected and nothing has
+been notified.
 
 %%----------------------------------------------------------------------
 \section{Session Capture}
+\label{sec:sessioncapture}
 %%----------------------------------------------------------------------
 
 The MCP server lifespan startup captures the session reference
 eagerly, before the NATS connection is established and before the
 background poller begins.  This is the key operation that prevents
 the biff-8g0 bug class: by the time any NATS callback can fire,
-the session is guaranteed to be captured.
+the session is guaranteed to have been captured at least once.
+
+$CaptureSession$ also flushes a $pendingNotify$ recorded before any
+session existed---the pre-initialize window in which a description
+change has nowhere to send its notification.  This half of the flush
+obligation was correct in the original implementation and remains so;
+Section~\ref{sec:sessionloss} is about the other half, the flush that
+a \emph{mid-session} loss of the reference requires.
 
 \begin{schema}{CaptureSession}
   \Delta NotificationState
@@ -416,6 +469,17 @@ the session is guaranteed to be captured.
   natsConn = natsDisconnected \\
   session' = sessCaptured \\
   natsConn' = natsConn \\
+  ((pendingNotify = ztrue) \implies \\
+  \quad~ (pendingNotify' = zfalse \land
+  lastNotifyResult' = notifySent \land \\
+  \quad~ \quad~ wallDescChanged' = zfalse \land
+  talkDescChanged' = zfalse)) \\
+  ((pendingNotify = zfalse) \implies \\
+  \quad~ (pendingNotify' = zfalse \land
+  lastNotifyResult' = lastNotifyResult \land \\
+  \quad~ \quad~ wallDescChanged' = wallDescChanged \land
+  talkDescChanged' = talkDescChanged)) \\
+  notifyLost' = notifyLost \\
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
   toolContext' = toolContext \\
@@ -427,8 +491,6 @@ the session is guaranteed to be captured.
   talkConnected' = talkConnected \\
   wallDesc' = wallDesc \\
   talkDesc' = talkDesc \\
-  wallDescChanged' = wallDescChanged \\
-  talkDescChanged' = talkDescChanged \\
   queueItems' = queueItems \\
   queueKinds' = queueKinds \\
   queueTexts' = queueTexts \\
@@ -438,37 +500,41 @@ the session is guaranteed to be captured.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 After $CaptureSession$, the system has $session = sessCaptured$
-with $natsConn = natsDisconnected$.  The invariant holds, and
-$EnsureConnected$ can now be applied---the resulting post-state
-$natsConn' = natsConnected \land session' = sessCaptured$ satisfies
-the invariant.
+with $natsConn = natsDisconnected$, and $EnsureConnected$ can now be
+applied.
 
 %%----------------------------------------------------------------------
 \section{NATS Connection Operations}
 %%----------------------------------------------------------------------
 
 \subsection{Ensure Connected}
+\label{sec:ensureconnected}
 
 Lazy connection: transitions from disconnected to connected,
 provisioning KV and stream infrastructure.  Idempotent when
 already connected.
 
-The state invariant
-$natsConn = natsConnected \implies session = sessCaptured$
-creates an implicit precondition: since this operation sets
-$natsConn' = natsConnected$ and preserves $session' = session$,
-the post-state requires $session = sessCaptured$.  The system
-must execute $CaptureSession$ before $EnsureConnected$.
+The guard $session \neq sessNone$ is the biff-8g0 protection, stated
+here explicitly rather than derived from a state invariant (see the
+erratum in Section~\ref{sec:state}): the system must execute
+$CaptureSession$ at least once before the first $EnsureConnected$.
+It is deliberately \emph{not} $session = sessCaptured$---after a
+suspenders send failure (Section~\ref{sec:sessionloss}) $session$ may
+be $sessNone$ again while $natsConn$ is already $natsConnected$, and
+$EnsureConnected$ must remain applicable (idempotently) in that state
+without requiring a fresh capture first.
 
 \begin{schema}{EnsureConnected}
   \Delta NotificationState
   \where
   pendingAge' = pendingAge \\
+  session \neq sessNone \lor natsConn = natsConnected \\
   natsConn = natsDisconnected \lor natsConn = natsConnected \\
   natsConn' = natsConnected \\
   kvProvisioned' = ztrue \\
@@ -495,15 +561,17 @@ must execute $CaptureSession$ before $EnsureConnected$.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Close Connection}
 
 Permanent shutdown.  Clears all NATS-dependent state.  The session
-reference is preserved---it is not invalidated by disconnection.
-The invariant holds because $natsConn' = natsClosed$, so the
-antecedent $natsConn = natsConnected$ is false.
+reference is preserved by this operation---a clean shutdown does not
+by itself invalidate it; only a failed \emph{send} does
+(Section~\ref{sec:sessionloss}).
 
 \begin{schema}{CloseConnection}
   \Delta NotificationState
@@ -534,6 +602,8 @@ antecedent $natsConn = natsConnected$ is false.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -598,6 +668,8 @@ handler.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -631,6 +703,8 @@ handler.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -645,13 +719,27 @@ reachable without weakening any existing guard.
 %%----------------------------------------------------------------------
 
 This is the central mechanism.  Two paths send the MCP
-\texttt{tools/list\_changed} notification.  Both always succeed.
+\texttt{tools/list\_changed} notification.  The belt path always
+succeeds; the suspenders path does not, and Section~\ref{sec:sessionloss}
+models the difference precisely at the operational level ($PollTick$).
+This section gives the two paths in their simplified, idealised form
+first, exactly as they were understood before the root-cause-\#1
+investigation.
 
 \subsection{Belt Path (Tool Context Available)}
 
 Inside a tool handler: notification piggybacks on the MCP response.
 This is the preferred path when tool context is available because
 it guarantees synchronous delivery within the request-response cycle.
+The real implementation refreshes the stored session reference on
+\emph{every} belt call, whether or not the prior reference was still
+good---\texttt{\_session = ctx.session}, unconditionally---so
+$NotifyBelt$ (re)captures the session regardless of its prior value.
+It also flushes any $pendingNotify$ left behind by an earlier
+suspenders failure, using the current call's own successful send to
+carry the missed notification.  Omitting that flush is the second
+half of root cause~\#1 and is kept below as the dead operation
+$NotifyBeltStale$.
 
 \begin{schema}{NotifyBelt}
   \Delta NotificationState
@@ -659,7 +747,53 @@ it guarantees synchronous delivery within the request-response cycle.
   pendingAge' = pendingAge \\
   toolContext = ztrue \\
   lastNotifyResult' = notifySent \\
-  session' = session \\
+  session' = sessCaptured \\
+  pendingNotify' = zfalse \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = zfalse \\
+  talkDescChanged' = zfalse \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = zfalse \\
+  notifyLost' = notifyLost \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+$NotifyBeltStale$ is the defect: an otherwise identical belt call that
+recaptures the session and sends successfully---so $lastNotifyResult$
+and the changed flags resolve exactly as above---but leaves
+$pendingNotify$ untouched.  A drop recorded by an earlier suspenders
+failure survives this call unflushed, waiting on some \emph{later}
+event to notice it.  Kept here, and proved dead once $notifyLost =
+zfalse$ is promoted in Section~\ref{sec:sessionloss}.
+
+\begin{schema}{NotifyBeltStale}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  toolContext = ztrue \\
+  pendingNotify = ztrue \\
+  lastNotifyResult' = notifySent \\
+  session' = sessCaptured \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = ztrue \\
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
@@ -686,14 +820,17 @@ it guarantees synchronous delivery within the request-response cycle.
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
-\subsection{Suspenders Path (No Tool Context)}
+\subsection{Suspenders Path (No Tool Context), idealised}
 
-Background poller: no request context, but the eagerly captured
-session reference is used to send the notification.  NATS callbacks
-do not use this path directly---they set description-changed flags
-that the poller detects on its next tick.  The state invariant
-guarantees $session = sessCaptured$ whenever NATS is connected,
-so the poller always succeeds when needed.
+Background poller: no request context, so the eagerly captured
+session reference is used to send the notification instead.  NATS
+callbacks do not use this path directly---they set description-changed
+flags that the poller detects on its next tick.  This schema is the
+\emph{idealised} suspenders path, kept for continuity with the earlier
+drafts: it assumes the send always succeeds whenever
+$session = sessCaptured$.  Section~\ref{sec:sessionloss} replaces this
+assumption at the operational level with the two outcomes a real send
+actually has.
 
 \begin{schema}{NotifySuspenders}
   \Delta NotificationState
@@ -726,6 +863,8 @@ so the poller always succeeds when needed.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = zfalse \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -733,14 +872,20 @@ so the poller always succeeds when needed.
 
 The complete notification operation is the disjunction of the two
 paths.  Exactly one fires: $NotifyBelt$ when $toolContext = ztrue$,
-$NotifySuspenders$ when $toolContext = zfalse$.
+$NotifySuspenders$ (idealised) or its two-outcome refinement,
+Section~\ref{sec:sessionloss}, when $toolContext = zfalse$.
 
-Because the state invariant guarantees $session = sessCaptured$
-whenever NATS is connected, and because all notification-triggering
-operations require a NATS connection, $NotifySuspenders$ is always
-applicable when $toolContext = zfalse$ and a description has changed.
-No notification is ever dropped---NATS callbacks defer to the poller
-and wake it from napping, so the next active tick fires the notification.
+\paragraph{Erratum.}  The paragraph that stood here in earlier drafts
+claimed ``no notification is ever dropped,'' reasoning from the state
+invariant $natsConn = natsConnected \implies session = sessCaptured$
+that Section~\ref{sec:state}'s erratum has since retracted.  That
+claim is false: a suspenders send can fail independently of NATS
+connectivity, and root cause~\#1 (Section~\ref{sec:sessionloss}) is
+exactly the case in which the resulting drop was, until the fix given
+there, never recorded and never recovered.  NATS callbacks still defer
+to the poller and wake it from napping so that the next active tick
+\emph{attempts} the notification promptly; whether that attempt
+succeeds is the question Section~\ref{sec:sessionloss} answers.
 
 %%----------------------------------------------------------------------
 \section{Send Flow Operations}
@@ -793,6 +938,8 @@ tool context and a live NATS connection.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -834,6 +981,8 @@ notifications.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -877,6 +1026,8 @@ handles the receive-side effects.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -944,6 +1095,8 @@ have a valid session when it fires the deferred notification.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1005,6 +1158,8 @@ session when it fires the deferred notification.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1044,30 +1199,31 @@ Called after any state change that affects what the status bar shows.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
 \subsection{Poll Tick (Background Poller)}
+\label{sec:polltick}
 
-The 2-second background poller tick.  Runs outside tool context.
-If a description has changed, fires notification via the suspenders
-path.  The state invariant guarantees $session = sessCaptured$
-whenever NATS is connected, so the suspenders path always succeeds.
-Clears the changed flags regardless.
+The 2-second background poller tick.  Runs outside tool context.  This
+schema is the \emph{idle} case only---nothing has changed, so there is
+nothing to attempt.  Section~\ref{sec:sessionloss} gives the three
+operations that cover the remaining case, $wallDescChanged = ztrue \lor
+talkDescChanged = ztrue$: a successful suspenders send, a failed one
+that is correctly recorded, and---kept as the now-dead root cause
+\#1---a failed one that is silently absorbed.
 
 \begin{schema}{PollTick}
   \Delta NotificationState
   \where
   pendingAge' = pendingAge \\
   toolContext = zfalse \\
-  ((wallDescChanged = ztrue \lor \\
-  \quad~ talkDescChanged = ztrue) \implies \\
-  \quad~ lastNotifyResult' = notifySent \land \\
-  \quad~ barStale' = zfalse) \\
-  ((wallDescChanged = zfalse \land \\
-  \quad~ talkDescChanged = zfalse) \implies \\
-  \quad~ lastNotifyResult' = lastNotifyResult \land \\
-  \quad~ barStale' = barStale) \\
+  wallDescChanged = zfalse \\
+  talkDescChanged = zfalse \\
+  lastNotifyResult' = lastNotifyResult \\
+  barStale' = barStale \\
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
   talkSubscribed' = talkSubscribed \\
@@ -1091,8 +1247,342 @@ Clears the changed flags regardless.
   fileUnreadCount' = fileUnreadCount \\
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
+
+%%----------------------------------------------------------------------
+\section{Suspenders Failure and the No-Recovery Sink}
+\label{sec:sessionloss}
+%%----------------------------------------------------------------------
+
+Root cause~\#1, ``dropped \texttt{tools/list\_changed} mid-session, no
+recovery.''  A suspenders send can fail---the stored
+\texttt{ServerSession} may be attached to a stream the client has
+already torn down---independently of whether the NATS connection
+itself is healthy.  $notify\_tool\_list\_changed()$'s suspenders branch
+catches exactly this and clears the stored session reference so the
+poller stops hammering a dead stream:
+
+\begin{verbatim}
+if _session is not None:
+    try:
+        await _session.send_tool_list_changed()
+    except Exception:
+        logger.warning(...)
+        _session = None
+    return
+_pending_notify = True
+\end{verbatim}
+
+The \texttt{return} on the exception path is the defect: it skips the
+\texttt{\_pending\_notify = True} line entirely.  A failed suspenders
+send and a session that was simply never captured end up
+indistinguishable---both leave $\texttt{\_session} = \texttt{None}$
+with nothing recorded---even though the two cases are not
+symmetric.  The pre-session case is genuinely a first attempt with
+nothing yet to notify about; the suspenders-failure case has already
+mutated the tool description and already decided a notification is
+owed.  Losing that distinction is what makes the drop permanent: the
+one flag that exists to remember an owed notification, $pendingNotify$,
+is never set.
+
+\begin{schema}{PollTickNotifyOk}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  toolContext = zfalse \\
+  (wallDescChanged = ztrue \lor talkDescChanged = ztrue) \\
+  session = sessCaptured \\
+  lastNotifyResult' = notifySent \\
+  barStale' = zfalse \\
+  session' = session \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = zfalse \\
+  talkDescChanged' = zfalse \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+$PollTickNotifyFail$ is the corrected failure branch: the send fails,
+the session reference is cleared exactly as the code above clears it,
+the changed flag that triggered the attempt is left set (the client
+was not, in fact, told anything), and---the fix---$pendingNotify$ is
+raised to record the debt.
+
+\begin{schema}{PollTickNotifyFail}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  toolContext = zfalse \\
+  (wallDescChanged = ztrue \lor talkDescChanged = ztrue) \\
+  session = sessCaptured \\
+  lastNotifyResult' = notifyDropped \\
+  barStale' = barStale \\
+  session' = sessNone \\
+  pendingNotify' = ztrue \\
+  notifyLost' = notifyLost \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+$PollTickNotifyFailUnrecorded$ is root cause~\#1 itself, kept as the
+negative result it now is: identical precondition and identical
+$session' = sessNone$, but $pendingNotify$ is left exactly as the
+\texttt{return} in the code above leaves it---untouched.
+$notifyLost' = ztrue$ records that this has happened, the same device
+$staleWithdrawHit$ uses for the talk channel's reordering defect.
+
+\begin{schema}{PollTickNotifyFailUnrecorded}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  toolContext = zfalse \\
+  (wallDescChanged = ztrue \lor talkDescChanged = ztrue) \\
+  session = sessCaptured \\
+  lastNotifyResult' = notifyDropped \\
+  barStale' = barStale \\
+  session' = sessNone \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = ztrue \\
+  natsConn' = natsConn \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  wallDescChanged' = wallDescChanged \\
+  talkDescChanged' = talkDescChanged \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+\subsection{Recovery: a mid-session reconnect}
+
+$CaptureSession$ (Section~\ref{sec:sessioncapture}) is guarded to the
+server's startup window---$natsConn = natsDisconnected$---and cannot
+fire again once NATS is up.  But the real
+\texttt{\_SessionCaptureMiddleware} runs \texttt{capture\_session()} on
+\emph{every} client \texttt{initialize}, not only the first: a client
+that reconnects mid-session (a fresh MCP transport, the same NATS
+connection underneath) re-arrives here.  $RecaptureSession$ models that
+second call.  It flushes $pendingNotify$ exactly as $CaptureSession$
+does---the shared obligation both capture points owe.
+
+\begin{schema}{RecaptureSession}
+  \Delta NotificationState
+  \where
+  pendingAge' = pendingAge \\
+  session = sessNone \\
+  natsConn = natsConnected \\
+  session' = sessCaptured \\
+  natsConn' = natsConn \\
+  ((pendingNotify = ztrue) \implies \\
+  \quad~ (pendingNotify' = zfalse \land
+  lastNotifyResult' = notifySent \land \\
+  \quad~ \quad~ wallDescChanged' = zfalse \land
+  talkDescChanged' = zfalse)) \\
+  ((pendingNotify = zfalse) \implies \\
+  \quad~ (pendingNotify' = zfalse \land
+  lastNotifyResult' = lastNotifyResult \land \\
+  \quad~ \quad~ wallDescChanged' = wallDescChanged \land
+  talkDescChanged' = talkDescChanged)) \\
+  notifyLost' = notifyLost \\
+  kvProvisioned' = kvProvisioned \\
+  talkSubscribed' = talkSubscribed \\
+  toolContext' = toolContext \\
+  readDesc' = readDesc \\
+  unreadCount' = unreadCount \\
+  talkPending' = talkPending \\
+  talkBare' = talkBare \\
+  talkQueued' = talkQueued \\
+  talkConnected' = talkConnected \\
+  wallDesc' = wallDesc \\
+  talkDesc' = talkDesc \\
+  queueItems' = queueItems \\
+  queueKinds' = queueKinds \\
+  queueTexts' = queueTexts \\
+  currentIndex' = currentIndex \\
+  fileExists' = fileExists \\
+  fileUnreadCount' = fileUnreadCount \\
+  fileItems' = fileItems \\
+  barLine2' = barLine2 \\
+  barStale' = barStale \\
+  staleWithdrawHit' = staleWithdrawHit
+\end{schema}
+
+Observe the shape of $RecaptureSession$'s second branch: when
+$pendingNotify = zfalse$ it changes nothing about the changed flags or
+$lastNotifyResult$ at all.  A reconnect that arrives after
+$PollTickNotifyFailUnrecorded$ therefore restores $session$ to
+$sessCaptured$ but does \emph{not} deliver the notification the client
+missed---because nothing recorded that one was owed.  This is root
+cause~\#1's second consequence: even the recovery path that exists
+specifically to repair a dead session reference cannot repair a debt
+it was never told about.
+
+\subsection{The counterexample}
+
+Deleting $notifyLost = zfalse$ from $NotificationState$
+(Section~\ref{sec:state}) and setting the ProB goal to
+$notifyLost = ztrue \land wallDescChanged = ztrue \land talkDescChanged
+= zfalse$---isolating the wall channel so the trace is not cluttered by
+unrelated talk transitions---finds the four-step trace:
+
+\begin{verbatim}
+probcli docs/notification.tex -model_check -noltl -coverage \
+  -goal "notifyLost = ztrue & wallDescChanged = ztrue
+         & talkDescChanged = zfalse" \
+  -p DEFAULT_SETSIZE 2 \
+  -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 1 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000
+\end{verbatim}
+
+\begin{verbatim}
+Found GOAL in state id 1591
+Model checking time: 291 ms (304 ms walltime)
+States analysed: 423
+Transitions fired: 4630
+*** COUNTER EXAMPLE FOUND ***
+*** TRACE (length=6):
+ 1: SETUP_CONSTANTS(...)
+ 2: INITIALISATION(..., natsConn=natsDisconnected, notifyLost=zfalse,
+    pendingNotify=zfalse, session=sessNone, ...)
+ 3: CaptureSession(session=sessCaptured)
+ 4: EnsureConnected(kvProvisioned=ztrue,natsConn=natsConnected)
+ 5: KVWallReceive(SOURCEKEY1,MSG2)
+ 6: PollTickNotifyFailUnrecorded
+\end{verbatim}
+
+Step~5 mutates the wall description and sets $wallDescChanged' =
+ztrue$; nothing has been sent yet, that is the poller's job on its
+next tick.  Step~6 is the suspenders send failing on that very next
+tick: $session' = sessNone$, $wallDescChanged$ is left $ztrue$ (the
+client was not told), $pendingNotify' = pendingNotify = zfalse$ (the
+drop is not recorded), $notifyLost' = ztrue$.  The resulting state is
+exactly the one the task asks for: $wallDescChanged = ztrue$ (activity
+is server-side correct and waiting), $session = sessNone$ (the
+suspenders path is dead), $pendingNotify = zfalse$ (nothing will tell
+the next capture to flush), and $natsConn = natsConnected$ throughout
+(the connection itself was never at fault).
+
+$RecaptureSession$ is enabled from this state---its guard $session =
+sessNone \land natsConn = natsConnected$ holds---and confirms the
+second half of the finding without needing a further ProB search: by
+inspection of $RecaptureSession$'s second implication branch
+(triggered because $pendingNotify = zfalse$), firing it sets $session'
+= sessCaptured$ while leaving $wallDescChanged'$, $talkDescChanged'$,
+and $lastNotifyResult'$ all unchanged.  The reconnect does not recover
+the missed notification, because nothing recorded that one was owed.
+
+\begin{verbatim}
+probcli docs/notification.tex -model_check -noltl -coverage \
+  -p DEFAULT_SETSIZE 2 \
+  -card USER 1 -card SOURCEKEY 1 -card SESSIONKEY 1 \
+  -card QSLOT 1 -card USLOT 1 -card ASLOT 1 -card PSLOT 1 \
+  -p MAX_INITIALISATIONS 16 -p MAX_OPERATIONS 8000
+\end{verbatim}
+
+\paragraph{What this does and does not establish.}  Restoring
+$notifyLost = zfalse$ and re-running the check exhaustively---the
+$DEFAULT\_SETSIZE~2$, $USER~1$ scope, no goal---terminates with ``all
+open states visited'': $1{,}086{,}889$ states, $16{,}343{,}296$
+transitions, $invariant\_violated{:}0$, $deadlocked{:}0$,
+$open{:}0$.  $PollTickNotifyFailUnrecorded$ and $NotifyBeltStale$ are
+both reported among the six uncovered operations, alongside the
+pre-existing $TalkDrainStale$, $TalkInviteArriveBare$, and
+$WithdrawStale$ (Section~\ref{sec:markerfix2}) and
+$TalkInviteArriveOverflow$ (live but needs a second $USER$ to trigger,
+per Section~\ref{sec:state}'s scoping note)---the same proof shape as
+$WithdrawStale$.  This is a \emph{safety} property: it says the
+failure-accounting obligation is never skipped, in any reachable
+state.  It is deliberately not phrased
+as the CTL liveness formula
+$\mathrm{AG}\,((wallDescChanged = ztrue \lor talkDescChanged = ztrue)
+\implies \mathrm{EF}\,(wallDescChanged = zfalse \land talkDescChanged =
+zfalse))$ that closes the talk channel's own defect in
+Section~\ref{sec:markerfix2}, because that formula would report
+\textsc{true} in \emph{both} the buggy and the fixed model here: $NotifyBelt$
+is modelled as unconditionally reliable and unconditionally enabled
+whenever $toolContext = ztrue$, so ProB's existential path quantifier
+$\mathrm{EF}$ always finds a recovering trace through some future,
+unrelated tool call, whether or not the suspenders bookkeeping was
+correct.  That is not a false proof, but it is not the property this
+bug is about, and stating it as though it were would overclaim what
+the check shows---the {\fuzz} discipline is to report exactly what a
+green check establishes, not what would be reassuring for it to
+establish.  The talk channel's liveness proof works because
+$ExpirePendingInvite$ is driven by a clock ($AgeTick$,
+$pendingAge$) guaranteed to advance on its own; nothing plays that role
+for the suspenders path once $session$ is lost.  The three operations
+that restore it---$CaptureSession$, $RecaptureSession$, $NotifyBelt$---are
+all environment-triggered (server startup, a client reconnect, a fresh
+tool call) rather than time-driven, so no purely background,
+poller-only sequence of transitions ever clears a stranded changed
+flag.  That structural fact is visible by inspection of the schema set
+above: no operation whose guard depends only on $toolContext = zfalse$
+sets $session' = sessCaptured$ from $session = sessNone$.  The safety
+property $notifyLost = zfalse$ is the one this specification actually
+proves, and it is the one the fix needs: once every suspenders failure
+is recorded, the next capture point---whichever arrives
+first---discharges it, by inspection of $CaptureSession$'s and
+$RecaptureSession$'s first branch.
 
 \subsection{Status Bar Refresh}
 
@@ -1133,6 +1623,8 @@ This is the slow path---no MCP involvement.
   fileItems' = fileItems \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1184,6 +1676,8 @@ queue.  With a single wall item, the cursor stays at zero.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1222,6 +1716,8 @@ queue.  With a single wall item, the cursor stays at zero.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1287,6 +1783,8 @@ the marker set once the count reaches zero.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1320,6 +1818,8 @@ the marker set once the count reaches zero.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1374,6 +1874,8 @@ $ReceiveOverflow$.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1430,6 +1932,8 @@ $talk.tex$, where a full queue drops its head before appending.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1464,6 +1968,8 @@ $talk.tex$, where a full queue drops its head before appending.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1505,6 +2011,8 @@ and $talkConnected$, yet preserves $talkDesc$.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1547,6 +2055,8 @@ session'').
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1708,6 +2218,8 @@ marker stays, now backed only by the surviving invites.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1791,6 +2303,8 @@ returns to zero.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1841,6 +2355,8 @@ discard such a frame rather than acting on its user field alone.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -1907,7 +2423,9 @@ $MarkerConsistent$ and $HintNamesSession$.
   fileItems' = fileItems \\
   barLine2' = barLine2 \\
   barStale' = barStale \\
-  lastNotifyResult' = lastNotifyResult
+  lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost
 \end{schema}
 
 \subsection{Expiring a pending invite (time-to-live)}
@@ -1952,6 +2470,8 @@ the description, not the activity.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -2002,6 +2522,8 @@ zero.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -2046,6 +2568,8 @@ with the invariant.
   barLine2' = barLine2 \\
   barStale' = barStale \\
   lastNotifyResult' = lastNotifyResult \\
+  pendingNotify' = pendingNotify \\
+  notifyLost' = notifyLost \\
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
@@ -2164,10 +2688,18 @@ could never complete.
 
 \subsection{Notification Delivery Guarantee}
 
-The safety property: whenever a tool description changes,
-Claude~Code is notified.  In the corrected system this holds
-by construction---no operation produces $notifyDropped$ after
-a description change.
+\paragraph{Erratum.}  Earlier drafts stated $NotifyGuarantee$ below as
+an unconditional invariant---``no operation produces $notifyDropped$
+after a description change.''  $PollTickNotifyFail$ and
+$PollTickNotifyFailUnrecorded$ (Section~\ref{sec:sessionloss})
+falsify it directly: both are enabled exactly when a description has
+changed, and both produce $lastNotifyResult' = notifyDropped$.  The
+schema is kept below, unchanged, as a record of what was believed and
+is no longer claimed as a property of the whole reachable space.  What
+\emph{does} hold in the whole reachable space is the accounting safety
+property $notifyLost = zfalse$ (Section~\ref{sec:sessionloss}): a
+dropped send is not guaranteed never to happen, but it is guaranteed
+never to happen unrecorded.
 
 \begin{schema}{NotifyGuarantee}
   NotificationState
@@ -2176,23 +2708,23 @@ a description change.
   \implies lastNotifyResult = notifySent
 \end{schema}
 
-\emph{Proof sketch}: $WallPost$ sets $wallDescChanged' = ztrue$ and
-$lastNotifyResult' = notifySent$ (belt path, tool context).
-$KVWallReceive$ and $NatsTalkCallback$ set their respective changed
-flags but defer notification to the poller: they preserve
-$lastNotifyResult$, and $PollTick$ detects the changed flags and sets
-$lastNotifyResult' = notifySent$.  The invariant holds because,
-whenever a description change sets a ``changed'' flag, the next execution
-of $PollTick$ that observes this flag produces $notifySent$; thus no
-changed flag can persist across two consecutive $PollTick$ executions
-without producing $notifySent$.  Both KV watchers and NATS callbacks
-wake the poller from napping, ensuring $PollTick$ runs promptly even
-during idle periods.
+\emph{What remains true}: $WallPost$ and $TalkStart$ (belt path, tool
+context) still set $lastNotifyResult' = notifySent$ unconditionally---
+the belt path was never the source of this defect.  $KVWallReceive$
+and $NatsTalkCallback$ still defer the actual send to the poller, which
+is exactly the design that makes $PollTick$'s split
+(Section~\ref{sec:sessionloss}) the right place to model the failure.
 
-\subsection{Session Invariant}
+\subsection{Session Invariant---retracted}
 
-The key structural invariant: NATS connectivity implies
-session capture.
+\paragraph{Erratum.}  Earlier drafts asserted $SessionInvariant$ below
+as a state invariant and used it to prove $SuspendersAvailable$.
+Section~\ref{sec:state}'s erratum retracts it: $PollTickNotifyFail$
+sets $session' = sessNone$ while $natsConn' = natsConnected$, so the
+schema below is false of the corrected model and is not part of it.
+The property it was protecting---$EnsureConnected$ cannot run before a
+first capture---is now $EnsureConnected$'s own explicit precondition
+(Section~\ref{sec:ensureconnected}).
 
 \begin{schema}{SessionInvariant}
   NotificationState
@@ -2200,23 +2732,16 @@ session capture.
   natsConn = natsConnected \implies session = sessCaptured
 \end{schema}
 
-This holds because:
-\begin{enumerate}
-  \item $Init$ sets $natsConn = natsDisconnected$ (antecedent false).
-  \item $CaptureSession$ sets $session = sessCaptured$ while
-    $natsConn$ remains $natsDisconnected$ (antecedent false).
-  \item $EnsureConnected$ sets $natsConn = natsConnected$ and
-    preserves $session$. The invariant in $NotificationState$
-    forces $session = sessCaptured$ as an implicit precondition.
-  \item No operation transitions $session$ from $sessCaptured$
-    back to $sessNone$.
-  \item $CloseConnection$ sets $natsConn = natsClosed$ (antecedent false).
-\end{enumerate}
+\subsection{Suspenders Always Available---retracted}
 
-\subsection{Suspenders Always Available}
-
-When NATS is connected and no tool context is active, the
-suspenders path is always applicable:
+\paragraph{Erratum.}  For the same reason, $SuspendersAvailable$ below
+no longer holds unconditionally: after $PollTickNotifyFail$,
+$natsConn = natsConnected \land toolContext = zfalse$ while
+$session = sessNone$, so the suspenders path is exactly \emph{not}
+available until $CaptureSession$, $RecaptureSession$, or a fresh
+$NotifyBelt$ call restores it.  This is the substance of root
+cause~\#1: the property below was the promise the background poller
+made to itself, and it is the promise that broke.
 
 \begin{schema}{SuspendersAvailable}
   NotificationState
@@ -2226,19 +2751,23 @@ suspenders path is always applicable:
   session = sessCaptured
 \end{schema}
 
-The last conjunct is not an additional requirement---it follows from
-the first conjunct via $SessionInvariant$.  This means every poller
-tick with pending changes can successfully send a notification.
-Neither NATS callbacks nor KV watchers send notifications directly;
-they set flags that the poller consumes.
+What holds instead: whenever $SuspendersAvailable$ fails with a changed
+flag set, $notifyLost = zfalse$ (the corrected model's safety property)
+guarantees $pendingNotify = ztrue$, so the debt is visible to whichever
+of $CaptureSession$, $RecaptureSession$, or $NotifyBelt$ arrives next.
 
 \subsection{Wall and Talk Symmetry}
 
-In the corrected system, both wall and talk notifications always
-reach Claude~Code.  Wall posting uses the belt path (tool context);
-wall reception from another user uses $KVWallReceive$ which defers to
-the poller.  Talk reception uses $NatsTalkCallback$ which also defers
-to the poller.  Both ultimately produce $lastNotifyResult = notifySent$.
+Wall posting uses the belt path (tool context) and always produces
+$lastNotifyResult' = notifySent$---the belt path is unconditionally
+reliable throughout this specification.  Wall reception from another
+user uses $KVWallReceive$, and talk reception uses $NatsTalkCallback$;
+both defer the actual send to the poller rather than producing
+$notifySent$ themselves.  Section~\ref{sec:sessionloss}'s erratum to
+$SuspendersAvailable$ applies equally to both deferred paths: the
+poller's next tick attempts the send, and $notifyLost = zfalse$, not
+delivery symmetry, is what guarantees the attempt is never silently
+lost.
 
 \paragraph{Erratum (biff-9la).}  The symmetry stated above concerns only
 \emph{notification delivery}---that a \texttt{tools/list\_changed} is
@@ -2280,6 +2809,14 @@ guarantees of $talk.tex$ (invariant~11) are unaffected: withdrawal and expiry
 only \emph{remove} pending invites, never complete a handshake, so they cannot
 forge consent.
 
+$WallNotifySuccess$ and $TalkNotifySuccess$ describe the state
+immediately after a successful send---$PollTickNotifyOk$, or $NotifyBelt$
+before it clears the changed flag.  Neither is a state invariant: a
+changed flag can also coexist with $lastNotifyResult = notifyDropped$,
+which is exactly $PollTickNotifyFail$'s and
+$PollTickNotifyFailUnrecorded$'s post-state
+(Section~\ref{sec:sessionloss}).
+
 \begin{schema}{WallNotifySuccess}
   NotificationState
   \where
@@ -2300,12 +2837,19 @@ The correct startup sequence is:
 \begin{enumerate}
   \item $Init$ --- all state zeroed, NATS disconnected, session uncaptured.
   \item $CaptureSession$ --- session captured from server lifespan context.
-  \item $EnsureConnected$ --- NATS connected (invariant satisfied).
-  \item Poller starts, subscriptions begin --- suspenders path available.
+  \item $EnsureConnected$ --- NATS connected ($EnsureConnected$'s own
+    precondition, Section~\ref{sec:ensureconnected}, satisfied).
+  \item Poller starts, subscriptions begin --- suspenders path available,
+    until and unless a send failure strands it
+    (Section~\ref{sec:sessionloss}).
 \end{enumerate}
 
-Any reordering that attempts $EnsureConnected$ before $CaptureSession$
-would violate the state invariant and is therefore rejected by the
-specification.
+$EnsureConnected$ before any $CaptureSession$ is rejected by its own
+guard $session \neq sessNone \lor natsConn = natsConnected$
+(Section~\ref{sec:ensureconnected}): the first disjunct fails because
+no capture has happened, and the second fails because nothing has
+connected yet.  A \emph{mid-session} loss of $session$, by contrast,
+does not block a repeat $EnsureConnected$---the second disjunct now
+holds, correctly, since the connection itself was never the problem.
 
 \end{document}
