@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -37,6 +38,7 @@ from biff.talk_state import TalkState
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
+    from fastmcp.server.context import Context
 
 _TEST_REPO = "_test-server"
 _KAI_SESSION = "kai:tty1"
@@ -1144,7 +1146,20 @@ class TestMidSessionDropRecovery:
         _descriptions._session = dying_session
 
         await refresh_read_messages(mcp, state)  # drops the notification
+        dying_session.send_tool_list_changed.assert_awaited_once()
+        # Invariant pinned here: a recorded drop always leaves the dead
+        # session reference cleared — nothing must observe
+        # _pending_notify=True alongside a stale, still-set _session.
+        # Read _session through an ``object``-typed local rather than
+        # comparing `_descriptions._session is None` directly: mypy
+        # narrows the direct `_descriptions._session = dying_session`
+        # assignment above as persisting past the intervening await (it
+        # does not know ``refresh_read_messages`` mutates that module
+        # attribute), so a same-function `is None` comparison is deemed
+        # statically unreachable and poisons every statement after it.
         assert _descriptions._pending_notify
+        session_after_drop: object = _descriptions._session
+        assert session_after_drop is None
 
         reconnected = MagicMock(spec=ServerSession)
         reconnected.send_tool_list_changed = AsyncMock()
@@ -1220,3 +1235,171 @@ class TestMidSessionDropRecovery:
 
         assert len(sent) == 1  # exactly one send, not two
         assert not _descriptions._pending_notify
+
+    async def test_no_op_refresh_after_drop_leaves_pending_notify_set(
+        self, state: ServerState
+    ) -> None:
+        """A refresh whose description does not change must not disturb a
+        drop recorded by an earlier failure.
+
+        refresh_read_messages only calls notify_tool_list_changed() when
+        ``tool.description != old_desc`` — a repeated call with the same
+        unread count is a pure no-op on that gate.  A drop recorded before
+        this call must still be waiting for its next real flush
+        opportunity, not silently lost because nothing new happened.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        dying_session = MagicMock(spec=ServerSession)
+        dying_session.send_tool_list_changed = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        _descriptions._session = dying_session
+
+        await refresh_read_messages(mcp, state)  # drops the notification
+        assert _descriptions._pending_notify
+
+        dying_session.send_tool_list_changed.reset_mock()
+        await refresh_read_messages(mcp, state)  # no-op: unread count unchanged
+
+        # The change-gate skipped notify entirely — nothing was sent, and
+        # nothing about the recorded drop moved.
+        dying_session.send_tool_list_changed.assert_not_awaited()
+        assert _descriptions._pending_notify
+
+    async def test_drop_then_genuine_belt_refresh_flushes(
+        self, state: ServerState
+    ) -> None:
+        """Belt recovery through the real entry point: after a drop, the
+        message is genuinely marked read (not a synthetic re-trigger), and
+        ``refresh_read_messages`` — the function every belt-path tool
+        calls — is invoked directly inside a working request context.  The
+        pending drop must flush alongside that call's own notification.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        dying_session = MagicMock(spec=ServerSession)
+        dying_session.send_tool_list_changed = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        _descriptions._session = dying_session
+
+        await refresh_read_messages(mcp, state)  # drops the notification
+        assert _descriptions._pending_notify
+
+        # Genuinely change the count/description — mark the message read,
+        # exactly as the read_messages tool does — rather than synthesizing
+        # a description change.
+        unread = await state.relay.fetch(state.session_key)
+        await state.relay.mark_read(state.session_key, [m.id for m in unread])
+
+        sent: list[object] = []
+
+        class _FakeContext:
+            session = object()
+
+            async def send_notification(self, notification: object) -> None:
+                sent.append(notification)
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(
+            "fastmcp.server.dependencies.get_context", lambda: _FakeContext()
+        )
+        try:
+            await refresh_read_messages(mcp, state)  # real belt-path entry point
+        finally:
+            monkeypatch.undo()
+
+        tool = await mcp.get_tool("read_messages")
+        assert tool is not None
+        assert tool.description == _READ_MESSAGES_BASE  # count genuinely dropped to 0
+        assert len(sent) == 1  # description change's own send carries the flush
+        assert not _descriptions._pending_notify
+
+    async def test_concurrent_suspenders_fail_and_belt_send_do_not_clobber_pending(
+        self, state: ServerState
+    ) -> None:
+        """A suspenders failure racing a concurrent, still in-flight belt
+        send must not corrupt ``_pending_notify``.
+
+        Without ``_notify_lock``, a belt send that started before a
+        suspenders failure but *completes* after it would unconditionally
+        clear ``_pending_notify = False`` on completion, silently
+        discarding the drop the suspenders branch just recorded — the
+        notifyLost-forever failure mode this mission exists to close,
+        reached via a race between two concurrent tasks instead of a
+        single code path (confirmed empirically against the pre-lock
+        code: given a real chance to run to completion, the suspenders
+        task's failure lands first, and the belt send's later,
+        unconditional success then clobbers it). The belt task runs
+        under its own copy of FastMCP's ``_current_context`` contextvar
+        (real request scoping, not a monkeypatch of ``get_context``) so
+        the concurrently-running suspenders task — ambient context, no
+        request in flight — takes the other branch exactly as two real
+        concurrent calls would.
+        """
+        from fastmcp.server.context import _current_context
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        belt_send_started = asyncio.Event()
+        release_belt_send = asyncio.Event()
+
+        class _SlowContext:
+            session = object()
+
+            async def send_notification(self, notification: object) -> None:
+                belt_send_started.set()
+                await release_belt_send.wait()
+
+        belt_context = contextvars.copy_context()
+        belt_context.run(_current_context.set, cast("Context", _SlowContext()))
+        belt_task = asyncio.create_task(
+            _descriptions.notify_tool_list_changed(), context=belt_context
+        )
+        await belt_send_started.wait()  # belt now holds _notify_lock, mid-send
+
+        dying_session = MagicMock(spec=ServerSession)
+        dying_session.send_tool_list_changed = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        _descriptions._session = dying_session
+        suspenders_task = asyncio.create_task(refresh_read_messages(mcp, state))
+        # Give the suspenders task every opportunity to run to completion
+        # before releasing belt — a single scheduler turn is not enough
+        # (LocalRelay's chain of awaits needs several). Under the lock it
+        # will never finish this loop (it blocks acquiring _notify_lock,
+        # which belt still holds) and the loop just spins to its bound;
+        # without the lock, nothing blocks it and it completes within a
+        # handful of turns — that gap is exactly what makes this a
+        # meaningful race test instead of a coincidentally-ordered one.
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if suspenders_task.done():
+                break
+
+        release_belt_send.set()
+        await belt_task
+        await suspenders_task
+
+        # The suspenders failure is the later-recorded, still-unresolved
+        # drop — the lock forces it to apply only after the belt's success
+        # is durable, so it must win: not be silently clobbered back to
+        # False by the belt send's own unconditional flush-clear.
+        assert _descriptions._pending_notify
+        session_after_race: object = _descriptions._session
+        assert session_after_race is None
