@@ -124,12 +124,18 @@ into those descriptions (server tools `_descriptions._talk_description` and
 To delete existing auto-poll cron jobs:
 
 1. Call `CronList`.
-2. For every line whose prompt suffix is exactly `: /biff-dev:read-dev` — that
-   is, the text after the final colon-space separator is the literal string
-   `/biff-dev:read-dev`, with no trailing space and no argument — extract the job
-   ID (the first whitespace-separated token on the line).
+2. For every line whose prompt suffix is exactly `: /biff-dev:read-dev` OR
+   exactly `: /biff-dev:poll-dev` — that is, the text after the final
+   colon-space separator is the literal string `/biff-dev:read-dev` or the
+   legacy string `/biff-dev:poll-dev`, with no trailing space and no argument —
+   extract the job ID (the first whitespace-separated token on the line).
+   `/biff-dev:poll-dev` predates #414, which folded polling into
+   `/biff-dev:read-dev`; a durable cron job created before that merge still
+   fires the now-deleted `/biff-dev:poll-dev` command, so it must be swept
+   alongside `/biff-dev:read-dev` jobs or it strands as a dead loop.
 3. Call `CronDelete` for each matching ID.
 
-Lines whose prompt is `/biff-dev:read-dev <something>` (an argument-bearing
-invocation, not the bare auto-poll job) must not be deleted. Match on the exact
-`: /biff-dev:read-dev` suffix only.
+Lines whose prompt is `/biff-dev:read-dev <something>` or
+`/biff-dev:poll-dev <something>` (an argument-bearing invocation, not a bare
+auto-poll job) must not be deleted. Match on the exact `: /biff-dev:read-dev`
+or `: /biff-dev:poll-dev` suffix only.
