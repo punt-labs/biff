@@ -6,6 +6,7 @@ Unit tests for deploy/remove/check operations on
 
 from __future__ import annotations
 
+from importlib.metadata import version as _dist_version
 from pathlib import Path
 
 import pytest
@@ -46,7 +47,12 @@ _DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
 # hosted-nats.yml) -- verified against actions/checkout's tag refs.
 _LIVE_CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 
-_PINNED_BIFF_VERSION = "1.18.1"
+# Derived from the installed package, not hardcoded -- a release bumps
+# pyproject.toml's version and the template's `uvx --from punt-biff==X.Y.Z`
+# pin in lockstep (see scripts/release-plugin.sh), but never touches this
+# test file. A literal here would go stale on every release and fail CI
+# for a reason unrelated to the change being released.
+_PINNED_BIFF_VERSION = _dist_version("punt-biff")
 
 
 # ── template action pins ───────────────────────────────────────────
