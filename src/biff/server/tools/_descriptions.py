@@ -310,10 +310,12 @@ async def notify_tool_list_changed() -> None:
                 _session = None
                 _pending_notify = True
             else:
-                # Conform to the model's *NotifyOk transition: a
-                # confirmed successful send covers any drop recorded
-                # earlier, same as the belt and capture-session paths.
-                _pending_notify = False
+                # PollTickNotifyOk (notification.tex): a suspenders send
+                # reports only the current tick's own delivery; it does not
+                # touch _pending_notify, which tracks a drop recorded at a
+                # different tick — a later belt send or reconnect flush covers
+                # it, per the proven model.
+                pass
             return
 
         # Pre-session path — no session captured yet, record the drop.
