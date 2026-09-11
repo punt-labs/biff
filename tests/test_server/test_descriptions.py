@@ -993,6 +993,71 @@ class TestPollInbox:
 
         assert f"biff.{_TEST_REPO}.notify.jfreeman" in subjects
 
+    async def test_disabled_interval_recovers_from_a_client_discard(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """At ``interval<=0``, a client discard must not strand every
+        always-on SUB forever.
+
+        Waiting on ``wake_event`` alone with no timeout has a real
+        liveness hole: a wedge teardown (``_force_reconnect``) or give-up
+        close (``_on_closed``) orphans every SUB on the dead client, and
+        only the reconcile step — which runs after ``_sleep_or_wake``
+        returns — can rebind them. With no live SUB, no poke can ever
+        arrive to end that wait, so reconcile never runs and the SUBs
+        stay stranded permanently. ``_DISABLED_POLLER_FALLBACK_INTERVAL``
+        (shrunk here for test speed) is the liveness backstop that
+        breaks this: it bounds the wait even at ``interval<=0``, so
+        reconcile still gets scheduled with zero poke traffic.
+        """
+        monkeypatch.setattr(
+            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
+        )
+        nc = AsyncMock()
+        subscribe_calls = 0
+
+        async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
+            del subject, cb
+            nonlocal subscribe_calls
+            subscribe_calls += 1
+            return AsyncMock()
+
+        nc.subscribe = AsyncMock(side_effect=fake_subscribe)
+
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.connection_generation = 0
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
+        relay.inbox_notify_subject = MagicMock(
+            return_value="biff._test-server.notify.kai"
+        )
+        relay.get_wall = AsyncMock(return_value=None)
+        relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
+
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        mcp = create_server(state)
+        task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        assert subscribe_calls == 2  # talk + inbox-notify, startup bind
+
+        # A wedge teardown/give-up close, independent of this poller —
+        # exactly what the heartbeat loop's own _force_reconnect does.
+        relay.connection_generation = 1
+        await asyncio.sleep(self._FAST_INTERVAL * 10)
+
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert subscribe_calls > 2  # reconcile ran and rebound both SUBs
+
     async def test_cheap_nap_tick_reconciles_inbox_notify_generation_bump(
         self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:

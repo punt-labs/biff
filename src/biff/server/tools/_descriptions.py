@@ -57,6 +57,8 @@ _DEFAULT_POLL_INTERVAL = 2.0
 _DEFAULT_IDLE_THRESHOLD = 120.0  # 2 minutes — transition to napping
 _DEFAULT_NAP_INTERVAL = 30.0  # 30 seconds — reduced polling while napping
 
+_DISABLED_POLLER_FALLBACK_INTERVAL = 30.0  # seconds — see _sleep_or_wake
+
 
 def nap_interval_for(poll_interval: float) -> float:
     """Scale the napping/backstop cadence proportionally to *poll_interval*.
@@ -1130,12 +1132,23 @@ async def _sleep_or_wake(
     return so a wake this call already consumed cannot immediately
     re-trigger the next one.
 
-    ``interval <= 0`` waits indefinitely for a wake or shutdown instead of
-    timing out at all: a disabled poller still hosts the always-on SUBs
-    and reacts to pokes, it just has no periodic cadence of its own —
-    there is nothing to elapse toward.
+    ``interval <= 0`` disables the fast periodic cadence, but does NOT
+    wait indefinitely: it falls back to
+    ``_DISABLED_POLLER_FALLBACK_INTERVAL``. Waiting forever on *wake_event*
+    alone has a real liveness hole — a client discard (a wedge teardown's
+    ``_force_reconnect``, or ``_on_closed`` giving up) strands every
+    always-on SUB on the dead client, and reconciling them is the tick
+    loop's own job, which runs only after this wait returns. With no
+    live SUB, no poke can ever arrive to end that wait, so the very
+    thing that would fix the stranding never gets to run — the family's
+    ``nats-relay.tex`` liveness proof (a stranded SUB always eventually
+    re-binds) implicitly assumes *some* real scheduler keeps calling
+    ``Subscribe``; this fallback is what keeps that assumption true when
+    poke traffic alone cannot be relied on. It is deliberately much
+    slower than the active-mode default (30s here vs. 2s there) — this
+    is a liveness backstop, not a cadence.
     """
-    timeout = interval if interval > 0 else None
+    timeout = interval if interval > 0 else _DISABLED_POLLER_FALLBACK_INTERVAL
     waiters = [asyncio.ensure_future(wake_event.wait())]
     if shutdown is not None:
         waiters.append(asyncio.ensure_future(shutdown.wait()))

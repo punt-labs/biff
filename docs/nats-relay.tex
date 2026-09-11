@@ -1750,7 +1750,22 @@ verified by model checking with probcli (\texttt{z-spec test}):
     liveness claim, not a one-step safety claim, for any of the three
     kinds: $SubscribeRetry$ models a subscribe of kind $kind?$ that fails
     and is retried next tick, so that kind's SUB is \emph{eventually},
-    not \emph{immediately}, re-bound.  The pre-fix defect is reproduced,
+    not \emph{immediately}, re-bound.  ``Next tick'' names the model's
+    retry point without timing it --- $EF$ makes no claim about how soon
+    the eventually is --- but the property is only as true in practice as
+    the real scheduler that keeps calling $Subscribe$/$SubscribeRetry$ at
+    all: a poller that stops ticking makes ``eventually'' vacuous no
+    matter what the model proves.  The relay's poller ticks at a
+    configurable cadence and, when that cadence is disabled outright
+    (interval $\leq 0$, biff-5ex), still retries on a bounded fallback
+    interval rather than waiting on wake signals alone --- the wake path
+    depends on a live SUB of the very kind that may be stranded, so with
+    every SUB down, nothing but a time-bounded retry can ever restart the
+    cycle.  This is an implementation-level fairness obligation the
+    untimed model does not and cannot state; it is recorded here as the
+    condition under which the proven liveness property actually holds in
+    the running system, not as a gap in the property itself.  The pre-fix
+    defect is reproduced,
     for $k = talk$, by replacing the $Subscribe$ guard with the
     ``re-subscribe only when the handle is \texttt{None}'' condition
     $subGen(talk) = 0$: the same CTL formula then goes \textbf{FALSE},
