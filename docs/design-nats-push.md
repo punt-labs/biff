@@ -147,15 +147,27 @@ Three alternatives were considered:
 - **Targeted messages** (`user:tty`): no change — already covered by
   `talk_notify_subject`. Zero new code.
 - **Broadcast messages** (`user`, no tty): new core-NATS subject
-  `{stream_prefix}.inbox.notify.{user}`, one per user, fanning out to every
-  live MCP session for that user (multiple terminals of the same user each
-  subscribe independently; core NATS delivers to all current subscribers,
-  which is the correct semantic — any of that user's sessions might want to
-  wake and re-check). `deliver()`'s broadcast branch
-  (`nats_relay.py:1316-1330`) publishes a bare wake byte (`b"1"`, same
-  fallback `_publish_talk_notification` already uses when there is no
-  `Message`) to this subject after the JetStream publish succeeds, mirroring
-  the targeted branch's existing call.
+  `{stream_prefix}.{repo}.inbox.notify.{user}`, one per repo per user,
+  fanning out to every live MCP session for that user in that repo
+  (multiple terminals of the same user each subscribe independently;
+  core NATS delivers to all current subscribers, which is the correct
+  semantic — any of that user's sessions in the repo might want to wake
+  and re-check). The subject is repo-scoped, not repo-less, and
+  deliberately so: DES-048's identity-routed, repo-less discipline
+  applies to *targeted* delivery, where `user:tty` is a globally-unique
+  identity (`talk.tex`, `subjectOf k = k`); a broadcast poke names a
+  bare `user`, which is *not* a unique identity, and it announces
+  activity on the repo-partitioned durable inbox `biff.{repo}.inbox.
+  {user}` (DES-030: bare-user addressing is repo-local), which only
+  that repo's sessions can read. A repo-less subject would wake every
+  repo's sessions of that user for an inbox most of them cannot see —
+  spurious recomputes and a cross-repo activity leak. The repo-scoped
+  subject mirrors exactly the durable subject it signals.
+  `deliver()`'s broadcast branch (`nats_relay.py:1316-1330`) publishes a
+  bare wake byte (`b"1"`, same fallback `_publish_talk_notification`
+  already uses when there is no `Message`) to this subject after the
+  JetStream publish succeeds, mirroring the targeted branch's existing
+  call.
 - **Wall**: unchanged (KV watcher already covers it).
 - **Talk**: unchanged (`talk_notify_subject`, unchanged wire format).
 
