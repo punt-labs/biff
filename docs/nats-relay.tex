@@ -221,19 +221,33 @@ times out; the cached handles are stale and must not be used.
 $closed$ is permanent shutdown --- no reconnection is possible.
 
 \begin{zed}
-  SubKind ::= talk | inboxNotify
+  SubKind ::= talk | inboxNotify | inboxNotifyCompanion
 \end{zed}
 
 $SubKind$ indexes the family of always-on core-NATS subscriptions the
 relay holds open for the life of the process: $talk$, the talk-inbox SUB
-(biff-9la), and $inboxNotify$, the broadcast inbox-notify SUB (biff-5ex).
-Both are the same class of resource --- bound to the particular client
-that created them, replayed by nats-py's in-place reconnect, and orphaned
-by a force-reconnect that discards the client wholesale --- so the model
+(biff-9la); $inboxNotify$, the broadcast inbox-notify SUB for the
+session's own user (biff-5ex); and $inboxNotifyCompanion$, the same kind
+of SUB bound to a dual session's companion user instead. All three are
+the same class of resource --- bound to the particular client that
+created them, replayed by nats-py's in-place reconnect, and orphaned by a
+force-reconnect that discards the client wholesale --- so the model
 tracks one generation-binding per kind rather than duplicating the
-treatment.  It is finite and closed: a new always-on subscription is added
-by extending $SubKind$ with a further constructor, not by introducing a
-new state variable.
+treatment. $inboxNotifyCompanion$ is not a new shape, only a further
+instance of $inboxNotify$'s: a companion-addressed broadcast pokes a
+subject keyed on the companion's user, which nothing subscribes to unless
+a second binding of the same kind exists for that user, exactly as a
+second live session of the same user would need its own binding. This is
+the family's extension point exercised exactly as designed: $SubKind$
+gained a third constructor, every operation already quantified over
+$SubKind$ ($EnsureConnected$'s $subGen$ preservation, $Subscribe$,
+$ForceReconnect$'s stranding, the liveness obligation in
+\S\ref{sec:modelcheck}) needed no change, and only the two sites that
+name every kind explicitly ($InitConnection$'s literal and the
+initial-state description) gained the third mapping. It is finite and
+closed: a further always-on subscription is added the same way, by
+extending $SubKind$ with one more constructor, not by introducing a new
+state variable.
 
 \begin{zed}
   ReqOutcome ::= reqOk | reqTimeout
@@ -522,7 +536,7 @@ that reached it.
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
   generation' = 0 \\
-  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0 \} \\
+  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, inboxNotifyCompanion \mapsto 0 \} \\
   reconnectEpoch' = 0 \\
   spuriousTeardown' = zfalse \\
   epochPending' = zfalse
@@ -1564,7 +1578,7 @@ the watcher as a $weError$ and drives it through $HandleError$.
 
 The composed initial state is: $connState = disconnected$ with no
 handles and no always-on subscription of any kind
-($subGen = \{ talk \mapsto 0, inboxNotify \mapsto 0 \}$, $InitConnection$),
+($subGen = \{ talk \mapsto 0, inboxNotify \mapsto 0, inboxNotifyCompanion \mapsto 0 \}$, $InitConnection$),
 an empty session store, and an $idle$ watcher.  $InitConnection$ is the sole initialisation schema so
 that the model checker explores the $Connection$ lifecycle as a
 single, well-posed state machine; the session and watcher
@@ -1718,24 +1732,26 @@ verified by model checking with probcli (\texttt{z-spec test}):
 
     CTL model checking is not itself parametric, so probcli checks the
     formula once per instance of $k$ rather than as a single quantified
-    query; both instances are confirmed \textbf{TRUE}, $k = talk$ (the
-    original biff-9la property, unchanged in substance) and $k =
-    inboxNotify$ (the new biff-5ex obligation), and the restriction of
-    either to $connState = connected$ is TRUE as well; only the terminal
-    $closed$ state, in which the connection is permanently shut down and
-    carries no subscription obligation of any kind, is excluded.  The
-    escape for kind $k$ is $Subscribe$ with $kind? = k$ (guard
-    $subGen(k) < generation$, effect $subGen' = subGen \oplus \{ k
-    \mapsto generation \}$), the poller's generation-tracked re-subscribe
-    for that kind; it is preserved unchanged across nats-py's in-place
-    $Reconnect$ (same client, same generation, every kind's SUB replayed)
-    and re-established after $ForceReconnect$ once the replacement dial
+    query; all three instances are confirmed \textbf{TRUE}, $k = talk$
+    (the original biff-9la property, unchanged in substance), $k =
+    inboxNotify$ (the biff-5ex obligation for a session's own user), and
+    $k = inboxNotifyCompanion$ (the same obligation for a dual session's
+    companion user) --- and the restriction of any of the three to
+    $connState = connected$ is TRUE as well; only the terminal $closed$
+    state, in which the connection is permanently shut down and carries
+    no subscription obligation of any kind, is excluded.  The escape for
+    kind $k$ is $Subscribe$ with $kind? = k$ (guard $subGen(k) <
+    generation$, effect $subGen' = subGen \oplus \{ k \mapsto generation
+    \}$), the poller's generation-tracked re-subscribe for that kind; it
+    is preserved unchanged across nats-py's in-place $Reconnect$ (same
+    client, same generation, every kind's SUB replayed) and
+    re-established after $ForceReconnect$ once the replacement dial
     advances $generation$ past $subGen(k)$.  The property is a genuine
-    liveness claim, not a one-step safety claim, for either kind:
-    $SubscribeRetry$ models a subscribe of kind $kind?$ that fails and is
-    retried next tick, so that kind's SUB is \emph{eventually}, not
-    \emph{immediately}, re-bound.  The pre-fix defect is reproduced, for
-    $k = talk$, by replacing the $Subscribe$ guard with the
+    liveness claim, not a one-step safety claim, for any of the three
+    kinds: $SubscribeRetry$ models a subscribe of kind $kind?$ that fails
+    and is retried next tick, so that kind's SUB is \emph{eventually},
+    not \emph{immediately}, re-bound.  The pre-fix defect is reproduced,
+    for $k = talk$, by replacing the $Subscribe$ guard with the
     ``re-subscribe only when the handle is \texttt{None}'' condition
     $subGen(talk) = 0$: the same CTL formula then goes \textbf{FALSE},
     with probcli returning the counterexample $connState = connected
@@ -1743,8 +1759,9 @@ verified by model checking with probcli (\texttt{z-spec test}):
     talk SUB is stuck on the superseded generation $2$, never re-opened.
     That state \emph{is} biff-9la, and the same defect shape --- a guard
     that checks ``never subscribed'' instead of ``subscribed to a
-    superseded generation'' --- would equally strand $inboxNotify$ were
-    the fix not applied uniformly across the family.
+    superseded generation'' --- would equally strand $inboxNotify$ or
+    $inboxNotifyCompanion$ were the fix not applied uniformly across the
+    family.
 
   \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
     $streaming$, never to $idle$ or $stopped$.  The watcher
