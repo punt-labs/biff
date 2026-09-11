@@ -1191,6 +1191,100 @@ class TestInboxPokeGate:
         assert gate.claim() is True
 
 
+class TestActiveTickGateOrderingProperties:
+    """The two ``_InboxPokeGate`` ordering properties, pinned through the
+    real ``_active_tick`` call path rather than by driving the gate
+    directly. ``TestInboxPokeGate``'s own tests call ``gate.mark()``/
+    ``gate.claim()`` from the test body and never invoke ``_active_tick``
+    at all — so they cannot fail if ``_active_tick``'s own
+    re-mark-on-failure branch (``if not ok: gate.mark()``) is broken or
+    inverted; only these tests, which drive the real branch, can.
+    """
+
+    @staticmethod
+    def _nats_state(tmp_path: Path) -> tuple[ServerState, MagicMock]:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_wall = AsyncMock(return_value=None)
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        return state, relay
+
+    async def test_failed_refresh_re_marks_and_next_tick_retries(
+        self, tmp_path: Path
+    ) -> None:
+        """Property (b), through ``_active_tick`` itself: a fetch failure
+        re-marks the gate, so the very next tick retries instead of
+        waiting out a 1000s backstop.
+        """
+        state, relay = self._nats_state(tmp_path)
+        mcp = create_server(state)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+
+        calls = 0
+
+        async def _flaky_get_unread_summary(_key: str) -> UnreadSummary:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                msg = "nats: timeout"
+                raise TimeoutError(msg)
+            return UnreadSummary(count=1)
+
+        relay.get_unread_summary = AsyncMock(side_effect=_flaky_get_unread_summary)
+
+        # Tick 1: the initial forced claim() fires and the fetch fails —
+        # _active_tick's own re-mark-on-failure branch must run.
+        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        assert calls == 1
+
+        # Tick 2: with a 1000s backstop, only a re-mark from tick 1 can
+        # make claim() due again — a broken or inverted re-mark branch
+        # leaves get_unread_summary uncalled here.
+        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        assert calls == 2
+
+    async def test_poke_arriving_mid_refresh_survives_to_next_tick(
+        self, tmp_path: Path
+    ) -> None:
+        """Property (a), through ``_active_tick`` itself: a poke that
+        arrives while the tick's own refresh is in flight (``gate.mark()``
+        called from inside the ``get_unread_summary`` side effect,
+        standing in for a concurrent inbox-notify callback) is not
+        clobbered by ``claim()``'s earlier clear — it survives to be
+        claimed on the next tick.
+        """
+        state, relay = self._nats_state(tmp_path)
+        mcp = create_server(state)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+
+        calls = 0
+
+        async def _poke_mid_refresh(_key: str) -> UnreadSummary:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                # A poke lands while this fetch is in flight — claim()
+                # already cleared _poked before this coroutine started.
+                gate.mark()
+            return UnreadSummary(count=1)
+
+        relay.get_unread_summary = AsyncMock(side_effect=_poke_mid_refresh)
+
+        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        assert calls == 1
+
+        # Tick 2: only the mid-refresh mark from tick 1 can make claim()
+        # due again with a 1000s backstop.
+        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+        assert calls == 2
+
+
 class TestTargetedMessageMarksInboxGate:
     """A targeted (``user:tty``) message's wake poke must mark the shared
     inbox gate, not just wake the poller — the regression this pins
