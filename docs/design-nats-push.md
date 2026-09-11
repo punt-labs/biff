@@ -187,10 +187,16 @@ recovery paths already exist and need no new code:
    call succeeds (`_descriptions.py` module docstring, line 4: "Called after
    every tool execution (belt)"), so the next tool call the agent makes
    re-syncs the count regardless of whether any push arrived.
-2. The retained low-frequency tick (§3) still exists and still calls
-   `get_wall()`/`get_unread_summary()` on its own cadence as a backstop —
-   see the open question on whether to keep `set_poll_interval` as an
-   explicit fallback knob.
+2. The retained low-frequency tick (§3) still exists. `get_wall()` keeps
+   running on it unconditionally, every tick, whether or not a poke
+   arrived — see §3, this is load-bearing for wedge detection, not
+   optional. `get_unread_summary()` is **poke-gated with its own
+   backstop**, not unconditionally retained: a poke marks a gate that
+   `_active_tick` reads (recompute now); absent a poke, the same gate
+   still forces a recompute once `nap_interval` has elapsed since the
+   last one, so a dropped at-most-once poke costs at most one backstop
+   interval of latency, never a stalled count. `set_poll_interval` sets
+   that backstop interval (§5).
 3. The model-side `/biff:read` cron (out of scope, unchanged) periodically
    calls the tool regardless of description state.
 
@@ -200,8 +206,10 @@ No new coordination is needed here beyond what already exists, because the
 design deliberately does **not** call `refresh_read_messages()` or
 `notify_tool_list_changed()` from the NATS callback. The new
 `_on_inbox_notify_msg` callback (parallel to `_on_talk_msg`,
-`_descriptions.py:676-696`) does exactly one thing: `state.activity.wake()`.
-Multiple rapid pushes collapse into a no-op re-wake
+`_descriptions.py:676-696`) does exactly two things, both pure bookkeeping:
+marks the poke gate (`_InboxPokeGate.mark()`, §3) so the next tick's unread
+recompute is not deferred to the backstop, and calls `state.activity.wake()`.
+Multiple rapid pushes collapse into a no-op re-mark and re-wake
 (`ActivityTracker.wake()`, `activity.py:36-50`, is idempotent — it just resets
 `_last_nap_poll` to the epoch). The next poller tick — one tick, since the
 loop is sequential — calls `refresh_read_messages`, which itself already
@@ -275,11 +283,14 @@ whether or not the underlying wall content changed, and that requirement is
 explicitly out of scope here. This means the wedge-detection cadence does
 **not** need a new dedicated heartbeat: it is already preserved as a side
 effect of not touching wall's tick, as long as the implementation removes
-only the `get_unread_summary()` call from `_active_tick` (replacing it with
-the push-triggered check) and leaves `get_wall()` untouched. No regression,
-no new machinery — provided this dependency is called out explicitly so a
-later refactor doesn't "simplify" the tick loop into deletion once broadcast
-messages no longer need it.
+only the *unconditional* `get_unread_summary()` call from `_active_tick`,
+replacing it with the poke-gated check of §2: recompute when a poke has
+arrived, or when `nap_interval` has elapsed since the last recompute
+(the backstop, `_InboxPokeGate` in `_descriptions.py`) — and leaves
+`get_wall()` running every tick, unconditionally, untouched. No
+regression, no new heartbeat — provided this dependency is called out
+explicitly so a later refactor doesn't "simplify" the tick loop into
+deletion once broadcast messages no longer need it.
 
 This recommendation is conditional, not free: if a future change *also*
 removes or slows the wall tick (e.g. moving wall to a fully push-driven
