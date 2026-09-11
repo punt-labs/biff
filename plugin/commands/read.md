@@ -16,6 +16,18 @@ mail are held on the biff server and surface by MUTATING the descriptions of the
 `talk` and `read_messages` tools. This command manages polling and checks for
 new activity.
 
+**Two complementary delivery paths.** `plugin/hooks/unread-nudge.sh` covers
+*active* sessions: it fires on every `UserPromptSubmit` and `PostToolUse`,
+reads the same per-session unread file section C reads below, and injects an
+`additionalContext` nudge the moment the count rises — the model sees it on
+its very next turn, with no `/biff:read` invocation required. This command
+(the cron loop in section A, and the manual/forced check in section C) covers
+the *idle* gap the nudge hook cannot: a session sitting with no prompt
+submitted and no tool called has nothing to fire the hook on, so the cron's
+periodic `/biff:read` invocation is still what surfaces mail during an idle
+stretch. Running section C by hand also remains the reliable way to
+force-check right now, independent of whether the nudge already fired.
+
 ### Argument routing
 
 First, check if `$ARGUMENTS` matches a **polling config** command:
