@@ -201,6 +201,18 @@ uv run pytest -m nats_docker
 
 Requires Docker running locally (or in the CI runner).
 
+**Push-vs-poll demo** (`tests/test_relay_image/test_push_demo.py`,
+biff-5ex/DES-062): the same push-vs-poll comparison as tier 3c's
+`test_push_vs_poll_latency.py`, run end to end against the real
+container instead of a bare `nats-server`. Marked
+`@pytest.mark.transcript`, so it also saves a human-readable transcript
+to `tests/transcripts/`. Run it directly, or via the one-command
+wrapper:
+
+```bash
+./scripts/demo-push-vs-poll.sh
+```
+
 ### Tier 3c: Local NATS E2E
 
 Full MCP servers backed by `NatsRelay`, connected via
@@ -217,6 +229,16 @@ uv run pytest -m nats_local
 
 **Cleanup**: An autouse fixture deletes NATS streams after each test
 for full isolation.
+
+**Push-vs-poll comparison** (`test_push_vs_poll_latency.py`,
+biff-5ex/DES-062): demonstrates the measurable push-detection claim
+with an A/B lever on the sender side only — one arm publishes a
+broadcast message straight to JetStream (bypassing `deliver()`'s wake
+poke, the pre-biff-5ex shape), the other goes through the real
+`deliver()`. The receiving MCP server is identical and honest in both
+arms; the test prints a side-by-side latency comparison table and
+separately demonstrates the companion load claim (steady-state
+`get_unread_summary` call volume with no arrivals).
 
 ### Tier 3d: Hosted NATS E2E
 
