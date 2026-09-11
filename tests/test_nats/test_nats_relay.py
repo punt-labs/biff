@@ -614,21 +614,31 @@ class TestLiveNcOrReconnectBounds:
     """The reconnect fall-through inside a best-effort poke stays bounded,
     and a closed relay never resurrects a connection.
 
-    Neither test needs a live nats-server — both drive
-    ``_live_nc_or_reconnect`` directly against a bare, never-connected
-    ``NatsRelay`` instance with ``get_nc`` replaced.
+    None of these need a live nats-server — all drive a never-connected
+    ``NatsRelay`` instance with ``get_nc`` replaced. The durable
+    regressions exercise the public surface a caller actually uses
+    (``_publish_inbox_notification``, ``deliver()``); the closed-flag
+    tests exercise ``_live_nc_or_reconnect`` directly, since the
+    terminal-close guard has no further-public surface to observe it
+    through.
     """
 
-    async def test_reconnect_fall_through_is_bounded(
+    async def test_slow_reconnect_does_not_block_a_poke_publish(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A hung dial is bounded by ``_NOTIFY_RECONNECT_TIMEOUT``, not the
-        much larger ``_CONNECT_PROVISION_TIMEOUT`` the unwrapped
-        ``get_nc()`` fall-through used to be subject to.
+        """The durable regression, against the public surface a caller
+        actually uses (not ``_live_nc_or_reconnect`` directly): a hung
+        dial is bounded by ``_NOTIFY_RECONNECT_TIMEOUT``, not the much
+        larger ``_CONNECT_PROVISION_TIMEOUT`` the unwrapped ``get_nc()``
+        fall-through used to be subject to, so the best-effort poke
+        publish itself returns promptly and does not raise — mirrors
+        the original repro's own surface (``_publish_inbox_notification``,
+        not the private helper underneath it).
         """
         monkeypatch.setattr(nats_relay_module, "_NOTIFY_RECONNECT_TIMEOUT", 0.05)
 
         relay = NatsRelay()
+        relay._nc = None  # a wedge teardown discarded the cached client
 
         async def _hung_get_nc() -> NatsClient:
             await asyncio.sleep(5.0)  # never resolves within the patched bound
@@ -638,11 +648,43 @@ class TestLiveNcOrReconnectBounds:
         relay.get_nc = _hung_get_nc  # type: ignore[method-assign]
 
         start = time.monotonic()
-        with pytest.raises(TimeoutError):
-            await relay._live_nc_or_reconnect()
+        await relay._publish_inbox_notification("repo", "kai")  # must not raise
         elapsed = time.monotonic() - start
 
         assert elapsed < 1.0  # bounded by the patched 0.05s, not the 5s sleep
+
+    async def test_deliver_succeeds_despite_a_slow_poke_reconnect(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``deliver()``'s durable JetStream publish must not wait on the
+        best-effort poke's reconnect: the poke runs after the publish has
+        already succeeded and is bounded/best-effort, never on the
+        critical path, even when the reconnect it attempts is itself slow.
+        """
+        monkeypatch.setattr(nats_relay_module, "_NOTIFY_RECONNECT_TIMEOUT", 0.05)
+
+        relay = NatsRelay()
+        relay._nc = None
+
+        js = AsyncMock()
+
+        async def _fake_ensure_connected() -> tuple[AsyncMock, object]:
+            return js, object()
+
+        async def _hung_get_nc() -> NatsClient:
+            await asyncio.sleep(5.0)
+            msg = "unreachable — the timeout must fire first"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(relay, "_ensure_connected", _fake_ensure_connected)
+        relay.get_nc = _hung_get_nc  # type: ignore[method-assign]
+
+        start = time.monotonic()
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="hi"))
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0  # deliver() itself never waits on the poke
+        js.publish.assert_awaited_once()  # the durable publish still ran
 
     async def test_closed_relay_never_reconnects(self) -> None:
         """``_closed`` short-circuits before ``get_nc`` is even called."""
@@ -700,8 +742,8 @@ class TestLiveNcOrReconnectBounds:
 
 
 class TestValidateUserRejectsColon:
-    """MED-7: the ``inbox_notify_subject``/``talk_notify_subject``
-    disjointness docstring claims a bare user can never contain ``:`` —
+    """The ``inbox_notify_subject``/``talk_notify_subject`` disjointness
+    docstring claims a bare user can never contain ``:`` —
     ``_validate_user`` must actually enforce that, not just assert it.
     """
 
@@ -727,8 +769,8 @@ class TestValidateUserRejectsColon:
 
 
 class TestBroadcastPokeCarriesTargetRepo:
-    """MED-8: a cross-repo broadcast's poke subject names the TARGET
-    repo, not the sender's — proven directly against ``deliver()``'s
+    """A cross-repo broadcast's poke subject names the TARGET repo, not
+    the sender's — proven directly against ``deliver()``'s
     broadcast branch without a live server, by capturing the arguments
     ``_publish_inbox_notification`` is called with.
     """

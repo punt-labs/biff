@@ -24,6 +24,7 @@ from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
     SubscriptionBinding,
+    _active_tick,
     _InboxPokeGate,
     _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
@@ -1165,9 +1166,9 @@ class TestInboxPokeGate:
         assert gate.claim() is False
 
     def test_mark_after_claim_is_preserved_for_next_claim(self) -> None:
-        """HIGH-4 property (a): a poke that arrives after ``claim()`` clears
-        the flag (e.g. mid-refresh, while the caller is awaiting) is not
-        lost — it survives to be picked up by the next ``claim()``.
+        """Ordering property (a): a poke that arrives after ``claim()``
+        clears the flag (e.g. mid-refresh, while the caller is awaiting)
+        is not lost — it survives to be picked up by the next ``claim()``.
 
         ``claim()`` clears ``_poked`` synchronously before returning, so
         nothing the caller does with the returned ``True`` (including
@@ -1179,15 +1180,88 @@ class TestInboxPokeGate:
         assert gate.claim() is True  # not clobbered — the next tick sees it
 
     def test_mark_after_failed_refresh_re_arms_retry(self) -> None:
-        """HIGH-4 property (b): re-marking after a failed refresh makes the
-        very next ``claim()`` due again, instead of waiting out a full
-        backstop interval for a transient failure.
+        """Ordering property (b): re-marking after a failed refresh makes
+        the very next ``claim()`` due again, instead of waiting out a
+        full backstop interval for a transient failure.
         """
         gate = _InboxPokeGate(backstop_interval=1000.0)
         gate.claim()  # consume the initial force
         # Simulate _active_tick's re-mark-on-failure branch.
         gate.mark()
         assert gate.claim() is True
+
+
+class TestTargetedMessageMarksInboxGate:
+    """A targeted (``user:tty``) message's wake poke must mark the shared
+    inbox gate, not just wake the poller — the regression this pins
+    permanently. Drives the exact frame ``_publish_talk_notification``
+    publishes for a targeted message through the real ``subscribe_talk``
+    callback (mirroring the original repro's setup exactly), then asserts
+    the FIXED behavior: the next active tick recomputes and the
+    description shows the unread count. A test that called ``gate.mark()``
+    by hand instead would pass on both the broken and the fixed code — it
+    would prove nothing about whether the callback itself marks the gate.
+    """
+
+    @staticmethod
+    def _nats_state(tmp_path: Path, nc: AsyncMock) -> ServerState:
+        relay = MagicMock(spec=NatsRelay)
+        relay.connection_generation = 1
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
+        relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=1))
+        relay.get_wall = AsyncMock(return_value=None)
+        return create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+
+    async def test_targeted_wake_poke_recomputes_on_next_tick(
+        self, tmp_path: Path
+    ) -> None:
+        nc = AsyncMock()
+        state = self._nats_state(tmp_path, nc)
+        mcp = create_server(state)
+
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        wake_event = asyncio.Event()
+        gate.claim()  # steady state: consume the initial forced recompute
+
+        # Establish the talk SUB and drive the exact frame deliver() publishes
+        # for a targeted message (_publish_talk_notification's payload: no
+        # "type" key -> classified as a wake poke, not a modeled talk frame).
+        await subscribe_talk(
+            state,
+            TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER)),
+            gate,
+            wake_event,
+        )
+        on_talk = nc.subscribe.call_args.kwargs["cb"]
+        frame = json.dumps(
+            {
+                "from": "eric",
+                "body": "ping",
+                "to_key": "kai:tty1",
+                "from_key": "eric:tty2",
+            }
+        ).encode()
+        msg = MagicMock()
+        msg.data = frame
+        await on_talk(msg)
+
+        # The callback both wakes the poller and marks the gate.
+        assert state.activity.napping is False
+        assert wake_event.is_set()
+
+        await _active_tick(mcp, state, -1, ("", ""), ((), -1, ""), gate=gate)
+
+        tool = await mcp.get_tool("read_messages")
+        assert tool is not None
+        assert "1 unread" in (tool.description or "")
 
 
 class TestSubscribeTalkLatch:
@@ -1287,9 +1361,9 @@ class TestSubscribeInboxNotify:
     async def test_subscribes_on_a_different_users_subject_for_companion(
         self, tmp_path: Path
     ) -> None:
-        """CRITICAL-2: the *user* argument, not always ``state.config.user``,
-        decides the subject — the companion binding passes the companion's
-        user so its broadcast pokes land on a subject this session actually
+        """The *user* argument, not always ``state.config.user``, decides
+        the subject — the companion binding passes the companion's user
+        so its broadcast pokes land on a subject this session actually
         subscribes to.
         """
         state, relay = self._nats_state(tmp_path)
@@ -1467,7 +1541,7 @@ class TestReconcileInboxNotifySub:
     async def test_reconciles_the_companion_binding_independently(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CRITICAL-2: the companion's SUB is reconciled by the SAME helper,
+        """The companion's SUB is reconciled by the SAME helper,
         parameterized on ``user`` — proving one generic reconcile serves
         both the own-user and companion-user bindings without a second
         code path.
