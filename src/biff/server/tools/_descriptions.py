@@ -101,6 +101,19 @@ _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES = LatchMessages(
     recovery="Companion inbox-notify wake pokes recovered — re-subscribed",
 )
 
+# Same wording pattern again, for the companion's own talk-notify SUB — a
+# third distinct LatchMessages, since the companion's talk subject can fail
+# and recover independently of both its inbox-notify SUB and this session's
+# own talk SUB.
+_COMPANION_TALK_RESUBSCRIBE_MESSAGES = LatchMessages(
+    onset=(
+        "Companion talk-notify wake pokes are down — re-subscribe failing, "
+        "retrying each tick"
+    ),
+    retry="Companion talk-notify re-subscribe still failing, will retry",
+    recovery="Companion talk-notify wake pokes recovered — re-subscribed",
+)
+
 MAX_UNREAD_COUNT: int = 100
 """Maximum unread count written to the status file.
 
@@ -942,6 +955,122 @@ async def _reconcile_talk_sub(
     )
 
 
+async def subscribe_companion_talk(
+    state: ServerState,
+    latch: TalkNotifyLatch,
+    gate: _InboxPokeGate,
+    wake_event: asyncio.Event,
+) -> SubscriptionBinding | None:
+    """Establish the companion's talk-notify subscription (presence-only).
+
+    A targeted (``user:tty``) message or talk frame addressed to
+    ``state.companion``'s session publishes its wake poke on
+    ``talk_notify_subject(companion.session_key)`` — a subject distinct
+    from this session's own (:func:`subscribe_talk`'s), since the two are
+    different session keys. Without this second binding nothing in this
+    process ever subscribes to it, so a targeted write to the companion
+    regresses to the backstop exactly as the untargeted companion gap
+    ``subscribe_inbox_notify``'s ``user`` parameter closed — a distinct
+    subject family the inbox-notify fix does not cover at all.
+
+    Unlike :func:`subscribe_talk`, the callback never calls
+    ``state.talk.receive()``: the companion is presence-only (DES-039) —
+    it does not originate tool calls and has no ``TalkState`` of its own
+    in this process, so a frame on its subject is never this session's
+    own talk to surface. Every frame — wake poke or a genuine talk frame
+    the companion happens to receive — only marks the gate and wakes the
+    poller, so the companion's unread count gets recomputed promptly
+    without this process pretending to own the companion's talk state.
+    """
+    from biff.nats_relay import NatsRelay  # noqa: PLC0415
+
+    if not isinstance(state.relay, NatsRelay) or state.companion is None:
+        return None
+    try:
+        nc = await state.relay.get_nc()
+        generation = state.relay.connection_generation
+        subject = state.relay.talk_notify_subject(state.companion.session_key)
+
+        async def _on_companion_talk_msg(_msg: object) -> None:
+            gate.mark()
+            state.activity.wake()
+            wake_event.set()
+
+        handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+            subject, cb=_on_companion_talk_msg
+        )
+    except Exception:  # noqa: BLE001
+        latch.record_failure()
+        return None
+    latch.record_success()
+    return SubscriptionBinding(handle, generation)
+
+
+async def _reconcile_companion_talk_sub(
+    state: ServerState,
+    companion_talk_sub: SubscriptionBinding | None,
+    latch: TalkNotifyLatch,
+    gate: _InboxPokeGate,
+    wake_event: asyncio.Event,
+) -> SubscriptionBinding | None:
+    """Re-establish the companion's talk SUB when unbound or its client was replaced."""
+    return await _reconcile_always_on_sub(
+        companion_talk_sub,
+        _relay_generation(state),
+        lambda: subscribe_companion_talk(state, latch, gate, wake_event),
+    )
+
+
+class _CompanionSubs(NamedTuple):
+    """Lazily-bound state for the companion's two always-on SUBs.
+
+    ``inbox_latch``/``talk_latch`` start ``None`` and are created on
+    whichever tick first observes ``state.companion`` set (it is almost
+    always ``None`` at ``poll_inbox`` startup — see the comment where
+    this is first constructed); pairs with the ``None`` sentinel every
+    element starts at before that tick.
+    """
+
+    inbox_latch: TalkNotifyLatch | None
+    inbox_sub: SubscriptionBinding | None
+    talk_latch: TalkNotifyLatch | None
+    talk_sub: SubscriptionBinding | None
+
+
+async def _reconcile_companion_subs(
+    state: ServerState,
+    companion: _CompanionSubs,
+    gate: _InboxPokeGate,
+    wake_event: asyncio.Event,
+) -> _CompanionSubs:
+    """Lazily bind, then reconcile, both of the companion's always-on SUBs.
+
+    A no-op returning *companion* unchanged when ``state.companion`` is
+    ``None`` — the common case at ``poll_inbox`` startup, since
+    production only sets the companion later via the heartbeat loop.
+    """
+    if state.companion is None:
+        return companion
+    inbox_latch = companion.inbox_latch or TalkNotifyLatch(
+        logger, _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES
+    )
+    inbox_sub = await _reconcile_inbox_notify_sub(
+        state,
+        companion.inbox_sub,
+        inbox_latch,
+        gate,
+        wake_event,
+        user=state.companion.user,
+    )
+    talk_latch = companion.talk_latch or TalkNotifyLatch(
+        logger, _COMPANION_TALK_RESUBSCRIBE_MESSAGES
+    )
+    talk_sub = await _reconcile_companion_talk_sub(
+        state, companion.talk_sub, talk_latch, gate, wake_event
+    )
+    return _CompanionSubs(inbox_latch, inbox_sub, talk_latch, talk_sub)
+
+
 async def subscribe_inbox_notify(
     state: ServerState,
     latch: TalkNotifyLatch,
@@ -1200,16 +1329,24 @@ async def poll_inbox(
     When *shutdown* is set, exits cleanly between iterations —
     no NATS operations are interrupted mid-flight.
 
-    Establishes two or three always-on NATS subscriptions: talk
+    Establishes two or four always-on NATS subscriptions: talk
     notifications (ungated — a fresh agent must receive an unsolicited
     invite), the broadcast inbox-notify wake poke for this session's own
-    user, and — when ``state.companion`` is set — a second, independent
-    inbox-notify SUB for the companion's user, since a broadcast
-    addressed to the companion pokes a subject only that binding listens
-    on. Every talk frame flows into the shared ``TalkState``; a wake poke
-    (message notification riding the talk subject) additionally marks the
-    poke gate so a targeted message's detection is not silently deferred
-    to the backstop the way only broadcast pokes used to mark it.
+    user, and — when ``state.companion`` is set — two more, independent
+    of the first two: an inbox-notify SUB for the companion's user (a
+    broadcast addressed to the companion pokes a subject only that
+    binding listens on) and a talk-notify SUB for the companion's own
+    session key (a *targeted* write to the companion rides its own talk
+    subject, distinct from both this session's talk subject and either
+    inbox-notify subject — nothing subscribes to it without this fourth
+    binding). Every talk frame on this session's own subject flows into
+    the shared ``TalkState``; a wake poke (message notification riding
+    the talk subject) additionally marks the poke gate so a targeted
+    message's detection is not silently deferred to the backstop the way
+    only broadcast pokes used to mark it. The companion's talk subject
+    never feeds ``TalkState`` — the companion is presence-only and has no
+    talk state of its own in this process — it only marks the gate and
+    wakes the poller.
     """
     tracker = state.activity
     last_count = -1  # Force initial refresh (LocalRelay fallback path only)
@@ -1230,12 +1367,12 @@ async def poll_inbox(
     # roster resolves) — it is almost always still None at this exact
     # point. A one-shot check here would permanently miss a companion
     # that appears after the poller has already started; the per-tick
-    # loop below lazily creates the latch/binds the SUB on whichever
-    # tick first observes state.companion set, covering both "set before
-    # poll_inbox starts" (test-injected, e.g. dual-session e2e tests) and
-    # "set later" (production) with the same code path.
-    companion_latch: TalkNotifyLatch | None = None
-    companion_sub: SubscriptionBinding | None = None
+    # loop below (_reconcile_companion_subs) lazily creates both latches
+    # and binds both SUBs on whichever tick first observes state.companion
+    # set, covering both "set before poll_inbox starts" (test-injected,
+    # e.g. dual-session e2e tests) and "set later" (production) with the
+    # same code path.
+    companion = _CompanionSubs(None, None, None, None)
 
     try:
         while shutdown is None or not shutdown.is_set():
@@ -1294,22 +1431,9 @@ async def poll_inbox(
                 wake_event,
                 user=state.config.user,
             )
-            if state.companion is not None:
-                # Lazily create the latch the first tick a companion is
-                # observed — covers a companion that appeared after this
-                # loop started, not only one already set before it.
-                if companion_latch is None:
-                    companion_latch = TalkNotifyLatch(
-                        logger, _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES
-                    )
-                companion_sub = await _reconcile_inbox_notify_sub(
-                    state,
-                    companion_sub,
-                    companion_latch,
-                    gate,
-                    wake_event,
-                    user=state.companion.user,
-                )
+            companion = await _reconcile_companion_subs(
+                state, companion, gate, wake_event
+            )
     finally:
         # A hard cancel arriving while unsubscribing one SUB must not skip
         # the rest — each attempt is shielded from that specific
@@ -1320,7 +1444,8 @@ async def poll_inbox(
         # re-raise CancelledError": we are already inside the finally block
         # reacting to the original cancellation, and teardown must stay
         # bounded and complete rather than abandoning it partway through.
-        for sub in (talk_sub, inbox_notify_sub, companion_sub):
+        all_subs = (talk_sub, inbox_notify_sub, companion.inbox_sub, companion.talk_sub)
+        for sub in all_subs:
             if sub is not None:
                 with suppress(Exception, asyncio.CancelledError):
                     await asyncio.shield(sub.handle.unsubscribe())

@@ -376,6 +376,67 @@ class TestCompanionPushNotification:
             assert "1 unread" in desc
 
 
+class TestCompanionTargetedPushNotification:
+    """A *targeted* (``user:tty``) write to the companion's own session key
+    rides the companion's talk-notify subject, not its inbox-notify one —
+    proving ``poll_inbox`` opens a second talk-notify SUB bound to
+    ``state.companion.session_key``, distinct from both this session's own
+    talk SUB and either inbox-notify SUB. Before this SUB existed, nothing
+    in this process subscribed to that subject at all, so a targeted write
+    to the companion regressed to the backstop exactly as the untargeted
+    companion gap did before its own fix.
+    """
+
+    async def test_targeted_write_to_companion_wakes_and_refreshes(
+        self, nats_server: str, tmp_path: Path
+    ) -> None:
+        kai_state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server),
+            tmp_path / "kai-companion-targeted",
+            tty=_KAI_TTY,
+            hostname="test-host",
+            pwd="/test",
+            companion=CompanionSession(
+                user="jfreeman",
+                display_name="Jim Freeman",
+                kind="human",
+                tty="bbbb0098",
+            ),
+        )
+        eric_state = create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server),
+            tmp_path / "eric-companion-targeted",
+            tty="eeee0097",
+            hostname="test-host",
+            pwd="/test",
+        )
+        kai_mcp = create_server(kai_state)
+        eric_mcp = create_server(eric_state)
+
+        async with (
+            Client(FastMCPTransport(kai_mcp)) as kai_client,
+            Client(FastMCPTransport(eric_mcp)),
+        ):
+            assert kai_state.companion_session_key is not None
+            await asyncio.sleep(3.0)  # let the poller establish the companion talk SUB
+
+            await eric_state.relay.deliver(
+                Message(
+                    from_user="eric",
+                    to_user=kai_state.companion_session_key,  # targeted — user:tty
+                    body="direct ping for the human",
+                ),
+                sender_key=eric_state.session_key,
+            )
+
+            # Well under the 30s nap_interval backstop — proves the companion
+            # talk-notify wake poke detected it, not the periodic safety net.
+            desc = await _wait_for_read_messages_description(
+                kai_client, "1 unread", timeout=6.0
+            )
+            assert "1 unread" in desc
+
+
 class TestPollerAtDisabledInterval:
     """``poll_interval<=0`` still hosts the always-on SUBs and detects a poke.
 
