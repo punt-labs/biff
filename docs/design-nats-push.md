@@ -1,4 +1,4 @@
-# Design: NATS Push for Mail/Talk Description Refresh (biff-5ex)
+# Design: NATS Push for Message/Talk Description Refresh (biff-5ex)
 
 Status: **proposed — design only, not implemented**
 Scope: the server-side surfacing path (`set_poll_interval` → tool-description
@@ -29,7 +29,7 @@ while shutdown is None or not shutdown.is_set():
 (`_descriptions.py:816-898`). `_active_tick` (`_descriptions.py:736-786`) does
 three unconditional relay round-trips every tick, active or napping:
 
-1. `state.relay.get_unread_summary(state.session_key)` — mail count
+1. `state.relay.get_unread_summary(state.session_key)` — unread-message count
    (`_active_tick`, `_descriptions.py:747`).
 2. `state.relay.get_wall()` — wall content and countdown
    (`_descriptions.py:760`).
@@ -71,18 +71,18 @@ is unreliable" (`_descriptions.py:691-694`, restated at `app.py:600-604` for
 wall). The wake only shortens the wait until the *next* poller tick, which
 then does the actual `refresh_talk` + notify. So talk's *detection latency* is
 already NATS-push (sub-second), even though its *notify delivery* still rides
-the poller's tick loop, exactly like wall and mail.
+the poller's tick loop, exactly like wall and messages.
 
-**Mail's unread *count* is always computed by a poll** —
+**The message inbox's unread *count* is always computed by a poll** —
 `get_unread_summary()` calls `js.stream_info(self._stream_name,
 subjects_filter=...)` (`nats_relay.py:1510-1550`), a JetStream metadata query,
 routed through `_tracked` (`nats_relay.py:587`). There is no JetStream
 "notify on new message" primitive biff uses; `stream_info` must be asked.
 
-**But mail's *wake timing* is already partially push-driven**, and this is
+**But the message inbox's *wake timing* is already partially push-driven**, and this is
 easy to miss: `NatsRelay.deliver()` (`nats_relay.py:1265-1333`) calls
 `_publish_talk_notification(message.to_user, message, sender_key)`
-unconditionally at the end of *every* delivery — mail or talk — publishing a
+unconditionally at the end of *every* delivery — message or talk — publishing a
 lightweight payload (`from`/`body`/`to_key`, no `type` field) on the **same**
 `talk_notify_subject` the talk SUB listens on
 (`_publish_talk_notification`, `nats_relay.py:1335-1378`), but **only when
@@ -92,11 +92,11 @@ recognized frame type as a **wake poke** (`talk_types.py:184-219`,
 `is_wake_poke` at `talk_types.py:304`), and `TalkState.receive()`
 (`talk_state.py:237-266`) diverts it *before* the session-scope filter: it
 wakes the poller (`return True`) but is never enqueued as a talk message
-(`talk_state.py:245-258`). So **targeted mail already gets a NATS wake poke
+(`talk_state.py:245-258`). So **targeted messages already get a NATS wake poke
 today** — it just still has to wait for the poller's next tick to actually
 recompute the count via `stream_info()` and notify.
 
-**What is genuinely poll-only, with zero push signal**: broadcast mail
+**What is genuinely poll-only, with zero push signal**: broadcast messages
 (`to_user` with no `:tty`, e.g. `/write alice "..."` with no active session
 addressed) — `_publish_talk_notification` returns before publishing anything
 for it (`nats_relay.py:1359-1360`). Its arrival is invisible until the next
@@ -116,8 +116,8 @@ the tick loop cannot simply be deleted (§3).
 | Marker | Detection | Notify delivery | Poll-only gap |
 |---|---|---|---|
 | Talk (invite/message/end/withdraw) | Push (always-on SUB, biff-9la) | Poller tick (belt/suspenders) | None |
-| Mail, targeted (`user:tty`) | Push (wake poke on talk subject, piggybacked on `deliver()`) | Poller tick | None for *detection*; count itself is `stream_info()` |
-| Mail, broadcast (`user`) | **Poll only** | Poller tick | Full poll_interval/nap_interval latency |
+| Message, targeted (`user:tty`) | Push (wake poke on talk subject, piggybacked on `deliver()`) | Poller tick | None for *detection*; count itself is `stream_info()` |
+| Message, broadcast (`user`) | **Poll only** | Poller tick | Full poll_interval/nap_interval latency |
 | Wall | Push (KV watcher) | Poller tick | Countdown re-render only, not detection |
 
 ## 2. Proposed push mechanism
@@ -132,22 +132,22 @@ Three alternatives were considered:
   `stream_info` zero-consumer); a consumer per live MCP session reintroduces
   the scaling concern DES-015 closed, for a signal that only needs to say
   "something arrived," never the payload.
-- **KV watcher fan-out** (mirror wall). Rejected for mail: mail is JetStream
+- **KV watcher fan-out** (mirror wall). Rejected for messages: the message stream is JetStream
   WORK_QUEUE, not KV — there is no KV key that changes on message arrival, and
   inventing one (a per-user/tty "last-delivered" KV counter written on every
   `deliver()`) adds a KV write to the hot send path and a new namespace to
   reason about, for no benefit over the mechanism already proven for talk.
 - **Core NATS wake poke, generalizing what `deliver()` already does for
-  targeted mail.** **Chosen.** Reuses a pattern already shipped, reviewed, and
+  targeted messages.** **Chosen.** Reuses a pattern already shipped, reviewed, and
   spec'd (biff-9la); needs one new subject and one new always-on SUB
   (parallel to `subscribe_talk`), not a new consumer class.
 
 ### Subjects
 
-- **Targeted mail** (`user:tty`): no change — already covered by
+- **Targeted messages** (`user:tty`): no change — already covered by
   `talk_notify_subject`. Zero new code.
-- **Broadcast mail** (`user`, no tty): new core-NATS subject
-  `{stream_prefix}.mail.notify.{user}`, one per user, fanning out to every
+- **Broadcast messages** (`user`, no tty): new core-NATS subject
+  `{stream_prefix}.inbox.notify.{user}`, one per user, fanning out to every
   live MCP session for that user (multiple terminals of the same user each
   subscribe independently; core NATS delivers to all current subscribers,
   which is the correct semantic — any of that user's sessions might want to
@@ -187,7 +187,7 @@ recovery paths already exist and need no new code:
 No new coordination is needed here beyond what already exists, because the
 design deliberately does **not** call `refresh_read_messages()` or
 `notify_tool_list_changed()` from the NATS callback. The new
-`_on_mail_msg` callback (parallel to `_on_talk_msg`,
+`_on_inbox_notify_msg` callback (parallel to `_on_talk_msg`,
 `_descriptions.py:676-696`) does exactly one thing: `state.activity.wake()`.
 Multiple rapid pushes collapse into a no-op re-wake
 (`ActivityTracker.wake()`, `activity.py:36-50`, is idempotent — it just resets
@@ -198,18 +198,18 @@ enforces the `!= old_desc` change-gate (`_descriptions.py:443`) before calling
 `_pending_notify` bookkeeping (the biff-ue2 hardening) is untouched. So: one
 or more pushes between two ticks produce at most one `refresh_read_messages`
 call and at most one `tools/list_changed` — the same guarantee the design
-already has for wall and talk, extended to mail with zero new state machinery
+already has for wall and talk, extended to broadcast messages with zero new state machinery
 in `_descriptions.py`.
 
 ### New subscription bookkeeping (parallel to `TalkSubscription`)
 
-The broadcast-mail SUB needs the same generation-tracked lifecycle as the
-talk SUB, because it is the same class of resource: an always-on core-NATS
+The broadcast inbox-notify SUB needs the same generation-tracked lifecycle as
+the talk SUB, because it is the same class of resource: an always-on core-NATS
 subscription bound to a particular `nats.connect()` client, which a
 force-reconnect (`_force_reconnect`, `nats_relay.py:653-713`) discards
-wholesale. Concretely: a `MailSubscription` `NamedTuple` (handle +
-generation), a `subscribe_mail()` mirroring `subscribe_talk()`
-(`_descriptions.py:652-705`), and a `_reconcile_mail_sub()` mirroring
+wholesale. Concretely: an `InboxNotifySubscription` `NamedTuple` (handle +
+generation), a `subscribe_inbox_notify()` mirroring `subscribe_talk()`
+(`_descriptions.py:652-705`), and a `_reconcile_inbox_notify_sub()` mirroring
 `_reconcile_talk_sub()` (`_descriptions.py:708-733`), called from
 `poll_inbox` alongside the existing `_reconcile_talk_sub` call
 (`_descriptions.py:898`). This is new code, not a design change to the
@@ -266,8 +266,8 @@ effect of not touching wall's tick, as long as the implementation removes
 only the `get_unread_summary()` call from `_active_tick` (replacing it with
 the push-triggered check) and leaves `get_wall()` untouched. No regression,
 no new machinery — provided this dependency is called out explicitly so a
-later refactor doesn't "simplify" the tick loop into deletion once mail no
-longer needs it.
+later refactor doesn't "simplify" the tick loop into deletion once broadcast
+messages no longer need it.
 
 This recommendation is conditional, not free: if a future change *also*
 removes or slows the wall tick (e.g. moving wall to a fully push-driven
@@ -305,7 +305,7 @@ tick — is what ran it. Crucially, `KVWallReceive` and `NatsTalkCallback`
 (the two schemas modeling exactly wall's and talk's existing push paths) are
 already in the spec, and their own commentary (`notification.tex:3465-3467`)
 states they "still defer the actual send to the poller" — precisely the
-pattern §2 proposes for mail. A `MailPushCallback` schema, added the same way
+pattern §2 proposes for broadcast messages. A `MessagePushCallback` schema, added the same way
 `NatsTalkCallback` was, would be a **mechanical extension**, not a
 reconciliation of conflicting model and code — no existing invariant is
 falsified by adding a third "wake, defer the send" source. This is a
@@ -321,13 +321,13 @@ proven state space, not just prose:
 1. **A second always-on subscription.** `talkSubGen` (`nats-relay.tex:345`)
    and its liveness property (§ modelcheck, item "Talk-subscription
    liveness (biff-9la)") are specific to *one* tracked SUB generation. A
-   broadcast-mail SUB is a second instance of the same resource class
+   broadcast inbox-notify SUB is a second instance of the same resource class
    (bound to a client, orphaned by `ForceReconnect`, replayed by an in-place
    `Reconnect`). The model must either generalize `talkSubGen` to a
    finite family of subscription-generation bindings (one per subscription
-   kind — talk, mail-broadcast, and any future one) with the liveness
+   kind — talk, inboxNotify, and any future one) with the liveness
    property stated once and quantified over the family, or duplicate the
-   schema with a `mailSubGen` variable and a parallel CTL formula. The
+   schema with an `inboxNotifySubGen` variable and a parallel CTL formula. The
    former is preferable — it is the generalization the model will need again
    for any *third* always-on SUB — but either is a real extension to
    `Connection`'s state schema, not prose. **jms/jra must extend this before
@@ -360,16 +360,16 @@ proven state space, not just prose:
 2. **Delivery-semantics choice.** Recommend: **core NATS, at-most-once,
    fire-and-forget**, identical to the existing talk-notify subject — not a
    JetStream consumer (rejected in §2 on DES-015 grounds) and not a
-   KV-watched key (rejected in §2 as a mismatch with mail's WORK_QUEUE
+   KV-watched key (rejected in §2 as a mismatch with the message stream's WORK_QUEUE
    model). The three-layer recovery in §2 (belt path, retained tick,
    model-side cron) makes at-most-once acceptable for a signal that never
    carries the actual data.
 3. **Whether `set_poll_interval` is removed outright or kept as a
    fallback.** Recommend: **keep it, but repoint its documented meaning.**
-   Once mail detection is push-driven, `set_poll_interval`'s remaining
+   Once broadcast-message detection is push-driven, `set_poll_interval`'s remaining
    effect is (a) wall-countdown re-render cadence, (b) stale-invite expiry
    cadence, and (c) the wedge-detection cadence dependency of §3 — all
-   real, all still user-tunable, none of them "how fast does mail arrive"
+   real, all still user-tunable, none of them "how fast do messages arrive"
    anymore. Removing the tool outright would also remove the only knob an
    operator has to widen or narrow the wedge-detection window, and would
    force a restart-required config edit to recover it later. The tool's
@@ -380,7 +380,7 @@ proven state space, not just prose:
    removed."
 4. **Scope of the always-on-SUB generalization (§4, item 1).** Recommend:
    generalize `talkSubGen` to a family now, in the same spec-extension pass,
-   rather than duplicating the schema for mail and re-doing the
+   rather than duplicating the schema for inboxNotify and re-doing the
    generalization for the next always-on SUB. This is a design-time call
    for jms, not an implementation detail rmh should decide unilaterally,
    since it changes `Connection`'s state schema shape.
