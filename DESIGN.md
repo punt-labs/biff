@@ -4227,6 +4227,47 @@ When Channels ships as stable API:
 
 ---
 
+### Amendment (2026-09-11): Layer 2 extended to continuous; Layer 1's model-facing half declared dead
+
+Live canary evidence (biff-5ex, PR #428) closed a question this entry left
+implicit. The server-side pipeline is fully correct — a message arrival
+mutated the description, fired `tools/list_changed`, and the client
+re-fetched the tool list within seconds (`biff.log`: CallToolRequest
+06:03:09 → ListToolsRequest 06:03:20) — **and the model still never saw
+it**: the conversation's tool list is a session-start snapshot, and
+ToolSearch serves the same stale base. The refreshed description reaches
+the client process but not the model's view, ever. A real message sat
+unread for 3+ minutes while the status bar (the file, channel 2) showed it
+correctly and the marker-gated `/biff:read` no-op'd on a marker the model
+cannot see. This is the same failure the operator has reported across
+roughly a dozen prior fix efforts (PRs 65, 91, 124/128/139, 176,
+198/199, 204, 410/420, 414) — every one of which fixed a real
+server-side defect without touching this hop, because this hop is harness
+behavior no MCP server can change.
+
+Consequences, now normative:
+
+1. **Description markers are display metadata only.** Nothing may gate
+   model behavior on reading a tool-description marker. `/biff:read`'s
+   check now gates on `biff statusline`'s per-session unread count (the
+   same file the status bar reads) — commit 3e41eb8.
+2. **Layer 2 is extended from one-shot to continuous.** A change-gated
+   `unread-nudge` hook on `UserPromptSubmit` + `PostToolUse` injects
+   "You have N unread biff messages — call read_messages now" via
+   `additionalContext` — the one channel proven to reach the model
+   (DES-031's plan gate uses it daily). Change-gated on the count (fires
+   on rising change, silent on repeats, state cleared at zero) to avoid
+   context spam — DES-020's discipline applied to a working channel.
+   Pure bash, `find_session_key()`'s PID walk ported into the plugin
+   script, fail-silent on every error path — commit b8ba643. The Stop
+   variant removed in #176 failed for Stop-specific reasons (no
+   `additionalContext` support on Stop; POP-consumption); this is the
+   never-tried cell: recurring injection on events that support it.
+3. **Coverage after this amendment**: active sessions learn of arrivals
+   within one tool call (hook); idle sessions within the cron interval
+   (Layer 3, now file-gated). The model's awareness is bounded by the
+   harness's turn model — that ceiling stands until Channels (biff-5esx).
+
 ## DES-039: Dual-Session Registration via Ethos Roster
 
 **Date:** 2026-04-14
