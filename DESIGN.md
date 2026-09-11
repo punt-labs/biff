@@ -7184,3 +7184,110 @@ Root cause #2 — Claude Code resolving the tool via `ToolSearch` and reading th
 *cached base* description with no marker — is client-side behavior this server
 change cannot reach; the durable fix is native push (Channels), tracked as
 biff-5esx.
+
+## DES-062: Push-Driven Inbox Detection — the Broadcast Wake Poke Replaces the Unread Poll
+
+**Date:** 2026-09-11
+**Status:** IN PROGRESS (branch `feat/nats-push-notify`; not merged — operator
+review gate; ADRs to be reviewed with the finished test suite and demo)
+**Bead:** biff-5ex
+**Related:** DES-004 (dynamic descriptions + `tools/list_changed`), DES-013
+(user vs TTY mailboxes), DES-015 (count-only summary via `stream_info`, zero
+consumers), DES-016 (shared streams), DES-019 (persistent connection; napping
+is a frequency knob), DES-020 (a notification is a no-op unless the description
+changes), DES-030 (bare-user addressing is repo-local), DES-036/DES-038
+(three-layer delivery — this changes only Layer 1's detection), DES-042
+(proactive wedge detector — the cadence this must not starve), DES-045
+(`MarkerConsistent`), DES-047 (`talkSubGen` generation guard — the template the
+second SUB generalizes), DES-048 (identity routing is for targeted delivery),
+DES-061 (`_pending_notify` re-arm / one lock / bounded send — untouched),
+`docs/design-nats-push.md` (the full design), `docs/nats-relay.tex`,
+`docs/notification.tex`
+
+### Problem
+
+The MCP server detects new `/write` messages by polling: `_active_tick` calls
+`get_unread_summary()` (JetStream `stream_info`) every `poll_interval` (2s
+active, 30s napping). Detection latency for a message is bounded below by the
+tick cadence — worst case the full 30s nap interval — and the poll issues
+relay round-trips even when nothing ever arrives. Wall and talk already
+detect in real time (KV watcher; the biff-9la always-on talk SUB), and
+targeted messages already ride a wake poke piggybacked on `deliver()`
+(`_publish_talk_notification`, sent only when `":" in to_user`). The one
+arrival with **no push signal at all** is the broadcast message
+(`/write user`, no tty): `_publish_talk_notification` returns early for a
+bare user, so its arrival is invisible until the next scheduled tick.
+
+### Decision
+
+1. **Extend the wake-poke pattern to broadcast delivery.** `deliver()`'s
+   broadcast branch publishes a payload-less core-NATS poke after the
+   JetStream publish succeeds, on a new subject; each MCP server holds a
+   second always-on, generation-tracked SUB on it (mirroring
+   `subscribe_talk`/`_reconcile_talk_sub`), whose callback does exactly one
+   thing: `state.activity.wake()`. Never a refresh or notify from the
+   callback (DES-020/DES-021 discipline); the poller's next tick recomputes
+   and notifies under the DES-061 lock and change-gate, unchanged.
+2. **The subject is repo-scoped:** `{stream_prefix}.{repo}.inbox.notify.{user}`.
+   DES-048's repo-less identity routing governs *targeted* delivery, where
+   `user:tty` is globally unique. A broadcast poke names a bare user — not a
+   unique identity — and announces activity on the repo-partitioned user
+   mailbox `biff.{repo}.inbox.{user}` (DES-013/DES-030), which only that
+   repo's sessions can read. The poke's subject mirrors the durable subject
+   it signals, waking exactly the sessions that can act on it.
+3. **Core NATS, at-most-once, fire-and-forget** — identical to the talk-notify
+   poke. Safe because the poke never carries state: a dropped poke costs
+   latency, not data, and three recovery layers already exist (belt-path
+   refresh after every tool call; the retained tick; the model-side
+   `/biff:read` cron — DES-038 Layer 3, unchanged).
+4. **The unread-count poll leaves `_active_tick`; the tick itself stays.**
+   Unread recomputation becomes arrival-driven. The tick loop survives
+   because two other duties ride it: the wall countdown re-render, and —
+   load-bearing — the wedge-detection cadence. DES-042's `ForceReconnect`
+   counts consecutive `_tracked` request timeouts; the per-tick `get_wall()`
+   is what keeps that counter fed. Removing the whole tick would push
+   proactive wedge detection to ~3 minutes on the 60s heartbeat alone —
+   *slower* than the ~60-80s keepalive floor it exists to beat. This
+   dependency is recorded as normative prose in `nats-relay.tex`.
+5. **`set_poll_interval` is retained and repointed.** Its remaining meaning:
+   wall-countdown render cadence, stale-invite expiry cadence, and the
+   wedge-detection window. It is no longer "how fast do messages arrive."
+6. **Spec-first.** `nats-relay.tex`'s `talkSubGen` is generalized to a
+   kind-indexed family of always-on subscription bindings (talk, inboxNotify)
+   with the biff-9la stranded-SUB liveness property quantified over the
+   family, model-checked before implementation; `notification.tex` gains an
+   additive `MessagePushCallback` (the `NatsTalkCallback`/`KVWallReceive`
+   template) with the implementation.
+
+### What this deliberately does not change
+
+The client-wake model (`tools/list_changed` surfaces on the model's next
+activity — an MCP constraint, cf. DES-004; the durable fix is Channels,
+biff-5esx), the `/biff:read` cron (DES-038 Layer 3), the "pull, not push"
+consent model (a transport latency change, not a steering change), the REPL's
+own snapshot poll (`repl.tex` `PollNewMessages` — a separate subsystem), the
+DES-061 notify hardening, and targeted-message delivery (already push).
+
+### The measurable claim (drives the test suite and demo)
+
+Broadcast-message detection latency drops from worst-case `nap_interval`
+(30s; 2s active) to sub-second — the same ≤2s-in-all-states property wall and
+talk already ship (README, "Notification deferral") — and steady-state relay
+load drops: unread `stream_info` calls go from every-tick to on-arrival.
+Demonstrated two ways: tier 2b/3c integration tests measuring
+arrival→marker-refresh latency push vs poll, and a tier 3b end-to-end run
+against the real `ghcr.io/punt-labs/biff-relay` docker image (TESTING.md).
+
+### Rejected
+
+A JetStream consumer per session watching the inbox (reintroduces the
+DES-015 consumer-scaling problem for a signal that needs no payload); a
+KV-watched per-user "last delivered" key (the inbox is a WORK_QUEUE stream,
+not KV; adds a KV write to the hot delivery path); a repo-less poke subject
+(wakes every repo's sessions of the user for an inbox they cannot read —
+see Decision 2); deleting the tick loop outright (starves DES-042's wedge
+counter — see Decision 4); removing `set_poll_interval` (deletes the only
+operator knob on the wedge-detection window); driving the wedge counter off
+subscription silence (a silent SUB is indistinguishable from a quiet one —
+`_tracked` measures request round-trips, and `talkSubGen`-style tracking
+exists precisely because silence is not evidence).
