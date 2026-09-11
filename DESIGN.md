@@ -7228,13 +7228,33 @@ bare user, so its arrival is invisible until the next scheduled tick.
    thing: `state.activity.wake()`. Never a refresh or notify from the
    callback (DES-020/DES-021 discipline); the poller's next tick recomputes
    and notifies under the DES-061 lock and change-gate, unchanged.
-2. **The subject is repo-scoped:** `{stream_prefix}.{repo}.inbox.notify.{user}`.
+2. **The subject is repo-scoped:** `{stream_prefix}.{repo}.notify.{user}`.
    DES-048's repo-less identity routing governs *targeted* delivery, where
    `user:tty` is globally unique. A broadcast poke names a bare user — not a
    unique identity — and announces activity on the repo-partitioned user
    mailbox `biff.{repo}.inbox.{user}` (DES-013/DES-030), which only that
-   repo's sessions can read. The poke's subject mirrors the durable subject
-   it signals, waking exactly the sessions that can act on it.
+   repo's sessions can read. The poke wakes exactly the sessions that can
+   act on it.
+
+   *Corrected in round 2 (evaluator finding, proven live):* this entry
+   originally specified `{stream_prefix}.{repo}.inbox.notify.{user}` —
+   "mirror the durable subject it signals." That shape **matches the
+   durable inbox stream's own filter** `{stream_prefix}.*.inbox.>`
+   (`_provision()`), so JetStream silently captures every core-NATS poke
+   into the shared WORK_QUEUE stream: no consumer targets it, retention has
+   no `max_age`/`max_msgs`, and each broadcast would permanently burn a slot
+   in the shared 100 MiB budget until real messages get evicted. djb proved
+   it against a live nats-server (`stream_info().state.messages` 0 → 1 on a
+   bare `nc.publish`). The corrected shape drops the `inbox` token so the
+   subject cannot match `*.inbox.>` — the same reason
+   `talk_notify_subject`'s `{prefix}.talk.notify.{user}:{tty}` is
+   stream-safe. Even a repo literally named `talk` cannot collide with talk
+   pokes: talk-poke token 4 always carries `:` (`{user}:{tty}`); a bare user
+   never does. The invariant this correction adds: **a poke subject must not
+   match any provisioned stream filter, verified by live probe** (publish a
+   poke, assert unfiltered `stream_info` message count unchanged), now a
+   permanent tier-3c regression test — string comparison against the other
+   subject literals is not verification.
 3. **Core NATS, at-most-once, fire-and-forget** — identical to the talk-notify
    poke. Safe because the poke never carries state: a dropped poke costs
    latency, not data, and three recovery layers already exist (belt-path
