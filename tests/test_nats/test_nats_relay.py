@@ -8,15 +8,19 @@ per-user broadcast mailbox.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
+import biff.nats_relay as nats_relay_module
 from biff.models import Message, UserSession, WallPost
 from biff.nats_relay import NatsRelay
 
 if TYPE_CHECKING:
+    from nats.aio.client import Client as NatsClient
     from nats.js.client import JetStreamContext
     from nats.js.kv import KeyValue
 
@@ -604,3 +608,155 @@ class TestPublishRebuildRobustness:
 
         assert result is None
         assert calls == 2  # fetch + a fresh resolve immediately before the delete
+
+
+class TestLiveNcOrReconnectBounds:
+    """The reconnect fall-through inside a best-effort poke stays bounded,
+    and a closed relay never resurrects a connection.
+
+    Neither test needs a live nats-server — both drive
+    ``_live_nc_or_reconnect`` directly against a bare, never-connected
+    ``NatsRelay`` instance with ``get_nc`` replaced.
+    """
+
+    async def test_reconnect_fall_through_is_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hung dial is bounded by ``_NOTIFY_RECONNECT_TIMEOUT``, not the
+        much larger ``_CONNECT_PROVISION_TIMEOUT`` the unwrapped
+        ``get_nc()`` fall-through used to be subject to.
+        """
+        monkeypatch.setattr(nats_relay_module, "_NOTIFY_RECONNECT_TIMEOUT", 0.05)
+
+        relay = NatsRelay()
+
+        async def _hung_get_nc() -> NatsClient:
+            await asyncio.sleep(5.0)  # never resolves within the patched bound
+            msg = "unreachable — the timeout must fire first"
+            raise AssertionError(msg)
+
+        relay.get_nc = _hung_get_nc  # type: ignore[method-assign]
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError):
+            await relay._live_nc_or_reconnect()
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0  # bounded by the patched 0.05s, not the 5s sleep
+
+    async def test_closed_relay_never_reconnects(self) -> None:
+        """``_closed`` short-circuits before ``get_nc`` is even called."""
+        relay = NatsRelay()
+        relay._closed = True
+
+        called = False
+
+        async def _get_nc() -> NatsClient:
+            nonlocal called
+            called = True
+            msg = "unreachable — close() must short-circuit first"
+            raise AssertionError(msg)
+
+        relay.get_nc = _get_nc  # type: ignore[method-assign]
+
+        with pytest.raises(ConnectionError):
+            await relay._live_nc_or_reconnect()
+
+        assert called is False
+
+    async def test_close_sets_closed_flag(self) -> None:
+        relay = NatsRelay()
+        assert relay._closed is False
+        await relay.close()
+        assert relay._closed is True
+
+    async def test_disconnect_does_not_set_closed_flag(self) -> None:
+        """``disconnect()`` is reversible — it must not trip the terminal flag."""
+        relay = NatsRelay()
+        await relay.disconnect()  # no live connection; must be a safe no-op
+        assert relay._closed is False
+
+    async def test_poke_after_close_does_not_create_new_connection(self) -> None:
+        """A best-effort poke fired after ``close()`` must not resurrect a
+        client — the end-to-end path through the public best-effort
+        publish, not just the ``_live_nc_or_reconnect`` unit above.
+        """
+        relay = NatsRelay()
+        await relay.close()
+
+        called = False
+
+        async def _get_nc() -> NatsClient:
+            nonlocal called
+            called = True
+            msg = "unreachable — close() must short-circuit first"
+            raise AssertionError(msg)
+
+        relay.get_nc = _get_nc  # type: ignore[method-assign]
+
+        await relay._publish_inbox_notification("repo", "kai")  # must not raise
+
+        assert called is False
+
+
+class TestValidateUserRejectsColon:
+    """MED-7: the ``inbox_notify_subject``/``talk_notify_subject``
+    disjointness docstring claims a bare user can never contain ``:`` —
+    ``_validate_user`` must actually enforce that, not just assert it.
+    """
+
+    async def test_colon_bearing_user_is_rejected(self) -> None:
+        relay = NatsRelay()
+        with pytest.raises(ValueError, match="Invalid username"):
+            relay.inbox_notify_subject(relay._repo_name, "kai:tty1")
+
+    async def test_colon_bearing_user_cannot_collide_with_a_talk_subject(self) -> None:
+        """The disjointness the docstring claims, proven directly: a
+        broadcast poke subject for a forged ``user:tty`` can never equal a
+        real talk-notify subject for that same session, because
+        constructing the poke subject now raises before it can collide.
+        """
+        relay = NatsRelay()
+        talk_subject = relay.talk_notify_subject("kai:tty1")
+        with pytest.raises(ValueError, match="Invalid username"):
+            relay.inbox_notify_subject("talk", "kai:tty1")
+        # The talk subject itself is unaffected — still constructible and
+        # distinct from anything the (now-rejected) poke construction
+        # could have produced.
+        assert talk_subject == f"{relay._stream_prefix}.talk.notify.kai:tty1"
+
+
+class TestBroadcastPokeCarriesTargetRepo:
+    """MED-8: a cross-repo broadcast's poke subject names the TARGET
+    repo, not the sender's — proven directly against ``deliver()``'s
+    broadcast branch without a live server, by capturing the arguments
+    ``_publish_inbox_notification`` is called with.
+    """
+
+    async def test_cross_repo_broadcast_pokes_the_target_repos_subject(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        relay = NatsRelay(repo_name="sender-repo")
+
+        captured: list[tuple[str, str]] = []
+
+        async def _fake_publish_inbox_notification(repo: str, user: str) -> None:
+            captured.append((repo, user))
+
+        js = AsyncMock()
+
+        async def _fake_ensure_connected() -> tuple[AsyncMock, object]:
+            return js, object()
+
+        monkeypatch.setattr(
+            relay, "_publish_inbox_notification", _fake_publish_inbox_notification
+        )
+        monkeypatch.setattr(relay, "_ensure_connected", _fake_ensure_connected)
+        monkeypatch.setattr(relay, "_publish_talk_notification", AsyncMock())
+
+        await relay.deliver(
+            Message(from_user="kai", to_user="eric", body="cross-repo"),
+            target_repo="target-repo",
+        )
+
+        assert captured == [("target-repo", "eric")]
