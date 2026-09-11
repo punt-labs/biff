@@ -23,6 +23,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
+from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
@@ -1246,20 +1247,30 @@ async def _safe_tick(
         return last_count, last_wall, last_talk
 
 
+class _WakeOutcome(Enum):
+    """Why ``_sleep_or_wake`` returned — the caller's next action differs per kind."""
+
+    SHUTDOWN = auto()  # shutdown fired — the poller must exit
+    EVENT = auto()  # wake_event fired before the timeout — real activity
+    TIMEOUT = auto()  # neither fired — interval/fallback simply elapsed
+
+
 async def _sleep_or_wake(
     *,
     interval: float,
     shutdown: asyncio.Event | None,
     wake_event: asyncio.Event,
-) -> bool:
+) -> _WakeOutcome:
     """Sleep up to *interval*, returning early on a wake or shutdown signal.
 
-    Returns ``True`` when *shutdown* fired (the caller should exit);
-    ``False`` otherwise, whether *wake_event* fired or *interval* simply
-    elapsed — the caller can't tell which and doesn't need to, since
-    either way it is time to check for work. Clears *wake_event* on every
-    return so a wake this call already consumed cannot immediately
-    re-trigger the next one.
+    Distinguishing :attr:`_WakeOutcome.EVENT` from
+    :attr:`_WakeOutcome.TIMEOUT` (rather than collapsing both into "not
+    shutdown," as an earlier version did) lets the caller tell "there is
+    real activity to react to" apart from "nothing happened, this was
+    just the liveness backstop" — see ``poll_inbox``'s own use, which
+    must not run its periodic tick work on a bare disabled-interval
+    fallback wake. Clears *wake_event* on every return so a wake this
+    call already consumed cannot immediately re-trigger the next one.
 
     ``interval <= 0`` disables the fast periodic cadence, but does NOT
     wait indefinitely: it falls back to
@@ -1282,7 +1293,7 @@ async def _sleep_or_wake(
     if shutdown is not None:
         waiters.append(asyncio.ensure_future(shutdown.wait()))
     try:
-        await asyncio.wait(
+        done, _pending = await asyncio.wait(
             waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
         )
     finally:
@@ -1290,7 +1301,11 @@ async def _sleep_or_wake(
             if not task.done():
                 task.cancel()
     wake_event.clear()
-    return shutdown is not None and shutdown.is_set()
+    if shutdown is not None and shutdown.is_set():
+        return _WakeOutcome.SHUTDOWN
+    if done:  # a waiter completed before the timeout — must be wake_event
+        return _WakeOutcome.EVENT
+    return _WakeOutcome.TIMEOUT
 
 
 async def poll_inbox(
@@ -1376,39 +1391,51 @@ async def poll_inbox(
 
     try:
         while shutdown is None or not shutdown.is_set():
-            if await _sleep_or_wake(
+            outcome = await _sleep_or_wake(
                 interval=interval, shutdown=shutdown, wake_event=wake_event
-            ):
-                return  # Shutdown requested
-
-            # Transition: active → napping (connection stays open)
-            if not tracker.napping and tracker.idle_seconds() > idle_threshold:
-                tracker.enter_nap()
-
-            # Napping: skip only the expensive relay poll on a cheap nap tick
-            # (the KV watcher is primary for wall).  The SUB reconciles below
-            # still run — a background wedge teardown (the heartbeat loop's
-            # _tracked → _force_reconnect) can advance connection_generation
-            # *during* the nap, independent of this poller, and orphan the
-            # always-on SUBs on the dead client.  Gating the reconcile behind
-            # this skip would drop an unsolicited invite (or a message poke)
-            # to the idle agent until the nap ends.  Reconcile is a cheap
-            # no-op — a generation compare, no relay call — when nothing
-            # changed.
-            cheap_nap = (
-                tracker.napping and tracker.seconds_since_nap_poll() < nap_interval
             )
-            if not cheap_nap:
-                last_count, last_wall, last_talk = await _safe_tick(
-                    mcp,
-                    state,
-                    last_count,
-                    last_wall,
-                    last_talk,
-                    gate=gate,
+            if outcome is _WakeOutcome.SHUTDOWN:
+                return
+
+            # A TIMEOUT outcome at a disabled interval is purely the
+            # liveness backstop _sleep_or_wake documents — it exists only
+            # to keep the SUB reconcile below alive, not to resurrect the
+            # periodic tick work interval<=0 is supposed to have turned
+            # off (wall re-render, invite expiry, the unread backstop).
+            # At interval>0 every TIMEOUT is the normal periodic tick and
+            # runs it as always; only the disabled-interval fallback is
+            # special-cased.
+            run_tick_work = not (interval <= 0 and outcome is _WakeOutcome.TIMEOUT)
+
+            if run_tick_work:
+                # Transition: active → napping (connection stays open)
+                if not tracker.napping and tracker.idle_seconds() > idle_threshold:
+                    tracker.enter_nap()
+
+                # Napping: skip only the expensive relay poll on a cheap nap
+                # tick (the KV watcher is primary for wall).  The SUB
+                # reconciles below still run — a background wedge teardown
+                # (the heartbeat loop's _tracked → _force_reconnect) can
+                # advance connection_generation *during* the nap, independent
+                # of this poller, and orphan the always-on SUBs on the dead
+                # client.  Gating the reconcile behind this skip would drop
+                # an unsolicited invite (or a message poke) to the idle
+                # agent until the nap ends.  Reconcile is a cheap no-op — a
+                # generation compare, no relay call — when nothing changed.
+                cheap_nap = (
+                    tracker.napping and tracker.seconds_since_nap_poll() < nap_interval
                 )
-                if tracker.napping:
-                    tracker.record_nap_poll()
+                if not cheap_nap:
+                    last_count, last_wall, last_talk = await _safe_tick(
+                        mcp,
+                        state,
+                        last_count,
+                        last_wall,
+                        last_talk,
+                        gate=gate,
+                    )
+                    if tracker.napping:
+                        tracker.record_nap_poll()
 
             # Keep the always-on SUBs bound to the live client — AFTER the
             # tick, not before. The tick's relay calls are what can trigger the

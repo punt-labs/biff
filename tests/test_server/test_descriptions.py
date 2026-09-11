@@ -1058,6 +1058,70 @@ class TestPollInbox:
 
         assert subscribe_calls > 2  # reconcile ran and rebound both SUBs
 
+    async def test_disabled_interval_fallback_skips_tick_work(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare fallback-timeout wake at ``interval<=0`` must not run the
+        periodic tick work (``get_wall``, ``get_unread_summary``) — only a
+        real event wake (a poke) should. The SUB reconcile must still run
+        on every fallback wake regardless — proven here by forcing a
+        client discard partway through and confirming the stranded SUBs
+        get rebound anyway, at the same time as confirming zero tick-work
+        calls throughout.
+        """
+        monkeypatch.setattr(
+            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
+        )
+        nc = AsyncMock()
+        subscribe_calls = 0
+
+        async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
+            del subject, cb
+            nonlocal subscribe_calls
+            subscribe_calls += 1
+            return AsyncMock()
+
+        nc.subscribe = AsyncMock(side_effect=fake_subscribe)
+
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.connection_generation = 0
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
+        relay.inbox_notify_subject = MagicMock(
+            return_value="biff._test-server.notify.kai"
+        )
+        relay.get_wall = AsyncMock(return_value=None)
+        relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
+
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        mcp = create_server(state)
+        task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        assert subscribe_calls == 2  # talk + inbox-notify, startup bind
+
+        # A wedge teardown/give-up close, independent of this poller.
+        relay.connection_generation = 1
+        await asyncio.sleep(self._FAST_INTERVAL * 10)
+
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        # The SUB reconcile ran on the fallback timer and rebound both
+        # stranded SUBs — proving the timer itself is alive — but
+        # relay.get_wall/get_unread_summary were never called at all:
+        # no periodic tick work snuck in alongside it.
+        assert subscribe_calls > 2  # reconcile ran and rebound both SUBs
+        relay.get_wall.assert_not_awaited()
+        relay.get_unread_summary.assert_not_awaited()
+
     async def test_cheap_nap_tick_reconciles_inbox_notify_generation_bump(
         self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
