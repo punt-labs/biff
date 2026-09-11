@@ -539,3 +539,47 @@ transient error.
   every always-on-SUB kind already shared structurally;
   `_InboxPokeGate` uses `time.monotonic()` instead of wall-clock time, so a
   backward NTP step cannot suspend the backstop.
+
+## 7. The client-wake gap: a refreshed description reaching the harness is not the same as reaching the model
+
+The scope line at the top of this document states the client-wake model —
+"`tools/list_changed` on next activity" — as an unchanged given. A live canary of the completed
+push build (§6) found that assumption does not hold in current Claude Code,
+and the gap sits entirely on the client side of the boundary this design
+controls.
+
+**What was observed.** `~/.punt-labs/biff/logs/biff.log` for the canary
+session shows the full server-side mechanism working exactly as designed:
+`CallToolRequest` at 06:03:09 (the message arrives), then
+`ListToolsRequest` at 06:03:20 — Claude Code re-fetched the tool list within
+eleven seconds of the wake poke, proving the `tools/list_changed`
+notification was sent and received. But the message sat unread for 3+
+minutes afterward. The status bar (`biff statusline`, an independent
+read of the same per-session unread file) correctly showed `count=1` the
+entire time. `/biff:read`'s no-arg check (`plugin/commands/read.md` §C,
+pre-fix) gated on the live `read_messages` tool *description* containing
+`unread)` — the exact text the harness had just re-fetched — and it
+no-opped every time it ran, because the model's view of that description
+was still the session-start snapshot. Nothing in Claude Code re-presents a
+refreshed tool description to the model mid-session; the model only sees a
+description's current text on its next fresh read of the tool list, which
+does not happen just because `ListToolsRequest` fired on the wire.
+
+**Why this is a client-side gap, not a bug in the mechanism above.** Every
+piece of §1-§6 is verified working by the same log line: the notification
+was sent, and the harness re-fetched. The gap is that "the harness has the
+latest tool list" and "the model can see the latest tool list" are two
+different facts, and only the first one is true here. This design's
+scope was deliberately the server-side surfacing path; this section
+exists because the client-wake half of that scope statement turned out to
+be false under test, not because anything upstream of it needs to change.
+
+**Mitigation.** `/biff:read`'s no-arg check no longer depends on the tool
+description being visible to the model at all for the mail half of its
+gate. It reads `biff statusline`'s per-session unread file directly — a
+plain file read via a different binary invocation, with no dependency on
+the MCP tool list or its staleness. The talk half of the gate has no
+equivalent ground-truth source (statusline's talk signal is an ephemeral
+display-queue item, not a persistent count) and keeps the
+description-based check, with the same staleness exposure this section
+describes — see `plugin/commands/read.md` §C for the full rationale.
