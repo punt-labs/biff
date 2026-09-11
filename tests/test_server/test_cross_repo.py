@@ -270,6 +270,18 @@ class TestValidateRepo:
         with pytest.raises(ValueError, match="Invalid repo name"):
             NatsRelay._validate_repo("")
 
+    def test_rejects_colon(self) -> None:
+        """Defense-in-depth alignment with ``_validate_user``: ``:`` is not
+        a demonstrated NATS subject-collision vector for repo names, but
+        rejecting it here matches the rejected set every sibling
+        validator uses, so the family never disagrees on what an escape
+        character is.
+        """
+        from biff.nats_relay import NatsRelay
+
+        with pytest.raises(ValueError, match="Invalid repo name"):
+            NatsRelay._validate_repo("repo:name")
+
 
 class TestSessionRepoBackfill:
     """get_or_create_session backfills repo on pre-DES-030 sessions."""

@@ -1183,8 +1183,16 @@ class NatsRelay:
 
     @staticmethod
     def _validate_repo(repo: str) -> str:
-        """Reject repo names that could escape NATS subject boundaries."""
-        if not repo or any(c in repo for c in (".", "*", ">", " ")):
+        """Reject repo names that could escape NATS subject boundaries.
+
+        ``:`` is not a NATS subject token separator, so no escape is
+        demonstrated for it here the way it is for ``_validate_user``'s
+        disjointness from ``talk_notify_subject``'s ``user:tty`` shape --
+        this is a defense-in-depth alignment with that rejected set, so
+        a future subject that does key on repo names the same way is not
+        the one place the family's rejected-character sets disagree.
+        """
+        if not repo or any(c in repo for c in (".", "*", ">", " ", ":")):
             msg = f"Invalid repo name: {repo!r}"
             raise ValueError(msg)
         return repo
