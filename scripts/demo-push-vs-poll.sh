@@ -10,14 +10,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TRANSCRIPT_FILE="${REPO_ROOT}/tests/transcripts/test_push_beats_poll_against_real_relay.txt"
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "Error: docker is not installed or not on PATH." >&2
-  echo "This demo builds and runs the real biff-relay image, which needs Docker." >&2
+  echo "Error: docker is not installed on this host — this demo needs Docker to build and run the real biff-relay image." >&2
   exit 1
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "Error: the Docker daemon is not reachable (docker info failed)." >&2
-  echo "Start Docker and re-run this script." >&2
+  echo "Error: the Docker daemon is not reachable (docker info failed) — start Docker and re-run this script." >&2
   exit 1
 fi
 
