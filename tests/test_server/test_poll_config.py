@@ -56,6 +56,23 @@ class TestSetPollInterval:
         assert "disabled" in result.lower()
         assert "Restart" in result
 
+    async def test_disable_response_states_push_still_works(
+        self, tmp_path: Path
+    ) -> None:
+        """The poller task always runs now — the ``n`` response must say push
+        detection survives, and must name what actually degrades (wall
+        render, invite expiry, backstop, wedge detection), not claim
+        everything still works uniformly.
+        """
+        state = _make_state(tmp_path)
+        fn = await _get_tool_fn(state, "set_poll_interval")
+        result = await fn(interval="n")
+        assert "push" in result.lower()
+        assert "wall" in result.lower()
+        assert "invite" in result.lower()
+        assert "backstop" in result.lower()
+        assert "keepalive" in result.lower()
+
     async def test_invalid_interval(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
         fn = await _get_tool_fn(state, "set_poll_interval")
@@ -116,6 +133,36 @@ class TestSetPollIntervalDescription:
         assert tool is not None
         desc = tool.description or ""
         assert "keepalive" in desc.lower()
+
+    async def test_description_states_the_backstop_ratio_honestly(
+        self, tmp_path: Path
+    ) -> None:
+        """The description must name the actual 15x backstop ratio, not just
+        say "recomputed on this cadence" — that phrasing implied the
+        backstop fires every *interval*, when it actually fires every
+        ``nap_interval_for(interval)`` (15x).
+        """
+        state = _make_state(tmp_path)
+        mcp = create_server(state)
+        tool = await mcp.get_tool("set_poll_interval")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "15x" in desc
+
+    async def test_description_states_push_survives_disabling(
+        self, tmp_path: Path
+    ) -> None:
+        """The poller task now always runs — the description must say push
+        detection keeps working even when the interval is disabled, not
+        just that push is real-time "regardless of this value" in the
+        abstract while n silently amputated it.
+        """
+        state = _make_state(tmp_path)
+        mcp = create_server(state)
+        tool = await mcp.get_tool("set_poll_interval")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "keeps working" in desc.lower()
 
 
 class TestGetPollStatus:
