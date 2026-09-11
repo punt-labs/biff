@@ -7311,3 +7311,77 @@ operator knob on the wedge-detection window); driving the wedge counter off
 subscription silence (a silent SUB is indistinguishable from a quiet one —
 `_tracked` measures request round-trips, and `talkSubGen`-style tracking
 exists precisely because silence is not evidence).
+
+### Local-review fix round (2026-09-11, missions m-2026-09-11-016)
+
+A five-agent review sweep (code-reviewer, silent-failure-hunter,
+pr-test-analyzer, type-design-analyzer, alex-chen) run after the
+implementation and demonstration missions closed found defects that two
+specialist evaluation rounds had missed — three of them proven by runnable
+repro before any fix was written. The corrections below are now part of this
+design; each shipped with a regression test that was mutation-verified
+(defect re-introduced, test observed failing, fix restored).
+
+1. **The gate is marked from the talk-SUB wake path.** Decision 1's premise
+   "targeted messages already ride a wake poke" was written against the
+   unconditional per-tick recompute and silently stopped holding once the
+   recompute became poke-gated: the talk-notify poke woke the poller but
+   nothing marked the gate, so targeted `/write` detection fell from
+   ~`poll_interval` to the backstop — slower than main. The talk-SUB
+   callback now marks the inbox gate when the received frame is a wake
+   poke. No second poke publish on the targeted branch (that would wake
+   every session of the user in the repo — wider fan-out than needed).
+2. **The companion gets its own SUB.** `SubKind` gained a third constructor,
+   `inboxNotifyCompanion` (the family's designed extension point); when a
+   companion session exists the poller binds a third generation-tracked
+   subscription on the companion user's poke subject. Without it, the
+   dual-session human companion's broadcasts — polled every 2 s before this
+   design — fell to the backstop. Per-kind stranded-SUB liveness re-proven
+   for all three kinds (probcli CTL, TRUE, independently re-run by the
+   evaluator).
+3. **The poller runs even at interval 0.** `set_poll_interval n` previously
+   killed the entire push subsystem (both always-on SUBs lived inside the
+   poller task, created only when `poll_interval > 0`) while the tool text
+   promised push survived. The poller task is now unconditional; at
+   interval ≤ 0 it hosts the SUBs and the poke-driven recompute with the
+   periodic tick work (wall render, invite expiry, backstop, wedge cadence)
+   gated off, and the tool text states exactly what degrades. The tick
+   sleep is also interruptible (event-based), so push-to-refresh latency no
+   longer scales with the configured interval.
+4. **A consumed poke survives a failed recompute.** `refresh_read_messages`
+   reports fetch success to the tick, which re-marks the gate on failure —
+   a poke followed by a transient relay error retries next tick instead of
+   freezing the count for a backstop window (the biff-brn class). Both
+   ordering properties (mid-refresh poke preserved; failed fetch re-marked)
+   are pinned by tests that drive `_active_tick` itself — the evaluator
+   proved by mutation that gate-level tests alone could not catch a swapped
+   call-site, so the pins live at the call site.
+5. **Pokes are bounded and terminal-close-safe.** `_live_nc_or_reconnect`'s
+   reconnect fall-through is wrapped in a named timeout (the pre-fix path
+   could dial + re-provision for ~20 s inside `deliver()` after the durable
+   publish — the "never blocks" comment was false, proven by repro), and
+   `close()` sets a terminal flag so a late fire-and-forget poke cannot
+   resurrect a deliberately-closed relay with a connection nothing owns.
+6. **Subject disjointness is enforced, not asserted.** `_validate_user` now
+   rejects `:` (previously only `_validate_tty` did), making the
+   talk/broadcast poke-subject disjointness argument in this entry's
+   round-2 correction a validator-enforced invariant rather than prose —
+   the docstring had claimed enforcement that did not exist.
+7. **Type-design set.** `SubscriptionBinding.handle` is a one-method
+   `_Unsubscribable` Protocol (three `type: ignore` sites deleted); the
+   `TalkSubscription`/`InboxNotifySubscription` aliases are gone (forbidden
+   alias pattern, zero checker enforcement); `_InboxPokeGate` exposes one
+   atomic `claim()` with the backstop in the constructor and
+   `time.monotonic()` as its clock; `NotificationTracker`'s count derives
+   from its timestamp list. Deferred by ruling: renaming `TalkNotifyLatch`
+   to a kind-generic name (rides the next mission touching
+   `talk_latch.py`).
+
+**Measured result** (tier 3c, real nats-server, three consistent runs +
+two independent reproductions): broadcast detection latency push ~205-218 ms
+vs poll ~2.9-3.0 s against a 4.5 s backstop; idle unread `stream_info` load
+4 calls per 10 s window (backstop-only) vs 33 at the old per-tick rate. The
+tier 3b demonstration against the real `biff-relay` image rides CI
+(`subprocess-tests.yml` builds the image from `docker/` and runs
+`-m nats_docker` per PR); `scripts/demo-push-vs-poll.sh` is the one-command
+operator demo on any Docker-capable host.
