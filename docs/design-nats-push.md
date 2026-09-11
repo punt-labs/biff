@@ -1,9 +1,16 @@
 # Design: NATS Push for Message/Talk Description Refresh (biff-5ex)
 
-Status: **proposed — design only, not implemented**
+Status: **implemented**, including a consolidated fix round (§6) that
+corrected two latency regressions a five-agent local-review sweep found
+against the original implementation of this design.
 Scope: the server-side surfacing path (`set_poll_interval` → tool-description
 mutation → `tools/list_changed`). The model-side `/biff:read` cron and the
 client-wake model (`tools/list_changed` on next activity) are unchanged.
+
+Sections 1-5 below are the original pre-implementation design and are kept
+as written — they remain an accurate description of the mechanism's shape.
+§6 documents where the first implementation diverged from that shape under
+review and how the fix round closed each gap.
 
 ## 1. The current path
 
@@ -420,3 +427,107 @@ proven state space, not just prose:
    generalization for the next always-on SUB. This is a design-time call
    for jms, not an implementation detail rmh should decide unilaterally,
    since it changes `Connection`'s state schema shape.
+
+## 6. Fix round: latency regressions found by review, and their closure
+
+The first implementation (missions m-009/m-014) built §2's mechanism as
+designed but, under a five-agent local-review sweep run afterward, was found
+to have quietly regressed two of §1's "already push-driven" paths back to
+poll-only behavior, plus several narrower correctness and type-design gaps.
+This section documents each gap and the fix, so a future reader does not
+have to reconstruct the reasoning from the diff alone.
+
+### Gap 1: targeted messages stopped marking the poke gate
+
+§1 established that a targeted (`user:tty`) message already rides a wake
+poke on the talk-notify subject (`_publish_talk_notification`), not a
+second poke. The first implementation's poke-gated `_active_tick` (§2,
+"One push event → exactly one refresh") correctly gated the unread
+recompute behind `_InboxPokeGate`, but `_on_talk_msg` — the talk SUB's
+callback — only called `state.activity.wake()` for a wake poke, never
+`gate.mark()`. Once the recompute became gate-conditional instead of
+unconditional-per-tick, a targeted message's detection latency silently
+fell from "next tick" to "next backstop interval" (up to `nap_interval_for
+(poll_interval)`, 15x the configured interval) — a real regression against
+both the pre-biff-5ex baseline and this design's own stated intent.
+
+Fix: `_on_talk_msg` now classifies each frame via
+`TalkNotification.from_payload(frame).is_wake_poke` and calls `gate.mark()`
+for a wake poke specifically — never for a genuine talk frame (invite,
+message, end, withdraw), where marking the inbox gate would be a spurious
+unread recompute unrelated to what actually changed.
+
+### Gap 2: a dual session's companion had no inbox-notify SUB at all
+
+§2 designed one inbox-notify SUB per session, bound to
+`inbox_notify_subject(repo, state.config.user)`. A dual session (DES-039)
+has a second identity, `state.companion`, whose broadcast messages land on
+`inbox_notify_subject(repo, state.companion.user)` — a subject the single
+SUB never subscribed to. A broadcast addressed to the companion therefore
+had zero push signal, regressing it to the backstop exactly as gap 1 did
+for targeted messages, but for a different reason (a missing subscription,
+not a missing gate-mark).
+
+Fix: `poll_inbox` opens a second, independent inbox-notify SUB — same
+callback shape, same gate, bound to `state.companion.user` — whenever
+`state.companion is not None`. `subscribe_inbox_notify` and
+`_reconcile_inbox_notify_sub` gained a `user` parameter so the *same*
+functions serve both bindings; no companion-specific code path was added.
+`docs/nats-relay.tex`'s `SubKind` free type gained a third constructor,
+`inboxNotifyCompanion`, to keep the two live SUBs' generation-tracking
+distinguishable in the model — every operation already quantified over
+`SubKind` needed no further change (see the spec's own commentary at the
+`SubKind` declaration).
+
+### Gap 3: `set_poll_interval n` silently amputated all push
+
+The poller task itself — which hosts every always-on SUB — was only
+created when `poll_interval > 0`. Disabling polling therefore disabled
+talk, targeted, broadcast, and companion push alike, while the tool's own
+description claimed messages and talk "arrive in real time via NATS push
+regardless of this value." Fix: the poller task now always runs. Its
+sleep-or-wake step is a shared `asyncio.Event` rather than a plain
+`asyncio.sleep(interval)`, so a wake (talk activity, a wake poke, or a
+broadcast poke) interrupts the wait immediately at any interval, including
+`interval <= 0` (which waits indefinitely on the event alone, with no
+periodic timeout). What actually still degrades at `interval <= 0` is the
+*periodic* work that has no push signal of its own — the wall countdown's
+re-render, stale talk-invite expiry, and the backstop — because with no
+periodic wake, that work only runs on whatever tick a poke happens to
+produce. `set_poll_interval`'s tool description and its `n` response text
+were rewritten to state this distinction honestly, including the real 15x
+backstop ratio the original text glossed over as "on this cadence."
+
+### Gap 4: the poke could be clobbered by a same-tick failed refresh
+
+`_InboxPokeGate`'s two-method form (`should_recompute` / `recompute_done`)
+let a caller clear the poke and only later discover the refresh it gated
+had failed, with no way to signal "try again next tick" back to the gate.
+Collapsed into one atomic `claim()`: it clears the poke and resets the
+backstop clock in the same synchronous step as the check, before the
+caller's own `await` on the refresh — so a poke arriving mid-refresh
+survives to the next tick rather than being silently absorbed — and
+`refresh_read_messages` now reports fetch success/failure back to its
+caller so `_active_tick` can call `gate.mark()` again on a failure,
+re-arming the very next tick instead of waiting out a full backstop for a
+transient error.
+
+### Narrower findings closed in the same round
+
+- `_live_nc_or_reconnect`'s fall-through to a fresh dial was unbounded
+  inside a caller documented as best-effort and near-instant; wrapped in
+  `asyncio.timeout(_NOTIFY_RECONNECT_TIMEOUT)`.
+- `NatsRelay` gained a terminal `_closed` flag, set only by `close()`
+  (never the reversible `disconnect()`), checked by
+  `_live_nc_or_reconnect` so a poke firing after close cannot resurrect a
+  connection nothing will ever close again.
+- `_validate_user` now rejects `:` — `inbox_notify_subject`'s disjointness
+  from `talk_notify_subject` was already documented as depending on a bare
+  user never containing one, but nothing enforced it.
+- Type-design cleanup: `SubscriptionBinding.handle` is a small
+  `_Unsubscribable` Protocol instead of `object` with `type: ignore`
+  comments at each call site; the `TalkSubscription`/`InboxNotifySubscription`
+  aliases were deleted in favor of the one `SubscriptionBinding` NamedTuple
+  every always-on-SUB kind already shared structurally;
+  `_InboxPokeGate` uses `time.monotonic()` instead of wall-clock time, so a
+  backward NTP step cannot suspend the backstop.
