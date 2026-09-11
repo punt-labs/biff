@@ -7385,3 +7385,23 @@ tier 3b demonstration against the real `biff-relay` image rides CI
 (`subprocess-tests.yml` builds the image from `docker/` and runs
 `-m nats_docker` per PR); `scripts/demo-push-vs-poll.sh` is the one-command
 operator demo on any Docker-capable host.
+
+### Outcome
+
+Broadcast and targeted message detection are push-driven for every session
+identity — primary, companion, and (targeted) companion session — with the
+poll reduced to a backstop. Measured on a real relay: detection latency
+~205–218 ms (from ~2.9 s poll-bounded), idle unread `stream_info` traffic
+4 calls per 10 s window versus 33 per the old per-tick rate, zero new
+JetStream consumers or stream load (DES-015 preserved), and the DES-042
+wedge-detection cadence intact. The relay carries three generation-tracked
+always-on subscription kinds (`talk`, `inboxNotify`,
+`inboxNotifyCompanion`) plus a lazy companion talk-notify binding, all
+reconciled by the poller and proven live (per-kind stranded-SUB liveness,
+probcli CTL). Disabling the poll interval no longer disables push: the
+poller always runs, hosting the SUBs with a bounded reconcile-only
+fallback, and the periodic work alone stops. Four external-review cycles
+(five local agents, Bugbot ×2, Copilot, Qodo, a security automation)
+converged to zero unaddressed findings; every accepted finding shipped
+with a mutation-verified regression test. Shipped on PR #428, merge held
+for operator review.
