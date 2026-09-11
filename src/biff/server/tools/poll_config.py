@@ -48,14 +48,18 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         name="set_poll_interval",
         description=(
             "Set the background poller's cadence. Messages and talk arrive "
-            "in real time via NATS push regardless of this value — it now "
-            "governs the wall-countdown render rate, stale talk-invite "
-            "expiry, the unread-count backstop (recomputed on this cadence "
-            "even if a push notification is missed), and the connection "
-            "wedge-detection window. Accepts {N}s or {N}m format (e.g. 2s, "
-            "30s, 5m), or n (disable — also widens wedge detection to the "
-            "~60-80s keepalive floor). Persisted to config. Restart "
-            "required to take effect."
+            "in real time via NATS push regardless of this value — the "
+            "poller keeps its always-on subscriptions and poke-driven "
+            "recompute running even when disabled (see n, below). This "
+            "value instead governs the wall-countdown render rate, stale "
+            "talk-invite expiry, the unread-count backstop (recomputed "
+            "roughly every 15x this interval even if a push notification "
+            "is missed), and the connection wedge-detection window. "
+            "Accepts {N}s or {N}m format (e.g. 2s, 30s, 5m), or n (disable "
+            "— push detection keeps working, but the wall countdown stops "
+            "re-rendering, stale invites stop expiring, the backstop is "
+            "gone, and wedge detection widens to the ~60-80s keepalive "
+            "floor). Persisted to config. Restart required to take effect."
         ),
     )
     async def set_poll_interval(interval: str) -> str:
@@ -82,10 +86,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         if parsed is None:
             return (
-                "Polling disabled — messages and talk still arrive via NATS "
-                "push, but the wall countdown stops re-rendering and wedge "
-                "detection widens to the ~60-80s keepalive floor. Restart "
-                "Claude Code for the change to take effect."
+                "Polling's periodic work is disabled — the wall countdown "
+                "stops re-rendering, stale talk invites stop expiring, "
+                "the unread backstop is gone, and wedge detection widens "
+                "to the ~60-80s keepalive floor. Messages and talk still "
+                "arrive via NATS push: the always-on subscriptions and "
+                "their poke-driven recompute keep running: only the "
+                "periodic safety net around them is gone. Restart Claude "
+                "Code for the change to take effect."
             )
 
         return (

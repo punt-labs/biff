@@ -1334,18 +1334,18 @@ async def _active_lifespan(
 
     shutdown = asyncio.Event()
     poll_interval = state.config.poll_interval
-    poller = (
-        asyncio.create_task(
-            poll_inbox(
-                mcp,
-                state,
-                shutdown=shutdown,
-                interval=poll_interval,
-                nap_interval=nap_interval_for(poll_interval),
-            )
+    # Always on, even at poll_interval <= 0 (HIGH-3): the always-on SUBs and
+    # their poke-driven recompute never depended on a periodic tick, only
+    # the periodic work (wall re-render, invite expiry, backstop) does —
+    # poll_inbox itself degrades that gracefully when interval <= 0.
+    poller: asyncio.Task[None] = asyncio.create_task(
+        poll_inbox(
+            mcp,
+            state,
+            shutdown=shutdown,
+            interval=poll_interval,
+            nap_interval=nap_interval_for(poll_interval),
         )
-        if poll_interval > 0
-        else None
     )
     reaper = asyncio.create_task(_reap_loop(state, shutdown))
     heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
@@ -1357,7 +1357,7 @@ async def _active_lifespan(
             state,
             shutdown,
             reaper,
-            [t for t in [poller, heartbeat, watcher] if t is not None],
+            [poller, heartbeat, watcher],
         )
 
 

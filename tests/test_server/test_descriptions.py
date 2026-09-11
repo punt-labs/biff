@@ -23,8 +23,7 @@ from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
-    InboxNotifySubscription,
-    TalkSubscription,
+    SubscriptionBinding,
     _InboxPokeGate,
     _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
@@ -605,13 +604,17 @@ class TestPollInbox:
         calls = 0
 
         async def flaky_subscribe(
-            state: ServerState, latch: TalkNotifyLatch
-        ) -> TalkSubscription | None:
+            state: ServerState,
+            latch: TalkNotifyLatch,
+            gate: _InboxPokeGate,
+            wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
+            del state, latch, gate, wake_event
             nonlocal calls
             calls += 1
             # LocalRelay has no generation, so _relay_generation is 0 — bind the
             # SUB at 0 so the reconcile leaves it alone once it succeeds.
-            return None if calls == 1 else TalkSubscription(fake_sub, 0)
+            return None if calls == 1 else SubscriptionBinding(fake_sub, 0)
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", flaky_subscribe)
         mcp = create_server(state_with_path)
@@ -643,10 +646,13 @@ class TestPollInbox:
             return gen[0]
 
         async def fake_subscribe(
-            _state: ServerState, _latch: TalkNotifyLatch
-        ) -> TalkSubscription:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding:
             events.append(("subscribe", gen[0]))
-            return TalkSubscription(AsyncMock(), gen[0])
+            return SubscriptionBinding(AsyncMock(), gen[0])
 
         async def fake_tick(
             _mcp: FastMCP[ServerState],
@@ -656,9 +662,8 @@ class TestPollInbox:
             last_talk: tuple[tuple[str, ...], int, str],
             *,
             gate: _InboxPokeGate,
-            nap_interval: float,
         ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
-            del gate, nap_interval
+            del gate
             events.append(("tick", gen[0]))
             if gen[0] == 0:
                 gen[0] = 1  # the tick's relay calls trigger _force_reconnect
@@ -699,14 +704,17 @@ class TestPollInbox:
             return 1  # a background swap advanced the generation past the SUB
 
         async def fake_subscribe(
-            _state: ServerState, _latch: TalkNotifyLatch
-        ) -> TalkSubscription:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding:
             subscribe_calls[0] += 1
             # First call is the startup bind at the pre-swap generation (0, now
             # stale); the cheap-nap reconcile rebinds to the live generation (1).
             bound = 0 if subscribe_calls[0] == 1 else 1
             events.append(("subscribe", bound))
-            return TalkSubscription(AsyncMock(), bound)
+            return SubscriptionBinding(AsyncMock(), bound)
 
         async def fake_tick(
             _mcp: FastMCP[ServerState],
@@ -716,9 +724,8 @@ class TestPollInbox:
             last_talk: tuple[tuple[str, ...], int, str],
             *,
             gate: _InboxPokeGate,
-            nap_interval: float,
         ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
-            del gate, nap_interval
+            del gate
             tick_calls[0] += 1
             return last_count, last_wall, last_talk
 
@@ -896,14 +903,20 @@ class TestPollInbox:
             return 1  # a background swap advanced the generation past the SUB
 
         async def fake_subscribe(
-            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
-        ) -> InboxNotifySubscription:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding:
+            del user
             subscribe_calls[0] += 1
             # First call is the startup bind at the pre-swap generation (0, now
             # stale); the cheap-nap reconcile rebinds to the live generation (1).
             bound = 0 if subscribe_calls[0] == 1 else 1
             events.append(("subscribe", bound))
-            return InboxNotifySubscription(AsyncMock(), bound)
+            return SubscriptionBinding(AsyncMock(), bound)
 
         async def fake_tick(
             _mcp: FastMCP[ServerState],
@@ -913,9 +926,8 @@ class TestPollInbox:
             last_talk: tuple[tuple[str, ...], int, str],
             *,
             gate: _InboxPokeGate,
-            nap_interval: float,
         ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
-            del gate, nap_interval
+            del gate
             return last_count, last_wall, last_talk
 
         monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", fake_subscribe)
@@ -971,6 +983,10 @@ class TestReconcileTalkSub:
             pwd="/test",
         )
 
+    @staticmethod
+    def _gate() -> _InboxPokeGate:
+        return _InboxPokeGate(backstop_interval=1000.0)
+
     async def test_no_resubscribe_when_generation_unchanged(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -981,20 +997,25 @@ class TestReconcileTalkSub:
         accident and the generation check gets right by construction.
         """
         handle = AsyncMock()
-        current = TalkSubscription(handle, generation=3)
+        current = SubscriptionBinding(handle, generation=3)
         calls = 0
 
         async def _sub(
-            _state: ServerState, _latch: TalkNotifyLatch
-        ) -> TalkSubscription | None:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
             nonlocal calls
             calls += 1
-            return TalkSubscription(AsyncMock(), 3)
+            return SubscriptionBinding(AsyncMock(), 3)
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(3))
 
-        result = await _reconcile_talk_sub(state, current, _test_latch())
+        result = await _reconcile_talk_sub(
+            state, current, _test_latch(), self._gate(), asyncio.Event()
+        )
 
         assert result is current
         assert calls == 0
@@ -1009,18 +1030,25 @@ class TestReconcileTalkSub:
         handle is still non-None, so only the generation comparison fires.
         """
         stale = AsyncMock()
-        fresh = TalkSubscription(AsyncMock(), 4)
+        fresh = SubscriptionBinding(AsyncMock(), 4)
 
         async def _sub(
-            _state: ServerState, _latch: TalkNotifyLatch
-        ) -> TalkSubscription | None:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
 
         result = await _reconcile_talk_sub(
-            state, TalkSubscription(stale, 3), _test_latch()
+            state,
+            SubscriptionBinding(stale, 3),
+            _test_latch(),
+            self._gate(),
+            asyncio.Event(),
         )
 
         assert result is fresh
@@ -1030,17 +1058,22 @@ class TestReconcileTalkSub:
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A None handle (failed initial subscribe) is retried."""
-        fresh = TalkSubscription(AsyncMock(), 1)
+        fresh = SubscriptionBinding(AsyncMock(), 1)
 
         async def _sub(
-            _state: ServerState, _latch: TalkNotifyLatch
-        ) -> TalkSubscription | None:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
 
-        result = await _reconcile_talk_sub(state, None, _test_latch())
+        result = await _reconcile_talk_sub(
+            state, None, _test_latch(), self._gate(), asyncio.Event()
+        )
 
         assert result is fresh
 
@@ -1055,15 +1088,22 @@ class TestReconcileTalkSub:
         stale = AsyncMock()
 
         async def _sub(
-            _state: ServerState, _latch: TalkNotifyLatch
-        ) -> TalkSubscription | None:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
             return None
 
         monkeypatch.setattr(_descriptions, "subscribe_talk", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(5))
 
         result = await _reconcile_talk_sub(
-            state, TalkSubscription(stale, 2), _test_latch()
+            state,
+            SubscriptionBinding(stale, 2),
+            _test_latch(),
+            self._gate(),
+            asyncio.Event(),
         )
 
         assert result is None
@@ -1090,21 +1130,21 @@ class TestInboxPokeGate:
 
         Replaces the old ``last_count = -1`` "force initial refresh" idiom.
         """
-        gate = _InboxPokeGate()
-        assert gate.should_recompute(backstop_interval=1000.0) is True
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        assert gate.claim() is True
 
     def test_no_recompute_before_backstop_with_no_poke(self) -> None:
         """An unpoked tick within the backstop window does not recompute."""
-        gate = _InboxPokeGate()
-        gate.recompute_done()  # consume the initial forced recompute
-        assert gate.should_recompute(backstop_interval=1000.0) is False
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute
+        assert gate.claim() is False
 
     def test_poke_forces_recompute_regardless_of_backstop(self) -> None:
         """A marked poke recomputes immediately, even mid-backstop-window."""
-        gate = _InboxPokeGate()
-        gate.recompute_done()
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()
         gate.mark()
-        assert gate.should_recompute(backstop_interval=1000.0) is True
+        assert gate.claim() is True
 
     def test_backstop_recomputes_with_no_poke(self) -> None:
         """The backstop cadence fires a recompute even with no poke at all.
@@ -1113,16 +1153,41 @@ class TestInboxPokeGate:
         that never arrives still gets picked up within one backstop
         interval instead of stalling forever.
         """
-        gate = _InboxPokeGate()
-        gate.recompute_done()
-        assert gate.should_recompute(backstop_interval=0.0) is True
+        gate = _InboxPokeGate(backstop_interval=0.0)
+        gate.claim()
+        assert gate.claim() is True
 
-    def test_recompute_done_clears_poke_and_resets_clock(self) -> None:
-        """recompute_done() clears the poke flag and restarts the backstop clock."""
-        gate = _InboxPokeGate()
+    def test_claim_clears_poke_and_resets_clock(self) -> None:
+        """A successful ``claim()`` clears the poke flag and restarts the clock."""
+        gate = _InboxPokeGate(backstop_interval=1000.0)
         gate.mark()
-        gate.recompute_done()
-        assert gate.should_recompute(backstop_interval=1000.0) is False
+        assert gate.claim() is True  # consumes both the poke and the initial force
+        assert gate.claim() is False
+
+    def test_mark_after_claim_is_preserved_for_next_claim(self) -> None:
+        """HIGH-4 property (a): a poke that arrives after ``claim()`` clears
+        the flag (e.g. mid-refresh, while the caller is awaiting) is not
+        lost — it survives to be picked up by the next ``claim()``.
+
+        ``claim()`` clears ``_poked`` synchronously before returning, so
+        nothing the caller does with the returned ``True`` (including
+        awaiting a slow refresh) can race a concurrent ``mark()``.
+        """
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial force; simulates "refresh in flight"
+        gate.mark()  # a poke arrives while that refresh is still running
+        assert gate.claim() is True  # not clobbered — the next tick sees it
+
+    def test_mark_after_failed_refresh_re_arms_retry(self) -> None:
+        """HIGH-4 property (b): re-marking after a failed refresh makes the
+        very next ``claim()`` due again, instead of waiting out a full
+        backstop interval for a transient failure.
+        """
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial force
+        # Simulate _active_tick's re-mark-on-failure branch.
+        gate.mark()
+        assert gate.claim() is True
 
 
 class TestSubscribeTalkLatch:
@@ -1155,16 +1220,20 @@ class TestSubscribeTalkLatch:
     ) -> None:
         state, relay = self._nats_state(tmp_path)
         latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        wake_event = asyncio.Event()
 
         with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
-            assert await subscribe_talk(state, latch) is None  # onset — WARNING
-            assert await subscribe_talk(state, latch) is None  # retry — DEBUG
+            # onset — WARNING
+            assert await subscribe_talk(state, latch, gate, wake_event) is None
+            # retry — DEBUG
+            assert await subscribe_talk(state, latch, gate, wake_event) is None
 
             warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
             assert len(warnings) == 1  # not one per tick
 
             relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
-            sub = await subscribe_talk(state, latch)
+            sub = await subscribe_talk(state, latch, gate, wake_event)
 
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
@@ -1198,51 +1267,83 @@ class TestSubscribeInboxNotify:
 
     async def test_returns_none_for_non_nats_relay(self, state: ServerState) -> None:
         """LocalRelay (the default test relay) has no push mechanism."""
-        gate = _InboxPokeGate()
-        result = await subscribe_inbox_notify(state, _test_latch(), gate)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        result = await subscribe_inbox_notify(
+            state, _test_latch(), gate, asyncio.Event(), user="kai"
+        )
         assert result is None
 
     async def test_subscribes_on_the_repo_scoped_subject(self, tmp_path: Path) -> None:
         state, relay = self._nats_state(tmp_path)
         relay.get_nc = AsyncMock(return_value=AsyncMock())
-        gate = _InboxPokeGate()
-        sub = await subscribe_inbox_notify(state, _test_latch(), gate)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        sub = await subscribe_inbox_notify(
+            state, _test_latch(), gate, asyncio.Event(), user="kai"
+        )
         assert sub is not None
         assert sub.generation == 1
         relay.inbox_notify_subject.assert_called_once_with("_test-server", "kai")
+
+    async def test_subscribes_on_a_different_users_subject_for_companion(
+        self, tmp_path: Path
+    ) -> None:
+        """CRITICAL-2: the *user* argument, not always ``state.config.user``,
+        decides the subject — the companion binding passes the companion's
+        user so its broadcast pokes land on a subject this session actually
+        subscribes to.
+        """
+        state, relay = self._nats_state(tmp_path)
+        relay.get_nc = AsyncMock(return_value=AsyncMock())
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        sub = await subscribe_inbox_notify(
+            state, _test_latch(), gate, asyncio.Event(), user="eric"
+        )
+        assert sub is not None
+        relay.inbox_notify_subject.assert_called_once_with("_test-server", "eric")
 
     async def test_callback_marks_gate_and_wakes(self, tmp_path: Path) -> None:
         """The callback marks the poke gate and wakes the poller — nothing else."""
         state, relay = self._nats_state(tmp_path)
         nc = AsyncMock()
         relay.get_nc = AsyncMock(return_value=nc)
-        gate = _InboxPokeGate()
-        gate.recompute_done()  # consume the initial forced recompute
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute
+        wake_event = asyncio.Event()
         state.activity.enter_nap()
 
-        await subscribe_inbox_notify(state, _test_latch(), gate)
+        await subscribe_inbox_notify(state, _test_latch(), gate, wake_event, user="kai")
         callback = nc.subscribe.call_args.kwargs["cb"]
         await callback(object())
 
-        assert gate.should_recompute(backstop_interval=1000.0) is True
+        assert gate.claim() is True
         assert state.activity.napping is False  # wake() exited napping
+        assert wake_event.is_set()
 
     async def test_failure_then_recovery_logs_once_each(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         state, relay = self._nats_state(tmp_path)
-        gate = _InboxPokeGate()
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        wake_event = asyncio.Event()
         latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
 
         with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
-            assert await subscribe_inbox_notify(state, latch, gate) is None
-            assert await subscribe_inbox_notify(state, latch, gate) is None
+            assert (
+                await subscribe_inbox_notify(state, latch, gate, wake_event, user="kai")
+                is None
+            )
+            assert (
+                await subscribe_inbox_notify(state, latch, gate, wake_event, user="kai")
+                is None
+            )
 
             warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
             assert len(warnings) == 1  # not one per tick
 
             relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
-            sub = await subscribe_inbox_notify(state, latch, gate)
+            sub = await subscribe_inbox_notify(
+                state, latch, gate, wake_event, user="kai"
+            )
 
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
@@ -1266,25 +1367,40 @@ class TestReconcileInboxNotifySub:
             pwd="/test",
         )
 
+    @staticmethod
+    def _gate() -> _InboxPokeGate:
+        return _InboxPokeGate(backstop_interval=1000.0)
+
     async def test_no_resubscribe_when_generation_unchanged(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         handle = AsyncMock()
-        current = InboxNotifySubscription(handle, generation=3)
+        current = SubscriptionBinding(handle, generation=3)
         calls = 0
 
         async def _sub(
-            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
-        ) -> InboxNotifySubscription | None:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            del user
             nonlocal calls
             calls += 1
-            return InboxNotifySubscription(AsyncMock(), 3)
+            return SubscriptionBinding(AsyncMock(), 3)
 
         monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(3))
 
         result = await _reconcile_inbox_notify_sub(
-            state, current, _test_latch(), _InboxPokeGate()
+            state,
+            current,
+            _test_latch(),
+            self._gate(),
+            asyncio.Event(),
+            user="kai",
         )
 
         assert result is current
@@ -1295,18 +1411,29 @@ class TestReconcileInboxNotifySub:
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         stale = AsyncMock()
-        fresh = InboxNotifySubscription(AsyncMock(), 4)
+        fresh = SubscriptionBinding(AsyncMock(), 4)
 
         async def _sub(
-            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
-        ) -> InboxNotifySubscription | None:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            del user
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
 
         result = await _reconcile_inbox_notify_sub(
-            state, InboxNotifySubscription(stale, 3), _test_latch(), _InboxPokeGate()
+            state,
+            SubscriptionBinding(stale, 3),
+            _test_latch(),
+            self._gate(),
+            asyncio.Event(),
+            user="kai",
         )
 
         assert result is fresh
@@ -1315,21 +1442,66 @@ class TestReconcileInboxNotifySub:
     async def test_subscribes_when_never_established(
         self, state: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        fresh = InboxNotifySubscription(AsyncMock(), 1)
+        fresh = SubscriptionBinding(AsyncMock(), 1)
 
         async def _sub(
-            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
-        ) -> InboxNotifySubscription | None:
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            del user
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
 
         result = await _reconcile_inbox_notify_sub(
-            state, None, _test_latch(), _InboxPokeGate()
+            state, None, _test_latch(), self._gate(), asyncio.Event(), user="kai"
         )
 
         assert result is fresh
+
+    async def test_reconciles_the_companion_binding_independently(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CRITICAL-2: the companion's SUB is reconciled by the SAME helper,
+        parameterized on ``user`` — proving one generic reconcile serves
+        both the own-user and companion-user bindings without a second
+        code path.
+        """
+        stale = AsyncMock()
+        fresh = SubscriptionBinding(AsyncMock(), 4)
+        seen_users: list[str] = []
+
+        async def _sub(
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            seen_users.append(user)
+            return fresh
+
+        monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
+
+        result = await _reconcile_inbox_notify_sub(
+            state,
+            SubscriptionBinding(stale, 3),
+            _test_latch(),
+            self._gate(),
+            asyncio.Event(),
+            user="eric",
+        )
+
+        assert result is fresh
+        assert seen_users == ["eric"]
+        stale.unsubscribe.assert_awaited_once()
 
 
 class TestStartupNotificationRace:
