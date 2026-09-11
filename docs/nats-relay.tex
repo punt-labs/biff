@@ -1292,11 +1292,11 @@ connection is $connected$, the poller compares the generation each kind's
 SUB is bound to against the current connection generation and, for
 whichever kind $kind?$ differs, opens a fresh SUB of that kind on the live
 client and records the new binding.  One schema, indexed by $kind?$,
-covers both the existing $talk$ reconciliation
-(\texttt{\_reconcile\_talk\_sub}) and the biff-5ex $inboxNotify$
-reconciliation, because $subGen(kind?) < generation$ is their common
-signature regardless of kind.  This one operation covers three cases the
-code treats uniformly for each kind.  The \emph{initial} subscribe: after
+covers the existing $talk$ reconciliation (\texttt{\_reconcile\_talk\_sub}),
+the biff-5ex $inboxNotify$ reconciliation, and its $inboxNotifyCompanion$
+extension, because $subGen(kind?) < generation$ is their common signature
+regardless of kind.  This one operation covers three cases the code
+treats uniformly for each kind.  The \emph{initial} subscribe: after
 the first dial, $subGen(kind?) = 0 < generation = 1$, and the first tick
 binds that kind's SUB to generation $1$.  The \emph{re-subscribe} after a
 force-reconnect: a fresh dial has advanced $generation$ past the stranded
@@ -1308,13 +1308,29 @@ on the live client.  The post-condition $subGen' = subGen \oplus \{
 kind? \mapsto generation \}$ is the whole repair for that kind: it moves
 the connection from stranded to current for $kind?$ in a single step, and
 it is the transition the code must implement for the biff-9la fix
-($kind? = talk$) and its biff-5ex extension ($kind? = inboxNotify$) alike.
-Every other component of $Connection$ is preserved, $subGen$'s other
-kinds included; a re-subscribe of one kind touches that kind's SUB and
-nothing else --- the two kinds reconcile independently, one $Subscribe$
-per stranded kind per tick, exactly as \texttt{poll\_inbox} calls
-\texttt{\_reconcile\_talk\_sub} and its $inboxNotify$ counterpart as two
-separate calls.
+($kind? = talk$), its biff-5ex extension ($kind? = inboxNotify$), and the
+dual-session companion's own inbox-notify SUB ($kind? = inboxNotifyCompanion$)
+alike.  Every other component of $Connection$ is preserved, $subGen$'s
+other kinds included; a re-subscribe of one kind touches that kind's SUB
+and nothing else --- the three kinds reconcile independently, one
+$Subscribe$ per stranded kind per tick, exactly as \texttt{poll\_inbox}
+calls \texttt{\_reconcile\_talk\_sub}, its $inboxNotify$ counterpart, and
+the companion's $inboxNotifyCompanion$ counterpart as separate calls.
+
+A dual session's companion also gets its own talk-notify SUB
+(\texttt{subscribe\_companion\_talk} /
+\texttt{\_reconcile\_companion\_talk\_sub}), bound and reconciled the same
+lazy, generation-compared way as the three $SubKind$-indexed SUBs above ---
+but it is not itself a fourth $SubKind$ constructor.  The companion's talk
+SUB shares $talk$'s subject-naming and wake-only callback shape rather
+than $inboxNotify$'s, so it does not fit the $inboxNotifyCompanion$
+precedent of extending an existing kind with a second user-keyed instance;
+modelling it as its own $SubKind$ constructor is the extension the free
+type's own closing description anticipates (``a further always-on
+subscription is added the same way, by extending $SubKind$ with one more
+constructor'') but has not yet been made.  Until then its liveness is a
+corollary the code upholds structurally identically to the three
+modelled kinds, not a property this spec proves.
 
 \subsection{Subscribe Retry (Transient Subscribe Failure)}
 

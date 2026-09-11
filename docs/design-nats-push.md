@@ -489,14 +489,22 @@ regardless of this value." Fix: the poller task now always runs. Its
 sleep-or-wake step is a shared `asyncio.Event` rather than a plain
 `asyncio.sleep(interval)`, so a wake (talk activity, a wake poke, or a
 broadcast poke) interrupts the wait immediately at any interval, including
-`interval <= 0` (which waits indefinitely on the event alone, with no
-periodic timeout). What actually still degrades at `interval <= 0` is the
-*periodic* work that has no push signal of its own — the wall countdown's
-re-render, stale talk-invite expiry, and the backstop — because with no
-periodic wake, that work only runs on whatever tick a poke happens to
-produce. `set_poll_interval`'s tool description and its `n` response text
-were rewritten to state this distinction honestly, including the real 15x
-backstop ratio the original text glossed over as "on this cadence."
+`interval <= 0`. A bare `interval <= 0` wait on the event alone, with no
+timeout at all, turned out to have its own liveness hole: a wedge teardown
+or give-up close can strand every always-on SUB on a dead client with zero
+poke traffic left to end the wait, so nothing would ever rebind them.
+`_sleep_or_wake` therefore bounds even a disabled interval on
+`_DISABLED_POLLER_FALLBACK_INTERVAL`, a liveness backstop distinct from
+`interval` itself — but a bare fallback-timeout wake (no real event) runs
+only the SUB reconcile, never the periodic tick work, so the fallback
+closes the liveness hole without smuggling the disabled cadence back in.
+What actually still degrades at `interval <= 0` is that same *periodic*
+work — the wall countdown's re-render, stale talk-invite expiry, and the
+backstop — because with no real event to wake it, that work only runs on
+whatever tick a poke happens to produce. `set_poll_interval`'s tool
+description and its `n` response text were rewritten to state this
+distinction honestly, including the real 15x backstop ratio the original
+text glossed over as "on this cadence."
 
 ### Gap 4: the poke could be clobbered by a same-tick failed refresh
 
