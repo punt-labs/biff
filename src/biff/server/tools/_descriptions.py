@@ -1198,15 +1198,19 @@ async def poll_inbox(
     inbox_notify_sub = await subscribe_inbox_notify(
         state, inbox_notify_latch, gate, wake_event, user=state.config.user
     )
+    # Not established here, unlike talk_sub/inbox_notify_sub above:
+    # state.companion is a frozen-dataclass field production sets LATER,
+    # from the heartbeat loop's _poll_companion_registration (an
+    # object.__setattr__ on the same ServerState instance, once the ethos
+    # roster resolves) — it is almost always still None at this exact
+    # point. A one-shot check here would permanently miss a companion
+    # that appears after the poller has already started; the per-tick
+    # loop below lazily creates the latch/binds the SUB on whichever
+    # tick first observes state.companion set, covering both "set before
+    # poll_inbox starts" (test-injected, e.g. dual-session e2e tests) and
+    # "set later" (production) with the same code path.
     companion_latch: TalkNotifyLatch | None = None
     companion_sub: SubscriptionBinding | None = None
-    if state.companion is not None:
-        companion_latch = TalkNotifyLatch(
-            logger, _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES
-        )
-        companion_sub = await subscribe_inbox_notify(
-            state, companion_latch, gate, wake_event, user=state.companion.user
-        )
 
     try:
         while shutdown is None or not shutdown.is_set():
@@ -1265,7 +1269,14 @@ async def poll_inbox(
                 wake_event,
                 user=state.config.user,
             )
-            if state.companion is not None and companion_latch is not None:
+            if state.companion is not None:
+                # Lazily create the latch the first tick a companion is
+                # observed — covers a companion that appeared after this
+                # loop started, not only one already set before it.
+                if companion_latch is None:
+                    companion_latch = TalkNotifyLatch(
+                        logger, _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES
+                    )
                 companion_sub = await _reconcile_inbox_notify_sub(
                     state,
                     companion_sub,

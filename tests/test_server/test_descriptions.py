@@ -18,7 +18,7 @@ from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import CompanionSession, ServerState, create_state
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
@@ -884,6 +884,69 @@ class TestPollInbox:
         assert any(s.endswith("notify.kai") and "talk" not in s for s in subjects)
         talk_handle.unsubscribe.assert_awaited_once()
         inbox_handle.unsubscribe.assert_awaited_once()
+
+    async def test_companion_registered_after_start_still_gets_a_sub(
+        self, tmp_path: Path
+    ) -> None:
+        """A companion set AFTER ``poll_inbox`` starts still opens its own
+        inbox-notify SUB — production always hits this path: the
+        heartbeat loop's ``_poll_companion_registration`` sets
+        ``state.companion`` (via ``object.__setattr__`` on the frozen
+        ``ServerState``) well after the poller task is already running,
+        never before it. A one-shot check for ``state.companion`` made
+        only before the tick loop starts would permanently miss this —
+        the per-tick reconcile must pick it up lazily.
+        """
+        nc = AsyncMock()
+        subjects: list[str] = []
+
+        async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
+            del cb
+            subjects.append(subject)
+            return AsyncMock()
+
+        nc.subscribe = AsyncMock(side_effect=fake_subscribe)
+
+        def _inbox_notify_subject(repo: str, user: str) -> str:
+            return f"biff.{repo}.notify.{user}"
+
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.connection_generation = 0
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
+        relay.inbox_notify_subject = MagicMock(side_effect=_inbox_notify_subject)
+        relay.get_wall = AsyncMock(return_value=None)
+        relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
+
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+            # companion intentionally omitted — None at poller start,
+            # matching production.
+        )
+        mcp = create_server(state)
+        task = asyncio.create_task(poll_inbox(mcp, state, interval=self._FAST_INTERVAL))
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+
+        # The heartbeat loop's own mutation shape (ServerState is frozen).
+        object.__setattr__(
+            state,
+            "companion",
+            CompanionSession(
+                user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
+            ),
+        )
+        await asyncio.sleep(self._FAST_INTERVAL * 5)
+
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert f"biff.{_TEST_REPO}.notify.jfreeman" in subjects
 
     async def test_cheap_nap_tick_reconciles_inbox_notify_generation_bump(
         self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
