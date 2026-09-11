@@ -568,21 +568,44 @@ class NatsRelay:
             return js, kv
         return None
 
+    def _raise_if_closed(self) -> None:
+        """Raise if :meth:`close` has already been called on this relay."""
+        if self._closed:
+            msg = "NatsRelay is closed"
+            raise ConnectionError(msg)
+
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
         """Lazily connect and provision infrastructure.
 
         Reuses an existing NATS connection if available (e.g. after
         :meth:`reset_infrastructure`).  Only creates a new connection
         when none exists or the previous one was closed.
+
+        Rejects a terminally-closed relay in two places, not one: the
+        fast-path check below fails immediately for the common case (no
+        connection attempt racing at all); the check again inside
+        ``_connect_lock`` is the one that actually matters, closing a race
+        :meth:`close` also serializes on the same lock to win: whichever
+        of a concurrent ``close()``/``_ensure_connected()`` pair acquires
+        the lock first now runs to completion before the other proceeds,
+        so a reconnect that was already in flight when ``close()`` arrives
+        finishes and is torn down cleanly by ``close()`` afterward, while
+        a reconnect that arrives after (or blocks behind) ``close()`` sees
+        ``_closed`` before it can install a new client — either way, no
+        client the relay does not intend to own is ever left standing.
         """
+        self._raise_if_closed()
         # Lock-free fast path: return cached handles if connection is alive.
         cached = self._cached_handles()
         if cached is not None:
             return cached
 
         # Slow path: serialize connection creation to prevent concurrent
-        # callers from each creating a separate NATS connection (DES-029).
+        # callers from each creating a separate NATS connection (DES-029) —
+        # and, as of the _closed check below, to prevent a concurrent
+        # close() from losing this race.
         async with self._connect_lock:
+            self._raise_if_closed()
             # Double-check after acquiring the lock — another caller may
             # have already reconnected while we waited.
             cached = self._cached_handles()
@@ -669,14 +692,15 @@ class NatsRelay:
         the next :meth:`_ensure_connected` dials a fresh client.
 
         Serialised on ``_connect_lock`` against concurrent rebuilds
-        (``_ensure_connected`` / ``_open_connection`` hold it).  ``_tracked``
-        requests never run under that lock, so acquiring it here cannot
-        deadlock.  ``close()`` and ``disconnect()`` do *not* take the lock, so
-        races with deliberate teardown are handled by idempotence, not by the
-        lock: the wedged client is captured before the lock and re-checked
-        under it, and if it no longer matches ``self._nc`` (a rebuild, close,
-        or disconnect replaced or cleared it) this is a no-op — it never tears
-        down a freshly built connection.  The re-check also skips a client that
+        (``_ensure_connected`` / ``_open_connection`` / ``close`` all hold
+        it).  ``_tracked`` requests never run under that lock, so acquiring
+        it here cannot deadlock.  ``disconnect()`` does *not* take the
+        lock, so a race with it is still handled by idempotence, not by
+        the lock: the wedged client is captured before the lock and
+        re-checked under it, and if it no longer matches ``self._nc`` (a
+        rebuild, close, or disconnect replaced or cleared it) this is a
+        no-op — it never tears down a freshly built connection.  The
+        re-check also skips a client that
         stopped being connected while we waited for the lock: if nats-py's own
         keepalive flipped it to reconnecting after the ``_tracked`` gate saw it
         connected, that reconnect owns recovery — do not tear it down.
@@ -1147,15 +1171,27 @@ class NatsRelay:
         """Close the NATS connection and release resources — permanently.
 
         Sets the terminal ``_closed`` flag :meth:`_live_nc_or_reconnect`
-        checks: nothing redials after this call, unlike :meth:`disconnect`.
+        and :meth:`_ensure_connected` check: nothing redials after this
+        call, unlike :meth:`disconnect`.
+
+        Holds ``_connect_lock`` for the same reason :meth:`_ensure_connected`
+        does: a reconnect racing this call must not install a client after
+        ``close()`` has already run, and the *only* way to guarantee that
+        ordering — rather than hoping ``self._nc is None`` happens to read
+        back correctly — is for the two to serialize on the same lock.
+        Whichever acquires it first completes fully (a reconnect already
+        in flight finishes and is then torn down cleanly by ``close()``
+        right here; a reconnect that arrives after sees ``_closed`` set
+        inside the lock and never dials at all).
         """
-        self._closed = True
-        if self._nc is not None:
-            await safe_close(self._nc)
-            self._nc = None
-            self._js = None
-            self._kv = None
-            self._names_kv = None
+        async with self._connect_lock:
+            self._closed = True
+            if self._nc is not None:
+                await safe_close(self._nc)
+                self._nc = None
+                self._js = None
+                self._kv = None
+                self._names_kv = None
 
     @staticmethod
     def _validate_user(user: str) -> str:
@@ -1320,7 +1356,9 @@ class NatsRelay:
         """Return the raw NATS client, connecting if necessary.
 
         Used by talk tools for core pub/sub subscriptions that
-        don't go through JetStream.
+        don't go through JetStream. Raises ``ConnectionError`` if
+        :meth:`close` has already been called — a terminally-closed relay
+        never dials again, via :meth:`_ensure_connected`'s own check.
         """
         await self._ensure_connected()
         if self._nc is None:  # pragma: no cover — _ensure_connected guarantees this
@@ -1452,9 +1490,7 @@ class NatsRelay:
         reconnect fall-through needs its own, tighter bound to keep it
         true when the client is down too.
         """
-        if self._closed:
-            msg = "NatsRelay is closed"
-            raise ConnectionError(msg)
+        self._raise_if_closed()
         nc = self._nc
         if nc is None or nc.is_closed:
             async with asyncio.timeout(_NOTIFY_RECONNECT_TIMEOUT):

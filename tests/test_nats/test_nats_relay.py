@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -802,3 +802,89 @@ class TestBroadcastPokeCarriesTargetRepo:
         )
 
         assert captured == [("target-repo", "eric")]
+
+
+class TestCloseRaceWithReconnect:
+    """``close()`` racing a blocked reconnect must never leave a client
+    installed that nothing will ever close again.
+
+    Before this fix, ``close()`` did not take ``_connect_lock`` at all —
+    a reconnect that was mid-dial when ``close()`` ran could still finish
+    afterward and overwrite the ``None`` ``close()`` had just set,
+    resurrecting a connection outside the terminal-close contract.
+    ``close()`` now serializes on the same lock ``_ensure_connected``
+    holds: whichever acquires it first runs to completion before the
+    other proceeds, so the in-flight reconnect either finishes and is
+    torn down cleanly by ``close()`` right after, or never starts at all
+    because ``close()`` won the race and ``_ensure_connected`` sees
+    ``_closed`` set inside the lock.
+    """
+
+    async def test_close_during_blocked_reconnect_installs_no_client(self) -> None:
+        relay = NatsRelay()
+
+        dial_started = asyncio.Event()
+        release_dial = asyncio.Event()
+
+        fake_nc = MagicMock()
+        fake_nc.is_closed = False
+        fake_nc.close = AsyncMock()
+
+        async def _slow_dial() -> NatsClient:
+            dial_started.set()
+            await release_dial.wait()
+            return cast("NatsClient", fake_nc)
+
+        async def _fake_provision(
+            _nc: NatsClient,
+        ) -> tuple[JetStreamContext, KeyValue, KeyValue]:
+            return (
+                cast("JetStreamContext", MagicMock()),
+                cast("KeyValue", MagicMock()),
+                cast("KeyValue", MagicMock()),
+            )
+
+        relay._dial = _slow_dial  # type: ignore[method-assign]
+        relay._provision = _fake_provision  # type: ignore[method-assign,assignment]
+
+        # A reconnect starts and blocks mid-dial, holding _connect_lock.
+        connect_task = asyncio.create_task(relay._ensure_connected())
+        await dial_started.wait()
+
+        # close() races in while the dial is still blocked — it must wait
+        # on the same lock rather than tearing down state concurrently.
+        close_task = asyncio.create_task(relay.close())
+        await asyncio.sleep(0.05)  # let close() start blocking on the lock
+        assert not close_task.done()
+
+        # Let the blocked dial complete: it started first, so it legitimately
+        # finishes and installs the client before close() gets the lock.
+        release_dial.set()
+        await connect_task  # no exception — this reconnect began before close()
+
+        await close_task
+
+        assert relay._closed is True
+        assert relay._nc is None  # close() tore down what the reconnect installed
+
+        with pytest.raises(ConnectionError, match="closed"):
+            await relay.get_nc()
+
+    async def test_reconnect_started_after_close_never_dials(self) -> None:
+        relay = NatsRelay()
+        await relay.close()
+
+        dialed = False
+
+        async def _dial_should_not_run() -> NatsClient:
+            nonlocal dialed
+            dialed = True
+            msg = "unreachable — close() must be checked before dialing"
+            raise AssertionError(msg)
+
+        relay._dial = _dial_should_not_run  # type: ignore[method-assign]
+
+        with pytest.raises(ConnectionError, match="closed"):
+            await relay._ensure_connected()
+
+        assert dialed is False
