@@ -86,6 +86,10 @@ _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
+_NOTIFY_RECONNECT_TIMEOUT = 3.0  # bound _live_nc_or_reconnect's fall-through
+# dial+provision (_CONNECT_PROVISION_TIMEOUT=20s) so a best-effort wake poke
+# stays best-effort — deliver() already published durably by the time this
+# runs, so the poke must never sit and wait on a cold reconnect.
 
 # Keepalive tuning so a half-open connection (socket up, server not
 # responding) is detected in ~60-80s, not the nats-py default of 240s.
@@ -491,6 +495,11 @@ class NatsRelay:
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
         self._names_kv: KeyValue | None = None
+        # Set only by close() — the permanent "the session is ending" state,
+        # never by disconnect() (reversible: the next call redials). Checked
+        # by _live_nc_or_reconnect so a poke fire_and_forget arriving after
+        # close() cannot resurrect a client nothing owns or will ever close.
+        self._closed = False
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
         self._health = _ConnectionHealth(url)
@@ -1135,7 +1144,12 @@ class NatsRelay:
         self._names_kv = None
 
     async def close(self) -> None:
-        """Close the NATS connection and release resources."""
+        """Close the NATS connection and release resources — permanently.
+
+        Sets the terminal ``_closed`` flag :meth:`_live_nc_or_reconnect`
+        checks: nothing redials after this call, unlike :meth:`disconnect`.
+        """
+        self._closed = True
         if self._nc is not None:
             await safe_close(self._nc)
             self._nc = None
@@ -1149,9 +1163,12 @@ class NatsRelay:
 
         NATS subjects use ``.`` as a separator and ``*``/``>`` as
         wildcards.  Allowing these in usernames would let a crafted
-        name match unintended subjects.
+        name match unintended subjects. ``:`` is rejected too — it is
+        the separator :meth:`talk_notify_subject` uses to render its
+        ``user:tty`` fourth token, and :meth:`inbox_notify_subject`'s
+        disjointness from it depends on a bare user never containing one.
         """
-        if not user or any(c in user for c in (".", "*", ">", " ")):
+        if not user or any(c in user for c in (".", "*", ">", " ", ":")):
             msg = f"Invalid username: {user!r}"
             raise ValueError(msg)
         return user
@@ -1412,10 +1429,28 @@ class NatsRelay:
         be provisioned, which :meth:`get_nc`'s underlying
         ``_ensure_connected`` does) is *necessary* for a bare core-NATS
         publish, which never touches JetStream or KV at all.
+
+        Two additional guards close gaps a bare staleness check leaves
+        open. First, ``self._closed`` — set only by :meth:`close`, never
+        by :meth:`disconnect` — short-circuits before touching the network
+        at all: a wake poke that fires after the session has explicitly
+        closed must not resurrect a connection nothing will ever close
+        again. Second, the fall-through to :meth:`get_nc` is wrapped in
+        :func:`asyncio.timeout`: unguarded, it can dial and fully
+        re-provision (bounded only by ``_CONNECT_PROVISION_TIMEOUT`` = 20s,
+        plus the dial itself) *inside* a caller that is supposed to be a
+        best-effort, near-instant poke — the "never blocks" claim above is
+        true only for the common case where ``nc`` is already live; the
+        reconnect fall-through needs its own, tighter bound to keep it
+        true when the client is down too.
         """
+        if self._closed:
+            msg = "NatsRelay is closed"
+            raise ConnectionError(msg)
         nc = self._nc
         if nc is None or nc.is_closed:
-            return await self.get_nc()
+            async with asyncio.timeout(_NOTIFY_RECONNECT_TIMEOUT):
+                return await self.get_nc()
         return nc
 
     async def _publish_talk_notification(

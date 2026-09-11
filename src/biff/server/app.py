@@ -1334,7 +1334,7 @@ async def _active_lifespan(
 
     shutdown = asyncio.Event()
     poll_interval = state.config.poll_interval
-    # Always on, even at poll_interval <= 0 (HIGH-3): the always-on SUBs and
+    # Always on, even at poll_interval <= 0: the always-on SUBs and
     # their poke-driven recompute never depended on a periodic tick, only
     # the periodic work (wall re-render, invite expiry, backstop) does —
     # poll_inbox itself degrades that gracefully when interval <= 0.

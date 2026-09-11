@@ -86,10 +86,10 @@ _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
     recovery="Inbox-notify wake pokes recovered — re-subscribed",
 )
 
-# Same wording pattern, for the companion's independent inbox-notify SUB
-# (CRITICAL-2) — a distinct LatchMessages so the two SUBs' onset/recovery
-# logging is never conflated: a dual session's own inbox and its
-# companion's inbox can fail and recover independently.
+# Same wording pattern, for the companion's independent inbox-notify SUB —
+# a distinct LatchMessages so the two SUBs' onset/recovery logging is never
+# conflated: a dual session's own inbox and its companion's inbox can fail
+# and recover independently.
 _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES = LatchMessages(
     onset=(
         "Companion inbox-notify wake pokes are down — re-subscribe failing, "
@@ -469,10 +469,10 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     Returns whether the unread-count *fetch* succeeded — ``False`` only
     when the relay call itself raised (never for the belt-path tool
     callers, which uniformly ignore the return value). ``_active_tick``
-    (HIGH-4) uses this to re-mark the poke gate on a transient failure:
-    the gate's own clear-before-refresh already happened, and without this
-    signal a dropped relay call would freeze the count until the next
-    backstop tick instead of retrying on the very next one, as the old
+    uses this to re-mark the poke gate on a transient failure: the gate's
+    own clear-before-refresh already happened, and without this signal a
+    dropped relay call would freeze the count until the next backstop
+    tick instead of retrying on the very next one, as the old
     unconditional per-tick poll always did. ``tool is None`` is a
     precondition failure, not a fetch outcome — no relay call was ever
     attempted, so it reports success (there is nothing for a retry to fix).
@@ -746,12 +746,11 @@ class _InboxPokeGate:
     """Poke-gated recompute with a periodic backstop (DES-062).
 
     Shared between the inbox-notify SUB callback and the talk-SUB
-    callback's wake-poke branch (CRITICAL-1: a targeted message's wake
-    poke rides the talk subject, not a second inbox-notify publish, but it
-    must mark this same gate or the gated tick never recomputes) — both
-    call :meth:`mark` and nothing else, never a relay call
-    (DES-020/DES-021) — and ``_active_tick``, which calls :meth:`claim`
-    once per tick.
+    callback's wake-poke branch — a targeted message's wake poke rides the
+    talk subject, not a second inbox-notify publish, but it must mark this
+    same gate or the gated tick never recomputes — both call :meth:`mark`
+    and nothing else, never a relay call (DES-020/DES-021) — and
+    ``_active_tick``, which calls :meth:`claim` once per tick.
 
     :meth:`claim` is true when a poke has arrived since the last
     recompute, OR when *backstop_interval* has elapsed since the last
@@ -763,10 +762,10 @@ class _InboxPokeGate:
     the actual refresh: a poke that arrives while that refresh is still in
     flight sets ``_poked`` again, which nothing after the clear can
     clobber, so it survives to the next tick instead of being silently
-    absorbed into a refresh that started before it arrived (HIGH-4
-    property (a)). A refresh that then fails should call :meth:`mark`
-    again to re-arm the retry for the next tick, rather than waiting out a
-    full backstop for a transient failure (HIGH-4 property (b)).
+    absorbed into a refresh that started before it arrived. A refresh
+    that then fails should call :meth:`mark` again to re-arm the retry
+    for the next tick, rather than waiting out a full backstop for a
+    transient failure.
 
     Starts poked so the first tick always recomputes once, matching the
     old ``last_count = -1`` "force initial refresh" idiom it replaces.
@@ -844,18 +843,18 @@ async def subscribe_talk(
     ``state.talk.receive`` (self-echo and session-scope filtering happen
     there); when the frame wakes the poller, *wake_event* cuts the tick
     loop's sleep short so push latency stops being bounded by whatever
-    ``poll_interval`` happens to be (HIGH-3).
+    ``poll_interval`` happens to be.
 
-    A wake poke — a ``/write`` mail notification riding this subject with
-    no recognized ``type`` (``TalkNotification.is_wake_poke``,
+    A wake poke — a ``/write`` message notification riding this subject
+    with no recognized ``type`` (``TalkNotification.is_wake_poke``,
     ``talk_state.py`` diverts it before the session filter) — also marks
     *gate*.  Without this, a targeted message's only signal was
     ``state.activity.wake()``, which un-naps the tracker but has no say
     over whether the now poke-gated tick actually recomputes the unread
-    count (CRITICAL-1): the gate, not activity, decides that. A genuine
-    talk frame (invite/message/end/withdraw) does *not* mark the gate —
-    marking it for talk activity unrelated to the inbox would be a
-    spurious unread recompute.
+    count — the gate, not activity, decides that. A genuine talk frame
+    (invite/message/end/withdraw) does *not* mark the gate — marking it
+    for talk activity unrelated to the inbox would be a spurious unread
+    recompute.
 
     Captures ``connection_generation`` at the point of subscribe so a later
     client replacement is detectable: the returned pair binds the SUB to the
@@ -880,7 +879,7 @@ async def subscribe_talk(
                         for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
                     }
                     if TalkNotification.from_payload(frame).is_wake_poke:
-                        gate.mark()  # CRITICAL-1: a targeted mail's wake poke
+                        gate.mark()  # a targeted message's wake poke, not a talk frame
                     woke = state.talk.receive(frame)
                 else:
                     # A non-dict payload (a legacy ``b"1"`` bare wake) carries
@@ -942,7 +941,7 @@ async def subscribe_inbox_notify(
 
     *user* names whose broadcast inbox this binds to: ``state.config.user``
     for the session's own subscription, or ``state.companion.user`` for
-    the second, independent binding a dual session needs (CRITICAL-2) —
+    the second, independent binding a dual session needs —
     ``subscribe_inbox_notify(repo, state.config.user)`` alone leaves a
     companion's broadcast messages poking a subject nobody has subscribed
     to.
@@ -1018,9 +1017,9 @@ async def _active_tick(
         if gate.claim():
             ok = await refresh_read_messages(mcp, state)
             if not ok:
-                # HIGH-4: the gate already cleared its poke before this
-                # await started (claim()'s clear-before-refresh ordering).
-                # A transient relay failure here must not freeze the count
+                # The gate already cleared its poke before this await
+                # started (claim()'s clear-before-refresh ordering). A
+                # transient relay failure here must not freeze the count
                 # until the next backstop tick — re-arm so the very next
                 # tick retries, matching the ~2s cadence the old
                 # unconditional per-tick poll always retried at.
@@ -1120,8 +1119,8 @@ async def _sleep_or_wake(
     re-trigger the next one.
 
     ``interval <= 0`` waits indefinitely for a wake or shutdown instead of
-    timing out at all (HIGH-3): a disabled poller still hosts the always-on
-    SUBs and reacts to pokes, it just has no periodic cadence of its own —
+    timing out at all: a disabled poller still hosts the always-on SUBs
+    and reacts to pokes, it just has no periodic cadence of its own —
     there is nothing to elapse toward.
     """
     timeout = interval if interval > 0 else None
@@ -1152,11 +1151,11 @@ async def poll_inbox(
     """Background task: poll inbox and wall, refresh notifications on change.
 
     Runs for the lifetime of the MCP server, at every *interval* — even
-    ``interval <= 0`` (HIGH-3): the SUBs below and their poke-driven
-    recompute run regardless, since push detection never depended on a
-    periodic tick in the first place. What ``interval <= 0`` actually
-    disables is the *periodic* work that has no push signal of its own —
-    the wall countdown's re-render, stale talk-invite expiry, and the
+    ``interval <= 0``: the SUBs below and their poke-driven recompute run
+    regardless, since push detection never depended on a periodic tick in
+    the first place. What ``interval <= 0`` actually disables is the
+    *periodic* work that has no push signal of its own — the wall
+    countdown's re-render, stale talk-invite expiry, and the
     nap-interval backstop — because with no periodic sleep timeout, that
     work only runs on whatever tick a poke happens to wake, not on a
     schedule of its own. In **active** mode (``interval > 0``), polls the
@@ -1166,12 +1165,12 @@ async def poll_inbox(
     continue to deliver wall/session changes in real-time.
 
     Push-to-refresh latency does not wait out *interval*: every wake
-    (talk activity, a targeted mail's wake poke, or a broadcast
+    (talk activity, a targeted message's wake poke, or a broadcast
     inbox-notify poke) interrupts the sleep immediately via a shared
-    wake event (HIGH-3), so it is bounded by actual network/processing
-    time, not by whatever cadence is configured — the tool description's
-    "arrives in real time regardless of this value" claim is literally
-    true, not a latency bound stated as a hope.
+    wake event, so it is bounded by actual network/processing time, not
+    by whatever cadence is configured — the tool description's "arrives
+    in real time regardless of this value" claim is literally true, not
+    a latency bound stated as a hope.
 
     When *shutdown* is set, exits cleanly between iterations —
     no NATS operations are interrupted mid-flight.
@@ -1179,14 +1178,13 @@ async def poll_inbox(
     Establishes two or three always-on NATS subscriptions: talk
     notifications (ungated — a fresh agent must receive an unsolicited
     invite), the broadcast inbox-notify wake poke for this session's own
-    user, and — when ``state.companion`` is set (CRITICAL-2) — a second,
-    independent inbox-notify SUB for the companion's user, since a
-    broadcast addressed to the companion pokes a subject only that
-    binding listens on. Every talk frame flows into the shared
-    ``TalkState``; a wake poke (mail notification riding the talk
-    subject) additionally marks the poke gate (CRITICAL-1) so a targeted
-    message's detection is not silently deferred to the backstop the way
-    only broadcast pokes used to mark it.
+    user, and — when ``state.companion`` is set — a second, independent
+    inbox-notify SUB for the companion's user, since a broadcast
+    addressed to the companion pokes a subject only that binding listens
+    on. Every talk frame flows into the shared ``TalkState``; a wake poke
+    (message notification riding the talk subject) additionally marks the
+    poke gate so a targeted message's detection is not silently deferred
+    to the backstop the way only broadcast pokes used to mark it.
     """
     tracker = state.activity
     last_count = -1  # Force initial refresh (LocalRelay fallback path only)
@@ -1277,8 +1275,8 @@ async def poll_inbox(
                     user=state.companion.user,
                 )
     finally:
-        # LOW-10: a hard cancel arriving while unsubscribing one SUB must
-        # not skip the rest — each attempt is shielded from that specific
+        # A hard cancel arriving while unsubscribing one SUB must not skip
+        # the rest — each attempt is shielded from that specific
         # cancellation (the underlying unsubscribe keeps running server-side
         # even if this task stops waiting for it) and both Exception and
         # CancelledError are swallowed here so the loop always reaches every
