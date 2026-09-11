@@ -1367,6 +1367,25 @@ class NatsRelay:
         underneath) when it is actually gone or closed avoids forcing a
         full reconnect/re-provisioning cycle on every publish when the
         client is already live — the common case.
+
+        ``self._nc is None or self._nc.is_closed`` is the *complete* and
+        *sufficient* staleness predicate here, not an approximation: every
+        path that discards the live client — ``_force_reconnect`` (wedge
+        teardown), ``_on_closed`` (nats-py gives up reconnecting), and
+        ``close()``/``disconnect()`` — sets ``self._nc`` to ``None`` (or
+        leaves it in a state where ``is_closed`` is ``True``) as part of
+        that same transition, unconditionally.  There is no reachable state
+        in which the live connection has been superseded or torn down but
+        ``self._nc`` still holds a non-``None``, non-closed reference to
+        it — nats-py's own in-place keepalive reconnect (``reconnected_cb``)
+        never replaces the client object at all, only ``connection_generation``-
+        bumping events do, and every one of those clears this exact pair of
+        conditions.  So a cached client that is neither ``None`` nor closed
+        is, by construction, the live one: there is nothing narrower to
+        check, and nothing broader (like requiring ``_js``/``_kv`` to also
+        be provisioned, which :meth:`get_nc`'s underlying
+        ``_ensure_connected`` does) is *necessary* for a bare core-NATS
+        publish, which never touches JetStream or KV at all.
         """
         nc = self._nc
         if nc is None or nc.is_closed:
