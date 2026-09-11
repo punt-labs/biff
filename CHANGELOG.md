@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Broadcast messages now push-detect in real time instead of waiting for the next poll tick** (biff-5ex, DES-062). `deliver()`'s broadcast branch (`/write user` with no active `:tty` addressed) now publishes a payload-less core-NATS wake poke on a repo-scoped subject (`{stream_prefix}.{repo}.inbox.notify.{user}`) after the JetStream publish succeeds, mirroring the wake poke targeted messages already got via the talk-notify subject. Each MCP server holds a second always-on subscription on its own poke subject (`subscribe_inbox_notify`/`_reconcile_inbox_notify_sub`, generalizing the talk SUB's generation-tracked lifecycle to a shared `SubscriptionBinding`); the callback only wakes the poller and marks a poke gate — never refreshes or notifies directly. Detection latency for broadcast messages drops from up to `nap_interval` (30s) to sub-second, matching wall and talk.
+
+### Changed
+
+- **`_active_tick`'s unread-count recompute is poke-gated with a periodic backstop, not unconditional** (DES-062). `get_unread_summary()` now runs only when a wake poke has arrived since the last recompute, or when `nap_interval` has elapsed with no poke (dropped-poke insurance for the at-most-once core-NATS delivery) — `get_wall()` keeps running every tick unconditionally, unchanged, because it drives both the wall countdown and the connection wedge-detection cadence.
+- **`set_poll_interval` is repointed**: it no longer governs message-arrival latency (now push-driven for both targeted and broadcast delivery). It now governs the wall-countdown render cadence, stale talk-invite expiry, the unread-count backstop cadence, and the connection wedge-detection window. Disabling it (`n`) also widens wedge detection to the ~60-80s keepalive floor.
+- **`_publish_talk_notification` and the new inbox-notify poke publish are rebuild-robust** (biff-1f2): both now resolve the NATS client via `get_nc()` (which reconnects through `_ensure_connected()` if needed) instead of checking the cached client reference directly, so a poke issued right after a wedge-triggered client rebuild no longer silently no-ops on the discarded client. `get_wall()`'s expiry cleanup likewise re-resolves the KV handle immediately before its delete, closing the same class of staleness across the one `await` that separates the fetch from the delete.
+
 ## [1.18.2] - 2026-09-09
 
 ### Fixed
