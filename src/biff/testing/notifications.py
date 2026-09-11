@@ -27,13 +27,17 @@ class NotificationTracker(MessageHandler):
     """
 
     def __init__(self) -> None:
-        self._tool_list_changed_count = 0
         self._tool_list_changed_at: list[float] = []
 
     @property
     def tool_list_changed_count(self) -> int:
-        """How many ``tools/list_changed`` notifications have arrived."""
-        return self._tool_list_changed_count
+        """How many ``tools/list_changed`` notifications have arrived.
+
+        Derived from :attr:`tool_list_changed_at`'s length rather than a
+        separately incremented counter — the two can never drift apart,
+        because there is only one number to keep, not two kept in lockstep.
+        """
+        return len(self._tool_list_changed_at)
 
     @property
     def tool_list_changed_at(self) -> tuple[float, ...]:
@@ -44,5 +48,4 @@ class NotificationTracker(MessageHandler):
         self,
         message: mcp_types.ToolListChangedNotification,  # noqa: ARG002
     ) -> None:
-        self._tool_list_changed_count += 1
         self._tool_list_changed_at.append(time.monotonic())
