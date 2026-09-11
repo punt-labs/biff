@@ -851,7 +851,7 @@ class TestPollInbox:
         relay.connection_generation = 0
         relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
         relay.inbox_notify_subject = MagicMock(
-            return_value="biff-dev._test-server.inbox.notify.kai"
+            return_value="biff-dev._test-server.notify.kai"
         )
         relay.get_wall = AsyncMock(return_value=None)
         relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
@@ -873,7 +873,7 @@ class TestPollInbox:
 
         subjects = [c.args[0] for c in nc.subscribe.call_args_list]
         assert any("talk" in s for s in subjects)
-        assert any("inbox.notify" in s for s in subjects)
+        assert any(s.endswith("notify.kai") and "talk" not in s for s in subjects)
         talk_handle.unsubscribe.assert_awaited_once()
         inbox_handle.unsubscribe.assert_awaited_once()
 
@@ -1184,7 +1184,7 @@ class TestSubscribeInboxNotify:
         relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
         relay.connection_generation = 1
         relay.inbox_notify_subject = MagicMock(
-            return_value="biff-dev._test-server.inbox.notify.kai"
+            return_value="biff-dev._test-server.notify.kai"
         )
         state = create_state(
             BiffConfig(user="kai", repo_name=_TEST_REPO),

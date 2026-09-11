@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Broadcast messages now push-detect in real time instead of waiting for the next poll tick** (biff-5ex, DES-062). `deliver()`'s broadcast branch (`/write user` with no active `:tty` addressed) now publishes a payload-less core-NATS wake poke on a repo-scoped subject (`{stream_prefix}.{repo}.inbox.notify.{user}`) after the JetStream publish succeeds, mirroring the wake poke targeted messages already got via the talk-notify subject. Each MCP server holds a second always-on subscription on its own poke subject (`subscribe_inbox_notify`/`_reconcile_inbox_notify_sub`, generalizing the talk SUB's generation-tracked lifecycle to a shared `SubscriptionBinding`); the callback only wakes the poller and marks a poke gate — never refreshes or notifies directly. Detection latency for broadcast messages drops from up to `nap_interval` (30s) to sub-second, matching wall and talk.
+- **Broadcast messages now push-detect in real time instead of waiting for the next poll tick** (biff-5ex, DES-062). `deliver()`'s broadcast branch (`/write user` with no active `:tty` addressed) now publishes a payload-less core-NATS wake poke on a repo-scoped subject (`{stream_prefix}.{repo}.notify.{user}`) after the JetStream publish succeeds, mirroring the wake poke targeted messages already got via the talk-notify subject. Each MCP server holds a second always-on subscription on its own poke subject (`subscribe_inbox_notify`/`_reconcile_inbox_notify_sub`, generalizing the talk SUB's generation-tracked lifecycle to a shared `SubscriptionBinding`); the callback only wakes the poller and marks a poke gate — never refreshes or notifies directly. Detection latency for broadcast messages drops from up to `nap_interval` (30s) to sub-second, matching wall and talk.
 
 ### Changed
 
@@ -15,6 +15,7 @@
 ### Fixed
 
 - **A successful suspenders send never flushed a `pendingNotify` drop recorded by an earlier suspenders failure** (biff-6vuv). `notify_tool_list_changed()`'s suspenders success path left `_pending_notify` untouched, so a drop could only be flushed by a belt-path tool call or a session reconnect (`capture_session`) — never by a later successful send on the same suspenders path. The Z model (`docs/notification.tex`, `PollTickNotifyOk`) was amended first — a successful send clears `pendingNotify` unconditionally, the same argument `NotifyBelt`'s existing unconditional clear already rests on — then the code was conformed to match, under the existing `_notify_lock`.
+- **The broadcast wake-poke subject collided with the durable inbox stream's wildcard filter, silently leaking a message into the shared JetStream budget on every broadcast.** `{stream_prefix}.{repo}.inbox.notify.{user}` matched the inbox stream's `{stream_prefix}.*.inbox.>` filter, so JetStream captured every poke into the shared WORK_QUEUE stream — no consumer ever read it, and with no `max_age`/`max_msgs` bound for this case it stayed there forever, permanently consuming a slot in the shared 100 MiB budget and, over enough broadcasts, threatening to evict real undelivered messages. The subject is now `{stream_prefix}.{repo}.notify.{user}` (`inbox` replaced by `notify`, mirroring `talk_notify_subject`'s own stream-safe shape), which cannot match any provisioned stream filter.
 
 ## [1.18.2] - 2026-09-09
 

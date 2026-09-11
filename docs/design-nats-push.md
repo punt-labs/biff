@@ -147,7 +147,7 @@ Three alternatives were considered:
 - **Targeted messages** (`user:tty`): no change — already covered by
   `talk_notify_subject`. Zero new code.
 - **Broadcast messages** (`user`, no tty): new core-NATS subject
-  `{stream_prefix}.{repo}.inbox.notify.{user}`, one per repo per user,
+  `{stream_prefix}.{repo}.notify.{user}`, one per repo per user,
   fanning out to every live MCP session for that user in that repo
   (multiple terminals of the same user each subscribe independently;
   core NATS delivers to all current subscribers, which is the correct
@@ -161,8 +161,21 @@ Three alternatives were considered:
   {user}` (DES-030: bare-user addressing is repo-local), which only
   that repo's sessions can read. A repo-less subject would wake every
   repo's sessions of that user for an inbox most of them cannot see —
-  spurious recomputes and a cross-repo activity leak. The repo-scoped
-  subject mirrors exactly the durable subject it signals.
+  spurious recomputes and a cross-repo activity leak. The subject is
+  scoped to the same repo as the durable subject it signals, but does
+  **not** reuse its `inbox` token: the durable inbox stream is
+  provisioned with the wildcard filter `{stream_prefix}.*.inbox.>`
+  (`_provision`, `nats_relay.py:924`), so a poke subject containing
+  `inbox` as its third token is silently captured into the shared
+  JetStream WORK_QUEUE stream — no consumer reads it, and with no
+  `max_age`/`max_msgs` bound for this case it sits there forever,
+  permanently consuming a slot in the shared 100 MiB budget and,
+  over enough broadcasts, evicting real undelivered messages. `notify`
+  replaces `inbox` for exactly this reason, mirroring
+  `talk_notify_subject`'s own stream-safe shape. Verify a poke subject
+  against the stream's *filter*, not by comparing literal subject
+  strings — a subject can be distinct from every other subject in use
+  and still collide with a wildcard.
   `deliver()`'s broadcast branch (`nats_relay.py:1316-1330`) publishes a
   bare wake byte (`b"1"`, same fallback `_publish_talk_notification`
   already uses when there is no `Message`) to this subject after the

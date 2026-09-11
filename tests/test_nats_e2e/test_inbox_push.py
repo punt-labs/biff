@@ -176,6 +176,53 @@ class TestBroadcastPushNotification:
         assert "unread" in desc
 
 
+class TestPokeSubjectDoesNotCollideWithInboxStream:
+    """The poke subject must never match the durable inbox stream's filter.
+
+    Round-1 evaluation (djb) found the original subject shape,
+    ``{stream_prefix}.{repo}.inbox.notify.{user}``, matched the inbox
+    stream's wildcard filter ``{stream_prefix}.*.inbox.>`` (``_provision``,
+    ``nats_relay.py``): JetStream silently captured every poke into the
+    shared WORK_QUEUE stream, with no consumer ever reading it and no
+    ``max_age``/``max_msgs`` bound reclaiming it — proven live with a bare
+    ``nc.publish()`` moving ``stream_info().state.messages`` 0 -> 1. This
+    test makes that probe permanent against the fixed subject shape
+    (``{stream_prefix}.{repo}.notify.{user}``, ``inbox`` replaced by
+    ``notify``): the *unfiltered* message count on the inbox stream must be
+    unchanged by a poke publish.
+    """
+
+    async def test_poke_publish_does_not_land_in_the_inbox_stream(
+        self,
+        eric_tracked: tuple[Client[Any], NotificationTracker, ServerState],
+    ) -> None:
+        _ec, _et, eric_state = eric_tracked
+        relay = eric_state.relay
+        assert isinstance(relay, NatsRelay)
+        js, _ = await relay._ensure_connected()
+
+        before = await js.stream_info(relay._stream_name)
+        before_count = before.state.messages
+
+        await relay._publish_inbox_notification(relay._repo_name, "kai")
+        # A captured message needs a moment to land in the stream's state —
+        # stream_info() checked immediately after publish() returns can still
+        # report the pre-publish count even when the subject collides (the
+        # collision was reproduced directly against a live server: checking
+        # too early made the bug invisible here too). Poll briefly rather
+        # than assume a fixed settle time.
+        deadline = asyncio.get_event_loop().time() + 3.0
+        after_count = before_count
+        while asyncio.get_event_loop().time() < deadline:
+            after = await js.stream_info(relay._stream_name)
+            after_count = after.state.messages
+            if after_count != before_count:
+                break
+            await asyncio.sleep(0.2)
+
+        assert after_count == before_count
+
+
 @pytest.fixture
 async def kai_fast_backstop(
     nats_server: str, tmp_path: Path

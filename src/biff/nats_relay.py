@@ -1254,16 +1254,42 @@ class NatsRelay:
         Repo-scoped (DES-062), unlike :meth:`talk_notify_subject`'s
         identity-routed form: a broadcast poke names a bare ``user``, not a
         globally-unique ``user:tty`` identity, so it cannot be routed the
-        same way.  It instead mirrors exactly the durable subject it
+        same way.  It is scoped to the same repo as the durable subject it
         signals — the repo-partitioned broadcast inbox
         ``{stream_prefix}.{repo}.inbox.{user}`` (DES-013/DES-030) — waking
         only the sessions in that repo that can read that inbox.  A
         repo-less subject would wake every repo's sessions of *user* for an
         inbox most of them cannot see.
+
+        Deliberately **not** ``{stream_prefix}.{repo}.inbox.notify.{user}``,
+        the shape this originally shipped with: the durable inbox stream is
+        provisioned with the wildcard filter
+        ``{stream_prefix}.*.inbox.>`` (:meth:`_provision`), and that pattern
+        matches *any* subject with ``inbox`` as its third token, poke
+        subject included.  A poke published on such a subject is silently
+        captured into the shared JetStream WORK_QUEUE stream — no
+        consumer ever reads it, retention has no ``max_age``/``max_msgs``
+        for this per-message case, so it sits there forever, permanently
+        consuming a slot in the shared 100 MiB budget and, over enough
+        broadcasts, evicting real undelivered messages.  Every poke
+        subject must be checked against the stream's *filter*, not just
+        compared as a literal string against other subjects: a subject can
+        be entirely distinct from every other subject in use and still
+        collide with a wildcard.  Putting ``notify`` where ``inbox`` was —
+        matching :meth:`talk_notify_subject`'s own stream-safe shape — is
+        what keeps this pattern from ever containing the ``inbox`` token
+        the durable stream filters on.
+
+        This also can never collide with a talk-notify subject, even for a
+        repo literally named ``talk``: :meth:`talk_notify_subject`'s fourth
+        token is always a session-scoped ``user:tty`` (containing ``:``),
+        while this subject's fourth token is always a bare ``user`` (never
+        containing ``:``, enforced by :meth:`_validate_user`) — the two
+        shapes are disjoint by construction, not by naming convention.
         """
         self._validate_user(user)
         self._validate_repo(repo)
-        return f"{self._stream_prefix}.{repo}.inbox.notify.{user}"
+        return f"{self._stream_prefix}.{repo}.notify.{user}"
 
     async def get_nc(self) -> NatsClient:
         """Return the raw NATS client, connecting if necessary.
