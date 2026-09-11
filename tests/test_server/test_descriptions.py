@@ -28,6 +28,7 @@ from biff.server.tools._descriptions import (
     _InboxPokeGate,
     _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
+    _sync_unread_file,
     _talk_description,
     _write_unread_file,
     nap_interval_for,
@@ -270,6 +271,50 @@ class TestUnreadFile:
         mcp = create_server(state)
         await refresh_read_messages(mcp, state)
         assert nested.exists()
+
+    async def test_sync_with_no_summary_still_includes_companion_count(
+        self, tmp_path: Path
+    ) -> None:
+        """``_sync_unread_file(state)`` with no ``summary=`` kwarg — the
+        shape the display-queue rotation path calls it with — must still
+        report the combined primary+companion total, not just the
+        primary session's own count.
+
+        Regression: a caller that omits ``summary=`` used to fall back to
+        fetching only ``state.session_key``'s count, silently dropping
+        the companion's half of the total from the status file on every
+        queue rotation, even though ``refresh_read_messages`` shows the
+        combined total in the tool description at the same moment.
+        """
+        companion = CompanionSession(
+            user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
+        )
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            unread_path=tmp_path / "unread.json",
+            companion=companion,
+        )
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="for kai")
+        )
+        assert state.companion_session_key is not None
+        await state.relay.deliver(
+            Message(
+                from_user="eric",
+                to_user=state.companion_session_key,
+                body="for the human",
+            )
+        )
+
+        await _sync_unread_file(state)  # no summary= — the rotation call shape
+
+        assert state.unread_path is not None
+        data = json.loads(state.unread_path.read_text())
+        assert data["count"] == 2  # 1 primary + 1 companion, not just 1
 
 
 class TestTalkSignal:

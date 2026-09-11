@@ -387,6 +387,27 @@ async def notify_tool_list_changed() -> None:
         _pending_notify = True
 
 
+async def _combined_unread_summary(state: ServerState) -> UnreadSummary:
+    """Fetch the primary session's unread count plus the companion's, combined.
+
+    The one place this addition lives — every caller that needs "the
+    unread count as the status bar/tool description should show it" for
+    a possibly-dual session goes through here, so a session with a
+    companion never silently loses that half of the count to a caller
+    that forgot to add it in separately (the exact shape of a prior
+    regression: a caller that fetched only ``state.session_key``'s count
+    and never re-derived the combined total).
+    """
+    primary = await state.relay.get_unread_summary(state.session_key)
+    companion_count = 0
+    if state.companion_session_key:
+        companion_summary = await state.relay.get_unread_summary(
+            state.companion_session_key
+        )
+        companion_count = companion_summary.count
+    return UnreadSummary(count=primary.count + companion_count)
+
+
 async def _sync_unread_file(
     state: ServerState,
     *,
@@ -399,7 +420,12 @@ async def _sync_unread_file(
     after any state change that might affect what the status bar shows.
 
     Pass *summary* to reuse an already-fetched :class:`UnreadSummary`
-    and avoid a redundant relay call.
+    (already combined with the companion's count, if the caller computed
+    one) and avoid a redundant relay round-trip; when omitted, this
+    fetches the combined primary+companion total itself via
+    :func:`_combined_unread_summary`, not just the primary session's own
+    count — a dual session's status file must show the same total its
+    tool descriptions do, regardless of which caller triggered the sync.
 
     Best-effort: called from refresh_read_messages, refresh_wall, and
     refresh_talk, all of which run after their own primary tool
@@ -415,7 +441,7 @@ async def _sync_unread_file(
         return
     try:
         if summary is None:
-            summary = await state.relay.get_unread_summary(state.session_key)
+            summary = await _combined_unread_summary(state)
         # Fetch plan from the relay session (lives in NATS KV, not display queue).
         plan = ""
         session = await state.relay.get_session(state.session_key)
@@ -481,28 +507,21 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     if tool is None:
         return True
     try:
-        primary = await state.relay.get_unread_summary(state.session_key)
-        companion_count = 0
-        if state.companion_session_key:
-            companion_summary = await state.relay.get_unread_summary(
-                state.companion_session_key
-            )
-            companion_count = companion_summary.count
+        combined = await _combined_unread_summary(state)
     except Exception:  # noqa: BLE001 — best-effort side channel, see docstring
         logger.debug(
             "refresh_read_messages: unread summary fetch failed", exc_info=True
         )
         return False
-    total = primary.count + companion_count
     old_desc = tool.description
-    if total == 0:
+    if combined.count == 0:
         tool.description = _READ_MESSAGES_BASE
     else:
-        tool.description = f"Check messages ({total} unread). Marks all as read."
+        tool.description = (
+            f"Check messages ({combined.count} unread). Marks all as read."
+        )
     if tool.description != old_desc:
         await notify_tool_list_changed()
-    # Use a synthetic summary with the combined count for the status file.
-    combined = UnreadSummary(count=total)
     await _sync_unread_file(state, summary=combined)
     return True
 
@@ -1025,14 +1044,7 @@ async def _active_tick(
                 # unconditional per-tick poll always retried at.
                 gate.mark()
     else:
-        primary = await state.relay.get_unread_summary(state.session_key)
-        companion_count = 0
-        if state.companion_session_key:
-            companion_summary = await state.relay.get_unread_summary(
-                state.companion_session_key
-            )
-            companion_count = companion_summary.count
-        total = primary.count + companion_count
+        total = (await _combined_unread_summary(state)).count
         if total != last_count:
             last_count = total
             await refresh_read_messages(mcp, state)
