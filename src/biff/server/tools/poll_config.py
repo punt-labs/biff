@@ -47,9 +47,15 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @mcp.tool(
         name="set_poll_interval",
         description=(
-            "Set the background polling interval. "
-            "Accepts {N}s or {N}m format (e.g. 2s, 30s, 5m), or n (disable). "
-            "Persisted to config. Restart required to take effect."
+            "Set the background poller's cadence. Messages and talk arrive "
+            "in real time via NATS push regardless of this value — it now "
+            "governs the wall-countdown render rate, stale talk-invite "
+            "expiry, the unread-count backstop (recomputed on this cadence "
+            "even if a push notification is missed), and the connection "
+            "wedge-detection window. Accepts {N}s or {N}m format (e.g. 2s, "
+            "30s, 5m), or n (disable — also widens wedge detection to the "
+            "~60-80s keepalive floor). Persisted to config. Restart "
+            "required to take effect."
         ),
     )
     async def set_poll_interval(interval: str) -> str:
@@ -76,7 +82,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
         if parsed is None:
             return (
-                "Polling disabled. Restart Claude Code for the change to take effect."
+                "Polling disabled — messages and talk still arrive via NATS "
+                "push, but the wall countdown stops re-rendering and wedge "
+                "detection widens to the ~60-80s keepalive floor. Restart "
+                "Claude Code for the change to take effect."
             )
 
         return (

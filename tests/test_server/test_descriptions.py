@@ -23,12 +23,17 @@ from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     MAX_UNREAD_COUNT,
+    InboxNotifySubscription,
     TalkSubscription,
+    _InboxPokeGate,
+    _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
     _talk_description,
     _write_unread_file,
+    nap_interval_for,
     poll_inbox,
     refresh_read_messages,
+    subscribe_inbox_notify,
     subscribe_talk,
     talk_signal,
 )
@@ -649,7 +654,11 @@ class TestPollInbox:
             last_count: int,
             last_wall: tuple[str, str],
             last_talk: tuple[tuple[str, ...], int, str],
+            *,
+            gate: _InboxPokeGate,
+            nap_interval: float,
         ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
+            del gate, nap_interval
             events.append(("tick", gen[0]))
             if gen[0] == 0:
                 gen[0] = 1  # the tick's relay calls trigger _force_reconnect
@@ -705,7 +714,11 @@ class TestPollInbox:
             last_count: int,
             last_wall: tuple[str, str],
             last_talk: tuple[tuple[str, ...], int, str],
+            *,
+            gate: _InboxPokeGate,
+            nap_interval: float,
         ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
+            del gate, nap_interval
             tick_calls[0] += 1
             return last_count, last_wall, last_talk
 
@@ -813,6 +826,56 @@ class TestPollInbox:
             await task
 
         assert tool.description == WALL_BASE_DESCRIPTION
+
+    async def test_establishes_and_tears_down_both_subs(self, tmp_path: Path) -> None:
+        """poll_inbox opens talk AND inbox-notify SUBs, unsubscribes both on exit.
+
+        DES-062: the second always-on SUB must be established alongside the
+        existing talk SUB and torn down the same way — proven here against a
+        mocked ``NatsRelay`` (LocalRelay, used by every other test in this
+        class, has no push mechanism at all — see
+        ``_relay_pushes_inbox_notify``).
+        """
+        nc = AsyncMock()
+        talk_handle = AsyncMock()
+        inbox_handle = AsyncMock()
+
+        async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
+            del cb
+            return talk_handle if "talk" in subject else inbox_handle
+
+        nc.subscribe = AsyncMock(side_effect=fake_subscribe)
+
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.connection_generation = 0
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
+        relay.inbox_notify_subject = MagicMock(
+            return_value="biff-dev._test-server.inbox.notify.kai"
+        )
+        relay.get_wall = AsyncMock(return_value=None)
+        relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
+
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        mcp = create_server(state)
+        task = asyncio.create_task(poll_inbox(mcp, state, interval=self._FAST_INTERVAL))
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        subjects = [c.args[0] for c in nc.subscribe.call_args_list]
+        assert any("talk" in s for s in subjects)
+        assert any("inbox.notify" in s for s in subjects)
+        talk_handle.unsubscribe.assert_awaited_once()
+        inbox_handle.unsubscribe.assert_awaited_once()
 
 
 def _fixed_generation(value: int) -> Callable[[ServerState], int]:
@@ -943,6 +1006,61 @@ class TestReconcileTalkSub:
         stale.unsubscribe.assert_awaited_once()
 
 
+class TestNapIntervalFor:
+    """The backstop cadence scales with the configured poll interval."""
+
+    def test_default_matches_historical_nap_interval(self) -> None:
+        """The module defaults (2.0s / 30.0s) round-trip exactly."""
+        assert nap_interval_for(2.0) == 30.0
+
+    def test_scales_proportionally(self) -> None:
+        assert nap_interval_for(1.0) == 15.0
+        assert nap_interval_for(10.0) == 150.0
+
+
+class TestInboxPokeGate:
+    """Poke-gated recompute with a periodic backstop (DES-062)."""
+
+    def test_starts_poked_forces_initial_recompute(self) -> None:
+        """A fresh gate recomputes on its first check — no poke needed.
+
+        Replaces the old ``last_count = -1`` "force initial refresh" idiom.
+        """
+        gate = _InboxPokeGate()
+        assert gate.should_recompute(backstop_interval=1000.0) is True
+
+    def test_no_recompute_before_backstop_with_no_poke(self) -> None:
+        """An unpoked tick within the backstop window does not recompute."""
+        gate = _InboxPokeGate()
+        gate.recompute_done()  # consume the initial forced recompute
+        assert gate.should_recompute(backstop_interval=1000.0) is False
+
+    def test_poke_forces_recompute_regardless_of_backstop(self) -> None:
+        """A marked poke recomputes immediately, even mid-backstop-window."""
+        gate = _InboxPokeGate()
+        gate.recompute_done()
+        gate.mark()
+        assert gate.should_recompute(backstop_interval=1000.0) is True
+
+    def test_backstop_recomputes_with_no_poke(self) -> None:
+        """The backstop cadence fires a recompute even with no poke at all.
+
+        This is the dropped-poke insurance: an at-most-once core-NATS poke
+        that never arrives still gets picked up within one backstop
+        interval instead of stalling forever.
+        """
+        gate = _InboxPokeGate()
+        gate.recompute_done()
+        assert gate.should_recompute(backstop_interval=0.0) is True
+
+    def test_recompute_done_clears_poke_and_resets_clock(self) -> None:
+        """recompute_done() clears the poke flag and restarts the backstop clock."""
+        gate = _InboxPokeGate()
+        gate.mark()
+        gate.recompute_done()
+        assert gate.should_recompute(backstop_interval=1000.0) is False
+
+
 class TestSubscribeTalkLatch:
     """The poller's ``subscribe_talk`` routes failures/successes through the latch.
 
@@ -987,6 +1105,167 @@ class TestSubscribeTalkLatch:
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
         assert len(infos) == 1  # one recovery line
+
+
+class TestSubscribeInboxNotify:
+    """``subscribe_inbox_notify`` establishes the broadcast wake-poke SUB.
+
+    Mirrors ``TestSubscribeTalkLatch``: a NATS outage routes failure/success
+    through the latch (onset WARNING, retries DEBUG, one recovery INFO).
+    """
+
+    @staticmethod
+    def _nats_state(tmp_path: Path) -> tuple[ServerState, MagicMock]:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        relay.connection_generation = 1
+        relay.inbox_notify_subject = MagicMock(
+            return_value="biff-dev._test-server.inbox.notify.kai"
+        )
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        return state, relay
+
+    async def test_returns_none_for_non_nats_relay(self, state: ServerState) -> None:
+        """LocalRelay (the default test relay) has no push mechanism."""
+        gate = _InboxPokeGate()
+        result = await subscribe_inbox_notify(state, _test_latch(), gate)
+        assert result is None
+
+    async def test_subscribes_on_the_repo_scoped_subject(self, tmp_path: Path) -> None:
+        state, relay = self._nats_state(tmp_path)
+        relay.get_nc = AsyncMock(return_value=AsyncMock())
+        gate = _InboxPokeGate()
+        sub = await subscribe_inbox_notify(state, _test_latch(), gate)
+        assert sub is not None
+        assert sub.generation == 1
+        relay.inbox_notify_subject.assert_called_once_with("_test-server", "kai")
+
+    async def test_callback_marks_gate_and_wakes(self, tmp_path: Path) -> None:
+        """The callback marks the poke gate and wakes the poller — nothing else."""
+        state, relay = self._nats_state(tmp_path)
+        nc = AsyncMock()
+        relay.get_nc = AsyncMock(return_value=nc)
+        gate = _InboxPokeGate()
+        gate.recompute_done()  # consume the initial forced recompute
+        state.activity.enter_nap()
+
+        await subscribe_inbox_notify(state, _test_latch(), gate)
+        callback = nc.subscribe.call_args.kwargs["cb"]
+        await callback(object())
+
+        assert gate.should_recompute(backstop_interval=1000.0) is True
+        assert state.activity.napping is False  # wake() exited napping
+
+    async def test_failure_then_recovery_logs_once_each(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        state, relay = self._nats_state(tmp_path)
+        gate = _InboxPokeGate()
+        latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
+
+        with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
+            assert await subscribe_inbox_notify(state, latch, gate) is None
+            assert await subscribe_inbox_notify(state, latch, gate) is None
+
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1  # not one per tick
+
+            relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
+            sub = await subscribe_inbox_notify(state, latch, gate)
+
+        assert sub is not None
+        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(infos) == 1  # one recovery line
+
+
+class TestReconcileInboxNotifySub:
+    """The generation-tracked re-subscribe, generalized to the inboxNotify kind.
+
+    Same fix as ``TestReconcileTalkSub``, applied to the second always-on
+    SUB the ``SubKind``-indexed family (``nats-relay.tex`` ``subGen``) adds.
+    """
+
+    @pytest.fixture
+    def state(self, tmp_path: Path) -> ServerState:
+        return create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+        )
+
+    async def test_no_resubscribe_when_generation_unchanged(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handle = AsyncMock()
+        current = InboxNotifySubscription(handle, generation=3)
+        calls = 0
+
+        async def _sub(
+            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
+        ) -> InboxNotifySubscription | None:
+            nonlocal calls
+            calls += 1
+            return InboxNotifySubscription(AsyncMock(), 3)
+
+        monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(3))
+
+        result = await _reconcile_inbox_notify_sub(
+            state, current, _test_latch(), _InboxPokeGate()
+        )
+
+        assert result is current
+        assert calls == 0
+        handle.unsubscribe.assert_not_awaited()
+
+    async def test_resubscribes_when_client_replaced(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stale = AsyncMock()
+        fresh = InboxNotifySubscription(AsyncMock(), 4)
+
+        async def _sub(
+            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
+        ) -> InboxNotifySubscription | None:
+            return fresh
+
+        monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
+
+        result = await _reconcile_inbox_notify_sub(
+            state, InboxNotifySubscription(stale, 3), _test_latch(), _InboxPokeGate()
+        )
+
+        assert result is fresh
+        stale.unsubscribe.assert_awaited_once()
+
+    async def test_subscribes_when_never_established(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fresh = InboxNotifySubscription(AsyncMock(), 1)
+
+        async def _sub(
+            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
+        ) -> InboxNotifySubscription | None:
+            return fresh
+
+        monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
+
+        result = await _reconcile_inbox_notify_sub(
+            state, None, _test_latch(), _InboxPokeGate()
+        )
+
+        assert result is fresh
 
 
 class TestStartupNotificationRace:

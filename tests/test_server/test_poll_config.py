@@ -86,6 +86,38 @@ class TestSetPollInterval:
         assert "config.local.yaml" in gitignore.read_text()
 
 
+class TestSetPollIntervalDescription:
+    """The tool description is repointed to the post-biff-5ex semantics.
+
+    Message and talk arrival are push-driven now — the description must no
+    longer claim this interval governs how fast they arrive, and must
+    instead name what it still governs: wall-countdown cadence, stale
+    talk-invite expiry, the unread backstop, and the wedge-detection window.
+    """
+
+    async def test_description_names_repointed_meaning(self, tmp_path: Path) -> None:
+        state = _make_state(tmp_path)
+        mcp = create_server(state)
+        tool = await mcp.get_tool("set_poll_interval")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "push" in desc.lower()
+        assert "wall" in desc.lower()
+        assert "invite" in desc.lower()
+        assert "backstop" in desc.lower()
+        assert "wedge" in desc.lower()
+
+    async def test_disable_description_names_keepalive_floor(
+        self, tmp_path: Path
+    ) -> None:
+        state = _make_state(tmp_path)
+        mcp = create_server(state)
+        tool = await mcp.get_tool("set_poll_interval")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "keepalive" in desc.lower()
+
+
 class TestGetPollStatus:
     async def test_default_interval(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)

@@ -32,6 +32,7 @@ from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
     capture_session,
     get_tty_name,
+    nap_interval_for,
     poll_inbox,
     refresh_read_messages,
     refresh_wall,
@@ -1335,7 +1336,13 @@ async def _active_lifespan(
     poll_interval = state.config.poll_interval
     poller = (
         asyncio.create_task(
-            poll_inbox(mcp, state, shutdown=shutdown, interval=poll_interval)
+            poll_inbox(
+                mcp,
+                state,
+                shutdown=shutdown,
+                interval=poll_interval,
+                nap_interval=nap_interval_for(poll_interval),
+            )
         )
         if poll_interval > 0
         else None
