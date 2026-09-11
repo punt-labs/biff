@@ -7,12 +7,18 @@ per-user broadcast mailbox.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
-from biff.models import Message, UserSession
+from biff.models import Message, UserSession, WallPost
 from biff.nats_relay import NatsRelay
+
+if TYPE_CHECKING:
+    from nats.js.client import JetStreamContext
+    from nats.js.kv import KeyValue
 
 pytestmark = pytest.mark.nats_local
 
@@ -469,3 +475,132 @@ class TestCrossRelay:
         users = {s.user for s in sessions}
         assert "kai" in users
         assert "eric" in users
+
+
+class TestPublishRebuildRobustness:
+    """biff-1f2: notification/poke publishes and the wall expiry delete
+    reconnect after a client rebuild instead of silently no-opping on a
+    handle bound to the discarded client.
+
+    ``_force_reconnect``/``_on_closed`` clear ``self._nc`` (and, on a fresh
+    dial, ``self._js``/``self._kv``/``self._names_kv`` alongside it) so the
+    next relay call redials.  Before biff-1f2, the two wake-poke publishes
+    read ``self._nc`` directly and bailed out on ``None`` instead of
+    triggering that redial themselves.
+    """
+
+    @staticmethod
+    async def _rebuild(relay: NatsRelay) -> None:
+        """Simulate the client-discard side of a wedge teardown/give-up close."""
+        nc = await relay.get_nc()
+        await nc.close()
+        # Let biff's own closed_cb (_on_closed) clear _nc/_js/_kv/_names_kv.
+        for _ in range(50):
+            if relay._nc is None:
+                break
+            await asyncio.sleep(0.05)
+        assert relay._nc is None  # precondition: the rebuild actually happened
+
+    async def test_talk_notification_publishes_after_rebuild(
+        self, relay: NatsRelay, second_relay: NatsRelay
+    ) -> None:
+        await self._rebuild(relay)
+
+        received: list[bytes] = []
+
+        async def _cb(msg: object) -> None:
+            received.append(getattr(msg, "data", b""))
+
+        nc2 = await second_relay.get_nc()
+        subject = relay.talk_notify_subject(f"eric:{_ERIC_TTY}")
+        await nc2.subscribe(subject, cb=_cb)  # pyright: ignore[reportUnknownMemberType]
+        await asyncio.sleep(0.2)
+
+        msg = Message(
+            from_user="kai", to_user=f"eric:{_ERIC_TTY}", body="after rebuild"
+        )
+        await relay._publish_talk_notification(f"eric:{_ERIC_TTY}", msg, "kai:tty1")
+        await asyncio.sleep(0.5)
+
+        assert len(received) == 1
+        assert relay._nc is not None  # reconnected, not left discarded
+
+    async def test_inbox_notification_publishes_after_rebuild(
+        self, relay: NatsRelay, second_relay: NatsRelay
+    ) -> None:
+        await self._rebuild(relay)
+
+        received: list[bytes] = []
+
+        async def _cb(msg: object) -> None:
+            received.append(getattr(msg, "data", b""))
+
+        nc2 = await second_relay.get_nc()
+        subject = relay.inbox_notify_subject(relay._repo_name, "eric")
+        await nc2.subscribe(subject, cb=_cb)  # pyright: ignore[reportUnknownMemberType]
+        await asyncio.sleep(0.2)
+
+        await relay._publish_inbox_notification(relay._repo_name, "eric")
+        await asyncio.sleep(0.5)
+
+        assert len(received) == 1
+        assert relay._nc is not None
+
+    async def test_broadcast_deliver_pokes_after_rebuild(
+        self, relay: NatsRelay, second_relay: NatsRelay
+    ) -> None:
+        """The end-to-end path: deliver()'s broadcast branch still pokes."""
+        await self._rebuild(relay)
+
+        received: list[bytes] = []
+
+        async def _cb(msg: object) -> None:
+            received.append(getattr(msg, "data", b""))
+
+        nc2 = await second_relay.get_nc()
+        subject = relay.inbox_notify_subject(relay._repo_name, "eric")
+        await nc2.subscribe(subject, cb=_cb)  # pyright: ignore[reportUnknownMemberType]
+        await asyncio.sleep(0.2)
+
+        await relay.deliver(Message(from_user="kai", to_user="eric", body="broadcast"))
+        await asyncio.sleep(0.5)
+
+        assert len(received) == 1
+        unread = await relay.fetch_user_inbox("eric")
+        assert len(unread) == 1  # the JetStream delivery itself still landed
+
+    async def test_wall_expiry_delete_uses_a_freshly_resolved_handle(
+        self, relay: NatsRelay
+    ) -> None:
+        """The expiry delete re-resolves the handle instead of reusing the fetch's.
+
+        Proven by counting ``_ensure_connected`` calls: the fix calls it
+        once for the ``kv.get`` fetch and once more, immediately before the
+        delete — reusing the first call's handle across that ``await`` is
+        exactly the staleness bug biff-1f2 closes.
+        """
+        now = datetime.now(UTC)
+        expired = WallPost(
+            text="stale",
+            from_user="kai",
+            posted_at=now - timedelta(hours=2),
+            expires_at=now - timedelta(hours=1),
+        )
+        await relay.set_wall(expired)
+
+        original = relay._ensure_connected
+        calls = 0
+
+        async def _counting() -> tuple[JetStreamContext, KeyValue]:
+            nonlocal calls
+            calls += 1
+            return await original()
+
+        relay._ensure_connected = _counting  # type: ignore[method-assign]
+        try:
+            result = await relay.get_wall()
+        finally:
+            relay._ensure_connected = original  # type: ignore[method-assign]
+
+        assert result is None
+        assert calls == 2  # fetch + a fresh resolve immediately before the delete

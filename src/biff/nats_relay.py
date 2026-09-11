@@ -1248,6 +1248,23 @@ class NatsRelay:
         self._validate_tty(tty)
         return f"{self._stream_prefix}.talk.notify.{user}:{tty}"
 
+    def inbox_notify_subject(self, repo: str, user: str) -> str:
+        """NATS core subject for a broadcast-message wake poke to *user* in *repo*.
+
+        Repo-scoped (DES-062), unlike :meth:`talk_notify_subject`'s
+        identity-routed form: a broadcast poke names a bare ``user``, not a
+        globally-unique ``user:tty`` identity, so it cannot be routed the
+        same way.  It instead mirrors exactly the durable subject it
+        signals — the repo-partitioned broadcast inbox
+        ``{stream_prefix}.{repo}.inbox.{user}`` (DES-013/DES-030) — waking
+        only the sessions in that repo that can read that inbox.  A
+        repo-less subject would wake every repo's sessions of *user* for an
+        inbox most of them cannot see.
+        """
+        self._validate_user(user)
+        self._validate_repo(repo)
+        return f"{self._stream_prefix}.{repo}.inbox.notify.{user}"
+
     async def get_nc(self) -> NatsClient:
         """Return the raw NATS client, connecting if necessary.
 
@@ -1316,8 +1333,8 @@ class NatsRelay:
         else:
             # Broadcast — single user subject, no session lookup
             self._validate_user(message.to_user)
+            repo = self._validate_repo(target_repo) if target_repo else self._repo_name
             if target_repo:
-                repo = self._validate_repo(target_repo)
                 prefix = f"{self._stream_prefix}.{repo}.inbox"
                 subject = f"{prefix}.{message.to_user}"
             else:
@@ -1328,9 +1345,33 @@ class NatsRelay:
                     subject, message.model_dump_json().encode(), headers=headers
                 ),
             )
+            # Wake poke (DES-062): broadcast delivery has no session identity
+            # to target, so it cannot ride talk_notify_subject — a second
+            # always-on SUB per repo+user listens on the repo-scoped inbox
+            # subject instead. Best-effort; never blocks or fails delivery.
+            await self._publish_inbox_notification(repo, message.to_user)
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
         await self._publish_talk_notification(message.to_user, message, sender_key)
+
+    async def _live_nc_or_reconnect(self) -> NatsClient:
+        """Return ``self._nc`` if live, else reconnect via :meth:`get_nc`.
+
+        Best-effort notification publishes (:meth:`_publish_talk_notification`,
+        :meth:`_publish_inbox_notification`) need only the raw core-NATS
+        client, not JetStream/KV provisioning — but after a client rebuild
+        (``_force_reconnect``/``_on_closed`` clear ``self._nc``), reading
+        ``self._nc`` directly and bailing on ``None`` silently no-ops
+        instead of reconnecting (biff-1f2).  Checking the cached client
+        first and only calling :meth:`get_nc` (``_ensure_connected``
+        underneath) when it is actually gone or closed avoids forcing a
+        full reconnect/re-provisioning cycle on every publish when the
+        client is already live — the common case.
+        """
+        nc = self._nc
+        if nc is None or nc.is_closed:
+            return await self.get_nc()
+        return nc
 
     async def _publish_talk_notification(
         self,
@@ -1347,18 +1388,22 @@ class NatsRelay:
         The subject is ``subjectOf`` of the targeted recipient identity
         (talk.tex): only a ``user:tty`` recipient names a single session to
         wake.  A bare-user broadcast has no session identity, so no
-        instant-wake frame is published — its recipient still drains the
-        durable inbox on the next poll tick.
+        instant-wake frame is published on this subject (see
+        :meth:`_publish_inbox_notification` for that case).
 
         Best-effort: failures are logged at debug level and never
         propagate — the JetStream delivery (the critical path) has
-        already succeeded.
+        already succeeded.  Resolves the client via
+        :meth:`_live_nc_or_reconnect` rather than reading ``self._nc``
+        directly, so a poke issued right after a client rebuild (the
+        cached client discarded, not yet re-dialed) reconnects and still
+        publishes instead of silently no-opping on the stale reference
+        (biff-1f2).
         """
-        if self._nc is None or self._nc.is_closed:
-            return
         if ":" not in to_user:
             return
         try:
+            nc = await self._live_nc_or_reconnect()
             subject = self.talk_notify_subject(to_user)
             if message is not None:
                 data: dict[str, str] = {
@@ -1373,9 +1418,27 @@ class NatsRelay:
                 payload = json.dumps(data).encode()
             else:
                 payload = b"1"
-            await self._nc.publish(subject, payload)
+            await nc.publish(subject, payload)
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Talk notification failed for %s", to_user)
+
+    async def _publish_inbox_notification(self, repo: str, user: str) -> None:
+        """Publish a payload-less wake poke for a broadcast message (DES-062).
+
+        Mirrors :meth:`_publish_talk_notification`'s error discipline
+        exactly: resolves the client via :meth:`_live_nc_or_reconnect`
+        (rebuild-robust — biff-1f2) and never propagates a failure, since
+        the JetStream delivery in :meth:`deliver` — the critical path —
+        has already succeeded by the time this runs.  The poke carries no
+        payload; the subscriber (``subscribe_inbox_notify``) only wakes the
+        poller, which recomputes the unread count on its own next tick.
+        """
+        try:
+            nc = await self._live_nc_or_reconnect()
+            subject = self.inbox_notify_subject(repo, user)
+            await nc.publish(subject, b"1")
+        except Exception:  # noqa: BLE001 — notification is best-effort
+            logger.debug("Inbox notification failed for %s in %s", user, repo)
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
@@ -2066,6 +2129,13 @@ class NatsRelay:
         except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
             return None
         if wall.is_expired:
+            # Re-resolve the handle immediately before use (the same
+            # freshness discipline _tracked callers follow, biff-1f2): the
+            # ``kv.get`` above is a genuine ``await``, during which a
+            # concurrent wedge teardown could have discarded the client the
+            # outer ``kv`` is bound to, stranding this delete on a closed
+            # connection instead of rebuilding.
+            _, kv = await self._ensure_connected()
             with suppress(KeyNotFoundError, BucketNotFoundError):
                 await kv.delete(key)
             return None
