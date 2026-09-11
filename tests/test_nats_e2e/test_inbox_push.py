@@ -22,7 +22,7 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig, Message
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.state import ServerState, create_state
+from biff.server.state import CompanionSession, ServerState, create_state
 from biff.server.tools._descriptions import nap_interval_for
 from biff.testing import NotificationTracker
 
@@ -272,3 +272,158 @@ class TestUnpushedBroadcastBackstop:
             kai_client, "1 unread", timeout=backstop + 6.0
         )
         assert "1 unread" in desc
+
+
+class TestTargetedPushNotification:
+    """A targeted (``user:tty``) message's wake poke marks the inbox gate too.
+
+    The message rides the talk-notify subject (``_publish_talk_notification``),
+    not a second inbox-notify publish — proving the talk-SUB callback's
+    wake-poke classification (``TalkNotification.is_wake_poke``) actually
+    marks the same gate a broadcast's inbox-notify poke marks, so the
+    gated tick does not defer this detection to the backstop.
+    """
+
+    async def test_targeted_write_wakes_and_refreshes_description(
+        self,
+        kai_tracked: tuple[Client[Any], NotificationTracker, ServerState],
+        eric_tracked: tuple[Client[Any], NotificationTracker, ServerState],
+    ) -> None:
+        kai_client, _kt, kai_state = kai_tracked
+        _ec, _et, eric_state = eric_tracked
+        await asyncio.sleep(3.0)  # let the poller establish subscribe_talk
+
+        await eric_state.relay.deliver(
+            Message(
+                from_user="eric",
+                to_user=kai_state.session_key,  # targeted — user:tty
+                body="direct ping",
+            ),
+            sender_key=eric_state.session_key,
+        )
+
+        # Well under the 30s nap_interval backstop the gate would otherwise
+        # fall back to — this proves the talk-SUB wake-poke path detected
+        # it, not the periodic safety net.
+        desc = await _wait_for_read_messages_description(
+            kai_client, "1 unread", timeout=6.0
+        )
+        assert "1 unread" in desc
+
+
+class TestCompanionPushNotification:
+    """A broadcast addressed to the companion's user pokes a subject only
+    the companion binding subscribes to — proving ``poll_inbox`` opens a
+    second, independent ``inbox_notify`` SUB when ``state.companion`` is
+    set, not just one bound to ``state.config.user``.
+
+    Builds both sides directly (rather than the shared ``kai_tracked`` /
+    ``eric_tracked`` fixtures) so both share this file's own
+    ``_TEST_REPO`` unambiguously — those shared fixtures live in
+    ``conftest.py`` under a different repo constant, and a companion
+    broadcast landing in the wrong repo's stream is exactly the kind of
+    silent cross-repo mismatch this test would otherwise fail to catch.
+    """
+
+    async def test_companion_addressed_broadcast_wakes_and_refreshes(
+        self, nats_server: str, tmp_path: Path
+    ) -> None:
+        kai_state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server),
+            tmp_path / "kai-companion",
+            tty=_KAI_TTY,
+            hostname="test-host",
+            pwd="/test",
+            companion=CompanionSession(
+                user="jfreeman",
+                display_name="Jim Freeman",
+                kind="human",
+                tty="bbbb0099",
+            ),
+        )
+        eric_state = create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server),
+            tmp_path / "eric-companion",
+            tty="eeee0098",
+            hostname="test-host",
+            pwd="/test",
+        )
+        kai_mcp = create_server(kai_state)
+        eric_mcp = create_server(eric_state)
+
+        async with (
+            Client(FastMCPTransport(kai_mcp)) as kai_client,
+            Client(FastMCPTransport(eric_mcp)),
+        ):
+            assert kai_state.companion is not None
+            await asyncio.sleep(3.0)  # let the poller establish both inbox-notify SUBs
+
+            await eric_state.relay.deliver(
+                Message(
+                    from_user="eric",
+                    to_user=kai_state.companion.user,  # addressed to the companion
+                    body="for the human",
+                )
+            )
+
+            # The combined unread count (primary + companion,
+            # _relay_pushes_inbox_notify's else-branch mirrors this sum for the
+            # LocalRelay fallback) must reflect the companion's message well
+            # inside push latency, not the 30s backstop.
+            desc = await _wait_for_read_messages_description(
+                kai_client, "1 unread", timeout=6.0
+            )
+            assert "1 unread" in desc
+
+
+class TestPollerAtDisabledInterval:
+    """``poll_interval<=0`` still hosts the always-on SUBs and detects a poke.
+
+    Proves the poller task always runs (``app.py``'s lifespan no longer
+    skips creating it at interval<=0) and that push detection survives
+    disabling the periodic cadence entirely — the scenario
+    ``set_poll_interval``'s ``n`` response now claims works.
+    """
+
+    async def test_disabled_interval_still_detects_a_broadcast_poke(
+        self, nats_server: str, tmp_path: Path
+    ) -> None:
+        kai_state = create_state(
+            BiffConfig(
+                user="kai",
+                repo_name=_TEST_REPO,
+                relay_url=nats_server,
+                poll_interval=0,
+            ),
+            tmp_path / "kai-disabled",
+            tty=_KAI_TTY,
+            hostname="test-host",
+            pwd="/test",
+        )
+        eric_state = create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server),
+            tmp_path / "eric-disabled",
+            tty="eeee0099",
+            hostname="test-host",
+            pwd="/test",
+        )
+        kai_mcp = create_server(kai_state)
+        eric_mcp = create_server(eric_state)
+
+        async with (
+            Client(FastMCPTransport(kai_mcp)) as kai_client,
+            Client(FastMCPTransport(eric_mcp)),
+        ):
+            await asyncio.sleep(1.0)  # let the poller establish its SUBs
+
+            await eric_state.relay.deliver(
+                Message(from_user="eric", to_user="kai", body="pushed despite n")
+            )
+
+            # No periodic tick exists to eventually catch this on its own —
+            # if the wake_event/gate path is not doing the work, this
+            # would hang until the timeout with no other path to succeed.
+            desc = await _wait_for_read_messages_description(
+                kai_client, "1 unread", timeout=6.0
+            )
+            assert "1 unread" in desc
