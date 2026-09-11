@@ -877,6 +877,70 @@ class TestPollInbox:
         talk_handle.unsubscribe.assert_awaited_once()
         inbox_handle.unsubscribe.assert_awaited_once()
 
+    async def test_cheap_nap_tick_reconciles_inbox_notify_generation_bump(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cheap nap tick still reconciles the inbox-notify SUB too.
+
+        Mirrors ``test_cheap_nap_tick_reconciles_background_generation_bump``
+        for the second always-on SUB the ``SubKind``-indexed family adds: a
+        background wedge teardown/redial can orphan the inbox-notify SUB
+        during a nap exactly as it can the talk SUB, and both reconciles sit
+        in the same unconditional region of the tick loop (after the
+        cheap-nap skip), so both must run on a cheap tick alike.
+        """
+        events: list[tuple[str, int]] = []
+        subscribe_calls = [0]
+
+        def _gen(_state: ServerState) -> int:
+            return 1  # a background swap advanced the generation past the SUB
+
+        async def fake_subscribe(
+            _state: ServerState, _latch: TalkNotifyLatch, _gate: _InboxPokeGate
+        ) -> InboxNotifySubscription:
+            subscribe_calls[0] += 1
+            # First call is the startup bind at the pre-swap generation (0, now
+            # stale); the cheap-nap reconcile rebinds to the live generation (1).
+            bound = 0 if subscribe_calls[0] == 1 else 1
+            events.append(("subscribe", bound))
+            return InboxNotifySubscription(AsyncMock(), bound)
+
+        async def fake_tick(
+            _mcp: FastMCP[ServerState],
+            _state: ServerState,
+            last_count: int,
+            last_wall: tuple[str, str],
+            last_talk: tuple[tuple[str, ...], int, str],
+            *,
+            gate: _InboxPokeGate,
+            nap_interval: float,
+        ) -> tuple[int, tuple[str, str], tuple[tuple[str, ...], int, str]]:
+            del gate, nap_interval
+            return last_count, last_wall, last_talk
+
+        monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", fake_subscribe)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _gen)
+        monkeypatch.setattr(_descriptions, "_safe_tick", fake_tick)
+
+        state_with_path.activity.enter_nap()
+        state_with_path.activity.record_nap_poll()
+
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(
+            poll_inbox(
+                mcp,
+                state_with_path,
+                interval=self._FAST_INTERVAL,
+                nap_interval=1000.0,
+            )
+        )
+        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert ("subscribe", 1) in events  # rebound on the cheap nap tick
+
 
 def _fixed_generation(value: int) -> Callable[[ServerState], int]:
     """Return a ``_relay_generation`` stand-in that always reports *value*."""
