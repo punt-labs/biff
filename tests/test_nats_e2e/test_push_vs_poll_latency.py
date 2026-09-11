@@ -29,7 +29,6 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-import nats as nats_lib
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
@@ -65,20 +64,28 @@ _BACKSTOP = nap_interval_for(_POLL_INTERVAL)
 # below, not this bound, is what a genuine miss reports as).
 _TRIAL_TIMEOUT = _BACKSTOP * 2.0
 
-# Synchronization pause before each poll trial: long enough to
-# guarantee the poke gate's backstop clock has ticked over at least
-# once with nothing to detect, so the *next* recompute is a full
-# _BACKSTOP away when the trial's message is published — without this,
-# a trial's phase relative to the backstop's periodic schedule is
-# essentially wherever the previous trial's wall-clock overhead left
-# it, which can make the observed latency swing anywhere in
-# [0, _BACKSTOP) instead of consistently demonstrating the backstop
-# floor.
+# Synchronization pause before each poll trial: deliberately longer
+# than one full _BACKSTOP, so a message-less recompute is guaranteed
+# to happen at least once during the sleep, resetting the gate's
+# clock — without this, a trial's phase relative to the backstop's
+# periodic schedule is wherever the previous trial's wall-clock
+# overhead happened to leave it, and the observed latency swings
+# unpredictably across [0, _BACKSTOP) run to run.
+#
+# The pause *oversleeps* past that reset by roughly 2 * _POLL_INTERVAL
+# plus jitter, so the trial's message is actually published partway
+# into the *next* backstop window, not right at its start — the next
+# recompute is then less than a full _BACKSTOP away. Observed latency
+# is consistently around two-thirds of _BACKSTOP (~2.9-3.0s of 4.5s
+# across three separate runs), not the full interval. That's still
+# what the demonstration needs: deterministic and reproducible run to
+# run, clearly separated from push's sub-second latency, and
+# comfortably above the assertion's half-backstop floor.
 _SYNC_PAUSE = _BACKSTOP + 2 * _POLL_INTERVAL
 
 
 async def _publish_broadcast_without_poke(
-    nats_server: str, *, repo: str, to_user: str, from_user: str, body: str
+    sender: NatsRelay, *, to_user: str, from_user: str, body: str
 ) -> None:
     """Publish a broadcast message straight to JetStream, bypassing the poke.
 
@@ -86,19 +93,22 @@ async def _publish_broadcast_without_poke(
     before biff-5ex: the message lands in the durable inbox, but no wake
     poke is published, so the only way a poller can find it is the
     ``_InboxPokeGate`` backstop.
+
+    Uses ``sender``'s own JetStream context and subject-naming method
+    (private, white-box access — mirrors ``test_inbox_push.py``'s
+    ``TestPokeSubjectDoesNotCollideWithInboxStream`` and
+    ``test_push_demo.py``'s docker-tier counterpart) instead of a second
+    bare connection and a hand-copied subject string, so this helper
+    can never silently drift from ``deliver()``'s own subject shape.
     """
-    nc = await nats_lib.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
-    try:
-        js = nc.jetstream()  # pyright: ignore[reportUnknownMemberType]
-        msg = Message(from_user=from_user, to_user=to_user, body=body)
-        subject = f"biff.{repo}.inbox.{to_user}"
-        await js.publish(  # pyright: ignore[reportUnknownMemberType]
-            subject,
-            msg.model_dump_json().encode(),
-            headers={"Nats-Msg-Id": str(uuid.uuid4())},
-        )
-    finally:
-        await nc.close()  # pyright: ignore[reportUnknownMemberType]
+    js, _ = await sender._ensure_connected()  # white-box bypass, see docstring
+    msg = Message(from_user=from_user, to_user=to_user, body=body)
+    subject = sender._user_subject(to_user)  # white-box bypass, see docstring
+    await js.publish(  # pyright: ignore[reportUnknownMemberType]
+        subject,
+        msg.model_dump_json().encode(),
+        headers={"Nats-Msg-Id": str(uuid.uuid4())},
+    )
 
 
 async def _wait_for_unread_description(
@@ -133,19 +143,17 @@ class _LatencyTrials:
     ``src/biff/testing``.
     """
 
-    __slots__ = ("_client", "_kai_state", "_nats_server", "_tracker")
+    __slots__ = ("_client", "_kai_state", "_tracker")
 
     def __init__(
         self,
         client: Client[Any],
         tracker: NotificationTracker,
         kai_state: ServerState,
-        nats_server: str,
     ) -> None:
         self._client = client
         self._tracker = tracker
         self._kai_state = kai_state
-        self._nats_server = nats_server
 
     async def run_push(self, sender: NatsRelay) -> list[float]:
         """Measure push-path (real ``deliver()``) latency, ``_TRIALS`` times."""
@@ -166,19 +174,17 @@ class _LatencyTrials:
             await _drain_inbox(self._client)
         return latencies
 
-    async def run_poll(self) -> list[float]:
+    async def run_poll(self, sender: NatsRelay) -> list[float]:
         """Measure poll-path (backstop-only) latency, ``_TRIALS`` times."""
         latencies: list[float] = []
         for i in range(_TRIALS):
-            # Let the backstop clock reset with nothing to detect, so this
-            # trial's message is published right after a recompute — see
-            # _SYNC_PAUSE's docstring-length comment above for why this
-            # is necessary for a stable (non-flaky) measurement.
+            # Force a message-less backstop recompute before this trial's
+            # publish, so the measurement is deterministic run to run —
+            # see _SYNC_PAUSE's comment above for the traced timing.
             await asyncio.sleep(_SYNC_PAUSE)
             t_send = time.monotonic()
             await _publish_broadcast_without_poke(
-                self._nats_server,
-                repo=_TEST_REPO,
+                sender,
                 to_user=self._session_user(),
                 from_user="eric",
                 body=f"poll trial {i}",
@@ -257,16 +263,15 @@ class TestPushVsPollLatency:
 
     async def test_push_beats_poll(
         self,
-        nats_server: str,
         kai_latency: tuple[Client[Any], NotificationTracker, ServerState],
         sender_relay: NatsRelay,
     ) -> None:
         kai_client, _tracker, kai_state = kai_latency
         await asyncio.sleep(1.0)  # let the poller establish subscribe_inbox_notify
 
-        trials = _LatencyTrials(kai_client, _tracker, kai_state, nats_server)
+        trials = _LatencyTrials(kai_client, _tracker, kai_state)
         push_latencies = await trials.run_push(sender_relay)
-        poll_latencies = await trials.run_poll()
+        poll_latencies = await trials.run_poll(sender_relay)
 
         _print_comparison(push_latencies, poll_latencies)
 
@@ -338,10 +343,16 @@ class TestLoadReduction:
         _reset_session()
 
         old_style_calls = idle_seconds / _POLL_INTERVAL
-        # Backstop-only: one initial recompute plus one per elapsed
-        # backstop interval, with a generous +2 for scheduling slop —
-        # nowhere near the old per-tick rate.
-        expected_ceiling = int(idle_seconds / _BACKSTOP) + 2
+        # Backstop-only: one per elapsed backstop interval, plus +3 —
+        # 1 for app.py's lifespan, which calls refresh_read_messages
+        # once before the poller's own first tick even runs, and 2 for
+        # scheduling slop. Observed was exactly 4 across three separate
+        # runs (int(9.9/4.5)=2 backstop recomputes + 1 lifespan + 1 of
+        # the slop already used), so a bare +2 left zero margin above
+        # the observed count — a latent flake waiting for a slow
+        # runner. +3 leaves one full unit of headroom. Nowhere near the
+        # old per-tick rate either way.
+        expected_ceiling = int(idle_seconds / _BACKSTOP) + 3
 
         print(
             f"\nunread summary calls over {idle_seconds:.1f}s idle: "
