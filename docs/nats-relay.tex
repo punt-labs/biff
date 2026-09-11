@@ -166,21 +166,25 @@ same generation-tracked re-subscribe; the only thing that differs between
 the two is which inbox they watch.  Rather than duplicate $talkSubGen$,
 its invariant, and its liveness obligation for a second variable, this
 specification replaces $talkSubGen$ with $subGen$, a total function from a
-two-element free type $SubKind$ --- $talk$ and $inboxNotify$ --- to the
-generation each is bound to.  The invariant $talkSubGen \leq generation$
-becomes $\forall k : SubKind @ subGen(k) \leq generation$, quantified once
-over the family rather than restated per kind, and the stranding property
-becomes an obligation quantified the same way (\S\ref{sec:modelcheck}).
-Every operation that touched $talkSubGen$ is updated to the uniform
-$subGen' = subGen$ it already needed --- $ForceReconnect$ strands
-\emph{every} member of the family in one step, because it discards the
-client wholesale and does not distinguish which SUBs were opened on it ---
-and $Subscribe$ and $SubscribeRetry$ gain a $kind?$ input so one schema
-serves every member instead of one schema per kind.  This is a
-generalisation, not a restructuring: setting $SubKind$ to a singleton
-$\{ talk \}$ recovers exactly the third invariant's state space, and the
-two kinds present today are not expected to be the last, so the family
-shape is the one the model will need again for any third always-on SUB.
+free type $SubKind$ --- introduced here with two constructors, $talk$ and
+$inboxNotify$, and since extended to a third, $inboxNotifyCompanion$ (see
+its own free-type declaration below) --- to the generation each is bound
+to.  The
+invariant $talkSubGen \leq generation$ becomes $\forall k : SubKind @
+subGen(k) \leq generation$, quantified once over the family rather than
+restated per kind, and the stranding property becomes an obligation
+quantified the same way (\S\ref{sec:modelcheck}).  Every operation that
+touched $talkSubGen$ is updated to the uniform $subGen' = subGen$ it
+already needed --- $ForceReconnect$ strands \emph{every} member of the
+family in one step, because it discards the client wholesale and does not
+distinguish which SUBs were opened on it --- and $Subscribe$ and
+$SubscribeRetry$ gain a $kind?$ input so one schema serves every member
+instead of one schema per kind.  This is a generalisation, not a
+restructuring: setting $SubKind$ to a singleton $\{ talk \}$ recovers
+exactly the third invariant's state space, and the family was
+deliberately built to outlive its original two members --- its later
+extension to $inboxNotifyCompanion$ is that prediction already exercised
+once, not a hypothetical.
 
 %%----------------------------------------------------------------------
 \section{Basic Types}
