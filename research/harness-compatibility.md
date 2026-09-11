@@ -79,7 +79,7 @@ on them.
   agents (change-gate + rate limit + mesg), ethos identity resolution from
   pi's process tree unverified.
 
-### codex — tier: PARITY (different shape)
+### codex — tier: PARITY-PLUS on delivery, degraded on statusline
 
 - **Install**: codex plugin bundling `[mcp_servers.biff]` + hooks (codex
   plugins carry both), or `biff install --codex` writing config +
@@ -94,8 +94,12 @@ on them.
   near-verbatim to UserPromptSubmit.
 - **Session identity**: SessionStart hook registers the thread; thread
   names are settable (`thread/name/set`) → `/tty` maps directly.
-- **Gap**: no scriptable statusline — the queued message in the transcript
-  is the human surface.
+- **Commands**: MCP tools work as plain asks; codex custom prompts
+  (`~/.codex/prompts`) are the slash idiom — biff ships prompt files
+  mirroring `plugin/commands/`; an AGENTS.md fragment covers orientation.
+- **Gap**: no scriptable statusline — the queued nudge is a visible
+  user-turn line in the transcript (more honest than invisible injection,
+  but no persistent glanceable badge); optional desktop notification.
 - **Risks**: end-to-end queue delivery not yet live-verified (first canary:
   interactive session + `codex queue` from another shell); HEAD-vs-0.151.0
   drift; `thread/queue/add` requires an experimental client capability
