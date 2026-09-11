@@ -574,12 +574,26 @@ scope was deliberately the server-side surfacing path; this section
 exists because the client-wake half of that scope statement turned out to
 be false under test, not because anything upstream of it needs to change.
 
-**Mitigation.** `/biff:read`'s no-arg check no longer depends on the tool
-description being visible to the model at all for the mail half of its
-gate. It reads `biff statusline`'s per-session unread file directly — a
-plain file read via a different binary invocation, with no dependency on
-the MCP tool list or its staleness. The talk half of the gate has no
-equivalent ground-truth source (statusline's talk signal is an ephemeral
-display-queue item, not a persistent count) and keeps the
-description-based check, with the same staleness exposure this section
-describes — see `plugin/commands/read.md` §C for the full rationale.
+**Mitigation, part 1: stop trusting the stale channel.** `/biff:read`'s
+no-arg check no longer depends on the tool description being visible to the
+model at all for the mail half of its gate. It reads `biff statusline`'s
+per-session unread file directly — a plain file read via a different binary
+invocation, with no dependency on the MCP tool list or its staleness. The
+talk half of the gate has no equivalent ground-truth source (statusline's
+talk signal is an ephemeral display-queue item, not a persistent count) and
+keeps the description-based check, with the same staleness exposure this
+section describes — see `plugin/commands/read.md` §C for the full rationale.
+
+**Mitigation, part 2: use the channel that actually reaches the model.** A
+refreshed tool description reaching the model was never the load-bearing
+mechanism to begin with — `additionalContext`, injected by a hook's return
+value, is. `plugin/hooks/unread-nudge.sh` reads the same per-session unread
+file as part 1 (a pure-shell reimplementation of `session_key.py`'s PID walk,
+no Python startup, to fit `UserPromptSubmit`'s <100ms budget —
+`docs/hook-lifecycle.md` §5) and, wired into `UserPromptSubmit` and
+`PostToolUse`, injects "You have N unread biff messages — call
+`read_messages` now" directly into the model's context the moment the count
+rises. This replaces reliance on description markers as the model-side
+delivery mechanism for active sessions; `/biff:read`'s cron loop (§A)
+remains the coverage for a session sitting idle with no prompt or tool call
+to fire the hook on.
