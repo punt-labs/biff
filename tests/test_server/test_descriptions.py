@@ -1489,6 +1489,50 @@ class TestMidSessionDropRecovery:
         assert len(sent) == 1
         assert not _descriptions._pending_notify
 
+    async def test_drop_then_suspenders_success_flushes(
+        self, state: ServerState
+    ) -> None:
+        """A suspenders send failure followed by a LATER SUCCESSFUL suspenders
+        send flushes the earlier drop too (biff-6vuv).
+
+        ``PollTickNotifyOk`` now clears ``pendingNotify`` unconditionally,
+        the same argument ``NotifyBelt`` already rests on: the send that
+        just succeeded delivered the *current* description, so whatever
+        drop was recorded earlier — by this site or another — is
+        discharged. Before the amendment, this suspenders-only recovery
+        path did not exist: the drop had to wait for a belt call or a
+        reconnect (``capture_session``), never a same-site retry.
+        """
+        from mcp.server.session import ServerSession
+
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        dying_session = MagicMock(spec=ServerSession)
+        dying_session.send_tool_list_changed = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        _descriptions._session = dying_session
+
+        await refresh_read_messages(mcp, state)  # drops the notification
+        assert _descriptions._pending_notify
+        session_after_drop: object = _descriptions._session
+        assert session_after_drop is None
+
+        # A later suspenders send succeeds on its own terms — no request
+        # context, no reconnect, just the next poller tick reaching a live
+        # session again.
+        recovered = MagicMock(spec=ServerSession)
+        recovered.send_tool_list_changed = AsyncMock()
+        _descriptions._session = recovered
+
+        await _descriptions.notify_tool_list_changed()
+
+        recovered.send_tool_list_changed.assert_awaited_once()
+        assert not _descriptions._pending_notify
+
     async def test_belt_flush_does_not_double_send(self, state: ServerState) -> None:
         """The belt path's flush is folded into its own single send — a
         pending drop must not trigger a second notification on top of the

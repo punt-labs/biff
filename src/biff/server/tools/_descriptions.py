@@ -358,12 +358,15 @@ async def notify_tool_list_changed() -> None:
                 _session = None
                 _pending_notify = True
             else:
-                # PollTickNotifyOk (notification.tex): a suspenders send
-                # reports only the current tick's own delivery; it does not
-                # touch _pending_notify, which tracks a drop recorded at a
-                # different tick — a later belt send or reconnect flush covers
-                # it, per the proven model.
-                pass
+                # PollTickNotifyOk (notification.tex, biff-6vuv amendment):
+                # a successful suspenders send also clears _pending_notify,
+                # on the same argument NotifyBelt's unconditional clear
+                # already rests on — the send just delivered the *current*
+                # tool description, which reflects every mutation up to
+                # this point, whichever site armed the flag. Withholding
+                # the clear here left a stale debt sitting on a drop this
+                # very send already discharged.
+                _pending_notify = False
             return
 
         # Pre-session path — no session captured yet, record the drop.
