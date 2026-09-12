@@ -87,19 +87,24 @@ class TestSetPollInterval:
         assert "backstop" in result.lower()
         assert "keepalive" in result.lower()
 
-    async def test_disable_response_on_local_relay_says_detection_stops(
+    async def test_disable_response_on_local_relay_says_fallback_poll_continues(
         self, tmp_path: Path
     ) -> None:
         """A filesystem-backed relay has no push mechanism at all — the
         ``n`` response must not claim push detection "still works" the way
-        the NATS-backed response does, since that would be false.
+        the NATS-backed response does (that would be false), but it must
+        also not claim detection stops entirely: ``poll_inbox``'s
+        disabled-interval fallback tick still runs full tick work for a
+        non-push relay (Bugbot finding hwr7W), so detection degrades to a
+        fixed ~30s poll rather than disappearing.
         """
         state = _make_state(tmp_path)  # default: LocalRelay
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="n")
         assert "disabled" in result.lower()
         assert "no push mechanism" in result.lower()
-        assert "stop" in result.lower()
+        assert "30s" in result
+        assert "instead of stopping" in result.lower()
 
     async def test_invalid_interval(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
@@ -207,13 +212,17 @@ class TestSetPollIntervalDescriptionLocalRelay:
     async def test_description_does_not_claim_push_survives_disabling(
         self, tmp_path: Path
     ) -> None:
+        """Detection does keep working here (via a fallback poll, Bugbot
+        finding hwr7W) — but never by claiming *push* survives, since this
+        relay has none at all.
+        """
         state = _make_state(tmp_path)  # default: LocalRelay
         mcp = create_server(state)
         tool = await mcp.get_tool("set_poll_interval")
         assert tool is not None
         desc = tool.description or ""
         assert "no push mechanism" in desc.lower()
-        assert "keeps working" not in desc.lower()
+        assert "push detection keeps working" not in desc.lower()
 
     async def test_description_names_this_as_the_only_detection_mechanism(
         self, tmp_path: Path
@@ -224,6 +233,19 @@ class TestSetPollIntervalDescriptionLocalRelay:
         assert tool is not None
         desc = tool.description or ""
         assert "only thing driving" in desc.lower()
+
+    async def test_description_names_the_fallback_poll_on_disable(
+        self, tmp_path: Path
+    ) -> None:
+        """Disabling must be described as degrading to a fallback poll, not
+        as stopping detection entirely (Bugbot finding hwr7W)."""
+        state = _make_state(tmp_path)
+        mcp = create_server(state)
+        tool = await mcp.get_tool("set_poll_interval")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "30s" in desc
+        assert "never fully disabled" in desc.lower()
 
 
 class TestGetPollStatus:

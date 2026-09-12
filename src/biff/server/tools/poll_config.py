@@ -64,9 +64,10 @@ _SET_POLL_INTERVAL_DESCRIPTION_LOCAL = (
     "no push mechanism at all — this interval is the only "
     "thing driving new-message and talk detection. Accepts "
     "{N}s or {N}m format (e.g. 2s, 30s, 5m), or n (disable — "
-    "detection stops entirely; nothing else notices new "
-    "activity). Persisted to config. Restart required to take "
-    "effect."
+    "detection keeps working on a fixed ~30s fallback poll "
+    "instead of this interval; it is never fully disabled, "
+    "since nothing else would ever notice new activity). "
+    "Persisted to config. Restart required to take effect."
 )
 
 _DISABLE_RESPONSE_NATS = (
@@ -81,10 +82,11 @@ _DISABLE_RESPONSE_NATS = (
 )
 
 _DISABLE_RESPONSE_LOCAL = (
-    "Polling is disabled. This relay is filesystem-backed (no "
-    "NATS server configured) and has no push mechanism at all, "
-    "so new-message and talk detection stop entirely — nothing "
-    "else notices new activity. Restart Claude Code for the "
+    "Polling's configured interval is disabled. This relay is "
+    "filesystem-backed (no NATS server configured) and has no "
+    "push mechanism at all, so detection falls back to a fixed "
+    "~30s poll instead of stopping — nothing else would ever "
+    "notice new activity otherwise. Restart Claude Code for the "
     "change to take effect."
 )
 
