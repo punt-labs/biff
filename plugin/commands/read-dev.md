@@ -113,17 +113,27 @@ supplemented by a best-effort statusline peek.
    to the staleness of, the MCP tool-description path.
    - The output is two lines. Line 1 ends with the biff segment:
      `user:tty(N)` or `user(N)` (no tty name in some setups) — plain text when
-     `N` is `0` or mesg is off, wrapped in `\033[1;33m...\033[0m` (bold
-     yellow ANSI) when `N` is nonzero. Strip ANSI escape sequences
-     (`\x1b[...m`) and read the trailing `(N)` — that integer is the
-     ground-truth unread mail count for this session.
+     `N` is `0`, wrapped in `\033[1;33m...\033[0m` (bold yellow ANSI) when `N`
+     is nonzero. Strip ANSI escape sequences (`\x1b[...m`) and read the
+     trailing `(N)` — that integer is the ground-truth unread mail count for
+     this session.
+   - **Mesg off is a distinct, literal shape, not a number.** When this
+     session has run `/mesg off`, the segment renders the bare letter
+     `(n)` — plain text, unconditionally, regardless of the real count
+     (`_biff_segment` in `src/biff/statusline.py`; `SessionUnread.biff_enabled`
+     in `src/biff/unread.py`). The count is deliberately hidden, not zero —
+     do not coerce it to `0`. Doing so would silently stop mail delivery to a
+     mesg-off session while `plugin/hooks/unread-nudge.sh` (the other
+     delivery path) reads the on-disk count directly and keeps nudging
+     regardless of mesg. Treat a literal `(n)` as "count unknown, possibly
+     nonzero" — see step 3's mail gate.
    - Line 2 is either the idle marker `▶` alone, or `▶ <text>` wrapped bold
      red (a wall item) or bold yellow (a talk item) — see step 2.
-   - If the command errors, times out, or the output doesn't match this shape
-     (for example the dim "`/biff enable to turn on team communication`"
-     line, meaning biff isn't enabled for this session) treat `N` as `0` and
-     continue — a parse failure here must never block the rest of the
-     command.
+   - If the command errors, times out, or the output doesn't match either
+     shape above (for example the dim "`/biff enable to turn on team
+     communication`" line, meaning biff isn't enabled for this session) treat
+     `N` as `0` and continue — a parse failure here must never block the rest
+     of the command.
 2. **Talk** — pull if EITHER signal fires:
    - The live `talk` tool description begins with `[TALK]` AND signals *new
      activity* — it contains `wants to talk` (a pending invite) or
@@ -150,7 +160,9 @@ supplemented by a best-effort statusline peek.
    - If it returns talk messages, surface them.
    - Emit the tool output verbatim — no reformatting, code fences, tables, or
      boxes.
-3. **Mail** — pull only if `N > 0` from step 1:
+3. **Mail** — pull if `N > 0`, OR step 1's biff segment showed the literal
+   `(n)` mesg-off shape (count unknown, possibly nonzero — pull rather than
+   silently withholding mail the way the nudge hook never does):
    - Call `mcp__plugin_biff-dev_tty__read_messages`. The tool retries a transport
      error once internally, per inbox, and never raises for one.
    - If the result starts with "Could not check ", surface it plainly — this
@@ -167,7 +179,10 @@ supplemented by a best-effort statusline peek.
 Mail's gate is the parenthesized integer `biff statusline` prints — the exact
 count the biff server's `_write_unread_file` (`src/biff/server/tools/
 _descriptions.py`) writes to the per-session file on every change, not a
-string embedded in a tool description. Talk's gate is the marker `[TALK]`
+string embedded in a tool description — except when mesg is off, where the
+segment prints the literal `(n)` in place of the count and the gate falls
+back to pulling unconditionally rather than treating that as zero. Talk's
+gate is the marker `[TALK]`
 plus `wants to talk` / `new message`, the exact strings the biff server
 writes into the live tool description (`_descriptions._talk_description`),
 supplemented by the bold-yellow `▶ <text>` talk item on statusline line 2. If
