@@ -1370,10 +1370,22 @@ async def _sleep_or_wake(
         for task in waiters:
             if not task.done():
                 task.cancel()
+    # Snapshot the event's own state before clearing it, rather than
+    # trusting `done` alone. asyncio.wait()'s internal timeout resolution
+    # and a callback's wake_event.set() are two independent events that can
+    # land in either order in the same narrow window; a set() that wins
+    # that race without getting the wait-task into `done` first would
+    # otherwise be silently erased by the unconditional clear() below with
+    # no outcome ever reflecting it — at a disabled interval, poll_inbox
+    # treats that as TIMEOUT and skips the tick's recompute entirely, so
+    # the poke is lost until the next fallback tick, not just delayed.
+    # Only this function ever calls .clear() on wake_event, so nothing else
+    # can flip is_set() between this read and the clear — the read is safe.
+    woke = wake_event.is_set()
     wake_event.clear()
     if shutdown is not None and shutdown.is_set():
         return _WakeOutcome.SHUTDOWN
-    if done:  # a waiter completed before the timeout — must be wake_event
+    if done or woke:  # a waiter completed, or the event was set regardless
         return _WakeOutcome.EVENT
     return _WakeOutcome.TIMEOUT
 

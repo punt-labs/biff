@@ -543,6 +543,73 @@ class TestRefreshWallSenderBounds:
         assert "u" * 10_000 not in spoken_calls[0]
 
 
+class TestSleepOrWakeLostWakeRace:
+    """A ``wake_event.set()`` landing in the narrow window between
+    ``asyncio.wait()``'s internal timeout decision and this function's own
+    ``wake_event.clear()`` must not be silently erased.
+
+    ``asyncio.wait()``'s timeout resolution and a NATS callback's
+    ``wake_event.set()`` are two independent events that can interleave in
+    either order; if ``done`` came back empty (the wait-task lost that
+    narrow race) while the event was, in fact, set, trusting ``done`` alone
+    reports TIMEOUT instead of EVENT. At a disabled poll interval
+    (``interval<=0``), ``poll_inbox`` treats TIMEOUT as "skip tick work" —
+    so the poke is lost until the next fallback tick, not merely delayed.
+    """
+
+    async def test_event_set_despite_empty_done_still_reports_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        wake_event = asyncio.Event()
+
+        async def _fake_wait(
+            waiters: list[asyncio.Future[object]],
+            *,
+            timeout: float,
+            return_when: str,
+        ) -> tuple[set[asyncio.Future[object]], set[asyncio.Future[object]]]:
+            del waiters, timeout, return_when
+            # Simulate the race directly: asyncio.wait() decided "nothing
+            # completed" (empty done) in the same window a wake_event.set()
+            # landed — reproducible without depending on real scheduler
+            # timing.
+            wake_event.set()
+            return set(), set()
+
+        monkeypatch.setattr(asyncio, "wait", _fake_wait)
+
+        outcome = await _descriptions._sleep_or_wake(
+            interval=1000.0, shutdown=None, wake_event=wake_event
+        )
+
+        assert outcome is _descriptions._WakeOutcome.EVENT
+        assert not wake_event.is_set()  # still cleared before returning
+
+    async def test_truly_empty_done_and_unset_event_reports_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ordinary TIMEOUT path must still work — this fix must not
+        turn every wait into a false EVENT."""
+        wake_event = asyncio.Event()
+
+        async def _fake_wait(
+            waiters: list[asyncio.Future[object]],
+            *,
+            timeout: float,
+            return_when: str,
+        ) -> tuple[set[asyncio.Future[object]], set[asyncio.Future[object]]]:
+            del waiters, timeout, return_when
+            return set(), set()
+
+        monkeypatch.setattr(asyncio, "wait", _fake_wait)
+
+        outcome = await _descriptions._sleep_or_wake(
+            interval=1000.0, shutdown=None, wake_event=wake_event
+        )
+
+        assert outcome is _descriptions._WakeOutcome.TIMEOUT
+
+
 class TestPollInbox:
     """Verify the background inbox poller detects changes and refreshes."""
 
