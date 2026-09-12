@@ -26,6 +26,20 @@ def _make_state(tmp_path: Path, *, poll_interval: float = 2.0) -> ServerState:
     )
 
 
+def _make_nats_state(tmp_path: Path, *, poll_interval: float = 2.0) -> ServerState:
+    """A state whose relay is NATS-backed (never dials — no server needed).
+
+    ``set_poll_interval``'s push-oriented description/response text is only
+    accurate for a NATS-backed relay (Bugbot finding hgKjk); tests that
+    assert on that text must use this, not the default ``_make_state``
+    (filesystem-backed ``LocalRelay``, which has no push mechanism at all).
+    """
+    state = _make_state(tmp_path, poll_interval=poll_interval)
+    relay = NatsRelay(url="nats://localhost:4222", stream_prefix="biff-dev")
+    object.__setattr__(state, "relay", relay)
+    return state
+
+
 async def _get_tool_fn(state: ServerState, tool_name: str):
     mcp = create_server(state)
     tool = await mcp.get_tool(tool_name)
@@ -64,7 +78,7 @@ class TestSetPollInterval:
         render, invite expiry, backstop, wedge detection), not claim
         everything still works uniformly.
         """
-        state = _make_state(tmp_path)
+        state = _make_nats_state(tmp_path)
         fn = await _get_tool_fn(state, "set_poll_interval")
         result = await fn(interval="n")
         assert "push" in result.lower()
@@ -72,6 +86,20 @@ class TestSetPollInterval:
         assert "invite" in result.lower()
         assert "backstop" in result.lower()
         assert "keepalive" in result.lower()
+
+    async def test_disable_response_on_local_relay_says_detection_stops(
+        self, tmp_path: Path
+    ) -> None:
+        """A filesystem-backed relay has no push mechanism at all — the
+        ``n`` response must not claim push detection "still works" the way
+        the NATS-backed response does, since that would be false.
+        """
+        state = _make_state(tmp_path)  # default: LocalRelay
+        fn = await _get_tool_fn(state, "set_poll_interval")
+        result = await fn(interval="n")
+        assert "disabled" in result.lower()
+        assert "no push mechanism" in result.lower()
+        assert "stop" in result.lower()
 
     async def test_invalid_interval(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
@@ -110,10 +138,15 @@ class TestSetPollIntervalDescription:
     longer claim this interval governs how fast they arrive, and must
     instead name what it still governs: wall-countdown cadence, stale
     talk-invite expiry, the unread backstop, and the wedge-detection window.
+
+    All of this is NATS-relay-specific: ``_relay_pushes_inbox_notify`` is
+    ``NatsRelay``-only, so every assertion here uses a NATS-backed state
+    (Bugbot finding hgKjk) — see ``TestSetPollIntervalDescriptionLocalRelay``
+    for the filesystem-backed wording.
     """
 
     async def test_description_names_repointed_meaning(self, tmp_path: Path) -> None:
-        state = _make_state(tmp_path)
+        state = _make_nats_state(tmp_path)
         mcp = create_server(state)
         tool = await mcp.get_tool("set_poll_interval")
         assert tool is not None
@@ -127,7 +160,7 @@ class TestSetPollIntervalDescription:
     async def test_disable_description_names_keepalive_floor(
         self, tmp_path: Path
     ) -> None:
-        state = _make_state(tmp_path)
+        state = _make_nats_state(tmp_path)
         mcp = create_server(state)
         tool = await mcp.get_tool("set_poll_interval")
         assert tool is not None
@@ -142,7 +175,7 @@ class TestSetPollIntervalDescription:
         backstop fires every *interval*, when it actually fires every
         ``nap_interval_for(interval)`` (15x).
         """
-        state = _make_state(tmp_path)
+        state = _make_nats_state(tmp_path)
         mcp = create_server(state)
         tool = await mcp.get_tool("set_poll_interval")
         assert tool is not None
@@ -157,12 +190,40 @@ class TestSetPollIntervalDescription:
         just that push is real-time "regardless of this value" in the
         abstract while n silently amputated it.
         """
-        state = _make_state(tmp_path)
+        state = _make_nats_state(tmp_path)
         mcp = create_server(state)
         tool = await mcp.get_tool("set_poll_interval")
         assert tool is not None
         desc = tool.description or ""
         assert "keeps working" in desc.lower()
+
+
+class TestSetPollIntervalDescriptionLocalRelay:
+    """A filesystem-backed relay has no push mechanism at all — the
+    description must not claim NATS push semantics for it (Bugbot finding
+    hgKjk).
+    """
+
+    async def test_description_does_not_claim_push_survives_disabling(
+        self, tmp_path: Path
+    ) -> None:
+        state = _make_state(tmp_path)  # default: LocalRelay
+        mcp = create_server(state)
+        tool = await mcp.get_tool("set_poll_interval")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "no push mechanism" in desc.lower()
+        assert "keeps working" not in desc.lower()
+
+    async def test_description_names_this_as_the_only_detection_mechanism(
+        self, tmp_path: Path
+    ) -> None:
+        state = _make_state(tmp_path)
+        mcp = create_server(state)
+        tool = await mcp.get_tool("set_poll_interval")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "only thing driving" in desc.lower()
 
 
 class TestGetPollStatus:

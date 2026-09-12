@@ -41,27 +41,65 @@ def _parse_interval(value: str) -> float | None:
     return amount
 
 
+_SET_POLL_INTERVAL_DESCRIPTION_NATS = (
+    "Set the background poller's cadence. Messages and talk "
+    "arrive in real time via NATS push regardless of this "
+    "value — the poller keeps its always-on subscriptions and "
+    "poke-driven recompute running even when disabled (see n, "
+    "below). This value instead governs the wall-countdown "
+    "render rate, stale talk-invite expiry, the unread-count "
+    "backstop (recomputed roughly every 15x this interval even "
+    "if a push notification is missed), and the connection "
+    "wedge-detection window. Accepts {N}s or {N}m format (e.g. "
+    "2s, 30s, 5m), or n (disable — push detection keeps "
+    "working, but the wall countdown stops re-rendering, stale "
+    "invites stop expiring, the backstop is gone, and wedge "
+    "detection widens to the ~60-80s keepalive floor). "
+    "Persisted to config. Restart required to take effect."
+)
+
+_SET_POLL_INTERVAL_DESCRIPTION_LOCAL = (
+    "Set the background poller's cadence. This relay is "
+    "filesystem-backed (no NATS server configured), which has "
+    "no push mechanism at all — this interval is the only "
+    "thing driving new-message and talk detection. Accepts "
+    "{N}s or {N}m format (e.g. 2s, 30s, 5m), or n (disable — "
+    "detection stops entirely; nothing else notices new "
+    "activity). Persisted to config. Restart required to take "
+    "effect."
+)
+
+_DISABLE_RESPONSE_NATS = (
+    "Polling's periodic work is disabled — the wall countdown "
+    "stops re-rendering, stale talk invites stop expiring, "
+    "the unread backstop is gone, and wedge detection widens "
+    "to the ~60-80s keepalive floor. Messages and talk still "
+    "arrive via NATS push: the always-on subscriptions and "
+    "their poke-driven recompute keep running: only the "
+    "periodic safety net around them is gone. Restart Claude "
+    "Code for the change to take effect."
+)
+
+_DISABLE_RESPONSE_LOCAL = (
+    "Polling is disabled. This relay is filesystem-backed (no "
+    "NATS server configured) and has no push mechanism at all, "
+    "so new-message and talk detection stop entirely — nothing "
+    "else notices new activity. Restart Claude Code for the "
+    "change to take effect."
+)
+
+
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register poll configuration tools."""
 
-    @mcp.tool(
-        name="set_poll_interval",
-        description=(
-            "Set the background poller's cadence. Messages and talk arrive "
-            "in real time via NATS push regardless of this value — the "
-            "poller keeps its always-on subscriptions and poke-driven "
-            "recompute running even when disabled (see n, below). This "
-            "value instead governs the wall-countdown render rate, stale "
-            "talk-invite expiry, the unread-count backstop (recomputed "
-            "roughly every 15x this interval even if a push notification "
-            "is missed), and the connection wedge-detection window. "
-            "Accepts {N}s or {N}m format (e.g. 2s, 30s, 5m), or n (disable "
-            "— push detection keeps working, but the wall countdown stops "
-            "re-rendering, stale invites stop expiring, the backstop is "
-            "gone, and wedge detection widens to the ~60-80s keepalive "
-            "floor). Persisted to config. Restart required to take effect."
-        ),
+    nats_backed = isinstance(state.relay, NatsRelay)
+    description = (
+        _SET_POLL_INTERVAL_DESCRIPTION_NATS
+        if nats_backed
+        else _SET_POLL_INTERVAL_DESCRIPTION_LOCAL
     )
+
+    @mcp.tool(name="set_poll_interval", description=description)
     async def set_poll_interval(interval: str) -> str:
         """Persist the poll interval to config.local.yaml. Restart required."""
         parsed = _parse_interval(interval)
@@ -85,16 +123,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             ensure_gitignore_yaml(repo_root)
 
         if parsed is None:
-            return (
-                "Polling's periodic work is disabled — the wall countdown "
-                "stops re-rendering, stale talk invites stop expiring, "
-                "the unread backstop is gone, and wedge detection widens "
-                "to the ~60-80s keepalive floor. Messages and talk still "
-                "arrive via NATS push: the always-on subscriptions and "
-                "their poke-driven recompute keep running: only the "
-                "periodic safety net around them is gone. Restart Claude "
-                "Code for the change to take effect."
-            )
+            return _DISABLE_RESPONSE_NATS if nats_backed else _DISABLE_RESPONSE_LOCAL
 
         return (
             f"Poll interval set to {interval} ({parsed}s). "
