@@ -98,7 +98,20 @@ fi
 # `!= false` is exact: only an explicit boolean `false` yields "false";
 # missing (null) or `true` both yield "true" (default-enabled).
 _enabled=$(jq -r '(.biff_enabled != false)' "$_unread_file" 2>/dev/null)
-[[ "$_enabled" == "false" ]] && exit 0
+if [[ "$_enabled" == "false" ]]; then
+  # Clear the sidecar unconditionally while muted, not only at count==0
+  # below (unreachable from here — we exit before ever reading $_count).
+  # Without this, a stamp written before muting survives the entire muted
+  # period untouched; if the count changes one or more times while muted
+  # (read to zero, new mail arrives, etc.) and happens to land back on
+  # that same stale value by the time mesg comes back on, the rising-
+  # change gate below would compare equal and silently swallow a nudge
+  # for genuinely unread mail the user was never told about (Bugbot
+  # finding hw_9-). Clearing here guarantees the first post-unmute tick
+  # always starts from a clean "never nudged" baseline.
+  rm -f "$_nudge_file" 2>/dev/null
+  exit 0
+fi
 
 _count=$(jq -r '.count // 0' "$_unread_file" 2>/dev/null)
 [[ "$_count" =~ ^[0-9]+$ ]] || exit 0
