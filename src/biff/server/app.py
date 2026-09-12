@@ -23,6 +23,8 @@ from biff._stdlib import active_dir, remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from mcp.types import InitializeRequest, InitializeResult
 
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
@@ -32,6 +34,7 @@ from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
     capture_session,
     get_tty_name,
+    nap_interval_for,
     poll_inbox,
     refresh_read_messages,
     refresh_wall,
@@ -996,6 +999,24 @@ async def _release_relay(state: ServerState) -> None:
         logger.warning("Failed to close relay", exc_info=True)
 
 
+def _remove_unread_files(unread_path: Path | None) -> None:
+    """Delete the unread-status JSON and its unread-nudge.sh sidecar.
+
+    ``plugin/hooks/unread-nudge.sh`` tracks the last-nudged count in a
+    sibling ``.nudged`` file keyed to this same path's stem. Removing only
+    the JSON (the original shutdown behavior) left the sidecar behind: a
+    reused PID starting a fresh session could inherit a stale sidecar whose
+    leftover count happened to match its own first real count, silently
+    suppressing the nudge that should fire for it (Bugbot finding hfTNp).
+    """
+    if unread_path is None:
+        return
+    with suppress(FileNotFoundError):
+        unread_path.unlink()
+    with suppress(FileNotFoundError):
+        unread_path.with_suffix(".nudged").unlink()
+
+
 def _write_reap_fallback_sentinels(state: ServerState) -> None:
     """Write reap-fallback sentinels before the best-effort NATS teardown.
 
@@ -1088,9 +1109,7 @@ async def _lifespan_cleanup(
     from biff.integration.vox import drain_background_tasks  # noqa: PLC0415
 
     await drain_background_tasks()
-    if state.unread_path is not None:
-        with suppress(FileNotFoundError):
-            state.unread_path.unlink()
+    _remove_unread_files(state.unread_path)
     if state.owns_relay:
         await _release_relay(state)
     with suppress(OSError):
@@ -1188,6 +1207,18 @@ async def _active_lifespan(
                     b"biff: signal cleanup: companion sentinel write failed\n",
                 )
             )
+        # Relay-agnostic, like the sentinel writes above: a hard SIGTERM/
+        # SIGINT/SIGHUP kill previously skipped this entirely (only the
+        # normal lifespan-teardown path called it), leaving both the
+        # unread-status JSON and its unread-nudge.sh ``.nudged`` sidecar
+        # on disk after this session ends (Cursor Bugbot finding hwquR).
+        steps.append(
+            (
+                lambda: _remove_unread_files(state.unread_path),
+                (OSError,),
+                b"biff: signal cleanup: unread file removal failed\n",
+            )
+        )
         # Best-effort sync cleanup for LocalRelay only.
         if isinstance(state.relay, LocalRelay):
             relay = state.relay
@@ -1333,12 +1364,18 @@ async def _active_lifespan(
 
     shutdown = asyncio.Event()
     poll_interval = state.config.poll_interval
-    poller = (
-        asyncio.create_task(
-            poll_inbox(mcp, state, shutdown=shutdown, interval=poll_interval)
+    # Always on, even at poll_interval <= 0: the always-on SUBs and
+    # their poke-driven recompute never depended on a periodic tick, only
+    # the periodic work (wall re-render, invite expiry, backstop) does —
+    # poll_inbox itself degrades that gracefully when interval <= 0.
+    poller: asyncio.Task[None] = asyncio.create_task(
+        poll_inbox(
+            mcp,
+            state,
+            shutdown=shutdown,
+            interval=poll_interval,
+            nap_interval=nap_interval_for(poll_interval),
         )
-        if poll_interval > 0
-        else None
     )
     reaper = asyncio.create_task(_reap_loop(state, shutdown))
     heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
@@ -1350,7 +1387,7 @@ async def _active_lifespan(
             state,
             shutdown,
             reaper,
-            [t for t in [poller, heartbeat, watcher] if t is not None],
+            [poller, heartbeat, watcher],
         )
 
 
@@ -1368,9 +1405,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
             try:
                 yield state
             finally:
-                if state.unread_path is not None:
-                    with suppress(FileNotFoundError):
-                        state.unread_path.unlink()
+                _remove_unread_files(state.unread_path)
             return
         async with _active_lifespan(mcp, state) as ctx:
             yield ctx

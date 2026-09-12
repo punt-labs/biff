@@ -86,6 +86,10 @@ _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
+_NOTIFY_RECONNECT_TIMEOUT = 3.0  # bound _live_nc_or_reconnect's fall-through
+# dial+provision (_CONNECT_PROVISION_TIMEOUT=20s) so a best-effort wake poke
+# stays best-effort — deliver() already published durably by the time this
+# runs, so the poke must never sit and wait on a cold reconnect.
 
 # Keepalive tuning so a half-open connection (socket up, server not
 # responding) is detected in ~60-80s, not the nats-py default of 240s.
@@ -491,6 +495,11 @@ class NatsRelay:
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
         self._names_kv: KeyValue | None = None
+        # Set only by close() — the permanent "the session is ending" state,
+        # never by disconnect() (reversible: the next call redials). Checked
+        # by _live_nc_or_reconnect so a poke fire_and_forget arriving after
+        # close() cannot resurrect a client nothing owns or will ever close.
+        self._closed = False
         self._connect_lock = asyncio.Lock()
         self._wtmp_available: bool = False
         self._health = _ConnectionHealth(url)
@@ -559,21 +568,44 @@ class NatsRelay:
             return js, kv
         return None
 
+    def _raise_if_closed(self) -> None:
+        """Raise if :meth:`close` has already been called on this relay."""
+        if self._closed:
+            msg = "NatsRelay is closed"
+            raise ConnectionError(msg)
+
     async def _ensure_connected(self) -> tuple[JetStreamContext, KeyValue]:
         """Lazily connect and provision infrastructure.
 
         Reuses an existing NATS connection if available (e.g. after
         :meth:`reset_infrastructure`).  Only creates a new connection
         when none exists or the previous one was closed.
+
+        Rejects a terminally-closed relay in two places, not one: the
+        fast-path check below fails immediately for the common case (no
+        connection attempt racing at all); the check again inside
+        ``_connect_lock`` is the one that actually matters, closing a race
+        :meth:`close` also serializes on the same lock to win: whichever
+        of a concurrent ``close()``/``_ensure_connected()`` pair acquires
+        the lock first now runs to completion before the other proceeds,
+        so a reconnect that was already in flight when ``close()`` arrives
+        finishes and is torn down cleanly by ``close()`` afterward, while
+        a reconnect that arrives after (or blocks behind) ``close()`` sees
+        ``_closed`` before it can install a new client — either way, no
+        client the relay does not intend to own is ever left standing.
         """
+        self._raise_if_closed()
         # Lock-free fast path: return cached handles if connection is alive.
         cached = self._cached_handles()
         if cached is not None:
             return cached
 
         # Slow path: serialize connection creation to prevent concurrent
-        # callers from each creating a separate NATS connection (DES-029).
+        # callers from each creating a separate NATS connection (DES-029) —
+        # and, as of the _closed check below, to prevent a concurrent
+        # close() from losing this race.
         async with self._connect_lock:
+            self._raise_if_closed()
             # Double-check after acquiring the lock — another caller may
             # have already reconnected while we waited.
             cached = self._cached_handles()
@@ -660,14 +692,16 @@ class NatsRelay:
         the next :meth:`_ensure_connected` dials a fresh client.
 
         Serialised on ``_connect_lock`` against concurrent rebuilds
-        (``_ensure_connected`` / ``_open_connection`` hold it).  ``_tracked``
-        requests never run under that lock, so acquiring it here cannot
-        deadlock.  ``close()`` and ``disconnect()`` do *not* take the lock, so
-        races with deliberate teardown are handled by idempotence, not by the
-        lock: the wedged client is captured before the lock and re-checked
-        under it, and if it no longer matches ``self._nc`` (a rebuild, close,
-        or disconnect replaced or cleared it) this is a no-op — it never tears
-        down a freshly built connection.  The re-check also skips a client that
+        (``_ensure_connected`` / ``_open_connection`` / ``close`` /
+        ``disconnect`` all hold it — a race with any of them is now
+        prevented by the lock itself, not merely handled after the fact
+        by idempotence).  ``_tracked`` requests never run under that
+        lock, so acquiring it here cannot deadlock.  The wedged client is
+        still captured before the lock and re-checked under it, since a
+        rebuild, close, or disconnect can still have replaced or cleared
+        ``self._nc`` while this call waited its turn for the lock — a
+        mismatch there is a no-op — it never tears down a freshly built
+        connection.  The re-check also skips a client that
         stopped being connected while we waited for the lock: if nats-py's own
         keepalive flipped it to reconnecting after the ``_tracked`` gate saw it
         connected, that reconnect owns recovery — do not tear it down.
@@ -866,11 +900,21 @@ class NatsRelay:
             js, kv, names_kv = await asyncio.wait_for(
                 self._provision(nc), timeout=_CONNECT_PROVISION_TIMEOUT
             )
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             if isinstance(exc, TimeoutError):
                 self._health.record_provision_timeout(_CONNECT_PROVISION_TIMEOUT)
             # Tear the connection down so the next call reconnects fresh
-            # instead of reusing a wedged/half-open one.
+            # instead of reusing a wedged/half-open one.  Catches
+            # ``asyncio.CancelledError`` too (a ``BaseException``, not an
+            # ``Exception``): an outer ``asyncio.timeout()``/cancellation
+            # (e.g. ``_live_nc_or_reconnect``'s bounded fall-through) landing
+            # here while ``_provision`` is in flight must not skip this
+            # cleanup — a plain ``except Exception`` lets the cancellation
+            # fall straight through, leaking ``nc`` un-closed and leaving
+            # it neither installed on ``self._nc`` nor reachable to close
+            # later.  Re-raising after cleanup preserves cancellation
+            # semantics; ``asyncio.timeout()``'s own ``__aexit__`` converts
+            # it to ``TimeoutError`` at its boundary as usual.
             await safe_close(nc)
             self._nc = None
             self._js = None
@@ -1126,22 +1170,53 @@ class NatsRelay:
         Semantically distinct from :meth:`close` — disconnect is
         reversible (the session continues), close is permanent
         (the session is ending).
-        """
-        if self._nc is not None and not self._nc.is_closed:
-            await safe_close(self._nc)
-        self._nc = None
-        self._js = None
-        self._kv = None
-        self._names_kv = None
 
-    async def close(self) -> None:
-        """Close the NATS connection and release resources."""
-        if self._nc is not None:
-            await safe_close(self._nc)
+        Serialised on ``_connect_lock`` like every other lifecycle
+        transition (``_ensure_connected``, ``_force_reconnect``, ``close``).
+        Without the lock, ``disconnect()`` could observe ``self._nc`` as
+        ``None`` (or already closed), decide there is nothing to tear down,
+        and return — while a concurrent ``_ensure_connected()`` that was
+        already blocked waiting on the lock (e.g. behind a slow dial) then
+        completes moments later and installs a fresh client, silently
+        resurrecting the connection this call just reported as torn down.
+        Sharing the lock makes the two operations linearise: whichever
+        acquires it first runs to completion before the other proceeds, so
+        a ``disconnect()`` that loses the race tears down what the
+        in-flight reconnect just installed instead of racing past it.
+        """
+        async with self._connect_lock:
+            if self._nc is not None and not self._nc.is_closed:
+                await safe_close(self._nc)
             self._nc = None
             self._js = None
             self._kv = None
             self._names_kv = None
+
+    async def close(self) -> None:
+        """Close the NATS connection and release resources — permanently.
+
+        Sets the terminal ``_closed`` flag :meth:`_live_nc_or_reconnect`
+        and :meth:`_ensure_connected` check: nothing redials after this
+        call, unlike :meth:`disconnect`.
+
+        Holds ``_connect_lock`` for the same reason :meth:`_ensure_connected`
+        does: a reconnect racing this call must not install a client after
+        ``close()`` has already run, and the *only* way to guarantee that
+        ordering — rather than hoping ``self._nc is None`` happens to read
+        back correctly — is for the two to serialize on the same lock.
+        Whichever acquires it first completes fully (a reconnect already
+        in flight finishes and is then torn down cleanly by ``close()``
+        right here; a reconnect that arrives after sees ``_closed`` set
+        inside the lock and never dials at all).
+        """
+        async with self._connect_lock:
+            self._closed = True
+            if self._nc is not None:
+                await safe_close(self._nc)
+                self._nc = None
+                self._js = None
+                self._kv = None
+                self._names_kv = None
 
     @staticmethod
     def _validate_user(user: str) -> str:
@@ -1149,9 +1224,12 @@ class NatsRelay:
 
         NATS subjects use ``.`` as a separator and ``*``/``>`` as
         wildcards.  Allowing these in usernames would let a crafted
-        name match unintended subjects.
+        name match unintended subjects. ``:`` is rejected too — it is
+        the separator :meth:`talk_notify_subject` uses to render its
+        ``user:tty`` fourth token, and :meth:`inbox_notify_subject`'s
+        disjointness from it depends on a bare user never containing one.
         """
-        if not user or any(c in user for c in (".", "*", ">", " ")):
+        if not user or any(c in user for c in (".", "*", ">", " ", ":")):
             msg = f"Invalid username: {user!r}"
             raise ValueError(msg)
         return user
@@ -1166,8 +1244,16 @@ class NatsRelay:
 
     @staticmethod
     def _validate_repo(repo: str) -> str:
-        """Reject repo names that could escape NATS subject boundaries."""
-        if not repo or any(c in repo for c in (".", "*", ">", " ")):
+        """Reject repo names that could escape NATS subject boundaries.
+
+        ``:`` is not a NATS subject token separator, so no escape is
+        demonstrated for it here the way it is for ``_validate_user``'s
+        disjointness from ``talk_notify_subject``'s ``user:tty`` shape --
+        this is a defense-in-depth alignment with that rejected set, so
+        a future subject that does key on repo names the same way is not
+        the one place the family's rejected-character sets disagree.
+        """
+        if not repo or any(c in repo for c in (".", "*", ">", " ", ":")):
             msg = f"Invalid repo name: {repo!r}"
             raise ValueError(msg)
         return repo
@@ -1248,11 +1334,56 @@ class NatsRelay:
         self._validate_tty(tty)
         return f"{self._stream_prefix}.talk.notify.{user}:{tty}"
 
+    def inbox_notify_subject(self, repo: str, user: str) -> str:
+        """NATS core subject for a broadcast-message wake poke to *user* in *repo*.
+
+        Repo-scoped (DES-062), unlike :meth:`talk_notify_subject`'s
+        identity-routed form: a broadcast poke names a bare ``user``, not a
+        globally-unique ``user:tty`` identity, so it cannot be routed the
+        same way.  It is scoped to the same repo as the durable subject it
+        signals — the repo-partitioned broadcast inbox
+        ``{stream_prefix}.{repo}.inbox.{user}`` (DES-013/DES-030) — waking
+        only the sessions in that repo that can read that inbox.  A
+        repo-less subject would wake every repo's sessions of *user* for an
+        inbox most of them cannot see.
+
+        Deliberately **not** ``{stream_prefix}.{repo}.inbox.notify.{user}``,
+        the shape this originally shipped with: the durable inbox stream is
+        provisioned with the wildcard filter
+        ``{stream_prefix}.*.inbox.>`` (:meth:`_provision`), and that pattern
+        matches *any* subject with ``inbox`` as its third token, poke
+        subject included.  A poke published on such a subject is silently
+        captured into the shared JetStream WORK_QUEUE stream — no
+        consumer ever reads it, retention has no ``max_age``/``max_msgs``
+        for this per-message case, so it sits there forever, permanently
+        consuming a slot in the shared 100 MiB budget and, over enough
+        broadcasts, evicting real undelivered messages.  Every poke
+        subject must be checked against the stream's *filter*, not just
+        compared as a literal string against other subjects: a subject can
+        be entirely distinct from every other subject in use and still
+        collide with a wildcard.  Putting ``notify`` where ``inbox`` was —
+        matching :meth:`talk_notify_subject`'s own stream-safe shape — is
+        what keeps this pattern from ever containing the ``inbox`` token
+        the durable stream filters on.
+
+        This also can never collide with a talk-notify subject, even for a
+        repo literally named ``talk``: :meth:`talk_notify_subject`'s fourth
+        token is always a session-scoped ``user:tty`` (containing ``:``),
+        while this subject's fourth token is always a bare ``user`` (never
+        containing ``:``, enforced by :meth:`_validate_user`) — the two
+        shapes are disjoint by construction, not by naming convention.
+        """
+        self._validate_user(user)
+        self._validate_repo(repo)
+        return f"{self._stream_prefix}.{repo}.notify.{user}"
+
     async def get_nc(self) -> NatsClient:
         """Return the raw NATS client, connecting if necessary.
 
         Used by talk tools for core pub/sub subscriptions that
-        don't go through JetStream.
+        don't go through JetStream. Raises ``ConnectionError`` if
+        :meth:`close` has already been called — a terminally-closed relay
+        never dials again, via :meth:`_ensure_connected`'s own check.
         """
         await self._ensure_connected()
         if self._nc is None:  # pragma: no cover — _ensure_connected guarantees this
@@ -1316,8 +1447,8 @@ class NatsRelay:
         else:
             # Broadcast — single user subject, no session lookup
             self._validate_user(message.to_user)
+            repo = self._validate_repo(target_repo) if target_repo else self._repo_name
             if target_repo:
-                repo = self._validate_repo(target_repo)
                 prefix = f"{self._stream_prefix}.{repo}.inbox"
                 subject = f"{prefix}.{message.to_user}"
             else:
@@ -1328,9 +1459,79 @@ class NatsRelay:
                     subject, message.model_dump_json().encode(), headers=headers
                 ),
             )
+            # Wake poke (DES-062): broadcast delivery has no session identity
+            # to target, so it cannot ride talk_notify_subject — a second
+            # always-on SUB per repo+user listens on the repo-scoped inbox
+            # subject instead. Best-effort; never fails delivery (the
+            # JetStream publish above already succeeded), and identical in
+            # shape to the pre-existing targeted-message poke below — but
+            # "never blocks" overstates it: both pokes resolve their client
+            # via _live_nc_or_reconnect, whose reconnect fall-through is
+            # bounded by _NOTIFY_RECONNECT_TIMEOUT (3s), not zero, when the
+            # cached client is gone. Moving either poke onto a background
+            # task (see server/tools/_tasks.py's fire_and_forget) would make
+            # the "never blocks" claim literally true, but that helper is
+            # presentation-layer — this is core/relay code, and importing
+            # it here would violate the core-never-imports-presentation
+            # layering invariant. The bound stays inline, deliberately.
+            await self._publish_inbox_notification(repo, message.to_user)
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
         await self._publish_talk_notification(message.to_user, message, sender_key)
+
+    async def _live_nc_or_reconnect(self) -> NatsClient:
+        """Return ``self._nc`` if live, else reconnect via :meth:`get_nc`.
+
+        Best-effort notification publishes (:meth:`_publish_talk_notification`,
+        :meth:`_publish_inbox_notification`) need only the raw core-NATS
+        client, not JetStream/KV provisioning — but after a client rebuild
+        (``_force_reconnect``/``_on_closed`` clear ``self._nc``), reading
+        ``self._nc`` directly and bailing on ``None`` silently no-ops
+        instead of reconnecting (biff-1f2).  Checking the cached client
+        first and only calling :meth:`get_nc` (``_ensure_connected``
+        underneath) when it is actually gone or closed avoids forcing a
+        full reconnect/re-provisioning cycle on every publish when the
+        client is already live — the common case.
+
+        ``self._nc is None or self._nc.is_closed`` is the *complete* and
+        *sufficient* staleness predicate here, not an approximation: every
+        path that discards the live client — ``_force_reconnect`` (wedge
+        teardown), ``_on_closed`` (nats-py gives up reconnecting), and
+        ``close()``/``disconnect()`` — sets ``self._nc`` to ``None`` (or
+        leaves it in a state where ``is_closed`` is ``True``) as part of
+        that same transition, unconditionally.  There is no reachable state
+        in which the live connection has been superseded or torn down but
+        ``self._nc`` still holds a non-``None``, non-closed reference to
+        it — nats-py's own in-place keepalive reconnect (``reconnected_cb``)
+        never replaces the client object at all, only ``connection_generation``-
+        bumping events do, and every one of those clears this exact pair of
+        conditions.  So a cached client that is neither ``None`` nor closed
+        is, by construction, the live one: there is nothing narrower to
+        check, and nothing broader (like requiring ``_js``/``_kv`` to also
+        be provisioned, which :meth:`get_nc`'s underlying
+        ``_ensure_connected`` does) is *necessary* for a bare core-NATS
+        publish, which never touches JetStream or KV at all.
+
+        Two additional guards close gaps a bare staleness check leaves
+        open. First, ``self._closed`` — set only by :meth:`close`, never
+        by :meth:`disconnect` — short-circuits before touching the network
+        at all: a wake poke that fires after the session has explicitly
+        closed must not resurrect a connection nothing will ever close
+        again. Second, the fall-through to :meth:`get_nc` is wrapped in
+        :func:`asyncio.timeout`: unguarded, it can dial and fully
+        re-provision (bounded only by ``_CONNECT_PROVISION_TIMEOUT`` = 20s,
+        plus the dial itself) *inside* a caller that is supposed to be a
+        best-effort, near-instant poke — the "never blocks" claim above is
+        true only for the common case where ``nc`` is already live; the
+        reconnect fall-through needs its own, tighter bound to keep it
+        true when the client is down too.
+        """
+        self._raise_if_closed()
+        nc = self._nc
+        if nc is None or nc.is_closed:
+            async with asyncio.timeout(_NOTIFY_RECONNECT_TIMEOUT):
+                return await self.get_nc()
+        return nc
 
     async def _publish_talk_notification(
         self,
@@ -1347,18 +1548,22 @@ class NatsRelay:
         The subject is ``subjectOf`` of the targeted recipient identity
         (talk.tex): only a ``user:tty`` recipient names a single session to
         wake.  A bare-user broadcast has no session identity, so no
-        instant-wake frame is published — its recipient still drains the
-        durable inbox on the next poll tick.
+        instant-wake frame is published on this subject (see
+        :meth:`_publish_inbox_notification` for that case).
 
         Best-effort: failures are logged at debug level and never
         propagate — the JetStream delivery (the critical path) has
-        already succeeded.
+        already succeeded.  Resolves the client via
+        :meth:`_live_nc_or_reconnect` rather than reading ``self._nc``
+        directly, so a poke issued right after a client rebuild (the
+        cached client discarded, not yet re-dialed) reconnects and still
+        publishes instead of silently no-opping on the stale reference
+        (biff-1f2).
         """
-        if self._nc is None or self._nc.is_closed:
-            return
         if ":" not in to_user:
             return
         try:
+            nc = await self._live_nc_or_reconnect()
             subject = self.talk_notify_subject(to_user)
             if message is not None:
                 data: dict[str, str] = {
@@ -1373,9 +1578,27 @@ class NatsRelay:
                 payload = json.dumps(data).encode()
             else:
                 payload = b"1"
-            await self._nc.publish(subject, payload)
+            await nc.publish(subject, payload)
         except Exception:  # noqa: BLE001 — notification is best-effort
             logger.debug("Talk notification failed for %s", to_user)
+
+    async def _publish_inbox_notification(self, repo: str, user: str) -> None:
+        """Publish a payload-less wake poke for a broadcast message (DES-062).
+
+        Mirrors :meth:`_publish_talk_notification`'s error discipline
+        exactly: resolves the client via :meth:`_live_nc_or_reconnect`
+        (rebuild-robust — biff-1f2) and never propagates a failure, since
+        the JetStream delivery in :meth:`deliver` — the critical path —
+        has already succeeded by the time this runs.  The poke carries no
+        payload; the subscriber (``subscribe_inbox_notify``) only wakes the
+        poller, which recomputes the unread count on its own next tick.
+        """
+        try:
+            nc = await self._live_nc_or_reconnect()
+            subject = self.inbox_notify_subject(repo, user)
+            await nc.publish(subject, b"1")
+        except Exception:  # noqa: BLE001 — notification is best-effort
+            logger.debug("Inbox notification failed for %s in %s", user, repo)
 
     def _durable_name(self, session_key: str) -> str:
         """Durable consumer name for a session's inbox.
@@ -2066,6 +2289,13 @@ class NatsRelay:
         except (KeyNotFoundError, BucketNotFoundError, ValidationError, ValueError):
             return None
         if wall.is_expired:
+            # Re-resolve the handle immediately before use (the same
+            # freshness discipline _tracked callers follow, biff-1f2): the
+            # ``kv.get`` above is a genuine ``await``, during which a
+            # concurrent wedge teardown could have discarded the client the
+            # outer ``kv`` is bound to, stranding this delete on a closed
+            # connection instead of rebuilding.
+            _, kv = await self._ensure_connected()
             with suppress(KeyNotFoundError, BucketNotFoundError):
                 await kv.delete(key)
             return None

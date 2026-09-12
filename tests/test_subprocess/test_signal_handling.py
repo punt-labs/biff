@@ -261,3 +261,68 @@ class TestSignalSurvivesCleanupFailure:
         assert "biff: signal cleanup: sentinel write failed" in stderr, (
             f"handler did not report the sentinel-write failure: {stderr!r}"
         )
+
+
+def _unread_dir(home: Path) -> Path:
+    """Unread-status directory under the isolated ``HOME``.
+
+    Mirrors ``biff.statusline.UNREAD_DIR``.
+    """
+    return home / ".punt-labs" / "biff" / "unread"
+
+
+def _wait_for_unread_json(home: Path, timeout: float = _STARTUP_TIMEOUT) -> Path:
+    """Poll for the server's first-tick unread-status JSON to appear.
+
+    ``poll_inbox`` forces an initial write on its first tick, so this
+    should appear shortly after startup -- but on a slow CI box the
+    poller's first tick can lag past the stdio-startup marker this
+    fixture already waited for.
+    """
+    deadline = time.monotonic() + timeout
+    unread_dir = _unread_dir(home)
+    while time.monotonic() < deadline:
+        found = list(unread_dir.glob("*.json"))
+        if found:
+            return found[0]
+        time.sleep(0.05)
+    raise AssertionError(f"no unread-status JSON appeared under {unread_dir}")
+
+
+@pytest.mark.parametrize(
+    "sig", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP], ids=lambda s: s.name
+)
+class TestSignalRemovesUnreadFiles:
+    """A caught signal must remove the unread-status JSON and its
+    ``unread-nudge.sh`` ``.nudged`` sidecar, not just the sentinel.
+
+    Before this fix, ``_signal_handler``'s cleanup steps did not include
+    ``_remove_unread_files`` at all -- only the normal (non-signal)
+    lifespan-teardown path called it. A hard SIGTERM/SIGINT/SIGHUP kill
+    left both files behind; if the PID this session's files are keyed by
+    was later reused by an unrelated session, that session could inherit
+    a stale ``.nudged`` sidecar whose leftover count happened to match its
+    own first real count, silently suppressing the nudge that should fire
+    for it (Cursor Bugbot finding hwquR).
+    """
+
+    def test_unread_files_removed_after_signal(
+        self, active_server: ActiveServer, sig: signal.Signals
+    ) -> None:
+        proc, home, _stderr_lines = active_server
+        unread_json = _wait_for_unread_json(home)
+        # Simulate a prior nudge having already recorded state for this
+        # session -- the sidecar unread-nudge.sh itself would have
+        # written, which the server never creates on its own.
+        nudged = unread_json.with_suffix(".nudged")
+        nudged.write_text("12345:1")
+
+        os.kill(proc.pid, sig)
+        _wait_for_exit(proc)
+
+        assert not unread_json.exists(), (
+            "unread-status JSON should be removed by signal cleanup"
+        )
+        assert not nudged.exists(), (
+            "the .nudged sidecar should be removed alongside the JSON"
+        )

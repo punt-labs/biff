@@ -389,7 +389,7 @@ Biff assumes the terminal is where you're already working — so that's where yo
 - CLI parity: every MCP tool available as `biff <command>` with `--json` output
 - Interactive REPL: `biff` with readline, real-time notifications, modal talk
 - Library API: pure async functions for programmatic use and testing
-- Notification deferral: ≤2s latency for wall and talk in all states (active and napping)
+- Notification deferral: ≤2s latency for wall, talk, and messages in all states (active and napping) — message arrival is push-detected via a NATS wake poke (~200ms measured), not polled; `scripts/demo-push-vs-poll.sh` demonstrates the difference against the real relay image
 - Formal verification: Z specifications for talk and REPL, ProB model-checked
 
 ### Next

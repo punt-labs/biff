@@ -673,7 +673,7 @@ when a request context is available, suspenders when it is not---and it
 gates every operation that can only occur inside a handler ($WallPost$,
 $TalkStart$, $NotifyBelt$) against every operation that can only occur
 in the background ($NotifySuspenders$, $KVWallReceive$,
-$NatsTalkCallback$, $PollTick$).
+$NatsTalkCallback$, $MessagePushCallback$, $PollTick$).
 
 The earlier drafts left $toolContext$ at its initial $zfalse$ with no
 operation to raise it.  The consequence was quiet but total: no reachable
@@ -1356,6 +1356,49 @@ session when it fires the deferred notification.
   staleWithdrawHit' = staleWithdrawHit
 \end{schema}
 
+\subsection{Message Push Callback}
+
+Fires when a core NATS message arrives on the broadcast inbox-notify
+subject (DES-062, \texttt{nats-relay.tex}'s $inboxNotify$ kind of $subGen$).
+Runs \emph{outside} any tool handler context, exactly like
+$NatsTalkCallback$ and $KVWallReceive$---but unlike those two, the poke
+carries no payload: it is the bare fact that \emph{something} changed on
+the durable JetStream inbox, not a copy of what changed.  A broadcast
+message has no session identity to target (talk.tex $subjectOf$ requires
+a $user:tty$ recipient), so the wake poke names only the bare repo+user
+pair the durable inbox is partitioned by---there is nothing in the frame
+for this callback to decode, and therefore nothing it can write into
+$unreadCount$ or $readDesc$.  Recomputing those still requires the actual
+$stream\_info$ round-trip, which only the poller performs, on its next
+tick.
+
+\begin{schema}{MessagePushCallback}
+  \Xi NotificationState
+  \where
+  natsConn = natsConnected \\
+  toolContext = zfalse
+\end{schema}
+
+$MessagePushCallback$ is the identity transition on every modelled
+variable---$unreadCount$, $readDesc$, $pendingNotify$, and $notifyLost$
+included---because it never calls \texttt{refresh\_read\_messages} or
+\texttt{notify\_tool\_list\_changed} directly (DES-020/DES-021); the code
+side of this callback does exactly one visible-to-the-model-adjacent
+thing, waking the poller out of napping, and that wake lives entirely
+outside $NotificationState$'s vocabulary---the poller's active/napping
+timer is a separate, untimed mechanism the model does not represent, the
+same way $KVWallReceive$'s and $NatsTalkCallback$'s own wake effect is
+already out of scope here.  Because $MessagePushCallback$ changes nothing,
+adding it falsifies no existing property: $NotifyGuarantee$ and
+$notifyLost = zfalse$ (Section~\ref{sec:sessionloss}) both range only over
+the states $NatsTalkCallback$/$KVWallReceive$/$PollTick$ already reach, and
+a purely additive self-loop operation cannot remove a state, an edge, or a
+counterexample-witnessing path any existing $AG$/$EF$ property depends on.
+This is the mechanical extension the design anticipated
+(\texttt{design-nats-push.md} \S4): a third ``wake, defer the send'' source,
+following the $NatsTalkCallback$/$KVWallReceive$ template, added with no
+reconciliation of any conflicting model or code because none exists.
+
 \subsection{Sync Unread File}
 
 Writes the display queue snapshot to the filesystem status file.
@@ -1536,9 +1579,29 @@ send.  Nothing about the send's outcome is known yet.
 \end{schema}
 
 $PollTickNotifyOk$ commits a successful send: releases $siteSuspenders$
-from $inFlight$, clears the changed flags, and does not touch
-$pendingNotify$---the suspenders path never has anything of its own to
-flush, only the current tick's own delivery to report.
+from $inFlight$, clears the changed flags, and---the biff-6vuv
+amendment---also clears $pendingNotify$.  Earlier drafts left
+$pendingNotify$ untouched here on the argument that ``the suspenders path
+never has anything of its own to flush, only the current tick's own
+delivery to report''; that argument proves too little.  $NotifyBelt$
+(Section~\ref{sec:beltpath}) clears $pendingNotify$ unconditionally for
+exactly the reason restated here: whichever site armed the flag, a send
+that just succeeded delivered the \emph{current} tool description, which
+reflects every mutation up to this point---so the debt the flag was
+recording is paid, regardless of which site incurred it.  $PollTickNotifyOk$
+is a successful send by the same measure $NotifyBelt$ is; withholding the
+clear only because this send happened to run on the suspenders path
+re-armed nothing new and healed nothing---it left a stale $ztrue$ sitting
+on a debt this very commit already discharged, so an unrelated future
+belt call would eventually flush a notification for a description that had
+already gone out.  No snapshot-based race instrumentation
+($beltPnSnapshot$/$capPnSnapshot$/$raceLost$) is added for this site: those
+exist for $siteBelt$ and $siteCapture$ because their commits are conditioned
+on a value read at their own $\dots Begin$ step, and a competing write could
+land in the gap between; $PollTickNotifyOk$'s clear is unconditional, reads
+nothing back, and races nothing by construction, and the
+$\# inFlight \leq 1$ invariant already forbids a second critical section
+from being open concurrently regardless of site.
 
 \begin{schema}{PollTickNotifyOk}
   \Delta NotificationState
@@ -1550,7 +1613,7 @@ flush, only the current tick's own delivery to report.
   lastNotifyResult' = notifySent \\
   barStale' = zfalse \\
   session' = session \\
-  pendingNotify' = pendingNotify \\
+  pendingNotify' = zfalse \\
   notifyLost' = notifyLost \\
   natsConn' = natsConn \\
   kvProvisioned' = kvProvisioned \\
