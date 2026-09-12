@@ -909,8 +909,17 @@ async def subscribe_talk(
                 data = getattr(msg, "data", b"")
                 raw: object = json.loads(data)
                 if isinstance(raw, dict):
-                    frame: dict[str, str] = {
-                        str(k): str(v)  # pyright: ignore[reportUnknownArgumentType]
+                    # Narrow only the keys to str (a JSON object's keys always
+                    # are) — never the values. TalkNotification.from_payload's
+                    # _trusted() type-guards each value itself, trusting only
+                    # a str and falling back to the field's default for any
+                    # other JSON type (None, number, dict, list). Converting
+                    # values with str() here ran that guard *after* every
+                    # value was already a str, defeating it: a forged
+                    # ``{"body": null}`` became ``str(None)`` == ``"None"``,
+                    # which passed the guard and rendered as a real message.
+                    frame: dict[str, object] = {
+                        str(k): v  # pyright: ignore[reportUnknownArgumentType]
                         for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
                     }
                     if TalkNotification.from_payload(frame).is_wake_poke:
@@ -1371,11 +1380,7 @@ async def poll_inbox(
     wake_event = asyncio.Event()
     talk_latch = TalkNotifyLatch.for_resubscribe(logger)
     inbox_notify_latch = TalkNotifyLatch(logger, _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES)
-    talk_sub = await subscribe_talk(state, talk_latch, gate, wake_event)
-    inbox_notify_sub = await subscribe_inbox_notify(
-        state, inbox_notify_latch, gate, wake_event, user=state.config.user
-    )
-    # Not established here, unlike talk_sub/inbox_notify_sub above:
+    # Not established here, unlike the initial subscribes below:
     # state.companion is a frozen-dataclass field production sets LATER,
     # from the heartbeat loop's _poll_companion_registration (an
     # object.__setattr__ on the same ServerState instance, once the ethos
@@ -1388,8 +1393,20 @@ async def poll_inbox(
     # e.g. dual-session e2e tests) and "set later" (production) with the
     # same code path.
     companion = _CompanionSubs(None, None, None, None)
+    talk_sub: SubscriptionBinding | None = None
+    inbox_notify_sub: SubscriptionBinding | None = None
 
     try:
+        # Bound inside the try/finally, not before it: a cancellation
+        # landing between subscribe_talk() returning and
+        # subscribe_inbox_notify()'s own await used to escape before either
+        # binding var was assigned outside this block, so the finally's
+        # unsubscribe loop below never saw the talk SUB it had just
+        # established and leaked it (Copilot finding hb4tE).
+        talk_sub = await subscribe_talk(state, talk_latch, gate, wake_event)
+        inbox_notify_sub = await subscribe_inbox_notify(
+            state, inbox_notify_latch, gate, wake_event, user=state.config.user
+        )
         while shutdown is None or not shutdown.is_set():
             outcome = await _sleep_or_wake(
                 interval=interval, shutdown=shutdown, wake_event=wake_event

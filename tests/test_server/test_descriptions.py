@@ -669,6 +669,64 @@ class TestPollInbox:
         # Establishing the subscription is proven by its clean teardown on exit.
         fake_sub.unsubscribe.assert_awaited_once()
 
+    async def test_cancellation_between_initial_subscribes_unsubscribes_talk(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cancellation landing between the two initial subscribe() calls
+        must not leak the already-established talk SUB.
+
+        Before this fix, both initial subscribes ran BEFORE the
+        ``try/finally`` that unsubscribes on exit. A cancellation arriving
+        after ``subscribe_talk()`` returned but while
+        ``subscribe_inbox_notify()``'s own await was still in flight escaped
+        the function before ``talk_sub`` was ever bound inside the
+        protected block, so the finally's teardown loop never saw it and
+        the live SUB was orphaned.
+        """
+        talk_unsubscribe = AsyncMock()
+        talk_binding = SubscriptionBinding(MagicMock(unsubscribe=talk_unsubscribe), 0)
+
+        async def _fake_subscribe_talk(
+            state: ServerState,
+            latch: TalkNotifyLatch,
+            gate: _InboxPokeGate,
+            wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
+            del state, latch, gate, wake_event
+            return talk_binding
+
+        inbox_subscribe_started = asyncio.Event()
+
+        async def _hanging_subscribe_inbox_notify(
+            state: ServerState,
+            latch: TalkNotifyLatch,
+            gate: _InboxPokeGate,
+            wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            del state, latch, gate, wake_event, user
+            inbox_subscribe_started.set()
+            await asyncio.sleep(5.0)  # never resolves before the cancellation
+            msg = "unreachable — cancellation must fire first"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(_descriptions, "subscribe_talk", _fake_subscribe_talk)
+        monkeypatch.setattr(
+            _descriptions, "subscribe_inbox_notify", _hanging_subscribe_inbox_notify
+        )
+
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(
+            poll_inbox(mcp, state_with_path, interval=self._FAST_INTERVAL)
+        )
+        await inbox_subscribe_started.wait()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        talk_unsubscribe.assert_awaited_once()
+
     async def test_generation_bump_during_tick_reconciles_same_tick(
         self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1593,6 +1651,68 @@ class TestTargetedMessageMarksInboxGate:
         tool = await mcp.get_tool("read_messages")
         assert tool is not None
         assert "1 unread" in (tool.description or "")
+
+
+class TestTalkCallbackPreservesWireTypes:
+    """The talk-SUB callback must not stringify decoded JSON values before
+    ``TalkNotification.from_payload`` type-guards them.
+
+    Before this fix, the callback's dict comprehension ran ``str(v)`` on
+    every decoded value, so by the time ``from_payload``'s ``_trusted()``
+    checked ``isinstance(value, str)`` every value already *was* a str —
+    the guard against non-str JSON types (forged ``null``, numbers, nested
+    structures) was unreachable. A forged ``{"body": null}`` became
+    ``str(None)`` == ``"None"``, which passed the (defeated) guard and
+    rendered as if the sender had actually typed the word "None".
+    """
+
+    async def test_forged_null_body_does_not_render_as_the_string_none(
+        self, tmp_path: Path
+    ) -> None:
+        nc = AsyncMock()
+        relay = MagicMock(spec=NatsRelay)
+        relay.connection_generation = 1
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        wake_event = asyncio.Event()
+
+        await subscribe_talk(
+            state,
+            TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER)),
+            gate,
+            wake_event,
+        )
+        on_talk = nc.subscribe.call_args.kwargs["cb"]
+
+        # A forged frame: "body" is JSON null, not a string. "type": "message"
+        # makes this a modeled frame (not a wake poke) so it is actually
+        # enqueued and observable via drain_idle().
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {
+                "type": "message",
+                "from": "eric",
+                "body": None,
+                "to_key": "kai:tty1",
+                "from_key": "eric:tty2",
+            }
+        ).encode()
+        await on_talk(msg)
+
+        drained = state.talk.drain_idle()
+        assert len(drained) == 1
+        # The documented default for a non-str value (empty string), never
+        # the stringified "None".
+        assert drained[0].nbody == ""
 
 
 class TestSubscribeTalkLatch:
