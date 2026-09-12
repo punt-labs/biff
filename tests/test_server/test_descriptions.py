@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import os
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -250,6 +251,26 @@ class TestUnreadFile:
         )
         data = json.loads(path.read_text())
         assert data["count"] == MAX_UNREAD_COUNT
+
+    async def test_includes_this_processs_own_pid(self, tmp_path: Path) -> None:
+        """``unread-nudge.sh`` uses ``server_pid`` to detect when a
+        ``.json`` was written by a different server process than whichever
+        process last updated its ``.nudged`` sidecar (PID reuse after an
+        unclean kill, or a same-PID subprocess restart) — Bugbot finding
+        hwquR. The field must be this process's actual ``os.getpid()``,
+        not a placeholder.
+        """
+        path = tmp_path / "unread.json"
+        _write_unread_file(
+            path,
+            UnreadSummary(count=1),
+            repo_name=_TEST_REPO,
+            user="kai",
+            tty_name="tty1",
+            biff_enabled=True,
+        )
+        data = json.loads(path.read_text())
+        assert data["server_pid"] == os.getpid()
 
     async def test_no_write_when_path_is_none(self, state: ServerState) -> None:
         assert state.unread_path is None
@@ -676,6 +697,38 @@ class TestPollInbox:
         data = json.loads(state_with_path.unread_path.read_text())
         assert data["count"] == 1
 
+    async def test_local_relay_disabled_interval_still_detects_new_message(
+        self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``LocalRelay`` session with polling disabled must still detect
+        new mail via the fallback tick, not go permanently silent.
+
+        LocalRelay has no push mechanism of any kind — the disabled-interval
+        skip that is safe for a NATS-backed relay (push covers detection
+        instead) would otherwise disable ``/write`` detection for the rest
+        of the session's life, not merely delay it, since nothing else
+        would ever set ``wake_event`` (Bugbot finding hwr7W).
+        """
+        assert not isinstance(state_with_path.relay, NatsRelay)
+        monkeypatch.setattr(
+            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
+        )
+        mcp = create_server(state_with_path)
+        task = asyncio.create_task(poll_inbox(mcp, state_with_path, interval=0))
+        await asyncio.sleep(self._FAST_INTERVAL * 3)
+
+        await state_with_path.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="still here?")
+        )
+        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert state_with_path.unread_path is not None
+        data = json.loads(state_with_path.unread_path.read_text())
+        assert data["count"] == 1
+
     async def test_updates_tool_description(self, state_with_path: ServerState) -> None:
         """Poller updates the read_messages tool description."""
         mcp = create_server(state_with_path)
@@ -868,11 +921,23 @@ class TestPollInbox:
         talk SUB would stay orphaned on the dead client until the nap ended, and
         an unsolicited invite to the idle agent would be silently dropped.
         The reconcile must run on the cheap nap tick even though the
-        expensive relay poll is skipped.
+        expensive relay poll is skipped — proven by checking, at the exact
+        moment the rebind happens, that ``_safe_tick`` had not yet run (the
+        cheap-nap skip held for that same tick).
+
+        ``_reconcile_always_on_sub`` now also wakes the tracker on any
+        rebind (Bugbot finding hwr7z) — deliberately: a SUB re-established
+        after an orphaned window may have missed a poke with no replay, so
+        the very next tick must recompute for real rather than staying
+        napped indefinitely. That un-nap is expected to let subsequent
+        ticks run ``_safe_tick`` too; this test only pins the rebinding
+        tick itself, not what happens afterward.
         """
         events: list[tuple[str, int]] = []
         tick_calls = [0]
         subscribe_calls = [0]
+        tick_calls_at_rebind: list[int] = []
+        rebind_done = asyncio.Event()
 
         def _gen(_state: ServerState) -> int:
             return 1  # a background swap advanced the generation past the SUB
@@ -888,6 +953,9 @@ class TestPollInbox:
             # stale); the cheap-nap reconcile rebinds to the live generation (1).
             bound = 0 if subscribe_calls[0] == 1 else 1
             events.append(("subscribe", bound))
+            if bound == 1:
+                tick_calls_at_rebind.append(tick_calls[0])
+                rebind_done.set()
             return SubscriptionBinding(AsyncMock(), bound)
 
         async def fake_tick(
@@ -921,13 +989,13 @@ class TestPollInbox:
                 nap_interval=1000.0,
             )
         )
-        await asyncio.sleep(self._FAST_INTERVAL * 5)
+        await asyncio.wait_for(rebind_done.wait(), timeout=2.0)
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
 
         assert ("subscribe", 1) in events  # rebound on the cheap nap tick
-        assert tick_calls[0] == 0  # _safe_tick skipped — the cheap nap held
+        assert tick_calls_at_rebind == [0]  # _safe_tick had not yet run at rebind time
 
     async def test_cancellation_is_clean(self, state_with_path: ServerState) -> None:
         """Cancelling the poller task does not raise."""
@@ -1186,16 +1254,67 @@ class TestPollInbox:
 
         assert subscribe_calls > 2  # reconcile ran and rebound both SUBs
 
-    async def test_disabled_interval_fallback_skips_tick_work(
+    async def test_disabled_interval_fallback_skips_tick_work_with_no_real_event(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A bare fallback-timeout wake at ``interval<=0`` must not run the
-        periodic tick work (``get_wall``, ``get_unread_summary``) — only a
-        real event wake (a poke) should. The SUB reconcile must still run
-        on every fallback wake regardless — proven here by forcing a
-        client discard partway through and confirming the stranded SUBs
-        get rebound anyway, at the same time as confirming zero tick-work
-        calls throughout.
+        """A bare fallback-timeout wake at ``interval<=0`` — no real event,
+        no reconcile-triggered rebind, nothing new — must not run the
+        periodic tick work (``get_wall``, ``get_unread_summary``). See
+        ``test_disabled_interval_reconcile_rebind_forces_a_recompute`` for
+        the complementary case where a rebind DOES force one.
+        """
+        monkeypatch.setattr(
+            _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
+        )
+        nc = AsyncMock()
+
+        async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
+            del subject, cb
+            return AsyncMock()
+
+        nc.subscribe = AsyncMock(side_effect=fake_subscribe)
+
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.connection_generation = 0
+        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
+        relay.inbox_notify_subject = MagicMock(
+            return_value="biff._test-server.notify.kai"
+        )
+        relay.get_wall = AsyncMock(return_value=None)
+        relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
+
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        mcp = create_server(state)
+        task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
+        await asyncio.sleep(self._FAST_INTERVAL * 5)
+
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        relay.get_wall.assert_not_awaited()
+        relay.get_unread_summary.assert_not_awaited()
+
+    async def test_disabled_interval_reconcile_rebind_forces_a_recompute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stranded-SUB rebind at ``interval<=0`` must force a real
+        recompute, not just rebind silently.
+
+        A SUB orphaned by a wedge teardown and later rebound may have
+        missed a poke published while nothing was listening — core NATS
+        has no replay. At a disabled interval, nothing else would ever
+        trigger ``get_unread_summary`` again after such a rebind, so a
+        message that arrived during the gap would stay undetected
+        forever, not just delayed (Bugbot finding hwr7z).
         """
         monkeypatch.setattr(
             _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
@@ -1233,6 +1352,7 @@ class TestPollInbox:
         task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
         assert subscribe_calls == 2  # talk + inbox-notify, startup bind
+        relay.get_wall.assert_not_awaited()  # steady state: nothing to recompute yet
 
         # A wedge teardown/give-up close, independent of this poller.
         relay.connection_generation = 1
@@ -1242,13 +1362,8 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
 
-        # The SUB reconcile ran on the fallback timer and rebound both
-        # stranded SUBs — proving the timer itself is alive — but
-        # relay.get_wall/get_unread_summary were never called at all:
-        # no periodic tick work snuck in alongside it.
         assert subscribe_calls > 2  # reconcile ran and rebound both SUBs
-        relay.get_wall.assert_not_awaited()
-        relay.get_unread_summary.assert_not_awaited()
+        relay.get_wall.assert_awaited()  # the rebind forced a real recompute
 
     async def test_cheap_nap_tick_reconciles_inbox_notify_generation_bump(
         self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
@@ -1872,9 +1987,13 @@ class TestReconcileCompanionSubs:
             _descriptions, "subscribe_inbox_notify", _fake_subscribe_inbox_notify
         )
 
-        # A previously-failed attempt already created the latch, but
-        # inbox_sub is still None — this reconcile pass is the retry.
-        previously_failed = _CompanionSubs(_test_latch(), None, None, None)
+        # A previously-failed attempt already created the latch (and
+        # recorded the companion's own identity), but inbox_sub is still
+        # None — this reconcile pass is the retry for the SAME identity.
+        assert state.companion is not None
+        previously_failed = _CompanionSubs(
+            _test_latch(), None, None, None, state.companion.session_key
+        )
 
         result = await _reconcile_companion_subs(
             state, previously_failed, gate, wake_event
@@ -1884,9 +2003,11 @@ class TestReconcileCompanionSubs:
         assert gate.claim() is True
 
     async def test_steady_state_does_not_mark_the_gate(self, tmp_path: Path) -> None:
-        """Once bound, an ordinary no-op reconcile (generation unchanged)
-        must not spuriously mark the gate on every tick."""
+        """Once bound, an ordinary no-op reconcile (generation unchanged,
+        identity unchanged) must not spuriously mark the gate on every
+        tick."""
         state = self._state(tmp_path)
+        assert state.companion is not None
         gate = _InboxPokeGate(backstop_interval=1000.0)
         gate.claim()
         wake_event = asyncio.Event()
@@ -1897,6 +2018,7 @@ class TestReconcileCompanionSubs:
             already_bound,
             _test_latch(),
             SubscriptionBinding(AsyncMock(), 0),
+            state.companion.session_key,
         )
 
         result = await _reconcile_companion_subs(state, steady, gate, wake_event)
@@ -1904,6 +2026,116 @@ class TestReconcileCompanionSubs:
         assert result.inbox_sub is already_bound
         assert gate.claim() is False
         assert not wake_event.is_set()
+
+    async def test_companion_rollback_to_none_unsubscribes_old_subs(
+        self, tmp_path: Path
+    ) -> None:
+        """``state.companion`` rolling back to ``None`` with the connection
+        generation unchanged must unsubscribe the old identity's SUBs, not
+        leave them bound forever.
+
+        A connection-generation-only reconcile would never notice this —
+        the SUBs are still live on the still-current client, so
+        ``_reconcile_always_on_sub`` alone sees nothing to do. Without
+        identity tracking, this process keeps waking for a companion that
+        is no longer relevant (Bugbot finding hwr78).
+        """
+        state = self._state(tmp_path)
+        assert state.companion is not None
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        wake_event = asyncio.Event()
+
+        old_inbox_handle = AsyncMock()
+        old_talk_handle = AsyncMock()
+        bound = _CompanionSubs(
+            _test_latch(),
+            SubscriptionBinding(old_inbox_handle, 0),
+            _test_latch(),
+            SubscriptionBinding(old_talk_handle, 0),
+            state.companion.session_key,
+        )
+
+        object.__setattr__(state, "companion", None)
+        result = await _reconcile_companion_subs(state, bound, gate, wake_event)
+
+        old_inbox_handle.unsubscribe.assert_awaited_once()
+        old_talk_handle.unsubscribe.assert_awaited_once()
+        assert result.inbox_sub is None
+        assert result.talk_sub is None
+        assert result.identity is None
+
+    async def test_companion_identity_change_unsubscribes_old_and_binds_new(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A different companion taking over the role (same connection
+        generation) must unsubscribe the old identity's SUBs and bind the
+        new identity's own — not silently keep listening on the stale
+        subject forever, and not silently skip binding the new one because
+        ``_reconcile_always_on_sub`` already sees a live SUB (Bugbot
+        finding hwr78).
+        """
+        state = self._state(tmp_path)
+        assert state.companion is not None
+        old_identity = state.companion.session_key
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        wake_event = asyncio.Event()
+
+        old_inbox_handle = AsyncMock()
+        old_talk_handle = AsyncMock()
+        bound = _CompanionSubs(
+            _test_latch(),
+            SubscriptionBinding(old_inbox_handle, 0),
+            _test_latch(),
+            SubscriptionBinding(old_talk_handle, 0),
+            old_identity,
+        )
+
+        new_companion = CompanionSession(
+            user="newperson", display_name="New", kind="human", tty="cccc0002"
+        )
+        object.__setattr__(state, "companion", new_companion)
+
+        fresh_inbox = SubscriptionBinding(AsyncMock(), 0)
+        fresh_talk = SubscriptionBinding(AsyncMock(), 0)
+        bind_users: list[str] = []
+
+        async def _fake_subscribe_inbox_notify(
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            bind_users.append(user)
+            return fresh_inbox
+
+        async def _fake_subscribe_companion_talk(
+            _state: ServerState,
+            companion: CompanionSession,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
+            bind_users.append(companion.user)
+            return fresh_talk
+
+        monkeypatch.setattr(
+            _descriptions, "subscribe_inbox_notify", _fake_subscribe_inbox_notify
+        )
+        monkeypatch.setattr(
+            _descriptions, "subscribe_companion_talk", _fake_subscribe_companion_talk
+        )
+
+        result = await _reconcile_companion_subs(state, bound, gate, wake_event)
+
+        old_inbox_handle.unsubscribe.assert_awaited_once()
+        old_talk_handle.unsubscribe.assert_awaited_once()
+        assert bind_users == ["newperson", "newperson"]
+        assert result.inbox_sub is fresh_inbox
+        assert result.talk_sub is fresh_talk
+        assert result.identity == new_companion.session_key
+        assert result.identity != old_identity
 
 
 class TestCompanionTalkCallbackGatesOnWakePoke:

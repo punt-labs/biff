@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -840,6 +841,10 @@ async def _reconcile_always_on_sub(
     current: SubscriptionBinding | None,
     relay_generation: int,
     resubscribe: Callable[[], Awaitable[SubscriptionBinding | None]],
+    *,
+    state: ServerState,
+    gate: _InboxPokeGate,
+    wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
     """Re-establish an always-on SUB when unbound or its client was replaced.
 
@@ -854,6 +859,18 @@ async def _reconcile_always_on_sub(
     An in-place nats-py reconnect keeps the same generation and replays
     every SUB, so it is left untouched. The new generation is bound only on
     a successful re-subscribe.
+
+    Invariant this enforces (every kind, uniformly): every event that can
+    change unread state either marks the poke gate directly or is covered
+    by the backstop's periodic fallback tick. A newly (re)established SUB
+    of ANY kind — first bind, a retry after an earlier failure, or a
+    wedge-teardown re-subscribe — cannot see a poke published while nothing
+    was listening; core NATS has no replay. Round 1 marked this only for
+    the companion's first-bind case (``_reconcile_companion_subs``), which
+    missed the identical gap on an ordinary resubscribe of this session's
+    own talk/inbox-notify SUBs (Bugbot finding hwr7z) — the mark+wake now
+    lives here, once, so every caller inherits it rather than needing its
+    own copy.
     """
     if current is not None and current.generation >= relay_generation:
         return current
@@ -862,7 +879,12 @@ async def _reconcile_always_on_sub(
         # orphaned handle is best-effort and its failure is expected.
         with suppress(Exception):
             await current.handle.unsubscribe()
-    return await resubscribe()
+    fresh = await resubscribe()
+    if fresh is not None:
+        gate.mark()
+        state.activity.wake()
+        wake_event.set()
+    return fresh
 
 
 async def subscribe_talk(
@@ -962,6 +984,9 @@ async def _reconcile_talk_sub(
         talk_sub,
         _relay_generation(state),
         lambda: subscribe_talk(state, latch, gate, wake_event),
+        state=state,
+        gate=gate,
+        wake_event=wake_event,
     )
 
 
@@ -1065,6 +1090,9 @@ async def _reconcile_companion_talk_sub(
         companion_talk_sub,
         _relay_generation(state),
         lambda: subscribe_companion_talk(state, companion, latch, gate, wake_event),
+        state=state,
+        gate=gate,
+        wake_event=wake_event,
     )
 
 
@@ -1076,12 +1104,24 @@ class _CompanionSubs(NamedTuple):
     always ``None`` at ``poll_inbox`` startup — see the comment where
     this is first constructed); pairs with the ``None`` sentinel every
     element starts at before that tick.
+
+    ``identity`` records the ``session_key`` these SUBs are bound to (or
+    ``None`` when nothing is bound) — the piece round 1 omitted. Without
+    it, a connection-generation-only reconcile has no way to notice that
+    ``state.companion`` rolled back to ``None`` or changed to a *different*
+    identity while the connection generation stayed put: the SUBs would
+    keep listening on the stale identity's subjects forever (waking this
+    server for a companion no longer relevant), and a genuinely new
+    companion would never get a subscription of its own at all, because
+    the generation check alone sees an already-live SUB and declares
+    nothing to do (Bugbot finding hwr78).
     """
 
     inbox_latch: TalkNotifyLatch | None
     inbox_sub: SubscriptionBinding | None
     talk_latch: TalkNotifyLatch | None
     talk_sub: SubscriptionBinding | None
+    identity: str | None = None
 
 
 async def _reconcile_companion_subs(
@@ -1104,13 +1144,38 @@ async def _reconcile_companion_subs(
     this guard just checked (see :func:`subscribe_companion_talk`, which
     used to do exactly that and could raise ``AttributeError`` on
     ``None.session_key``, killing ``poll_inbox`` — Copilot finding hgKio).
+
+    Also detects an *identity* change — ``state.companion`` rolling back
+    to ``None``, or a different companion taking over the role — which a
+    connection-generation-only reconcile can never notice on its own: the
+    generation is unchanged, so ``_reconcile_always_on_sub`` sees an
+    already-live SUB and does nothing, leaving this process subscribed to
+    the *old* identity's subjects forever (and never subscribing to a
+    genuinely new identity's subjects at all — Bugbot finding hwr78).
+    Whenever the tracked ``identity`` no longer matches, unsubscribe
+    whatever was bound and start clean.
     """
     companion_session = state.companion
+    new_identity = (
+        companion_session.session_key if companion_session is not None else None
+    )
+    if new_identity != companion.identity:
+        for stale in (companion.inbox_sub, companion.talk_sub):
+            if stale is not None:
+                with suppress(Exception):
+                    await stale.handle.unsubscribe()
+        companion = _CompanionSubs(None, None, None, None, new_identity)
     if companion_session is None:
         return companion
     inbox_latch = companion.inbox_latch or TalkNotifyLatch(
         logger, _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES
     )
+    # A newly (re)established companion inbox-notify SUB — the first bind,
+    # a retry that finally succeeds after prior failures, or a wedge-
+    # teardown re-subscribe — marks the gate and wakes the poller inside
+    # _reconcile_always_on_sub itself (shared by every SUB kind, not just
+    # this one — Bugbot finding hwr7z generalized the fix round 1 first
+    # applied only here, for finding hglyP).
     inbox_sub = await _reconcile_inbox_notify_sub(
         state,
         companion.inbox_sub,
@@ -1119,27 +1184,13 @@ async def _reconcile_companion_subs(
         wake_event,
         user=companion_session.user,
     )
-    if companion.inbox_sub is None and inbox_sub is not None:
-        # A newly (re)established companion inbox-notify SUB — the first
-        # bind, or a retry that finally succeeds after prior failures —
-        # cannot see any broadcast poke published before it existed: core
-        # NATS has no replay. Mark the gate directly so the very next tick
-        # recomputes the companion's unread count from stream_info instead
-        # of waiting on a poke that already came and went while nothing was
-        # listening (Bugbot finding hglyP). This mirrors the initial
-        # True _InboxPokeGate.__init__ already gives this session's OWN
-        # inbox at poller startup — the companion's late-bound sub deserves
-        # the same one-time catch-up.
-        gate.mark()
-        state.activity.wake()
-        wake_event.set()
     talk_latch = companion.talk_latch or TalkNotifyLatch(
         logger, _COMPANION_TALK_RESUBSCRIBE_MESSAGES
     )
     talk_sub = await _reconcile_companion_talk_sub(
         state, companion_session, companion.talk_sub, talk_latch, gate, wake_event
     )
-    return _CompanionSubs(inbox_latch, inbox_sub, talk_latch, talk_sub)
+    return _CompanionSubs(inbox_latch, inbox_sub, talk_latch, talk_sub, new_identity)
 
 
 async def subscribe_inbox_notify(
@@ -1208,6 +1259,9 @@ async def _reconcile_inbox_notify_sub(
         inbox_notify_sub,
         _relay_generation(state),
         lambda: subscribe_inbox_notify(state, latch, gate, wake_event, user=user),
+        state=state,
+        gate=gate,
+        wake_event=wake_event,
     )
 
 
@@ -1495,7 +1549,24 @@ async def poll_inbox(
             # At interval>0 every TIMEOUT is the normal periodic tick and
             # runs it as always; only the disabled-interval fallback is
             # special-cased.
-            run_tick_work = not (interval <= 0 and outcome is _WakeOutcome.TIMEOUT)
+            #
+            # That special case is conditioned on the relay actually having
+            # a push mechanism (_relay_pushes_inbox_notify): DES-062's whole
+            # premise is that disabling the interval is safe because the
+            # always-on SUBs' pokes (or _reconcile_always_on_sub's own
+            # rebind-triggered wake, see finding hwr7z) drive detection
+            # instead. A filesystem-backed LocalRelay has no push mechanism
+            # of any kind — wake_event never fires from anything but this
+            # same fallback timer — so skipping tick work on every TIMEOUT
+            # would silently disable /write detection for the rest of the
+            # session's life, not just delay it (Bugbot finding hwr7W). For
+            # a non-push relay the fallback IS the only detection mechanism,
+            # so every wake must run tick work regardless of outcome kind.
+            run_tick_work = not (
+                interval <= 0
+                and outcome is _WakeOutcome.TIMEOUT
+                and _relay_pushes_inbox_notify(state)
+            )
 
             if run_tick_work:
                 # Transition: active → napping (connection stays open)
@@ -1582,9 +1653,21 @@ def _write_unread_file(
     """Write unread count to a JSON status file.
 
     Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``,
-    ``plan``, and the full ``display_items`` list so the status bar
-    can rotate through all items independently using time-based
-    indexing.
+    ``plan``, ``server_pid``, and the full ``display_items`` list so the
+    status bar can rotate through all items independently using
+    time-based indexing.
+
+    ``server_pid`` (this process's own ``os.getpid()``) lets
+    ``plugin/hooks/unread-nudge.sh`` detect when the file at *path* was
+    written by a different server process than whichever process last
+    updated its ``.nudged`` sidecar — the signal the SIGKILL-only gap
+    needs (a caught signal already removes both files via
+    ``_remove_unread_files``; nothing catches SIGKILL, so PID reuse after
+    an unclean kill can otherwise leave a sidecar a later, unrelated
+    session inherits, Cursor Bugbot finding hwquR). A same-session
+    subprocess restart also changes this value and so also resets the
+    sidecar — a redundant re-nudge for an unchanged count, not a silently
+    suppressed one, which is the safe direction to err.
 
     Failures are logged but never propagated — tool execution must not
     break because a status file could not be written.
@@ -1601,6 +1684,7 @@ def _write_unread_file(
         "biff_enabled": biff_enabled,
         "display_items": items_list,
         "plan": plan,
+        "server_pid": os.getpid(),
     }
     try:
         atomic_write(path, json.dumps(data, indent=2) + "\n")
