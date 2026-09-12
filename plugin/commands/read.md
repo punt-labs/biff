@@ -121,10 +121,12 @@ supplemented by a best-effort statusline peek.
      (`_biff_segment` in `src/biff/statusline.py`; `SessionUnread.biff_enabled`
      in `src/biff/unread.py`). The count is deliberately hidden, not zero —
      do not coerce it to `0`. Doing so would silently stop mail delivery to a
-     mesg-off session while `plugin/hooks/unread-nudge.sh` (the other
-     delivery path) reads the on-disk count directly and keeps nudging
-     regardless of mesg. Treat a literal `(n)` as "count unknown, possibly
-     nonzero" — see step 3's mail gate.
+     mesg-off session, which would otherwise be the *only* remaining delivery
+     path: `plugin/hooks/unread-nudge.sh` (the other, proactive path) also
+     honors mesg and stays silent while muted, matching the statusline's own
+     count-hiding — only this command's own deliberate pull is unaffected.
+     Treat a literal `(n)` as "count unknown, possibly nonzero" — see step
+     3's mail gate.
    - Line 2 is either the idle marker `▶` alone, or `▶ <text>` wrapped bold
      red (a wall item) or bold yellow (a talk item) — see step 2.
    - If the command errors, times out, or the output doesn't match either

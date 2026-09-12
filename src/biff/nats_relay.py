@@ -692,15 +692,16 @@ class NatsRelay:
         the next :meth:`_ensure_connected` dials a fresh client.
 
         Serialised on ``_connect_lock`` against concurrent rebuilds
-        (``_ensure_connected`` / ``_open_connection`` / ``close`` all hold
-        it).  ``_tracked`` requests never run under that lock, so acquiring
-        it here cannot deadlock.  ``disconnect()`` does *not* take the
-        lock, so a race with it is still handled by idempotence, not by
-        the lock: the wedged client is captured before the lock and
-        re-checked under it, and if it no longer matches ``self._nc`` (a
-        rebuild, close, or disconnect replaced or cleared it) this is a
-        no-op — it never tears down a freshly built connection.  The
-        re-check also skips a client that
+        (``_ensure_connected`` / ``_open_connection`` / ``close`` /
+        ``disconnect`` all hold it — a race with any of them is now
+        prevented by the lock itself, not merely handled after the fact
+        by idempotence).  ``_tracked`` requests never run under that
+        lock, so acquiring it here cannot deadlock.  The wedged client is
+        still captured before the lock and re-checked under it, since a
+        rebuild, close, or disconnect can still have replaced or cleared
+        ``self._nc`` while this call waited its turn for the lock — a
+        mismatch there is a no-op — it never tears down a freshly built
+        connection.  The re-check also skips a client that
         stopped being connected while we waited for the lock: if nats-py's own
         keepalive flipped it to reconnecting after the ``_tracked`` gate saw it
         connected, that reconnect owns recovery — do not tear it down.
