@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from fastmcp.server.context import Context
     from mcp.server.session import ServerSession
 
-    from biff.server.state import ServerState
+    from biff.server.state import CompanionSession, ServerState
 
 logger = logging.getLogger(__name__)
 
@@ -967,6 +967,7 @@ async def _reconcile_talk_sub(
 
 async def subscribe_companion_talk(
     state: ServerState,
+    companion: CompanionSession,
     latch: TalkNotifyLatch,
     gate: _InboxPokeGate,
     wake_event: asyncio.Event,
@@ -974,7 +975,7 @@ async def subscribe_companion_talk(
     """Establish the companion's talk-notify subscription (presence-only).
 
     A targeted (``user:tty``) message or talk frame addressed to
-    ``state.companion``'s session publishes its wake poke on
+    *companion*'s session publishes its wake poke on
     ``talk_notify_subject(companion.session_key)`` — a subject distinct
     from this session's own (:func:`subscribe_talk`'s), since the two are
     different session keys. Without this second binding nothing in this
@@ -983,28 +984,63 @@ async def subscribe_companion_talk(
     ``subscribe_inbox_notify``'s ``user`` parameter closed — a distinct
     subject family the inbox-notify fix does not cover at all.
 
+    Takes *companion* as a caller-supplied snapshot rather than reading
+    ``state.companion`` itself. ``state.companion`` is mutated concurrently
+    by the heartbeat loop (including rolled back to ``None``), and this
+    function awaits ``state.relay.get_nc()`` before it would otherwise need
+    the companion's session key — rereading ``state.companion`` after that
+    await risked observing ``None`` where the caller's own guard had just
+    seen it set, raising an uncaught ``AttributeError`` on
+    ``None.session_key`` that would kill the whole ``poll_inbox`` task
+    (Copilot finding hgKio). The caller (:func:`_reconcile_companion_subs`)
+    captures ``state.companion`` exactly once per reconciliation pass and
+    passes that value down, so this function operates on something that
+    cannot change out from under it.
+
     Unlike :func:`subscribe_talk`, the callback never calls
     ``state.talk.receive()``: the companion is presence-only (DES-039) —
     it does not originate tool calls and has no ``TalkState`` of its own
     in this process, so a frame on its subject is never this session's
     own talk to surface. Every frame — wake poke or a genuine talk frame
-    the companion happens to receive — only marks the gate and wakes the
-    poller, so the companion's unread count gets recomputed promptly
-    without this process pretending to own the companion's talk state.
+    the companion happens to receive — wakes the poller (the companion's
+    presence is still active), but only a wake poke marks the gate: a
+    genuine talk frame (invite/accept/message/end/withdraw) addressed to
+    the companion is unrelated to the inbox, and marking the gate for it
+    would force a spurious ``stream_info`` recompute on every real
+    conversation turn — the same discipline :func:`subscribe_talk` already
+    applies to this session's own talk subject.
     """
     from biff.nats_relay import NatsRelay  # noqa: PLC0415
 
-    if not isinstance(state.relay, NatsRelay) or state.companion is None:
+    if not isinstance(state.relay, NatsRelay):
         return None
     try:
         nc = await state.relay.get_nc()
         generation = state.relay.connection_generation
-        subject = state.relay.talk_notify_subject(state.companion.session_key)
+        subject = state.relay.talk_notify_subject(companion.session_key)
 
-        async def _on_companion_talk_msg(_msg: object) -> None:
-            gate.mark()
-            state.activity.wake()
-            wake_event.set()
+        async def _on_companion_talk_msg(msg: object) -> None:
+            try:
+                data = getattr(msg, "data", b"")
+                raw: object = json.loads(data)
+                if isinstance(raw, dict):
+                    frame: dict[str, object] = {
+                        str(k): v  # pyright: ignore[reportUnknownArgumentType]
+                        for k, v in raw.items()  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+                    }
+                    if TalkNotification.from_payload(frame).is_wake_poke:
+                        gate.mark()  # a message/wall wake poke, not genuine talk
+                else:
+                    # A non-dict payload (legacy bare ``b"1"`` wake) carries no
+                    # frame — it cannot be a modeled talk frame either, so it
+                    # is a wake poke by the same reasoning as subscribe_talk.
+                    gate.mark()
+                state.activity.wake()
+                wake_event.set()
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                logger.debug(
+                    "Failed to process companion talk notification", exc_info=True
+                )
 
         handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
             subject, cb=_on_companion_talk_msg
@@ -1018,6 +1054,7 @@ async def subscribe_companion_talk(
 
 async def _reconcile_companion_talk_sub(
     state: ServerState,
+    companion: CompanionSession,
     companion_talk_sub: SubscriptionBinding | None,
     latch: TalkNotifyLatch,
     gate: _InboxPokeGate,
@@ -1027,7 +1064,7 @@ async def _reconcile_companion_talk_sub(
     return await _reconcile_always_on_sub(
         companion_talk_sub,
         _relay_generation(state),
-        lambda: subscribe_companion_talk(state, latch, gate, wake_event),
+        lambda: subscribe_companion_talk(state, companion, latch, gate, wake_event),
     )
 
 
@@ -1058,8 +1095,18 @@ async def _reconcile_companion_subs(
     A no-op returning *companion* unchanged when ``state.companion`` is
     ``None`` — the common case at ``poll_inbox`` startup, since
     production only sets the companion later via the heartbeat loop.
+
+    Snapshots ``state.companion`` exactly once, at entry, and threads that
+    single value through both reconciles instead of re-reading the live
+    field later. The heartbeat loop mutates ``state.companion`` concurrently
+    (including rolling it back to ``None``); re-reading it after either
+    reconcile's internal ``await`` risked observing a different value than
+    this guard just checked (see :func:`subscribe_companion_talk`, which
+    used to do exactly that and could raise ``AttributeError`` on
+    ``None.session_key``, killing ``poll_inbox`` — Copilot finding hgKio).
     """
-    if state.companion is None:
+    companion_session = state.companion
+    if companion_session is None:
         return companion
     inbox_latch = companion.inbox_latch or TalkNotifyLatch(
         logger, _INBOX_NOTIFY_COMPANION_RESUBSCRIBE_MESSAGES
@@ -1070,13 +1117,27 @@ async def _reconcile_companion_subs(
         inbox_latch,
         gate,
         wake_event,
-        user=state.companion.user,
+        user=companion_session.user,
     )
+    if companion.inbox_sub is None and inbox_sub is not None:
+        # A newly (re)established companion inbox-notify SUB — the first
+        # bind, or a retry that finally succeeds after prior failures —
+        # cannot see any broadcast poke published before it existed: core
+        # NATS has no replay. Mark the gate directly so the very next tick
+        # recomputes the companion's unread count from stream_info instead
+        # of waiting on a poke that already came and went while nothing was
+        # listening (Bugbot finding hglyP). This mirrors the initial
+        # True _InboxPokeGate.__init__ already gives this session's OWN
+        # inbox at poller startup — the companion's late-bound sub deserves
+        # the same one-time catch-up.
+        gate.mark()
+        state.activity.wake()
+        wake_event.set()
     talk_latch = companion.talk_latch or TalkNotifyLatch(
         logger, _COMPANION_TALK_RESUBSCRIBE_MESSAGES
     )
     talk_sub = await _reconcile_companion_talk_sub(
-        state, companion.talk_sub, talk_latch, gate, wake_event
+        state, companion_session, companion.talk_sub, talk_latch, gate, wake_event
     )
     return _CompanionSubs(inbox_latch, inbox_sub, talk_latch, talk_sub)
 

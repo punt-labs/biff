@@ -25,7 +25,9 @@ from biff.server.tools._descriptions import (
     MAX_UNREAD_COUNT,
     SubscriptionBinding,
     _active_tick,
+    _CompanionSubs,
     _InboxPokeGate,
+    _reconcile_companion_subs,
     _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
     _sync_unread_file,
@@ -34,6 +36,7 @@ from biff.server.tools._descriptions import (
     nap_interval_for,
     poll_inbox,
     refresh_read_messages,
+    subscribe_companion_talk,
     subscribe_inbox_notify,
     subscribe_talk,
     talk_signal,
@@ -1713,6 +1716,236 @@ class TestTalkCallbackPreservesWireTypes:
         # The documented default for a non-str value (empty string), never
         # the stringified "None".
         assert drained[0].nbody == ""
+
+
+class TestReconcileCompanionSubs:
+    """A newly (re)established companion inbox-notify SUB must mark the
+    gate so pre-existing broadcast mail is not stranded.
+
+    Core NATS has no replay: a broadcast poke published to the companion's
+    inbox before this process ever subscribed to it is gone forever. Only
+    ``stream_info`` (a real recompute) can discover mail that arrived
+    before the SUB existed — so the very first successful bind (or a retry
+    that finally succeeds after prior failures) must force that recompute,
+    the same way ``_InboxPokeGate.__init__`` starting poked already forces
+    it for this session's OWN inbox at poller startup.
+    """
+
+    @staticmethod
+    def _state(tmp_path: Path) -> ServerState:
+        companion = CompanionSession(
+            user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
+        )
+        return create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            companion=companion,
+        )
+
+    async def test_first_bind_marks_the_gate_and_wakes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state = self._state(tmp_path)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute — steady state
+        wake_event = asyncio.Event()
+
+        fresh = SubscriptionBinding(AsyncMock(), 0)
+
+        async def _fake_subscribe_inbox_notify(
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            del user
+            return fresh
+
+        monkeypatch.setattr(
+            _descriptions, "subscribe_inbox_notify", _fake_subscribe_inbox_notify
+        )
+
+        result = await _reconcile_companion_subs(
+            state, _CompanionSubs(None, None, None, None), gate, wake_event
+        )
+
+        assert result.inbox_sub is fresh
+        assert wake_event.is_set()
+        assert gate.claim() is True  # the first bind forced a recompute
+
+    async def test_retry_that_finally_succeeds_marks_the_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same catch-up applies when a prior tick's subscribe failed
+        (``inbox_sub`` still ``None``) and this tick's retry succeeds."""
+        state = self._state(tmp_path)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()
+        wake_event = asyncio.Event()
+
+        fresh = SubscriptionBinding(AsyncMock(), 0)
+
+        async def _fake_subscribe_inbox_notify(
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _gate: _InboxPokeGate,
+            _wake_event: asyncio.Event,
+            *,
+            user: str,
+        ) -> SubscriptionBinding | None:
+            del user
+            return fresh
+
+        monkeypatch.setattr(
+            _descriptions, "subscribe_inbox_notify", _fake_subscribe_inbox_notify
+        )
+
+        # A previously-failed attempt already created the latch, but
+        # inbox_sub is still None — this reconcile pass is the retry.
+        previously_failed = _CompanionSubs(_test_latch(), None, None, None)
+
+        result = await _reconcile_companion_subs(
+            state, previously_failed, gate, wake_event
+        )
+
+        assert result.inbox_sub is fresh
+        assert gate.claim() is True
+
+    async def test_steady_state_does_not_mark_the_gate(self, tmp_path: Path) -> None:
+        """Once bound, an ordinary no-op reconcile (generation unchanged)
+        must not spuriously mark the gate on every tick."""
+        state = self._state(tmp_path)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()
+        wake_event = asyncio.Event()
+
+        already_bound = SubscriptionBinding(AsyncMock(), 0)
+        steady = _CompanionSubs(
+            _test_latch(),
+            already_bound,
+            _test_latch(),
+            SubscriptionBinding(AsyncMock(), 0),
+        )
+
+        result = await _reconcile_companion_subs(state, steady, gate, wake_event)
+
+        assert result.inbox_sub is already_bound
+        assert gate.claim() is False
+        assert not wake_event.is_set()
+
+
+class TestCompanionTalkCallbackGatesOnWakePoke:
+    """``subscribe_companion_talk``'s callback must mark the shared inbox
+    gate only for a wake poke, not for every frame on the companion's talk
+    subject.
+
+    Before this fix, the callback unconditionally called ``gate.mark()``
+    for every frame, including a genuine talk message/invite/end/withdraw
+    addressed to the companion — forcing a spurious ``stream_info``
+    recompute on every real conversation turn. ``subscribe_talk`` already
+    applies the wake-poke classification to this session's own talk
+    subject (DES-062's local-review fix round); the companion's subject
+    deserves the same discipline.
+    """
+
+    @staticmethod
+    def _state(tmp_path: Path, nc: AsyncMock) -> ServerState:
+        relay = MagicMock(spec=NatsRelay)
+        relay.connection_generation = 1
+        relay.get_nc = AsyncMock(return_value=nc)
+        relay.talk_notify_subject = MagicMock(
+            return_value="biff.talk.notify.jfreeman:bbbb0001"
+        )
+        companion = CompanionSession(
+            user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
+        )
+        return create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+            companion=companion,
+        )
+
+    async def test_genuine_talk_frame_wakes_but_does_not_mark_the_gate(
+        self, tmp_path: Path
+    ) -> None:
+        nc = AsyncMock()
+        state = self._state(tmp_path, nc)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute — steady state
+        wake_event = asyncio.Event()
+
+        assert state.companion is not None
+        await subscribe_companion_talk(
+            state, state.companion, _test_latch(), gate, wake_event
+        )
+        on_companion_talk = nc.subscribe.call_args.kwargs["cb"]
+
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {
+                "type": "message",
+                "from": "eric",
+                "body": "hello",
+                "to_key": "jfreeman:bbbb0001",
+                "from_key": "eric:tty2",
+            }
+        ).encode()
+        await on_companion_talk(msg)
+
+        assert wake_event.is_set()  # presence is still active
+        assert gate.claim() is False  # but no spurious unread recompute
+
+    async def test_wake_poke_marks_the_gate(self, tmp_path: Path) -> None:
+        nc = AsyncMock()
+        state = self._state(tmp_path, nc)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute — steady state
+        wake_event = asyncio.Event()
+
+        assert state.companion is not None
+        await subscribe_companion_talk(
+            state, state.companion, _test_latch(), gate, wake_event
+        )
+        on_companion_talk = nc.subscribe.call_args.kwargs["cb"]
+
+        # A /write mail notification riding the talk subject: no "type" key.
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {"from": "eric", "body": "for the human", "to_key": "jfreeman:bbbb0001"}
+        ).encode()
+        await on_companion_talk(msg)
+
+        assert wake_event.is_set()
+        assert gate.claim() is True  # the poke is owed a recompute
+
+    async def test_legacy_bare_wake_marks_the_gate(self, tmp_path: Path) -> None:
+        nc = AsyncMock()
+        state = self._state(tmp_path, nc)
+        gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute — steady state
+        wake_event = asyncio.Event()
+
+        assert state.companion is not None
+        await subscribe_companion_talk(
+            state, state.companion, _test_latch(), gate, wake_event
+        )
+        on_companion_talk = nc.subscribe.call_args.kwargs["cb"]
+
+        msg = MagicMock()
+        msg.data = b"1"  # legacy non-dict payload
+        await on_companion_talk(msg)
+
+        assert wake_event.is_set()
+        assert gate.claim() is True
 
 
 class TestSubscribeTalkLatch:
