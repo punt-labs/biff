@@ -34,24 +34,36 @@ _event=$(printf '%s' "$_stdin" | jq -r '.hook_event_name // empty' 2>/dev/null)
 # PID, mirroring src/biff/session_key.py's find_session_key() in pure shell
 # (one `ps` call, not a Python subprocess). Falls back to $PPID, matching
 # that function's own os.getppid() fallback.
+#
+# The walk itself runs in awk, not bash: `declare -A` (bash 4+) is not
+# available in macOS's system /bin/bash (3.2, GPLv2-frozen), so building the
+# pid->ppid/comm maps as bash associative arrays silently errored out on
+# macOS and disabled the whole hook there (every session fell back to
+# $PPID). awk has always had associative arrays and ships on every target
+# platform (POSIX-required), so the two-pass build-then-walk moves there
+# entirely; bash only captures awk's single-line result.
 _session_key=""
 if _ps_table=$(ps -eo pid=,ppid=,comm= 2>/dev/null); then
-  declare -A _ppid_of=() _comm_of=()
-  while read -r _pid _ppid _comm; do
-    [[ -n "$_pid" ]] || continue
-    _ppid_of["$_pid"]="$_ppid"
-    _comm_of["$_pid"]="$_comm"
-  done <<<"$_ps_table"
-
-  _walk="$$"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [[ -n "${_ppid_of[$_walk]+x}" ]] || break
-    _base="${_comm_of[$_walk]##*/}"
-    [[ "$_base" == "claude" ]] && _session_key="$_walk"
-    _next="${_ppid_of[$_walk]}"
-    [[ "$_next" == "$_walk" || "$_next" == "0" ]] && break
-    _walk="$_next"
-  done
+  _session_key=$(printf '%s\n' "$_ps_table" | awk -v start="$$" '
+    {
+      pid = $1; ppid = $2; comm = $3
+      n = split(comm, parts, "/")
+      base[pid] = parts[n]
+      parent[pid] = ppid
+    }
+    END {
+      walk = start
+      found = ""
+      for (i = 0; i < 10; i++) {
+        if (!(walk in parent)) break
+        if (base[walk] == "claude") found = walk
+        nxt = parent[walk]
+        if (nxt == walk || nxt == "0") break
+        walk = nxt
+      }
+      print found
+    }
+  ' 2>/dev/null)
 fi
 [[ -n "$_session_key" ]] || _session_key="$PPID"
 
@@ -59,7 +71,18 @@ _unread_dir="$HOME/.punt-labs/biff/unread"
 _unread_file="$_unread_dir/${_session_key}.json"
 _nudge_file="$_unread_dir/${_session_key}.nudged"
 
-[[ -f "$_unread_file" ]] || exit 0
+# A .nudged sidecar with no matching .json is stale — the primary cleanup
+# lives in the server's own shutdown path (src/biff/server/app.py removes
+# both files together), but a PID that outlived a prior session's cleanup
+# and got reused by an unrelated new session could otherwise inherit a
+# sidecar whose leftover count happens to match the new session's first
+# real count, silently suppressing the nudge that should fire for it.
+# Self-heal here too: no .json means nothing to gate, so any sidecar is
+# stale regardless of cause.
+if [[ ! -f "$_unread_file" ]]; then
+  rm -f "$_nudge_file" 2>/dev/null
+  exit 0
+fi
 
 _count=$(jq -r '.count // 0' "$_unread_file" 2>/dev/null)
 [[ "$_count" =~ ^[0-9]+$ ]] || exit 0

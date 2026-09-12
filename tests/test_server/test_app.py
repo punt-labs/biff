@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastmcp import FastMCP
 
+from biff.models import BiffConfig
 from biff.server import app
 from biff.server.app import (
     _UNEXPECTED_CLEANUP_ERROR,
@@ -17,7 +18,7 @@ from biff.server.app import (
     _write_sentinel,
     create_server,
 )
-from biff.server.state import ServerState
+from biff.server.state import ServerState, create_state
 
 
 @pytest.fixture
@@ -363,3 +364,88 @@ class TestLifespanCleanupSurvivesFailedReaper:
             "shutdown_tasks",
             "release_relay",
         ]
+
+
+class TestRemoveUnreadFiles:
+    """``_remove_unread_files`` deletes both the unread-status JSON and its
+    ``unread-nudge.sh`` ``.nudged`` sidecar.
+
+    Before this fix, both cleanup call sites removed only the JSON, leaving
+    the sidecar behind -- a reused PID starting a fresh session could
+    inherit a stale sidecar whose leftover count happened to match its own
+    first real count, silently suppressing the nudge that should fire for
+    it (Bugbot finding hfTNp).
+    """
+
+    def test_removes_both_files_when_present(self, tmp_path: Path) -> None:
+        unread_path = tmp_path / "42.json"
+        nudged_path = tmp_path / "42.nudged"
+        unread_path.write_text("{}")
+        nudged_path.write_text("3")
+
+        app._remove_unread_files(unread_path)
+
+        assert not unread_path.exists()
+        assert not nudged_path.exists()
+
+    def test_none_path_is_a_safe_no_op(self) -> None:
+        app._remove_unread_files(None)  # must not raise
+
+    def test_missing_files_are_a_safe_no_op(self, tmp_path: Path) -> None:
+        unread_path = tmp_path / "missing.json"
+        app._remove_unread_files(unread_path)  # must not raise
+
+
+class TestLifespanCleanupRemovesNudgeSidecar:
+    """The end-to-end ``_lifespan_cleanup`` path removes both files, not
+    just the JSON -- the regression this pins beyond the unit test above."""
+
+    async def test_both_files_removed_after_cleanup(
+        self, tmp_path: Path, config: BiffConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unread_path = tmp_path / "unread.json"
+        nudged_path = tmp_path / "unread.nudged"
+        unread_path.write_text("{}")
+        nudged_path.write_text("2")
+
+        state = create_state(
+            config,
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            unread_path=unread_path,
+        )
+
+        async def _noop(_state: ServerState) -> None:
+            return None
+
+        async def _noop_shutdown(
+            _shutdown: asyncio.Event, _tasks: list[asyncio.Task[None]]
+        ) -> None:
+            return None
+
+        async def _fake_drain() -> None:
+            return None
+
+        def _noop_write_sentinels(_state: ServerState) -> None:
+            return None
+
+        monkeypatch.setattr(app, "_append_logout_event", _noop)
+        monkeypatch.setattr(app, "_append_companion_logout_event", _noop)
+        monkeypatch.setattr(app, "_shutdown_tasks", _noop_shutdown)
+        monkeypatch.setattr(
+            app, "_write_reap_fallback_sentinels", _noop_write_sentinels
+        )
+        monkeypatch.setattr(app, "_release_relay", _noop)
+        monkeypatch.setattr("biff.integration.vox.drain_background_tasks", _fake_drain)
+
+        async def _never_ending_reaper() -> None:
+            await asyncio.Event().wait()
+
+        reaper = asyncio.create_task(_never_ending_reaper())
+        await asyncio.sleep(0)  # let the reaper task actually start running
+        await _lifespan_cleanup(state, asyncio.Event(), reaper, [])
+
+        assert not unread_path.exists()
+        assert not nudged_path.exists()

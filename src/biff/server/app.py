@@ -23,6 +23,8 @@ from biff._stdlib import active_dir, remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from mcp.types import InitializeRequest, InitializeResult
 
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
@@ -997,6 +999,24 @@ async def _release_relay(state: ServerState) -> None:
         logger.warning("Failed to close relay", exc_info=True)
 
 
+def _remove_unread_files(unread_path: Path | None) -> None:
+    """Delete the unread-status JSON and its unread-nudge.sh sidecar.
+
+    ``plugin/hooks/unread-nudge.sh`` tracks the last-nudged count in a
+    sibling ``.nudged`` file keyed to this same path's stem. Removing only
+    the JSON (the original shutdown behavior) left the sidecar behind: a
+    reused PID starting a fresh session could inherit a stale sidecar whose
+    leftover count happened to match its own first real count, silently
+    suppressing the nudge that should fire for it (Bugbot finding hfTNp).
+    """
+    if unread_path is None:
+        return
+    with suppress(FileNotFoundError):
+        unread_path.unlink()
+    with suppress(FileNotFoundError):
+        unread_path.with_suffix(".nudged").unlink()
+
+
 def _write_reap_fallback_sentinels(state: ServerState) -> None:
     """Write reap-fallback sentinels before the best-effort NATS teardown.
 
@@ -1089,9 +1109,7 @@ async def _lifespan_cleanup(
     from biff.integration.vox import drain_background_tasks  # noqa: PLC0415
 
     await drain_background_tasks()
-    if state.unread_path is not None:
-        with suppress(FileNotFoundError):
-            state.unread_path.unlink()
+    _remove_unread_files(state.unread_path)
     if state.owns_relay:
         await _release_relay(state)
     with suppress(OSError):
@@ -1375,9 +1393,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
             try:
                 yield state
             finally:
-                if state.unread_path is not None:
-                    with suppress(FileNotFoundError):
-                        state.unread_path.unlink()
+                _remove_unread_files(state.unread_path)
             return
         async with _active_lifespan(mcp, state) as ctx:
             yield ctx
