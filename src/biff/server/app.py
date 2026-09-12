@@ -1207,6 +1207,18 @@ async def _active_lifespan(
                     b"biff: signal cleanup: companion sentinel write failed\n",
                 )
             )
+        # Relay-agnostic, like the sentinel writes above: a hard SIGTERM/
+        # SIGINT/SIGHUP kill previously skipped this entirely (only the
+        # normal lifespan-teardown path called it), leaving both the
+        # unread-status JSON and its unread-nudge.sh ``.nudged`` sidecar
+        # on disk after this session ends (Cursor Bugbot finding hwquR).
+        steps.append(
+            (
+                lambda: _remove_unread_files(state.unread_path),
+                (OSError,),
+                b"biff: signal cleanup: unread file removal failed\n",
+            )
+        )
         # Best-effort sync cleanup for LocalRelay only.
         if isinstance(state.relay, LocalRelay):
             relay = state.relay
