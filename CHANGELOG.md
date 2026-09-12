@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-09-12
+
 ### Added
 
 - **Broadcast messages now push-detect in real time instead of waiting for the next poll tick** (biff-5ex, DES-062). `deliver()`'s broadcast branch (`/write user` with no active `:tty` addressed) now publishes a payload-less core-NATS wake poke on a repo-scoped subject (`{stream_prefix}.{repo}.notify.{user}`) after the JetStream publish succeeds, mirroring the wake poke targeted messages already got via the talk-notify subject. Each MCP server holds a second always-on subscription on its own poke subject (`subscribe_inbox_notify`/`_reconcile_inbox_notify_sub`, generalizing the talk SUB's generation-tracked lifecycle to a shared `SubscriptionBinding`); the callback only wakes the poller and marks a poke gate — never refreshes or notifies directly. Detection latency for broadcast messages drops from up to `nap_interval` (30s) to sub-second, matching wall and talk.
