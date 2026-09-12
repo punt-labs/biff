@@ -888,3 +888,140 @@ class TestCloseRaceWithReconnect:
             await relay._ensure_connected()
 
         assert dialed is False
+
+
+class TestOpenConnectionCancellationSafety:
+    """A cancellation landing while ``_provision`` is in flight must not
+    skip ``_open_connection``'s cleanup.
+
+    Before this fix, the cleanup ``except`` clause caught only
+    ``Exception`` — but ``asyncio.CancelledError`` is a ``BaseException``
+    (Python 3.8+), so an outer cancellation (e.g. ``_live_nc_or_reconnect``'s
+    bounding ``asyncio.timeout()``) landing mid-``_provision`` skipped the
+    clause entirely: the dialed client was never closed, never installed on
+    ``self._nc``, and so was leaked — neither owned nor reachable.
+    """
+
+    async def test_cancellation_during_provision_closes_the_dialed_client(
+        self,
+    ) -> None:
+        relay = NatsRelay()
+
+        fake_nc = MagicMock()
+        fake_nc.is_closed = False
+        fake_nc.close = AsyncMock()
+
+        async def _fast_dial() -> NatsClient:
+            return cast("NatsClient", fake_nc)
+
+        provision_started = asyncio.Event()
+
+        async def _hanging_provision(
+            _nc: NatsClient,
+        ) -> tuple[JetStreamContext, KeyValue, KeyValue]:
+            provision_started.set()
+            await asyncio.sleep(5.0)  # never resolves before the outer cancel
+            msg = "unreachable — outer cancellation must fire first"
+            raise AssertionError(msg)
+
+        relay._dial = _fast_dial  # type: ignore[method-assign]
+        relay._provision = _hanging_provision  # type: ignore[method-assign,assignment]
+
+        connect_task = asyncio.create_task(relay._ensure_connected())
+        await provision_started.wait()
+        connect_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await connect_task
+
+        # The dialed client must be closed, not leaked un-closed and
+        # un-cached — this is the discriminator: the old code never
+        # reached safe_close() for a CancelledError.
+        fake_nc.close.assert_awaited_once()
+        assert relay._nc is None
+        assert relay._js is None
+        assert relay._kv is None
+        assert relay._names_kv is None
+        # The lock must have been released too — a subsequent connect works.
+        assert not relay._connect_lock.locked()
+
+
+class TestDisconnectRaceWithReconnect:
+    """``disconnect()`` racing a blocked reconnect must not let the
+    reconnect silently resurrect the connection ``disconnect()`` just
+    reported as torn down.
+
+    Before this fix, ``disconnect()`` did not take ``_connect_lock`` at
+    all — it could observe ``self._nc`` as ``None``, decide there was
+    nothing to tear down, and return, while a reconnect that was already
+    blocked mid-dial (waiting on the lock for an unrelated reason) then
+    finished and installed a fresh client moments later, leaving the
+    relay connected again right after ``disconnect()`` returned.
+    ``disconnect()`` now serialises on the same lock ``_ensure_connected``
+    holds, so whichever of the two runs first completes before the other
+    proceeds.
+    """
+
+    async def test_disconnect_during_blocked_reconnect_tears_down_installed_client(
+        self,
+    ) -> None:
+        relay = NatsRelay()
+
+        dial_started = asyncio.Event()
+        release_dial = asyncio.Event()
+
+        fake_nc = MagicMock()
+        fake_nc.is_closed = False
+        fake_nc.close = AsyncMock()
+
+        async def _slow_dial() -> NatsClient:
+            dial_started.set()
+            await release_dial.wait()
+            return cast("NatsClient", fake_nc)
+
+        async def _fake_provision(
+            _nc: NatsClient,
+        ) -> tuple[JetStreamContext, KeyValue, KeyValue]:
+            return (
+                cast("JetStreamContext", MagicMock()),
+                cast("KeyValue", MagicMock()),
+                cast("KeyValue", MagicMock()),
+            )
+
+        relay._dial = _slow_dial  # type: ignore[method-assign]
+        relay._provision = _fake_provision  # type: ignore[method-assign,assignment]
+
+        # A reconnect starts and blocks mid-dial, holding _connect_lock.
+        connect_task = asyncio.create_task(relay._ensure_connected())
+        await dial_started.wait()
+
+        # disconnect() races in while the dial is still blocked — it must
+        # wait on the same lock rather than tearing down (or no-oping past)
+        # state concurrently.
+        disconnect_task = asyncio.create_task(relay.disconnect())
+        await asyncio.sleep(0.05)  # let disconnect() start blocking on the lock
+        assert not disconnect_task.done()
+
+        # Let the blocked dial complete: it started first, so it
+        # legitimately finishes and installs the client before disconnect()
+        # gets the lock.
+        release_dial.set()
+        await connect_task  # no exception — this reconnect began before disconnect()
+
+        await disconnect_task
+
+        # disconnect() ran AFTER the reconnect installed its client — it
+        # must tear down exactly what that reconnect just installed, not
+        # leave it standing because an earlier, stale read saw nothing.
+        assert relay._nc is None
+        fake_nc.close.assert_awaited_once()
+
+    async def test_disconnect_before_reconnect_starts_is_still_a_safe_no_op(
+        self,
+    ) -> None:
+        """The lock must not turn a completely ordinary no-op disconnect
+        into a hang or an error — only the racing case above changes."""
+        relay = NatsRelay()
+        await relay.disconnect()
+        assert relay._nc is None
+        assert relay._closed is False

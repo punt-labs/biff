@@ -899,11 +899,21 @@ class NatsRelay:
             js, kv, names_kv = await asyncio.wait_for(
                 self._provision(nc), timeout=_CONNECT_PROVISION_TIMEOUT
             )
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             if isinstance(exc, TimeoutError):
                 self._health.record_provision_timeout(_CONNECT_PROVISION_TIMEOUT)
             # Tear the connection down so the next call reconnects fresh
-            # instead of reusing a wedged/half-open one.
+            # instead of reusing a wedged/half-open one.  Catches
+            # ``asyncio.CancelledError`` too (a ``BaseException``, not an
+            # ``Exception``): an outer ``asyncio.timeout()``/cancellation
+            # (e.g. ``_live_nc_or_reconnect``'s bounded fall-through) landing
+            # here while ``_provision`` is in flight must not skip this
+            # cleanup — a plain ``except Exception`` lets the cancellation
+            # fall straight through, leaking ``nc`` un-closed and leaving
+            # it neither installed on ``self._nc`` nor reachable to close
+            # later.  Re-raising after cleanup preserves cancellation
+            # semantics; ``asyncio.timeout()``'s own ``__aexit__`` converts
+            # it to ``TimeoutError`` at its boundary as usual.
             await safe_close(nc)
             self._nc = None
             self._js = None
@@ -1159,13 +1169,27 @@ class NatsRelay:
         Semantically distinct from :meth:`close` — disconnect is
         reversible (the session continues), close is permanent
         (the session is ending).
+
+        Serialised on ``_connect_lock`` like every other lifecycle
+        transition (``_ensure_connected``, ``_force_reconnect``, ``close``).
+        Without the lock, ``disconnect()`` could observe ``self._nc`` as
+        ``None`` (or already closed), decide there is nothing to tear down,
+        and return — while a concurrent ``_ensure_connected()`` that was
+        already blocked waiting on the lock (e.g. behind a slow dial) then
+        completes moments later and installs a fresh client, silently
+        resurrecting the connection this call just reported as torn down.
+        Sharing the lock makes the two operations linearise: whichever
+        acquires it first runs to completion before the other proceeds, so
+        a ``disconnect()`` that loses the race tears down what the
+        in-flight reconnect just installed instead of racing past it.
         """
-        if self._nc is not None and not self._nc.is_closed:
-            await safe_close(self._nc)
-        self._nc = None
-        self._js = None
-        self._kv = None
-        self._names_kv = None
+        async with self._connect_lock:
+            if self._nc is not None and not self._nc.is_closed:
+                await safe_close(self._nc)
+            self._nc = None
+            self._js = None
+            self._kv = None
+            self._names_kv = None
 
     async def close(self) -> None:
         """Close the NATS connection and release resources — permanently.
@@ -1437,7 +1461,18 @@ class NatsRelay:
             # Wake poke (DES-062): broadcast delivery has no session identity
             # to target, so it cannot ride talk_notify_subject — a second
             # always-on SUB per repo+user listens on the repo-scoped inbox
-            # subject instead. Best-effort; never blocks or fails delivery.
+            # subject instead. Best-effort; never fails delivery (the
+            # JetStream publish above already succeeded), and identical in
+            # shape to the pre-existing targeted-message poke below — but
+            # "never blocks" overstates it: both pokes resolve their client
+            # via _live_nc_or_reconnect, whose reconnect fall-through is
+            # bounded by _NOTIFY_RECONNECT_TIMEOUT (3s), not zero, when the
+            # cached client is gone. Moving either poke onto a background
+            # task (see server/tools/_tasks.py's fire_and_forget) would make
+            # the "never blocks" claim literally true, but that helper is
+            # presentation-layer — this is core/relay code, and importing
+            # it here would violate the core-never-imports-presentation
+            # layering invariant. The bound stays inline, deliberately.
             await self._publish_inbox_notification(repo, message.to_user)
 
         # Notify any active talk_listen subscriber (core NATS, fire-and-forget).
