@@ -2043,6 +2043,7 @@ class TestReconcileCompanionSubs:
         state = self._state(tmp_path)
         assert state.companion is not None
         gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute — steady state
         wake_event = asyncio.Event()
 
         old_inbox_handle = AsyncMock()
@@ -2063,6 +2064,11 @@ class TestReconcileCompanionSubs:
         assert result.inbox_sub is None
         assert result.talk_sub is None
         assert result.identity is None
+        # The drop itself is an unread-state change (the companion's
+        # contribution vanishes from the next combined-count recompute)
+        # with no fresh SUB bind left to mark the gate on our behalf.
+        assert wake_event.is_set()
+        assert gate.claim() is True
 
     async def test_companion_identity_change_unsubscribes_old_and_binds_new(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2078,6 +2084,7 @@ class TestReconcileCompanionSubs:
         assert state.companion is not None
         old_identity = state.companion.session_key
         gate = _InboxPokeGate(backstop_interval=1000.0)
+        gate.claim()  # consume the initial forced recompute — steady state
         wake_event = asyncio.Event()
 
         old_inbox_handle = AsyncMock()
@@ -2136,6 +2143,13 @@ class TestReconcileCompanionSubs:
         assert result.talk_sub is fresh_talk
         assert result.identity == new_companion.session_key
         assert result.identity != old_identity
+        # An identity CHANGE (not a drop) is covered by the normal
+        # fresh-bind path -- _reconcile_always_on_sub's own mark+wake on
+        # the new identity's successful inbox-notify subscribe, not the
+        # drop-specific handling above -- verified explicitly here rather
+        # than assumed.
+        assert wake_event.is_set()
+        assert gate.claim() is True
 
 
 class TestCompanionTalkCallbackGatesOnWakePoke:

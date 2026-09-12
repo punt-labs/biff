@@ -1154,6 +1154,19 @@ async def _reconcile_companion_subs(
     genuinely new identity's subjects at all — Bugbot finding hwr78).
     Whenever the tracked ``identity`` no longer matches, unsubscribe
     whatever was bound and start clean.
+
+    A drop to ``None`` specifically also marks the gate and wakes the
+    poller: the companion's contribution to the combined unread count is
+    about to disappear from the next recompute, which is itself an
+    unread-state change with no SUB left to bind (and so no
+    ``_reconcile_always_on_sub`` fresh-bind to mark the gate on our
+    behalf this pass) — without marking it here directly, a disabled
+    poll interval would leave the stale, still-companion-inclusive total
+    displayed forever (Bugbot finding hw_9_). An identity *change* (to a
+    different companion, not a drop) needs no equivalent handling here:
+    it falls through to the normal bind below with ``inbox_sub`` reset to
+    ``None``, which is exactly the "never established" path
+    ``_reconcile_always_on_sub`` already marks the gate for on success.
     """
     companion_session = state.companion
     new_identity = (
@@ -1164,6 +1177,10 @@ async def _reconcile_companion_subs(
             if stale is not None:
                 with suppress(Exception):
                     await stale.handle.unsubscribe()
+        if companion.identity is not None and new_identity is None:
+            gate.mark()
+            state.activity.wake()
+            wake_event.set()
         companion = _CompanionSubs(None, None, None, None, new_identity)
     if companion_session is None:
         return companion
