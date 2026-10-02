@@ -864,7 +864,7 @@ def cc_pre_tool_use() -> None:
     data = _read_hook_input()
     try:
         result = handle_pre_tool_use(data)
-    except Exception:  # noqa: BLE001 — hook boundary (PY-EH-6): a gate that cannot evaluate must fail closed
+    except Exception:
         logger.warning("Plan gate evaluation failed; denying", exc_info=True)
         result = _pre_tool_use_deny(
             "Blocked: could not verify plan state. "

@@ -206,12 +206,10 @@ step immediately after `_resolve_config_fields` returns and before
 
 ```python
 cf = _resolve_config_fields(repo_root)
-cf = _apply_env_relay_overrides(cf)          # NEW
-relay_url_resolved, relay_auth = _apply_demo_relay_default(
-    cf.relay_url, cf.relay_auth
-)
+cf = _apply_env_relay_overrides(cf)  # NEW
+relay_url_resolved, relay_auth = _apply_demo_relay_default(cf.relay_url, cf.relay_auth)
 ...
-if relay_url_override is not RELAY_URL_UNSET:   # existing --relay-url path, untouched
+if relay_url_override is not RELAY_URL_UNSET:  # existing --relay-url path, untouched
     ...
 ```
 

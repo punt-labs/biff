@@ -122,8 +122,10 @@ tool calls.
 @dataclass(frozen=True)
 class EthosRoster:
     """Session roster from ``ethos session roster --json``."""
+
     root: EthosIdentity | None
     primary: EthosIdentity | None
+
 
 def get_ethos_roster() -> EthosRoster | None:
     """Resolve the session roster from ethos CLI.
@@ -181,9 +183,9 @@ If any condition fails: single session, existing behavior.
 ```python
 @dataclass(frozen=True)
 class ServerState:
-    config: BiffConfig        # primary identity
+    config: BiffConfig  # primary identity
     relay: Relay
-    tty: str                  # single TTY hex
+    tty: str  # single TTY hex
     # ...
 
     @property
@@ -199,21 +201,23 @@ Add a companion identity for the root session:
 @dataclass(frozen=True)
 class CompanionSession:
     """The secondary (root) identity in a dual-session setup."""
+
     user: str
     display_name: str
     kind: str
-    tty: str                  # separate hex
-    tty_name: str = ""        # set after claim
+    tty: str  # separate hex
+    tty_name: str = ""  # set after claim
 
     @property
     def session_key(self) -> str:
         return build_session_key(self.user, self.tty)
 
+
 @dataclass(frozen=True)
 class ServerState:
-    config: BiffConfig        # primary identity (unchanged)
+    config: BiffConfig  # primary identity (unchanged)
     relay: Relay
-    tty: str                  # primary TTY hex
+    tty: str  # primary TTY hex
     companion: CompanionSession | None = None  # NEW
     # ... rest unchanged
 
@@ -323,9 +327,7 @@ summary = await state.relay.get_unread_summary(state.session_key)
 Check both inboxes:
 
 ```python
-primary_summary = await state.relay.get_unread_summary(
-    state.session_key
-)
+primary_summary = await state.relay.get_unread_summary(state.session_key)
 companion_summary = (
     await state.relay.get_unread_summary(state.companion_session_key)
     if state.companion_session_key
@@ -377,15 +379,15 @@ must not expire while the MCP server is alive.
 Both sessions get login events at startup:
 
 ```python
-await _append_login_event(state, final_name)           # primary
-await _append_companion_login_event(state)              # companion
+await _append_login_event(state, final_name)  # primary
+await _append_companion_login_event(state)  # companion
 ```
 
 Both get logout events on shutdown:
 
 ```python
-await _append_logout_event(state)                       # primary
-await _append_companion_logout_event(state)             # companion
+await _append_logout_event(state)  # primary
+await _append_companion_logout_event(state)  # companion
 ```
 
 ### Session Cleanup
@@ -400,9 +402,7 @@ await state.relay.release_tty_name(state.config.user, primary_name)
 await state.relay.delete_session(state.session_key)
 # Release companion
 if state.companion:
-    await state.relay.release_tty_name(
-        state.companion.user, state.companion.tty_name
-    )
+    await state.relay.release_tty_name(state.companion.user, state.companion.tty_name)
     await state.relay.delete_session(state.companion.session_key)
 ```
 
@@ -423,9 +423,7 @@ Both sessions get active-session markers:
 ```python
 write_active_session(repo_name, state.session_key, worktree_root)
 if state.companion:
-    write_active_session(
-        repo_name, state.companion.session_key, worktree_root
-    )
+    write_active_session(repo_name, state.companion.session_key, worktree_root)
 ```
 
 ## 8. `/who` Output

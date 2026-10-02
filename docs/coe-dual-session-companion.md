@@ -115,9 +115,14 @@ async def register_session(
         with suppress(Exception):
             await relay.release_tty_name(existing.user, existing.tty_name)
     session = UserSession(
-        user=user, tty=tty_hex, tty_name=tty_name,
-        display_name=display_name, kind=kind,
-        hostname=hostname, pwd=pwd, repo=repo,
+        user=user,
+        tty=tty_hex,
+        tty_name=tty_name,
+        display_name=display_name,
+        kind=kind,
+        hostname=hostname,
+        pwd=pwd,
+        repo=repo,
         last_active=datetime.now(UTC),
     )
     await relay.update_session(session)

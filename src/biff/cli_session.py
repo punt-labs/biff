@@ -95,7 +95,7 @@ async def _heartbeat_loop(
             await relay.heartbeat(session_key)
         except asyncio.CancelledError:
             return
-        except Exception:  # noqa: BLE001
+        except Exception:
             # INFO, not WARNING: a transient NATS timeout auto-recovers on the
             # next tick and must NOT dump a traceback into the interactive REPL.
             # The stderr handler floors at WARNING, so INFO stays off the
@@ -131,7 +131,7 @@ async def _cli_session_cleanup(
     if name_reserved and tty_name and not registered:
         try:
             await relay.release_tty_name(user, tty_name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
 
     if registered and session is not None:
@@ -149,26 +149,26 @@ async def _cli_session_cleanup(
         try:
             await relay.append_wtmp(logout_event)
             await relay.flush()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to write CLI wtmp logout", exc_info=True)
 
         # Release TTY name reservation (DES-035).
         if tty_name:
             try:
                 await relay.release_tty_name(user, tty_name)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
 
         try:
             await relay.delete_session(session_key)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "Failed to delete CLI session %s", session_key, exc_info=True
             )
 
     try:
         await relay.close()
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Failed to close CLI relay", exc_info=True)
 
 
@@ -260,7 +260,7 @@ async def cli_session(
         )
         try:
             await relay.append_wtmp(login_event)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to write CLI wtmp login", exc_info=True)
 
         if interactive:

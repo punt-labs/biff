@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Bump ruff 0.15.1 → 0.16.4 and clear the new findings: removed 41 now-unused
+  `# noqa: BLE001` directives (ruff 0.16 narrowed blind-except detection),
+  parenthesized an implicit byte-string concatenation (ISC004), moved `None`
+  to the end of a type union (RUF036), and applied 0.16 formatting (including
+  Python code blocks in docs).
+
 ## [1.19.0] - 2026-09-12
 
 ### Added

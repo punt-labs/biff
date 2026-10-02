@@ -211,7 +211,7 @@ async def capture_session(session: ServerSession) -> None:
         try:
             async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
                 await session.send_tool_list_changed()
-        except Exception:  # noqa: BLE001 — best-effort: a session that
+        except Exception:
             # can't accept a notification at initialize time is broken
             # (a wedged transport that never returns hits the timeout
             # above and lands here too — see _NOTIFY_SEND_TIMEOUT); clear
@@ -349,7 +349,7 @@ async def notify_tool_list_changed() -> None:
             try:
                 async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
                     await ctx.send_notification(ToolListChangedNotification())
-            except Exception:  # noqa: BLE001 — best-effort, mirrors the
+            except Exception:
                 # suspenders except below: a transport error (or a wedged
                 # transport hitting the timeout — see _NOTIFY_SEND_TIMEOUT)
                 # on the belt send must not crash the calling tool handler,
@@ -377,7 +377,7 @@ async def notify_tool_list_changed() -> None:
             try:
                 async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
                     await _session.send_tool_list_changed()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning(
                     "Failed to send tool list changed notification",
                     exc_info=True,
@@ -464,7 +464,7 @@ async def _sync_unread_file(
         session = await state.relay.get_session(state.session_key)
         if session is not None:
             plan = session.plan
-    except Exception:  # noqa: BLE001 — best-effort side channel, see docstring
+    except Exception:
         logger.debug("_sync_unread_file: relay call failed", exc_info=True)
         return
     items = state.display_queue.snapshot()
@@ -525,7 +525,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
         return True
     try:
         combined = await _combined_unread_summary(state)
-    except Exception:  # noqa: BLE001 — best-effort side channel, see docstring
+    except Exception:
         logger.debug(
             "refresh_read_messages: unread summary fetch failed", exc_info=True
         )
@@ -547,7 +547,7 @@ async def refresh_wall(
     mcp: FastMCP[ServerState],
     state: ServerState,
     *,
-    wall: WallPost | None | _Sentinel = _SENTINEL,
+    wall: WallPost | _Sentinel | None = _SENTINEL,
 ) -> None:
     """Update the ``wall`` tool description and display queue.
 
@@ -1383,7 +1383,7 @@ async def _safe_tick(
         )
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("Poller tick failed, will retry", exc_info=True)
         return last_count, last_wall, last_talk
 

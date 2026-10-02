@@ -251,7 +251,7 @@ async def _poll_notify(
         summary = await ctx.relay.get_unread_summary(ctx.session_key)
         wall_post = await ctx.relay.get_wall()
         notes = notify.check(summary.count, wall_post)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logging.getLogger(__name__).debug("Notify check failed", exc_info=True)
 
     # Age out invites whose inviter never returned and never withdrew, mirroring
@@ -634,7 +634,7 @@ async def _set_talk_plan(ctx: CliContext, display: str) -> None:
     """
     try:
         await update_current_session(ctx, plan=f"talking to {display}")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logging.getLogger(__name__).debug("Failed to set talk plan", exc_info=True)
 
 
@@ -642,7 +642,7 @@ async def _clear_talk_plan(ctx: CliContext) -> None:
     """Best-effort clear the talk plan when a talk cancels, withdraws, or ends."""
     try:
         await update_current_session(ctx, plan="")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logging.getLogger(__name__).debug("Failed to clear talk plan", exc_info=True)
 
 
@@ -1650,7 +1650,7 @@ _NO_INPUT = object()
 async def _wait_for_input_or_notify(
     aqueue: asyncio.Queue[str | None],
     notify_event: asyncio.Event,
-) -> str | None | object:
+) -> str | object | None:
     """Wait for user input, a NATS notification, or a 2s timeout."""
     input_task = asyncio.create_task(aqueue.get())
     notify_task = asyncio.create_task(notify_event.wait())
