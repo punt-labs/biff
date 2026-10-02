@@ -308,12 +308,14 @@ from biff import commands, CliContext, CommandResult
 from biff.relay import LocalRelay
 
 relay = LocalRelay(data_dir)
-ctx = CliContext(relay=relay, config=config, session_key="kai:abc123", user="kai", tty="abc123")
+ctx = CliContext(
+    relay=relay, config=config, session_key="kai:abc123", user="kai", tty="abc123"
+)
 
 result: CommandResult = await commands.who(ctx)
-print(result.text)       # Human-readable output
+print(result.text)  # Human-readable output
 print(result.json_data)  # JSON-serializable data
-print(result.error)      # True if command failed
+print(result.error)  # True if command failed
 ```
 
 All 10 product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`) follow this pattern. See the [design log](DESIGN.md#des-022-library-api--command-extraction-via-humble-object-pattern) for architecture details.

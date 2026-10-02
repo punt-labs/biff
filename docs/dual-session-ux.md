@@ -29,7 +29,7 @@ _write_unread_file(
     state.unread_path,
     summary,
     repo_name=state.config.repo_name,
-    user=state.config.user,         # <-- always primary (e.g. "claude")
+    user=state.config.user,  # <-- always primary (e.g. "claude")
     tty_name=_tty_name,
     biff_enabled=_biff_enabled,
     display_items=items,
@@ -165,8 +165,10 @@ if state.companion is not None and all_unread:
     human_msgs = sorted(comp_tty + comp_user, key=lambda m: m.timestamp)
     agent_msgs = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
     return format_read_dual(
-        state.companion.user, human_msgs,
-        state.config.user, agent_msgs,
+        state.companion.user,
+        human_msgs,
+        state.config.user,
+        agent_msgs,
     )
 return format_read(all_unread)
 ```

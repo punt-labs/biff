@@ -24,13 +24,13 @@ sets feeds a single number, `interval`, into `poll_inbox()`
 ```python
 while shutdown is None or not shutdown.is_set():
     ...
-    await asyncio.sleep(interval)          # or wait_for(shutdown.wait(), interval)
+    await asyncio.sleep(interval)  # or wait_for(shutdown.wait(), interval)
     ...
     if not tracker.napping and tracker.idle_seconds() > idle_threshold:
         tracker.enter_nap()
     cheap_nap = tracker.napping and tracker.seconds_since_nap_poll() < nap_interval
     if not cheap_nap:
-        last_count, last_wall, last_talk = await _safe_tick(...)   # -> _active_tick
+        last_count, last_wall, last_talk = await _safe_tick(...)  # -> _active_tick
 ```
 
 (`_descriptions.py:816-898`). `_active_tick` (`_descriptions.py:736-786`) does

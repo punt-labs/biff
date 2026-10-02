@@ -1030,7 +1030,7 @@ class NatsRelay:
                     self._wtmp_stream,
                 )
                 self._wtmp_available = True
-        except Exception:  # noqa: BLE001 — provisioning must never crash startup
+        except Exception:
             # INFO: degrades gracefully; a background connect/reconnect event
             # that must not print into the interactive REPL.  The
             # traceback stays in biff.log for diagnosis.
@@ -1061,7 +1061,7 @@ class NatsRelay:
                     "Cleaned up legacy KV bucket biff-%s-sessions",
                     self._repo_name,
                 )
-        except Exception:  # noqa: BLE001 — best-effort cleanup must never crash startup
+        except Exception:
             # INFO: best-effort background cleanup on connect/reconnect; a
             # failure is non-fatal and must not print into the interactive
             # REPL.  The traceback stays in biff.log.
@@ -1862,7 +1862,7 @@ class NatsRelay:
                 await self.refresh_tty_reservation(
                     existing.user, existing.tty_name, session_key
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # INFO: reservation refresh runs inside the background
                 # heartbeat; a transient failure retries next tick and must
                 # not print into the interactive REPL.
@@ -1910,7 +1910,7 @@ class NatsRelay:
             return await self._discover_repos_for_org_inner(org)
         except NotFoundError:
             return frozenset()
-        except Exception:  # noqa: BLE001
+        except Exception:
             # INFO: org discovery runs at session startup and is best-effort
             # (returns empty on any transient failure) — it must not print a
             # traceback into the interactive REPL.  biff.log keeps
@@ -1955,7 +1955,7 @@ class NatsRelay:
             return await self._get_sessions_for_repo_inner(repo)
         except NotFoundError:
             return []
-        except Exception:  # noqa: BLE001
+        except Exception:
             # INFO: a transient peer-repo query failure returns [] and
             # self-recovers on the next call — it must not print a traceback
             # into the interactive REPL.  biff.log keeps the detail.

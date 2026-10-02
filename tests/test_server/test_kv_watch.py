@@ -24,7 +24,7 @@ _TEST_REPO = "_test-kv-watch"
 # Sentinel for scripting a TimeoutError in FakeWatcher
 _TIMEOUT = object()
 
-type ScriptItem = FakeKVEntry | None | object
+type ScriptItem = FakeKVEntry | object | None
 
 
 @dataclass

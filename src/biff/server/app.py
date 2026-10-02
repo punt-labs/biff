@@ -387,7 +387,7 @@ async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
     if session is not None and session.tty_name:
         try:
             await state.relay.release_tty_name(session.user, session.tty_name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "Failed to release TTY name %s during sentinel reap",
                 session.tty_name,
@@ -395,7 +395,7 @@ async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
             )
     try:
         await state.relay.delete_session(session_key)
-    except Exception:  # noqa: BLE001 — relay errors vary by backend
+    except Exception:
         logger.warning("Failed to reap sentinel for %s", session_key, exc_info=True)
         return False
     return True
@@ -455,7 +455,7 @@ async def _poll_companion_registration(state: ServerState) -> None:
     # if only the login event fails (matches _active_lifespan pattern).
     try:
         await _append_companion_login_event(state)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Companion wtmp login failed", exc_info=True)
     logger.info("Companion registered: %s", companion.session_key)
 
@@ -488,7 +488,7 @@ async def _refresh_org_repos(state: ServerState) -> None:
         if new_org_repos != state.org_repos:
             object.__setattr__(state, "org_repos", new_org_repos)
             logger.info("Org repos refreshed: %s", sorted(new_org_repos))
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("Org discovery refresh failed", exc_info=True)
 
 
@@ -518,7 +518,7 @@ async def _heartbeat_loop(
             pass
         try:
             await state.relay.heartbeat(state.session_key)
-        except Exception:  # noqa: BLE001 — relay errors vary by backend
+        except Exception:
             # DEBUG, not WARNING: the loop ticks every 60s, so a NATS wedge
             # would spam a warning per tick.  The relay's _ConnectionHealth
             # logs the wedge onset/recovery once — it is the single source.
@@ -526,12 +526,12 @@ async def _heartbeat_loop(
         if state.companion is None:
             try:
                 await _poll_companion_registration(state)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("Companion registration poll failed", exc_info=True)
         if state.companion_session_key:
             try:
                 await state.relay.heartbeat(state.companion_session_key)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug("Companion heartbeat failed", exc_info=True)
         await _refresh_org_repos(state)
 
@@ -646,7 +646,7 @@ async def _kv_watcher_loop(
             await _run_kv_watch(relay, state, shutdown, cache)
         except asyncio.CancelledError:
             return
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("KV watcher restarting after error", exc_info=True)
             with suppress(TimeoutError):
                 await asyncio.wait_for(shutdown.wait(), timeout=2.0)
@@ -705,7 +705,7 @@ async def _handle_kv_delete(
         return
     try:
         await relay.append_wtmp(_build_logout_event(session_key, cached))
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning(
             "Failed to append wtmp logout for %s",
             session_key,
@@ -758,7 +758,7 @@ async def _append_login_event(state: ServerState, tty_name: str) -> None:
     )
     try:
         await state.relay.append_wtmp(login_event)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Failed to append wtmp login event", exc_info=True)
 
 
@@ -785,7 +785,7 @@ async def _append_logout_event(state: ServerState) -> None:
         await asyncio.wait_for(
             state.relay.append_wtmp(logout_event), timeout=_TEARDOWN_STEP_TIMEOUT
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Failed to append wtmp logout event", exc_info=True)
         return
     # Flush ensures the publish hits the wire before process exit.  Separate
@@ -795,7 +795,7 @@ async def _append_logout_event(state: ServerState) -> None:
     if isinstance(state.relay, NatsRelay):
         try:
             await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to flush wtmp logout event", exc_info=True)
 
 
@@ -821,7 +821,7 @@ async def _append_companion_login_event(state: ServerState) -> None:
     )
     try:
         await state.relay.append_wtmp(login_event)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Failed to append companion wtmp login event", exc_info=True)
 
 
@@ -844,13 +844,13 @@ async def _append_companion_logout_event(state: ServerState) -> None:
         await asyncio.wait_for(
             state.relay.append_wtmp(logout_event), timeout=_TEARDOWN_STEP_TIMEOUT
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Failed to append companion wtmp logout event", exc_info=True)
         return
     if isinstance(state.relay, NatsRelay):
         try:
             await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to flush companion wtmp logout event", exc_info=True)
 
 
@@ -955,13 +955,13 @@ async def _release_session(
                 state.relay.release_tty_name(user, tty_name),
                 timeout=_TEARDOWN_STEP_TIMEOUT,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
     try:
         await asyncio.wait_for(
             state.relay.delete_session(session_key), timeout=_TEARDOWN_STEP_TIMEOUT
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Failed to delete session %s", session_key, exc_info=True)
     else:
         try:
@@ -995,7 +995,7 @@ async def _release_relay(state: ServerState) -> None:
         )
     try:
         await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Failed to close relay", exc_info=True)
 
 
@@ -1089,7 +1089,7 @@ async def _lifespan_cleanup(
         await reaper
     except asyncio.CancelledError:
         pass
-    except Exception:  # noqa: BLE001
+    except Exception:
         # _reap_loop can fail on its own (e.g. an unhandled error inside
         # _reap_sentinels) before this ever cancels it, in which case
         # ``await reaper`` re-raises that stored exception rather than
@@ -1242,8 +1242,10 @@ async def _active_lifespan(
                     (
                         lambda: relay.write_remove_sentinel(companion.session_key),
                         (OSError,),
-                        b"biff: signal cleanup: companion remove-sentinel "
-                        b"write failed\n",
+                        (
+                            b"biff: signal cleanup: companion remove-sentinel "
+                            b"write failed\n"
+                        ),
                     )
                 )
                 steps.append(

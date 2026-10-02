@@ -20,7 +20,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _UNCHECKED = object()
-_vox_binary: str | None | object = _UNCHECKED
+_vox_binary: str | object | None = _UNCHECKED
 _vox_once_supported: bool | object = _UNCHECKED
 
 

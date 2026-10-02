@@ -930,10 +930,10 @@ Default empty string. Zero behavior change. The session KV entry already carries
 **2. `Message` encryption envelope:**
 
 ```python
-encrypted: bool = False        # True when body contains ciphertext
-nonce: str = ""                # Base64-encoded 24-byte nonce
-sender_pubkey: str = ""        # Base64-encoded Curve25519 public key
-encryption_mode: str = ""      # "box" | "secretbox" | ""
+encrypted: bool = False  # True when body contains ciphertext
+nonce: str = ""  # Base64-encoded 24-byte nonce
+sender_pubkey: str = ""  # Base64-encoded Curve25519 public key
+encryption_mode: str = ""  # "box" | "secretbox" | ""
 ```
 
 All default to empty/false. Existing clients produce `encrypted=False` messages. When lff ships, encrypted messages set `encrypted=True` and populate the envelope. Receivers that see `encrypted=True` but lack decryption capability skip the message gracefully instead of crashing on `ValidationError`.
@@ -1928,6 +1928,7 @@ def _run(coro_factory: Callable[[CliContext], Awaitable[CommandResult]]) -> None
                 print(result.text)
             if result.error:
                 raise typer.Exit(code=1)
+
     asyncio.run(_inner())
 ```
 
@@ -1937,6 +1938,7 @@ Typer commands become one-liners:
 @app.command()
 def who() -> None:
     _run(commands.who)
+
 
 @app.command()
 def finger(user: Annotated[str, typer.Argument(...)]) -> None:
@@ -2008,6 +2010,7 @@ def ctx(relay: LocalRelay) -> CliContext:
         user="kai",
         tty="abc12345",
     )
+
 
 async def test_who_empty(ctx: CliContext) -> None:
     result = await who(ctx)
@@ -2449,11 +2452,13 @@ The hook output used `"reason"` as the JSON field name:
 
 ```python
 # WRONG — silently ignored by Claude Code
-{"hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "reason": "Set a plan with /plan before editing files."
-}}
+{
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "reason": "Set a plan with /plan before editing files.",
+    }
+}
 ```
 
 Claude Code requires `"permissionDecisionReason"`.  The `"reason"` field is
@@ -2467,11 +2472,13 @@ Rename the field to `"permissionDecisionReason"`:
 
 ```python
 # CORRECT — reason visible to the model
-{"hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "Set a plan with /plan before editing files."
-}}
+{
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "Set a plan with /plan before editing files.",
+    }
+}
 ```
 
 ### Evidence
@@ -2540,6 +2547,7 @@ created the exact hang it intended to prevent.
 ```python
 import os
 import select
+
 
 def _read_hook_input() -> dict[str, object]:
     fd = sys.stdin.fileno()
@@ -2723,11 +2731,11 @@ re-established them.
 async def _ensure_connected(self):
     # Fast path — returns cached handles without checking connection
     if self._js is not None and self._kv is not None:
-        return self._js, self._kv          # ← BUG: stale handles
+        return self._js, self._kv  # ← BUG: stale handles
 
     # Slow path — checks connection, reconnects if needed
     nc = self._nc
-    if nc is None or nc.is_closed:          # ← never reached
+    if nc is None or nc.is_closed:  # ← never reached
         nc = await nats.connect(...)
 ```
 
@@ -3264,17 +3272,21 @@ Replace `permissionDecision: "ask"` with `additionalContext`:
 
 ```python
 # Before (DES-026): hijacks permission system, prompts user
-{"hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
-    "permissionDecisionReason": "Set a plan before editing files."
-}}
+{
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": "Set a plan before editing files.",
+    }
+}
 
 # After (DES-031): injects context, no user prompt
-{"hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "additionalContext": "Set a plan before editing files."
-}}
+{
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "Set a plan before editing files.",
+    }
+}
 ```
 
 `additionalContext` injects the suggestion into Claude's context as a system
@@ -3695,9 +3707,13 @@ One additional KV read+write per heartbeat (~every 60s). Negligible overhead.
 
 ```python
 class Relay(Protocol):
-    async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool: ...
+    async def reserve_tty_name(
+        self, user: str, name: str, session_key: str
+    ) -> bool: ...
     async def release_tty_name(self, user: str, name: str) -> None: ...
-    async def refresh_tty_reservation(self, user: str, name: str, session_key: str) -> None: ...
+    async def refresh_tty_reservation(
+        self, user: str, name: str, session_key: str
+    ) -> None: ...
     async def list_reserved_names(self, user: str) -> list[str]: ...
     async def get_tty_reservation_owner(self, user: str, name: str) -> str | None: ...
 ```
