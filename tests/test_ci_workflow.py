@@ -39,7 +39,7 @@ def _write_workflow(root: Path, filename: str, name: str | None) -> None:
 # A resolvable, non-dead action pin. The prior pin
 # (e58605a9b6da7c637471fab8847a5e5a6b8df081) does not exist on GitHub — the
 # notify job failed to resolve the action on first trigger in every repo.
-_LIVE_SETUP_UV_SHA = "c771a70e6277c0a99b617c7a806ffedaca235ff9"
+_LIVE_SETUP_UV_SHA = "c18668ad3cf93ea998bef934396af7bb5c839dc7"
 _DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
 
 # actions/checkout@v7.0.1, matching the SHA every other workflow in this repo
