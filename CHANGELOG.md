@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `biff-notify.yml`'s deployed `setup-uv` pin was left at v9.0.0 after
+  dependabot bumped every other workflow (and the bundled template) to
+  v10.2.0 — a release-process gap: `biff enable` deposits from the
+  installed `punt-biff` CLI, and nothing forces a reinstall before
+  `enable` re-renders against a newer bundled template. Re-pinned to
+  v10.2.0 to match the rest of the repo's workflows.
+
 ### Changed
 
 - Bump ruff 0.15.1 → 0.16.4 and clear the new findings: removed 41 now-unused
