@@ -10,7 +10,7 @@
   installed `punt-biff` CLI, and nothing forces a reinstall before
   `enable` re-renders against a newer bundled template. Re-pinned to
   v10.2.0 to match the rest of the repo's workflows.
-- **The companion (human) `/who` row never appeared in a dual-session setup** (biff-2zug). `get_ethos_roster()` shelled out to `ethos session roster --json` without passing `CLAUDE_PID` in the subprocess environment, so `ethos` refused with a plain-text `"No active session."` line instead of JSON — silently swallowed as `None` on every poll, forever. The call now injects `CLAUDE_PID` via the same process-tree walk `session_id.py` already uses to resolve its own session key (DES-058), and logs the failure paths at DEBUG so a future regression is diagnosable from `biff.log`.
+- **The companion (human) `/who` row never appeared in a dual-session setup** (biff-2zug). `get_ethos_roster()` shelled out to `ethos session roster --json` without passing `CLAUDE_PID` in the subprocess environment, so `ethos` refused with a plain-text `"No active session."` line instead of JSON — silently swallowed as `None` on every poll, forever. The call now injects `CLAUDE_PID` via the same process-tree walk `session_id.py` already uses to resolve its own session key (DES-058), and logs the failure paths (including stderr) at INFO so a future regression is diagnosable from `biff.log` — `logging_config.py`'s file handler is hardcoded at INFO, so a DEBUG-level log here would never actually reach the file.
 
 ### Changed
 
