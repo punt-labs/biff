@@ -43,6 +43,7 @@ from biff._stdlib import (
     yaml_config_dir,
 )
 from biff.models import BiffConfig, RelayAuth
+from biff.session_key import topmost_claude_pid
 
 # Re-export stdlib functions so existing callers of biff.config still work.
 __all__ = [
@@ -216,6 +217,10 @@ def get_ethos_roster() -> EthosRoster | None:
     Returns ``None`` when ethos is not installed, not configured,
     returns malformed JSON, or times out.
     """
+    env = dict(os.environ)
+    claude_pid = topmost_claude_pid()
+    if claude_pid is not None:
+        env["CLAUDE_PID"] = str(claude_pid)
     try:
         result = subprocess.run(
             ["ethos", "session", "roster", "--json"],  # noqa: S607
@@ -223,16 +228,26 @@ def get_ethos_roster() -> EthosRoster | None:
             text=True,
             check=False,
             timeout=2,
+            env=env,
         )
     except FileNotFoundError:
         return None
     except subprocess.TimeoutExpired:
         return None
     if result.returncode != 0:
+        logger.debug(
+            "ethos session roster exited %d: %s",
+            result.returncode,
+            result.stdout.strip(),
+        )
         return None
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
+        logger.debug(
+            "ethos session roster returned non-JSON output: %s",
+            result.stdout.strip(),
+        )
         return None
     if not isinstance(data, dict):
         return None
