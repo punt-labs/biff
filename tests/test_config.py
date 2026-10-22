@@ -959,7 +959,8 @@ class TestGetEthosRoster:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = "No active session."
-            with caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER):
+            mock_run.return_value.stderr = ""
+            with caplog.at_level(logging.INFO, logger=_CONFIG_LOGGER):
                 assert get_ethos_roster() is None
         assert any("No active session." in r.getMessage() for r in caplog.records)
 
@@ -974,7 +975,8 @@ class TestGetEthosRoster:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "not json"
-            with caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER):
+            mock_run.return_value.stderr = ""
+            with caplog.at_level(logging.INFO, logger=_CONFIG_LOGGER):
                 assert get_ethos_roster() is None
         assert any("not json" in r.getMessage() for r in caplog.records)
 

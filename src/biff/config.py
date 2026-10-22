@@ -235,18 +235,20 @@ def get_ethos_roster() -> EthosRoster | None:
     except subprocess.TimeoutExpired:
         return None
     if result.returncode != 0:
-        logger.debug(
-            "ethos session roster exited %d: %s",
+        logger.info(
+            "ethos session roster exited %d: stdout=%s stderr=%s",
             result.returncode,
             result.stdout.strip(),
+            result.stderr.strip(),
         )
         return None
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
-        logger.debug(
-            "ethos session roster returned non-JSON output: %s",
+        logger.info(
+            "ethos session roster returned non-JSON output: stdout=%s stderr=%s",
             result.stdout.strip(),
+            result.stderr.strip(),
         )
         return None
     if not isinstance(data, dict):
