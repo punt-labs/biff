@@ -1086,6 +1086,22 @@ class TestGetEthosRoster:
             passed_env = mock_run.call_args.kwargs["env"]
             assert "CLAUDE_PID" not in passed_env
 
+    def test_preserves_inherited_claude_pid_over_topmost_walk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A nested claude process's own CLAUDE_PID (DES-058) must survive --
+        the topmost-ancestor walk's result must never overwrite it."""
+        monkeypatch.setenv("CLAUDE_PID", "200")
+        with (
+            patch("biff.config.subprocess.run") as mock_run,
+            patch("biff.config.topmost_claude_pid", return_value=100),
+        ):
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = _ROSTER_JSON
+            get_ethos_roster()
+            passed_env = mock_run.call_args.kwargs["env"]
+            assert passed_env["CLAUDE_PID"] == "200"
+
 
 # -- resolve_agent_identity_from_disk --
 
