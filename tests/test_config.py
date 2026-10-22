@@ -955,11 +955,13 @@ class TestGetEthosRoster:
         with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
             assert get_ethos_roster() is None
 
-    def test_exit_1(self) -> None:
+    def test_exit_1(self, caplog: pytest.LogCaptureFixture) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
-            mock_run.return_value.stdout = ""
-            assert get_ethos_roster() is None
+            mock_run.return_value.stdout = "No active session."
+            with caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER):
+                assert get_ethos_roster() is None
+        assert any("No active session." in r.getMessage() for r in caplog.records)
 
     def test_timeout(self) -> None:
         with patch(
@@ -968,11 +970,13 @@ class TestGetEthosRoster:
         ):
             assert get_ethos_roster() is None
 
-    def test_bad_json(self) -> None:
+    def test_bad_json(self, caplog: pytest.LogCaptureFixture) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "not json"
-            assert get_ethos_roster() is None
+            with caplog.at_level(logging.DEBUG, logger=_CONFIG_LOGGER):
+                assert get_ethos_roster() is None
+        assert any("not json" in r.getMessage() for r in caplog.records)
 
     def test_missing_root(self) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
@@ -1053,6 +1057,32 @@ class TestGetEthosRoster:
             assert result.root is None
             assert result.primary is not None
             assert result.primary.handle == "claude"
+
+    def test_injects_claude_pid_into_subprocess_env(self) -> None:
+        """Regression: the companion /who row never appeared because the
+        ethos subprocess call was missing CLAUDE_PID (biff-2zug)."""
+        with (
+            patch("biff.config.subprocess.run") as mock_run,
+            patch("biff.config.topmost_claude_pid", return_value=4242),
+        ):
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = _ROSTER_JSON
+            get_ethos_roster()
+            passed_env = mock_run.call_args.kwargs["env"]
+            assert passed_env["CLAUDE_PID"] == "4242"
+
+    def test_omits_claude_pid_when_no_claude_ancestor(self) -> None:
+        """No claude ancestor (headless/CI/SDK) -- CLAUDE_PID is absent
+        entirely, not a sentinel or empty string."""
+        with (
+            patch("biff.config.subprocess.run") as mock_run,
+            patch("biff.config.topmost_claude_pid", return_value=None),
+        ):
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = _ROSTER_JSON
+            get_ethos_roster()
+            passed_env = mock_run.call_args.kwargs["env"]
+            assert "CLAUDE_PID" not in passed_env
 
 
 # -- resolve_agent_identity_from_disk --
