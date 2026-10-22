@@ -7495,12 +7495,27 @@ working round trip (`plugin:fakechat:fakechat: Channel notifications
 registered`) within the same session that had failed every prior attempt
 with them set.
 
-Anthropic's own docs confirm this is not biff-specific: the Remote
-Control troubleshooting guide names the exact same three variables (plus
-`DO_NOT_TRACK`) as disabling "the feature-flag evaluation that Remote
-Control availability depends on" (code.claude.com/docs/en/remote-control,
-"Remote Control requires feature-flag evaluation"). Channels and Remote
-Control share the same gate.
+Anthropic's own docs confirm the underlying mechanism — feature-flag
+evaluation gating a Claude Code capability — is not biff-specific, though
+the two capabilities are not identically gated. The Remote Control
+troubleshooting guide (code.claude.com/docs/en/remote-control,
+"Remote Control requires feature-flag evaluation") names all four
+variables (`DISABLE_TELEMETRY`, `DO_NOT_TRACK`,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`) as
+disabling feature-flag evaluation in general, but draws a distinction for
+Remote Control specifically: `DISABLE_TELEMETRY` or `DO_NOT_TRACK` *alone*
+leaves Remote Control available (on a supported Claude Code version)
+unless the organization requires Trusted Devices, whereas
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` and `DISABLE_GROWTHBOOK` block
+it unconditionally. This repo's finding is about Channels, not Remote
+Control, and was confirmed empirically by live retest (below) rather than
+inferred from the Remote Control doc — the retest is authoritative for
+Channels regardless of how Remote Control's gate is scoped. Channels and
+Remote Control evaluate the same underlying feature-flag service but are
+not proven to share identical per-variable gating; readers extending this
+decision to Remote Control specifically should re-verify against current
+Anthropic docs rather than assume the Channels finding transfers
+unchanged.
 
 ### Decision
 
@@ -7537,6 +7552,28 @@ know to pass `env -u ANTHROPIC_API_KEY env -u DISABLE_TELEMETRY ...`
 hits the same silent skip again. Baking the unset into `.envrc` means
 every session in this repo gets the gate open by default, with no
 tribal knowledge required.
+
+### Outcome
+
+With the three lines commented out, Claude Code's feature-flag evaluation
+runs normally in every session started in this repo, and Channels'
+`notifications/claude/channel` gate is open by default — no per-session
+`env -u` juggling, no tribal knowledge. Observed: the 2026-09-13 live
+retest registered channel notifications and completed a round trip in the
+same session that had failed with the vars set. biff's Channels adoption
+work (biff-5esx) can proceed assuming the gate is open in this repo
+without re-deriving the fix each time.
+
+**Known residual gap.** `punt-labs/punt-labs`'s canonical `.envrc` rollout
+(`.bin/envrc-canonical-rollout.sh`) still copies the unmodified template —
+including the three enabling lines — to every child repo it touches,
+biff included. A rollout pass run against this repo today would silently
+overwrite this override and reintroduce the Channels-blocking state,
+with no warning. Until the rollout tooling gains a per-repo exception
+mechanism (tracked as follow-up work in `punt-labs/punt-labs`, not this
+repo), anyone running the canonical rollout against biff must manually
+confirm these three lines stay commented out afterward — `git diff
+.envrc` after any rollout pass is the check.
 
 ### Evidence
 

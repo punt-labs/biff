@@ -19,6 +19,15 @@ cd biff
 uv sync --all-extras
 ```
 
+**If you work on biff with Claude Code**, note that this repo's `.envrc`
+deliberately differs from the org's canonical template: `DISABLE_TELEMETRY`,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, and the `CLAUDE_CODE_ENABLE_TELEMETRY`
+unset are commented out here, not active. Any of them disables the
+feature-flag evaluation Claude Code Channels depends on, which biff is
+actively building against (biff-5esx). See `DESIGN.md` DES-063 for the full
+rationale and evidence before "fixing" this back to match the canonical
+template.
+
 ### Verify your setup
 
 ```bash
