@@ -1065,7 +1065,7 @@ class TestGetEthosRoster:
         ethos subprocess call was missing CLAUDE_PID (biff-2zug)."""
         with (
             patch("biff.config.subprocess.run") as mock_run,
-            patch("biff.config.topmost_claude_pid", return_value=4242),
+            patch("biff.config.nearest_claude_pid", return_value=4242),
         ):
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = _ROSTER_JSON
@@ -1078,7 +1078,7 @@ class TestGetEthosRoster:
         entirely, not a sentinel or empty string."""
         with (
             patch("biff.config.subprocess.run") as mock_run,
-            patch("biff.config.topmost_claude_pid", return_value=None),
+            patch("biff.config.nearest_claude_pid", return_value=None),
         ):
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = _ROSTER_JSON
@@ -1086,15 +1086,15 @@ class TestGetEthosRoster:
             passed_env = mock_run.call_args.kwargs["env"]
             assert "CLAUDE_PID" not in passed_env
 
-    def test_preserves_inherited_claude_pid_over_topmost_walk(
+    def test_preserves_inherited_claude_pid_over_nearest_walk(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A nested claude process's own CLAUDE_PID (DES-058) must survive --
-        the topmost-ancestor walk's result must never overwrite it."""
+        the nearest-ancestor walk's result must never overwrite it."""
         monkeypatch.setenv("CLAUDE_PID", "200")
         with (
             patch("biff.config.subprocess.run") as mock_run,
-            patch("biff.config.topmost_claude_pid", return_value=100),
+            patch("biff.config.nearest_claude_pid", return_value=100),
         ):
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = _ROSTER_JSON

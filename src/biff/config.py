@@ -44,7 +44,7 @@ from biff._stdlib import (
 )
 from biff.models import BiffConfig, RelayAuth
 from biff.session_id import _claude_pid_from_env  # pyright: ignore[reportPrivateUsage]
-from biff.session_key import topmost_claude_pid
+from biff.session_key import nearest_claude_pid
 
 # Re-export stdlib functions so existing callers of biff.config still work.
 __all__ = [
@@ -221,10 +221,14 @@ def get_ethos_roster() -> EthosRoster | None:
     env = dict(os.environ)
     if _claude_pid_from_env() is None:
         # A nested claude process already has its own correct CLAUDE_PID in
-        # os.environ (DES-058); only derive one via the topmost-ancestor walk
+        # os.environ (DES-058); only derive one via the nearest-ancestor walk
         # when it's absent, so a nested session's PID is never clobbered with
-        # its ancestor's.
-        claude_pid = topmost_claude_pid()
+        # its ancestor's. The TOPMOST-ancestor walk (topmost_claude_pid) is
+        # deliberately not used here: on a daemon+spare process model, the
+        # outermost claude ancestor can be a process shared by every
+        # concurrent session on the host, which would register the wrong
+        # companion user and read another session's inbox.
+        claude_pid = nearest_claude_pid()
         if claude_pid is not None:
             env["CLAUDE_PID"] = str(claude_pid)
     try:
