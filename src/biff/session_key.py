@@ -71,6 +71,40 @@ def topmost_claude_pid() -> int | None:
     return topmost_claude
 
 
+def nearest_claude_pid() -> int | None:
+    """Return the nearest ``claude`` ancestor PID, or ``None`` if none.
+
+    Distinct from :func:`topmost_claude_pid`: this stops at the FIRST
+    ``claude`` ancestor found, rather than continuing to the outermost one.
+    On a host where Claude Code runs a daemon+spare process model, the
+    outermost ``claude`` ancestor can be a shared process common to every
+    concurrent session on that host -- the topmost walk would return that
+    shared PID for all of them. The nearest ancestor is specific to this
+    session.
+    """
+    try:
+        table = _read_process_table()
+    except (OSError, subprocess.SubprocessError):
+        logger.warning(
+            "Could not read the process table; treating as not under Claude Code",
+            exc_info=True,
+        )
+        return None
+
+    pid = os.getpid()
+    for _ in range(10):  # safety bound — process trees are shallow
+        entry = table.get(pid)
+        if entry is None:
+            break
+        ppid, comm = entry
+        if _is_claude(comm):
+            return pid
+        if ppid == pid or ppid == 0:
+            break  # reached init / root
+        pid = ppid
+    return None
+
+
 def is_live_ancestor(pid: int) -> bool:
     """True when *pid* is currently one of this process's own ancestors.
 

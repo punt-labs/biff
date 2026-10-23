@@ -10,6 +10,7 @@ from biff.session_key import (
     _is_claude,
     find_session_key,
     is_live_ancestor,
+    nearest_claude_pid,
     topmost_claude_pid,
 )
 
@@ -126,6 +127,51 @@ class TestTopmostClaudePid:
         table[pids[-1]] = (pids[-1], "python3")  # self-referential root
         with patch("biff.session_key._read_process_table", return_value=table):
             assert topmost_claude_pid() is None
+
+
+class TestNearestClaudePid:
+    """``nearest_claude_pid`` stops at the FIRST claude ancestor -- the
+    opposite of ``topmost_claude_pid``, which keeps walking and overwrites
+    its answer on every match."""
+
+    def test_multi_claude_ancestry_returns_nearest_not_topmost(self) -> None:
+        """A nested session's claude process (nearest_pid) has its own
+        outer claude ancestor (topmost_pid) -- e.g. a shared daemon process
+        on a host that runs a daemon+spare process model. The two walk
+        functions must disagree on the identical table: nearest_claude_pid
+        returns the session-specific PID, topmost_claude_pid returns the
+        shared outer one."""
+        my_pid = os.getpid()
+        nearest_pid = 300
+        topmost_pid = 100
+        table = _make_table(
+            {
+                my_pid: (nearest_pid, "python3"),
+                nearest_pid: (topmost_pid, "claude"),
+                topmost_pid: (1, "claude"),
+            }
+        )
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert nearest_claude_pid() == nearest_pid
+            assert topmost_claude_pid() == topmost_pid
+
+    def test_no_claude_ancestor_returns_none(self) -> None:
+        my_pid = os.getpid()
+        table = _make_table(
+            {
+                my_pid: (500, "python3"),
+                500: (1, "zsh"),
+            }
+        )
+        with patch("biff.session_key._read_process_table", return_value=table):
+            assert nearest_claude_pid() is None
+
+    def test_ps_failure_returns_none(self) -> None:
+        with patch(
+            "biff.session_key._read_process_table",
+            side_effect=OSError("ps not found"),
+        ):
+            assert nearest_claude_pid() is None
 
 
 class TestIsLiveAncestor:
