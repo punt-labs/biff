@@ -1060,47 +1060,35 @@ class TestGetEthosRoster:
             assert result.primary is not None
             assert result.primary.handle == "claude"
 
-    def test_injects_claude_pid_into_subprocess_env(self) -> None:
-        """Regression: the companion /who row never appeared because the
-        ethos subprocess call was missing CLAUDE_PID (biff-2zug)."""
-        with (
-            patch("biff.config.subprocess.run") as mock_run,
-            patch("biff.config.nearest_claude_pid", return_value=4242),
-        ):
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = _ROSTER_JSON
-            get_ethos_roster()
-            passed_env = mock_run.call_args.kwargs["env"]
-            assert passed_env["CLAUDE_PID"] == "4242"
-
-    def test_omits_claude_pid_when_no_claude_ancestor(self) -> None:
-        """No claude ancestor (headless/CI/SDK) -- CLAUDE_PID is absent
-        entirely, not a sentinel or empty string."""
-        with (
-            patch("biff.config.subprocess.run") as mock_run,
-            patch("biff.config.nearest_claude_pid", return_value=None),
-        ):
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = _ROSTER_JSON
-            get_ethos_roster()
-            passed_env = mock_run.call_args.kwargs["env"]
-            assert "CLAUDE_PID" not in passed_env
-
-    def test_preserves_inherited_claude_pid_over_nearest_walk(
+    def test_preserves_inherited_claude_pid(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A nested claude process's own CLAUDE_PID (DES-058) must survive --
-        the nearest-ancestor walk's result must never overwrite it."""
+        """A claude process's own CLAUDE_PID (DES-058), already present in
+        os.environ, must reach the subprocess unmodified -- the original
+        regression (biff-2zug) was an unconditional overwrite that clobbered
+        it."""
         monkeypatch.setenv("CLAUDE_PID", "200")
-        with (
-            patch("biff.config.subprocess.run") as mock_run,
-            patch("biff.config.nearest_claude_pid", return_value=100),
-        ):
+        with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = _ROSTER_JSON
             get_ethos_roster()
-            passed_env = mock_run.call_args.kwargs["env"]
-            assert passed_env["CLAUDE_PID"] == "200"
+            assert "env" not in mock_run.call_args.kwargs
+            assert os.environ["CLAUDE_PID"] == "200"
+
+    def test_omits_claude_pid_when_absent_from_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLAUDE_PID absent from os.environ (headless/CI/SDK, or Claude
+        Code simply not injecting it into the MCP server's own environment,
+        biff-qou) -- no ancestry-walk fallback derives one; the subprocess
+        call passes no env override at all, so it inherits exactly what
+        this process has (CLAUDE_PID absent)."""
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = _ROSTER_JSON
+            get_ethos_roster()
+            assert "env" not in mock_run.call_args.kwargs
 
 
 # -- resolve_agent_identity_from_disk --

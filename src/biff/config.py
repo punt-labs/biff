@@ -43,8 +43,6 @@ from biff._stdlib import (
     yaml_config_dir,
 )
 from biff.models import BiffConfig, RelayAuth
-from biff.session_id import _claude_pid_from_env  # pyright: ignore[reportPrivateUsage]
-from biff.session_key import nearest_claude_pid
 
 # Re-export stdlib functions so existing callers of biff.config still work.
 __all__ = [
@@ -218,19 +216,17 @@ def get_ethos_roster() -> EthosRoster | None:
     Returns ``None`` when ethos is not installed, not configured,
     returns malformed JSON, or times out.
     """
-    env = dict(os.environ)
-    if _claude_pid_from_env() is None:
-        # A nested claude process already has its own correct CLAUDE_PID in
-        # os.environ (DES-058); only derive one via the nearest-ancestor walk
-        # when it's absent, so a nested session's PID is never clobbered with
-        # its ancestor's. The TOPMOST-ancestor walk (topmost_claude_pid) is
-        # deliberately not used here: on a daemon+spare process model, the
-        # outermost claude ancestor can be a process shared by every
-        # concurrent session on the host, which would register the wrong
-        # companion user and read another session's inbox.
-        claude_pid = nearest_claude_pid()
-        if claude_pid is not None:
-            env["CLAUDE_PID"] = str(claude_pid)
+    # No ancestry-walk fallback when CLAUDE_PID is absent from os.environ: a
+    # plain process-tree walk (nearest OR topmost ancestor) cannot soundly
+    # distinguish this session's own claude process from one merely shared
+    # with it -- nested sessions, MCP-manager layers, and daemon processes
+    # all look alike to a bare walk (see biff-3dd's investigation, which
+    # falsified both directions). Passing through os.environ unmodified
+    # means the subprocess sees CLAUDE_PID exactly as inherited: correctly
+    # when Claude Code injected it, absent otherwise, with the same safe
+    # no-op (ethos refuses with "No active session.") as every other
+    # failure path below. Resolving the absent case soundly is tracked as
+    # biff-qou and needs its own dedicated design pass, not a quick walk.
     try:
         result = subprocess.run(
             ["ethos", "session", "roster", "--json"],  # noqa: S607
@@ -238,7 +234,6 @@ def get_ethos_roster() -> EthosRoster | None:
             text=True,
             check=False,
             timeout=2,
-            env=env,
         )
     except FileNotFoundError:
         return None
