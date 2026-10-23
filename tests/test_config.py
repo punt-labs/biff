@@ -955,11 +955,14 @@ class TestGetEthosRoster:
         with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
             assert get_ethos_roster() is None
 
-    def test_exit_1(self) -> None:
+    def test_exit_1(self, caplog: pytest.LogCaptureFixture) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
-            mock_run.return_value.stdout = ""
-            assert get_ethos_roster() is None
+            mock_run.return_value.stdout = "No active session."
+            mock_run.return_value.stderr = ""
+            with caplog.at_level(logging.INFO, logger=_CONFIG_LOGGER):
+                assert get_ethos_roster() is None
+        assert any("No active session." in r.getMessage() for r in caplog.records)
 
     def test_timeout(self) -> None:
         with patch(
@@ -968,11 +971,14 @@ class TestGetEthosRoster:
         ):
             assert get_ethos_roster() is None
 
-    def test_bad_json(self) -> None:
+    def test_bad_json(self, caplog: pytest.LogCaptureFixture) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "not json"
-            assert get_ethos_roster() is None
+            mock_run.return_value.stderr = ""
+            with caplog.at_level(logging.INFO, logger=_CONFIG_LOGGER):
+                assert get_ethos_roster() is None
+        assert any("not json" in r.getMessage() for r in caplog.records)
 
     def test_missing_root(self) -> None:
         with patch("biff.config.subprocess.run") as mock_run:
@@ -1053,6 +1059,37 @@ class TestGetEthosRoster:
             assert result.root is None
             assert result.primary is not None
             assert result.primary.handle == "claude"
+
+    def test_preserves_inherited_claude_pid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A claude process's own CLAUDE_PID (DES-058), already present in
+        os.environ, reaches the subprocess unmodified -- subprocess.run with
+        no env= override inherits the caller's environment as-is. Guards
+        this contract explicitly so a future change does not regress it by
+        introducing an env= override that fails to copy CLAUDE_PID through."""
+        monkeypatch.setenv("CLAUDE_PID", "200")
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = _ROSTER_JSON
+            get_ethos_roster()
+            assert "env" not in mock_run.call_args.kwargs
+            assert os.environ["CLAUDE_PID"] == "200"
+
+    def test_omits_claude_pid_when_absent_from_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLAUDE_PID absent from os.environ (headless/CI/SDK, or Claude
+        Code simply not injecting it into the MCP server's own environment,
+        biff-qou) -- no ancestry-walk fallback derives one; the subprocess
+        call passes no env override at all, so it inherits exactly what
+        this process has (CLAUDE_PID absent)."""
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
+        with patch("biff.config.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = _ROSTER_JSON
+            get_ethos_roster()
+            assert "env" not in mock_run.call_args.kwargs
 
 
 # -- resolve_agent_identity_from_disk --

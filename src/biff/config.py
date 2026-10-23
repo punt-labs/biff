@@ -216,6 +216,17 @@ def get_ethos_roster() -> EthosRoster | None:
     Returns ``None`` when ethos is not installed, not configured,
     returns malformed JSON, or times out.
     """
+    # No ancestry-walk fallback when CLAUDE_PID is absent from os.environ: a
+    # plain process-tree walk (nearest OR topmost ancestor) cannot soundly
+    # distinguish this session's own claude process from one merely shared
+    # with it -- nested sessions, MCP-manager layers, and daemon processes
+    # all look alike to a bare walk (see biff-3dd's investigation, which
+    # falsified both directions). Passing through os.environ unmodified
+    # means the subprocess sees CLAUDE_PID exactly as inherited: correctly
+    # when Claude Code injected it, absent otherwise, with the same safe
+    # no-op (ethos refuses with "No active session.") as every other
+    # failure path below. Resolving the absent case soundly is tracked as
+    # biff-qou and needs its own dedicated design pass, not a quick walk.
     try:
         result = subprocess.run(
             ["ethos", "session", "roster", "--json"],  # noqa: S607
@@ -229,10 +240,21 @@ def get_ethos_roster() -> EthosRoster | None:
     except subprocess.TimeoutExpired:
         return None
     if result.returncode != 0:
+        logger.info(
+            "ethos session roster exited %d: stdout=%s stderr=%s",
+            result.returncode,
+            result.stdout.strip(),
+            result.stderr.strip(),
+        )
         return None
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
+        logger.info(
+            "ethos session roster returned non-JSON output: stdout=%s stderr=%s",
+            result.stdout.strip(),
+            result.stderr.strip(),
+        )
         return None
     if not isinstance(data, dict):
         return None

@@ -13,6 +13,7 @@
 
 ### Changed
 
+- `get_ethos_roster()`'s two previously-silent failure paths (`ethos session roster --json` exiting non-zero, or returning non-JSON output) now log at INFO, including `stderr`, so a future regression is diagnosable from `biff.log` — `logging_config.py`'s file handler is hardcoded at INFO, so a DEBUG-level log here would never actually reach the file. Investigated as part of biff-2zug (the companion/human `/who` row never appearing in a dual-session setup): `subprocess.run`'s call here was already correctly inheriting `CLAUDE_PID` with no `env=` override needed, so this is a diagnosability improvement only, not a behavior change. The actual blocker for biff-2zug is that Claude Code does not inject `CLAUDE_PID` into the MCP server's own environment at all — confirmed in the official env-vars documentation (set only for Bash/PowerShell tool commands and hook commands) and measured across every live `biff mcp` process on one host. Resolving that needs a non-ancestry-walk mechanism (a plain process-tree walk, in either direction, cannot soundly distinguish one session's `claude` process from one merely shared with it — nested sessions, MCP-manager layers, and daemon processes all look alike; see biff-3dd) and is tracked as biff-qou; this PR leaves the companion session unregistered in that case, same as before.
 - Bump ruff 0.15.1 → 0.16.4 and clear the new findings: removed 41 now-unused
   `# noqa: BLE001` directives (ruff 0.16 narrowed blind-except detection),
   parenthesized an implicit byte-string concatenation (ISC004), moved `None`
