@@ -1064,9 +1064,10 @@ class TestGetEthosRoster:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A claude process's own CLAUDE_PID (DES-058), already present in
-        os.environ, must reach the subprocess unmodified -- the original
-        regression (biff-2zug) was an unconditional overwrite that clobbered
-        it."""
+        os.environ, reaches the subprocess unmodified -- subprocess.run with
+        no env= override inherits the caller's environment as-is. Guards
+        this contract explicitly so a future change does not regress it by
+        introducing an env= override that fails to copy CLAUDE_PID through."""
         monkeypatch.setenv("CLAUDE_PID", "200")
         with patch("biff.config.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
