@@ -268,6 +268,26 @@ def test_startup_failure_cleans_before_next_owner(tmp_path: Path) -> None:
         _expect(resumed, "STOPPED")
 
 
+@pytest.mark.parametrize("contents", ["", "malformed", "other:../unsafe"])
+def test_unrelated_corrupt_sentinel_does_not_block_pinned_startup(
+    tmp_path: Path, contents: str
+) -> None:
+    directory = tmp_path / "relay"
+    directory.mkdir()
+    invalid = directory / "remove-unrelated"
+    invalid.write_text(contents)
+    with _server(tmp_path) as owner:
+        _expect(owner, "READY")
+        assert not invalid.exists()
+        rows = json.loads((directory / "sessions.json").read_text())
+        pin = EthosSessionPin(SID, SID)
+        assert list(rows) == [f"rmh:{pin.routing_id}"]
+        _advance(owner)
+        _expect(owner, "CLEANUP")
+        _advance(owner)
+        _expect(owner, "STOPPED")
+
+
 @pytest.mark.parametrize("signal_exit", [False, True])
 def test_process_death_releases_pin_and_resume_keeps_presence(
     tmp_path: Path, signal_exit: bool

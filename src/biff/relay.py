@@ -609,6 +609,18 @@ class LocalRelay:
                 session_key = sentinel.read_text().strip()
             except OSError:
                 continue
+            except UnicodeError:
+                # A truncated/corrupt signal-handler artifact names no key.
+                sentinel.unlink(missing_ok=True)
+                continue
+            try:
+                self._validate_session_key(session_key)
+            except ValueError:
+                # Validate before taking a lock or attempting deletion. A
+                # crash between open and write can leave an empty sentinel;
+                # discard only this artifact, never block neighboring keys.
+                sentinel.unlink(missing_ok=True)
+                continue
             with routing_lock(session_key.partition(":")[2]) as acquired:
                 if not acquired:
                     continue
