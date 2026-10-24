@@ -357,3 +357,68 @@ async def test_persona_predecessor_logout_alias_and_exact_routing_scope(
     assert events.await_args is not None
     event = events.await_args.args[0]
     assert event.event == "logout" and event.tty == old.tty and event.user == "rmh"
+
+
+@pytest.mark.parametrize("cancel_alias", [False, True])
+async def test_failed_persona_retirement_preserves_alias_and_retry_information(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_alias: bool
+) -> None:
+    from biff._stdlib import active_dir, sentinel_dir
+    from biff.server.app import (
+        _active_lifespan,
+        _write_sentinel,
+        register_session,
+        write_active_session,
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pin = EthosSessionPin(SID, SID)
+    state = create_state(
+        BiffConfig(user="gvr", repo_name="test"),
+        tmp_path / "relay",
+        tty=pin.routing_id,
+        ethos_session_pin=pin,
+        auto_companion=False,
+    )
+    old, alias = await register_session(
+        state.relay,
+        "rmh",
+        pin.routing_id,
+        display_name="rmh",
+        kind="agent",
+        hostname="h",
+        pwd="/",
+        repo="test",
+    )
+    key = f"rmh:{pin.routing_id}"
+    safe = key.replace(":", "-")
+    _write_sentinel("test", key)
+    write_active_session("test", key)
+    local = tmp_path / "relay" / f"remove-{safe}"
+    local.write_text(key)
+    failure = (
+        asyncio.CancelledError("alias cancelled")
+        if cancel_alias
+        else RuntimeError("alias failed")
+    )
+    with (
+        patch("biff.server.app.signal.signal"),
+        patch.object(type(state.relay), "release_tty_name", side_effect=failure),
+        patch("biff.server.app.register_session") as registration,
+        pin.ownership(),
+        pytest.raises(type(failure)),
+    ):
+        async with _active_lifespan(create_server(state), state):
+            pytest.fail("replacement registered after failed retirement")
+    registration.assert_not_called()
+    assert await state.relay.get_session(key) == old
+    assert await state.relay.get_tty_reservation_owner("rmh", alias) == key
+    assert local.exists() and (sentinel_dir("test") / safe).exists()
+    assert (active_dir() / safe).exists()
+    with patch("biff.server.app.signal.signal"), pin.ownership():
+        async with _active_lifespan(create_server(state), state):
+            assert await state.relay.get_session(key) is None
+            assert await state.relay.get_tty_reservation_owner("rmh", alias) is None
+            assert not local.exists() and not (sentinel_dir("test") / safe).exists()
+            assert not (active_dir() / safe).exists()
+            assert await state.relay.get_session(state.session_key) is not None

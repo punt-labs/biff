@@ -46,6 +46,10 @@ If the persona changes, startup retires old-persona rows and both sentinel types
 for the exact same routing ID under that ownership, including logout, alias, and
 active-marker cleanup, before registering the new persona. Other routing IDs
 are not part of predecessor retirement.
+Pinned persona retirement is strict: alias-release failure or inner cancellation
+aborts replacement startup before deleting the predecessor row or consuming its
+sentinels/active marker. The durable alias information remains available for a
+successful retry. The default unpinned reaper remains best-effort.
 LocalRelay discards empty, malformed, or undecodable removal-sentinel artifacts
 individually before routing-key locking, so a signal-time interrupted write
 cannot block enumeration or unrelated pinned startup. Valid keys still require

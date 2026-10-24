@@ -1369,13 +1369,39 @@ async def _retire_pin_predecessors(state: ServerState) -> None:
         ):
             continue
         if key != state.session_key:
-            if not await _reap_dead_session(state, key):
-                raise RuntimeError(f"Failed to retire pinned predecessor {key}")
+            await _retire_pin_session(state, key)
             with suppress(OSError):
                 remove_active_session(key)
         _remove_sentinel(state.config.repo_name, key)
         if isinstance(state.relay, LocalRelay):
             state.relay.remove_own_sentinel(key)
+
+
+async def _retire_pin_session(state: ServerState, key: str) -> None:
+    """Strict retirement: preserve durable retry state until alias release.
+
+    Unlike the best-effort default reaper, replacement startup must not erase
+    the only row containing an alias it failed to release. Inner cancellation
+    also propagates before deletion; caller cancellation remains shielded.
+    """
+    session = await state.relay.get_session(key)
+    if session is not None:
+        if session.tty_name:
+            owner = await state.relay.get_tty_reservation_owner(
+                session.user, session.tty_name
+            )
+            if owner == key:
+                await asyncio.wait_for(
+                    state.relay.release_tty_name(session.user, session.tty_name),
+                    timeout=_TEARDOWN_STEP_TIMEOUT,
+                )
+        await asyncio.wait_for(
+            state.relay.append_wtmp(_build_logout_event(key, session)),
+            timeout=_TEARDOWN_STEP_TIMEOUT,
+        )
+    await asyncio.wait_for(
+        state.relay.delete_session(key), timeout=_TEARDOWN_STEP_TIMEOUT
+    )
 
 
 @asynccontextmanager
