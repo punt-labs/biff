@@ -126,6 +126,8 @@ _background_tasks: set[asyncio.Task[None]] = set()
 # Track spawned processes so we can kill+wait during shutdown.
 _spawned_procs: set[asyncio.subprocess.Process] = set()
 _creating: set[asyncio.Task[asyncio.subprocess.Process]] = set()
+_abandoned: set[asyncio.Task[asyncio.subprocess.Process]] = set()
+_drain_lock = asyncio.Lock()
 _draining = False
 _SHUTDOWN_TIMEOUT = 3.0
 
@@ -146,18 +148,53 @@ async def _stop_process(proc: asyncio.subprocess.Process) -> None:
 
 async def _join_creations() -> None:
     """Keep unfinished creations tracked; adopt every child before returning."""
+    failure: BaseException | None = None
     for creation in tuple(_creating):
         if not creation.done():
             creation.cancel()
             _, pending = await asyncio.wait([creation], timeout=_SHUTDOWN_TIMEOUT)
             if pending:
-                raise TimeoutError("Vox process creation still pending")
-        if not creation.cancelled():
-            _spawned_procs.add(creation.result())
-        _creating.discard(creation)
+                _abandoned.add(creation)
+                failure = failure or TimeoutError("Vox process creation still pending")
+                continue
+        try:
+            if not creation.cancelled():
+                _spawned_procs.add(creation.result())
+        except OSError:
+            logger.warning("Vox process creation failed during drain", exc_info=True)
+        finally:
+            _creating.discard(creation)
+    if failure is not None:
+        raise failure
+
+
+def _creation_done(creation: asyncio.Task[asyncio.subprocess.Process]) -> None:
+    """Own every eventual result, even after a bounded drain has failed."""
+    _creating.discard(creation)
+    abandoned = creation in _abandoned
+    _abandoned.discard(creation)
+    if creation.cancelled():
+        return
+    try:
+        proc = creation.result()
+    except OSError:
+        logger.debug("Vox creation failed", exc_info=True)
+        return
+    _spawned_procs.add(proc)
+    if abandoned:
+        # Never leave a late result dependent on another drain invocation.
+        task = asyncio.create_task(_stop_process(proc))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
 
 async def drain_background_tasks() -> None:
+    """Serialize drains so one cannot cancel another's child-reaping task."""
+    async with _drain_lock:
+        await _drain()
+
+
+async def _drain() -> None:
     """Kill spawned vox processes and await their background tasks.
 
     Called during server shutdown to ensure asyncio's child watcher
@@ -175,15 +212,29 @@ async def drain_background_tasks() -> None:
             task.cancel()
         if tasks:
             _, pending = await asyncio.wait(tasks, timeout=3 * _SHUTDOWN_TIMEOUT)
+            failures: list[BaseException | None] = [
+                task.exception()
+                for task in tasks
+                if task.done() and not task.cancelled()
+            ]
             if pending:
-                raise TimeoutError("Vox spawn tasks did not stop during shutdown")
-            failures = [task.exception() for task in tasks if not task.cancelled()]
+                failures.append(TimeoutError("Vox spawn tasks did not stop"))
         else:
             failures = []
-        await _join_creations()
+        creation_results = await asyncio.gather(
+            _join_creations(), return_exceptions=True
+        )
+        failures.extend(
+            result for result in creation_results if isinstance(result, BaseException)
+        )
         # Inspect AFTER the join: failed waiters retain their actual children.
-        for proc in tuple(_spawned_procs):
-            await _stop_process(proc)
+        results = await asyncio.gather(
+            *(_stop_process(proc) for proc in tuple(_spawned_procs)),
+            return_exceptions=True,
+        )
+        failures.extend(
+            result for result in results if isinstance(result, BaseException)
+        )
         for failure in failures:
             if failure is not None:
                 raise failure
@@ -203,6 +254,7 @@ async def _spawn(args: list[str]) -> None:
             )
         )
         _creating.add(creation)
+        creation.add_done_callback(_creation_done)
         try:
             proc = await asyncio.wait_for(
                 asyncio.shield(creation), timeout=_SHUTDOWN_TIMEOUT
@@ -211,6 +263,7 @@ async def _spawn(args: list[str]) -> None:
             creation.cancel()
             _, pending = await asyncio.wait([creation], timeout=_SHUTDOWN_TIMEOUT)
             if pending:
+                _abandoned.add(creation)
                 raise TimeoutError("Vox process creation did not stop") from None
             if not creation.cancelled():
                 proc = creation.result()
