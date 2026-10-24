@@ -2,7 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+- Explicit single-session OpenCode MCP mode with paired `--ethos-session`
+  and `--ethos-agent-id` flags. Resolves the exact Ethos agent participant,
+  rejects missing or mismatched caller metadata before tool execution, uses
+  stable session-specific routing/unread files, and disables inferred human
+  companion presence. Default Claude behavior is unchanged.
+- Pinned MCP processes hold an exclusive lifetime lock through cleanup to
+  reject overlapping reconnects sharing a Biff home; stale local removal
+  sentinels are consumed before replacement registration. Independent homes
+  or hosts concurrently reusing a pin are unsupported. Pinned plans do not
+  write or clear Claude's shared or session-specific plan markers.
+
 ### Fixed
+
+- ProB validation preserves full checker output and fails on violations,
+  timeouts, nonzero exits, or missing completion markers instead of masking
+  errors with output-filtering pipelines. Timeout logs retain partial output;
+  timeout-named paths are not mistaken for checker diagnostics.
+- ProB model checks require explicit zero coverage counters for deadlocks,
+  invariant violations, unchecked invariants, and open states. Optional
+  `PROB_WALL_TIMEOUT` limits whole checker runs independently of ProB's
+  per-operation `PROB_TIMEOUT`; no whole-run limit is imposed by default.
+- Session-model verification now binds the full `RouteWorld` invariant through
+  ProZ's named `Invariant` schema and checks the translated predicates before
+  proof runs. The model requires live presence cleanup before final session
+  close, preserving routing invariants without changing runtime shutdown or
+  user workflow. Earlier proof claims checked underlying types only and are
+  corrected; current exhaustive checks are explicitly bounded, not a proof
+  of larger scopes or fork/spawn behavior.
 
 - `biff-notify.yml`'s deployed `setup-uv` pin was left at v9.0.0 after
   dependabot bumped every other workflow (and the bundled template) to

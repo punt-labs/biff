@@ -125,9 +125,80 @@ _background_tasks: set[asyncio.Task[None]] = set()
 
 # Track spawned processes so we can kill+wait during shutdown.
 _spawned_procs: set[asyncio.subprocess.Process] = set()
+_creating: set[asyncio.Task[asyncio.subprocess.Process]] = set()
+_abandoned: set[asyncio.Task[asyncio.subprocess.Process]] = set()
+_drain_lock = asyncio.Lock()
+_draining = False
+_SHUTDOWN_TIMEOUT = 3.0
+
+
+async def _stop_process(proc: asyncio.subprocess.Process) -> None:
+    """Terminate, escalate to kill, and reap with bounded waits."""
+    if proc.returncode is None:
+        with suppress(ProcessLookupError):
+            proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=_SHUTDOWN_TIMEOUT)
+    except TimeoutError:
+        with suppress(ProcessLookupError):
+            proc.kill()
+        await asyncio.wait_for(proc.wait(), timeout=_SHUTDOWN_TIMEOUT)
+    _spawned_procs.discard(proc)
+
+
+async def _join_creations() -> None:
+    """Adopt completed results; report and retain unfinished creations."""
+    failure: BaseException | None = None
+    for creation in tuple(_creating):
+        if not creation.done():
+            creation.cancel()
+            _, pending = await asyncio.wait([creation], timeout=_SHUTDOWN_TIMEOUT)
+            if pending:
+                _abandoned.add(creation)
+                failure = failure or TimeoutError("Vox process creation still pending")
+                continue
+        try:
+            if not creation.cancelled():
+                _spawned_procs.add(creation.result())
+        except OSError:
+            logger.warning("Vox process creation failed during drain", exc_info=True)
+        finally:
+            _creating.discard(creation)
+    if failure is not None:
+        raise failure
+
+
+def _creation_done(creation: asyncio.Task[asyncio.subprocess.Process]) -> None:
+    """Schedule late-result cleanup while the event loop remains alive.
+
+    A failed bounded drain does not guarantee completed reaping across loop
+    closure: the callback and its cleanup task still need time on a live loop.
+    """
+    _creating.discard(creation)
+    abandoned = creation in _abandoned
+    _abandoned.discard(creation)
+    if creation.cancelled():
+        return
+    try:
+        proc = creation.result()
+    except OSError:
+        logger.debug("Vox creation failed", exc_info=True)
+        return
+    _spawned_procs.add(proc)
+    if abandoned:
+        # No second drain is needed, but completion requires a live loop.
+        task = asyncio.create_task(_stop_process(proc))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
 
 async def drain_background_tasks() -> None:
+    """Serialize drains so one cannot cancel another's child-reaping task."""
+    async with _drain_lock:
+        await _drain()
+
+
+async def _drain() -> None:
     """Kill spawned vox processes and await their background tasks.
 
     Called during server shutdown to ensure asyncio's child watcher
@@ -135,15 +206,87 @@ async def drain_background_tasks() -> None:
     SIGCHLD fires ``_do_waitpid`` on a closed loop, producing logging
     errors on Python 3.13+.
     """
-    for proc in list(_spawned_procs):
-        with suppress(OSError):
-            proc.kill()
-    # Await remaining tasks — they will complete quickly after kill.
-    tasks = list(_background_tasks)
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
-    _background_tasks.clear()
-    _spawned_procs.clear()
+    global _draining
+    _draining = True
+    try:
+        # Cancel pending creation as well as process waiters. _spawn's finally
+        # owns any child returned during this race and joins its termination.
+        tasks = set(_background_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=3 * _SHUTDOWN_TIMEOUT)
+            failures: list[BaseException | None] = [
+                task.exception()
+                for task in tasks
+                if task.done() and not task.cancelled()
+            ]
+            if pending:
+                failures.append(TimeoutError("Vox spawn tasks did not stop"))
+        else:
+            failures = []
+        creation_results = await asyncio.gather(
+            _join_creations(), return_exceptions=True
+        )
+        failures.extend(
+            result for result in creation_results if isinstance(result, BaseException)
+        )
+        # Inspect AFTER the join: failed waiters retain their actual children.
+        results = await asyncio.gather(
+            *(_stop_process(proc) for proc in tuple(_spawned_procs)),
+            return_exceptions=True,
+        )
+        failures.extend(
+            result for result in results if isinstance(result, BaseException)
+        )
+        for failure in failures:
+            if failure is not None:
+                raise failure
+    finally:
+        _draining = bool(_creating or _spawned_procs or _background_tasks)
+
+
+async def _spawn(args: list[str]) -> None:
+    """Own creation and child termination across cancellation races."""
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        creation = asyncio.create_task(
+            asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        )
+        _creating.add(creation)
+        creation.add_done_callback(_creation_done)
+        try:
+            proc = await asyncio.wait_for(
+                asyncio.shield(creation), timeout=_SHUTDOWN_TIMEOUT
+            )
+        except (asyncio.CancelledError, TimeoutError):
+            creation.cancel()
+            _, pending = await asyncio.wait([creation], timeout=_SHUTDOWN_TIMEOUT)
+            if pending:
+                _abandoned.add(creation)
+                raise TimeoutError("Vox process creation did not stop") from None
+            if not creation.cancelled():
+                proc = creation.result()
+                _spawned_procs.add(proc)
+            _creating.discard(creation)
+            raise
+        _creating.discard(creation)
+        if proc is None:
+            raise RuntimeError("Vox creation returned no process")
+        logger.debug("vox speak spawned (pid=%s)", proc.pid)
+        _spawned_procs.add(proc)
+        if not _draining:
+            await proc.wait()
+            _spawned_procs.discard(proc)
+    except OSError:
+        logger.debug("Failed to spawn vox speak", exc_info=True)
+    finally:
+        if proc is not None and proc in _spawned_procs:
+            await _stop_process(proc)
 
 
 def speak_fire_and_forget(
@@ -163,6 +306,8 @@ def speak_fire_and_forget(
     [friendly]"``). ElevenLabs resolves inline tags as expressive
     cues without needing a separate ``vox vibe`` call.
     """
+    if _draining:
+        return
     binary = vox_binary()
     if binary is None:
         return
@@ -185,23 +330,6 @@ def speak_fire_and_forget(
         logger.debug("No running event loop; skipping vox speak")
         return
 
-    async def _spawn() -> None:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            logger.debug("vox speak spawned (pid=%s)", proc.pid)
-            _spawned_procs.add(proc)
-            # Must await proc.wait() so asyncio's child watcher deregisters
-            # the PID before the event loop closes.  Without this, SIGCHLD
-            # fires _do_waitpid on a closed loop, causing logging errors.
-            await proc.wait()
-            _spawned_procs.discard(proc)
-        except OSError:
-            logger.debug("Failed to spawn vox speak", exc_info=True)
-
-    task = loop.create_task(_spawn())
+    task = loop.create_task(_spawn(args))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)

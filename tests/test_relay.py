@@ -483,6 +483,32 @@ class TestRemoveSentinel:
         relay = LocalRelay(data_dir=tmp_path / "nonexistent")
         relay.reap_sentinels()  # no-op, no crash
 
+    @pytest.mark.parametrize(
+        "contents",
+        [
+            b"",
+            b" \n",
+            b"missing-separator",
+            b":tty1",
+            b"kai:",
+            b"kai:../escape",
+            b"kai:tty:extra",
+            b"\xff",
+        ],
+    )
+    async def test_invalid_artifact_does_not_block_valid_neighbor(
+        self, relay: LocalRelay, tmp_path: Path, contents: bytes
+    ) -> None:
+        invalid = tmp_path / "remove-invalid"
+        invalid.write_bytes(contents)
+        await relay.update_session(UserSession(user="kai", tty="tty1"))
+        await relay.update_session(UserSession(user="eric", tty="tty2"))
+        relay.write_remove_sentinel("kai:tty1")
+        assert [s.user for s in await relay.get_sessions()] == ["eric"]
+        assert not invalid.exists()
+        assert not (tmp_path / "remove-kai-tty1").exists()
+        assert [s.tty for s in await relay.get_sessions_for_user("eric")] == ["tty2"]
+
 
 class TestHeartbeat:
     async def test_skips_missing_session(self, relay: LocalRelay) -> None:

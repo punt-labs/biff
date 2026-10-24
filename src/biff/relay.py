@@ -41,6 +41,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
+from biff.session_lock import routing_lock
 from biff.tty import build_session_key, validate_reclaimable_name, validate_routing_id
 
 logger = logging.getLogger(__name__)
@@ -603,19 +604,50 @@ class LocalRelay:
         sentinels = list(self._data_dir.glob("remove-*"))
         if not sentinels:
             return
-        sessions = self._read_sessions()
-        changed = False
         for sentinel in sentinels:
             try:
                 session_key = sentinel.read_text().strip()
             except OSError:
                 continue
-            if session_key in sessions:
-                del sessions[session_key]
-                changed = True
-            sentinel.unlink(missing_ok=True)
-        if changed:
-            self._write_sessions(sessions)
+            except UnicodeError:
+                # A truncated/corrupt signal-handler artifact names no key.
+                sentinel.unlink(missing_ok=True)
+                continue
+            try:
+                self._validate_session_key(session_key)
+            except ValueError:
+                # Validate before taking a lock or attempting deletion. A
+                # crash between open and write can leave an empty sentinel;
+                # discard only this artifact, never block neighboring keys.
+                sentinel.unlink(missing_ok=True)
+                continue
+            with routing_lock(session_key.partition(":")[2]) as acquired:
+                if not acquired:
+                    continue
+                self.delete_session_sync(session_key)
+                sentinel.unlink(missing_ok=True)
+
+    def remove_own_sentinel(self, session_key: str) -> None:
+        """Consume a predecessor's sentinel while the caller owns its pin lock."""
+        self._validate_session_key(session_key)
+        safe = session_key.replace(":", "-")
+        (self._data_dir / f"remove-{safe}").unlink(missing_ok=True)
+
+    def removal_sentinel_keys(self, routing_id: str) -> set[str]:
+        """Validated exact-key sentinels for a caller-owned routing identity."""
+        keys: set[str] = set()
+        for path in self._data_dir.glob("remove-*"):
+            try:
+                key = path.read_text().strip()
+                self._validate_session_key(key)
+            except (OSError, UnicodeError, ValueError):
+                continue
+            if (
+                key.partition(":")[2] == routing_id
+                and path.name == f"remove-{key.replace(':', '-')}"
+            ):
+                keys.add(key)
+        return keys
 
     # -- Session history (wtmp) --
 

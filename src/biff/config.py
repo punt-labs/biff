@@ -140,7 +140,7 @@ def get_github_identity() -> GitHubIdentity | None:
 
 @dataclass(frozen=True)
 class EthosIdentity:
-    """Identity resolved from ``ethos whoami --json``."""
+    """Persona identity resolved from Ethos records or roster data."""
 
     handle: str
     display_name: str
@@ -1507,12 +1507,16 @@ def load_mcp_config(
     relay_url_override: object = RELAY_URL_UNSET,
     prefix: Path = _DEFAULT_PREFIX,
     start: Path | None = None,
+    pinned_identity: EthosIdentity | None = None,
 ) -> ResolvedConfig:
     """Discover and resolve configuration for the MCP server.
 
     Identity chain:
     ``user_override`` -> :func:`resolve_agent_identity_from_disk` ->
     :func:`get_github_identity` -> :func:`get_os_user`.
+
+    An explicitly resolved ``pinned_identity`` bypasses this entire chain;
+    it cannot be combined with ``user_override`` and never falls back.
 
     The MCP server runs inside the agent's process; its primary
     identity is the agent. Disk-based resolution avoids the
@@ -1529,6 +1533,16 @@ def load_mcp_config(
         prefix=prefix,
         start=start,
     )
+
+    if pinned_identity is not None:
+        if user_override is not None:
+            raise SystemExit("--user cannot override a pinned Ethos identity.")
+        return _assemble_config(
+            base,
+            pinned_identity.handle,
+            pinned_identity.display_name,
+            pinned_identity.kind,
+        )
 
     if user_override is not None:
         return _assemble_config(base, user_override, "", "")

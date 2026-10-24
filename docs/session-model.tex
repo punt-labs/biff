@@ -257,9 +257,10 @@ per-$(session, role)$ entries, their recyclable display aliases, the
 identity-keyed inboxes, and the discipline-selecting bookkeeping.  The
 structural state is unchanged; the extension is where addressing and
 delivery live.  Keeping it a distinct schema, included rather than
-merged, lets the sixteen structural operations remain framed on
-$BiffWorld$ alone: they leave the routing components fixed, which the
-animator supplies automatically.
+merged, lets the structural operations except $CloseSession$ remain framed
+on $BiffWorld$ alone: they leave the routing components fixed, which the
+animator supplies automatically.  Closing must also observe the routing
+layer so that live entries are cleaned up before their session is removed.
 
 \begin{schema}{RouteWorld}
   BiffWorld \\
@@ -326,6 +327,15 @@ $ResumeSession$ re-mints the \emph{same} $(s?, k?)$, so the identity is
 literally unchanged.  What \emph{is} checked, and is the property a
 recycled alias could otherwise break, is that $ttyalias$ is an injection
 --- no display alias names two live entries at once.
+
+ProZ selects $RouteWorld$ as the state through $Init$, but requires the
+reserved schema name $Invariant$ to install its predicates as the
+machine-checkable invariant.  Inclusion preserves all structural,
+function, injection, and delivery predicates without duplicating them.
+
+\begin{schema}{Invariant}
+  RouteWorld
+\end{schema}
 
 %%--------------------------------------------------------------------
 \section{Initial State}
@@ -806,15 +816,19 @@ invocations, and autonomous agent teams.
 \subsection{CloseSession}
 %%--------------------------------------------------------------------
 
-Close a session.  Precondition: all processes in the session have been
-reaped.
+Close a session after all processes have been reaped and all live routing
+entries have been suspended.  Live presence cleanup is automatic before
+final close; this verification ordering adds no user-visible workflow
+step.  $SuspendEntry$ releases each live alias while retaining routing
+history; final close leaves that history unchanged.
 
 \begin{schema}{CloseSession}
-  \Delta BiffWorld \\
+  \Delta RouteWorld \\
   s? : SESSION
   \where
   s? \in sessions \\
   s? \notin \ran psess \\
+  s? \notin \dom entries \\
   %%
   sessions' = sessions \setminus \{ s? \} \\
   smach' = sessions' \dres smach \\
@@ -831,7 +845,14 @@ reaped.
   psess' = psess \\
   pkind' = pkind \\
   pname' = pname \\
-  ppar' = ppar
+  ppar' = ppar \\
+  entries' = entries \\
+  ttyalias' = ttyalias \\
+  savedalias' = savedalias \\
+  abind' = abind \\
+  routeMode' = routeMode \\
+  lostF' = lostF \\
+  misF' = misF
 \end{schema}
 
 %%--------------------------------------------------------------------
@@ -1321,29 +1342,37 @@ happens between the two roles, or when one role resumes onto a fresh
 alias.
 
 \begin{verbatim}
-probcli docs/session-model.tex -model_check -noass -nodead \
+probcli docs/session-model.tex -model_check -strict \
   -card NAME 1 -card HOST 1 -card PROCESS 1 \
   -card SESSION 1 -card ALIAS 2 \
-  -p MAX_OPERATIONS 20000 -p TIME_OUT 90000 -coverage
+  -p DEFAULT_SETSIZE 1 -p MAXINT 4 \
+  -p MAX_INITIALISATIONS 100 -p MAX_OPERATIONS 20000 \
+  -p TIME_OUT 60000 -coverage
 \end{verbatim}
 
-This visits all $15{,}247$ reachable states with
+With the explicit $Invariant$ and cleanup-before-close guard, this visits
+all $9{,}390$ reachable states ($63{,}614$ transitions) with
 $invariant\_violated = 0$ and no deadlock, so every reachable state holds
 the $RouteWorld$ invariant --- in particular $routeMode = rmIdentity
 \implies lostF = zfalse \land misF = zfalse$, and the injectivity of
-$ttyalias$ over live entries.  Every routing operation is covered except
-$ForkSession$, which mints a second session and so needs a second
-$SESSION$; a second run at $\texttt{-card SESSION 2}$ covers it and holds
-the same invariant across the fork transition (it is not exhaustive at
-that scope, but $ForkSession$ only ever adds a fresh session with a fresh
-identity, so it can set no latch).  The lone structural operation left
-uncovered, $SpawnChild$, needs a second $PROCESS$ and is orthogonal to
-routing.
+$ttyalias$ over live entries.  $ForkSession$ and $SpawnChild$ are uncovered:
+they require a second $SESSION$ and $PROCESS$, respectively.  No larger
+scope or fork/child coverage is claimed.  The uniform-size-one gate also
+passes constraint-based deadlock checking and exhaustively explores
+$654$ states ($3{,}098$ transitions).
+
+Historical runs reported $15{,}247$ mixed-scope states and $966$
+uniform-size-one states without an explicit $Invariant$.  Their translated
+global invariant checked only underlying types, not the full $RouteWorld$
+predicates, so those results did not establish the claimed invariants.
+Installing the full invariant exposed $CloseSession$ leaving a live entry
+whose owning session had been removed; cleanup-before-close repairs that
+transition without weakening any invariant.
 
 \medskip\noindent\textbf{(D1) Soundness holds --- as a state invariant.}
 Under $rmIdentity$ neither latch is ever set: the exhaustive run above
-finds no counterexample to the $RouteWorld$ invariant across all
-$15{,}247$ states.
+finds no counterexample to the full $RouteWorld$ invariant across all
+$9{,}390$ states at the stated bounds.
 
 \medskip\noindent\textbf{(D2) LOST is reachable under alias routing.}
 As a reachability goal,
@@ -1386,7 +1415,7 @@ probcli ... -card SESSION 1 -card ALIAS 2 \
   -goal "(lostF=ztrue or misF=ztrue) & routeMode=rmIdentity"
 \end{verbatim}
 
-ProB reports no such state after visiting all $15{,}247$: under identity
+ProB reports no such state after visiting all $9{,}390$: under identity
 routing neither latch can be set.  (D1) and (D4) are the same fact seen
 twice --- as an invariant that holds and as a bad state that is
 unreachable --- which is the precise sense in which routing on the

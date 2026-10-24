@@ -9,10 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import signal
+import sys
 import time
-from collections.abc import AsyncGenerator, Callable, Sequence
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager, nullcontext, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
 
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay, Relay
+from biff.server.session_pin import SessionPinMiddleware
 from biff.server.state import CompanionSession, ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
@@ -41,9 +44,74 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.session_id import SessionHint
+from biff.session_lock import routing_lock
 from biff.tty import build_session_key, claim_tty_name, validate_reclaimable_name
 
 logger = logging.getLogger(__name__)
+
+
+async def _finish_cleanup(cleanup: Coroutine[object, object, None]) -> None:
+    """Delay caller cancellation until teardown has finished under ownership.
+
+    Shield a separate task, not merely one await: repeated cancellation of
+    the lifespan must never leave that task running after its lock is released.
+    Preserve the first cancellation, including its message, after joining.
+    """
+    task = asyncio.create_task(cleanup)
+    joined = asyncio.gather(task, return_exceptions=True)
+    original = sys.exception()
+    cancellation = original if isinstance(original, asyncio.CancelledError) else None
+    while not joined.done():
+        try:
+            await asyncio.shield(joined)
+        except asyncio.CancelledError as exc:
+            if cancellation is None:
+                cancellation = exc
+    if cancellation is not None:
+        # Retrieve any teardown failure without replacing the caller's cancel.
+        try:
+            task.result()
+        except BaseException:
+            logger.warning("Cleanup failed during cancellation", exc_info=True)
+        raise cancellation
+    if original is not None:
+        # Teardown must not replace an exception from the lifespan body/startup.
+        result = joined.result()[0]
+        if isinstance(result, BaseException):
+            logger.warning("Cleanup failed while unwinding: %s", result)
+        return
+    task.result()
+
+
+async def _run_cleanup_steps(
+    steps: Sequence[Callable[[], Awaitable[None]]],
+) -> None:
+    """Attempt every teardown stage, then propagate its first failure."""
+    failure: BaseException | None = None
+    for step in steps:
+        try:
+            await step()
+        except (Exception, asyncio.CancelledError) as exc:
+            logger.warning("Teardown stage failed", exc_info=True)
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+
+async def _cleanup_action(action: Callable[[], None]) -> None:
+    """Adapt a synchronous teardown stage without moving it off-thread."""
+    action()
+
+
+def _remove_active_markers(state: ServerState) -> None:
+    """Best-effort active-marker cleanup for both session identities."""
+    with suppress(OSError):
+        remove_active_session(state.session_key)
+    if state.companion:
+        with suppress(OSError):
+            remove_active_session(state.companion.session_key)
+
 
 # Org-repo discovery is non-critical (stale data is acceptable, per
 # ``_refresh_org_repos``'s own docstring) but was running every 60s heartbeat
@@ -134,6 +202,7 @@ async def register_session(
     pwd: str,
     repo: str,
     preferred_name: str | None = None,
+    on_claim: Callable[[str], None] = lambda _name: None,
 ) -> tuple[UserSession, str]:
     """Claim a TTY name, then write the session row once with tty_name set.
 
@@ -187,6 +256,7 @@ async def register_session(
             preferred_name,
             tty_name,
         )
+    on_claim(tty_name)
     # Release any stale TTY name reservation left by a prior process that
     # crashed after writing the KV row but before releasing its name.  The
     # KV row itself is overwritten unconditionally below; without this
@@ -362,8 +432,9 @@ async def _reap_sentinels(state: ServerState) -> None:
             # logout, reservation release, or KV delete.
             sentinel.unlink(missing_ok=True)
             continue
-        if await _reap_dead_session(state, session_key):
-            sentinel.unlink(missing_ok=True)
+        with routing_lock(session_key.partition(":")[2]) as acquired:
+            if acquired and await _reap_dead_session(state, session_key):
+                sentinel.unlink(missing_ok=True)
 
 
 async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
@@ -427,6 +498,9 @@ async def _poll_companion_registration(state: ServerState) -> None:
     2-second subprocess timeout cannot stall the event loop (spec
     invariant 11).
     """
+    if not state.auto_companion:
+        return
+
     from biff.config import get_ethos_roster  # noqa: PLC0415
 
     roster = await asyncio.to_thread(get_ethos_roster)
@@ -509,6 +583,9 @@ async def _heartbeat_loop(
     is bounded by one subprocess call per ``interval`` and the
     subprocess runs on a worker thread so it never blocks the event
     loop (spec invariant 11).
+
+    Explicit session pins disable this policy: root authority is not
+    evidence of a human's live presence.
     """
     while not shutdown.is_set():
         try:
@@ -523,7 +600,7 @@ async def _heartbeat_loop(
             # would spam a warning per tick.  The relay's _ConnectionHealth
             # logs the wedge onset/recovery once — it is the single source.
             logger.debug("Heartbeat failed", exc_info=True)
-        if state.companion is None:
+        if state.auto_companion and state.companion is None:
             try:
                 await _poll_companion_registration(state)
             except Exception:
@@ -726,17 +803,17 @@ async def _shutdown_tasks(
     may itself be responding to cancellation.
     """
     shutdown.set()
-    with suppress(asyncio.CancelledError):
-        await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout,
-        )
-    for t in tasks:
-        if not t.done():
-            t.cancel()
-    for t in tasks:
+    try:
         with suppress(asyncio.CancelledError):
-            await t
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=timeout,
+            )
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _append_login_event(state: ServerState, tty_name: str) -> None:
@@ -949,7 +1026,10 @@ async def _release_session(
     finishes the job later instead of the row silently outliving its
     process.
     """
-    if tty_name:
+
+    async def alias() -> None:
+        if not tty_name:
+            return
         try:
             await asyncio.wait_for(
                 state.relay.release_tty_name(user, tty_name),
@@ -957,6 +1037,15 @@ async def _release_session(
             )
         except Exception:
             logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
+
+    async def presence() -> None:
+        await _delete_released_session(state, session_key)
+
+    await _run_cleanup_steps([alias, presence])
+
+
+async def _delete_released_session(state: ServerState, session_key: str) -> None:
+    """Delete presence independently of alias-release failures."""
     try:
         await asyncio.wait_for(
             state.relay.delete_session(session_key), timeout=_TEARDOWN_STEP_TIMEOUT
@@ -980,23 +1069,31 @@ async def _release_session(
 
 async def _release_relay(state: ServerState) -> None:
     """Release TTY names, delete sessions, and close the relay."""
-    await _release_session(
-        state,
-        user=state.config.user,
-        session_key=state.session_key,
-        tty_name=get_tty_name(),
-    )
-    if state.companion:  # Release companion session (DES-039).
+
+    async def primary() -> None:
         await _release_session(
             state,
-            user=state.companion.user,
-            session_key=state.companion.session_key,
-            tty_name=state.companion.tty_name,
+            user=state.config.user,
+            session_key=state.session_key,
+            tty_name=get_tty_name(),
         )
-    try:
-        await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
-    except Exception:
-        logger.warning("Failed to close relay", exc_info=True)
+
+    async def companion() -> None:
+        if state.companion:
+            await _release_session(
+                state,
+                user=state.companion.user,
+                session_key=state.companion.session_key,
+                tty_name=state.companion.tty_name,
+            )
+
+    async def close() -> None:
+        try:
+            await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
+        except Exception:
+            logger.warning("Failed to close relay", exc_info=True)
+
+    await _run_cleanup_steps([primary, companion, close])
 
 
 def _remove_unread_files(unread_path: Path | None) -> None:
@@ -1011,10 +1108,15 @@ def _remove_unread_files(unread_path: Path | None) -> None:
     """
     if unread_path is None:
         return
-    with suppress(FileNotFoundError):
-        unread_path.unlink()
-    with suppress(FileNotFoundError):
-        unread_path.with_suffix(".nudged").unlink()
+    failure: OSError | None = None
+    for path in (unread_path, unread_path.with_suffix(".nudged")):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
 
 
 def _write_reap_fallback_sentinels(state: ServerState) -> None:
@@ -1098,25 +1200,31 @@ async def _lifespan_cleanup(
         # gather(..., return_exceptions=True) already protects the other
         # background tasks against (Cursor Bugbot, High).
         logger.warning("Reaper task failed during shutdown", exc_info=True)
-    if state.owns_relay:
-        _write_reap_fallback_sentinels(state)
-        await _append_logout_event(state)
-        await _append_companion_logout_event(state)
-    await _shutdown_tasks(shutdown, tasks)
     # Drain vox background tasks so child process waiters complete
     # before the event loop closes.  Without this, SIGCHLD fires
     # _do_waitpid on a closed loop, producing logging errors.
     from biff.integration.vox import drain_background_tasks  # noqa: PLC0415
 
-    await drain_background_tasks()
-    _remove_unread_files(state.unread_path)
+    steps: list[Callable[[], Awaitable[None]]] = []
     if state.owns_relay:
-        await _release_relay(state)
-    with suppress(OSError):
-        remove_active_session(state.session_key)
-    if state.companion:
-        with suppress(OSError):
-            remove_active_session(state.companion.session_key)
+        steps.extend(
+            [
+                lambda: _cleanup_action(lambda: _write_reap_fallback_sentinels(state)),
+                lambda: _append_logout_event(state),
+                lambda: _append_companion_logout_event(state),
+            ]
+        )
+    steps.extend(
+        [
+            lambda: _shutdown_tasks(shutdown, tasks),
+            drain_background_tasks,
+            lambda: _cleanup_action(lambda: _remove_unread_files(state.unread_path)),
+        ]
+    )
+    if state.owns_relay:
+        steps.append(lambda: _release_relay(state))
+    steps.append(lambda: _cleanup_action(lambda: _remove_active_markers(state)))
+    await _run_cleanup_steps(steps)
 
 
 async def _register_companion(state: ServerState) -> None:
@@ -1166,12 +1274,151 @@ async def _register_companion(state: ServerState) -> None:
 async def _active_lifespan(
     mcp: FastMCP[ServerState], state: ServerState
 ) -> AsyncGenerator[ServerState]:
+    """Clean partial startup before the outer ownership boundary is released."""
+    registered_names: list[str] = []
+    startup_tasks: list[asyncio.Task[None]] = []
+    started = False
+    previous_handlers = {
+        sig: signal.getsignal(sig)
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+    }
+    try:
+        async with _running_lifespan(
+            mcp, state, registered_names, startup_tasks
+        ) as ctx:
+            started = True
+            yield ctx
+    finally:
+        # A failed or completed lifespan must not leave a handler capable of
+        # deleting the next incarnation after this one's lock is released.
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+        if not started:
+            await _finish_cleanup(
+                _startup_cleanup(state, registered_names, startup_tasks)
+            )
+
+
+async def _startup_cleanup(
+    state: ServerState,
+    registered_names: list[str],
+    startup_tasks: list[asyncio.Task[None]],
+) -> None:
+    """Unwind resources acquired before the lifespan could yield."""
+    for task in startup_tasks:
+        task.cancel()
+    await asyncio.gather(*startup_tasks, return_exceptions=True)
+
+    async def close() -> None:
+        if state.owns_relay:
+            try:
+                await asyncio.wait_for(
+                    state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT
+                )
+            except Exception:
+                logger.warning("Failed to close startup relay", exc_info=True)
+
+    steps: list[Callable[[], Awaitable[None]]] = [
+        lambda: _cleanup_action(lambda: _remove_unread_files(state.unread_path))
+    ]
+    if registered_names:
+        steps.extend(
+            [
+                lambda: _cleanup_action(lambda: _write_reap_fallback_sentinels(state)),
+                lambda: _release_session(
+                    state,
+                    user=state.config.user,
+                    session_key=state.session_key,
+                    tty_name=registered_names[0],
+                ),
+                lambda: _cleanup_action(lambda: _remove_active_markers(state)),
+            ]
+        )
+    steps.append(close)
+    await _run_cleanup_steps(steps)
+
+
+async def _retire_pin_predecessors(state: ServerState) -> None:
+    """Retire old personas under the already-acquired routing lock.
+
+    The routing identity is exclusive across personas. Do not try to acquire
+    it again as a foreign reaper would; finish retirement before registration.
+    """
+    keys = {
+        build_session_key(session.user, session.tty)
+        for session in await state.relay.get_sessions()
+        if session.tty == state.tty
+    }
+    directory = sentinel_dir(state.config.repo_name)
+    for path in directory.glob("*"):
+        try:
+            key = path.read_text().strip()
+        except (OSError, UnicodeError):
+            continue
+        if path.name == key.replace(":", "-"):
+            keys.add(key)
+    if isinstance(state.relay, LocalRelay):
+        keys.update(state.relay.removal_sentinel_keys(state.tty))
+    keys.add(state.session_key)
+    for key in keys:
+        user, separator, routing_id = key.partition(":")
+        if (
+            not separator
+            or routing_id != state.tty
+            or re.fullmatch(r"[a-zA-Z0-9_-]+", user) is None
+        ):
+            continue
+        if key != state.session_key:
+            await _retire_pin_session(state, key)
+            with suppress(OSError):
+                remove_active_session(key)
+        _remove_sentinel(state.config.repo_name, key)
+        if isinstance(state.relay, LocalRelay):
+            state.relay.remove_own_sentinel(key)
+
+
+async def _retire_pin_session(state: ServerState, key: str) -> None:
+    """Strict retirement: preserve durable retry state until alias release.
+
+    Unlike the best-effort default reaper, replacement startup must not erase
+    the only row containing an alias it failed to release. Inner cancellation
+    also propagates before deletion; caller cancellation remains shielded.
+    """
+    session = await state.relay.get_session(key)
+    if session is not None:
+        if session.tty_name:
+            owner = await state.relay.get_tty_reservation_owner(
+                session.user, session.tty_name
+            )
+            if owner == key:
+                await asyncio.wait_for(
+                    state.relay.release_tty_name(session.user, session.tty_name),
+                    timeout=_TEARDOWN_STEP_TIMEOUT,
+                )
+        await asyncio.wait_for(
+            state.relay.append_wtmp(_build_logout_event(key, session)),
+            timeout=_TEARDOWN_STEP_TIMEOUT,
+        )
+    await asyncio.wait_for(
+        state.relay.delete_session(key), timeout=_TEARDOWN_STEP_TIMEOUT
+    )
+
+
+@asynccontextmanager
+async def _running_lifespan(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    registered_names: list[str],
+    startup_tasks: list[asyncio.Task[None]],
+) -> AsyncGenerator[ServerState]:
     """Lifespan for an active (non-dormant) server.
 
     Registers signal handlers, starts background tasks, and manages
     session lifecycle.  Extracted from :func:`create_server` for
     complexity management.
     """
+    if state.ethos_session_pin is not None:
+        await _finish_cleanup(_retire_pin_predecessors(state))
     _cleaned_up = False
 
     def _signal_handler(signum: int, _frame: object) -> None:
@@ -1331,6 +1578,7 @@ async def _active_lifespan(
         hostname=state.hostname,
         pwd=state.pwd,
         repo=state.config.repo_name,
+        on_claim=registered_names.append,
     )
     set_tty_name(final_name)
     # Keep the shared talk state's outgoing from_tty in sync with the
@@ -1379,17 +1627,23 @@ async def _active_lifespan(
             nap_interval=nap_interval_for(poll_interval),
         )
     )
+    startup_tasks.append(poller)
     reaper = asyncio.create_task(_reap_loop(state, shutdown))
+    startup_tasks.append(reaper)
     heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
+    startup_tasks.append(heartbeat)
     watcher = asyncio.create_task(_kv_watcher_loop(state, shutdown))
+    startup_tasks.append(watcher)
     try:
         yield state
     finally:
-        await _lifespan_cleanup(
-            state,
-            shutdown,
-            reaper,
-            [poller, heartbeat, watcher],
+        await _finish_cleanup(
+            _lifespan_cleanup(
+                state,
+                shutdown,
+                reaper,
+                [poller, heartbeat, watcher],
+            )
         )
 
 
@@ -1403,14 +1657,18 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
 
     @asynccontextmanager
     async def lifespan(mcp: FastMCP[ServerState]) -> AsyncGenerator[ServerState]:
-        if state.dormant:
-            try:
-                yield state
-            finally:
-                _remove_unread_files(state.unread_path)
-            return
-        async with _active_lifespan(mcp, state) as ctx:
-            yield ctx
+        pin = state.ethos_session_pin
+        # Acquire before registration, subscriptions, or unread writes. Keep
+        # ownership through every teardown step, including dormant cleanup.
+        with pin.ownership() if pin is not None else nullcontext():
+            if state.dormant:
+                try:
+                    yield state
+                finally:
+                    _remove_unread_files(state.unread_path)
+                return
+            async with _active_lifespan(mcp, state) as ctx:
+                yield ctx
 
     mcp: FastMCP[ServerState] = FastMCP(
         "biff",
@@ -1444,5 +1702,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     )
 
     mcp.add_middleware(_SessionCaptureMiddleware())
+    if state.ethos_session_pin is not None:
+        mcp.add_middleware(SessionPinMiddleware(state.ethos_session_pin))
     register_all_tools(mcp, state)
     return mcp

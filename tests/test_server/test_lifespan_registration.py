@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, TypedDict
 
 import pytest
 from fastmcp import Client
@@ -30,6 +30,16 @@ from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.server.app import _register_companion, create_server
 from biff.server.state import CompanionSession, ServerState, create_state
+
+
+class _RegistrationMetadata(TypedDict):
+    """Exact string-only registration keywords shared by lifecycle tests."""
+
+    display_name: str
+    kind: str
+    hostname: str
+    pwd: str
+    repo: str
 
 
 @pytest.fixture
@@ -665,7 +675,7 @@ class TestResumeReclaim:
     resume; the display alias ``ttyN`` is reclaimed via the sid hint.
     """
 
-    _KW: ClassVar[dict[str, str]] = {
+    _KW: ClassVar[_RegistrationMetadata] = {
         "display_name": "Kai",
         "kind": "agent",
         "hostname": "h",
@@ -865,7 +875,7 @@ class TestResumeReclaim:
 class TestReapSentinels:
     """The reaper must not log out the LIVE session under identity routing."""
 
-    _KW: ClassVar[dict[str, str]] = {
+    _KW: ClassVar[_RegistrationMetadata] = {
         "display_name": "Kai",
         "kind": "agent",
         "hostname": "h",
