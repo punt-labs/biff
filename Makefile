@@ -24,25 +24,15 @@ PROBCLI ?= $(HOME)/Applications/ProB/probcli
 PROB_SETSIZE ?= 2
 PROB_MAXINT ?= 4
 PROB_TIMEOUT ?= 60000
-PROB_FLAGS = -p DEFAULT_SETSIZE $(PROB_SETSIZE) -p MAXINT $(PROB_MAXINT) -p TIME_OUT $(PROB_TIMEOUT)
-
+PROB_LOG_DIR ?= .tmp/prob
 fuzz: ## Type-check a Z spec with fuzz (usage: make fuzz SPEC=docs/foo.tex)
 	@fuzz -t "$(SPEC)" > /dev/null
 	@echo "fuzz: $(SPEC) OK"
 
 prob: ## Animate and model-check a Z spec with ProB (usage: make prob SPEC=docs/foo.tex)
-	@echo "--- init ---"
-	@$(PROBCLI) "$(SPEC)" -init $(PROB_FLAGS) 2>&1 | grep -v "^Promoting\|^Z op\|^% given\|fuzz AST\|^Writing"
-	@echo "--- animate (50 steps, setsize $(PROB_SETSIZE)) ---"
-	@$(PROBCLI) "$(SPEC)" -animate 50 $(PROB_FLAGS) 2>&1 | grep -E "COVERED|not_covered|Runtime"
-	@echo "--- cbc assertions ---"
-	@$(PROBCLI) "$(SPEC)" -cbc_assertions $(PROB_FLAGS) 2>&1 | grep -E "counter|ASSERTION"
-	@echo "--- cbc deadlock ---"
-	@$(PROBCLI) "$(SPEC)" -cbc_deadlock $(PROB_FLAGS) 2>&1 | grep -E "deadlock|DEADLOCK"
-	@echo "--- model check (setsize $(PROB_SETSIZE)) ---"
-	@$(PROBCLI) "$(SPEC)" -model_check $(PROB_FLAGS) \
-		-p MAX_INITIALISATIONS 100 -p MAX_OPERATIONS 5000 2>&1 | \
-		grep -E "states|COUNTER|No counter|COVERED|all open|not all"
+	@uv run python -m biff.prob_gate --probcli "$(PROBCLI)" --spec "$(SPEC)" \
+		--setsize $(PROB_SETSIZE) --maxint $(PROB_MAXINT) \
+		--timeout $(PROB_TIMEOUT) --log-dir "$(PROB_LOG_DIR)"
 	@echo "prob: $(SPEC) OK"
 
 prob-session: ## Validate session-model.tex (fuzz + ProB, setsize 1)

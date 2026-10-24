@@ -1,0 +1,130 @@
+"""Formal gates fail closed rather than trusting filtered success banners."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from biff.prob_gate import check_output, main
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "deadlock_counter_example_found(354,358)\n*** DEADLOCK state found ***",
+        "\x1b[31m*** COUNTER EXAMPLE found ***\x1b[0m",
+        "Counter-example exists",
+        "! *** error occurred ***\n! Total Errors: 1, Warnings:0",
+        "TIMEOUT",
+        "not all open states visited",
+    ],
+)
+def test_violations_fail_even_with_zero_exit_and_success_banner(output: str) -> None:
+    assert not check_output(output + "\nprob-session: ALL CHECKS PASSED", 0, None)
+
+
+def test_exit_status_and_incomplete_proof_are_failures() -> None:
+    assert not check_output("No DEADLOCK state found", 1, "No DEADLOCK state found")
+    assert not check_output("Starting check", 0, "No DEADLOCK state found")
+    assert check_output(
+        "no_deadlock_counter_example_found(1,1)\nNo DEADLOCK state found",
+        0,
+        "No DEADLOCK state found",
+    )
+
+
+def test_full_output_saved_and_failure_stops_later_checks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = "unfiltered diagnostics\ndeadlock_counter_example_found(354,358)\n"
+    results = [
+        subprocess.CompletedProcess(["probcli"], 0, "init\n"),
+        subprocess.CompletedProcess(["probcli"], 0, "animate\n"),
+        subprocess.CompletedProcess(
+            ["probcli"], 0, "No counter-example to ASSERTION exists\n"
+        ),
+        subprocess.CompletedProcess(["probcli"], 0, output),
+    ]
+    with patch("biff.prob_gate.subprocess.run", side_effect=results) as run:
+        assert (
+            main(
+                [
+                    "--probcli",
+                    "probcli",
+                    "--spec",
+                    "session.tex",
+                    "--log-dir",
+                    str(tmp_path),
+                ]
+            )
+            == 1
+        )
+    assert run.call_count == 4
+    assert "-strict" in run.call_args.args[0]
+    assert (tmp_path / "session-deadlock.log").read_text() == output
+    captured = capsys.readouterr()
+    assert output in captured.out
+    assert "deadlock FAILED" in captured.err
+    assert not (tmp_path / "session-model-check.log").exists()
+
+
+def test_missing_checker_fails(tmp_path: Path) -> None:
+    with patch("biff.prob_gate.subprocess.run", side_effect=FileNotFoundError()):
+        assert (
+            main(
+                [
+                    "--probcli",
+                    "missing",
+                    "--spec",
+                    "session.tex",
+                    "--log-dir",
+                    str(tmp_path),
+                ]
+            )
+            == 1
+        )
+
+
+def test_make_gate_has_no_output_filtering() -> None:
+    makefile = (Path(__file__).parents[1] / "Makefile").read_text()
+    target = makefile.split("prob: ##", 1)[1].split("prob-session:", 1)[0]
+    assert "|" not in target
+    assert "biff.prob_gate" in target
+
+
+def test_completed_model_check_is_not_a_counterexample() -> None:
+    output = "No counter example found. ALL states visited."
+    assert check_output(output, 0, output)
+
+
+def test_all_steps_complete_successfully(tmp_path: Path) -> None:
+    outputs = [
+        "init",
+        "animate",
+        "No counter-example to ASSERTION exists",
+        "No DEADLOCK state found",
+        "No counter example found. ALL states visited.",
+    ]
+    with patch(
+        "biff.prob_gate.subprocess.run",
+        side_effect=[
+            subprocess.CompletedProcess(["probcli"], 0, output) for output in outputs
+        ],
+    ) as run:
+        assert (
+            main(
+                [
+                    "--probcli",
+                    "probcli",
+                    "--spec",
+                    "session.tex",
+                    "--log-dir",
+                    str(tmp_path),
+                ]
+            )
+            == 0
+        )
+    assert run.call_count == 5

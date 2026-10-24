@@ -43,13 +43,24 @@ identity defaults. Native Ethos MCP metadata resolution is independent.
 Use an Ethos CLI supporting explicit roster reads and
 `ETHOS_SESSION` / `ETHOS_AGENT_ID`. Create the pilot roster explicitly
 with its existing session-create command, seat the participant under the
-OpenCode ID, and declare its agent persona before starting Biff. Verify:
+OpenCode ID, and declare its agent persona before starting Biff.
+
+**Check the roster first. Run `session create` only if the session is absent:**
+it overwrites an existing roster. If the session already exists, inspect it
+and use explicit participant operations instead of recreating it.
 
 ```bash
-ethos session create --session ses_EXAMPLE --root-id jim --root-persona jim \
-  --primary-id ses_EXAMPLE --primary-persona claude
 ethos session roster ses_EXAMPLE --json
-ethos show claude --json
+```
+
+For an absent pilot session, create and verify:
+
+```bash
+ethos session create --session ses_EXAMPLE \
+  --root-id jfreeman --root-persona jfreeman \
+  --primary-id ses_EXAMPLE --primary-persona opencode
+ethos session roster ses_EXAMPLE --json
+ethos show opencode --json
 ```
 
 The roster must report `session: ses_EXAMPLE` and exactly one participant
