@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Security
+
+- Clear 3 open Dependabot alerts (1 critical) by bumping `uv.lock`: certifi
+  2026.1.4 → 2026.10.23, mcp 1.28.1 → 1.30.0, opentelemetry-api 1.39.1 →
+  1.45.1.
+
 ### Added
 
 - Explicit single-session OpenCode MCP mode with paired `--ethos-session`
