@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 import pytest
 
-from biff.prob_gate import check_output, main
+from biff.prob_gate import (
+    _SESSION_PREDICATES,
+    check_output,
+    check_session_invariant,
+    main,
+)
 
 
 @pytest.mark.parametrize(
@@ -98,6 +103,65 @@ def test_make_gate_has_no_output_filtering() -> None:
 def test_completed_model_check_is_not_a_counterexample() -> None:
     output = "No counter example found. ALL states visited."
     assert check_output(output, 0, output)
+
+
+def test_session_translation_requires_actual_global_predicates() -> None:
+    invariant = "\n  & ".join(_SESSION_PREDICATES)
+    translated = f"MACHINE session\nINVARIANT\n{invariant}\nINITIALISATION\nskip"
+    assert check_session_invariant(translated)
+    assert not check_session_invariant(
+        "MACHINE session\nINVARIANT\nabind : POW(ALIAS * (SESSION * KIND))"
+        "\nINITIALISATION\n" + invariant
+    )
+    for predicate in _SESSION_PREDICATES:
+        assert not check_session_invariant(translated.replace(predicate, "TRUE"))
+
+
+def test_session_translation_failure_stops_before_proofs(tmp_path: Path) -> None:
+    stale = "\n  & ".join(_SESSION_PREDICATES)
+    (tmp_path / "session-model-translation.mch").write_text(
+        f"MACHINE session\nINVARIANT\n{stale}\nINITIALISATION\nskip"
+    )
+    with patch(
+        "biff.prob_gate.subprocess.run",
+        return_value=subprocess.CompletedProcess(["probcli"], 0, "loaded\n"),
+    ) as run:
+        assert (
+            main(
+                [
+                    "--probcli",
+                    "probcli",
+                    "--spec",
+                    "session-model.tex",
+                    "--log-dir",
+                    str(tmp_path),
+                ]
+            )
+            == 1
+        )
+    run.assert_called_once()
+    assert "-ppf" in run.call_args.args[0]
+    assert not (tmp_path / "session-model-init.log").exists()
+    assert not (tmp_path / "session-model-translation.mch").exists()
+
+
+def test_session_close_requires_cleanup_and_frames_routing() -> None:
+    spec = (Path(__file__).parents[1] / "docs/session-model.tex").read_text()
+    close = spec.split(r"\begin{schema}{CloseSession}", 1)[1].split(r"\end{schema}", 1)[
+        0
+    ]
+    assert r"\Delta RouteWorld" in close
+    assert r"s? \notin \dom entries" in close
+    for variable in (
+        "entries",
+        "ttyalias",
+        "savedalias",
+        "abind",
+        "routeMode",
+        "lostF",
+        "misF",
+    ):
+        assert f"{variable}' = {variable}" in close
 
 
 def test_all_steps_complete_successfully(tmp_path: Path) -> None:

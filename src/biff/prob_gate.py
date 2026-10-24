@@ -40,6 +40,29 @@ _STEPS = (
         "No counter example found. ALL states visited.",
     ),
 )
+_SESSION_PREDICATES = (
+    "smach : SESSION +-> HOST",
+    "pkind : PROCESS +-> KIND",
+    "ttyalias : SESSION * KIND >+> ALIAS",
+    "abind : ALIAS +-> SESSION * KIND",
+    "dom(psess) = processes",
+    "dom(sbranch) = sessions",
+    "dom(entries) <: sessions",
+    "dom(ttyalias) = entries",
+    "routeMode = rmIdentity => lostF = zfalse",
+    "routeMode = rmIdentity => misF = zfalse",
+)
+
+
+def check_session_invariant(translation: str) -> bool:
+    """Reject a session translation checking only underlying relation types."""
+    _, invariant_marker, rest = translation.partition("\nINVARIANT\n")
+    invariant, init_marker, _ = rest.partition("\nINITIALISATION\n")
+    normalized = " ".join(invariant.replace("(", " ( ").replace(")", " ) ").split())
+    normalized = normalized.replace(" ( ", "(").replace(" )", ")")
+    return bool(invariant_marker and init_marker) and all(
+        predicate in normalized for predicate in _SESSION_PREDICATES
+    )
 
 
 def check_output(output: str, returncode: int, proof: str | None) -> bool:
@@ -75,7 +98,12 @@ def main(argv: list[str] | None = None) -> int:
         "TIME_OUT",
         str(args.timeout),
     ]
-    for name, operation, proof in _STEPS:
+    translation_path = args.log_dir / "session-model-translation.mch"
+    steps: tuple[tuple[str, list[str], str | None], ...] = _STEPS
+    if Path(args.spec).stem == "session-model":
+        translation_path.unlink(missing_ok=True)
+        steps = (("translation", ["-ppf", str(translation_path)], None), *steps)
+    for name, operation, proof in steps:
         print(f"--- {name} ---", flush=True)  # noqa: T201
         log_path = args.log_dir / f"{Path(args.spec).stem}-{name}.log"
         try:
@@ -110,6 +138,16 @@ def main(argv: list[str] | None = None) -> int:
             print(  # noqa: T201
                 f"ProB {name} FAILED (exit {result.returncode}); "
                 f"full output: {log_path}",
+                file=sys.stderr,
+            )
+            return 1
+        if name == "translation" and (
+            not translation_path.is_file()
+            or not check_session_invariant(translation_path.read_text())
+        ):
+            print(  # noqa: T201
+                "ProB translation FAILED: missing full session invariant; "
+                f"inspect {translation_path}",
                 file=sys.stderr,
             )
             return 1
