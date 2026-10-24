@@ -10,8 +10,9 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 import time
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager, nullcontext, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -46,6 +47,34 @@ from biff.session_lock import routing_lock
 from biff.tty import build_session_key, claim_tty_name, validate_reclaimable_name
 
 logger = logging.getLogger(__name__)
+
+
+async def _finish_cleanup(cleanup: Coroutine[object, object, None]) -> None:
+    """Delay caller cancellation until teardown has finished under ownership.
+
+    Shield a separate task, not merely one await: repeated cancellation of
+    the lifespan must never leave that task running after its lock is released.
+    Preserve the first cancellation, including its message, after joining.
+    """
+    task = asyncio.create_task(cleanup)
+    joined = asyncio.gather(task, return_exceptions=True)
+    original = sys.exception()
+    cancellation = original if isinstance(original, asyncio.CancelledError) else None
+    while not joined.done():
+        try:
+            await asyncio.shield(joined)
+        except asyncio.CancelledError as exc:
+            if cancellation is None:
+                cancellation = exc
+    if cancellation is not None:
+        # Retrieve any teardown failure without replacing the caller's cancel.
+        try:
+            task.result()
+        except BaseException:
+            logger.warning("Cleanup failed during cancellation", exc_info=True)
+        raise cancellation
+    task.result()
+
 
 # Org-repo discovery is non-critical (stale data is acceptable, per
 # ``_refresh_org_repos``'s own docstring) but was running every 60s heartbeat
@@ -1197,29 +1226,40 @@ async def _active_lifespan(
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
         if not started:
-            for task in startup_tasks:
-                task.cancel()
-            await asyncio.gather(*startup_tasks, return_exceptions=True)
+            await _finish_cleanup(
+                _startup_cleanup(state, registered_names, startup_tasks)
+            )
+
+
+async def _startup_cleanup(
+    state: ServerState,
+    registered_names: list[str],
+    startup_tasks: list[asyncio.Task[None]],
+) -> None:
+    """Unwind resources acquired before the lifespan could yield."""
+    for task in startup_tasks:
+        task.cancel()
+    await asyncio.gather(*startup_tasks, return_exceptions=True)
+    try:
+        _remove_unread_files(state.unread_path)
+    finally:
+        if registered_names:
+            _write_reap_fallback_sentinels(state)
+            await _release_session(
+                state,
+                user=state.config.user,
+                session_key=state.session_key,
+                tty_name=registered_names[0],
+            )
+            with suppress(OSError):
+                remove_active_session(state.session_key)
+        if state.owns_relay:
             try:
-                _remove_unread_files(state.unread_path)
-            finally:
-                if registered_names:
-                    _write_reap_fallback_sentinels(state)
-                    await _release_session(
-                        state,
-                        user=state.config.user,
-                        session_key=state.session_key,
-                        tty_name=registered_names[0],
-                    )
-                    with suppress(OSError):
-                        remove_active_session(state.session_key)
-                if state.owns_relay:
-                    try:
-                        await asyncio.wait_for(
-                            state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT
-                        )
-                    except Exception:
-                        logger.warning("Failed to close startup relay", exc_info=True)
+                await asyncio.wait_for(
+                    state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT
+                )
+            except Exception:
+                logger.warning("Failed to close startup relay", exc_info=True)
 
 
 @asynccontextmanager
@@ -1453,11 +1493,13 @@ async def _running_lifespan(
     try:
         yield state
     finally:
-        await _lifespan_cleanup(
-            state,
-            shutdown,
-            reaper,
-            [poller, heartbeat, watcher],
+        await _finish_cleanup(
+            _lifespan_cleanup(
+                state,
+                shutdown,
+                reaper,
+                [poller, heartbeat, watcher],
+            )
         )
 
 

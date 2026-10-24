@@ -46,6 +46,10 @@ LocalRelay discards empty, malformed, or undecodable removal-sentinel artifacts
 individually before routing-key locking, so a signal-time interrupted write
 cannot block enumeration or unrelated pinned startup. Valid keys still require
 ownership through deletion and sentinel removal.
+Lifespan cancellation is deferred until its shielded teardown task completes:
+even repeated cancellations during logout, task shutdown, or relay close cannot
+release ownership while predecessor background tasks are still running. The
+original cancellation is then re-raised. Externally owned relays are not closed.
 
 **Safe scope:** all processes using a pin must share the same Biff home and
 a filesystem providing coherent `flock` semantics. The lock key deliberately
