@@ -24,6 +24,7 @@ PROBCLI ?= $(HOME)/Applications/ProB/probcli
 PROB_SETSIZE ?= 2
 PROB_MAXINT ?= 4
 PROB_TIMEOUT ?= 60000
+PROB_WALL_TIMEOUT ?=
 PROB_LOG_DIR ?= .tmp/prob
 fuzz: ## Type-check a Z spec with fuzz (usage: make fuzz SPEC=docs/foo.tex)
 	@fuzz -t "$(SPEC)" > /dev/null
@@ -32,7 +33,8 @@ fuzz: ## Type-check a Z spec with fuzz (usage: make fuzz SPEC=docs/foo.tex)
 prob: ## Animate and model-check a Z spec with ProB (usage: make prob SPEC=docs/foo.tex)
 	@uv run python -m biff.prob_gate --probcli "$(PROBCLI)" --spec "$(SPEC)" \
 		--setsize $(PROB_SETSIZE) --maxint $(PROB_MAXINT) \
-		--timeout $(PROB_TIMEOUT) --log-dir "$(PROB_LOG_DIR)"
+		--timeout $(PROB_TIMEOUT) --log-dir "$(PROB_LOG_DIR)" \
+		$(if $(PROB_WALL_TIMEOUT),--wall-timeout "$(PROB_WALL_TIMEOUT)")
 	@echo "prob: $(SPEC) OK"
 
 prob-session: ## Validate session-model.tex (fuzz + ProB, setsize 1)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import subprocess
 import sys
@@ -21,6 +22,13 @@ _TIMEOUT = re.compile(
     r"operation|execution|solver|ProB(?: execution)?)\s+(?:(?:has|was)\s+)?)?"
     r"(?:timed[ -]?out|time[ -]?out|timeout)(?=\s|:|[.!*]|$)"
 )
+_MODEL_CHECK_PROOF = "No counter example found. ALL states visited."
+_COVERAGE = re.compile(
+    r"(?m)^Coverage:[ \t]*\n"
+    r"\[STATES \([0-9]+\),([^\n\]]*),TOTAL_TRANSITIONS,[0-9]+,"
+    r"[^\n\]]*\][ \t]*$"
+)
+_SAFETY_COUNTERS = ("deadlocked", "invariant_violated", "invariant_not_checked", "open")
 _STEPS = (
     ("init", ["-init"], None),
     ("animate", ["-animate", "50"], None),
@@ -30,6 +38,7 @@ _STEPS = (
         "model-check",
         [
             "-model_check",
+            "-coverage",
             "-p",
             "MAX_INITIALISATIONS",
             "100",
@@ -37,7 +46,7 @@ _STEPS = (
             "MAX_OPERATIONS",
             "5000",
         ],
-        "No counter example found. ALL states visited.",
+        _MODEL_CHECK_PROOF,
     ),
 )
 _SESSION_PREDICATES = (
@@ -65,6 +74,18 @@ def check_session_invariant(translation: str) -> bool:
     )
 
 
+def check_coverage(output: str) -> bool:
+    """Require one state summary with explicit zero safety counters."""
+    summaries = _COVERAGE.findall(output)
+    if len(summaries) != 1:
+        return False
+    fields = [field.partition(":") for field in summaries[0].split(",")]
+    return all(
+        [field for field in fields if field[0] == counter] == [(counter, ":", "0")]
+        for counter in _SAFETY_COUNTERS
+    )
+
+
 def check_output(output: str, returncode: int, proof: str | None) -> bool:
     """Require successful execution, no violations, and a completed proof."""
     plain = _ANSI.sub("", output)
@@ -73,18 +94,43 @@ def check_output(output: str, returncode: int, proof: str | None) -> bool:
         and _FAILURE.search(plain) is None
         and _TIMEOUT.search(plain) is None
         and (proof is None or proof in plain)
+        and (proof != _MODEL_CHECK_PROOF or check_coverage(plain))
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Validate scope and independent operation and wall time limits."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probcli", required=True)
     parser.add_argument("--spec", required=True)
     parser.add_argument("--setsize", type=int, default=2)
     parser.add_argument("--maxint", type=int, default=4)
-    parser.add_argument("--timeout", type=int, default=60000)
+    parser.add_argument(
+        "--timeout", type=int, default=60000, help="ProB per-operation timeout in ms"
+    )
+    parser.add_argument(
+        "--wall-timeout",
+        type=float,
+        default=None,
+        help="Optional wall timeout in seconds for each checker subprocess",
+    )
     parser.add_argument("--log-dir", type=Path, default=Path(".tmp/prob"))
     args = parser.parse_args(argv)
+    if args.setsize <= 0:
+        parser.error("--setsize must be positive")
+    if args.maxint < 0:
+        parser.error("--maxint must be nonnegative")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    if args.wall_timeout is not None and (
+        not math.isfinite(args.wall_timeout) or args.wall_timeout <= 0
+    ):
+        parser.error("--wall-timeout must be finite and positive")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     args.log_dir.mkdir(parents=True, exist_ok=True)
     flags = [
         "-strict",
@@ -113,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
                 stderr=subprocess.STDOUT,
                 text=True,
                 check=False,
-                timeout=max(1, args.timeout / 1000) + 30,
+                timeout=args.wall_timeout,
             )
         except subprocess.TimeoutExpired as exc:
             # TimeoutExpired.output can be bytes even with text=True. Retain

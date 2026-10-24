@@ -128,6 +128,21 @@ Nonzero exits, violation diagnostics, timeouts, and missing proof-completion
 messages fail closed. There are no output-filtering pipelines. Failure
 stops later steps and prevents both success banners.
 
+Model checking requests `-coverage` and requires a single `Coverage:` state
+summary with explicit zero `deadlocked`, `invariant_violated`,
+`invariant_not_checked`, and `open` counters. The completion banner alone is
+not proof: missing, malformed, duplicate, or nonzero safety counters fail.
+Coverage is checked only in the current subprocess output, never a stale log.
+
+`PROB_TIMEOUT` (default `60000`) supplies ProB's `TIME_OUT` in milliseconds
+for individual operations/solver calls. It is not a whole-check wall limit.
+`PROB_WALL_TIMEOUT` defaults to empty, leaving each checker subprocess
+unbounded; setting it passes `--wall-timeout` in seconds independently of
+`--timeout`. The optional wall limit must be finite and positive. A wall
+timeout preserves partial output byte-for-byte before its failure diagnostic
+and stops the gate. Scope size and operation timeout must be positive;
+`MAXINT` must be nonnegative. Invalid arguments fail before any checker runs.
+
 For `session-model.tex`, a translation preflight saves the internal machine
 and requires actual function, injection, domain, and delivery predicates
 inside its global `INVARIANT`, before initialization or proof runs. Merely
@@ -141,6 +156,18 @@ make prob-session PROBCLI=/run/current-system/sw/bin/probcli
 The repaired target passes with CBC retained. Complete output is saved in
 `.tmp/biff-e1ew-repair/prob-session.log`; individual checker logs and the
 translated machine are under `.tmp/biff-e1ew-repair/prob/`.
+
+PR #456 follow-up validation retains complete output in
+`.tmp/pr456-followup-formal/prob-session.log`, with individual checker logs
+and the full-invariant translation under `.tmp/pr456-followup-formal/prob/`.
+This run leaves the wall timeout unset and retains strict CBC assertions and
+deadlock checks. It exhausts 654 analyzed states and 3,098 transitions;
+the coverage summary reports 655 total states (including the root) with all
+four safety counters zero. `DeliverAliasMis`, `ForkSession`, and `SpawnChild`
+are uncovered at uniform size 1; no larger-scope proof is claimed.
+Targeted gate tests also exercise explicit wall bounds,
+independent timeout settings, invalid arguments, incomplete coverage, and
+stale log rejection.
 
 Mixed-scope proof command (no invariant or deadlock suppression):
 
