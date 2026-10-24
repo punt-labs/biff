@@ -133,6 +133,10 @@ summary with explicit zero `deadlocked`, `invariant_violated`,
 `invariant_not_checked`, and `open` counters. The completion banner alone is
 not proof: missing, malformed, duplicate, or nonzero safety counters fail.
 Coverage is checked only in the current subprocess output, never a stale log.
+The gate counts all coverage headers and state-record starts before validating
+structure, so an extra malformed record cannot hide behind a valid summary.
+Safety fields must occur exactly once in the state-counter section; duplicate
+or misplaced safety fields after `TOTAL_TRANSITIONS` also fail closed.
 
 `PROB_TIMEOUT` (default `60000`) supplies ProB's `TIME_OUT` in milliseconds
 for individual operations/solver calls. It is not a whole-check wall limit.
@@ -168,6 +172,11 @@ are uncovered at uniform size 1; no larger-scope proof is claimed.
 Targeted gate tests also exercise explicit wall bounds,
 independent timeout settings, invalid arguments, incomplete coverage, and
 stale log rejection.
+
+Independent-review parser follow-up output is retained in
+`.tmp/pr456-followup-formal/prob-session-parser-followup.log`; checker logs
+and translation are under `.tmp/pr456-followup-formal/parser-followup/prob/`.
+The real ProB coverage record passes the strengthened parser unchanged.
 
 Mixed-scope proof command (no invariant or deadlock suppression):
 

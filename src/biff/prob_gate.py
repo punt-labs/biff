@@ -23,10 +23,12 @@ _TIMEOUT = re.compile(
     r"(?:timed[ -]?out|time[ -]?out|timeout)(?=\s|:|[.!*]|$)"
 )
 _MODEL_CHECK_PROOF = "No counter example found. ALL states visited."
+_COVERAGE_HEADER = re.compile(r"(?m)^[ \t]*Coverage[ \t]*:")
+_COVERAGE_RECORD = re.compile(r"\[STATES\b")
 _COVERAGE = re.compile(
     r"(?m)^Coverage:[ \t]*\n"
     r"\[STATES \([0-9]+\),([^\n\]]*),TOTAL_TRANSITIONS,[0-9]+,"
-    r"[^\n\]]*\][ \t]*$"
+    r"([^\n\]]*)\][ \t]*$"
 )
 _SAFETY_COUNTERS = ("deadlocked", "invariant_violated", "invariant_not_checked", "open")
 _STEPS = (
@@ -76,12 +78,21 @@ def check_session_invariant(translation: str) -> bool:
 
 def check_coverage(output: str) -> bool:
     """Require one state summary with explicit zero safety counters."""
-    summaries = _COVERAGE.findall(output)
-    if len(summaries) != 1:
+    if (
+        len(_COVERAGE_HEADER.findall(output)) != 1
+        or len(_COVERAGE_RECORD.findall(output)) != 1
+    ):
         return False
-    fields = [field.partition(":") for field in summaries[0].split(",")]
+    summary = _COVERAGE.search(output)
+    if summary is None:
+        return False
+    fields = [field.partition(":") for field in summary[1].split(",")]
+    trailing_keys = [field.partition(":")[0].strip() for field in summary[2].split(",")]
+    if any(key in _SAFETY_COUNTERS for key in trailing_keys):
+        return False
     return all(
-        [field for field in fields if field[0] == counter] == [(counter, ":", "0")]
+        [field for field in fields if field[0].strip() == counter]
+        == [(counter, ":", "0")]
         for counter in _SAFETY_COUNTERS
     )
 

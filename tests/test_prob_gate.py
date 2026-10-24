@@ -11,6 +11,7 @@ import pytest
 
 from biff.prob_gate import (
     _MODEL_CHECK_PROOF,
+    _SAFETY_COUNTERS,
     _SESSION_PREDICATES,
     check_output,
     check_session_invariant,
@@ -24,6 +25,24 @@ _COVERAGE = (
     "ForkSession,SpawnChild]\n"
 )
 _MODEL_OUTPUT = _MODEL_CHECK_PROOF + "\n" + _COVERAGE
+_AMBIGUOUS_COVERAGE = [
+    _COVERAGE + "Coverage:\n[STATES (invalid),open:1]\n",
+    "Coverage:\n[STATES (invalid),open:1]\n" + _COVERAGE,
+    _COVERAGE + "Coverage:\n",
+    _COVERAGE + "[STATES (invalid),open:1]\n",
+    _COVERAGE.replace("]", "]\n[STATES (invalid),open:1]"),
+    *[
+        _COVERAGE.replace("]", f",{counter}{suffix}]")
+        for counter in _SAFETY_COUNTERS
+        for suffix in (":0", ":1", ":unknown", "")
+    ],
+    *[
+        _COVERAGE.replace(f"{counter}:0,", "").replace("]", f",{counter}:0]")
+        for counter in _SAFETY_COUNTERS
+    ],
+    _COVERAGE.replace("]", ", open:1]"),
+    _COVERAGE.replace("open:0", "open:0, open:1"),
+]
 
 
 def _successful_outputs() -> list[str]:
@@ -157,6 +176,37 @@ def test_completed_model_check_is_not_a_counterexample() -> None:
 )
 def test_model_completion_requires_valid_zero_coverage(coverage: str) -> None:
     assert not check_output(_MODEL_CHECK_PROOF + "\n" + coverage, 0, _MODEL_CHECK_PROOF)
+
+
+@pytest.mark.parametrize("coverage", _AMBIGUOUS_COVERAGE)
+def test_ambiguous_coverage_fails_parser_and_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], coverage: str
+) -> None:
+    output = _MODEL_CHECK_PROOF + "\n" + coverage
+    assert not check_output(output, 0, _MODEL_CHECK_PROOF)
+    outputs = [*_successful_outputs()[:-1], output]
+    with patch(
+        "biff.prob_gate.subprocess.run",
+        side_effect=[
+            subprocess.CompletedProcess(["probcli"], 0, text) for text in outputs
+        ],
+    ) as run:
+        assert (
+            main(
+                [
+                    "--probcli",
+                    "probcli",
+                    "--spec",
+                    "session.tex",
+                    "--log-dir",
+                    str(tmp_path),
+                ]
+            )
+            == 1
+        )
+    assert run.call_count == 5
+    assert (tmp_path / "session-model-check.log").read_text() == output
+    assert "model-check FAILED" in capsys.readouterr().err
 
 
 def test_session_translation_requires_actual_global_predicates() -> None:
