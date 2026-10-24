@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Explicit single-session OpenCode MCP mode with paired `--ethos-session`
+  and `--ethos-agent-id` flags. Resolves the exact Ethos agent participant,
+  rejects missing or mismatched caller metadata before tool execution, uses
+  stable session-specific routing/unread files, and disables inferred human
+  companion presence. Default Claude behavior is unchanged.
+
 ### Fixed
+
+- ProB validation preserves full checker output and fails on violations,
+  timeouts, nonzero exits, or missing completion markers instead of masking
+  errors with output-filtering pipelines. Timeout logs retain partial output;
+  timeout-named paths are not mistaken for checker diagnostics. The session
+  model's CBC discrepancy remains a separately tracked formal blocker.
 
 - `biff-notify.yml`'s deployed `setup-uv` pin was left at v9.0.0 after
   dependabot bumped every other workflow (and the bundled template) to

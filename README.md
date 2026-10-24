@@ -288,6 +288,13 @@ biff version                # Print version
 
 ### Global flags
 
+For a single OpenCode session, `biff mcp --ethos-session <session-id>
+--ethos-agent-id <session-id>` opts into exact Ethos participant resolution
+and matching MCP caller metadata. Both IDs must match an existing agent
+participant; no shared default is changed and no human presence is inferred
+from its parent. This mode cannot serve multiple OpenCode session IDs.
+See the [session-pinned pilot guide](docs/session-pinned-opencode.md).
+
 ```bash
 biff --json who             # JSON array of sessions
 biff --json status          # JSON object with version, unread, wall
