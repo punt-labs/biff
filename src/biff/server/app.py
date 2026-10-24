@@ -42,6 +42,7 @@ from biff.server.tools._descriptions import (
     set_tty_name,
 )
 from biff.session_id import SessionHint
+from biff.session_lock import routing_lock
 from biff.tty import build_session_key, claim_tty_name, validate_reclaimable_name
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,7 @@ async def register_session(
     pwd: str,
     repo: str,
     preferred_name: str | None = None,
+    on_claim: Callable[[str], None] = lambda _name: None,
 ) -> tuple[UserSession, str]:
     """Claim a TTY name, then write the session row once with tty_name set.
 
@@ -188,6 +190,7 @@ async def register_session(
             preferred_name,
             tty_name,
         )
+    on_claim(tty_name)
     # Release any stale TTY name reservation left by a prior process that
     # crashed after writing the KV row but before releasing its name.  The
     # KV row itself is overwritten unconditionally below; without this
@@ -363,8 +366,9 @@ async def _reap_sentinels(state: ServerState) -> None:
             # logout, reservation release, or KV delete.
             sentinel.unlink(missing_ok=True)
             continue
-        if await _reap_dead_session(state, session_key):
-            sentinel.unlink(missing_ok=True)
+        with routing_lock(session_key.partition(":")[2]) as acquired:
+            if acquired and await _reap_dead_session(state, session_key):
+                sentinel.unlink(missing_ok=True)
 
 
 async def _reap_dead_session(state: ServerState, session_key: str) -> bool:
@@ -1173,6 +1177,58 @@ async def _register_companion(state: ServerState) -> None:
 async def _active_lifespan(
     mcp: FastMCP[ServerState], state: ServerState
 ) -> AsyncGenerator[ServerState]:
+    """Clean partial startup before the outer ownership boundary is released."""
+    registered_names: list[str] = []
+    startup_tasks: list[asyncio.Task[None]] = []
+    started = False
+    previous_handlers = {
+        sig: signal.getsignal(sig)
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+    }
+    try:
+        async with _running_lifespan(
+            mcp, state, registered_names, startup_tasks
+        ) as ctx:
+            started = True
+            yield ctx
+    finally:
+        # A failed or completed lifespan must not leave a handler capable of
+        # deleting the next incarnation after this one's lock is released.
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+        if not started:
+            for task in startup_tasks:
+                task.cancel()
+            await asyncio.gather(*startup_tasks, return_exceptions=True)
+            try:
+                _remove_unread_files(state.unread_path)
+            finally:
+                if registered_names:
+                    _write_reap_fallback_sentinels(state)
+                    await _release_session(
+                        state,
+                        user=state.config.user,
+                        session_key=state.session_key,
+                        tty_name=registered_names[0],
+                    )
+                    with suppress(OSError):
+                        remove_active_session(state.session_key)
+                if state.owns_relay:
+                    try:
+                        await asyncio.wait_for(
+                            state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT
+                        )
+                    except Exception:
+                        logger.warning("Failed to close startup relay", exc_info=True)
+
+
+@asynccontextmanager
+async def _running_lifespan(
+    mcp: FastMCP[ServerState],
+    state: ServerState,
+    registered_names: list[str],
+    startup_tasks: list[asyncio.Task[None]],
+) -> AsyncGenerator[ServerState]:
     """Lifespan for an active (non-dormant) server.
 
     Registers signal handlers, starts background tasks, and manages
@@ -1338,6 +1394,7 @@ async def _active_lifespan(
         hostname=state.hostname,
         pwd=state.pwd,
         repo=state.config.repo_name,
+        on_claim=registered_names.append,
     )
     set_tty_name(final_name)
     # Keep the shared talk state's outgoing from_tty in sync with the
@@ -1386,9 +1443,13 @@ async def _active_lifespan(
             nap_interval=nap_interval_for(poll_interval),
         )
     )
+    startup_tasks.append(poller)
     reaper = asyncio.create_task(_reap_loop(state, shutdown))
+    startup_tasks.append(reaper)
     heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
+    startup_tasks.append(heartbeat)
     watcher = asyncio.create_task(_kv_watcher_loop(state, shutdown))
+    startup_tasks.append(watcher)
     try:
         yield state
     finally:
@@ -1424,7 +1485,10 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
                 # A signal-killed predecessor leaves LocalRelay remove-* files.
                 # Consume them before registering this same stable key, rather
                 # than letting get_sessions() delete the replacement afterward.
+                state.relay.remove_own_sentinel(state.session_key)
                 state.relay.reap_sentinels()
+            if pin is not None:
+                _remove_sentinel(state.config.repo_name, state.session_key)
             async with _active_lifespan(mcp, state) as ctx:
                 yield ctx
 

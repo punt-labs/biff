@@ -35,6 +35,14 @@ to exit before reconnecting; the routing ID and inbox remain stable. Crashes
 release the kernel lock automatically. Lock files remain on disk deliberately:
 unlinking them would allow two owners to lock different inodes.
 
+Both relay-agnostic and LocalRelay sentinel reapers acquire this same routing
+lock before reading or deleting a pinned session, retaining it through deletion
+and sentinel removal. A live owner makes a foreign reaper skip the key; an
+already-running reaper makes replacement startup fail until reaping completes.
+Replacement startup consumes its predecessor's sentinels under ownership before
+registration. Partial startup failures release acquired aliases, presence,
+unread files, active markers, and owned relay connections before unlocking.
+
 **Safe scope:** all processes using a pin must share the same Biff home and
 a filesystem providing coherent `flock` semantics. The lock key deliberately
 omits persona, repository, and relay because the unread key omits them too.

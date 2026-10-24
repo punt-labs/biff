@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -13,9 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from biff._stdlib import biff_data_dir
 from biff.config import EthosIdentity
 from biff.session_id import SessionHint
+from biff.session_lock import routing_lock
 
 _SESSION_ID = re.compile(r"ses_[a-zA-Z0-9]+\Z")
 _PERSONA = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
@@ -53,16 +52,12 @@ class EthosSessionPin:
         so would let a new process lock a different inode while we own it.
         Closing the descriptor (including on process death) releases flock.
         """
-        directory = biff_data_dir() / "session-locks"
-        directory.mkdir(parents=True, exist_ok=True)
-        with (directory / f"opencode-{self.routing_id}.lock").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
+        with routing_lock(self.routing_id, create=True) as acquired:
+            if not acquired:
                 raise ValueError(
                     f"Pinned OpenCode session {self.session_id} already has "
                     "a running Biff process; wait for it to exit before reconnecting."
-                ) from exc
+                )
             yield
 
     def _read_json(self, arguments: list[str]) -> dict[str, object]:

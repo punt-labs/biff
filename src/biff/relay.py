@@ -41,6 +41,7 @@ from biff.models import (
     UserSession,
     WallPost,
 )
+from biff.session_lock import routing_lock
 from biff.tty import build_session_key, validate_reclaimable_name, validate_routing_id
 
 logger = logging.getLogger(__name__)
@@ -603,19 +604,22 @@ class LocalRelay:
         sentinels = list(self._data_dir.glob("remove-*"))
         if not sentinels:
             return
-        sessions = self._read_sessions()
-        changed = False
         for sentinel in sentinels:
             try:
                 session_key = sentinel.read_text().strip()
             except OSError:
                 continue
-            if session_key in sessions:
-                del sessions[session_key]
-                changed = True
-            sentinel.unlink(missing_ok=True)
-        if changed:
-            self._write_sessions(sessions)
+            with routing_lock(session_key.partition(":")[2]) as acquired:
+                if not acquired:
+                    continue
+                self.delete_session_sync(session_key)
+                sentinel.unlink(missing_ok=True)
+
+    def remove_own_sentinel(self, session_key: str) -> None:
+        """Consume a predecessor's sentinel while the caller owns its pin lock."""
+        self._validate_session_key(session_key)
+        safe = session_key.replace(":", "-")
+        (self._data_dir / f"remove-{safe}").unlink(missing_ok=True)
 
     # -- Session history (wtmp) --
 

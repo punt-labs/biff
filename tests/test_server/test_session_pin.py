@@ -266,3 +266,45 @@ def test_ownership_is_per_routing_id_and_released_on_exception(
     ):
         pytest.fail("overlapping owner acquired lock")
     assert len(list((tmp_path / ".punt-labs/biff/session-locks").iterdir())) == 2
+
+
+@pytest.mark.parametrize("failure_step", ["refresh_wall", "update_session"])
+async def test_failed_startup_closes_owned_relay_before_unlock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_step: str
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pin = EthosSessionPin(SID, SID)
+    state = create_state(
+        BiffConfig(user="rmh", repo_name="test"),
+        tmp_path / "relay",
+        tty=pin.routing_id,
+        unread_path=pin.unread_path(tmp_path / "unread"),
+        ethos_session_pin=pin,
+        auto_companion=False,
+    )
+
+    async def close() -> None:
+        with pytest.raises(ValueError, match="already has a running"), pin.ownership():
+            pytest.fail("startup released ownership before relay.close")
+
+    target = (
+        patch("biff.server.app.refresh_wall", side_effect=RuntimeError("injected"))
+        if failure_step == "refresh_wall"
+        else patch.object(
+            type(state.relay), "update_session", side_effect=RuntimeError("injected")
+        )
+    )
+    with (
+        patch("biff.server.app.signal.signal"),
+        target,
+        patch.object(type(state.relay), "close", side_effect=close) as closed,
+        pytest.raises(Exception, match="injected"),
+    ):
+        async with Client(create_server(state)):
+            pytest.fail("failed startup yielded")
+    closed.assert_awaited_once()
+    assert not await state.relay.get_sessions()
+    assert await state.relay.get_tty_reservation_owner("rmh", "tty1") is None
+    assert state.unread_path is not None and not state.unread_path.exists()
+    with pin.ownership():
+        pass
