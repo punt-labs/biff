@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -137,3 +138,99 @@ async def test_cleanup_propagates_uncancelled_failure() -> None:
     cleanup = AsyncMock(side_effect=RuntimeError("original failure"))
     with pytest.raises(RuntimeError, match="original failure"):
         await app._finish_cleanup(cleanup())
+
+
+@pytest.mark.parametrize("failure_step", ["workers", "logout", "vox", "unread"])
+async def test_stage_failure_finishes_remaining_cleanup_under_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_step: str
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pin = EthosSessionPin("ses_timeout123", "ses_timeout123")
+    state = create_state(
+        BiffConfig(user="rmh", repo_name="test"),
+        tmp_path / "relay",
+        tty=pin.routing_id,
+        unread_path=pin.unread_path(tmp_path / "unread"),
+        ethos_session_pin=pin,
+        auto_companion=False,
+    )
+    cancelled = asyncio.Event()
+    worker: asyncio.Task[None] | None = None
+    shutdown = app._shutdown_tasks
+    remove = app._remove_unread_files
+
+    async def slow_worker() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def workers(event: asyncio.Event, tasks: list[asyncio.Task[None]]) -> None:
+        nonlocal worker
+        worker = asyncio.create_task(slow_worker())
+        await asyncio.sleep(0)
+        await shutdown(event, [*tasks, worker], timeout=0.01)
+
+    async def failure(*args: object) -> None:
+        raise RuntimeError("stage failure")
+
+    def unread(path: Path | None) -> None:
+        remove(path)
+        raise RuntimeError("stage failure")
+
+    async def close() -> None:
+        with pytest.raises(ValueError, match="already has a running"), pin.ownership():
+            pytest.fail("lock escaped before close")
+
+    target: AbstractContextManager[object]
+    if failure_step == "workers":
+        target = patch.object(app, "_shutdown_tasks", workers)
+    elif failure_step == "logout":
+        target = patch.object(app, "_append_logout_event", failure)
+    elif failure_step == "vox":
+        target = patch("biff.integration.vox.drain_background_tasks", failure)
+    else:
+        target = patch.object(app, "_remove_unread_files", unread)
+    with (
+        patch("biff.server.app.signal.signal"),
+        target,
+        patch.object(type(state.relay), "close", side_effect=close) as closed,
+        pin.ownership(),
+        pytest.raises(TimeoutError if failure_step == "workers" else RuntimeError),
+    ):
+        async with app._active_lifespan(app.create_server(state), state):
+            pass
+    closed.assert_awaited_once()
+    if worker is not None:
+        assert worker.done() and cancelled.is_set()
+    assert not await state.relay.get_sessions()
+    assert state.unread_path is not None and not state.unread_path.exists()
+    assert not list((tmp_path / ".punt-labs/biff/active").iterdir())
+    with pin.ownership():
+        pass
+
+
+async def test_startup_cleanup_failure_still_closes_and_preserves_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pin = EthosSessionPin("ses_startup123", "ses_startup123")
+    state = create_state(
+        BiffConfig(user="rmh", repo_name="test"),
+        tmp_path / "relay",
+        tty=pin.routing_id,
+        ethos_session_pin=pin,
+        auto_companion=False,
+    )
+    with (
+        patch("biff.server.app.signal.signal"),
+        patch.object(app, "refresh_wall", side_effect=RuntimeError("original")),
+        patch.object(app, "_remove_unread_files", side_effect=OSError("cleanup")),
+        patch.object(type(state.relay), "close", new_callable=AsyncMock) as closed,
+        pin.ownership(),
+        pytest.raises(RuntimeError, match="original"),
+    ):
+        async with app._active_lifespan(app.create_server(state), state):
+            pytest.fail("startup yielded")
+    closed.assert_awaited_once()
+    assert not await state.relay.get_sessions()

@@ -12,7 +12,7 @@ import os
 import signal
 import sys
 import time
-from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager, nullcontext, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -73,7 +73,43 @@ async def _finish_cleanup(cleanup: Coroutine[object, object, None]) -> None:
         except BaseException:
             logger.warning("Cleanup failed during cancellation", exc_info=True)
         raise cancellation
+    if original is not None:
+        # Teardown must not replace an exception from the lifespan body/startup.
+        result = joined.result()[0]
+        if isinstance(result, BaseException):
+            logger.warning("Cleanup failed while unwinding: %s", result)
+        return
     task.result()
+
+
+async def _run_cleanup_steps(
+    steps: Sequence[Callable[[], Awaitable[None]]],
+) -> None:
+    """Attempt every teardown stage, then propagate its first failure."""
+    failure: BaseException | None = None
+    for step in steps:
+        try:
+            await step()
+        except (Exception, asyncio.CancelledError) as exc:
+            logger.warning("Teardown stage failed", exc_info=True)
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+
+async def _cleanup_action(action: Callable[[], None]) -> None:
+    """Adapt a synchronous teardown stage without moving it off-thread."""
+    action()
+
+
+def _remove_active_markers(state: ServerState) -> None:
+    """Best-effort active-marker cleanup for both session identities."""
+    with suppress(OSError):
+        remove_active_session(state.session_key)
+    if state.companion:
+        with suppress(OSError):
+            remove_active_session(state.companion.session_key)
 
 
 # Org-repo discovery is non-critical (stale data is acceptable, per
@@ -766,17 +802,17 @@ async def _shutdown_tasks(
     may itself be responding to cancellation.
     """
     shutdown.set()
-    with suppress(asyncio.CancelledError):
-        await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout,
-        )
-    for t in tasks:
-        if not t.done():
-            t.cancel()
-    for t in tasks:
+    try:
         with suppress(asyncio.CancelledError):
-            await t
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=timeout,
+            )
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _append_login_event(state: ServerState, tty_name: str) -> None:
@@ -1020,23 +1056,31 @@ async def _release_session(
 
 async def _release_relay(state: ServerState) -> None:
     """Release TTY names, delete sessions, and close the relay."""
-    await _release_session(
-        state,
-        user=state.config.user,
-        session_key=state.session_key,
-        tty_name=get_tty_name(),
-    )
-    if state.companion:  # Release companion session (DES-039).
+
+    async def primary() -> None:
         await _release_session(
             state,
-            user=state.companion.user,
-            session_key=state.companion.session_key,
-            tty_name=state.companion.tty_name,
+            user=state.config.user,
+            session_key=state.session_key,
+            tty_name=get_tty_name(),
         )
-    try:
-        await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
-    except Exception:
-        logger.warning("Failed to close relay", exc_info=True)
+
+    async def companion() -> None:
+        if state.companion:
+            await _release_session(
+                state,
+                user=state.companion.user,
+                session_key=state.companion.session_key,
+                tty_name=state.companion.tty_name,
+            )
+
+    async def close() -> None:
+        try:
+            await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
+        except Exception:
+            logger.warning("Failed to close relay", exc_info=True)
+
+    await _run_cleanup_steps([primary, companion, close])
 
 
 def _remove_unread_files(unread_path: Path | None) -> None:
@@ -1138,25 +1182,31 @@ async def _lifespan_cleanup(
         # gather(..., return_exceptions=True) already protects the other
         # background tasks against (Cursor Bugbot, High).
         logger.warning("Reaper task failed during shutdown", exc_info=True)
-    if state.owns_relay:
-        _write_reap_fallback_sentinels(state)
-        await _append_logout_event(state)
-        await _append_companion_logout_event(state)
-    await _shutdown_tasks(shutdown, tasks)
     # Drain vox background tasks so child process waiters complete
     # before the event loop closes.  Without this, SIGCHLD fires
     # _do_waitpid on a closed loop, producing logging errors.
     from biff.integration.vox import drain_background_tasks  # noqa: PLC0415
 
-    await drain_background_tasks()
-    _remove_unread_files(state.unread_path)
+    steps: list[Callable[[], Awaitable[None]]] = []
     if state.owns_relay:
-        await _release_relay(state)
-    with suppress(OSError):
-        remove_active_session(state.session_key)
-    if state.companion:
-        with suppress(OSError):
-            remove_active_session(state.companion.session_key)
+        steps.extend(
+            [
+                lambda: _cleanup_action(lambda: _write_reap_fallback_sentinels(state)),
+                lambda: _append_logout_event(state),
+                lambda: _append_companion_logout_event(state),
+            ]
+        )
+    steps.extend(
+        [
+            lambda: _shutdown_tasks(shutdown, tasks),
+            drain_background_tasks,
+            lambda: _cleanup_action(lambda: _remove_unread_files(state.unread_path)),
+        ]
+    )
+    if state.owns_relay:
+        steps.append(lambda: _release_relay(state))
+    steps.append(lambda: _cleanup_action(lambda: _remove_active_markers(state)))
+    await _run_cleanup_steps(steps)
 
 
 async def _register_companion(state: ServerState) -> None:
@@ -1240,19 +1290,8 @@ async def _startup_cleanup(
     for task in startup_tasks:
         task.cancel()
     await asyncio.gather(*startup_tasks, return_exceptions=True)
-    try:
-        _remove_unread_files(state.unread_path)
-    finally:
-        if registered_names:
-            _write_reap_fallback_sentinels(state)
-            await _release_session(
-                state,
-                user=state.config.user,
-                session_key=state.session_key,
-                tty_name=registered_names[0],
-            )
-            with suppress(OSError):
-                remove_active_session(state.session_key)
+
+    async def close() -> None:
         if state.owns_relay:
             try:
                 await asyncio.wait_for(
@@ -1260,6 +1299,25 @@ async def _startup_cleanup(
                 )
             except Exception:
                 logger.warning("Failed to close startup relay", exc_info=True)
+
+    steps: list[Callable[[], Awaitable[None]]] = [
+        lambda: _cleanup_action(lambda: _remove_unread_files(state.unread_path))
+    ]
+    if registered_names:
+        steps.extend(
+            [
+                lambda: _cleanup_action(lambda: _write_reap_fallback_sentinels(state)),
+                lambda: _release_session(
+                    state,
+                    user=state.config.user,
+                    session_key=state.session_key,
+                    tty_name=registered_names[0],
+                ),
+                lambda: _cleanup_action(lambda: _remove_active_markers(state)),
+            ]
+        )
+    steps.append(close)
+    await _run_cleanup_steps(steps)
 
 
 @asynccontextmanager
