@@ -1236,25 +1236,44 @@ def _create_mcp_server(
     data_dir: Path | None,
     relay_url: str | None,
     prefix: Path,
+    ethos_session: str | None = None,
+    ethos_agent_id: str | None = None,
 ) -> FastMCP[ServerState]:
     """Shared config → state → server setup for serve/mcp."""
     from biff.config import RELAY_URL_UNSET
+    from biff.ethos_session import EthosSessionPin
     from biff.session_id import SessionHint
     from biff.session_key import find_session_key
     from biff.statusline import UNREAD_DIR
+
+    pin = None
+    pinned_identity = None
+    if ethos_session is not None or ethos_agent_id is not None:
+        if ethos_session is None or ethos_agent_id is None:
+            raise SystemExit(
+                "--ethos-session and --ethos-agent-id are required together."
+            )
+        if user is not None:
+            raise SystemExit("--user cannot override a pinned Ethos identity.")
+        try:
+            pin = EthosSessionPin(ethos_session, ethos_agent_id)
+            pinned_identity = pin.resolve_identity()
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
 
     resolved = load_mcp_config(
         user_override=user,
         data_dir_override=data_dir,
         relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
         prefix=prefix,
+        pinned_identity=pinned_identity,
     )
     dormant = not is_enabled(resolved.repo_root)
 
     # Route on the Claude session_id: read the SessionStart hook's
     # hint left for this server's claude ancestor.  None outside Claude Code
     # (headless/CI/SDK) — create_state then mints a fresh, misroute-safe hex.
-    routing_id = SessionHint.resolve_routing_id()
+    routing_id = pin.routing_id if pin is not None else SessionHint.resolve_routing_id()
 
     # Companion (human) registration is deferred to the heartbeat
     # loop -- the ethos roster is not yet available at startup on
@@ -1263,10 +1282,16 @@ def _create_mcp_server(
         resolved.config,
         resolved.data_dir,
         tty=routing_id,
-        unread_path=UNREAD_DIR / f"{find_session_key()}.json",
+        unread_path=(
+            pin.unread_path(UNREAD_DIR)
+            if pin is not None
+            else UNREAD_DIR / f"{find_session_key()}.json"
+        ),
         dormant=dormant,
         repo_root=resolved.repo_root,
         repo_common_root=resolved.repo_common_root,
+        ethos_session_pin=pin,
+        auto_companion=pin is None,
     )
     return create_server(state)
 
@@ -1321,6 +1346,14 @@ def mcp_cmd(
         Path,
         typer.Option(help="Base path for data directory (default: /tmp)."),
     ] = Path("/tmp"),  # noqa: S108
+    ethos_session: Annotated[
+        str | None,
+        typer.Option(help="Pin this process to one existing OpenCode/Ethos session."),
+    ] = None,
+    ethos_agent_id: Annotated[
+        str | None,
+        typer.Option(help="Exact Ethos participant ID; must equal --ethos-session."),
+    ] = None,
 ) -> None:
     """Start the biff MCP server (stdio transport)."""
     server = _create_mcp_server(
@@ -1328,6 +1361,8 @@ def mcp_cmd(
         data_dir=data_dir,
         relay_url=relay_url,
         prefix=prefix,
+        ethos_session=ethos_session,
+        ethos_agent_id=ethos_agent_id,
     )
     server.run(transport="stdio")
 

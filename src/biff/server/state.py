@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from biff.ethos_session import EthosSessionPin
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay, Relay
@@ -69,6 +70,8 @@ class ServerState:
     # calls for the shared connection's wedge-detection budget.
     org_repos_refreshed_at: float | None = None
     companion: CompanionSession | None = None
+    ethos_session_pin: EthosSessionPin | None = None
+    auto_companion: bool = True
     talk: TalkState = field(init=False)
 
     def __post_init__(self) -> None:
@@ -81,6 +84,10 @@ class ServerState:
         display ``tty_name`` is populated after registration via
         ``TalkState.set_tty_name``.
         """
+        if self.ethos_session_pin is not None and (
+            self.auto_companion or self.companion is not None
+        ):
+            raise ValueError("Pinned sessions cannot register human companions.")
         object.__setattr__(
             self,
             "talk",
@@ -129,6 +136,8 @@ def create_state(
     repo_common_root: Path | None = None,
     org_repos: frozenset[str] | None = None,
     companion: CompanionSession | None = None,
+    ethos_session_pin: EthosSessionPin | None = None,
+    auto_companion: bool = True,
 ) -> ServerState:
     """Create a ``ServerState`` from config and data directory.
 
@@ -176,4 +185,6 @@ def create_state(
         repo_root=repo_root,
         org_repos=org_repos or frozenset(),
         companion=companion,
+        ethos_session_pin=ethos_session_pin,
+        auto_companion=auto_companion,
     )

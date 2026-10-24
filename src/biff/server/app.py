@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay, Relay
+from biff.server.session_pin import SessionPinMiddleware
 from biff.server.state import CompanionSession, ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
@@ -427,6 +428,9 @@ async def _poll_companion_registration(state: ServerState) -> None:
     2-second subprocess timeout cannot stall the event loop (spec
     invariant 11).
     """
+    if not state.auto_companion:
+        return
+
     from biff.config import get_ethos_roster  # noqa: PLC0415
 
     roster = await asyncio.to_thread(get_ethos_roster)
@@ -509,6 +513,9 @@ async def _heartbeat_loop(
     is bounded by one subprocess call per ``interval`` and the
     subprocess runs on a worker thread so it never blocks the event
     loop (spec invariant 11).
+
+    Explicit session pins disable this policy: root authority is not
+    evidence of a human's live presence.
     """
     while not shutdown.is_set():
         try:
@@ -523,7 +530,7 @@ async def _heartbeat_loop(
             # would spam a warning per tick.  The relay's _ConnectionHealth
             # logs the wedge onset/recovery once — it is the single source.
             logger.debug("Heartbeat failed", exc_info=True)
-        if state.companion is None:
+        if state.auto_companion and state.companion is None:
             try:
                 await _poll_companion_registration(state)
             except Exception:
@@ -1444,5 +1451,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     )
 
     mcp.add_middleware(_SessionCaptureMiddleware())
+    if state.ethos_session_pin is not None:
+        mcp.add_middleware(SessionPinMiddleware(state.ethos_session_pin))
     register_all_tools(mcp, state)
     return mcp
