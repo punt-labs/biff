@@ -25,6 +25,32 @@ raw session ID is retained for Ethos and caller validation. Routing uses
 `SessionHint.derive_routing_id` with an OpenCode-specific domain, and the
 unread file is `~/.punt-labs/biff/unread/opencode-<routing-id>.json`.
 
+The process acquires a nonblocking exclusive `flock` on
+`~/.punt-labs/biff/session-locks/opencode-<routing-id>.lock` before any
+session registration, subscriptions, or unread writes. It holds that lock
+through all lifespan teardown, including relay and unread removal. An
+overlapping process fails with an explicit "already has a running Biff
+process" error, without touching the owner's state. Wait for the predecessor
+to exit before reconnecting; the routing ID and inbox remain stable. Crashes
+release the kernel lock automatically. Lock files remain on disk deliberately:
+unlinking them would allow two owners to lock different inodes.
+
+**Safe scope:** all processes using a pin must share the same Biff home and
+a filesystem providing coherent `flock` semantics. The lock key deliberately
+omits persona, repository, and relay because the unread key omits them too.
+This is not a distributed lease. Separate homes, containers with independent
+home mounts, or hosts with independent filesystems do not exclude one another.
+NATS presence uses `<repo>.<user>.<routing-id>` in the relay's KV bucket;
+identical pins with the same repo and persona can therefore collide across
+hosts even though their unread files are separate. Do not run that combination
+concurrently outside the shared lock scope. Cross-host ownership/fencing is
+not supported by this pilot; use distinct OpenCode session IDs instead.
+
+Pinned MCP plans update relay presence only, never Claude's plan-gate markers.
+They neither create nor clear the shared or ancestor-Claude marker, even if
+launched beneath Claude. Unpinned MCP and CLI plans still resolve the Claude
+identity fresh on each call.
+
 Every `tools/call` must contain `_meta` with
 `"ai.opencode/sessionID": "ses_EXAMPLE"`. Missing, malformed, or different
 IDs fail before tool execution. A process pinned to one session cannot

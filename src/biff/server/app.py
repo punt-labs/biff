@@ -12,7 +12,7 @@ import os
 import signal
 import time
 from collections.abc import AsyncGenerator, Callable, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -1410,14 +1410,23 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
 
     @asynccontextmanager
     async def lifespan(mcp: FastMCP[ServerState]) -> AsyncGenerator[ServerState]:
-        if state.dormant:
-            try:
-                yield state
-            finally:
-                _remove_unread_files(state.unread_path)
-            return
-        async with _active_lifespan(mcp, state) as ctx:
-            yield ctx
+        pin = state.ethos_session_pin
+        # Acquire before registration, subscriptions, or unread writes. Keep
+        # ownership through every teardown step, including dormant cleanup.
+        with pin.ownership() if pin is not None else nullcontext():
+            if state.dormant:
+                try:
+                    yield state
+                finally:
+                    _remove_unread_files(state.unread_path)
+                return
+            if pin is not None and isinstance(state.relay, LocalRelay):
+                # A signal-killed predecessor leaves LocalRelay remove-* files.
+                # Consume them before registering this same stable key, rather
+                # than letting get_sessions() delete the replacement afterward.
+                state.relay.reap_sentinels()
+            async with _active_lifespan(mcp, state) as ctx:
+                yield ctx
 
     mcp: FastMCP[ServerState] = FastMCP(
         "biff",

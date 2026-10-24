@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import subprocess
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from biff._stdlib import biff_data_dir
 from biff.config import EthosIdentity
 from biff.session_id import SessionHint
 
@@ -39,6 +43,27 @@ class EthosSessionPin:
 
     def unread_path(self, directory: Path) -> Path:
         return directory / f"opencode-{self.routing_id}.json"
+
+    @contextmanager
+    def ownership(self) -> Generator[None]:
+        """Exclude overlapping owners through teardown, not just registration.
+
+        All processes sharing this Biff home use the same inode, regardless
+        of persona, repository, or relay. Never unlink the lock file: doing
+        so would let a new process lock a different inode while we own it.
+        Closing the descriptor (including on process death) releases flock.
+        """
+        directory = biff_data_dir() / "session-locks"
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / f"opencode-{self.routing_id}.lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ValueError(
+                    f"Pinned OpenCode session {self.session_id} already has "
+                    "a running Biff process; wait for it to exit before reconnecting."
+                ) from exc
+            yield
 
     def _read_json(self, arguments: list[str]) -> dict[str, object]:
         env = dict(
