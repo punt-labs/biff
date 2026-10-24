@@ -15,8 +15,14 @@
 - ProB validation preserves full checker output and fails on violations,
   timeouts, nonzero exits, or missing completion markers instead of masking
   errors with output-filtering pipelines. Timeout logs retain partial output;
-  timeout-named paths are not mistaken for checker diagnostics. The session
-  model's CBC discrepancy remains a separately tracked formal blocker.
+  timeout-named paths are not mistaken for checker diagnostics.
+- Session-model verification now binds the full `RouteWorld` invariant through
+  ProZ's named `Invariant` schema and checks the translated predicates before
+  proof runs. The model requires live presence cleanup before final session
+  close, preserving routing invariants without changing runtime shutdown or
+  user workflow. Earlier proof claims checked underlying types only and are
+  corrected; current exhaustive checks are explicitly bounded, not a proof
+  of larger scopes or fork/spawn behavior.
 
 - `biff-notify.yml`'s deployed `setup-uv` pin was left at v9.0.0 after
   dependabot bumped every other workflow (and the bundled template) to
