@@ -59,9 +59,13 @@ relay cancellation. Unread JSON and nudge sidecars are unlinked independently.
 Vox drain cancels pending creation, adopts children returned during cancellation,
 and uses bounded terminate/kill/reap waits. Failed or unfinished child resources
 remain tracked rather than being falsely cleared as complete.
-Every pending creation has an eventual-result callback: even after a failed
-bounded drain, a late child is adopted, terminated, and reaped without a second
-drain. Failed creation results are retired and do not block neighboring children.
+Every pending creation has an eventual-result callback. After a failed bounded
+drain, late-child adoption and termination/reaping require a live event loop with
+time to complete the callback's cleanup task; no second drain is needed while
+that loop remains alive. There is no completed-reap guarantee across event-loop
+closure. Underlying subprocess transports may clean up a child at loop shutdown,
+but Biff does not claim that as completed reaping. Failed creation results are
+retired and do not block neighboring children.
 Drains are serialized. A cancellation-resistant creation that exceeds the bound
 is reported as failed cleanup, not successful completion; spawning stays disabled
 while unresolved resources remain. Such a child cannot mutate Biff relay state.

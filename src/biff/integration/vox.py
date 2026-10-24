@@ -147,7 +147,7 @@ async def _stop_process(proc: asyncio.subprocess.Process) -> None:
 
 
 async def _join_creations() -> None:
-    """Keep unfinished creations tracked; adopt every child before returning."""
+    """Adopt completed results; report and retain unfinished creations."""
     failure: BaseException | None = None
     for creation in tuple(_creating):
         if not creation.done():
@@ -169,7 +169,11 @@ async def _join_creations() -> None:
 
 
 def _creation_done(creation: asyncio.Task[asyncio.subprocess.Process]) -> None:
-    """Own every eventual result, even after a bounded drain has failed."""
+    """Schedule late-result cleanup while the event loop remains alive.
+
+    A failed bounded drain does not guarantee completed reaping across loop
+    closure: the callback and its cleanup task still need time on a live loop.
+    """
     _creating.discard(creation)
     abandoned = creation in _abandoned
     _abandoned.discard(creation)
@@ -182,7 +186,7 @@ def _creation_done(creation: asyncio.Task[asyncio.subprocess.Process]) -> None:
         return
     _spawned_procs.add(proc)
     if abandoned:
-        # Never leave a late result dependent on another drain invocation.
+        # No second drain is needed, but completion requires a live loop.
         task = asyncio.create_task(_stop_process(proc))
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
