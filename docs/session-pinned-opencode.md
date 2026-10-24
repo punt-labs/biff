@@ -42,6 +42,10 @@ already-running reaper makes replacement startup fail until reaping completes.
 Replacement startup consumes its predecessor's sentinels under ownership before
 registration. Partial startup failures release acquired aliases, presence,
 unread files, active markers, and owned relay connections before unlocking.
+If the persona changes, startup retires old-persona rows and both sentinel types
+for the exact same routing ID under that ownership, including logout, alias, and
+active-marker cleanup, before registering the new persona. Other routing IDs
+are not part of predecessor retirement.
 LocalRelay discards empty, malformed, or undecodable removal-sentinel artifacts
 individually before routing-key locking, so a signal-time interrupted write
 cannot block enumeration or unrelated pinned startup. Valid keys still require

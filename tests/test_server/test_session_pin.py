@@ -308,3 +308,52 @@ async def test_failed_startup_closes_owned_relay_before_unlock(
     assert state.unread_path is not None and not state.unread_path.exists()
     with pin.ownership():
         pass
+
+
+async def test_persona_predecessor_logout_alias_and_exact_routing_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biff.server.app import _retire_pin_predecessors, register_session
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pin = EthosSessionPin(SID, SID)
+    state = create_state(
+        BiffConfig(user="gvr", repo_name="test"),
+        tmp_path / "relay",
+        tty=pin.routing_id,
+        ethos_session_pin=pin,
+        auto_companion=False,
+    )
+    old, alias = await register_session(
+        state.relay,
+        "rmh",
+        pin.routing_id,
+        display_name="rmh",
+        kind="agent",
+        hostname="h",
+        pwd="/",
+        repo="test",
+    )
+    other, _ = await register_session(
+        state.relay,
+        "rmh",
+        "abcdef1234567890",
+        display_name="rmh",
+        kind="agent",
+        hostname="h",
+        pwd="/",
+        repo="test",
+    )
+    with (
+        pin.ownership(),
+        patch.object(
+            type(state.relay), "append_wtmp", new_callable=AsyncMock
+        ) as events,
+    ):
+        await _retire_pin_predecessors(state)
+    assert await state.relay.get_session(f"rmh:{pin.routing_id}") is None
+    assert await state.relay.get_tty_reservation_owner("rmh", alias) is None
+    assert await state.relay.get_session(f"rmh:{other.tty}") == other
+    assert events.await_args is not None
+    event = events.await_args.args[0]
+    assert event.event == "logout" and event.tty == old.tty and event.user == "rmh"

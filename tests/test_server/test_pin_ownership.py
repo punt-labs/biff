@@ -36,7 +36,7 @@ pin = EthosSessionPin("ses_ownership123", "ses_ownership123")
 home = Path.home()
 unread = pin.unread_path(home / "unread")
 state = create_state(
-    BiffConfig(user="rmh", repo_name="test"), home / "relay",
+    BiffConfig(user=os.environ.get("PERSONA", "rmh"), repo_name="test"), home / "relay",
     tty=pin.routing_id, unread_path=unread,
     ethos_session_pin=pin, auto_companion=False,
 )
@@ -71,7 +71,11 @@ asyncio.run(main())
 
 @contextmanager
 def _server(
-    home: Path, *, pause_cleanup: bool = True, startup: str = "normal"
+    home: Path,
+    *,
+    pause_cleanup: bool = True,
+    startup: str = "normal",
+    persona: str = "rmh",
 ) -> Generator[subprocess.Popen[str]]:
     process = subprocess.Popen(  # noqa: S603
         [sys.executable, "-u", "-c", _SERVER],
@@ -80,6 +84,7 @@ def _server(
             HOME=str(home),
             PAUSE_CLEANUP=str(int(pause_cleanup)),
             STARTUP=startup,
+            PERSONA=persona,
         ),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -286,6 +291,39 @@ def test_unrelated_corrupt_sentinel_does_not_block_pinned_startup(
         _expect(owner, "CLEANUP")
         _advance(owner)
         _expect(owner, "STOPPED")
+
+
+def test_persona_change_retires_both_predecessor_sentinels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pin = EthosSessionPin(SID, SID)
+    with _server(tmp_path, pause_cleanup=False) as predecessor:
+        _expect(predecessor, "READY")
+        predecessor.kill()
+        predecessor.wait(timeout=15)
+    key = f"rmh:{pin.routing_id}"
+    _write_sentinel("test", key)
+    local = tmp_path / "relay" / f"remove-rmh-{pin.routing_id}"
+    local.write_text(key)
+    # An unrelated routing key must not be consumed by predecessor retirement.
+    unrelated = tmp_path / "relay" / "remove-unrelated-abcdef1234567890"
+    unrelated.write_text("unrelated:abcdef1234567890")
+    with _server(tmp_path, persona="gvr") as replacement:
+        _expect(replacement, "READY")
+        rows = json.loads((tmp_path / "relay/sessions.json").read_text())
+        assert list(rows) == [f"gvr:{pin.routing_id}"]
+        assert not local.exists()
+        assert not (
+            tmp_path / ".punt-labs/biff/sentinels/test" / f"rmh-{pin.routing_id}"
+        ).exists()
+        assert not (
+            tmp_path / ".punt-labs/biff/active" / f"rmh-{pin.routing_id}"
+        ).exists()
+        _advance(replacement)
+        _expect(replacement, "CLEANUP")
+        _advance(replacement)
+        _expect(replacement, "STOPPED")
 
 
 @pytest.mark.parametrize("signal_exit", [False, True])

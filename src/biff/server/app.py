@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -1337,6 +1338,46 @@ async def _startup_cleanup(
     await _run_cleanup_steps(steps)
 
 
+async def _retire_pin_predecessors(state: ServerState) -> None:
+    """Retire old personas under the already-acquired routing lock.
+
+    The routing identity is exclusive across personas. Do not try to acquire
+    it again as a foreign reaper would; finish retirement before registration.
+    """
+    keys = {
+        build_session_key(session.user, session.tty)
+        for session in await state.relay.get_sessions()
+        if session.tty == state.tty
+    }
+    directory = sentinel_dir(state.config.repo_name)
+    for path in directory.glob("*"):
+        try:
+            key = path.read_text().strip()
+        except (OSError, UnicodeError):
+            continue
+        if path.name == key.replace(":", "-"):
+            keys.add(key)
+    if isinstance(state.relay, LocalRelay):
+        keys.update(state.relay.removal_sentinel_keys(state.tty))
+    keys.add(state.session_key)
+    for key in keys:
+        user, separator, routing_id = key.partition(":")
+        if (
+            not separator
+            or routing_id != state.tty
+            or re.fullmatch(r"[a-zA-Z0-9_-]+", user) is None
+        ):
+            continue
+        if key != state.session_key:
+            if not await _reap_dead_session(state, key):
+                raise RuntimeError(f"Failed to retire pinned predecessor {key}")
+            with suppress(OSError):
+                remove_active_session(key)
+        _remove_sentinel(state.config.repo_name, key)
+        if isinstance(state.relay, LocalRelay):
+            state.relay.remove_own_sentinel(key)
+
+
 @asynccontextmanager
 async def _running_lifespan(
     mcp: FastMCP[ServerState],
@@ -1350,6 +1391,8 @@ async def _running_lifespan(
     session lifecycle.  Extracted from :func:`create_server` for
     complexity management.
     """
+    if state.ethos_session_pin is not None:
+        await _finish_cleanup(_retire_pin_predecessors(state))
     _cleaned_up = False
 
     def _signal_handler(signum: int, _frame: object) -> None:
@@ -1598,14 +1641,6 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
                 finally:
                     _remove_unread_files(state.unread_path)
                 return
-            if pin is not None and isinstance(state.relay, LocalRelay):
-                # A signal-killed predecessor leaves LocalRelay remove-* files.
-                # Consume them before registering this same stable key, rather
-                # than letting get_sessions() delete the replacement afterward.
-                state.relay.remove_own_sentinel(state.session_key)
-                state.relay.reap_sentinels()
-            if pin is not None:
-                _remove_sentinel(state.config.repo_name, state.session_key)
             async with _active_lifespan(mcp, state) as ctx:
                 yield ctx
 
