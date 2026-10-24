@@ -12,7 +12,14 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _FAILURE = re.compile(
     r"(?im)(?:^!|\*\*\*.*(?:error|deadlock|counter)|"
     r"^deadlock_counter_example_found|(?<!No )\bcounter[- ]?example (?:found|exists)|"
-    r"\b(?:time[d ]?out|timeout|not all states|not all open states)\b)"
+    r"\b(?:not all states|not all open states)\b)"
+)
+_TIMEOUT = re.compile(
+    r"(?im)^\s*(?:[%!*]+\s*)?"
+    r"(?:(?:warning|error)\s*:\s*)?"
+    r"(?:(?:model checking|model check|constraint solving|constraint solver|"
+    r"operation|execution|solver|ProB(?: execution)?)\s+(?:(?:has|was)\s+)?)?"
+    r"(?:timed[ -]?out|time[ -]?out|timeout)(?=\s|:|[.!*]|$)"
 )
 _STEPS = (
     ("init", ["-init"], None),
@@ -41,6 +48,7 @@ def check_output(output: str, returncode: int, proof: str | None) -> bool:
     return (
         returncode == 0
         and _FAILURE.search(plain) is None
+        and _TIMEOUT.search(plain) is None
         and (proof is None or proof in plain)
     )
 
@@ -79,7 +87,20 @@ def main(argv: list[str] | None = None) -> int:
                 check=False,
                 timeout=max(1, args.timeout / 1000) + 30,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
+            # TimeoutExpired.output can be bytes even with text=True. Retain
+            # the original bytes in the log, decoding only for console output.
+            output = exc.output or b""
+            raw = output.encode() if isinstance(output, str) else output
+            separator = b"\n" if raw and not raw.endswith(b"\n") else b""
+            explanation = f"ProB execution timed out: {exc}\n".encode()
+            combined = raw + separator + explanation
+            log_path.write_bytes(combined)
+            print(  # noqa: T201
+                combined.decode(errors="replace"), file=sys.stderr, end="", flush=True
+            )
+            return 1
+        except OSError as exc:
             log_path.write_text(f"ProB execution failed: {exc}\n")
             print(log_path.read_text(), file=sys.stderr, end="")  # noqa: T201
             return 1

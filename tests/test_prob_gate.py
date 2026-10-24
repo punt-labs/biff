@@ -128,3 +128,64 @@ def test_all_steps_complete_successfully(tmp_path: Path) -> None:
             == 0
         )
     assert run.call_count == 5
+
+
+@pytest.mark.parametrize("directory", ["timeout", "timed-out", "time-out"])
+def test_healthy_paths_are_not_timeout_diagnostics(directory: str) -> None:
+    output = (
+        f"Writing fuzz AST to /biff/{directory}/docs/session-model.fuzz\n"
+        f"Loaded /biff/{directory}/docs/session-model.tex\n"
+        "No counter example found. ALL states visited.\n"
+    )
+    assert check_output(output, 0, "No counter example found. ALL states visited.")
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "TIMEOUT",
+        "Time-out: operation did not finish",
+        "% Timeout occurred",
+        "*** TIME OUT ***",
+        "Warning: timed-out",
+        "% Model checking timed out after 60000 ms",
+        "Constraint solver has timed out.",
+        "ProB execution timed out: 60 seconds",
+    ],
+)
+def test_actual_timeout_diagnostics_fail(diagnostic: str) -> None:
+    assert not check_output(
+        diagnostic + "\nNo counter example found. ALL states visited.",
+        0,
+        "No counter example found. ALL states visited.",
+    )
+
+
+@pytest.mark.parametrize(
+    "output", [None, "checker diagnostics", b"checker diagnostics\n", b"raw\xff"]
+)
+def test_subprocess_timeout_preserves_output_before_explanation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], output: str | bytes | None
+) -> None:
+    exc = subprocess.TimeoutExpired("probcli", 60, output=output)
+    with patch("biff.prob_gate.subprocess.run", side_effect=exc) as run:
+        assert (
+            main(
+                [
+                    "--probcli",
+                    "probcli",
+                    "--spec",
+                    "session.tex",
+                    "--log-dir",
+                    str(tmp_path),
+                ]
+            )
+            == 1
+        )
+    run.assert_called_once()
+    raw = output.encode() if isinstance(output, str) else output or b""
+    separator = b"\n" if raw and not raw.endswith(b"\n") else b""
+    expected = raw + separator + f"ProB execution timed out: {exc}\n".encode()
+    assert (tmp_path / "session-init.log").read_bytes() == expected
+    assert capsys.readouterr().err == expected.decode(errors="replace")
+    assert not (tmp_path / "session-animate.log").exists()
