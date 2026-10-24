@@ -9,6 +9,11 @@
   rejects missing or mismatched caller metadata before tool execution, uses
   stable session-specific routing/unread files, and disables inferred human
   companion presence. Default Claude behavior is unchanged.
+- Pinned MCP processes hold an exclusive lifetime lock through cleanup to
+  reject overlapping reconnects sharing a Biff home; stale local removal
+  sentinels are consumed before replacement registration. Independent homes
+  or hosts concurrently reusing a pin are unsupported. Pinned plans do not
+  write or clear Claude's shared or session-specific plan markers.
 
 ### Fixed
 
@@ -16,6 +21,10 @@
   timeouts, nonzero exits, or missing completion markers instead of masking
   errors with output-filtering pipelines. Timeout logs retain partial output;
   timeout-named paths are not mistaken for checker diagnostics.
+- ProB model checks require explicit zero coverage counters for deadlocks,
+  invariant violations, unchecked invariants, and open states. Optional
+  `PROB_WALL_TIMEOUT` limits whole checker runs independently of ProB's
+  per-operation `PROB_TIMEOUT`; no whole-run limit is imposed by default.
 - Session-model verification now binds the full `RouteWorld` invariant through
   ProZ's named `Invariant` schema and checks the translated predicates before
   proof runs. The model requires live presence cleanup before final session
