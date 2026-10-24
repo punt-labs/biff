@@ -1025,7 +1025,10 @@ async def _release_session(
     finishes the job later instead of the row silently outliving its
     process.
     """
-    if tty_name:
+
+    async def alias() -> None:
+        if not tty_name:
+            return
         try:
             await asyncio.wait_for(
                 state.relay.release_tty_name(user, tty_name),
@@ -1033,6 +1036,15 @@ async def _release_session(
             )
         except Exception:
             logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
+
+    async def presence() -> None:
+        await _delete_released_session(state, session_key)
+
+    await _run_cleanup_steps([alias, presence])
+
+
+async def _delete_released_session(state: ServerState, session_key: str) -> None:
+    """Delete presence independently of alias-release failures."""
     try:
         await asyncio.wait_for(
             state.relay.delete_session(session_key), timeout=_TEARDOWN_STEP_TIMEOUT
@@ -1095,10 +1107,15 @@ def _remove_unread_files(unread_path: Path | None) -> None:
     """
     if unread_path is None:
         return
-    with suppress(FileNotFoundError):
-        unread_path.unlink()
-    with suppress(FileNotFoundError):
-        unread_path.with_suffix(".nudged").unlink()
+    failure: OSError | None = None
+    for path in (unread_path, unread_path.with_suffix(".nudged")):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
 
 
 def _write_reap_fallback_sentinels(state: ServerState) -> None:

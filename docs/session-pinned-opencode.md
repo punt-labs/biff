@@ -54,6 +54,11 @@ Teardown stages continue after a worker timeout or other stage failure. Workers
 are cancelled and joined even on the timeout path; remaining unread, presence,
 active-marker, and owned-relay cleanup completes before the first failure is
 propagated. Cleanup failures do not replace an original startup/body exception.
+Alias release and presence deletion are independent stages, including inner
+relay cancellation. Unread JSON and nudge sidecars are unlinked independently.
+Vox drain cancels pending creation, adopts children returned during cancellation,
+and uses bounded terminate/kill/reap waits. Failed or unfinished child resources
+remain tracked rather than being falsely cleared as complete.
 
 **Safe scope:** all processes using a pin must share the same Biff home and
 a filesystem providing coherent `flock` semantics. The lock key deliberately

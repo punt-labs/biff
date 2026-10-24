@@ -234,3 +234,48 @@ async def test_startup_cleanup_failure_still_closes_and_preserves_original(
             pytest.fail("startup yielded")
     closed.assert_awaited_once()
     assert not await state.relay.get_sessions()
+
+
+async def test_alias_inner_cancel_still_deletes_presence(tmp_path: Path) -> None:
+    state = create_state(BiffConfig(user="rmh", repo_name="test"), tmp_path)
+    await app.register_session(
+        state.relay,
+        "rmh",
+        state.tty,
+        display_name="rmh",
+        kind="agent",
+        hostname="h",
+        pwd="/",
+        repo="test",
+    )
+    with (
+        patch.object(
+            type(state.relay),
+            "release_tty_name",
+            side_effect=asyncio.CancelledError("inner alias"),
+        ),
+        pytest.raises(asyncio.CancelledError, match="inner alias"),
+    ):
+        await app._release_session(
+            state, user="rmh", session_key=state.session_key, tty_name="tty1"
+        )
+    assert await state.relay.get_session(state.session_key) is None
+
+
+@pytest.mark.parametrize("blocked_suffix", [".json", ".nudged"])
+def test_unread_unlinks_independently(tmp_path: Path, blocked_suffix: str) -> None:
+    unread = tmp_path / "status.json"
+    sidecar = unread.with_suffix(".nudged")
+    unread.write_text("status")
+    sidecar.write_text("nudge")
+    unlink = Path.unlink
+
+    def denied(path: Path, missing_ok: bool = False) -> None:
+        if path.suffix == blocked_suffix:
+            raise PermissionError("denied")
+        unlink(path, missing_ok=missing_ok)
+
+    with patch.object(Path, "unlink", denied), pytest.raises(PermissionError):
+        app._remove_unread_files(unread)
+    assert unread.exists() == (blocked_suffix == ".json")
+    assert sidecar.exists() == (blocked_suffix == ".nudged")
