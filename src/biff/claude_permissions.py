@@ -116,7 +116,8 @@ class ProjectPermissions:
                 return PermissionChange()
             self._dir.mkdir(exist_ok=True)
             lock_path = self._dir / ".settings.json.punt-import.lock"
-            with lock_path.open("w", encoding="utf-8") as lock:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+            with os.fdopen(os.open(lock_path, flags, 0o600), "w") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 return PermissionChange(changed=self._apply(add=add))
         except ValueError as exc:
@@ -163,6 +164,9 @@ class ProjectPermissions:
             return {}
         except json.JSONDecodeError as exc:
             msg = f".claude/settings.json is not valid JSON ({exc.msg})"
+            raise ValueError(msg) from exc
+        except UnicodeDecodeError as exc:
+            msg = ".claude/settings.json is not valid UTF-8"
             raise ValueError(msg) from exc
         if not isinstance(data, dict):
             msg = ".claude/settings.json is not a JSON object"

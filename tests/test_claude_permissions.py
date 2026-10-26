@@ -121,3 +121,21 @@ class TestRevoke:
 
     def test_lines_empty_when_unchanged(self, tmp_path: Path) -> None:
         assert ProjectPermissions(tmp_path).revoke().lines("removed from") == []
+
+
+class TestHardening:
+    def test_refuses_invalid_utf8(self, tmp_path: Path) -> None:
+        _settings(tmp_path).parent.mkdir()
+        _settings(tmp_path).write_bytes(b"\xff\xfe{}")
+        change = ProjectPermissions(tmp_path).grant()
+        assert "not valid UTF-8" in change.error
+
+    def test_does_not_follow_symlinked_lock(self, tmp_path: Path) -> None:
+        victim = tmp_path / "victim.txt"
+        victim.write_text("keep me")
+        (tmp_path / ".claude").mkdir()
+        lock = tmp_path / ".claude" / ".settings.json.punt-import.lock"
+        lock.symlink_to(victim)
+        change = ProjectPermissions(tmp_path).grant()
+        assert change.error
+        assert victim.read_text() == "keep me"
