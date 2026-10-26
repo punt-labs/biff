@@ -215,7 +215,7 @@ Your status bar shows `(n)` instead of the unread count. Messages still accumula
 | `/talk user "msg"` | BSD `talk` | Start a real-time conversation |
 | `/wall "text"` | BSD `wall` | Broadcast to the team |
 | `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
-| `/biff enable` \| `/biff disable` | — | Turn biff on/off for this repo (writes the committed `.punt-labs/biff/enabled` marker + CI workflow and allows biff's tools in `.claude/settings.json`; equivalent to the `biff enable` CLI) |
+| `/biff enable` \| `/biff disable` | — | Turn biff on/off for this repo (writes the committed `.punt-labs/biff/enabled` marker + CI workflow and allows the `biff` CLI, biff's MCP tools and commands in `.claude/settings.json`; equivalent to the `biff enable` CLI) |
 | `/biff:read [duration]` | BSD `from` | Check inbox / set polling cadence: `<duration>` starts polling, `n` stops, `status` shows config, no-arg checks now |
 
 ## CLI

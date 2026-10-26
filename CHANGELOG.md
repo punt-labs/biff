@@ -52,7 +52,8 @@
   SessionStart hook used to add `mcp__plugin_biff_tty__*`, the `biff-dev`
   wildcard and twelve `Skill(...)` rules to the global
   `~/.claude/settings.json` in every session, without asking. Now `biff
-  enable` (and `/biff enable`) adds biff's rules to the repo's
+  enable` (and `/biff enable`) adds biff's rules (`Bash(biff:*)`, the MCP
+  wildcard and the `Skill(...)` rules) to the repo's
   `.claude/settings.json`, prints each one, and `biff disable` removes exactly
   those. It refuses a malformed or symlinked settings file and the home
   directory, and never grants the `biff-dev` rules. Rules earlier versions

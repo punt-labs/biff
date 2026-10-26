@@ -42,6 +42,7 @@ _COMMANDS: Final = (
 # set until no enabled repo can still carry it.
 BIFF_RULES: Final = (
     "mcp__plugin_biff_tty__*",
+    "Bash(biff:*)",
     "Skill(biff:*)",
     *(f"Skill({name})" for name in _COMMANDS),
 )
