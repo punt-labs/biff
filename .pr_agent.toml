@@ -1,0 +1,36 @@
+# Qodo v2 review config (punt-kit pr_agent.toml template). One review on open, no per-push re-review, only High findings inline.
+[github_app]
+ignore_bot_pr = true
+pr_commands = ["/agentic_describe", "/agentic_review"]
+handle_push_trigger = false
+
+[review_agent]
+enable_incremental_review = true
+# comments_routing below is authoritative; the threshold restates it (High only inline).
+inline_comments_severity_threshold = 3
+issues_user_guidelines = """
+biff is a Python 3.13 package (CLI, MCP server, NATS-backed relay) plus bash plugin hooks.
+Targets: macOS and Ubuntu 24.04. Nothing else.
+Report every finding in this one pass; do not hold findings back for a later pass.
+Flag only defects reachable by a real caller of the changed code: logic errors, None paths, security, API contract breaks, concurrency, resource leaks.
+Do not flag hypothetical environments (exotic env vars such as CDPATH or GIT_TRACE, control bytes in paths, tests run as root).
+Do not flag what CI enforces: ruff format/lint, mypy and pyright strict, shellcheck, markdownlint.
+Do not flag lines the PR did not change.
+Never suggest suppressions (# noqa, # type: ignore, xfail) or replacing __new__ with __init__; __new__ is the constructor by design.
+"""
+compliance_user_guidelines = """
+Apply code rules only: correctness, typing, error handling, security, and the coding standards for the changed files.
+Do not grade PR titles, PR descriptions, commit messages, or CHANGELOG wording.
+Do not grade agent process rules from CLAUDE.md, AGENTS.md, or WORKFLOW.md (missions, beads, review cycles, delegation).
+"""
+smart_router_extra_instructions = """
+High risk: src/biff/nats_relay.py and src/biff/relay.py (relay connect/reconnect and wire protocol), src/biff/server/ (MCP server state and tools),
+src/biff/session_lock.py, src/biff/session_key.py and src/biff/user_scope.py (session identity and locking), src/biff/git_hooks.py,
+plugin/hooks/*.sh, install.sh, and scripts/release-plugin.sh.
+Low risk: docs-only diffs (*.md, docs/) and test-only diffs (tests/).
+"""
+
+[review_agent.comments_routing]
+action_required = "both"
+remediation_recommended = "summary"
+informational = "drop"

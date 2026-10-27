@@ -36,7 +36,7 @@ Follow the protocol in CLAUDE.md. The short version:
 
 5. **Hand off** — provide context for next session
 
-**PR workflow (see CLAUDE.md):** Do NOT merge a PR immediately. Trigger GitHub Copilot code review, wait for feedback, evaluate and address valid issues, ensure quality gates pass, then merge.
+**PR workflow (see CLAUDE.md):** Do NOT merge a PR immediately. PR review follows punt-kit/standards/pr-review.md: local review before the PR, then Qodo and Bugbot once at open, at most two rounds, Copilot only on request. Address valid findings, ensure quality gates pass, then merge.
 
 ## Landing the Plane (Session Completion)
 

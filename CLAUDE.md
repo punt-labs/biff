@@ -94,20 +94,9 @@ Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 **All changes go through a PR** — no exceptions. Branch protection requires CI checks and review. Zero direct pushes to main, including README edits, beads sync, and release bumps. Every change gets a PR.
 
-**After creating a PR**, watch CI and review bots without blocking your main shell — do not stop waiting:
+PR review follows punt-kit/standards/pr-review.md: local review (qodo review + silent-failure-hunter + code-reviewer) before the PR, then Qodo and Bugbot once at open, at most two rounds, Copilot only on request.
 
-```bash
-gh pr checks <number> --watch  # run in background task, blocks until all checks resolve
-```
-
-**Expect 2-6 review cycles before merging.** Copilot and Bugbot often find real issues. Read their feedback using MCP GitHub tools:
-
-```text
-mcp__github__pull_request_read  →  get_reviews
-mcp__github__pull_request_read  →  get_review_comments
-```
-
-**Take every comment seriously.** There is no such thing as "pre-existing" or "unrelated to this change" — if you can see it, you own it. If a reviewer (human or bot) flagged it, investigate and fix it. Re-push, re-watch CI, re-read reviews. Repeat until the **last review cycle is uneventful** — zero new comments, all checks green.
+**Take every comment seriously.** There is no such thing as "pre-existing" or "unrelated to this change" — if you can see it, you own it. If a reviewer (human or bot) flagged it, investigate and fix it, or answer it with the exact finding, the specific reason, and the code reference. Merge when CI is green and every review thread is resolved.
 
 **Merge via `mcp__github__merge_pull_request`** (not `gh pr merge`). The MCP tool is API-only with no local git side effects, which avoids checkout conflicts in worktrees.
 
