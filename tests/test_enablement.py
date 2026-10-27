@@ -14,11 +14,13 @@ the enclosing project repo.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
 
+from biff.claude_permissions import BIFF_RULES
 from biff.enablement import RepoEnablement
 from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
 
@@ -231,3 +233,25 @@ class TestSurfaceEquivalence:
 
         assert state(cli_repo) == state(mcp_repo)
         assert state(cli_repo) == (True, True, frozenset(GIT_HOOKS))
+
+
+class TestPermissions:
+    def test_enable_grants_repo_level_rules(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        change = RepoEnablement(tmp_path).enable()
+        assert change.permissions.changed == BIFF_RULES
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert settings["permissions"]["allow"] == list(BIFF_RULES)
+
+    def test_disable_revokes_exactly_those_rules(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        RepoEnablement(tmp_path).enable()
+        change = RepoEnablement(tmp_path).disable()
+        assert change.permissions.changed == BIFF_RULES
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert settings["permissions"]["allow"] == []
+
+    def test_unresolvable_hooks_grants_nothing(self, tmp_path: Path) -> None:
+        change = RepoEnablement(tmp_path).enable()
+        assert change.permissions.changed == ()
+        assert not (tmp_path / ".claude").exists()

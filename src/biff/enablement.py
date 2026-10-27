@@ -6,7 +6,7 @@ definition is what makes the two surfaces equivalent -- the "two equivalent ways
 to one state" model (DES-052).
 
 ``enable`` fully activates the current clone in one verb (the beads ``bd setup``
-model), writing three artifacts:
+model), writing four artifacts:
 
 - ``.punt-labs/biff/enabled`` -- the **committed** policy marker ``is_enabled()``
   reads; commit it via a PR so the whole team's repo is on.
@@ -18,8 +18,10 @@ model), writing three artifacts:
   ``core.hooksPath`` are honored, and they gate on the marker at runtime, so
   deploying them in a not-yet-enabled clone is a safe no-op until the marker
   lands (§2.11).
+- ``.claude/settings.json`` allow rules for biff's MCP tools and commands --
+  the operator's opt-in, repo-level only (:mod:`biff.claude_permissions`).
 
-``disable`` removes exactly those three.  ``enable``/``disable`` invoke git only
+``disable`` removes exactly those four.  ``enable``/``disable`` invoke git only
 read-only (``git rev-parse`` to resolve the hooks directory); they never create
 commits or stage files -- the user commits the tracked marker + CI workflow via
 a PR like any repo change, while the local hooks are activated per-clone (each
@@ -31,11 +33,12 @@ touch them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self, final
 
 from biff._stdlib import remove_enabled_marker, write_enabled_marker
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
+from biff.claude_permissions import PermissionChange, ProjectPermissions
 from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
 
 if TYPE_CHECKING:
@@ -52,12 +55,14 @@ class EnablementChange:
     be resolved (not a git repo, or ``git`` not on ``PATH``).  It disambiguates
     an *empty* ``git_hooks_changed`` -- "already current" (resolved, nothing to
     do) from "could not deploy anything" -- so ``enable`` never reports success
-    while silently deploying zero hooks.
+    while silently deploying zero hooks.  ``permissions`` reports the
+    ``.claude/settings.json`` allow rules added or removed, or why not.
     """
 
     ci_workflow_changed: bool
     git_hooks_changed: tuple[str, ...]
     git_hooks_resolved: bool
+    permissions: PermissionChange = field(default_factory=PermissionChange)
 
 
 @final
@@ -103,17 +108,20 @@ class RepoEnablement:
             )
         ci_changed = deploy_ci_workflow(self._root)
         hooks_changed = tuple(deploy_git_hooks(self._root))
+        permissions = ProjectPermissions(self._root).grant()
         write_enabled_marker(self._root)
         return EnablementChange(
             ci_workflow_changed=ci_changed,
             git_hooks_changed=hooks_changed,
             git_hooks_resolved=True,
+            permissions=permissions,
         )
 
     def disable(self) -> EnablementChange:
         """Deactivate this clone: remove the marker, git hooks, and CI workflow.
 
-        Removes exactly what :meth:`enable` added.  The marker is removed
+        Removes exactly what :meth:`enable` added, permission rules included.
+        The marker is removed
         first, so the repo reads OFF immediately even if a later step fails.
         Idempotent.  Proceeds even when the hooks dir is unresolvable (there is
         simply nothing local to remove); ``git_hooks_resolved`` still reports
@@ -123,8 +131,10 @@ class RepoEnablement:
         remove_enabled_marker(self._root)
         hooks_changed = tuple(remove_git_hooks(self._root))
         ci_changed = remove_ci_workflow(self._root)
+        permissions = ProjectPermissions(self._root).revoke()
         return EnablementChange(
             ci_workflow_changed=ci_changed,
             git_hooks_changed=hooks_changed,
             git_hooks_resolved=resolved,
+            permissions=permissions,
         )
