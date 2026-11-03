@@ -447,3 +447,4 @@ make check
 | `/punt reconcile` | LLM-powered contextual reconciliation (workflows, CLAUDE.md, permissions) |
 
 @.punt-labs/vox/CLAUDE.md
+@.punt-labs/ethos/CLAUDE.md
