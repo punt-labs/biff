@@ -261,6 +261,7 @@ docs/*.synctex.gz
 !.punt-labs/ethos/identities/
 .punt-labs/ethos/identities/*
 !.punt-labs/ethos/identities/claude.yaml
+!.punt-labs/ethos/CLAUDE.md
 
 # Dev scratch files
 *.tmp
@@ -275,3 +276,6 @@ Lux.ini
 
 # Local uv overrides (depot find-links, etc.)
 uv.toml
+
+# ethos runtime (never track) — DES-058 live zone + mission locks
+.punt-labs/**/*.ethos-tmp*
