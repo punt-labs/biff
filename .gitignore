@@ -261,6 +261,7 @@ docs/*.synctex.gz
 !.punt-labs/ethos/identities/
 .punt-labs/ethos/identities/*
 !.punt-labs/ethos/identities/claude.yaml
+!.punt-labs/ethos/CLAUDE.md
 
 # Dev scratch files
 *.tmp
