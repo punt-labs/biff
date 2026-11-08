@@ -271,6 +271,19 @@ docs/*.synctex.gz
 .punt-labs/ethos/missions/
 .punt-labs/ethos/missions.jsonl
 .punt-labs/ethos/sessions/
+.punt-labs/ethos/locks/
+.punt-labs/ethos/trace/
+.punt-labs/ethos/audit/
+.punt-labs/ethos/.create.lock
+.punt-labs/ethos/**/.create.lock
+# Defense-in-depth: a credential overlay or local-state file must never be
+# committed even if an older ethos binary writes it directly under the
+# vendored tree instead of .punt-labs/local/ethos/. These patterns are
+# belt-and-suspenders over the directory ignores above; the DES-079 storage
+# contract already routes this churn to .punt-labs/local/ethos/ (ignored).
+.punt-labs/ethos/**/*.local.yaml
+.punt-labs/ethos/**/*.lock
+.punt-labs/ethos/**/*.audit.jsonl
 
 # Dev scratch files
 *.tmp
