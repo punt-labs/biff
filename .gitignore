@@ -277,5 +277,4 @@ Lux.ini
 # Local uv overrides (depot find-links, etc.)
 uv.toml
 
-# ethos runtime (never track) — DES-058 live zone + mission locks
-.punt-labs/**/*.ethos-tmp*
+# ethos: shared machine-local zone (never track)
