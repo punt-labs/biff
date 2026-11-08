@@ -10,25 +10,29 @@ There is no such thing as a "pre-existing" issue. If you see a problem — in co
 
 **This repo is cloned onto every user's machine.** `claude plugin install biff@punt-labs` clones it, and it clones **with submodules**. Everything tracked here ships to every consumer.
 
-So the org-wide rule "every project adds `punt-labs/team` as a submodule at `.punt-labs/ethos/`" does **not** apply to biff. It was added, and it broke keyless installs: `.gitmodules` used the SSH URL `git@github.com:punt-labs/team.git`, so any user without a GitHub SSH key hit
+So the org-wide rule "every project adds `punt-labs/team` as a submodule at `.punt-labs/ethos/`" does **not** apply to biff. It was once added as a submodule and broke keyless installs: `.gitmodules` used the SSH URL `git@github.com:punt-labs/team.git`, so any user without a GitHub SSH key hit
 
 ```text
 fatal: clone of 'git@github.com:punt-labs/team.git' into submodule path ... failed
 Failed to clone '.punt-labs/ethos' a second time, aborting
 ```
 
-`punt-labs/team` being public does not help — SSH auth fails before repo visibility is consulted. An HTTPS URL would fix the auth failure but still push 1.1 MB of internal identity data onto every user's disk. Do not re-add it.
+`punt-labs/team` being public did not help — SSH auth fails before repo visibility is consulted. **There is no submodule here, and none may be re-added.** The `punt-labs/team` registry has since been retired; the ethos tree is now repo-local, authoritative content edited via PR.
 
-What remains under `.punt-labs/` is ordinary tracked content, not a submodule, and it is deliberately two files:
+**The registry is vendored (tracked), not a submodule.** The source registry under `.punt-labs/ethos/` — `identities/`, `roles/`, `teams/`, `personalities/`, `writing-styles/`, `talents/`, and the generated `agents/` — is tracked so the team is reproducible from a clean clone: ethos is the source, and the agents must be regeneratable from it at any time (`ethos hook session-start`). This is the same vendoring model the sibling tool repos (vox, lux) adopted after `punt-labs/team` was retired.
 
-| File | Why it stays |
+The old fear — pushing 1.1 MB of registry onto every plugin user's disk — no longer applies: the marketplace installs biff with Claude Code's `git-subdir` source (`"path": "plugin"`), a sparse checkout of the `plugin/` subdir only. An install never fetches `.punt-labs/`, so tracking the registry in the repo root never reaches a plugin consumer.
+
+Ignored under `.punt-labs/ethos/` (see `.gitignore`): upstream dev scaffolding that rode along with the registry (`README.md`, `CHANGELOG.md`, `.github/`, lint configs) and per-machine runtime state (`missions/`, `missions.jsonl`, `sessions/`, `.biff`) — local audit logs in 0700 dirs that must never enter git.
+
+Two tracked files carry runtime significance beyond the roster:
+
+| File | Why it matters |
 |------|--------------|
 | `.punt-labs/ethos.yaml` | Names this repo's agent (`claude`). Located by `_find_ethos_config()`, then parsed by `_read_agent_handle()` for the `agent` field. |
-| `.punt-labs/ethos/identities/claude.yaml` | The only file biff's runtime consumes from the org registry — see below. |
+| `.punt-labs/ethos/identities/claude.yaml` | The one identity biff's own runtime consumes from the registry — see below. |
 
-`claude.yaml` is not an arbitrary subset. `resolve_agent_identity_from_disk()` (DES-040) reads it to give an agent session agent-first identity, and `_known_agent_github_logins()` (DES-053) scans that directory for every `kind: agent` identity's `github` login so a leaked bot PAT can be rejected. `claude.yaml` is the only agent identity in the entire org registry carrying a `github` field, so it alone carries that security property. The global `~/.punt-labs/ethos/` cannot substitute — it holds the human identity, not `claude`.
-
-The rest of the registry is gitignored. Clone `punt-labs/team` into `.punt-labs/ethos/` locally if you want the full roster; git will keep it untracked. Everything else resolves from the `ethos` CLI at runtime.
+`claude.yaml` carries a security property no other identity does. `resolve_agent_identity_from_disk()` (DES-040) reads it to give an agent session agent-first identity, and `_known_agent_github_logins()` (DES-053) scans the identities directory for every `kind: agent` identity's `github` login so a leaked bot PAT can be rejected. `claude.yaml` is the only agent identity in the org registry carrying a `github` field, so it alone carries that property. The global `~/.punt-labs/ethos/` cannot substitute — it holds the human identity, not `claude`.
 
 ## Standards
 

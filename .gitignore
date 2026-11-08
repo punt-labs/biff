@@ -248,20 +248,29 @@ docs/*.synctex.gz
 # Plugin runtime state (tts, vox, quarry, lux)
 .tts/
 
-# Ethos org registry — this repo has NO submodule at .punt-labs/ethos (see
-# CLAUDE.md, "No Git Submodules"). A local clone of punt-labs/team at this
-# path stays untracked; the only committed file is the one agent identity
-# biff's own runtime reads (src/biff/config.py, DES-040 and DES-053).
-# The `dir/*` + negation form is required: git cannot re-include a file whose
-# parent directory is itself excluded, so each level is opened explicitly.
-# NOT covered by the canonical .gitignore template -- restored here after
-# the canonical rollout (2026-08-22) stripped it as if it were, which would
-# have exposed missions/ and sessions/ (local audit logs, 0700 dirs) to git.
-.punt-labs/ethos/*
-!.punt-labs/ethos/identities/
-.punt-labs/ethos/identities/*
-!.punt-labs/ethos/identities/claude.yaml
-!.punt-labs/ethos/CLAUDE.md
+# Ethos registry (vendored, project-local). This repo has NO submodule at
+# .punt-labs/ethos (see CLAUDE.md, "No Git Submodules"). The source registry
+# — identities, roles, teams, personalities, writing-styles, talents, and the
+# generated agents/ — is tracked so the team is reproducible from a clean
+# clone ("ethos is the source, regeneratable at any time"). This matches the
+# vendoring model used by the sibling tool repos (vox, lux) after the
+# punt-labs/team registry was retired. The plugin ships from the `plugin/`
+# subdir via git-subdir, so tracking the registry never reaches plugin users.
+#
+# Ignored below: upstream dev scaffolding that rode along with the registry,
+# and per-machine runtime state (missions/sessions/locks are local audit
+# logs, 0700 dirs) that must never enter git.
+.punt-labs/ethos/.github/
+.punt-labs/ethos/.claude/
+.punt-labs/ethos/.biff
+.punt-labs/ethos/.gitignore
+.punt-labs/ethos/.markdownlint-cli2.jsonc
+.punt-labs/ethos/.markdownlint.jsonc
+.punt-labs/ethos/CHANGELOG.md
+.punt-labs/ethos/README.md
+.punt-labs/ethos/missions/
+.punt-labs/ethos/missions.jsonl
+.punt-labs/ethos/sessions/
 
 # Dev scratch files
 *.tmp
