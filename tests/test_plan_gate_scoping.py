@@ -223,6 +223,119 @@ class TestCliOnlyPlanSatisfiesGate:
         assert gate_result is not None  # denied
 
 
+class TestStaleHintRoutingIdStillSatisfiesGate:
+    """biff-ecl / PL-240: the gate reads the same routing id ``/plan`` wrote.
+
+    The write path (``commands/plan.py``'s ``sync_plan_marker``, shared by
+    the MCP ``plan`` tool) keys the marker on
+    ``SessionHint.resolve_routing_id()`` -- the CLAUDE_PID-anchored hint.
+    When that hint is momentarily stale (e.g. the MCP server has not yet
+    re-captured it after ``/clear``), the marker lands under the *hint's*
+    routing id, which differs from the ``session_id`` Claude Code delivers
+    on the ``PreToolUse`` payload.  A gate that read only the payload ids
+    found no marker and wedged every Edit/Write.  The gate's read ladder
+    now also consults ``resolve_routing_id()``, so read and write agree on
+    the key regardless of whether the hint is current -- without weakening
+    the deny when no plan exists for any of this caller's identities.
+    """
+
+    def test_marker_under_routing_id_found_despite_new_payload_id(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("pathlib.Path.cwd", return_value=repo),
+        ):
+            from biff._stdlib import get_repo_common_root
+
+            root = get_repo_common_root(str(repo))
+            # The write path keyed the marker on the hint's routing id.
+            write_plan_marker(root, "hint-routing-id", "plan from /plan")
+
+            # The PreToolUse payload carries the post-/clear session id,
+            # which does NOT match the stale hint's routing id.
+            with patch(
+                "biff.hook._routing_id",
+                return_value="hint-routing-id",
+            ):
+                result = handle_pre_tool_use(
+                    {"session_id": "post-clear-session-id", "cwd": str(repo)}
+                )
+
+        assert result is None  # allowed -- routing id closed the read/write gap
+
+    def test_no_plan_for_any_identity_still_denies(self, tmp_path: Path) -> None:
+        """The routing-id read must not become a blanket fail-open.
+
+        With no marker written for the payload ids, the routing id, or the
+        shared bucket, the gate still denies -- the fix adds one more of
+        *this caller's own* identities to the ladder, it does not allow on
+        a mismatch.
+        """
+        repo = _make_repo(tmp_path / "repo")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("pathlib.Path.cwd", return_value=repo),
+            patch(
+                "biff.hook._routing_id",
+                return_value="some-routing-id",
+            ),
+        ):
+            result = handle_pre_tool_use(
+                {"session_id": "unplanned-session", "cwd": str(repo)}
+            )
+
+        assert result is not None  # denied -- no plan anywhere
+
+
+class TestUnresolvedRootDoesNotWedge:
+    """biff-ecl / PL-240: a transient git failure must not deny every edit.
+
+    When ``get_repo_common_root`` returns ``""`` (git unavailable, timed
+    out, or a cwd that is briefly not a repo), the gate cannot know *which*
+    repo's plan to consult -- every unresolved root collapses onto the one
+    shared ``default`` bucket. Reading that bucket and denying turns a
+    bookkeeping outage into a block on the whole editing surface, and (via
+    the shared bucket) lets one repo's plan satisfy another's gate. With no
+    resolvable repo the gate has no marker store to reason about, so it
+    allows -- the same graceful escape hatch as "no active session" -- and
+    the ``hook-errors.log`` warning from ``hint_dir`` records the cause.
+    """
+
+    def test_empty_root_allows_rather_than_denies(self, tmp_path: Path) -> None:
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("biff.hook._repo_common_root", return_value=""),
+            patch("biff.hook._routing_id", return_value=None),
+        ):
+            result = handle_pre_tool_use({"session_id": "sid", "cwd": "/not/a/repo"})
+
+        assert result is None  # allowed -- no repo root to gate against
+
+    def test_resolved_root_without_marker_still_denies(self, tmp_path: Path) -> None:
+        """The empty-root allow must not leak into the resolved-root path.
+
+        Paired with the empty-root case: with a *resolved* root and no plan
+        marker for any of this caller's identities, the gate still denies.
+        This pins that the fix suppresses the edit requirement only when the
+        root is unresolvable, never when it resolves to a real repo with no
+        plan.
+        """
+        repo = _make_repo(tmp_path / "repo")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("pathlib.Path.cwd", return_value=repo),
+            patch("biff.hook._routing_id", return_value=None),
+        ):
+            result = handle_pre_tool_use({"session_id": "sid", "cwd": str(repo)})
+
+        assert result is not None  # denied -- resolved root, no plan
+
+
 @pytest.fixture(autouse=True)
 def _active_session(  # pyright: ignore[reportUnusedFunction]
     tmp_path: Path,

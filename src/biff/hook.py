@@ -192,29 +192,67 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
     return None
 
 
+def _routing_id() -> str | None:
+    """Return the CLAUDE_PID-anchored routing id, or ``None`` on any failure.
+
+    This is the identity the *write* path keys the plan marker on
+    (``commands/plan.py``'s ``sync_plan_marker`` → ``resolve_routing_id``).
+    Reading it here closes the gap when the payload's ``session_id`` and
+    the routing id disagree — the post-``/clear`` window where the MCP
+    server's hint is momentarily stale, or any case where the write path
+    resolved an id the payload does not carry. Best-effort: any resolver
+    fault — a filesystem/psutil ``OSError``, a ``RuntimeError`` from an
+    unresolvable home dir, or an ``ImportError`` on the lazy import —
+    degrades to "this identity unavailable" (one fewer read-ladder rung, a
+    strictly stricter gate), never an exception. Dropping the rung can only
+    cause a false deny the agent re-runs ``/plan`` to clear, never a false
+    allow, so swallowing here does not weaken the gate.
+    """
+    try:
+        from biff.session_id import SessionHint  # noqa: PLC0415
+
+        return SessionHint.resolve_routing_id()
+    except (OSError, RuntimeError, ImportError):
+        logger.debug("routing-id resolution failed; omitting from read ladder")
+        return None
+
+
 def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
     """Return this caller's own identities in gate-read preference order.
 
     The gate's *write* path is scoped to a single identity — the caller's
     preferred one from :func:`_resolve_identity`, so a ``SessionStart``
     can never wipe a sibling's marker (om9's core invariant). The *read*
-    path, in contrast, walks a preference list: for a dispatched
-    in-process subagent whose ``Bash``-invoked ``biff plan`` wrote under
-    the leader's ``session_id`` (no channel today for a subagent's
-    ``Bash`` tool to learn its own ``agent_id``), a subsequent
-    ``PreToolUse`` payload's ``agent_id`` alone would find no marker and
-    strand the subagent's edits (design §3b RISK-2). Reading
-    ``agent_id`` first and ``session_id`` second is *this caller's own*
-    identity ladder, never a sibling's — the fallback closes RISK-2
-    without weakening om9 (DES-054 "Amendment: two-key fallback").
-    ``None`` (the shared bucket) is included as the terminal so
-    headless/CI/SDK writes remain visible.
+    path, in contrast, walks a preference list of *this caller's own*
+    identities:
+
+    1. ``agent_id`` — a dispatched in-process subagent's own id, delivered
+       on its tool-call payloads.
+    2. ``session_id`` — the top-level session. A subagent whose
+       ``Bash``-invoked ``biff plan`` wrote under the leader's
+       ``session_id`` (no channel today for a subagent's ``Bash`` to learn
+       its own ``agent_id``) would, on an ``agent_id``-only read, find no
+       marker and strand every edit (DES-054 RISK-2).
+    3. The CLAUDE_PID routing id — the exact identity the write path keys
+       on. The payload ids and the routing id usually coincide, but after
+       ``/clear`` the server's hint can lag the payload's new
+       ``session_id``; consulting the routing id makes
+       the gate read the same key ``/plan`` wrote regardless of that lag,
+       so one bookkeeping desync can no longer wedge the whole editing
+       surface. It never satisfies the gate with a *sibling's* plan — the
+       routing id is this caller's own, derived from this process's
+       CLAUDE_PID.
+    4. ``None`` (the shared bucket) — the terminal, so headless/CI/SDK
+       writes with no Claude session remain visible.
     """
     candidates: list[str | None] = []
     for key in ("agent_id", "session_id"):
         value = data.get(key)
-        if isinstance(value, str) and value:
+        if isinstance(value, str) and value and value not in candidates:
             candidates.append(value)
+    routing_id = _routing_id()
+    if routing_id and routing_id not in candidates:
+        candidates.append(routing_id)
     if None not in candidates:
         candidates.append(None)
     return tuple(candidates)
@@ -251,14 +289,31 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
     — a sibling session's marker never satisfies this caller's gate; the
     fallback closes DES-054 RISK-2 without weakening om9's scoping.
 
-    One state allows gracefully rather than deny, because a hard block
-    there would strand the agent: no active biff session, where the gate
-    has no session state to reason about.
+    Two states allow gracefully rather than deny, because a hard block in
+    either would strand the agent on state the gate cannot reason about:
+
+    1. No active biff session — no session state at all.
+    2. An unresolvable repo-common-root (``get_repo_common_root`` returned
+       ``""``: git unavailable, timed out, or a cwd briefly not a repo).
+       Every unresolved root collapses onto the one shared ``default``
+       hint bucket, so denying here would block the whole editing surface
+       on a transient git outage AND let one repo's ``default``-bucket plan
+       satisfy another's gate (the cross-repo contamination
+       ``markers.hint_dir`` warns about). With no repo to key on, the gate
+       has no marker store of its own to consult, so it allows and leaves
+       the warning as the diagnostic trail.
     """
     if not _has_active_session():
         return None
 
     root = _repo_common_root(data)
+    if not root:
+        logger.warning(
+            "plan gate: repo-common-root unresolved; allowing edit rather "
+            "than wedging on the shared default bucket"
+        )
+        return None
+
     if not _has_any_plan_marker(root, _identity_candidates(data)):
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
