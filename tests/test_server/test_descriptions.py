@@ -642,8 +642,11 @@ class TestPollInbox:
     # loaded machine (CI or a busy dev box), where the first write has not
     # landed when the assertion runs and the test fails deterministically,
     # not randomly. 0.05s gives every wait 5x the headroom while keeping the
-    # suite fast (the longest wait is ~0.75s).
-    _FAST_INTERVAL = 0.05
+    # suite fast. 0.05s cleared ordinary load but still missed the initial
+    # write on a dev box spiking past ~60; 0.1s gives the first write ~300ms,
+    # clearing realistic contention while the longest wait stays ~1.5s. CI
+    # runs far below that load, so this is dev-box headroom, not a CI need.
+    _FAST_INTERVAL = 0.1
 
     @pytest.fixture
     def state_with_path(self, tmp_path: Path) -> ServerState:
