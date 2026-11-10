@@ -315,6 +315,26 @@ class TestUnresolvedRootDoesNotWedge:
 
         assert result is None  # allowed -- no repo root to gate against
 
+    def test_resolved_root_without_marker_still_denies(self, tmp_path: Path) -> None:
+        """The empty-root allow must not leak into the resolved-root path.
+
+        Paired with the empty-root case: with a *resolved* root and no plan
+        marker for any of this caller's identities, the gate still denies.
+        This pins that the fix suppresses the edit requirement only when the
+        root is unresolvable, never when it resolves to a real repo with no
+        plan.
+        """
+        repo = _make_repo(tmp_path / "repo")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("pathlib.Path.cwd", return_value=repo),
+            patch("biff.hook._routing_id", return_value=None),
+        ):
+            result = handle_pre_tool_use({"session_id": "sid", "cwd": str(repo)})
+
+        assert result is not None  # denied -- resolved root, no plan
+
 
 @pytest.fixture(autouse=True)
 def _active_session(  # pyright: ignore[reportUnusedFunction]

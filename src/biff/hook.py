@@ -200,15 +200,19 @@ def _routing_id() -> str | None:
     Reading it here closes the gap when the payload's ``session_id`` and
     the routing id disagree — the post-``/clear`` window where the MCP
     server's hint is momentarily stale, or any case where the write path
-    resolved an id the payload does not carry. Best-effort: a resolver
-    fault degrades to "this identity unavailable", never an exception that
-    would make the gate fail closed on a lookup error.
+    resolved an id the payload does not carry. Best-effort: any resolver
+    fault — a filesystem/psutil ``OSError``, a ``RuntimeError`` from an
+    unresolvable home dir, or an ``ImportError`` on the lazy import —
+    degrades to "this identity unavailable" (one fewer read-ladder rung, a
+    strictly stricter gate), never an exception. Dropping the rung can only
+    cause a false deny the agent re-runs ``/plan`` to clear, never a false
+    allow, so swallowing here does not weaken the gate.
     """
-    from biff.session_id import SessionHint  # noqa: PLC0415
-
     try:
+        from biff.session_id import SessionHint  # noqa: PLC0415
+
         return SessionHint.resolve_routing_id()
-    except OSError:
+    except (OSError, RuntimeError, ImportError):
         logger.debug("routing-id resolution failed; omitting from read ladder")
         return None
 
