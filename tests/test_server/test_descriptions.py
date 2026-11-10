@@ -634,7 +634,16 @@ class TestSleepOrWakeLostWakeRace:
 class TestPollInbox:
     """Verify the background inbox poller detects changes and refreshes."""
 
-    _FAST_INTERVAL = 0.01
+    # Each test sleeps a fixed multiple of this interval, then asserts the
+    # poller has completed a cycle (written unread.json, updated the tool
+    # description). The poller is a real asyncio task competing for the event
+    # loop, so the sleep must leave it enough wall-clock to be scheduled and
+    # finish a cycle. At 0.01s a three-cycle wait is 30ms — too little on a
+    # loaded machine (CI or a busy dev box), where the first write has not
+    # landed when the assertion runs and the test fails deterministically,
+    # not randomly. 0.05s gives every wait 5x the headroom while keeping the
+    # suite fast (the longest wait is ~0.75s).
+    _FAST_INTERVAL = 0.05
 
     @pytest.fixture
     def state_with_path(self, tmp_path: Path) -> ServerState:
