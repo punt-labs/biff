@@ -67,6 +67,24 @@ def _slow_biff_hook_on_path(bin_dir: Path, *, sentinel: Path) -> dict[str, str]:
     return env
 
 
+def _failing_biff_hook_on_path(bin_dir: Path, *, home: Path) -> dict[str, str]:
+    """A ``biff-hook`` stub that fails fast and writes to stderr.
+
+    Used to prove the detached call's stderr is still captured in the shared
+    hook-errors log. ``HOME`` is pointed at *home* so the log lands in the
+    sandbox, not the real one.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "biff-hook"
+    stub.write_text('#!/usr/bin/env bash\necho "stub boom" >&2\nexit 1\n')
+    stub.chmod(0o755)
+    home.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    env["HOME"] = str(home)
+    return env
+
+
 def _run_hook(repo: Path, env: dict[str, str]) -> float:
     """Run session-end.sh from *repo*; return the parent's wall-clock seconds."""
     start = time.monotonic()
@@ -116,6 +134,33 @@ class TestSessionEndDetaches:
         assert sentinel.exists(), (
             "the detached biff-hook call never ran — detaching dropped the "
             "session-end relay call entirely"
+        )
+
+
+class TestSessionEndObservability:
+    """A failed detached cleanup must still leave a breadcrumb (#471 review)."""
+
+    def test_failed_detached_call_is_logged(self, tmp_path: Path) -> None:
+        """biff-hook's stderr goes to ~/.punt-labs/biff/hook-errors.log.
+
+        Detaching sent the call to the background; without capturing stderr a
+        failed cleanup would be invisible. The hook routes it to the same log
+        pre-tool-gate.sh uses, so a failure is still debuggable.
+        """
+        repo = _enabled_repo(tmp_path / "repo")
+        home = tmp_path / "home"
+        env = _failing_biff_hook_on_path(tmp_path / "bin", home=home)
+
+        _run_hook(repo, env)
+
+        log = home / ".punt-labs" / "biff" / "hook-errors.log"
+        deadline = time.monotonic() + _STUB_SLEEP
+        while time.monotonic() < deadline:
+            if log.exists() and "stub boom" in log.read_text():
+                break
+            time.sleep(0.05)
+        assert log.exists() and "stub boom" in log.read_text(), (
+            "the failed detached cleanup left no trace in hook-errors.log"
         )
 
 
