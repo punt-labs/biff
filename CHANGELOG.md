@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- SessionEnd hook no longer prints "Hook cancelled" on exit. The
+  `session-end.sh` dispatcher ran `biff-hook claude-code session-end`
+  synchronously; its cost (interpreter startup plus local presence-cleanup
+  writes — sentinel files and active-marker removal, not a relay network
+  call) blocked process exit, so Claude Code cancelled the still-running
+  hook. The SessionEnd registration is now `async: true` (the harness no
+  longer waits for it, matching vox), and the script additionally detaches
+  the call (`nohup`, bounded by `timeout`/`gtimeout` where available) with
+  its stderr routed to `~/.punt-labs/biff/hook-errors.log` so a failed
+  detached cleanup stays debuggable. The enabled-marker and PATH gates are
+  unchanged (#471).
+
 ## [1.20.0] - 2026-11-10
 
 ### Security
