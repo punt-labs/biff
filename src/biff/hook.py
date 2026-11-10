@@ -236,7 +236,7 @@ def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
     3. The CLAUDE_PID routing id — the exact identity the write path keys
        on. The payload ids and the routing id usually coincide, but after
        ``/clear`` the server's hint can lag the payload's new
-       ``session_id`` (biff-ecl / PL-240); consulting the routing id makes
+       ``session_id``; consulting the routing id makes
        the gate read the same key ``/plan`` wrote regardless of that lag,
        so one bookkeeping desync can no longer wedge the whole editing
        surface. It never satisfies the gate with a *sibling's* plan — the
@@ -301,7 +301,7 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
        satisfy another's gate (the cross-repo contamination
        ``markers.hint_dir`` warns about). With no repo to key on, the gate
        has no marker store of its own to consult, so it allows and leaves
-       the warning as the diagnostic trail (biff-ecl / PL-240).
+       the warning as the diagnostic trail.
     """
     if not _has_active_session():
         return None
