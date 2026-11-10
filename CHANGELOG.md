@@ -23,6 +23,16 @@
 
 ### Fixed
 
+- Plan gate no longer wedges every Edit/Write after `/clear`. The
+  `SessionStart` matcher now routes `source=clear` to the hint-capturing
+  dispatcher, so the Claude session hint tracks the post-`/clear` session
+  id instead of the stale one; the `PreToolUse` gate's read ladder also
+  consults the CLAUDE_PID routing id the `/plan` write path keys on, so a
+  momentarily stale hint can no longer desync read from write; and an
+  unresolved repo-common-root now allows the edit (with a diagnostic
+  warning) rather than denying against the shared `default` bucket. The Z
+  model (`docs/claude-code-biff.tex` `PreToolHookAllow`/`Deny`) gains a
+  `rootResolved?` input proving the unresolved-root edit can only allow.
 - ProB validation preserves full checker output and fails on violations,
   timeouts, nonzero exits, or missing completion markers instead of masking
   errors with output-filtering pipelines. Timeout logs retain partial output;

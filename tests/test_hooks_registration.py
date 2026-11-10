@@ -61,3 +61,58 @@ class TestHooksJsonWiring:
             script = _HOOKS_DIR / command.replace(_PREFIX, "")
             assert script.is_file(), f"hooks.json references missing script: {script}"
             assert os.access(script, os.X_OK), f"script is not executable: {script}"
+
+
+# Scripts that re-capture the Claude SessionHint (``cc_session_start`` /
+# ``cc_session_resume``). The no-matcher ``session-start.sh`` only does
+# first-run setup and never captures the hint, so it does not count.
+_HINT_CAPTURE_SCRIPTS = frozenset({"session-init.sh", "session-resume.sh"})
+
+
+def _sessionstart_matcher_scripts() -> list[tuple[str, list[str]]]:
+    """Return ``(matcher, [script basename, ...])`` for each SessionStart entry.
+
+    A missing ``matcher`` key is the catch-all entry; it is reported as the
+    empty string so the caller can tell it apart from a named matcher.
+    """
+    events = _load_events()
+    out: list[tuple[str, list[str]]] = []
+    for entry in events["SessionStart"]:
+        matcher = entry.get("matcher", "")
+        assert isinstance(matcher, str)
+        hooks = cast("list[dict[str, object]]", entry["hooks"])
+        scripts: list[str] = []
+        for hook in hooks:
+            command = hook["command"]
+            assert isinstance(command, str)
+            scripts.append(command.rsplit("/", maxsplit=1)[-1])
+        out.append((matcher, scripts))
+    return out
+
+
+class TestSessionStartClearRecapture:
+    """``/clear`` must re-capture the SessionHint (biff-uyyd).
+
+    After ``/clear`` Claude Code emits ``SessionStart`` with
+    ``source=clear`` and a *new* ``session_id``.  Unless a matcher routes
+    ``clear`` to a hint-capturing dispatcher, the stale hint keeps the old
+    ``session_id``: ``/plan`` writes the plan marker under the old id while
+    the ``PreToolUse`` gate reads the payload's new id, and every edit is
+    denied no matter how many times ``/plan`` runs.
+    """
+
+    def test_clear_routed_to_a_hint_capturing_script(self) -> None:
+        routed = [
+            script
+            for matcher, scripts in _sessionstart_matcher_scripts()
+            if "clear" in matcher.split("|")
+            for script in scripts
+        ]
+        assert routed, (
+            "no SessionStart matcher routes source=clear; the SessionHint is "
+            "never re-captured after /clear (biff-uyyd)"
+        )
+        assert _HINT_CAPTURE_SCRIPTS.intersection(routed), (
+            "source=clear is matched but not by a hint-capturing dispatcher "
+            f"(need one of {sorted(_HINT_CAPTURE_SCRIPTS)}; got {routed})"
+        )

@@ -578,10 +578,24 @@ subagent's own tool call (design \S3a) --- and the guard now checks
 boolean: two identities sharing one worktree can have independently true
 or false plans.
 
+$rootResolved?$ records whether the hook could resolve this
+invocation's repo-common-root (\texttt{get\_repo\_common\_root}
+returning a non-empty path). $planSet$ models the identity-indexed
+marker files \emph{under one repo's hint bucket}; when the root cannot
+be resolved the hook has no bucket to read, so the edit gate cannot be
+evaluated at all. Rather than deny --- which would block the whole
+editing surface on a transient git outage, and (because every
+unresolved root collapses onto one shared \texttt{default} bucket) let
+one repo's plan satisfy another's gate --- the edit gate is suppressed
+when $rootResolved? = zfalse$, the same graceful allow the non-edit
+path already enjoys. The diagnostic warning on the unresolved-root path
+is the audit trail (biff-ecl / PL-240).
+
 \begin{schema}{PreToolHookAllow}
   BiffFrame \\
   hookDecision? : PermissionDecision \\
   needsPermission? : ZBOOL \\
+  rootResolved? : ZBOOL \\
   identity? : AGENTID
   \where
   sessionPhase = spProcessing \\
@@ -592,9 +606,12 @@ or false plans.
   % identity?'s OWN plan to be set (Bash is not gated).  Written total ---
   % an identity absent from dom planSet has no recorded plan, and the
   % guard correctly denies rather than leaving planSet(identity?)
-  % undefined.
+  % undefined.  The gate is additionally conditioned on rootResolved?
+  % (biff-ecl / PL-240): with no resolvable repo there is no hint bucket
+  % to read, so the edit requirement is suppressed rather than wedging
+  % every edit on a shared default bucket.
   %
-  toolCategory = tcEdit \implies
+  toolCategory = tcEdit \land rootResolved? = ztrue \implies
     identity? \in \dom planSet \land planSet(identity?) = ztrue \\
   %
   toolPhase' = \IF needsPermission? = ztrue \THEN tpPermission \ELSE tpExecuting \\
@@ -624,15 +641,28 @@ deny), so unlike \texttt{PreToolHookAllow} it does not itself constrain
 $planSet(identity?)$ --- $identity?$ documents whose call was denied,
 which is exactly the field a denial audit trail would need.
 
+The one combination the deny branch excludes is the unresolved-root edit
+(biff-ecl / PL-240): when $toolCategory = tcEdit \land rootResolved? =
+zfalse$ the gate cannot be evaluated and \texttt{PreToolHookAllow} is the
+only reachable \texttt{PreToolUse} outcome, so the hook never wedges an
+edit on a repo it could not resolve. Every other deny the hook may choose
+remains available.
+
 \begin{schema}{PreToolHookDeny}
   BiffFrame \\
   hookDecision? : PermissionDecision \\
   denialContext? : CONTEXTCHUNK \\
+  rootResolved? : ZBOOL \\
   identity? : AGENTID
   \where
   sessionPhase = spProcessing \\
   toolPhase = tpPreHook \\
   hookDecision? = pdDeny \\
+  %
+  % biff-ecl / PL-240: an unresolved-root edit cannot be denied --- there
+  % is no hint bucket to evaluate the gate against, so it allows instead.
+  %
+  \lnot ( toolCategory = tcEdit \land rootResolved? = zfalse ) \\
   %
   toolPhase' = tpNone \\
   currentTool' = \emptyset \\
