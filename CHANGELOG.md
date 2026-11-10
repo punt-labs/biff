@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-11-10
+
 ### Security
 
 - Clear 3 open Dependabot alerts (1 critical) by bumping `uv.lock`: certifi
