@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- SessionEnd hook no longer prints "Hook cancelled" on exit. The
+  `session-end.sh` dispatcher ran `biff-hook claude-code session-end`
+  synchronously — a relay network call of several seconds that Claude Code
+  cancels when it tears the process down. The call is now detached
+  (`nohup`, bounded by `timeout`/`gtimeout` where available) so the hook
+  returns at once; the enabled-marker and PATH gates are unchanged (#471).
+
 ## [1.20.0] - 2026-11-10
 
 ### Security
