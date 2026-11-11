@@ -45,6 +45,7 @@ from biff.server.tools._descriptions import (
 )
 from biff.session_lock import routing_lock
 from biff.session_registry import register_session, write_marker
+from biff.session_routing import ID_RE, SessionRouting
 from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
@@ -1276,7 +1277,7 @@ class _LiveSession:
                 self._repointing = True
                 try:
                     await self._gate.wait_for(lambda: self._in_flight == 0)
-                    await self.attach(mcp, state, caller)
+                    await self.attach(mcp, state, caller.routing)
                 finally:
                     self._repointing = False
                     self._gate.notify_all()
@@ -1288,17 +1289,34 @@ class _LiveSession:
                 self._in_flight -= 1
                 self._gate.notify_all()
 
+    async def start_declared(
+        self, mcp: FastMCP[ServerState], state: ServerState
+    ) -> None:
+        """Start the session Claude Code declared to this process, if any.
+
+        The server is a long-lived subprocess, so without this it would hold
+        no presence and no unread count until the first tool call.
+        ``CLAUDE_CODE_SESSION_ID`` names only the *starting* session: it goes
+        stale on ``/clear``, which the first stamped call corrects by
+        re-pointing.  It is never read per call.  Absent or malformed means
+        stay unbound.
+        """
+        raw = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        if not ID_RE.fullmatch(raw):
+            return
+        async with self._gate:
+            await self.attach(mcp, state, SessionRouting(raw))
+
     async def attach(
         self,
         mcp: FastMCP[ServerState],
         state: ServerState,
-        caller: CallerIdentity,
+        routing: SessionRouting,
     ) -> None:
-        """Bind *state* to the caller's session, then register and start tasks.
+        """Bind *state* to *routing*'s session, then register and start tasks.
 
-        Runs only from :meth:`call`, with no other call in flight.
+        Runs with no call in flight: from :meth:`call` or at startup.
         """
-        routing = caller.routing
         if state.bound_session_id != routing.session_id and self.attached:
             # /clear or resume changed session_id in place: release the old
             # session before the server is pointed at the new one.
@@ -1423,6 +1441,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
                 _remove_unread_files(state.unread_path)
             return
         async with _active_lifespan(state, live) as ctx:
+            await live.start_declared(mcp, state)
             yield ctx
 
     mcp: FastMCP[ServerState] = FastMCP(
