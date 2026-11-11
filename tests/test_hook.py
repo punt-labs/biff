@@ -1349,8 +1349,11 @@ class TestHandlePreToolUse:
         # The gate consulted MY own identities (agent -> session), in
         # preference order — never the sibling's key, and never the shared
         # bucket, which an identified caller does not read.
+        # (The trailing shared-bucket read is the diagnostic probe, which logs
+        # and never authorizes; the first two calls are the gate's ladder.)
         identities_queried = [call.args[1] for call in mock_has.call_args_list]
-        assert identities_queried == [my_agent, my_session]
+        assert identities_queried[:2] == [my_agent, my_session]
+        assert identities_queried[2:] in ([], [None])
         assert other_identity not in identities_queried
 
     def test_session_id_fallback_allows_when_agent_id_has_no_marker(self) -> None:

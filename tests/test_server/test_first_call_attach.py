@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
+from fastmcp.exceptions import ToolError
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
@@ -107,3 +108,23 @@ async def test_repoint_waits_for_an_in_flight_call_of_the_old_session(
         await second
     assert seen[-1] == ("sess-1", SessionRouting("sess-1").session_key("kai"))
     assert state.bound_session_id == "sess-2"
+
+
+async def test_a_failed_attach_is_logged_with_the_session(
+    state: ServerState,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("relay down")
+
+    monkeypatch.setattr("biff.server.app._reap_sentinels", boom)
+    async with StampedClient(
+        FastMCPTransport(create_server(state)), caller=caller_for("sess-x")
+    ) as client:
+        with caplog.at_level("ERROR", logger="biff.server.app"):
+            with pytest.raises(ToolError, match="relay down"):
+                await client.call_tool("who", {})
+    assert any(
+        "sess-x" in r.getMessage() and r.levelname == "ERROR" for r in caplog.records
+    )

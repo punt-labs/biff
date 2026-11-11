@@ -1327,6 +1327,13 @@ class _LiveSession:
         try:
             await self._register_and_start(mcp, state)
         except BaseException:
+            logger.error(
+                "attaching session %s (key %s) failed; the server is bound but "
+                "not registered",
+                routing.session_id,
+                state.session_key,
+                exc_info=True,
+            )
             for task in self.tasks:
                 task.cancel()
             await asyncio.gather(*self.tasks, return_exceptions=True)

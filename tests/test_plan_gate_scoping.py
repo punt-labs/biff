@@ -369,3 +369,34 @@ class TestCliPlanIsScopedToTheEnvironmentSession:
         assert cli_session_id() is None
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
         assert cli_session_id() is None
+
+
+class TestSkippedSharedPlanIsDiagnosable:
+    def test_logs_when_only_a_shared_marker_exists_for_an_identified_caller(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            from biff._stdlib import get_repo_common_root
+
+            write_plan_marker(get_repo_common_root(str(repo)), None, "cli plan")
+            with caplog.at_level("INFO", logger="biff.hook"):
+                result = handle_pre_tool_use(
+                    {"session_id": "skewed-session", "cwd": str(repo)}
+                )
+        assert result is not None  # decision unchanged: still denied
+        assert any(
+            "skewed-session" in r.getMessage() and "shared" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_no_log_without_a_shared_marker(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            caplog.at_level("INFO", logger="biff.hook"),
+        ):
+            handle_pre_tool_use({"session_id": "s", "cwd": str(repo)})
+        assert not any("shared" in r.getMessage() for r in caplog.records)

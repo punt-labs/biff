@@ -229,6 +229,23 @@ def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
     return any(has_plan_marker(root, identity) for identity in identities)
 
 
+def _log_skipped_shared_plan(root: str, identities: tuple[str | None, ...]) -> None:
+    """Say so when a plan exists only in the shared bucket an identified caller skips.
+
+    The CLI writes the shared bucket when its environment lacks the session id
+    the hook payload carries; without this line the resulting denial after
+    ``biff plan`` would have no visible cause.
+    """
+    from biff.markers import has_plan_marker  # noqa: PLC0415
+
+    if None not in identities and has_plan_marker(root, None):
+        logger.info(
+            "plan gate: a plan exists in the shared bucket but was skipped for "
+            "identified session %s; run /plan from this session to set its own",
+            identities[-1],
+        )
+
+
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
     """Hard-gate Edit/Write on a set plan.
 
@@ -278,7 +295,9 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
         )
         return None
 
-    if not _has_any_plan_marker(root, _identity_candidates(data)):
+    identities = _identity_candidates(data)
+    if not _has_any_plan_marker(root, identities):
+        _log_skipped_shared_plan(root, identities)
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
             "Run /plan <what you're working on>, then retry the edit."
