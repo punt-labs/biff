@@ -7627,9 +7627,26 @@ identical gate: code.claude.com/docs/en/remote-control
 
 biff learns the caller's `session_id` and `agent_id` from a **harness-declared
 channel on the call itself**, validates them, and refuses an unidentified call.
-It never infers identity from the process tree, the environment, the transport,
-git, or the OS user; and it never resolves identity by shelling out to the
-`ethos` CLI.
+It never infers *per-call* caller identity from the process tree, the
+environment, the transport, git, or the OS user; and it never resolves identity
+by shelling out to the `ethos` CLI.
+
+**One bounded exception, for passive presence only.** The long-lived `biff mcp`
+server reads `CLAUDE_CODE_SESSION_ID` from its own environment **once at
+startup** to learn its *starting* session, so it can register and start the
+heartbeat and inbox poller before the agent's first tool call — otherwise a
+session that only waits for mail would drop out of `/who` after the 120 s
+liveness window and show unread `0` until it happened to call a biff tool. This
+is the server's own starting identity, not a *caller's* identity: every
+per-call `_caller` still comes exclusively from the declared channel and is
+never read from the environment. `CLAUDE_CODE_SESSION_ID` is frozen at spawn and
+goes stale on `/clear`; that staleness is corrected by the first identified
+call's re-point (the same mechanism that fixes the `/clear` wedge), so the
+startup env read is only ever the *initial* binding. `CLAUDE_CODE_SESSION_ID`
+reaching the MCP-server subprocess is recorded in "Alternatives Considered"
+below (Claude Code 2.1.234+); DES-058 already relies on an environment variable
+(`CLAUDE_PID`) in the routing path, so this is a narrow, precedented use, not a
+return to inference.
 
 ### Why — the recurring defect class
 
