@@ -149,3 +149,11 @@ class TestCallerStampingHook:
     def test_script_dispatches_to_the_stamping_event(self) -> None:
         text = (_HOOKS_DIR / "pre-tool-stamp.sh").read_text()
         assert "biff-hook claude-code pre-tool-stamp" in text
+
+    def test_script_does_not_swallow_a_hook_failure(self) -> None:
+        text = (_HOOKS_DIR / "pre-tool-stamp.sh").read_text()
+        assert "|| true" not in text
+
+    def test_script_creates_the_log_directory_before_redirecting(self) -> None:
+        text = (_HOOKS_DIR / "pre-tool-stamp.sh").read_text()
+        assert text.index("mkdir -p") < text.index("hook-errors.log")
