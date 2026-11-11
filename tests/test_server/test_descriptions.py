@@ -23,7 +23,6 @@ from biff.server.state import CompanionSession, ServerState, create_state
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
-    MAX_UNREAD_COUNT,
     SubscriptionBinding,
     _active_tick,
     _CompanionSubs,
@@ -40,11 +39,11 @@ from biff.server.tools._descriptions import (
     subscribe_inbox_notify,
     subscribe_talk,
     talk_signal,
-    write_unread_file,
 )
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 from biff.talk_latch import TalkNotifyLatch
 from biff.talk_state import TalkState
+from biff.unread_file import MAX_UNREAD_COUNT, write_unread_file
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP

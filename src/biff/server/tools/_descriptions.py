@@ -19,23 +19,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from enum import Enum, auto
-from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
-from biff.relay import atomic_write
 from biff.server.display_queue import DisplayItem
 from biff.talk_latch import LatchMessages, TalkNotifyLatch
 from biff.talk_state import TalkState
 from biff.talk_types import TalkNotification, TalkPhase
 from biff.tty import format_address
+from biff.unread_file import write_unread_file
 
 
 class _Sentinel:
@@ -115,13 +113,6 @@ _COMPANION_TALK_RESUBSCRIBE_MESSAGES = LatchMessages(
     retry="Companion talk-notify re-subscribe still failing, will retry",
     recovery="Companion talk-notify wake pokes recovered — re-subscribed",
 )
-
-MAX_UNREAD_COUNT: int = 100
-"""Maximum unread count written to the status file.
-
-Corresponds to ``maxUnreadCount`` in the Z specification
-(notification.tex §4).  Counts above this are clamped.
-"""
 
 # Captured eagerly during ``initialize`` (via SessionCaptureMiddleware)
 # and refreshed on every tool call (belt path) so the background poller
@@ -1654,56 +1645,3 @@ async def poll_inbox(
             if sub is not None:
                 with suppress(Exception, asyncio.CancelledError):
                     await asyncio.shield(sub.handle.unsubscribe())
-
-
-def write_unread_file(
-    path: Path,
-    summary: UnreadSummary,
-    *,
-    repo_name: str,
-    user: str,
-    tty_name: str,
-    biff_enabled: bool,
-    display_items: list[DisplayItem] | None = None,
-    plan: str = "",
-) -> None:
-    """Write unread count to a JSON status file.
-
-    Includes ``user``, ``repo``, ``tty_name``, ``biff_enabled``,
-    ``plan``, ``server_pid``, and the full ``display_items`` list so the
-    status bar can rotate through all items independently using
-    time-based indexing.
-
-    ``server_pid`` (this process's own ``os.getpid()``) lets
-    ``plugin/hooks/unread-nudge.sh`` detect when the file at *path* was
-    written by a different server process than whichever process last
-    updated its ``.nudged`` sidecar — the signal the SIGKILL-only gap
-    needs (a caught signal already removes both files via
-    ``_remove_unread_files``; nothing catches SIGKILL, so PID reuse after
-    an unclean kill can otherwise leave a sidecar a later, unrelated
-    session inherits, Cursor Bugbot finding hwquR). A same-session
-    subprocess restart also changes this value and so also resets the
-    sidecar — a redundant re-nudge for an unchanged count, not a silently
-    suppressed one, which is the safe direction to err.
-
-    Failures are logged but never propagated — tool execution must not
-    break because a status file could not be written.
-    """
-    items_list: list[dict[str, str]] = [
-        {"kind": item.kind, "text": item.text} for item in (display_items or [])
-    ]
-    clamped_count = min(summary.count, MAX_UNREAD_COUNT)
-    data: dict[str, object] = {
-        "user": user,
-        "repo": repo_name,
-        "count": clamped_count,
-        "tty_name": tty_name,
-        "biff_enabled": biff_enabled,
-        "display_items": items_list,
-        "plan": plan,
-        "server_pid": os.getpid(),
-    }
-    try:
-        atomic_write(path, json.dumps(data, indent=2) + "\n")
-    except OSError:
-        logger.warning("Failed to write unread status file %s", path, exc_info=True)
