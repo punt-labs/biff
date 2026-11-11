@@ -50,3 +50,24 @@ def test_binding_a_different_session_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SessionAlreadyBoundError, match="sess-2"):
         state.bind(SessionRouting("sess-2"))
     assert state.session_key == SessionRouting("sess-1").session_key("rmh")
+
+
+def test_bind_derives_the_unread_path_from_the_configured_directory(
+    tmp_path: Path,
+) -> None:
+    state = create_state(
+        BiffConfig(user="rmh", repo_name="r"),
+        tmp_path,
+        dormant=True,
+        unread_dir=tmp_path / "unread",
+    )
+    assert state.unread_path is None
+    routing = SessionRouting("sess-1")
+    state.bind(routing)
+    assert state.unread_path == routing.unread_path(tmp_path / "unread")
+
+
+def test_bind_leaves_no_unread_path_when_none_was_configured(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    state.bind(SessionRouting("sess-1"))
+    assert state.unread_path is None
