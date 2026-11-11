@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Caller identity is now **harness-declared**, not inferred (DES-064). biff
+  learns which session and agent is calling from a `_caller` argument stamped
+  on each tool call by a PreToolUse hook, validates its shape, and refuses an
+  unidentified call with a named error. It no longer walks the process tree,
+  reads `CLAUDE_PID`, or keeps a `sessions/<pid>.json` hint file. The server
+  binds to a session on that session's first identified tool call (and
+  re-points cleanly across `/clear`, which changes the session id in place on
+  the long-lived server). Conforms to the org `mcp-caller-identity` standard
+  (biff-ork0).
+
+### Removed
+
+- The `ethos` CLI dependency in the identity path: biff no longer shells out to
+  `ethos session roster`, `ethos team for-repo`, or `ethos show` to resolve
+  identity. biff's own repo-agent identity is read from the committed
+  `.punt-labs/ethos.yaml` + `identities/<handle>.yaml` as before (DES-040,
+  unchanged); caller identity comes from the declared `_caller` channel
+  (biff-khr9).
+- The single-session OpenCode MCP mode and its `--ethos-session` /
+  `--ethos-agent-id` flags on `biff mcp`, and the session-pin middleware. Their
+  only job was resolving identity via the ethos CLI, which the standard forbids;
+  OpenCode caller identity will arrive on the declared channel like every other
+  harness.
+
 ### Fixed
 
 - SessionEnd hook no longer prints "Hook cancelled" on exit. The
