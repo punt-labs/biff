@@ -36,7 +36,10 @@ class CallerIdentity:
         for name in ("session_id", "agent_id"):
             value = mapping.get(name)
             if not isinstance(value, str) or not ID_RE.fullmatch(value):
-                msg = f"{CALLER_KEY}.{name} must match [A-Za-z0-9_-]+, got {value!r}"
+                msg = (
+                    f"{CALLER_KEY}.{name} must match [A-Za-z0-9_-]{{1,128}}, "
+                    f"got {value!r}"
+                )
                 raise CallerIdentityError(msg)
             fields[name] = value
         return cls(session_id=fields["session_id"], agent_id=fields["agent_id"])

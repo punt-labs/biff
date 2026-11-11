@@ -9,11 +9,12 @@ from pathlib import Path
 from biff.session_id import CLAUDE_CODE_ROLE, derive_routing_id
 from biff.tty import build_session_key
 
-ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+MAX_ID_LENGTH = 128  # matches markers._SAFE_IDENTITY_RE
+ID_RE = re.compile(rf"[A-Za-z0-9_-]{{1,{MAX_ID_LENGTH}}}")
 
 
 class SessionIdError(ValueError):
-    """A session_id is empty or outside ``[A-Za-z0-9_-]+``."""
+    """A session_id is empty, too long, or outside ``[A-Za-z0-9_-]+``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +30,10 @@ class SessionRouting:
 
     def __post_init__(self) -> None:
         if not ID_RE.fullmatch(self.session_id):
-            msg = f"session_id must match [A-Za-z0-9_-]+, got {self.session_id!r}"
+            msg = (
+                f"session_id must match [A-Za-z0-9_-]+ and be at most "
+                f"{MAX_ID_LENGTH} characters, got {self.session_id!r}"
+            )
             raise SessionIdError(msg)
 
     @property

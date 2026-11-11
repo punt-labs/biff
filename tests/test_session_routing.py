@@ -74,3 +74,18 @@ def test_statusline_reads_the_file_the_server_writes(tmp_path: Path) -> None:
     ):
         result = run_statusline(tmp_path / "stash.json", unread_dir)
     assert "kai:tty1(4)" in result
+
+
+def test_session_id_longer_than_the_marker_bound_is_rejected() -> None:
+    SessionRouting("a" * 128)
+    with pytest.raises(SessionIdError, match="128"):
+        SessionRouting("a" * 129)
+
+
+def test_caller_identity_applies_the_same_bound() -> None:
+    from biff.caller_identity import CallerIdentityError
+
+    with pytest.raises(CallerIdentityError):
+        CallerIdentity.from_wire({"session_id": "a" * 129, "agent_id": "x"})
+    with pytest.raises(CallerIdentityError):
+        CallerIdentity.from_wire({"session_id": "x", "agent_id": "a" * 129})
