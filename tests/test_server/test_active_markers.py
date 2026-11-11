@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
+from fastmcp.exceptions import ToolError
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
@@ -39,17 +40,13 @@ class TestActiveMarkers:
             kind="human",
             repo_name="_test-markers",
         )
-        state = create_state(
-            config,
-            tmp_path,
-            tty="a1b2c3d4",
-            hostname="test-host",
-            pwd="/test",
-        )
+        state = create_state(config, tmp_path, hostname="test-host", pwd="/test")
         mcp = create_server(state)
 
-        async with StampedClient(FastMCPTransport(mcp)):
-            marker = active_root / "kai-a1b2c3d4"
+        async with StampedClient(FastMCPTransport(mcp)) as client:
+            assert not list(active_root.glob("*")), "no marker before a caller"
+            await client.call_tool("who", {})
+            marker = active_root / state.session_key.replace(":", "-")
             assert marker.exists(), "primary active marker missing"
 
     async def test_marker_not_written_on_register_failure(
@@ -70,13 +67,7 @@ class TestActiveMarkers:
             kind="human",
             repo_name="_test-markers",
         )
-        state = create_state(
-            config,
-            tmp_path,
-            tty="a1b2c3d4",
-            hostname="test-host",
-            pwd="/test",
-        )
+        state = create_state(config, tmp_path, hostname="test-host", pwd="/test")
 
         async def _boom(*_args: object, **_kwargs: object) -> str:
             msg = "simulated claim failure"
@@ -85,11 +76,10 @@ class TestActiveMarkers:
         monkeypatch.setattr("biff.session_registry.claim_tty_name", _boom)
 
         mcp = create_server(state)
-        with pytest.raises(RuntimeError, match="simulated claim failure"):
-            async with StampedClient(FastMCPTransport(mcp)):
-                pass
+        async with StampedClient(FastMCPTransport(mcp)) as client:
+            with pytest.raises(ToolError, match="simulated claim failure"):
+                await client.call_tool("who", {})
 
-        marker = active_root / "kai-a1b2c3d4"
-        assert not marker.exists(), (
-            "primary marker must not exist when register_session fails"
+        assert not list(active_root.glob("*")), (
+            "no marker may exist when register_session fails"
         )

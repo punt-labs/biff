@@ -1000,31 +1000,21 @@ async def _lifespan_cleanup(
 
 @asynccontextmanager
 async def _active_lifespan(
-    mcp: FastMCP[ServerState], state: ServerState
+    state: ServerState, live: _LiveSession
 ) -> AsyncGenerator[ServerState]:
-    """Clean partial startup before the outer ownership boundary is released."""
-    registered_names: list[str] = []
-    startup_tasks: list[asyncio.Task[None]] = []
-    started = False
+    """Install signal handlers for the server's life and restore them after."""
     previous_handlers = {
         sig: signal.getsignal(sig)
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
     }
     try:
-        async with _running_lifespan(
-            mcp, state, registered_names, startup_tasks
-        ) as ctx:
-            started = True
+        async with _running_lifespan(state, live) as ctx:
             yield ctx
     finally:
-        # A failed or completed lifespan must not leave a handler capable of
-        # deleting the next incarnation after this one's lock is released.
+        # A completed lifespan must not leave a handler capable of deleting
+        # the next incarnation after this one's lock is released.
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
-        if not started:
-            await _finish_cleanup(
-                _startup_cleanup(state, registered_names, startup_tasks)
-            )
 
 
 async def _startup_cleanup(
@@ -1066,18 +1056,42 @@ async def _startup_cleanup(
     await _run_cleanup_steps(steps)
 
 
+async def _discover_org_repos(state: ServerState) -> None:
+    """Discover repos for configured orgs (DES-034), before anything registers."""
+    if not (state.config.orgs and isinstance(state.relay, NatsRelay)):
+        return
+    logger.info("Org discovery: querying orgs=%s", state.config.orgs)
+    org_results = await asyncio.gather(
+        *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
+    )
+    org_repos = frozenset[str]().union(*org_results)
+    # Counts as the first refresh attempt, so the first heartbeat tick's
+    # _refresh_org_repos doesn't immediately re-query on top of this one.
+    object.__setattr__(state, "org_repos_refreshed_at", time.monotonic())
+    logger.info(
+        "Org discovery: found %d repos: %s",
+        len(org_repos),
+        sorted(org_repos),
+    )
+    if org_repos:
+        # Mutate in-place so tool closures (which captured `state`
+        # during registration) see the updated visible_repos.
+        object.__setattr__(state, "org_repos", org_repos)
+    else:
+        logger.warning(
+            "Org discovery returned no repos — cross-repo visibility disabled",
+        )
+
+
 @asynccontextmanager
 async def _running_lifespan(
-    mcp: FastMCP[ServerState],
     state: ServerState,
-    registered_names: list[str],
-    startup_tasks: list[asyncio.Task[None]],
+    live: _LiveSession,
 ) -> AsyncGenerator[ServerState]:
     """Lifespan for an active (non-dormant) server.
 
-    Registers signal handlers, starts background tasks, and manages
-    session lifecycle.  Extracted from :func:`create_server` for
-    complexity management.
+    Registers signal handlers and tears down whatever the first identified
+    call attached.  Nothing is registered here: no session is declared yet.
     """
     _cleaned_up = False
 
@@ -1199,120 +1213,126 @@ async def _running_lifespan(
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)
 
-    # Org discovery (DES-034): discover repos for configured orgs.
-    # Runs before registration so the log reflects final visibility,
-    # and before tty assignment (which needs visible_repos).
-    if state.config.orgs and isinstance(state.relay, NatsRelay):
-        logger.info("Org discovery: querying orgs=%s", state.config.orgs)
-        org_results = await asyncio.gather(
-            *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
-        )
-        org_repos = frozenset[str]().union(*org_results)
-        # Counts as the first refresh attempt, so the first heartbeat tick's
-        # _refresh_org_repos doesn't immediately re-query on top of this one.
-        object.__setattr__(state, "org_repos_refreshed_at", time.monotonic())
-        logger.info(
-            "Org discovery: found %d repos: %s",
-            len(org_repos),
-            sorted(org_repos),
-        )
-        if org_repos:
-            # Mutate in-place so tool closures (which captured `state`
-            # during registration) see the updated visible_repos.
-            object.__setattr__(state, "org_repos", org_repos)
-        else:
-            logger.warning(
-                "Org discovery returned no repos — cross-repo visibility disabled",
-            )
+    await _discover_org_repos(state)
 
     logger.info(
         "Visible repos: %s",
         sorted(state.visible_repos),
     )
 
-    # Claim-then-write (DES-035): reserve TTY name first, then
-    # write the KV row exactly once with ``tty_name`` already populated.
-    # An unreserved hex fallback would defeat the DES-035 invariant.
-    _, final_name = await register_session(
-        state.relay,
-        state.config.user,
-        state.tty,
-        display_name=state.config.display_name,
-        kind=state.config.kind,
-        hostname=state.hostname,
-        pwd=state.pwd,
-        repo=state.config.repo_name,
-        on_claim=registered_names.append,
-    )
-    set_tty_name(final_name)
-    # Keep the shared talk state's outgoing from_tty in sync with the
-    # claimed display name (talk_state.py send_* frames).
-    state.talk.set_tty_name(final_name)
-    # Register this session as active so SessionEnd hooks can find it.
-    # Written after register_session succeeds so the invariant
-    # "marker exists iff KV row exists" holds under registration failure.
-    write_marker(
-        state.config.repo_name,
-        state.session_key,
-        str(state.repo_common_root),
-    )
-    logger.info("Session ready: %s (%s)", state.session_key, final_name)
-
-    # Companion (human) registration is deferred entirely to the
-    # heartbeat loop. The ethos roster is not yet available at
-    # startup on claude --resume (spec § 3.2).
-
-    # Write the initial unread file and wall state immediately so the
-    # status line has identity from the first render (before the poller ticks).
-    await refresh_read_messages(mcp, state)
-    await refresh_wall(mcp, state)
-
-    # Reap sentinels FIRST — writes logout events for sessions that
-    # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
-    # Then re-fetch sessions so orphan detection has clean KV state.
-    await _reap_sentinels(state)
-    sessions = await state.relay.get_sessions()
-
-    await _append_login_event(state, final_name)
-    await _close_orphaned_logins(state, sessions)
-
-    shutdown = asyncio.Event()
-    poll_interval = state.config.poll_interval
-    # Always on, even at poll_interval <= 0: the always-on SUBs and
-    # their poke-driven recompute never depended on a periodic tick, only
-    # the periodic work (wall re-render, invite expiry, backstop) does —
-    # poll_inbox itself degrades that gracefully when interval <= 0.
-    poller: asyncio.Task[None] = asyncio.create_task(
-        poll_inbox(
-            mcp,
-            state,
-            shutdown=shutdown,
-            interval=poll_interval,
-            nap_interval=nap_interval_for(poll_interval),
-        )
-    )
-    startup_tasks.append(poller)
-    reaper = asyncio.create_task(_reap_loop(state, shutdown))
-    startup_tasks.append(reaper)
-    heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
-    startup_tasks.append(heartbeat)
-    watcher = asyncio.create_task(_kv_watcher_loop(state, shutdown))
-    startup_tasks.append(watcher)
     try:
         yield state
     finally:
-        await _finish_cleanup(
-            _lifespan_cleanup(
-                state,
-                shutdown,
-                reaper,
-                [poller, heartbeat, watcher],
+        if live.attached and live.reaper is not None:
+            await _finish_cleanup(
+                _lifespan_cleanup(
+                    state,
+                    live.shutdown,
+                    live.reaper,
+                    [t for t in live.tasks if t is not live.reaper],
+                )
+            )
+        else:
+            await _finish_cleanup(
+                _startup_cleanup(state, live.registered_names, live.tasks)
+            )
+
+
+class _LiveSession:
+    """The session-keyed resources attached on the first identified call.
+
+    The lifespan owns only what is session-independent.  Registration, the
+    unread file and the background tasks are keyed on the session the caller
+    declares, so :meth:`attach` creates them on the first identified call and
+    the lifespan tears them down if (and only if) that call happened.
+    """
+
+    def __init__(self) -> None:
+        self.shutdown = asyncio.Event()
+        self.registered_names: list[str] = []
+        self.tasks: list[asyncio.Task[None]] = []
+        self.reaper: asyncio.Task[None] | None = None
+        self.attached = False
+        self._lock = asyncio.Lock()
+
+    async def attach(
+        self,
+        mcp: FastMCP[ServerState],
+        state: ServerState,
+        caller: CallerIdentity,
+    ) -> None:
+        """Bind *state* to the caller's session, then register and start tasks."""
+        async with self._lock:
+            routing = caller.routing
+            state.bind(routing)  # refuses a different session
+            if self.attached or state.dormant:
+                return
+            try:
+                await self._register_and_start(mcp, state)
+            except BaseException:
+                for task in self.tasks:
+                    task.cancel()
+                await asyncio.gather(*self.tasks, return_exceptions=True)
+                self.tasks.clear()
+                self.reaper = None
+                raise
+            self.attached = True
+
+    async def _register_and_start(
+        self, mcp: FastMCP[ServerState], state: ServerState
+    ) -> None:
+        # Claim-then-write (DES-035): reserve the TTY name first, then write
+        # the KV row once with ``tty_name`` populated.  ``register_session``
+        # is get-or-create: the SessionStart hook may have written the row.
+        _, final_name = await register_session(
+            state.relay,
+            state.config.user,
+            state.tty,
+            display_name=state.config.display_name,
+            kind=state.config.kind,
+            hostname=state.hostname,
+            pwd=state.pwd,
+            repo=state.config.repo_name,
+            on_claim=self.registered_names.append,
+        )
+        set_tty_name(final_name)
+        state.talk.set_tty_name(final_name)
+        # Written after register_session succeeds so "marker exists iff KV
+        # row exists" holds under registration failure.
+        write_marker(
+            state.config.repo_name,
+            state.session_key,
+            str(state.repo_common_root),
+        )
+        logger.info("Session ready: %s (%s)", state.session_key, final_name)
+
+        await refresh_read_messages(mcp, state)
+        await refresh_wall(mcp, state)
+
+        # Reap sentinels FIRST so orphan detection sees clean KV state.
+        await _reap_sentinels(state)
+        sessions = await state.relay.get_sessions()
+        await _append_login_event(state, final_name)
+        await _close_orphaned_logins(state, sessions)
+
+        poll_interval = state.config.poll_interval
+        # Always on, even at poll_interval <= 0: the always-on SUBs never
+        # depended on a periodic tick, only the periodic work does.
+        self.tasks.append(
+            asyncio.create_task(
+                poll_inbox(
+                    mcp,
+                    state,
+                    shutdown=self.shutdown,
+                    interval=poll_interval,
+                    nap_interval=nap_interval_for(poll_interval),
+                )
             )
         )
-
-
-async def _accept_caller(_caller: CallerIdentity) -> None:
-    """Bind a validated caller to the server (live resources attach here)."""
+        self.reaper = asyncio.create_task(_reap_loop(state, self.shutdown))
+        self.tasks.append(self.reaper)
+        self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
+        self.tasks.append(asyncio.create_task(_kv_watcher_loop(state, self.shutdown)))
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:
@@ -1323,15 +1343,17 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     and status file in sync with incoming messages.
     """
 
+    live = _LiveSession()
+
     @asynccontextmanager
-    async def lifespan(mcp: FastMCP[ServerState]) -> AsyncGenerator[ServerState]:
+    async def lifespan(_mcp: FastMCP[ServerState]) -> AsyncGenerator[ServerState]:
         if state.dormant:
             try:
                 yield state
             finally:
                 _remove_unread_files(state.unread_path)
             return
-        async with _active_lifespan(mcp, state) as ctx:
+        async with _active_lifespan(state, live) as ctx:
             yield ctx
 
     mcp: FastMCP[ServerState] = FastMCP(
@@ -1366,6 +1388,10 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     )
 
     mcp.add_middleware(_SessionCaptureMiddleware())
-    mcp.add_middleware(CallerIdentityMiddleware(_accept_caller))
+
+    async def accept_caller(caller: CallerIdentity) -> None:
+        await live.attach(mcp, state, caller)
+
+    mcp.add_middleware(CallerIdentityMiddleware(accept_caller))
     register_all_tools(mcp, state)
     return mcp

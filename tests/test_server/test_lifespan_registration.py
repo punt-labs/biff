@@ -79,16 +79,13 @@ class TestLifespanRegistration:
             kind="human",
             repo_name="_test-lifespan-primary",
         )
-        state = create_state(
-            config,
-            tmp_path,
-            tty="a1b2c3d4",
-            hostname="test-host",
-            pwd="/test",
-        )
+        state = create_state(config, tmp_path, hostname="test-host", pwd="/test")
         mcp = create_server(state)
 
-        async with StampedClient(FastMCPTransport(mcp)):
+        async with StampedClient(FastMCPTransport(mcp)) as client:
+            assert state.is_bound is False, "nothing registers before a caller"
+            assert await state.relay.get_sessions() == []
+            await client.call_tool("who", {})
             session = await state.relay.get_session(state.session_key)
 
         assert session is not None
@@ -481,7 +478,7 @@ class TestResumeReclaim:
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
         await relay.set_session_tty_hint("kai", sid, "tty5")
 
-        with caplog.at_level(logging.INFO, logger="biff.server.app"):
+        with caplog.at_level(logging.INFO, logger="biff.session_registry"):
             _, name = await register_session(relay, "kai", sid, **self._KW)
 
         assert name == "tty5"
@@ -502,7 +499,7 @@ class TestResumeReclaim:
         await relay.set_session_tty_hint("kai", sid, "tty1")
         assert await relay.reserve_tty_name("kai", "tty1", "kai:other-session-id")
 
-        with caplog.at_level(logging.INFO, logger="biff.server.app"):
+        with caplog.at_level(logging.INFO, logger="biff.session_registry"):
             _, name = await register_session(relay, "kai", sid, **self._KW)
 
         assert name == "tty2"

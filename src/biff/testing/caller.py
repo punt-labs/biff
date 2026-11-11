@@ -8,10 +8,13 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import Client
 
 from biff.caller_identity import CALLER_KEY
+from biff.session_routing import SessionRouting
 
 if TYPE_CHECKING:
     import mcp.types
     from fastmcp.client.progress import ProgressHandler
+
+    from biff.server.state import ServerState
 
 # A main-thread caller: the stamping hook sends the main-thread agent id,
 # which a test cannot corroborate, so the fixture states one directly.
@@ -52,3 +55,18 @@ class StampedClient(Client[Any]):  # pyright: ignore[reportMissingTypeArgument]
         return await super().call_tool_mcp(
             name, arguments, progress_handler, timeout, meta
         )
+
+
+def caller_for(session_id: str) -> dict[str, str]:
+    """A main-thread ``_caller`` declaring *session_id*."""
+    return {"session_id": session_id, "agent_id": "4242"}
+
+
+def bound_to(state: ServerState, session_id: str = "test-session") -> ServerState:
+    """Bind *state* to *session_id* ahead of its first call and return it.
+
+    Binding names the session without registering it, so a test can read
+    ``state.session_key`` before the first identified call attaches.
+    """
+    state.bind(SessionRouting(session_id))
+    return state

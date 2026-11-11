@@ -14,7 +14,7 @@ from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.testing import RecordingClient, Transcript
-from biff.testing.caller import StampedClient
+from biff.testing.caller import StampedClient, bound_to
 
 if TYPE_CHECKING:
     from fastmcp import Client
@@ -32,9 +32,7 @@ def config() -> BiffConfig:
 
 @pytest.fixture
 def state(tmp_path: Path, config: BiffConfig) -> ServerState:
-    return create_state(
-        config, tmp_path, tty="11111111", hostname="test-host", pwd="/test"
-    )
+    return bound_to(create_state(config, tmp_path, hostname="test-host", pwd="/test"))
 
 
 @pytest.fixture

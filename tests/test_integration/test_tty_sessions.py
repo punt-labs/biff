@@ -23,7 +23,7 @@ from mcp.types import TextContent
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
-from biff.testing.caller import StampedClient
+from biff.testing.caller import StampedClient, bound_to, caller_for
 
 if TYPE_CHECKING:
     from fastmcp import Client
@@ -45,34 +45,40 @@ def shared_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def kai_tty1_state(shared_dir: Path) -> ServerState:
-    return create_state(
-        BiffConfig(user="kai", repo_name=_TEST_REPO),
-        shared_dir,
-        tty="11111111",
-        hostname="host-a",
-        pwd="/project/a",
+    return bound_to(
+        create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            shared_dir,
+            hostname="host-a",
+            pwd="/project/a",
+        ),
+        "kai-1",
     )
 
 
 @pytest.fixture
 def kai_tty2_state(shared_dir: Path) -> ServerState:
-    return create_state(
-        BiffConfig(user="kai", repo_name=_TEST_REPO),
-        shared_dir,
-        tty="22222222",
-        hostname="host-a",
-        pwd="/project/b",
+    return bound_to(
+        create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            shared_dir,
+            hostname="host-a",
+            pwd="/project/b",
+        ),
+        "kai-2",
     )
 
 
 @pytest.fixture
 def eric_state(shared_dir: Path) -> ServerState:
-    return create_state(
-        BiffConfig(user="eric", repo_name=_TEST_REPO),
-        shared_dir,
-        tty="33333333",
-        hostname="host-b",
-        pwd="/project/c",
+    return bound_to(
+        create_state(
+            BiffConfig(user="eric", repo_name=_TEST_REPO),
+            shared_dir,
+            hostname="host-b",
+            pwd="/project/c",
+        ),
+        "eric-1",
     )
 
 
@@ -81,7 +87,9 @@ async def kai_tty1(
     kai_tty1_state: ServerState,
 ) -> AsyncIterator[Client[Any]]:
     mcp = create_server(kai_tty1_state)
-    async with StampedClient(FastMCPTransport(mcp)) as client:
+    async with StampedClient(
+        FastMCPTransport(mcp), caller=caller_for("kai-1")
+    ) as client:
         yield client
 
 
@@ -90,7 +98,9 @@ async def kai_tty2(
     kai_tty2_state: ServerState,
 ) -> AsyncIterator[Client[Any]]:
     mcp = create_server(kai_tty2_state)
-    async with StampedClient(FastMCPTransport(mcp)) as client:
+    async with StampedClient(
+        FastMCPTransport(mcp), caller=caller_for("kai-2")
+    ) as client:
         yield client
 
 
@@ -99,7 +109,9 @@ async def eric_client(
     eric_state: ServerState,
 ) -> AsyncIterator[Client[Any]]:
     mcp = create_server(eric_state)
-    async with StampedClient(FastMCPTransport(mcp)) as client:
+    async with StampedClient(
+        FastMCPTransport(mcp), caller=caller_for("eric-1")
+    ) as client:
         yield client
 
 
@@ -131,10 +143,14 @@ class TestSessionLogout:
     ) -> None:
         # Eric's server stays up the whole time
         eric_mcp = create_server(eric_state)
-        async with StampedClient(FastMCPTransport(eric_mcp)) as eric:
+        async with StampedClient(
+            FastMCPTransport(eric_mcp), caller=caller_for("eric-1")
+        ) as eric:
             # Kai's server starts, registers, then exits
             kai_mcp = create_server(kai_tty1_state)
-            async with StampedClient(FastMCPTransport(kai_mcp)) as kai:
+            async with StampedClient(
+                FastMCPTransport(kai_mcp), caller=caller_for("kai-1")
+            ) as kai:
                 await kai.call_tool("plan", {"message": "working"})
                 # Eric sees Kai
                 result = _text(await eric.call_tool("who", {}))
@@ -158,8 +174,10 @@ class TestSentinelLogout:
         eric_mcp = create_server(eric_state)
         kai_mcp = create_server(kai_tty1_state)
         async with (
-            StampedClient(FastMCPTransport(eric_mcp)) as eric,
-            StampedClient(FastMCPTransport(kai_mcp)) as kai,
+            StampedClient(
+                FastMCPTransport(eric_mcp), caller=caller_for("eric-1")
+            ) as eric,
+            StampedClient(FastMCPTransport(kai_mcp), caller=caller_for("kai-1")) as kai,
         ):
             await kai.call_tool("plan", {"message": "working"})
             assert "kai" in _text(await eric.call_tool("who", {}))
@@ -260,24 +278,26 @@ class TestOfflineDelivery:
         eric_state = create_state(
             BiffConfig(user="eric", repo_name=_TEST_REPO),
             shared_dir,
-            tty="33333333",
             hostname="host-b",
             pwd="/project/c",
         )
         eric_mcp = create_server(eric_state)
-        async with StampedClient(FastMCPTransport(eric_mcp)) as eric:
+        async with StampedClient(
+            FastMCPTransport(eric_mcp), caller=caller_for("eric-1")
+        ) as eric:
             await eric.call_tool("write", {"to": "@kai", "message": "offline msg"})
 
         # Kai comes online later and reads the message
         kai_state = create_state(
             BiffConfig(user="kai", repo_name=_TEST_REPO),
             shared_dir,
-            tty="11111111",
             hostname="host-a",
             pwd="/project/a",
         )
         kai_mcp = create_server(kai_state)
-        async with StampedClient(FastMCPTransport(kai_mcp)) as kai:
+        async with StampedClient(
+            FastMCPTransport(kai_mcp), caller=caller_for("kai-1")
+        ) as kai:
             r = await kai.call_tool("read_messages", {})
             assert "offline msg" in _text(r)
 
