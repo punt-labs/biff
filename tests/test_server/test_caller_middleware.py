@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,7 +21,7 @@ class _Binder:
         self.bound: list[CallerIdentity] = []
 
     @asynccontextmanager
-    async def __call__(self, caller: CallerIdentity) -> AsyncIterator[None]:
+    async def __call__(self, caller: CallerIdentity) -> AsyncGenerator[None]:
         self.bound.append(caller)
         yield
 
