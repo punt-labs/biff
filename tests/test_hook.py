@@ -1853,3 +1853,71 @@ class TestReadHookInput:
             result = _read_hook_input()
         r.close()
         assert result == {}
+
+
+class TestPreToolStampDispatch:
+    """``biff-hook claude-code pre-tool-stamp`` emits the stamped input."""
+
+    def test_stamps_a_biff_tool_call_from_stdin(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import io
+
+        from biff import _hook_entry
+
+        payload = {
+            "session_id": "sess-1",
+            "agent_id": "sub-1",
+            "tool_name": "mcp__plugin_biff_tty__plan",
+            "tool_input": {"message": "hi"},
+        }
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        _hook_entry._cc_pre_tool_stamp()
+        out = json.loads(capsys.readouterr().out)
+        updated = out["hookSpecificOutput"]["updatedInput"]
+        assert updated["_caller"] == {"session_id": "sess-1", "agent_id": "sub-1"}
+        assert "permissionDecision" not in out["hookSpecificOutput"]
+
+    def test_runs_even_when_biff_is_not_enabled_in_the_repo(self) -> None:
+        from biff import _hook_entry
+
+        assert "pre-tool-stamp" in _hook_entry.UNGATED_CC_EVENTS
+
+    def test_a_stamper_crash_fails_closed_with_the_cause(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from biff import _hook_entry
+
+        def _boom(_env: object) -> str | None:
+            raise RuntimeError("psutil exploded")
+
+        monkeypatch.setattr("biff.caller_stamp.main_agent_id", _boom)
+        payload: dict[str, object] = {
+            "session_id": "s",
+            "tool_name": "mcp__plugin_biff_tty__who",
+            "tool_input": {},
+        }
+        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        _hook_entry._cc_pre_tool_stamp()
+        spec = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+        assert spec["permissionDecision"] == "deny"
+        assert "psutil exploded" in spec["permissionDecisionReason"]
+
+    def test_a_stamper_crash_on_another_tool_leaves_it_untouched(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from biff import _hook_entry
+
+        def _boom(_env: object) -> str | None:
+            raise RuntimeError("psutil exploded")
+
+        monkeypatch.setattr("biff.caller_stamp.main_agent_id", _boom)
+        payload: dict[str, object] = {
+            "session_id": "s",
+            "tool_name": "mcp__other__x",
+            "tool_input": {},
+        }
+        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        _hook_entry._cc_pre_tool_stamp()
+        assert capsys.readouterr().out == ""

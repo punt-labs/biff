@@ -115,3 +115,37 @@ class TestSessionStartClearReopens:
             "source=clear is matched but not by a session-opening dispatcher "
             f"(need one of {sorted(_SESSION_OPEN_SCRIPTS)}; got {routed})"
         )
+
+
+class TestCallerStampingHook:
+    """The PreToolUse stamping hook is registered for biff's own tools."""
+
+    def test_registered_with_the_documented_matcher(self) -> None:
+        from biff.caller_stamp import MATCHER
+
+        entries = [
+            e for e in _load_events()["PreToolUse"] if e.get("matcher") == MATCHER
+        ]
+        assert len(entries) == 1
+        hooks = cast("list[dict[str, object]]", entries[0]["hooks"])
+        assert [h["command"] for h in hooks] == [f"{_PREFIX}pre-tool-stamp.sh"]
+
+    def test_matcher_covers_every_registration_name(self) -> None:
+        import re
+
+        from biff.caller_stamp import MATCHER
+
+        for name in (
+            "mcp__plugin_biff_tty__who",
+            "mcp__plugin_biff-dev_tty__who",
+            "mcp__tty__who",
+        ):
+            assert re.fullmatch(MATCHER, name)
+
+    def test_script_honors_the_org_kill_switch(self) -> None:
+        text = (_HOOKS_DIR / "pre-tool-stamp.sh").read_text()
+        assert '[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0' in text.splitlines()[1]
+
+    def test_script_dispatches_to_the_stamping_event(self) -> None:
+        text = (_HOOKS_DIR / "pre-tool-stamp.sh").read_text()
+        assert "biff-hook claude-code pre-tool-stamp" in text
