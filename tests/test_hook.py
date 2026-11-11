@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 from biff.hook import (
@@ -32,6 +32,9 @@ from biff.hook import (
     handle_session_resume,
     handle_session_start,
 )
+
+if TYPE_CHECKING:
+    import pytest
 
 # Deterministic worktree root for hint file tests.
 _FAKE_WORKTREE = "/test/worktree"
@@ -414,51 +417,43 @@ class TestHandleSessionResume:
         assert "resumed" in result
 
 
-class TestCaptureSessionHint:
-    """SessionStart persists the Claude session_id for the server."""
+class TestOpenSessionFromHook:
+    """SessionStart opens the engine session from the payload's session_id."""
 
-    def test_writes_hint_from_payload(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint
+    def test_opens_with_the_payload(self) -> None:
+        from biff.hook import _open_session
 
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_session_hint({"session_id": "sid-from-hook", "source": "resume"})
-            loaded = sid_mod.SessionHint.load(4321)
+        opened: list[dict[str, object]] = []
 
-        assert loaded is not None
-        assert loaded.session_id == "sid-from-hook"
-        assert loaded.source == "resume"
-        assert loaded.claude_pid == 4321
+        async def _fake(data: dict[str, object], **_kw: object) -> str | None:
+            opened.append(data)
+            return "k"
 
-    def test_no_session_id_is_noop(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint
+        with patch("biff.session_open.open_session_from_payload", _fake):
+            _open_session({"session_id": "sid-1", "source": "resume"})
 
-        with patch.object(sid_mod, "biff_data_dir", return_value=tmp_path):
-            _capture_session_hint({"source": "startup"})
+        assert opened == [{"session_id": "sid-1", "source": "resume"}]
 
-        assert not (tmp_path / "sessions").exists()
+    def test_open_failure_is_swallowed(self) -> None:
+        """A registration failure must not break session startup."""
+        from biff.hook import _open_session
 
-    def test_write_failure_is_swallowed(self, tmp_path: Path) -> None:
-        """A hint-write OSError must not break session startup (best-effort)."""
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint
+        async def _boom(data: dict[str, object], **_kw: object) -> str | None:
+            raise OSError("relay unreachable")
 
-        def _boom(_self: object) -> None:
-            raise OSError("disk full")
+        with patch("biff.session_open.open_session_from_payload", _boom):
+            _open_session({"session_id": "sid-1"})  # must not raise
 
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-            patch.object(sid_mod.SessionHint, "write", _boom),
-        ):
-            # Must not raise.
-            _capture_session_hint({"session_id": "sid", "source": "startup"})
+    def test_open_failure_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        from biff.hook import _open_session
+
+        async def _boom(data: dict[str, object], **_kw: object) -> str | None:
+            raise OSError("relay unreachable")
+
+        with patch("biff.session_open.open_session_from_payload", _boom):
+            _open_session({"session_id": "sid-1"})
+
+        assert "relay unreachable" in caplog.text
 
 
 class TestResolveIdentity:

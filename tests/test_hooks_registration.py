@@ -63,10 +63,10 @@ class TestHooksJsonWiring:
             assert os.access(script, os.X_OK), f"script is not executable: {script}"
 
 
-# Scripts that re-capture the Claude SessionHint (``cc_session_start`` /
+# Scripts that open the engine session (``cc_session_start`` /
 # ``cc_session_resume``). The no-matcher ``session-start.sh`` only does
-# first-run setup and never captures the hint, so it does not count.
-_HINT_CAPTURE_SCRIPTS = frozenset({"session-init.sh", "session-resume.sh"})
+# first-run setup and never opens a session, so it does not count.
+_SESSION_OPEN_SCRIPTS = frozenset({"session-init.sh", "session-resume.sh"})
 
 
 def _sessionstart_matcher_scripts() -> list[tuple[str, list[str]]]:
@@ -90,18 +90,17 @@ def _sessionstart_matcher_scripts() -> list[tuple[str, list[str]]]:
     return out
 
 
-class TestSessionStartClearRecapture:
-    """``/clear`` must re-capture the SessionHint (biff-uyyd).
+class TestSessionStartClearReopens:
+    """``/clear`` must re-open the engine session.
 
     After ``/clear`` Claude Code emits ``SessionStart`` with
     ``source=clear`` and a *new* ``session_id``.  Unless a matcher routes
-    ``clear`` to a hint-capturing dispatcher, the stale hint keeps the old
-    ``session_id``: ``/plan`` writes the plan marker under the old id while
-    the ``PreToolUse`` gate reads the payload's new id, and every edit is
-    denied no matter how many times ``/plan`` runs.
+    ``clear`` to a session-opening dispatcher, the relay row, unread file
+    and handle stay keyed by the old ``session_id`` while every tool call
+    arrives under the new one.
     """
 
-    def test_clear_routed_to_a_hint_capturing_script(self) -> None:
+    def test_clear_routed_to_a_session_opening_script(self) -> None:
         routed = [
             script
             for matcher, scripts in _sessionstart_matcher_scripts()
@@ -109,10 +108,10 @@ class TestSessionStartClearRecapture:
             for script in scripts
         ]
         assert routed, (
-            "no SessionStart matcher routes source=clear; the SessionHint is "
-            "never re-captured after /clear (biff-uyyd)"
+            "no SessionStart matcher routes source=clear; the session is "
+            "never re-opened after /clear"
         )
-        assert _HINT_CAPTURE_SCRIPTS.intersection(routed), (
-            "source=clear is matched but not by a hint-capturing dispatcher "
-            f"(need one of {sorted(_HINT_CAPTURE_SCRIPTS)}; got {routed})"
+        assert _SESSION_OPEN_SCRIPTS.intersection(routed), (
+            "source=clear is matched but not by a session-opening dispatcher "
+            f"(need one of {sorted(_SESSION_OPEN_SCRIPTS)}; got {routed})"
         )

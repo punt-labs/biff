@@ -10,6 +10,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -728,34 +729,21 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
     return collisions
 
 
-def _capture_session_hint(data: dict[str, object]) -> None:
-    """Persist the Claude ``session_id`` for the MCP server.
+def _open_session(data: dict[str, object]) -> None:
+    """Register the Claude session named by the SessionStart payload.
 
-    SessionStart is the only hook that sees ``session_id`` (on stdin); the
-    server reads the hint back from the same ``CLAUDE_PID``-keyed file this
-    hook writes to (DES-058), falling back to the process-tree walk only
-    when the env var is absent (DES-011).  A missing/empty id is a no-op —
-    the server then routes on a fresh hex fallback.
+    SessionStart is the harness declaring ``session_id`` to biff, so this is
+    where the durable record is opened (relay row, unread file, active
+    marker, handle).  Best-effort: a failure forfeits presence until the
+    first tool call opens the session instead, but must never break session
+    startup, so it is logged and swallowed.
     """
-    session_id = data.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        return
-    source = data.get("source")
-    from biff.session_id import SessionHint  # noqa: PLC0415
+    from biff.session_open import open_session_from_payload  # noqa: PLC0415
 
-    hint = SessionHint.capture(
-        session_id, source if isinstance(source, str) else "startup"
-    )
-    # Best-effort: a hint-write failure forfeits resume-reclaim (the server
-    # falls back to a fresh hex) but must never break session startup.  Log
-    # so a broken resume is observable, then swallow.
     try:
-        hint.write()
-    except OSError:
-        logger.warning(
-            "Failed to persist session hint; resume-reclaim disabled this session",
-            exc_info=True,
-        )
+        asyncio.run(open_session_from_payload(data))
+    except Exception:
+        logger.warning("Failed to open session at SessionStart", exc_info=True)
 
 
 def handle_session_start(data: dict[str, object] | None = None) -> str:
@@ -957,7 +945,7 @@ def cc_session_start() -> None:
     if not _is_biff_enabled():
         return
     data = _read_hook_input()
-    _capture_session_hint(data)
+    _open_session(data)
     result = handle_session_start(data)
     _emit(_hook_context("SessionStart", result))
 
@@ -967,7 +955,7 @@ def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
     if not _is_biff_enabled():
         return
-    _capture_session_hint(_read_hook_input())
+    _open_session(_read_hook_input())
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 

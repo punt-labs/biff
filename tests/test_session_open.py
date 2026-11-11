@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import pytest
 
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.session_handle import SessionHandleStore
 from biff.session_open import SessionOpener
 from biff.session_routing import SessionRouting
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def _opener(tmp_path: Path, relay: LocalRelay) -> SessionOpener:
@@ -64,3 +62,44 @@ async def test_open_is_idempotent_for_the_same_session(
 
     assert first == second
     assert len(await relay.get_sessions()) == 1
+
+
+def _git_repo(root: Path) -> Path:
+    import subprocess
+
+    root.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)  # noqa: S607
+    return root
+
+
+async def test_open_from_payload_registers_under_the_payload_session_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biff.session_open import open_session_from_payload
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = _git_repo(tmp_path / "repo")
+
+    key = await open_session_from_payload(
+        {"session_id": "sess-9", "cwd": str(repo)},
+        user_override="rmh",
+        relay_url_override="",
+    )
+
+    routing = SessionRouting("sess-9")
+    assert key == routing.session_key("rmh")
+    unread = routing.unread_path(tmp_path / ".punt-labs" / "biff" / "unread")
+    assert json.loads(unread.read_text())["user"] == "rmh"
+    handle = SessionHandleStore(tmp_path / ".punt-labs" / "biff" / "sessions")
+    assert handle.read(routing) == key
+
+
+@pytest.mark.parametrize("payload", [{}, {"session_id": ""}, {"session_id": "../x"}])
+async def test_open_from_payload_without_a_valid_session_id_is_a_no_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> None:
+    from biff.session_open import open_session_from_payload
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert await open_session_from_payload(payload, user_override="rmh") is None
+    assert not (tmp_path / ".punt-labs").exists()

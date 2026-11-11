@@ -57,3 +57,50 @@ class SessionOpener:
         )
         self.handles.write(routing, key)
         return key
+
+
+async def open_session_from_payload(
+    data: dict[str, object],
+    *,
+    user_override: str | None = None,
+    relay_url_override: str | None = None,
+) -> str | None:
+    """Open the session a SessionStart hook payload names.
+
+    Returns the session key, or ``None`` when the payload carries no usable
+    ``session_id`` (a missing or malformed one is the harness failing to
+    declare itself, and a hook must never break session start over it).
+    The relay is the one the server will use, selected by the same config.
+    """
+    from biff._stdlib import biff_data_dir  # noqa: PLC0415
+    from biff.config import RELAY_URL_UNSET, load_mcp_config  # noqa: PLC0415
+    from biff.server.state import create_state  # noqa: PLC0415
+    from biff.session_routing import SessionIdError  # noqa: PLC0415
+
+    raw = data.get("session_id")
+    try:
+        routing = SessionRouting(raw if isinstance(raw, str) else "")
+    except SessionIdError:
+        return None
+    cwd = data.get("cwd")
+    resolved = load_mcp_config(
+        user_override=user_override,
+        relay_url_override=(
+            RELAY_URL_UNSET if relay_url_override is None else relay_url_override
+        ),
+        start=Path(cwd) if isinstance(cwd, str) and cwd else None,
+    )
+    state = create_state(resolved.config, resolved.data_dir, tty=routing.routing_id)
+    data_root = biff_data_dir()
+    try:
+        return await SessionOpener(
+            relay=state.relay,
+            config=resolved.config,
+            repo_common_root=resolved.repo_common_root,
+            unread_dir=data_root / "unread",
+            handles=SessionHandleStore(data_root / "sessions"),
+            hostname=state.hostname,
+            pwd=state.pwd,
+        ).open(routing)
+    finally:
+        await state.relay.close()
