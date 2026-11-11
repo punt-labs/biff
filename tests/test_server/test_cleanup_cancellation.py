@@ -13,6 +13,7 @@ from biff.ethos_session import EthosSessionPin
 from biff.models import BiffConfig
 from biff.server import app
 from biff.server.state import create_state
+from biff.session_registry import register_session
 
 
 @pytest.mark.parametrize(
@@ -102,7 +103,7 @@ async def test_cancel_after_yield_joins_teardown_before_replacement(
     # The same pin can now register; all predecessor workers are joined and
     # cannot heartbeat, poll, or delete the replacement after ownership moves.
     with pin.ownership():
-        replacement, _ = await app.register_session(
+        replacement, _ = await register_session(
             state.relay,
             "rmh",
             pin.routing_id,
@@ -238,7 +239,7 @@ async def test_startup_cleanup_failure_still_closes_and_preserves_original(
 
 async def test_alias_inner_cancel_still_deletes_presence(tmp_path: Path) -> None:
     state = create_state(BiffConfig(user="rmh", repo_name="test"), tmp_path)
-    await app.register_session(
+    await register_session(
         state.relay,
         "rmh",
         state.tty,

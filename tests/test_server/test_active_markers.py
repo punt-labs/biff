@@ -25,7 +25,7 @@ from biff.server.state import CompanionSession, create_state
 def active_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Pin the active-marker directory to a tmp path for isolation."""
     root = tmp_path / "active"
-    monkeypatch.setattr("biff.server.app.active_dir", lambda: root)
+    monkeypatch.setattr("biff.session_registry.active_dir", lambda: root)
     return root
 
 
@@ -128,7 +128,7 @@ class TestActiveMarkers:
             msg = "simulated claim failure"
             raise RuntimeError(msg)
 
-        monkeypatch.setattr("biff.server.app.claim_tty_name", _boom)
+        monkeypatch.setattr("biff.session_registry.claim_tty_name", _boom)
 
         mcp = create_server(state)
         with pytest.raises(RuntimeError, match="simulated claim failure"):

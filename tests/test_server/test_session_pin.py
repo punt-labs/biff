@@ -313,7 +313,8 @@ async def test_failed_startup_closes_owned_relay_before_unlock(
 async def test_persona_predecessor_logout_alias_and_exact_routing_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from biff.server.app import _retire_pin_predecessors, register_session
+    from biff.server.app import _retire_pin_predecessors
+    from biff.session_registry import register_session
 
     monkeypatch.setenv("HOME", str(tmp_path))
     pin = EthosSessionPin(SID, SID)
@@ -364,12 +365,8 @@ async def test_failed_persona_retirement_preserves_alias_and_retry_information(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_alias: bool
 ) -> None:
     from biff._stdlib import active_dir, sentinel_dir
-    from biff.server.app import (
-        _active_lifespan,
-        _write_sentinel,
-        register_session,
-        write_active_session,
-    )
+    from biff.server.app import _active_lifespan, _write_sentinel
+    from biff.session_registry import register_session, write_active_session
 
     monkeypatch.setenv("HOME", str(tmp_path))
     pin = EthosSessionPin(SID, SID)

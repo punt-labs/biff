@@ -474,7 +474,7 @@ async def _sync_unread_file(
     else:
         status_user = state.config.user
         status_tty = _tty_name
-    _write_unread_file(
+    write_unread_file(
         state.unread_path,
         summary,
         repo_name=state.config.repo_name,
@@ -1656,7 +1656,7 @@ async def poll_inbox(
                     await asyncio.shield(sub.handle.unsubscribe())
 
 
-def _write_unread_file(
+def write_unread_file(
     path: Path,
     summary: UnreadSummary,
     *,

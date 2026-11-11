@@ -1,6 +1,6 @@
 """Tier-1 invariant tests for session registration.
 
-These tests exercise :func:`biff.server.app.register_session` and the
+These tests exercise :func:`biff.session_registry.register_session` and the
 companion registration helper against ``LocalRelay`` and assert the
 post-condition that ``tty_name`` is non-empty on every written row.
 
@@ -144,7 +144,7 @@ class TestRegisterCompanion:
             msg = "simulated claim failure"
             raise RuntimeError(msg)
 
-        monkeypatch.setattr("biff.server.app.claim_tty_name", _boom)
+        monkeypatch.setattr("biff.session_registry.claim_tty_name", _boom)
 
         with pytest.raises(RuntimeError, match="simulated claim failure"):
             await _register_companion(state)
@@ -163,7 +163,7 @@ class TestRegisterSessionHelper:
     """register_session() returns the written row with tty_name set."""
 
     async def test_returns_session_with_tty_name(self, tmp_path: Path) -> None:
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         session, tty_name = await register_session(
@@ -199,7 +199,7 @@ class TestRegisterSessionHelper:
         from datetime import UTC, datetime
 
         from biff.models import UserSession
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         session_key = "kai:a1b2c3d4"
@@ -251,7 +251,7 @@ class TestRegisterSessionHelper:
         from datetime import UTC, datetime
 
         from biff.models import UserSession
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         foreign_key = "kai:deadbeef"
@@ -687,7 +687,7 @@ class TestResumeReclaim:
         self, tmp_path: Path
     ) -> None:
         """A resumed session_id reclaims its prior ttyN, not the lowest free."""
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -708,7 +708,7 @@ class TestResumeReclaim:
         naive claim treated 'taken' as a foreign collision and reassigned a
         fresh tty. Same-identity takeover reclaims tty16 -> tty16.
         """
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -728,7 +728,7 @@ class TestResumeReclaim:
         routing is unaffected (the inbox keys on the session_id), only the
         human-facing alias moves.
         """
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -751,7 +751,7 @@ class TestResumeReclaim:
         and the resume falls back to a fresh lowest-free alias — never the
         poisoned name.
         """
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -770,7 +770,7 @@ class TestResumeReclaim:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The SUCCESS path is observable, symmetric with the fallback log."""
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -790,7 +790,7 @@ class TestResumeReclaim:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The fallback path logs the reassignment — the matched pair."""
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -816,7 +816,7 @@ class TestResumeReclaim:
         identical across the exit+resume boundary.
         """
         from biff.models import Message
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         relay = LocalRelay(data_dir=tmp_path)
         sid = "2f5a1c3e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -894,7 +894,8 @@ class TestReapSentinels:
         delete its KV row.
         """
         from biff.server import app as app_mod
-        from biff.server.app import _write_sentinel, register_session
+        from biff.server.app import _write_sentinel
+        from biff.session_registry import register_session
 
         config = BiffConfig(
             user="kai", display_name="Kai", kind="agent", repo_name="_test-reap"
@@ -928,7 +929,8 @@ class TestReapSentinels:
         """A sentinel for a DIFFERENT (dead) key is still reaped normally."""
         from biff.models import UserSession
         from biff.server import app as app_mod
-        from biff.server.app import _write_sentinel, register_session
+        from biff.server.app import _write_sentinel
+        from biff.session_registry import register_session
 
         config = BiffConfig(
             user="kai", display_name="Kai", kind="agent", repo_name="_test-reap"
