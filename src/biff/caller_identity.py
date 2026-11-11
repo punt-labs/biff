@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import cast
 
-from biff.session_id import CLAUDE_CODE_ROLE, SessionHint
+from biff.session_routing import ID_RE, SessionRouting
 
 CALLER_KEY = "_caller"
-
-_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class CallerIdentityError(ValueError):
@@ -38,13 +35,18 @@ class CallerIdentity:
         fields: dict[str, str] = {}
         for name in ("session_id", "agent_id"):
             value = mapping.get(name)
-            if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+            if not isinstance(value, str) or not ID_RE.fullmatch(value):
                 msg = f"{CALLER_KEY}.{name} must match [A-Za-z0-9_-]+, got {value!r}"
                 raise CallerIdentityError(msg)
             fields[name] = value
         return cls(session_id=fields["session_id"], agent_id=fields["agent_id"])
 
     @property
+    def routing(self) -> SessionRouting:
+        """Routing derivations for this caller's session."""
+        return SessionRouting(self.session_id)
+
+    @property
     def routing_id(self) -> str:
         """Routing token for this caller's session."""
-        return SessionHint.derive_routing_id(self.session_id, CLAUDE_CODE_ROLE)
+        return self.routing.routing_id
