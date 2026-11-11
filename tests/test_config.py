@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,8 +25,6 @@ from biff.config import (
     compute_data_dir,
     extract_biff_fields,
     find_git_root,
-    get_ethos_roster,
-    get_ethos_team,
     get_github_identity,
     get_os_user,
     get_repo_slug,
@@ -523,10 +520,9 @@ class TestLoadCliConfig:
         with pytest.raises(SystemExit, match="Not in a git repository"):
             load_cli_config(start=tmp_path)
 
-    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_zero_config_uses_demo_relay(
-        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
         resolved = load_cli_config(start=tmp_path)
@@ -543,11 +539,8 @@ class TestLoadCliConfig:
         with pytest.raises(SystemExit, match="Not in a git repository"):
             load_cli_config(start=tmp_path, data_dir_override=custom)
 
-    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
-    def test_relay_auth_flows_through(
-        self, _mock_gh: object, _mock_team: object, tmp_path: Path
-    ) -> None:
+    def test_relay_auth_flows_through(self, _mock_gh: object, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
@@ -557,10 +550,9 @@ class TestLoadCliConfig:
         resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_auth == RelayAuth(user_credentials="/creds")
 
-    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_tls_handshake_first_flows_through(
-        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
         """Regression: this value passes through several dataclass
         reconstructions in config.py (_ConfigFields, _BaseConfig,
@@ -581,10 +573,9 @@ class TestLoadCliConfig:
         resolved = load_cli_config(start=tmp_path)
         assert resolved.config.relay_tls_handshake_first is True
 
-    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_url_override_clears_auth(
-        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
         """Overriding relay URL must clear config auth to prevent credential leak."""
         (tmp_path / ".git").mkdir()
@@ -600,10 +591,9 @@ class TestLoadCliConfig:
         assert resolved.config.relay_url == "tls://other.example"
         assert resolved.config.relay_auth is None
 
-    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_relay_url_override_clears_tls_handshake_first(
-        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
         """Overriding relay URL must clear tls_handshake_first too.
 
@@ -873,223 +863,14 @@ class TestLoadMcpConfig:
         with pytest.raises(SystemExit, match="Not in a git repository"):
             load_mcp_config(start=tmp_path)
 
-    @patch("biff.config.get_ethos_team", return_value=None)
     @patch("biff.config.get_github_identity", return_value=_KAI)
     def test_zero_config_uses_demo_relay(
-        self, _mock_gh: object, _mock_team: object, tmp_path: Path
+        self, _mock_gh: object, tmp_path: Path
     ) -> None:
         (tmp_path / ".git").mkdir()
         resolved = load_mcp_config(start=tmp_path)
         assert resolved.config.relay_url == DEMO_RELAY_URL
         assert resolved.config.relay_auth is not None
-
-
-# -- get_ethos_team --
-
-
-class TestGetEthosTeam:
-    def test_success(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                '[{"name":"eng","members":['
-                '{"identity":"claude","role":"coo"},'
-                '{"identity":"jmf","role":"founder"}'
-                "]}]"
-            )
-            result = get_ethos_team()
-            assert result == ("claude", "jmf")
-
-    def test_empty_array(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "[]"
-            assert get_ethos_team() is None
-
-    def test_not_installed(self) -> None:
-        with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
-            assert get_ethos_team() is None
-
-    def test_multi_team_member_union(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                "["
-                '{"name":"eng","members":[{"identity":"claude"},{"identity":"jmf"}]},'
-                '{"name":"ops","members":[{"identity":"adb"},{"identity":"jmf"}]}'
-                "]"
-            )
-            result = get_ethos_team()
-            assert result == ("adb", "claude", "jmf")
-
-
-# -- get_ethos_roster --
-
-
-_ROSTER_JSON = (
-    '{"root":{"handle":"jfreeman","kind":"human","display_name":"Jim Freeman"},'
-    '"primary":{"handle":"claude","kind":"agent","display_name":"Claude Agento"}}'
-)
-
-_ROSTER_SAME = (
-    '{"root":{"handle":"claude","kind":"agent","display_name":"Claude Agento"},'
-    '"primary":{"handle":"claude","kind":"agent","display_name":"Claude Agento"}}'
-)
-
-
-class TestGetEthosRoster:
-    def test_success(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = _ROSTER_JSON
-            result = get_ethos_roster()
-            assert result is not None
-            assert result.root == EthosIdentity(
-                handle="jfreeman", display_name="Jim Freeman", kind="human"
-            )
-            assert result.primary == EthosIdentity(
-                handle="claude", display_name="Claude Agento", kind="agent"
-            )
-
-    def test_not_installed(self) -> None:
-        with patch("biff.config.subprocess.run", side_effect=FileNotFoundError):
-            assert get_ethos_roster() is None
-
-    def test_exit_1(self, caplog: pytest.LogCaptureFixture) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 1
-            mock_run.return_value.stdout = "No active session."
-            mock_run.return_value.stderr = ""
-            with caplog.at_level(logging.INFO, logger=_CONFIG_LOGGER):
-                assert get_ethos_roster() is None
-        assert any("No active session." in r.getMessage() for r in caplog.records)
-
-    def test_timeout(self) -> None:
-        with patch(
-            "biff.config.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="ethos", timeout=2),
-        ):
-            assert get_ethos_roster() is None
-
-    def test_bad_json(self, caplog: pytest.LogCaptureFixture) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "not json"
-            mock_run.return_value.stderr = ""
-            with caplog.at_level(logging.INFO, logger=_CONFIG_LOGGER):
-                assert get_ethos_roster() is None
-        assert any("not json" in r.getMessage() for r in caplog.records)
-
-    def test_missing_root(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                '{"primary":{"handle":"claude","kind":"agent",'
-                '"display_name":"Claude Agento"}}'
-            )
-            result = get_ethos_roster()
-            assert result is not None
-            assert result.root is None
-            assert result.primary is not None
-
-    def test_missing_primary(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                '{"root":{"handle":"jfreeman","kind":"human",'
-                '"display_name":"Jim Freeman"}}'
-            )
-            result = get_ethos_roster()
-            assert result is not None
-            assert result.root is not None
-            assert result.primary is None
-
-    def test_empty_handle_in_entry(self) -> None:
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = (
-                '{"root":{"handle":"","kind":"human","display_name":"X"},'
-                '"primary":{"handle":"claude","kind":"agent",'
-                '"display_name":"Claude"}}'
-            )
-            result = get_ethos_roster()
-            assert result is not None
-            assert result.root is None  # empty handle → None
-
-    def test_participants_format(self) -> None:
-        """Current ethos roster format: participants array."""
-        roster_json = (
-            '{"session":"abc","participants":['
-            '{"agent_id":"jfreeman","persona":"jfreeman"},'
-            '{"agent_id":"12345","persona":"claude","parent":"jfreeman"}'
-            "]}"
-        )
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = roster_json
-            result = get_ethos_roster()
-            assert result is not None
-            assert result.root is not None
-            assert result.root.handle == "jfreeman"
-            assert result.primary is not None
-            assert result.primary.handle == "claude"
-
-    def test_participants_no_parent_means_root(self) -> None:
-        """Entry without parent is root."""
-        roster_json = '{"participants":[{"agent_id":"kai","persona":"kai"}]}'
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = roster_json
-            result = get_ethos_roster()
-            assert result is not None
-            assert result.root is not None
-            assert result.root.handle == "kai"
-            assert result.primary is None
-
-    def test_participants_single_agent_only(self) -> None:
-        """Only an agent (with parent) and no root."""
-        roster_json = (
-            '{"participants":[{"agent_id":"99","persona":"claude","parent":"unknown"}]}'
-        )
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = roster_json
-            result = get_ethos_roster()
-            assert result is not None
-            assert result.root is None
-            assert result.primary is not None
-            assert result.primary.handle == "claude"
-
-    def test_preserves_inherited_claude_pid(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A claude process's own CLAUDE_PID (DES-058), already present in
-        os.environ, reaches the subprocess unmodified -- subprocess.run with
-        no env= override inherits the caller's environment as-is. Guards
-        this contract explicitly so a future change does not regress it by
-        introducing an env= override that fails to copy CLAUDE_PID through."""
-        monkeypatch.setenv("CLAUDE_PID", "200")
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = _ROSTER_JSON
-            get_ethos_roster()
-            assert "env" not in mock_run.call_args.kwargs
-            assert os.environ["CLAUDE_PID"] == "200"
-
-    def test_omits_claude_pid_when_absent_from_environment(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """CLAUDE_PID absent from os.environ (headless/CI/SDK, or Claude
-        Code simply not injecting it into the MCP server's own environment,
-        biff-qou) -- no ancestry-walk fallback derives one; the subprocess
-        call passes no env override at all, so it inherits exactly what
-        this process has (CLAUDE_PID absent)."""
-        monkeypatch.delenv("CLAUDE_PID", raising=False)
-        with patch("biff.config.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = _ROSTER_JSON
-            get_ethos_roster()
-            assert "env" not in mock_run.call_args.kwargs
 
 
 # -- resolve_agent_identity_from_disk --

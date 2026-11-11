@@ -10,11 +10,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Generator
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import nats
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
@@ -22,6 +21,10 @@ from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import _reset_session
 from biff.testing import NotificationTracker, RecordingClient, Transcript
+from biff.testing.caller import StampedClient
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 _TEST_REPO = "_test-nats-e2e"
@@ -91,7 +94,7 @@ async def kai_client(
         config, shared_data_dir / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -109,7 +112,7 @@ async def eric_client(
         pwd="/test",
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -143,7 +146,7 @@ async def kai_tracked(
         config, shared_data_dir / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
+    async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
         yield client, tracker, state
     _reset_session()
 
@@ -163,5 +166,5 @@ async def eric_tracked(
         pwd="/test",
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
+    async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
         yield client, tracker, state

@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, Message, RelayAuth
@@ -27,9 +26,12 @@ from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.server.tools._descriptions import _reset_session, nap_interval_for
 from biff.testing import NotificationTracker, RecordingClient, Transcript
+from biff.testing.caller import StampedClient
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from fastmcp import Client
 
     from ._docker import RelayContainer
 
@@ -152,7 +154,7 @@ class TestPushVsPollDemo:
             repo_name=_TEST_REPO,
         )
         try:
-            async with Client(
+            async with StampedClient(
                 FastMCPTransport(mcp), message_handler=tracker
             ) as kai_raw:
                 kai = RecordingClient(client=kai_raw, transcript=transcript, user="kai")

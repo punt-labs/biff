@@ -23,7 +23,6 @@ from biff.server.state import CompanionSession, ServerState, create_state
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
-    MAX_UNREAD_COUNT,
     SubscriptionBinding,
     _active_tick,
     _CompanionSubs,
@@ -33,7 +32,6 @@ from biff.server.tools._descriptions import (
     _reconcile_talk_sub,
     _sync_unread_file,
     _talk_description,
-    _write_unread_file,
     nap_interval_for,
     poll_inbox,
     refresh_read_messages,
@@ -45,6 +43,7 @@ from biff.server.tools._descriptions import (
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 from biff.talk_latch import TalkNotifyLatch
 from biff.talk_state import TalkState
+from biff.unread_file import MAX_UNREAD_COUNT, write_unread_file
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -241,7 +240,7 @@ class TestUnreadFile:
     async def test_clamps_unread_count_at_max(self, tmp_path: Path) -> None:
         path = tmp_path / "unread.json"
         summary = UnreadSummary(count=999)
-        _write_unread_file(
+        write_unread_file(
             path,
             summary,
             repo_name=_TEST_REPO,
@@ -261,7 +260,7 @@ class TestUnreadFile:
         not a placeholder.
         """
         path = tmp_path / "unread.json"
-        _write_unread_file(
+        write_unread_file(
             path,
             UnreadSummary(count=1),
             repo_name=_TEST_REPO,

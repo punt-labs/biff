@@ -38,42 +38,11 @@ command -v jq >/dev/null 2>&1 || exit 0
 _event=$(printf '%s' "$_stdin" | jq -r '.hook_event_name // empty' 2>/dev/null)
 [[ -n "$_event" ]] || exit 0
 
-# --- Resolve this session's unread-file key: the topmost `claude` ancestor
-# PID, mirroring src/biff/session_key.py's find_session_key() in pure shell
-# (one `ps` call, not a Python subprocess). Falls back to $PPID, matching
-# that function's own os.getppid() fallback.
-#
-# The walk itself runs in awk, not bash: `declare -A` (bash 4+) is not
-# available in macOS's system /bin/bash (3.2, GPLv2-frozen), so building the
-# pid->ppid/comm maps as bash associative arrays silently errored out on
-# macOS and disabled the whole hook there (every session fell back to
-# $PPID). awk has always had associative arrays and ships on every target
-# platform (POSIX-required), so the two-pass build-then-walk moves there
-# entirely; bash only captures awk's single-line result.
-_session_key=""
-if _ps_table=$(ps -eo pid=,ppid=,comm= 2>/dev/null); then
-  _session_key=$(printf '%s\n' "$_ps_table" | awk -v start="$$" '
-    {
-      pid = $1; ppid = $2; comm = $3
-      n = split(comm, parts, "/")
-      base[pid] = parts[n]
-      parent[pid] = ppid
-    }
-    END {
-      walk = start
-      found = ""
-      for (i = 0; i < 10; i++) {
-        if (!(walk in parent)) break
-        if (base[walk] == "claude") found = walk
-        nxt = parent[walk]
-        if (nxt == walk || nxt == "0") break
-        walk = nxt
-      }
-      print found
-    }
-  ' 2>/dev/null)
-fi
-[[ -n "$_session_key" ]] || _session_key="$PPID"
+# --- This session's unread-file key is the payload's session_id, the same
+# value the server and the statusline key on (SessionRouting.unread_path).
+# A missing or malformed id means there is no file to read: exit quietly.
+_session_key=$(printf '%s' "$_stdin" | jq -r '.session_id // empty' 2>/dev/null)
+[[ "$_session_key" =~ ^[A-Za-z0-9_-]+$ ]] || exit 0
 
 _unread_dir="$HOME/.punt-labs/biff/unread"
 _unread_file="$_unread_dir/${_session_key}.json"

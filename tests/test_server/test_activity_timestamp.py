@@ -185,7 +185,7 @@ class TestRegistrationSetsLastToolAt:
     """A freshly registered session idles from its own start time."""
 
     async def test_register_session_sets_last_tool_at(self, tmp_path: Path) -> None:
-        from biff.server.app import register_session
+        from biff.session_registry import register_session
 
         session, _ = await register_session(
             create_state(

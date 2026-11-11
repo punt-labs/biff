@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 from biff.__main__ import app
+from biff.session_routing import SessionRouting
 from biff.statusline import (
     _LINE2_IDLE,
     InstallResult,
@@ -746,16 +746,20 @@ class TestRunOriginal:
 # --- Run Statusline (integration) ------------------------------------------
 
 
-def _write_ppid_unread(
+_SESSION_ID = "statusline-test-session"
+_STDIN = json.dumps({"session_id": _SESSION_ID})
+
+
+def _write_session_unread(
     unread_dir: Path,
     user: str,
     count: int,
     tty_name: str = "",
     display_items: list[dict[str, str]] | None = None,
 ) -> None:
-    """Write a PPID-keyed unread file for the current process."""
+    """Write the unread file the server would write for ``_SESSION_ID``."""
     unread_dir.mkdir(parents=True, exist_ok=True)
-    path = unread_dir / f"{os.getppid()}.json"
+    path = SessionRouting(_SESSION_ID).unread_path(unread_dir)
     data: dict[str, object] = {
         "user": user,
         "count": count,
@@ -765,69 +769,67 @@ def _write_ppid_unread(
     path.write_text(json.dumps(data))
 
 
-@patch("biff.statusline.find_session_key", return_value=os.getppid())
 class TestRunStatusline:
-    def test_no_original_no_unreads(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_no_original_no_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "/biff enable" in result
         assert _LINE2_IDLE in result
 
-    def test_no_original_with_unreads(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_no_original_with_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 3, "tty1")
+        _write_session_unread(unread_dir, "kai", 3, "tty1")
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "kai:tty1(3)" in result
         assert "\033[1;33m" in result
 
-    def test_original_with_unreads(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_original_with_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 2, "tty1")
+        _write_session_unread(unread_dir, "kai", 2, "tty1")
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "42%" in result
         assert "kai:tty1(2)" in result
         assert " | " in result
 
-    def test_original_no_unreads(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_original_no_unreads(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         write_stash(stash_path, {"type": "command", "command": "echo 42%"})
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "42%" in result
         assert "/biff enable" in result
         assert "(0)" not in result
         assert " | " in result
 
-    def test_without_tty_name(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_without_tty_name(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 1)
+        _write_session_unread(unread_dir, "kai", 1)
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         assert "kai(1)" in result
         assert ":" not in result.replace("\033[1;33m", "").replace("\033[0m", "")
 
-    def test_native_segments_with_session_data(
-        self, _mock_key: object, tmp_path: Path
-    ) -> None:
+    def test_native_segments_with_session_data(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        _write_session_unread(unread_dir, "kai", 0, "tty1")
         session_json = json.dumps(
             {
+                "session_id": _SESSION_ID,
                 "workspace": {
                     "project_dir": "/tmp/my-repo",
                     "current_dir": "/tmp/my-repo",
@@ -848,15 +850,14 @@ class TestRunStatusline:
         assert "kai:tty1(0)" in result
         assert " | " in result
 
-    def test_original_overrides_base_segments(
-        self, _mock_key: object, tmp_path: Path
-    ) -> None:
+    def test_original_overrides_base_segments(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        _write_session_unread(unread_dir, "kai", 0, "tty1")
         write_stash(stash_path, {"type": "command", "command": "echo custom-base"})
         session_json = json.dumps(
             {
+                "session_id": _SESSION_ID,
                 "workspace": {
                     "project_dir": "/tmp/my-repo",
                     "current_dir": "/tmp/my-repo",
@@ -873,10 +874,10 @@ class TestRunStatusline:
         # Native segments should NOT appear when original is used
         assert "$1.50" not in result
 
-    def test_wall_on_separate_line(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_wall_on_separate_line(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(
+        _write_session_unread(
             unread_dir,
             "kai",
             0,
@@ -884,7 +885,7 @@ class TestRunStatusline:
             display_items=[{"kind": "wall", "text": "eric: release freeze"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
         assert len(lines) == 2
@@ -893,22 +894,22 @@ class TestRunStatusline:
         assert "eric: release freeze" in lines[1]
         assert "\033[1;31m" in lines[1]  # wall = bold red
 
-    def test_no_wall_idle_line_2(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_no_wall_idle_line_2(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        _write_session_unread(unread_dir, "kai", 0, "tty1")
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
         assert len(lines) == 2
         assert "kai:tty1(0)" in lines[0]
         assert lines[1] == _LINE2_IDLE
 
-    def test_talk_on_line_2(self, _mock_key: object, tmp_path: Path) -> None:
+    def test_talk_on_line_2(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(
+        _write_session_unread(
             unread_dir,
             "kai",
             0,
@@ -916,7 +917,7 @@ class TestRunStatusline:
             display_items=[{"kind": "talk", "text": "eric: check PR #42"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
         assert len(lines) == 2
@@ -926,14 +927,12 @@ class TestRunStatusline:
         # Bold yellow, not bold red (that's wall)
         assert "\033[1;33m" in lines[1]
 
-    def test_display_kind_determines_color(
-        self, _mock_key: object, tmp_path: Path
-    ) -> None:
+    def test_display_kind_determines_color(self, tmp_path: Path) -> None:
         """The display queue determines what shows on line 2 — no priority logic."""
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
         # Queue rotated wall into view
-        _write_ppid_unread(
+        _write_session_unread(
             unread_dir,
             "kai",
             0,
@@ -941,22 +940,21 @@ class TestRunStatusline:
             display_items=[{"kind": "wall", "text": "admin: release freeze"}],
         )
         with patch("biff.statusline.sys.stdin") as mock_stdin:
-            mock_stdin.read.return_value = "{}"
+            mock_stdin.read.return_value = _STDIN
             result = run_statusline(stash_path, unread_dir)
         lines = result.split("\n")
         assert len(lines) == 2
         assert "admin: release freeze" in lines[1]
         assert "\033[1;31m" in lines[1]  # wall = bold red
 
-    def test_empty_original_falls_back_to_native(
-        self, _mock_key: object, tmp_path: Path
-    ) -> None:
+    def test_empty_original_falls_back_to_native(self, tmp_path: Path) -> None:
         stash_path = tmp_path / "stash.json"
         unread_dir = tmp_path / "unread"
-        _write_ppid_unread(unread_dir, "kai", 0, "tty1")
+        _write_session_unread(unread_dir, "kai", 0, "tty1")
         write_stash(stash_path, {"type": "command", "command": "printf ''"})
         session_json = json.dumps(
             {
+                "session_id": _SESSION_ID,
                 "workspace": {
                     "project_dir": "/tmp/my-repo",
                     "current_dir": "/tmp/my-repo",

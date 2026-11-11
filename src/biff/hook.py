@@ -10,6 +10,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -178,10 +179,9 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
 
     Prefers ``agent_id`` over ``session_id`` when both are present: an
     in-process dispatched subagent shares its leader's OS ``claude``
-    process (and therefore the leader's ``session_id`` fallback via
-    ``SessionHint``), but Claude Code delivers the subagent's *own*
-    ``agent_id`` on its tool-call payloads, distinct from the leader's
-    top-level ``session_id``.  ``None`` when
+    process (and therefore the leader's ``session_id``), but Claude Code
+    delivers the subagent's *own* ``agent_id`` on its tool-call payloads,
+    distinct from the leader's top-level ``session_id``.  ``None`` when
     neither is present — headless/CI/SDK contexts with no Claude session
     at all — and the marker degrades to the shared, unscoped bucket.
     """
@@ -190,31 +190,6 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
-
-
-def _routing_id() -> str | None:
-    """Return the CLAUDE_PID-anchored routing id, or ``None`` on any failure.
-
-    This is the identity the *write* path keys the plan marker on
-    (``commands/plan.py``'s ``sync_plan_marker`` → ``resolve_routing_id``).
-    Reading it here closes the gap when the payload's ``session_id`` and
-    the routing id disagree — the post-``/clear`` window where the MCP
-    server's hint is momentarily stale, or any case where the write path
-    resolved an id the payload does not carry. Best-effort: any resolver
-    fault — a filesystem/psutil ``OSError``, a ``RuntimeError`` from an
-    unresolvable home dir, or an ``ImportError`` on the lazy import —
-    degrades to "this identity unavailable" (one fewer read-ladder rung, a
-    strictly stricter gate), never an exception. Dropping the rung can only
-    cause a false deny the agent re-runs ``/plan`` to clear, never a false
-    allow, so swallowing here does not weaken the gate.
-    """
-    try:
-        from biff.session_id import SessionHint  # noqa: PLC0415
-
-        return SessionHint.resolve_routing_id()
-    except (OSError, RuntimeError, ImportError):
-        logger.debug("routing-id resolution failed; omitting from read ladder")
-        return None
 
 
 def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
@@ -233,29 +208,18 @@ def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
        ``session_id`` (no channel today for a subagent's ``Bash`` to learn
        its own ``agent_id``) would, on an ``agent_id``-only read, find no
        marker and strand every edit (DES-054 RISK-2).
-    3. The CLAUDE_PID routing id — the exact identity the write path keys
-       on. The payload ids and the routing id usually coincide, but after
-       ``/clear`` the server's hint can lag the payload's new
-       ``session_id``; consulting the routing id makes
-       the gate read the same key ``/plan`` wrote regardless of that lag,
-       so one bookkeeping desync can no longer wedge the whole editing
-       surface. It never satisfies the gate with a *sibling's* plan — the
-       routing id is this caller's own, derived from this process's
-       CLAUDE_PID.
-    4. ``None`` (the shared bucket) — the terminal, so headless/CI/SDK
-       writes with no Claude session remain visible.
+    3. ``None`` (the shared bucket) — only when the payload carries no
+       identity at all, so headless/CI/SDK writes remain visible.  An
+       identified caller never reads it: the shared bucket is where an
+       unscoped CLI ``biff plan`` writes, and it must not authorize a
+       session it knows nothing about.
     """
     candidates: list[str | None] = []
     for key in ("agent_id", "session_id"):
         value = data.get(key)
         if isinstance(value, str) and value and value not in candidates:
             candidates.append(value)
-    routing_id = _routing_id()
-    if routing_id and routing_id not in candidates:
-        candidates.append(routing_id)
-    if None not in candidates:
-        candidates.append(None)
-    return tuple(candidates)
+    return tuple(candidates) or (None,)
 
 
 def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
@@ -263,6 +227,23 @@ def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
     from biff.markers import has_plan_marker  # noqa: PLC0415
 
     return any(has_plan_marker(root, identity) for identity in identities)
+
+
+def _log_skipped_shared_plan(root: str, identities: tuple[str | None, ...]) -> None:
+    """Say so when a plan exists only in the shared bucket an identified caller skips.
+
+    The CLI writes the shared bucket when its environment lacks the session id
+    the hook payload carries; without this line the resulting denial after
+    ``biff plan`` would have no visible cause.
+    """
+    from biff.markers import has_plan_marker  # noqa: PLC0415
+
+    if None not in identities and has_plan_marker(root, None):
+        logger.info(
+            "plan gate: a plan exists in the shared bucket but was skipped for "
+            "identified session %s; run /plan from this session to set its own",
+            identities[-1],
+        )
 
 
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
@@ -314,7 +295,9 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
         )
         return None
 
-    if not _has_any_plan_marker(root, _identity_candidates(data)):
+    identities = _identity_candidates(data)
+    if not _has_any_plan_marker(root, identities):
+        _log_skipped_shared_plan(root, identities)
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
             "Run /plan <what you're working on>, then retry the edit."
@@ -728,34 +711,21 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
     return collisions
 
 
-def _capture_session_hint(data: dict[str, object]) -> None:
-    """Persist the Claude ``session_id`` for the MCP server.
+def _open_session(data: dict[str, object]) -> None:
+    """Register the Claude session named by the SessionStart payload.
 
-    SessionStart is the only hook that sees ``session_id`` (on stdin); the
-    server reads the hint back from the same ``CLAUDE_PID``-keyed file this
-    hook writes to (DES-058), falling back to the process-tree walk only
-    when the env var is absent (DES-011).  A missing/empty id is a no-op —
-    the server then routes on a fresh hex fallback.
+    SessionStart is the harness declaring ``session_id`` to biff, so this is
+    where the durable record is opened (relay row, unread file, active
+    marker, handle).  Best-effort: a failure forfeits presence until the
+    first tool call opens the session instead, but must never break session
+    startup, so it is logged and swallowed.
     """
-    session_id = data.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        return
-    source = data.get("source")
-    from biff.session_id import SessionHint  # noqa: PLC0415
+    from biff.session_open import open_session_from_payload  # noqa: PLC0415
 
-    hint = SessionHint.capture(
-        session_id, source if isinstance(source, str) else "startup"
-    )
-    # Best-effort: a hint-write failure forfeits resume-reclaim (the server
-    # falls back to a fresh hex) but must never break session startup.  Log
-    # so a broken resume is observable, then swallow.
     try:
-        hint.write()
-    except OSError:
-        logger.warning(
-            "Failed to persist session hint; resume-reclaim disabled this session",
-            exc_info=True,
-        )
+        asyncio.run(open_session_from_payload(data))
+    except Exception:
+        logger.warning("Failed to open session at SessionStart", exc_info=True)
 
 
 def handle_session_start(data: dict[str, object] | None = None) -> str:
@@ -957,7 +927,7 @@ def cc_session_start() -> None:
     if not _is_biff_enabled():
         return
     data = _read_hook_input()
-    _capture_session_hint(data)
+    _open_session(data)
     result = handle_session_start(data)
     _emit(_hook_context("SessionStart", result))
 
@@ -967,7 +937,7 @@ def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
     if not _is_biff_enabled():
         return
-    _capture_session_hint(_read_hook_input())
+    _open_session(_read_hook_input())
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 

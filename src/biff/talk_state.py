@@ -599,6 +599,22 @@ class TalkState:
         """Update the display tty name used in outgoing notification frames."""
         self._my_tty_name = tty_name
 
+    def rebind(self, *, tty: str, session_key: str) -> None:
+        """Re-anchor an idle state to the session a caller has declared.
+
+        The server learns its session on the first identified call, after
+        this state was built.  Only an idle state can move: a live talk
+        names its own key as the consent anchor, so re-keying it mid-talk
+        would orphan the partner's frames.
+        """
+        if self._phase is not TalkPhase.IDLE:
+            msg = f"cannot rebind a talk state that is not idle ({self._phase})"
+            raise ValueError(msg)
+        self._my_tty = tty
+        self._my_key = session_key
+        self._partner_tty = tty
+        self._partner_key = session_key
+
     # -- Send (ephemeral core-NATS publish — talk.tex Send*/publish side effects) --
 
     async def send_invite(self, *, to_key: str, body: str = "") -> None:

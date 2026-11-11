@@ -12,6 +12,15 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "mcp__(plugin_biff(-dev)?_)?tty__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-stamp.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {

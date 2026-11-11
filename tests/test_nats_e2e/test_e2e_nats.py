@@ -13,13 +13,13 @@ from pathlib import Path
 
 import nats
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from nats.js.errors import NotFoundError
 
 from biff.models import Message
 from biff.nats_relay import NatsRelay
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
 
 pytestmark = pytest.mark.nats_local
 
@@ -267,8 +267,8 @@ class TestTtyNameAutoAssign:
         eric_mcp = create_server(eric_state)
 
         async with (
-            Client(FastMCPTransport(kai_mcp)) as kai_raw,
-            Client(FastMCPTransport(eric_mcp)) as eric_raw,
+            StampedClient(FastMCPTransport(kai_mcp)) as kai_raw,
+            StampedClient(FastMCPTransport(eric_mcp)) as eric_raw,
         ):
             kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
             RecordingClient(client=eric_raw, transcript=transcript, user="eric")
@@ -314,7 +314,7 @@ class TestTtyNameAutoAssign:
         )
         kai_mcp = create_server(kai_state)
 
-        async with Client(FastMCPTransport(kai_mcp)) as kai_raw:
+        async with StampedClient(FastMCPTransport(kai_mcp)) as kai_raw:
             kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
             # Verify tty_name is set after startup
@@ -359,7 +359,7 @@ class TestTtyNameAutoAssign:
         )
         kai_mcp = create_server(kai_state)
 
-        async with Client(FastMCPTransport(kai_mcp)) as kai_raw:
+        async with StampedClient(FastMCPTransport(kai_mcp)) as kai_raw:
             kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
             await kai_r.call("plan", message="testing")
 
@@ -395,7 +395,7 @@ class TestTtyNameAutoAssign:
         )
         kai_mcp = create_server(kai_state)
 
-        async with Client(FastMCPTransport(kai_mcp)) as kai_raw:
+        async with StampedClient(FastMCPTransport(kai_mcp)) as kai_raw:
             kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
             await kai_r.call("plan", message="testing")
 
@@ -437,7 +437,7 @@ class TestTtyNameAutoAssign:
         )
         kai_mcp = create_server(kai_state)
 
-        async with Client(FastMCPTransport(kai_mcp)) as kai_raw:
+        async with StampedClient(FastMCPTransport(kai_mcp)) as kai_raw:
             kai_r = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
             # Call any tool to ensure session is active
@@ -525,7 +525,7 @@ class TestTalkSelfEchoFilter:
         )
         mcp = create_server(state)
 
-        async with Client(FastMCPTransport(mcp)) as kai_raw:
+        async with StampedClient(FastMCPTransport(mcp)) as kai_raw:
             RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
             # The server's poller establishes the always-on talk subscription.
@@ -572,7 +572,7 @@ class TestTalkSelfEchoFilter:
         )
         mcp = create_server(state)
 
-        async with Client(FastMCPTransport(mcp)) as kai_raw:
+        async with StampedClient(FastMCPTransport(mcp)) as kai_raw:
             RecordingClient(client=kai_raw, transcript=transcript, user="kai")
 
             # The server's poller establishes the always-on talk subscription.

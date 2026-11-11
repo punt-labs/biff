@@ -62,14 +62,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 # Re-write the marker even though the relay plan is unchanged.
                 # SessionStart clears the marker, so auto-plan calls after
                 # a new session starts must restore it.
-                if state.ethos_session_pin is None:
-                    sync_plan_marker(session.plan)
+                sync_plan_marker(session.plan, state.bound_session_id)
                 return format_talk_echo("Plan unchanged (manual):", session.plan)
         message = expand_bead_id(message)
         await update_current_session(state, plan=message, plan_source=source)
         await refresh_read_messages(mcp, state)
-        # These markers feed Claude-only hooks. A pinned OpenCode process
-        # must never discover an ancestor Claude identity or the shared bucket.
-        if state.ethos_session_pin is None:
-            sync_plan_marker(message)
+        sync_plan_marker(message, state.bound_session_id)
         return format_talk_echo("Plan:", message)
