@@ -65,6 +65,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+CLAUDE_CODE_ROLE = "biff.claude-code.session.v1"
+"""Domain separator for routing ids derived from a Claude Code session_id.
+
+The SessionStart hook, the MCP server, and the statusline all derive the
+routing id (and so the unread-file key) from this one constant; a mismatch
+would strand the unread file under a key nobody reads.
+"""
+
 _DERIVE_DIGEST_BYTES = 8  # 16 hex chars — inside the routing-id charset
 _RESOLVE_ATTEMPTS = 10
 _RESOLVE_DELAY_S = 0.05  # SessionStart fires before MCP connect; retry is a safety net
