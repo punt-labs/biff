@@ -1264,8 +1264,15 @@ class _LiveSession:
         """Bind *state* to the caller's session, then register and start tasks."""
         async with self._lock:
             routing = caller.routing
-            state.bind(routing)  # refuses a different session
-            if self.attached or state.dormant:
+            if state.bound_session_id == routing.session_id:
+                if self.attached or state.dormant:
+                    return
+            elif self.attached:
+                # /clear or resume changed session_id in place: release the
+                # old session before the server is pointed at the new one.
+                await self._detach(state)
+            state.bind(routing)
+            if state.dormant:
                 return
             try:
                 await self._register_and_start(mcp, state)
@@ -1277,6 +1284,36 @@ class _LiveSession:
                 self.reaper = None
                 raise
             self.attached = True
+
+    async def _detach(self, state: ServerState) -> None:
+        """Stop the attached session's tasks and release what it registered."""
+        reaper = self.reaper
+        tasks = [t for t in self.tasks if t is not reaper]
+        old_key, old_tty_name = state.session_key, get_tty_name()
+        if reaper is not None:
+            reaper.cancel()
+            await asyncio.gather(reaper, return_exceptions=True)
+        await _run_cleanup_steps(
+            [
+                lambda: _append_logout_event(state),
+                lambda: _shutdown_tasks(self.shutdown, tasks),
+                lambda: _cleanup_action(
+                    lambda: _remove_unread_files(state.unread_path)
+                ),
+                lambda: _release_session(
+                    state,
+                    user=state.config.user,
+                    session_key=old_key,
+                    tty_name=old_tty_name,
+                ),
+                lambda: _cleanup_action(lambda: _remove_active_markers(state)),
+            ]
+        )
+        self.tasks.clear()
+        self.reaper = None
+        self.registered_names.clear()
+        self.shutdown = asyncio.Event()
+        self.attached = False
 
     async def _register_and_start(
         self, mcp: FastMCP[ServerState], state: ServerState

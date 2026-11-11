@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
-from fastmcp.exceptions import ToolError
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
@@ -49,14 +49,27 @@ async def test_first_call_binds_registers_and_writes_the_unread_file(
         assert routing.unread_path(tmp_path / "unread").exists()
 
 
-async def test_a_different_session_is_refused(state: ServerState) -> None:
+async def test_a_changed_session_id_repoints_the_server(
+    state: ServerState, tmp_path: Path
+) -> None:
+    """/clear changes session_id in place on the long-lived stdio server."""
+    unread = tmp_path / "unread"
+    old, new = SessionRouting("sess-1"), SessionRouting("sess-2")
+    before = len(asyncio.all_tasks())
     async with StampedClient(
         FastMCPTransport(create_server(state)), caller=caller_for("sess-1")
-    ) as client:
-        await client.call_tool("who", {})
-        other = StampedClient(
-            FastMCPTransport(create_server(state)), caller=caller_for("sess-2")
-        )
-        async with other:
-            with pytest.raises(ToolError, match="bound to session"):
-                await other.call_tool("who", {})
+    ) as first:
+        await first.call_tool("who", {})
+        running = len(asyncio.all_tasks())
+        assert old.unread_path(unread).exists()
+
+        # The same long-lived server, after /clear: the hook now stamps sess-2.
+        result = await first.call_tool("who", {"_caller": caller_for("sess-2")})
+        assert "kai" in str(result)
+        assert state.bound_session_id == "sess-2"
+        assert state.session_key == new.session_key("kai")
+        assert new.unread_path(unread).exists()
+        assert not old.unread_path(unread).exists()
+        assert await state.relay.get_session(old.session_key("kai")) is None
+        assert await state.relay.get_session(new.session_key("kai")) is not None
+    assert len(asyncio.all_tasks()) <= max(before, running)

@@ -19,10 +19,6 @@ from biff.talk_state import TalkState
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
 
 
-class SessionAlreadyBoundError(ValueError):
-    """The server is already bound to a different session."""
-
-
 @dataclass(frozen=True)
 class CompanionSession:
     """The secondary (root) identity in a dual-session setup.
@@ -114,21 +110,16 @@ class ServerState:
         return self.bound_session_id is not None
 
     def bind(self, routing: SessionRouting) -> None:
-        """Bind this server to the session *routing* names, once.
+        """Point this server at the session *routing* names.
 
-        The same session again is a no-op.  A different one is refused: a
-        server process serves one Claude Code session, and re-pointing its
-        routing key would strand the registration and subscriptions made
-        under the first.
+        The same session again is a no-op.  A different session_id on this
+        long-lived process is the owning session changing id in place
+        (``/clear``, resume), so the server re-points.  Releasing what the
+        previous session registered is the caller's job: see
+        ``_LiveSession.attach``, which tears it down before binding.
         """
         if self.bound_session_id == routing.session_id:
             return
-        if self.bound_session_id is not None:
-            msg = (
-                f"server is bound to session {self.bound_session_id!r}; "
-                f"refusing session {routing.session_id!r}"
-            )
-            raise SessionAlreadyBoundError(msg)
         object.__setattr__(self, "bound_session_id", routing.session_id)
         object.__setattr__(self, "tty", routing.routing_id)
         if self.unread_dir is not None:

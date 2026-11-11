@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from biff.models import BiffConfig
-from biff.server.state import SessionAlreadyBoundError, create_state
+from biff.server.state import create_state
 from biff.session_routing import SessionRouting
 
 
@@ -44,12 +42,12 @@ def test_binding_the_same_session_again_is_a_no_op(tmp_path: Path) -> None:
     assert state.session_key == routing.session_key("rmh")
 
 
-def test_binding_a_different_session_is_refused(tmp_path: Path) -> None:
+def test_binding_a_different_session_repoints(tmp_path: Path) -> None:
     state = _state(tmp_path)
     state.bind(SessionRouting("sess-1"))
-    with pytest.raises(SessionAlreadyBoundError, match="sess-2"):
-        state.bind(SessionRouting("sess-2"))
-    assert state.session_key == SessionRouting("sess-1").session_key("rmh")
+    state.bind(SessionRouting("sess-2"))
+    assert state.session_key == SessionRouting("sess-2").session_key("rmh")
+    assert state.talk.partner_key == SessionRouting("sess-2").session_key("rmh")
 
 
 def test_bind_derives_the_unread_path_from_the_configured_directory(
