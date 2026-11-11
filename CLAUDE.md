@@ -452,3 +452,4 @@ make check
 
 @.punt-labs/vox/CLAUDE.md
 @.punt-labs/ethos/CLAUDE.md
+@.punt-labs/punt/CLAUDE.md
