@@ -185,16 +185,12 @@ class TestCliOnlyPlanSatisfiesGate:
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("pathlib.Path.cwd", return_value=repo),
-            patch(
-                "biff.commands.plan.SessionHint.resolve_routing_id",
-                return_value="cli-session-id",
-            ),
         ):
             result = await plan(ctx, "biff-ar1: fix the plan gate")
             assert not result.error
 
             gate_result = handle_pre_tool_use(
-                {"session_id": "cli-session-id", "cwd": str(repo)}
+                {"session_id": "some-other-session", "cwd": str(repo)}
             )
 
         assert gate_result is None  # allowed
@@ -217,87 +213,15 @@ class TestCliOnlyPlanSatisfiesGate:
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("pathlib.Path.cwd", return_value=repo),
-            patch(
-                "biff.commands.plan.SessionHint.resolve_routing_id",
-                return_value="cli-session-id",
-            ),
         ):
             await plan(ctx, "a plan")
             await plan(ctx, "")  # clear
 
             gate_result = handle_pre_tool_use(
-                {"session_id": "cli-session-id", "cwd": str(repo)}
+                {"session_id": "some-other-session", "cwd": str(repo)}
             )
 
         assert gate_result is not None  # denied
-
-
-class TestStaleHintRoutingIdStillSatisfiesGate:
-    """biff-ecl / PL-240: the gate reads the same routing id ``/plan`` wrote.
-
-    The write path (``commands/plan.py``'s ``sync_plan_marker``, shared by
-    the MCP ``plan`` tool) keys the marker on
-    ``SessionHint.resolve_routing_id()`` -- the CLAUDE_PID-anchored hint.
-    When that hint is momentarily stale (e.g. the MCP server has not yet
-    re-captured it after ``/clear``), the marker lands under the *hint's*
-    routing id, which differs from the ``session_id`` Claude Code delivers
-    on the ``PreToolUse`` payload.  A gate that read only the payload ids
-    found no marker and wedged every Edit/Write.  The gate's read ladder
-    now also consults ``resolve_routing_id()``, so read and write agree on
-    the key regardless of whether the hint is current -- without weakening
-    the deny when no plan exists for any of this caller's identities.
-    """
-
-    def test_marker_under_routing_id_found_despite_new_payload_id(
-        self, tmp_path: Path
-    ) -> None:
-        repo = _make_repo(tmp_path / "repo")
-
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path / "home"),
-            patch("pathlib.Path.cwd", return_value=repo),
-        ):
-            from biff._stdlib import get_repo_common_root
-
-            root = get_repo_common_root(str(repo))
-            # The write path keyed the marker on the hint's routing id.
-            write_plan_marker(root, "hint-routing-id", "plan from /plan")
-
-            # The PreToolUse payload carries the post-/clear session id,
-            # which does NOT match the stale hint's routing id.
-            with patch(
-                "biff.hook._routing_id",
-                return_value="hint-routing-id",
-            ):
-                result = handle_pre_tool_use(
-                    {"session_id": "post-clear-session-id", "cwd": str(repo)}
-                )
-
-        assert result is None  # allowed -- routing id closed the read/write gap
-
-    def test_no_plan_for_any_identity_still_denies(self, tmp_path: Path) -> None:
-        """The routing-id read must not become a blanket fail-open.
-
-        With no marker written for the payload ids, the routing id, or the
-        shared bucket, the gate still denies -- the fix adds one more of
-        *this caller's own* identities to the ladder, it does not allow on
-        a mismatch.
-        """
-        repo = _make_repo(tmp_path / "repo")
-
-        with (
-            patch("pathlib.Path.home", return_value=tmp_path / "home"),
-            patch("pathlib.Path.cwd", return_value=repo),
-            patch(
-                "biff.hook._routing_id",
-                return_value="some-routing-id",
-            ),
-        ):
-            result = handle_pre_tool_use(
-                {"session_id": "unplanned-session", "cwd": str(repo)}
-            )
-
-        assert result is not None  # denied -- no plan anywhere
 
 
 class TestUnresolvedRootDoesNotWedge:
@@ -318,7 +242,6 @@ class TestUnresolvedRootDoesNotWedge:
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("biff.hook._repo_common_root", return_value=""),
-            patch("biff.hook._routing_id", return_value=None),
         ):
             result = handle_pre_tool_use({"session_id": "sid", "cwd": "/not/a/repo"})
 
@@ -338,7 +261,6 @@ class TestUnresolvedRootDoesNotWedge:
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("pathlib.Path.cwd", return_value=repo),
-            patch("biff.hook._routing_id", return_value=None),
         ):
             result = handle_pre_tool_use({"session_id": "sid", "cwd": str(repo)})
 
@@ -361,3 +283,26 @@ def _active_session(  # pyright: ignore[reportUnusedFunction]
     (active / "someone").write_text("someone:tty\nrepo\n")
     with patch("biff._stdlib.active_dir", return_value=active):
         yield
+
+
+class TestDeclaredSessionPlan:
+    """The MCP plan tool keys the marker on the session the caller declared."""
+
+    def test_marker_lands_under_the_declared_session_and_satisfies_its_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.commands.plan import sync_plan_marker
+
+        repo = _make_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            sync_plan_marker("declared plan", "declared-session")
+            allowed = handle_pre_tool_use(
+                {"session_id": "declared-session", "cwd": str(repo)}
+            )
+            sibling = handle_pre_tool_use(
+                {"session_id": "sibling-session", "cwd": str(repo)}
+            )
+
+        assert allowed is None
+        assert sibling is not None

@@ -8,28 +8,23 @@ from biff.commands._result import CommandResult
 from biff.commands._session import update_current_session
 from biff.formatting import format_talk_echo
 from biff.markers import clear_plan_marker, write_plan_marker
-from biff.session_id import SessionHint
 
 
-def sync_plan_marker(message: str) -> None:
-    """Write or clear the plan-gate marker for this process's session identity.
+def sync_plan_marker(message: str, session_id: str | None = None) -> None:
+    """Write or clear the plan-gate marker for *session_id*.
 
-    Shared by the CLI ``plan`` command and the MCP ``plan`` tool
-    (``server/tools/plan.py``) — before this, only the MCP tool wrote the
-    marker, so a CLI-only session (every ethos-mission worker in this
-    org) could run ``biff plan`` and see a success message while the
-    ``PreToolUse`` gate kept denying edits: the marker it reads was never
-    written.  Root and identity are
-    resolved fresh on every call — never cached at process startup — so a
-    long-running MCP server and a one-shot CLI invocation always resolve
-    the same key the hook itself resolves.
+    Shared by the CLI ``plan`` command and the MCP ``plan`` tool.  The MCP
+    tool passes the session the caller declared; the CLI has no declared
+    session and writes the shared bucket (``None``), which the gate reads
+    as the last rung of its ladder.  The root is resolved fresh on every
+    call so a long-running server and a one-shot CLI invocation agree with
+    the hook.
     """
     root = get_repo_common_root()
-    identity = SessionHint.resolve_routing_id()
     if message:
-        write_plan_marker(root, identity, message)
+        write_plan_marker(root, session_id, message)
     else:
-        clear_plan_marker(root, identity)
+        clear_plan_marker(root, session_id)
 
 
 async def plan(ctx: CliContext, message: str) -> CommandResult:

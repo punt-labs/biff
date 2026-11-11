@@ -179,10 +179,9 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
 
     Prefers ``agent_id`` over ``session_id`` when both are present: an
     in-process dispatched subagent shares its leader's OS ``claude``
-    process (and therefore the leader's ``session_id`` fallback via
-    ``SessionHint``), but Claude Code delivers the subagent's *own*
-    ``agent_id`` on its tool-call payloads, distinct from the leader's
-    top-level ``session_id``.  ``None`` when
+    process (and therefore the leader's ``session_id``), but Claude Code
+    delivers the subagent's *own* ``agent_id`` on its tool-call payloads,
+    distinct from the leader's top-level ``session_id``.  ``None`` when
     neither is present — headless/CI/SDK contexts with no Claude session
     at all — and the marker degrades to the shared, unscoped bucket.
     """
@@ -191,31 +190,6 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
-
-
-def _routing_id() -> str | None:
-    """Return the CLAUDE_PID-anchored routing id, or ``None`` on any failure.
-
-    This is the identity the *write* path keys the plan marker on
-    (``commands/plan.py``'s ``sync_plan_marker`` → ``resolve_routing_id``).
-    Reading it here closes the gap when the payload's ``session_id`` and
-    the routing id disagree — the post-``/clear`` window where the MCP
-    server's hint is momentarily stale, or any case where the write path
-    resolved an id the payload does not carry. Best-effort: any resolver
-    fault — a filesystem/psutil ``OSError``, a ``RuntimeError`` from an
-    unresolvable home dir, or an ``ImportError`` on the lazy import —
-    degrades to "this identity unavailable" (one fewer read-ladder rung, a
-    strictly stricter gate), never an exception. Dropping the rung can only
-    cause a false deny the agent re-runs ``/plan`` to clear, never a false
-    allow, so swallowing here does not weaken the gate.
-    """
-    try:
-        from biff.session_id import SessionHint  # noqa: PLC0415
-
-        return SessionHint.resolve_routing_id()
-    except (OSError, RuntimeError, ImportError):
-        logger.debug("routing-id resolution failed; omitting from read ladder")
-        return None
 
 
 def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
@@ -234,16 +208,7 @@ def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
        ``session_id`` (no channel today for a subagent's ``Bash`` to learn
        its own ``agent_id``) would, on an ``agent_id``-only read, find no
        marker and strand every edit (DES-054 RISK-2).
-    3. The CLAUDE_PID routing id — the exact identity the write path keys
-       on. The payload ids and the routing id usually coincide, but after
-       ``/clear`` the server's hint can lag the payload's new
-       ``session_id``; consulting the routing id makes
-       the gate read the same key ``/plan`` wrote regardless of that lag,
-       so one bookkeeping desync can no longer wedge the whole editing
-       surface. It never satisfies the gate with a *sibling's* plan — the
-       routing id is this caller's own, derived from this process's
-       CLAUDE_PID.
-    4. ``None`` (the shared bucket) — the terminal, so headless/CI/SDK
+    3. ``None`` (the shared bucket) — the terminal, so headless/CI/SDK
        writes with no Claude session remain visible.
     """
     candidates: list[str | None] = []
@@ -251,9 +216,6 @@ def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
         value = data.get(key)
         if isinstance(value, str) and value and value not in candidates:
             candidates.append(value)
-    routing_id = _routing_id()
-    if routing_id and routing_id not in candidates:
-        candidates.append(routing_id)
     if None not in candidates:
         candidates.append(None)
     return tuple(candidates)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from biff.caller_identity import CallerIdentity, CallerIdentityError
-from biff.session_id import CLAUDE_CODE_ROLE, SessionHint
+from biff.session_id import CLAUDE_CODE_ROLE, derive_routing_id
 
 
 def test_valid_wire_value_parses() -> None:
@@ -15,9 +15,7 @@ def test_valid_wire_value_parses() -> None:
 
 def test_routing_id_derives_from_session_id_and_role() -> None:
     caller = CallerIdentity(session_id="abc-123", agent_id="a1")
-    assert caller.routing_id == SessionHint.derive_routing_id(
-        "abc-123", CLAUDE_CODE_ROLE
-    )
+    assert caller.routing_id == derive_routing_id("abc-123", CLAUDE_CODE_ROLE)
 
 
 def test_role_is_the_claude_code_constant() -> None:

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from biff.session_id import CLAUDE_CODE_ROLE, SessionHint
+from biff.session_id import CLAUDE_CODE_ROLE, derive_routing_id
 from biff.tty import build_session_key
 
 ID_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -35,12 +35,16 @@ class SessionRouting:
     @property
     def routing_id(self) -> str:
         """Domain-separated routing token for this session."""
-        return SessionHint.derive_routing_id(self.session_id, CLAUDE_CODE_ROLE)
+        return derive_routing_id(self.session_id, CLAUDE_CODE_ROLE)
 
     def session_key(self, user: str) -> str:
         """Composite relay key ``{user}:{routing_id}``."""
         return build_session_key(user, self.routing_id)
 
     def unread_path(self, directory: Path) -> Path:
-        """Per-session unread status file inside *directory*."""
-        return directory / f"{self.routing_id}.json"
+        """Per-session unread status file inside *directory*.
+
+        Named by the session_id itself, not the digest: the shell nudge hook
+        reads it straight from its payload and cannot compute a hash.
+        """
+        return directory / f"{self.session_id}.json"

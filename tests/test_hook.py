@@ -1212,9 +1212,6 @@ def _gate_mocks(*, plan: bool):
         patch("biff.hook._has_active_session", return_value=True),
         patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
         patch("biff.markers.has_plan_marker", return_value=plan),
-        # Keep the routing-id rung hermetic: the plan outcome is driven by
-        # the has_plan_marker stub above, not by this process's live hint.
-        patch("biff.hook._routing_id", return_value=None),
     )
 
 
@@ -1267,8 +1264,8 @@ class TestHasActiveSession:
 
     def test_pre_tool_use_still_gates_with_active_session(self) -> None:
         """handle_pre_tool_use hard-denies when server IS running and plan not set."""
-        m_active, m_wt, m_plan, m_route = _gate_mocks(plan=False)
-        with m_active, m_wt, m_plan, m_route:
+        m_active, m_wt, m_plan = _gate_mocks(plan=False)
+        with m_active, m_wt, m_plan:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _deny_reason(result)
@@ -1285,8 +1282,8 @@ class TestHandlePreToolUse:
     """
 
     def test_plan_missing_denies_with_plan_instruction(self) -> None:
-        m_active, m_wt, m_plan, m_route = _gate_mocks(plan=False)
-        with m_active, m_wt, m_plan, m_route:
+        m_active, m_wt, m_plan = _gate_mocks(plan=False)
+        with m_active, m_wt, m_plan:
             result = handle_pre_tool_use({})
         assert result is not None
         reason = _deny_reason(result)
@@ -1294,8 +1291,8 @@ class TestHandlePreToolUse:
         assert "bd" not in reason
 
     def test_plan_present_allows(self) -> None:
-        m_active, m_wt, m_plan, m_route = _gate_mocks(plan=True)
-        with m_active, m_wt, m_plan, m_route:
+        m_active, m_wt, m_plan = _gate_mocks(plan=True)
+        with m_active, m_wt, m_plan:
             result = handle_pre_tool_use({})
         assert result is None
 
@@ -1306,12 +1303,11 @@ class TestHandlePreToolUse:
         that re-validated via subprocess on every edit would hang tool
         calls on ``bd``'s latency and availability.
         """
-        m_active, m_wt, m_plan, m_route = _gate_mocks(plan=False)
+        m_active, m_wt, m_plan = _gate_mocks(plan=False)
         with (
             m_active,
             m_wt,
             m_plan,
-            m_route,
             patch("subprocess.run") as mock_run,
         ):
             handle_pre_tool_use({})
@@ -1340,7 +1336,6 @@ class TestHandlePreToolUse:
         with (
             patch("biff.hook._has_active_session", return_value=True),
             patch("biff.hook._repo_common_root", return_value=_FAKE_WORKTREE),
-            patch("biff.hook._routing_id", return_value=None),
             patch(
                 "biff.markers.has_plan_marker", side_effect=_plan_by_identity
             ) as mock_has,
