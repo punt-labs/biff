@@ -21,6 +21,11 @@ class SessionHandleStore:
     that only the user can enter, as the caller-identity standard requires.
     ``SessionRouting`` has already checked ``session_id`` against
     ``[A-Za-z0-9_-]+``, so it is safe as a path component.
+
+    Nothing at runtime reads this yet.  It is the engine-session handle
+    store of the caller-identity standard (section 4.2.4), written now so a
+    layer-2 engine session and the SessionEnd handoff have a handle to find;
+    it is intentional forward wiring, not dead state.
     """
 
     root: Path
