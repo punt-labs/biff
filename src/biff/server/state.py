@@ -15,8 +15,13 @@ from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay, Relay
 from biff.server.activity import ActivityTracker
 from biff.server.display_queue import DisplayQueue
+from biff.session_routing import SessionRouting
 from biff.talk_state import TalkState
 from biff.tty import build_session_key, generate_tty, get_hostname, get_pwd
+
+
+class SessionAlreadyBoundError(ValueError):
+    """The server is already bound to a different session."""
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,9 @@ class ServerState:
     ethos_session_pin: EthosSessionPin | None = None
     auto_companion: bool = True
     talk: TalkState = field(init=False)
+    # The session this server is bound to, set once by ``bind`` on the first
+    # identified call.  ``None`` until then.
+    bound_session_id: str | None = None
 
     def __post_init__(self) -> None:
         """Compose the shared ephemeral talk state from this server's identity.
@@ -103,6 +111,33 @@ class ServerState:
     def session_key(self) -> str:
         """Composite key ``{user}:{tty}`` for this server instance."""
         return build_session_key(self.config.user, self.tty)
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether a caller has declared the session this server serves."""
+        return self.bound_session_id is not None
+
+    def bind(self, routing: SessionRouting) -> None:
+        """Bind this server to the session *routing* names, once.
+
+        The same session again is a no-op.  A different one is refused: a
+        server process serves one Claude Code session, and re-pointing its
+        routing key would strand the registration and subscriptions made
+        under the first.
+        """
+        if self.bound_session_id == routing.session_id:
+            return
+        if self.bound_session_id is not None:
+            msg = (
+                f"server is bound to session {self.bound_session_id!r}; "
+                f"refusing session {routing.session_id!r}"
+            )
+            raise SessionAlreadyBoundError(msg)
+        object.__setattr__(self, "bound_session_id", routing.session_id)
+        object.__setattr__(self, "tty", routing.routing_id)
+        self.talk.rebind(
+            tty=routing.routing_id, session_key=routing.session_key(self.config.user)
+        )
 
     @property
     def companion_session_key(self) -> str | None:
