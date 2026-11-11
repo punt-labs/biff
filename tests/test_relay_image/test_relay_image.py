@@ -13,7 +13,6 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, Message, RelayAuth
@@ -21,6 +20,7 @@ from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,8 +66,8 @@ class TestPresenceAndMessaging:
         )
         transcript = Transcript(title="")
         async with (
-            Client(FastMCPTransport(create_server(kai_state))) as kai_raw,
-            Client(FastMCPTransport(create_server(eric_state))) as eric_raw,
+            StampedClient(FastMCPTransport(create_server(kai_state))) as kai_raw,
+            StampedClient(FastMCPTransport(create_server(eric_state))) as eric_raw,
         ):
             kai = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
             eric = RecordingClient(client=eric_raw, transcript=transcript, user="eric")
@@ -97,8 +97,8 @@ class TestPresenceAndMessaging:
         )
         transcript = Transcript(title="")
         async with (
-            Client(FastMCPTransport(create_server(kai_state))) as kai_raw,
-            Client(FastMCPTransport(create_server(eric_state))) as eric_raw,
+            StampedClient(FastMCPTransport(create_server(kai_state))) as kai_raw,
+            StampedClient(FastMCPTransport(create_server(eric_state))) as eric_raw,
         ):
             kai = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
             eric = RecordingClient(client=eric_raw, transcript=transcript, user="eric")

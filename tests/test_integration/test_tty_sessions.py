@@ -14,16 +14,19 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
+from biff.testing.caller import StampedClient
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 _TEST_REPO = "_test-integration"
 
@@ -78,7 +81,7 @@ async def kai_tty1(
     kai_tty1_state: ServerState,
 ) -> AsyncIterator[Client[Any]]:
     mcp = create_server(kai_tty1_state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -87,7 +90,7 @@ async def kai_tty2(
     kai_tty2_state: ServerState,
 ) -> AsyncIterator[Client[Any]]:
     mcp = create_server(kai_tty2_state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -96,7 +99,7 @@ async def eric_client(
     eric_state: ServerState,
 ) -> AsyncIterator[Client[Any]]:
     mcp = create_server(eric_state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -128,10 +131,10 @@ class TestSessionLogout:
     ) -> None:
         # Eric's server stays up the whole time
         eric_mcp = create_server(eric_state)
-        async with Client(FastMCPTransport(eric_mcp)) as eric:
+        async with StampedClient(FastMCPTransport(eric_mcp)) as eric:
             # Kai's server starts, registers, then exits
             kai_mcp = create_server(kai_tty1_state)
-            async with Client(FastMCPTransport(kai_mcp)) as kai:
+            async with StampedClient(FastMCPTransport(kai_mcp)) as kai:
                 await kai.call_tool("plan", {"message": "working"})
                 # Eric sees Kai
                 result = _text(await eric.call_tool("who", {}))
@@ -155,8 +158,8 @@ class TestSentinelLogout:
         eric_mcp = create_server(eric_state)
         kai_mcp = create_server(kai_tty1_state)
         async with (
-            Client(FastMCPTransport(eric_mcp)) as eric,
-            Client(FastMCPTransport(kai_mcp)) as kai,
+            StampedClient(FastMCPTransport(eric_mcp)) as eric,
+            StampedClient(FastMCPTransport(kai_mcp)) as kai,
         ):
             await kai.call_tool("plan", {"message": "working"})
             assert "kai" in _text(await eric.call_tool("who", {}))
@@ -262,7 +265,7 @@ class TestOfflineDelivery:
             pwd="/project/c",
         )
         eric_mcp = create_server(eric_state)
-        async with Client(FastMCPTransport(eric_mcp)) as eric:
+        async with StampedClient(FastMCPTransport(eric_mcp)) as eric:
             await eric.call_tool("write", {"to": "@kai", "message": "offline msg"})
 
         # Kai comes online later and reads the message
@@ -274,7 +277,7 @@ class TestOfflineDelivery:
             pwd="/project/a",
         )
         kai_mcp = create_server(kai_state)
-        async with Client(FastMCPTransport(kai_mcp)) as kai:
+        async with StampedClient(FastMCPTransport(kai_mcp)) as kai:
             r = await kai.call_tool("read_messages", {})
             assert "offline msg" in _text(r)
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
@@ -70,3 +72,20 @@ async def test_malformed_caller_is_named_error(bad: object) -> None:
             await client.call_tool("echo", {"message": "hi", "_caller": bad})
     assert seen == []
     assert binder.bound == []
+
+
+async def test_create_server_strips_and_refuses_on_a_real_tool(tmp_path: Path) -> None:
+    from biff.models import BiffConfig
+    from biff.server.app import create_server
+    from biff.server.state import create_state
+    from biff.testing.caller import StampedClient
+
+    state = create_state(
+        BiffConfig(user="rmh", repo_name="test"), tmp_path, dormant=True
+    )
+    async with StampedClient(create_server(state)) as client:
+        ok = await client.call_tool("who")
+        assert not ok.is_error
+    async with StampedClient(create_server(state), caller=None) as client:
+        with pytest.raises(ToolError, match="stamping hook"):
+            await client.call_tool("who")

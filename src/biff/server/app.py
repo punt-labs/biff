@@ -29,9 +29,10 @@ if TYPE_CHECKING:
 
     from mcp.types import InitializeRequest, InitializeResult
 
+from biff.caller_identity import CallerIdentity
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
-from biff.server.session_pin import SessionPinMiddleware
+from biff.server.caller_middleware import CallerIdentityMiddleware
 from biff.server.state import CompanionSession, ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
@@ -1506,6 +1507,10 @@ async def _running_lifespan(
         )
 
 
+async def _accept_caller(_caller: CallerIdentity) -> None:
+    """Bind a validated caller to the server (live resources attach here)."""
+
+
 def create_server(state: ServerState) -> FastMCP[ServerState]:
     """Create a FastMCP server with all biff tools registered.
 
@@ -1561,7 +1566,6 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     )
 
     mcp.add_middleware(_SessionCaptureMiddleware())
-    if state.ethos_session_pin is not None:
-        mcp.add_middleware(SessionPinMiddleware(state.ethos_session_pin))
+    mcp.add_middleware(CallerIdentityMiddleware(_accept_caller))
     register_all_tools(mcp, state)
     return mcp

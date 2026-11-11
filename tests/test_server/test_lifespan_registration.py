@@ -23,13 +23,13 @@ from pathlib import Path
 from typing import ClassVar, TypedDict
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.server.app import _register_companion, create_server
 from biff.server.state import CompanionSession, ServerState, create_state
+from biff.testing.caller import StampedClient
 
 
 class _RegistrationMetadata(TypedDict):
@@ -88,7 +88,7 @@ class TestLifespanRegistration:
         )
         mcp = create_server(state)
 
-        async with Client(FastMCPTransport(mcp)):
+        async with StampedClient(FastMCPTransport(mcp)):
             session = await state.relay.get_session(state.session_key)
 
         assert session is not None
@@ -110,7 +110,7 @@ class TestLifespanRegistration:
         state = primary_state_with_companion
         mcp = create_server(state)
 
-        async with Client(FastMCPTransport(mcp)):
+        async with StampedClient(FastMCPTransport(mcp)):
             assert state.companion_session_key is not None
             session = await state.relay.get_session(state.companion_session_key)
 

@@ -30,7 +30,6 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, Message, UnreadSummary
@@ -39,10 +38,13 @@ from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.server.tools._descriptions import _reset_session, nap_interval_for
 from biff.testing import NotificationTracker
+from biff.testing.caller import StampedClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
+
+    from fastmcp import Client
 
     from biff.server.state import ServerState
 
@@ -243,7 +245,7 @@ async def kai_latency(
         config, tmp_path / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
+    async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
         yield client, tracker, state
     _reset_session()
 
@@ -338,7 +340,7 @@ class TestLoadReduction:
 
         mcp = create_server(state)
         idle_seconds = _BACKSTOP * 2.2
-        async with Client(FastMCPTransport(mcp)):
+        async with StampedClient(FastMCPTransport(mcp)):
             await asyncio.sleep(idle_seconds)
         _reset_session()
 

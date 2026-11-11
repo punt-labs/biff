@@ -12,17 +12,20 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import CompanionSession, ServerState, create_state
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
 from biff.tty import generate_tty
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 _TEST_REPO = "_test-dual-session"
 
@@ -82,7 +85,7 @@ async def dual_client(dual_state: ServerState) -> AsyncIterator[Client[Any]]:
     from biff.server.app import _register_companion
 
     mcp = create_server(dual_state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         # Companion registration is deferred to the heartbeat loop.
         # Tests that need a registered companion invoke
         # the helper directly after the lifespan opens, simulating
@@ -96,7 +99,7 @@ async def single_client(
     single_state: ServerState,
 ) -> AsyncIterator[Client[Any]]:
     mcp = create_server(single_state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 

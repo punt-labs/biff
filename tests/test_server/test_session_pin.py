@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
 
 from biff.ethos_session import EthosSessionPin
 from biff.markers import read_plan_marker, write_plan_marker
@@ -20,40 +17,9 @@ from biff.server.app import (
     create_server,
 )
 from biff.server.state import create_state
+from biff.testing.caller import StampedClient
 
 SID = "ses_123ABC"
-
-
-@pytest.mark.parametrize(
-    "meta",
-    [
-        None,
-        {},
-        {"sessionID": SID},
-        {"ai.opencode/sessionID": "ses_other"},
-        {"ai.opencode/sessionID": None},
-        {"ai.opencode/sessionID": 123},
-        {"ai.opencode/sessionID": {"id": SID}},
-        {"ai.opencode/sessionID": [SID]},
-    ],
-)
-async def test_invalid_caller_cannot_mutate_state(
-    tmp_path: Path, meta: dict[str, object] | None
-) -> None:
-    pin = EthosSessionPin(SID, SID)
-    state = create_state(
-        BiffConfig(user="rmh", repo_name="test"),
-        tmp_path,
-        dormant=True,
-        ethos_session_pin=pin,
-        auto_companion=False,
-        tty=pin.routing_id,
-    )
-    with patch.object(type(state.activity), "touch") as touch:
-        async with Client(create_server(state)) as client:
-            with pytest.raises(ToolError, match="pinned"):
-                await client.call_tool("plan", {"message": "wrong session"}, meta=meta)
-    touch.assert_not_called()
 
 
 async def test_matching_caller_and_legacy_no_metadata(tmp_path: Path) -> None:
@@ -65,13 +31,13 @@ async def test_matching_caller_and_legacy_no_metadata(tmp_path: Path) -> None:
         ethos_session_pin=pin,
         auto_companion=False,
     )
-    async with Client(create_server(pinned)) as client:
+    async with StampedClient(create_server(pinned)) as client:
         result = await client.call_tool("who", meta={"ai.opencode/sessionID": SID})
         assert not result.is_error
     legacy = create_state(
         BiffConfig(user="claude", repo_name="test"), tmp_path, dormant=True
     )
-    async with Client(create_server(legacy)) as client:
+    async with StampedClient(create_server(legacy)) as client:
         result = await client.call_tool("who")
         assert not result.is_error
 
@@ -110,48 +76,6 @@ def test_pin_requires_explicit_companion_policy(tmp_path: Path) -> None:
         )
 
 
-async def test_active_identity_unread_and_rejected_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    pin = EthosSessionPin(SID, SID)
-    unread = pin.unread_path(tmp_path / "unread")
-    state = create_state(
-        BiffConfig(user="rmh", display_name="Raymond", kind="agent", repo_name="test"),
-        tmp_path / "relay",
-        tty=pin.routing_id,
-        unread_path=unread,
-        ethos_session_pin=pin,
-        auto_companion=False,
-    )
-    with patch("biff.server.app.signal.signal"):
-        async with Client(create_server(state)) as client:
-            sessions = await state.relay.get_sessions()
-            assert len(sessions) == 1
-            assert sessions[0].user == "rmh"
-            assert sessions[0].display_name == "Raymond"
-            assert sessions[0].kind == "agent"
-            assert unread.exists()
-            status: object = json.loads(unread.read_text())
-            assert isinstance(status, dict)
-            assert status["user"] == "rmh"
-            with pytest.raises(ToolError, match="pinned"):
-                await client.call_tool(
-                    "plan",
-                    {"message": "wrong"},
-                    meta={"ai.opencode/sessionID": "ses_other"},
-                )
-            unchanged = await state.relay.get_session(state.session_key)
-            assert unchanged is not None and unchanged.plan == ""
-            await client.call_tool(
-                "plan", {"message": "right"}, meta={"ai.opencode/sessionID": SID}
-            )
-            changed = await state.relay.get_session(state.session_key)
-            assert changed is not None and changed.plan == "right"
-            assert state.companion is None
-    assert not unread.exists()
-
-
 @pytest.mark.parametrize("claude_identity", [None, "ancestor123"])
 async def test_pinned_plan_never_changes_claude_markers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, claude_identity: str | None
@@ -177,7 +101,7 @@ async def test_pinned_plan_never_changes_claude_markers(
             return_value=claude_identity,
         ) as discovery,
     ):
-        async with Client(create_server(state)) as client:
+        async with StampedClient(create_server(state)) as client:
             for message, source, expected in (
                 ("pinned plan", "manual", "pinned plan"),
                 ("ignored auto", "auto", "pinned plan"),
@@ -210,7 +134,7 @@ async def test_unpinned_mcp_plan_resolves_marker_identity_fresh(
             side_effect=["first123", "second123", "second123"],
         ) as discovery,
     ):
-        async with Client(create_server(state)) as client:
+        async with StampedClient(create_server(state)) as client:
             await client.call_tool("plan", {"message": "first"})
             await client.call_tool("plan", {"message": "second"})
             await client.call_tool("plan", {"message": ""})
@@ -238,11 +162,11 @@ async def test_dormant_overlap_cannot_remove_owner_unread(
     )
     with pin.ownership():
         with pytest.raises(Exception, match="already has a running Biff process"):
-            async with Client(create_server(state)):
+            async with StampedClient(create_server(state)):
                 pytest.fail("overlapping dormant server started")
         assert unread.read_text() == "owner"
         assert sidecar.read_text() == "owner nudge"
-    async with Client(create_server(state)):
+    async with StampedClient(create_server(state)):
         pass
     assert not unread.exists() and not sidecar.exists()
 
@@ -300,7 +224,7 @@ async def test_failed_startup_closes_owned_relay_before_unlock(
         patch.object(type(state.relay), "close", side_effect=close) as closed,
         pytest.raises(Exception, match="injected"),
     ):
-        async with Client(create_server(state)):
+        async with StampedClient(create_server(state)):
             pytest.fail("failed startup yielded")
     closed.assert_awaited_once()
     assert not await state.relay.get_sessions()

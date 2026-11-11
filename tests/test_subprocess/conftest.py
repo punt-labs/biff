@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 
@@ -68,7 +71,7 @@ def transcript(request: pytest.FixtureRequest) -> Generator[Transcript]:
 async def biff_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
     """MCP client connected to a biff subprocess for user 'kai'."""
     transport = _make_transport("kai", shared_data_dir)
-    async with Client(transport) as client:
+    async with StampedClient(transport) as client:
         yield client
 
 
@@ -79,7 +82,7 @@ async def biff_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
 async def kai_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
     """MCP client connected to a biff subprocess for user 'kai'."""
     transport = _make_transport("kai", shared_data_dir)
-    async with Client(transport) as client:
+    async with StampedClient(transport) as client:
         yield client
 
 
@@ -87,7 +90,7 @@ async def kai_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
 async def eric_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
     """MCP client connected to a biff subprocess for user 'eric'."""
     transport = _make_transport("eric", shared_data_dir)
-    async with Client(transport) as client:
+    async with StampedClient(transport) as client:
         yield client
 
 

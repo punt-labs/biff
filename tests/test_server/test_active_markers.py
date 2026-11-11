@@ -13,12 +13,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import CompanionSession, create_state
+from biff.testing.caller import StampedClient
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ class TestActiveMarkers:
         )
         mcp = create_server(state)
 
-        async with Client(FastMCPTransport(mcp)):
+        async with StampedClient(FastMCPTransport(mcp)):
             marker = active_root / "kai-a1b2c3d4"
             assert marker.exists(), "primary active marker missing"
 
@@ -86,7 +86,7 @@ class TestActiveMarkers:
         )
         mcp = create_server(state)
 
-        async with Client(FastMCPTransport(mcp)):
+        async with StampedClient(FastMCPTransport(mcp)):
             companion_marker = active_root / "jfreeman-e5f6a7b8"
             assert not companion_marker.exists(), (
                 "companion marker must not be written at startup"
@@ -132,7 +132,7 @@ class TestActiveMarkers:
 
         mcp = create_server(state)
         with pytest.raises(RuntimeError, match="simulated claim failure"):
-            async with Client(FastMCPTransport(mcp)):
+            async with StampedClient(FastMCPTransport(mcp)):
                 pass
 
         marker = active_root / "kai-a1b2c3d4"

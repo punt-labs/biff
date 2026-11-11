@@ -12,12 +12,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.server.app import _register_companion, create_server
 from biff.server.state import CompanionSession, create_state
+from biff.testing.caller import StampedClient
 
 pytestmark = pytest.mark.nats_local
 
@@ -74,8 +74,8 @@ class TestDualSessionLifespan:
         mcp_b = create_server(state_b)
 
         async with (
-            Client(FastMCPTransport(mcp_a)),
-            Client(FastMCPTransport(mcp_b)),
+            StampedClient(FastMCPTransport(mcp_a)),
+            StampedClient(FastMCPTransport(mcp_b)),
         ):
             # Production registers the companion from the heartbeat loop once
             # the ethos roster resolves the human identity.  With the companion

@@ -26,7 +26,7 @@ import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
-from fastmcp import Client
+from biff.testing.caller import StampedClient
 from biff.ethos_session import EthosSessionPin
 from biff.models import BiffConfig
 from biff.server import app
@@ -60,7 +60,7 @@ async def main():
         patch.object(app, "_remove_unread_files", cleanup),
         patch.object(app, "refresh_wall", startup_wall),
     ):
-        async with Client(app.create_server(state)):
+        async with StampedClient(app.create_server(state)):
             print("READY", flush=True)
             await asyncio.to_thread(sys.stdin.readline)
     print("STOPPED", flush=True)
