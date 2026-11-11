@@ -13,7 +13,7 @@ import signal
 import sys
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -1253,7 +1253,40 @@ class _LiveSession:
         self.tasks: list[asyncio.Task[None]] = []
         self.reaper: asyncio.Task[None] | None = None
         self.attached = False
-        self._lock = asyncio.Lock()
+        # Calls run inside ``call``; a re-point waits for the running ones to
+        # finish and holds new ones back, so a tool never sees its session
+        # change underneath it.
+        self._gate = asyncio.Condition()
+        self._in_flight = 0
+        self._repointing = False
+
+    @asynccontextmanager
+    async def call(
+        self,
+        mcp: FastMCP[ServerState],
+        state: ServerState,
+        caller: CallerIdentity,
+    ) -> AsyncGenerator[None]:
+        """Run one tool call pointed at *caller*'s session, start to finish."""
+        async with self._gate:
+            await self._gate.wait_for(lambda: not self._repointing)
+            if state.bound_session_id != caller.session_id or not (
+                self.attached or state.dormant
+            ):
+                self._repointing = True
+                try:
+                    await self._gate.wait_for(lambda: self._in_flight == 0)
+                    await self.attach(mcp, state, caller)
+                finally:
+                    self._repointing = False
+                    self._gate.notify_all()
+            self._in_flight += 1
+        try:
+            yield
+        finally:
+            async with self._gate:
+                self._in_flight -= 1
+                self._gate.notify_all()
 
     async def attach(
         self,
@@ -1261,29 +1294,28 @@ class _LiveSession:
         state: ServerState,
         caller: CallerIdentity,
     ) -> None:
-        """Bind *state* to the caller's session, then register and start tasks."""
-        async with self._lock:
-            routing = caller.routing
-            if state.bound_session_id == routing.session_id:
-                if self.attached or state.dormant:
-                    return
-            elif self.attached:
-                # /clear or resume changed session_id in place: release the
-                # old session before the server is pointed at the new one.
-                await self._detach(state)
-            state.bind(routing)
-            if state.dormant:
-                return
-            try:
-                await self._register_and_start(mcp, state)
-            except BaseException:
-                for task in self.tasks:
-                    task.cancel()
-                await asyncio.gather(*self.tasks, return_exceptions=True)
-                self.tasks.clear()
-                self.reaper = None
-                raise
-            self.attached = True
+        """Bind *state* to the caller's session, then register and start tasks.
+
+        Runs only from :meth:`call`, with no other call in flight.
+        """
+        routing = caller.routing
+        if state.bound_session_id != routing.session_id and self.attached:
+            # /clear or resume changed session_id in place: release the old
+            # session before the server is pointed at the new one.
+            await self._detach(state)
+        state.bind(routing)
+        if state.dormant or self.attached:
+            return
+        try:
+            await self._register_and_start(mcp, state)
+        except BaseException:
+            for task in self.tasks:
+                task.cancel()
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+            self.tasks.clear()
+            self.reaper = None
+            raise
+        self.attached = True
 
     async def _detach(self, state: ServerState) -> None:
         """Stop the attached session's tasks and release what it registered."""
@@ -1426,8 +1458,10 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
 
     mcp.add_middleware(_SessionCaptureMiddleware())
 
-    async def accept_caller(caller: CallerIdentity) -> None:
-        await live.attach(mcp, state, caller)
+    def accept_caller(
+        caller: CallerIdentity,
+    ) -> AbstractAsyncContextManager[None]:
+        return live.call(mcp, state, caller)
 
     mcp.add_middleware(CallerIdentityMiddleware(accept_caller))
     register_all_tools(mcp, state)

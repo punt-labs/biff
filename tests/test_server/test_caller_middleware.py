@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -18,8 +20,10 @@ class _Binder:
     def __init__(self) -> None:
         self.bound: list[CallerIdentity] = []
 
-    async def __call__(self, caller: CallerIdentity) -> None:
+    @asynccontextmanager
+    async def __call__(self, caller: CallerIdentity) -> AsyncIterator[None]:
         self.bound.append(caller)
+        yield
 
 
 def _server(binder: _Binder) -> tuple[FastMCP, list[dict[str, object]]]:

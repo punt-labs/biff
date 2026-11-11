@@ -73,3 +73,37 @@ async def test_a_changed_session_id_repoints_the_server(
         assert await state.relay.get_session(old.session_key("kai")) is None
         assert await state.relay.get_session(new.session_key("kai")) is not None
     assert len(asyncio.all_tasks()) <= max(before, running)
+
+
+async def test_repoint_waits_for_an_in_flight_call_of_the_old_session(
+    state: ServerState,
+) -> None:
+    """A different-session call must not re-point under a running tool."""
+    mcp = create_server(state)
+    started, release = asyncio.Event(), asyncio.Event()
+    seen: list[tuple[str | None, str | None]] = []
+
+    @mcp.tool
+    async def slow() -> str:
+        seen.append((state.bound_session_id, None))
+        started.set()
+        await release.wait()
+        seen.append((state.bound_session_id, state.session_key))
+        return "done"
+
+    async with StampedClient(
+        FastMCPTransport(mcp), caller=caller_for("sess-1")
+    ) as client:
+        await client.call_tool("who", {})
+        first = asyncio.create_task(client.call_tool("slow", {}))
+        await started.wait()
+        second = asyncio.create_task(
+            client.call_tool("who", {"_caller": caller_for("sess-2")})
+        )
+        await asyncio.sleep(0.3)
+        assert state.bound_session_id == "sess-1", "re-pointed under a running tool"
+        release.set()
+        await first
+        await second
+    assert seen[-1] == ("sess-1", SessionRouting("sess-1").session_key("kai"))
+    assert state.bound_session_id == "sess-2"

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING
 
 from fastmcp.exceptions import ToolError
@@ -14,7 +15,9 @@ if TYPE_CHECKING:
     from fastmcp.tools import ToolResult
     from mcp.types import CallToolRequestParams
 
-type CallerBinder = Callable[[CallerIdentity], Awaitable[None]]
+# Entered around the whole tool call, so the server can keep one caller's
+# session pointed at while its tool runs.
+type CallerBinder = Callable[[CallerIdentity], AbstractAsyncContextManager[None]]
 
 _UNIDENTIFIED = (
     f"call carried no {CALLER_KEY}: the biff stamping hook is not installed, "
@@ -24,7 +27,7 @@ _UNIDENTIFIED = (
 
 
 class CallerIdentityMiddleware(Middleware):
-    """Remove ``_caller`` before schema validation, then hand it to *bind*.
+    """Remove ``_caller`` before schema validation, then run the call inside *bind*.
 
     fastmcp 3 runs ``on_call_tool`` before the tool's argument schema is
     checked, so the undeclared ``_caller`` is popped here and never reaches
@@ -48,5 +51,5 @@ class CallerIdentityMiddleware(Middleware):
             caller = CallerIdentity.from_wire(raw)
         except CallerIdentityError as exc:
             raise ToolError(str(exc)) from exc
-        await self._bind(caller)
-        return await call_next(context)
+        async with self._bind(caller):
+            return await call_next(context)
