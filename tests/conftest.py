@@ -53,6 +53,7 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
     look here first.
     """
     monkeypatch.delenv("CLAUDE_PID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)

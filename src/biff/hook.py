@@ -208,17 +208,18 @@ def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
        ``session_id`` (no channel today for a subagent's ``Bash`` to learn
        its own ``agent_id``) would, on an ``agent_id``-only read, find no
        marker and strand every edit (DES-054 RISK-2).
-    3. ``None`` (the shared bucket) — the terminal, so headless/CI/SDK
-       writes with no Claude session remain visible.
+    3. ``None`` (the shared bucket) — only when the payload carries no
+       identity at all, so headless/CI/SDK writes remain visible.  An
+       identified caller never reads it: the shared bucket is where an
+       unscoped CLI ``biff plan`` writes, and it must not authorize a
+       session it knows nothing about.
     """
     candidates: list[str | None] = []
     for key in ("agent_id", "session_id"):
         value = data.get(key)
         if isinstance(value, str) and value and value not in candidates:
             candidates.append(value)
-    if None not in candidates:
-        candidates.append(None)
-    return tuple(candidates)
+    return tuple(candidates) or (None,)
 
 
 def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:

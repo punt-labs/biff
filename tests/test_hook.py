@@ -1324,7 +1324,7 @@ class TestHandlePreToolUse:
         own* identity ladder, never a sibling's: a sibling ``agent-sibling``
         having a plan must not satisfy ``agent-me``'s gate when neither
         ``agent-me`` (agent_id) nor its leader (session_id) nor the shared
-        bucket has a plan of its own.
+        bucket has a plan of its own (the shared bucket is not consulted).
         """
         my_agent = "agent-me"
         my_session = "leader-sid"
@@ -1346,12 +1346,11 @@ class TestHandlePreToolUse:
         assert result is not None, "sibling's plan must not satisfy my gate"
         reason = _deny_reason(result)
         assert "/plan" in reason
-        # The gate consulted MY own identities (agent -> session -> routing
-        # id -> shared), in preference order — never the sibling's key. The
-        # routing id resolves to None here, so it collapses into the shared
-        # terminal rather than adding a distinct rung.
+        # The gate consulted MY own identities (agent -> session), in
+        # preference order — never the sibling's key, and never the shared
+        # bucket, which an identified caller does not read.
         identities_queried = [call.args[1] for call in mock_has.call_args_list]
-        assert identities_queried == [my_agent, my_session, None]
+        assert identities_queried == [my_agent, my_session]
         assert other_identity not in identities_queried
 
     def test_session_id_fallback_allows_when_agent_id_has_no_marker(self) -> None:

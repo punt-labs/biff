@@ -169,6 +169,7 @@ class TestCliOnlyPlanSatisfiesGate:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         repo = _make_repo(tmp_path / "repo")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cli-session-id")
         # plan() shells out to git in the process cwd; patching Path.cwd does
         # not reach the subprocess, so a linked-worktree test run resolved the
         # marker root to the real checkout instead of this temp repo.
@@ -190,7 +191,7 @@ class TestCliOnlyPlanSatisfiesGate:
             assert not result.error
 
             gate_result = handle_pre_tool_use(
-                {"session_id": "some-other-session", "cwd": str(repo)}
+                {"session_id": "cli-session-id", "cwd": str(repo)}
             )
 
         assert gate_result is None  # allowed
@@ -200,6 +201,7 @@ class TestCliOnlyPlanSatisfiesGate:
     ) -> None:
         """Clearing the CLI plan (biff plan --clear) re-denies via the same path."""
         repo = _make_repo(tmp_path / "repo")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cli-session-id")
         monkeypatch.chdir(repo)
         relay = LocalRelay(tmp_path / "relay-data")
         ctx = CliContext(
@@ -218,7 +220,7 @@ class TestCliOnlyPlanSatisfiesGate:
             await plan(ctx, "")  # clear
 
             gate_result = handle_pre_tool_use(
-                {"session_id": "some-other-session", "cwd": str(repo)}
+                {"session_id": "cli-session-id", "cwd": str(repo)}
             )
 
         assert gate_result is not None  # denied
@@ -306,3 +308,64 @@ class TestDeclaredSessionPlan:
 
         assert allowed is None
         assert sibling is not None
+
+
+class TestSharedBucketDoesNotAuthorizeASession:
+    """An unscoped plan must not satisfy another session's edit gate."""
+
+    def test_shared_marker_does_not_satisfy_an_identified_session(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            from biff._stdlib import get_repo_common_root
+
+            write_plan_marker(get_repo_common_root(str(repo)), None, "cli plan")
+            result = handle_pre_tool_use(
+                {"session_id": "other-session", "cwd": str(repo)}
+            )
+        assert result is not None  # denied
+
+    def test_shared_marker_still_serves_a_payload_with_no_identity(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            from biff._stdlib import get_repo_common_root
+
+            write_plan_marker(get_repo_common_root(str(repo)), None, "headless")
+            assert handle_pre_tool_use({"cwd": str(repo)}) is None
+
+
+class TestCliPlanIsScopedToTheEnvironmentSession:
+    def test_cli_plan_writes_under_the_session_and_reset_clears_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.commands.plan import sync_plan_marker
+
+        repo = _make_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-session")
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("pathlib.Path.cwd", return_value=repo),
+        ):
+            from biff._stdlib import get_repo_common_root
+
+            root = get_repo_common_root(str(repo))
+            sync_plan_marker("cli plan")
+            assert has_plan_marker(root, "my-session")
+            assert not has_plan_marker(root, None)
+            assert handle_pre_tool_use({"session_id": "other", "cwd": str(repo)})
+            handle_session_start({"session_id": "my-session", "cwd": str(repo)})
+            assert not has_plan_marker(root, "my-session")
+
+    def test_a_malformed_environment_session_falls_to_the_shared_bucket(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.commands.plan import cli_session_id
+
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "../evil")
+        assert cli_session_id() is None
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+        assert cli_session_id() is None
