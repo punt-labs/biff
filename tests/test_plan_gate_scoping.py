@@ -165,8 +165,14 @@ class TestCliOnlyPlanSatisfiesGate:
     this fix, because the marker write path did not exist.
     """
 
-    async def test_cli_plan_then_hook_allows_edit(self, tmp_path: Path) -> None:
+    async def test_cli_plan_then_hook_allows_edit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         repo = _make_repo(tmp_path / "repo")
+        # plan() shells out to git in the process cwd; patching Path.cwd does
+        # not reach the subprocess, so a linked-worktree test run resolved the
+        # marker root to the real checkout instead of this temp repo.
+        monkeypatch.chdir(repo)
         relay = LocalRelay(tmp_path / "relay-data")
         ctx = CliContext(
             relay=relay,
@@ -193,9 +199,12 @@ class TestCliOnlyPlanSatisfiesGate:
 
         assert gate_result is None  # allowed
 
-    async def test_cli_plan_clear_then_hook_denies(self, tmp_path: Path) -> None:
+    async def test_cli_plan_clear_then_hook_denies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Clearing the CLI plan (biff plan --clear) re-denies via the same path."""
         repo = _make_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
         relay = LocalRelay(tmp_path / "relay-data")
         ctx = CliContext(
             relay=relay,
