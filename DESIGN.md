@@ -5490,9 +5490,11 @@ not argued.
 
 **Status:** The routing *derivation* (`derive_routing_id(session_id, role)`)
 stands. The `session_id` *acquisition* mechanism described in "Plumbing" (the
-SessionStart-hook → PPID-walk → `sessions/<pid>.json` bridge) is DEPRECATED —
-superseded by DES-064, under which `session_id` arrives on the call via the
-harness-declared channel and is handed straight to `derive_routing_id`.
+SessionStart-hook → PPID-walk → `sessions/<pid>.json` bridge) is SUPERSEDED by
+DES-064 and still in the code: under DES-064 `session_id` arrives on the call
+via the harness-declared channel and is handed straight to `derive_routing_id`,
+and the acquisition bridge is removed when that channel ships (biff-ork0 /
+biff-khr9), not before.
 
 **Context.** The session key `{user}:{tty}` used `ttyN` — a display name minted
 fresh (`generate_tty()`, random hex) on every server start — as the *routing*
@@ -6706,11 +6708,11 @@ and `tests/test_commands/test_who.py::TestWho::test_all_dead_returns_no_sessions
 ## DES-058: `CLAUDE_PID` Env Var Corrects DES-011's Rejected Alternative
 
 **Date:** 2026-08-22
-**Status:** DEPRECATED — superseded by DES-064. This ADR corrected the
+**Status:** SUPERSEDED by DES-064, still in the code. This ADR corrected the
 process-tree walk with a corroborated `CLAUDE_PID`; DES-064 removes the walk and
 its env-var correction together, in favor of a harness-declared caller. The
-`is_live_ancestor` corroboration and the `CLAUDE_PID` keying are retired once the
-stamping hook is in place. Kept as history.
+`is_live_ancestor` corroboration and the `CLAUDE_PID` keying are removed when the
+stamping hook ships (biff-ork0 / biff-khr9), not before. Kept as history.
 **Related:** DES-011 (recorded the now-stale rejection), DES-050 (the
 PID-walk hint-file mechanism this decision re-keys, without removing)
 
@@ -7685,6 +7687,39 @@ serves Claude Code **and** codex; OpenCode uses MCP `_meta`; pi (and any
 applet) passes the facts in-process. The process-tree walk is retired for all
 of them.
 
+### The declared caller routes; it does not authenticate
+
+The shape check (`[A-Za-z0-9_-]+`, non-empty) is a well-formedness gate, not an
+identity proof. The standard is explicit that `_caller` **routes rather than
+authenticates** (`mcp-caller-identity.md` § 3.1.7, § 4.4), and biff adopts that
+boundary unchanged:
+
+- **Who may set each channel, and what "set correctly" means.** The stamping
+  hook sets `_caller` for Claude Code and codex; the OpenCode transport sets
+  `params._meta["ai.opencode/sessionID"]`; the pi extension passes the facts
+  in-process. Each producer is the component biff *expects* to populate the
+  channel, not a component biff can *verify* populated it. A client that can
+  send a tool call can also send a `_caller` argument or a `_meta` key itself,
+  and biff cannot distinguish a hook-stamped value from a model-written one
+  while no hook is running (§ 3.1.7). The hook prevents that forgery only while
+  it runs.
+- **What this means for routing, presence, and the plan gate.** All three key
+  on the declared `{session_id, agent_id}` and therefore trust it for
+  *addressing* — delivering a message to a session, showing who is present,
+  gating edits for a session. None of them is an authorization decision that a
+  forged caller could use to cross a privilege boundary: a spoofed caller can
+  misroute or mis-present within the same user's own sessions, which is the
+  same exposure the process-tree path had, not a new one.
+- **Where the real boundary sits.** For a local engine it is the loopback bind
+  and same-user filesystem access: every process of the same user can already
+  read `~/.punt-labs/biff/sessions/`, so no same-user process is kept from
+  acting as another by the shape check alone (§ 4.4). biff adds no authenticated
+  principal here. An engine reachable across hosts or users would need real
+  transport authentication (and OAuth where it exposes protected resources)
+  before the declared caller could carry any authorization weight — biff does
+  not expose such a surface today, and biff's own relay/message **security model
+  is unstarted** (tracked separately; not in scope for this ADR).
+
 ### Sequence — before (deprecated) and after (this ADR)
 
 Before — biff infers identity from the process tree, and OpenCode shells to the
@@ -7752,8 +7787,9 @@ SessionStart-hook → PPID-walk → hint-file bridge (DES-050's "Plumbing" secti
 and DES-058's `CLAUDE_PID` corroboration of that walk. Under this ADR
 `session_id` arrives on the call via the declared channel and is handed straight
 to `derive_routing_id`. The hint-file bridge, `topmost_claude_pid`,
-`is_live_ancestor`, and the `sessions/<pid>.json` mechanism are deprecated once
-the stamping hook is in place.
+`is_live_ancestor`, and the `sessions/<pid>.json` mechanism are removed when the
+stamping hook ships (biff-ork0 / biff-khr9), not before — until then they remain
+the live acquisition path.
 
 ### Scope of this ADR vs. the implementation
 
