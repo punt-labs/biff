@@ -86,18 +86,27 @@ class CallerStamper:
                 "tool_input is not an object"
             )
         fields = cast("dict[str, object]", args)
-        updated: dict[str, object] = {k: v for k, v in fields.items() if k != "_caller"}
         caller = self._caller(payload)
-        if caller is not None:
-            updated["_caller"] = caller
+        if isinstance(caller, str):
+            return _deny(
+                f"biff stamping hook could not identify the caller of {tool}: {caller}"
+            )
+        updated: dict[str, object] = {k: v for k, v in fields.items() if k != "_caller"}
+        updated["_caller"] = caller
         return _updated(updated)
 
-    def _caller(self, payload: dict[str, object]) -> dict[str, str] | None:
+    def _caller(self, payload: dict[str, object]) -> dict[str, str] | str:
+        """Return the ``_caller`` to stamp, or the reason it cannot be known."""
         session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not ID_RE.fullmatch(session_id):
+            return f"the payload session_id is missing or malformed ({session_id!r})"
         sub = payload.get("agent_id")
         agent_id = sub if isinstance(sub, str) and sub else self.main_agent_id
-        if not isinstance(session_id, str) or agent_id is None:
-            return None
-        if not ID_RE.fullmatch(session_id) or not ID_RE.fullmatch(agent_id):
-            return None
+        if agent_id is None:
+            return (
+                "no agent_id in the payload and CLAUDE_PID is not a live ancestor "
+                "of the hook"
+            )
+        if not ID_RE.fullmatch(agent_id):
+            return f"the agent_id is malformed ({agent_id!r})"
         return {"session_id": session_id, "agent_id": agent_id}

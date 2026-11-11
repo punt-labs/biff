@@ -60,27 +60,41 @@ def test_model_supplied_caller_is_overwritten() -> None:
         {"session_id": "../x"},
     ],
 )
-def test_indeterminate_session_removes_caller(overrides: dict[str, object]) -> None:
+def test_indeterminate_session_is_denied_naming_the_session_id(
+    overrides: dict[str, object],
+) -> None:
     forged = {"session_id": "evil", "agent_id": "evil"}
     out = CallerStamper(main_agent_id="4242").stamp(
         _payload(tool_input={"message": "hi", "_caller": forged}, **overrides)
     )
-    assert _updated(out) == {"message": "hi"}
+    assert out is not None
+    spec = _spec(out)
+    assert spec["permissionDecision"] == "deny"
+    assert "session_id" in str(spec["permissionDecisionReason"])
 
 
-def test_indeterminate_agent_id_removes_caller() -> None:
+def test_indeterminate_agent_id_is_denied_naming_the_agent_id() -> None:
     forged = {"session_id": "evil", "agent_id": "evil"}
     out = CallerStamper(main_agent_id=None).stamp(
         _payload(tool_input={"message": "hi", "_caller": forged})
     )
-    assert _updated(out) == {"message": "hi"}
+    assert out is not None
+    spec = _spec(out)
+    assert spec["permissionDecision"] == "deny"
+    assert "CLAUDE_PID" in str(spec["permissionDecisionReason"])
 
 
-def test_never_returns_a_permission_decision() -> None:
+def test_never_returns_allow() -> None:
     for stamper in (CallerStamper("1"), CallerStamper(None)):
         out = stamper.stamp(_payload())
         assert out is not None
-        assert "permissionDecision" not in _spec(out)
+        assert _spec(out).get("permissionDecision") != "allow"
+
+
+def test_a_stamped_call_carries_no_permission_decision() -> None:
+    out = CallerStamper("1").stamp(_payload())
+    assert out is not None
+    assert "permissionDecision" not in _spec(out)
 
 
 @pytest.mark.parametrize("payload", [{}, {"session_id": SID, "tool_name": TOOL}])
