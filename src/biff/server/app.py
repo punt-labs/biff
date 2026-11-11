@@ -1092,17 +1092,21 @@ async def _running_lifespan(
         # and run by ``_run_signal_cleanup_steps`` below -- see that
         # function for why a failed step reports via ``os.write(2, ...)``
         # rather than logging.
-        steps: list[_SignalCleanupStep] = [
-            (
-                lambda: _write_sentinel(state.config.repo_name, state.session_key),
-                # RuntimeError: sentinel_dir() -> biff_data_dir() calls
-                # Path.home() fresh on every invocation, which raises
-                # RuntimeError (not OSError) when HOME is unset and
-                # pwd.getpwuid() can't resolve the user.
-                (OSError, RuntimeError),
-                b"biff: signal cleanup: sentinel write failed\n",
-            ),
-        ]
+        steps: list[_SignalCleanupStep] = []
+        # An unbound server has no declared session: its placeholder key
+        # names nothing a reaper could clean, so it leaves no sentinel.
+        if state.is_bound:
+            steps.append(
+                (
+                    lambda: _write_sentinel(state.config.repo_name, state.session_key),
+                    # RuntimeError: sentinel_dir() -> biff_data_dir() calls
+                    # Path.home() fresh on every invocation, which raises
+                    # RuntimeError (not OSError) when HOME is unset and
+                    # pwd.getpwuid() can't resolve the user.
+                    (OSError, RuntimeError),
+                    b"biff: signal cleanup: sentinel write failed\n",
+                )
+            )
         if state.companion:
             companion = state.companion
             steps.append(
