@@ -137,25 +137,81 @@ class TestTemplateHardening:
         ) in content
 
 
-class TestDeployedWorkflowPin:
-    """This repo's own deployed workflow must track the released package."""
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_STAMPED_HEADING = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
 
-    def test_deployed_biff_pin_matches_package_version(self) -> None:
-        """The deployed copy's ``punt-biff==`` pin equals the package version.
+
+def _previous_released_version(changelog: str, current: str) -> str:
+    """Return the newest stamped CHANGELOG version other than ``current``."""
+    stamped: list[str] = _STAMPED_HEADING.findall(changelog)
+    return next(v for v in stamped if v != current)
+
+
+def _assert_pin_window(deployed: str, current: str, previous: str) -> None:
+    """Assert the one ``punt-biff==`` pin in ``deployed`` is current or previous."""
+    pins = re.findall(r"punt-biff==(\S+)", deployed)
+    assert len(pins) == 1
+    assert pins[0] in {current, previous}
+
+
+class TestDeployedWorkflowPin:
+    """This repo's own deployed workflow must reference a published release."""
+
+    def test_deployed_biff_pin_is_current_or_previous_release(self) -> None:
+        """The deployed ``punt-biff==`` pin is the package version or the one before.
+
+        The deployed notifier must name a version that is already on PyPI.
+        While a release is publishing, the package version has been bumped
+        but the deployed pin is only advanced once the new version is
+        published, so for that window the pin legitimately lags by exactly
+        one release. Anything older, a dropped pin, or a duplicated pin
+        fails.
 
         Deliberately pin-scoped, not full-render equality: Dependabot bumps
         the action SHAs in the deployed file but not in the template, so
         comparing whole files would fail on every Dependabot bump and
         pressure a regeneration that reverts those SHAs.
         """
-        deployed = (
-            Path(__file__).resolve().parents[1]
-            / ".github"
-            / "workflows"
-            / _WORKFLOW_NAME
-        ).read_text()
-        pins = re.findall(r"punt-biff==(\S+)", deployed)
-        assert pins == [_PINNED_BIFF_VERSION]
+        deployed = (_REPO_ROOT / ".github" / "workflows" / _WORKFLOW_NAME).read_text()
+        changelog = (_REPO_ROOT / "CHANGELOG.md").read_text()
+        previous = _previous_released_version(changelog, _PINNED_BIFF_VERSION)
+        _assert_pin_window(deployed, _PINNED_BIFF_VERSION, previous)
+
+
+class TestPinWindow:
+    """The accepted window is {current, previous}: a bounded one-release lag."""
+
+    CHANGELOG = (
+        "## [Unreleased]\n\n## [1.21.0] - d\n\n## [1.20.0] - d\n\n## [1.19.0] - d\n"
+    )
+
+    @staticmethod
+    def _wf(*pins: str) -> str:
+        return "\n".join(f"uvx --from punt-biff=={p} biff wall" for p in pins)
+
+    def test_previous_is_entry_below_current(self) -> None:
+        assert _previous_released_version(self.CHANGELOG, "1.21.0") == "1.20.0"
+
+    def test_previous_when_current_not_yet_stamped(self) -> None:
+        assert _previous_released_version(self.CHANGELOG, "1.22.0") == "1.21.0"
+
+    def test_accepts_pin_equal_to_current(self) -> None:
+        _assert_pin_window(self._wf("1.21.0"), "1.21.0", "1.20.0")
+
+    def test_accepts_one_release_lag(self) -> None:
+        _assert_pin_window(self._wf("1.20.0"), "1.21.0", "1.20.0")
+
+    def test_rejects_two_release_drift(self) -> None:
+        with pytest.raises(AssertionError):
+            _assert_pin_window(self._wf("1.19.0"), "1.21.0", "1.20.0")
+
+    def test_rejects_dropped_pin(self) -> None:
+        with pytest.raises(AssertionError):
+            _assert_pin_window(self._wf(), "1.21.0", "1.20.0")
+
+    def test_rejects_duplicated_pin(self) -> None:
+        with pytest.raises(AssertionError):
+            _assert_pin_window(self._wf("1.21.0", "1.21.0"), "1.21.0", "1.20.0")
 
 
 class TestRenderPlaceholderGuard:
