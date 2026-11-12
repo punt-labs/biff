@@ -86,6 +86,9 @@ _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
+_TEARDOWN_TIMEOUT = 5.0  # bound nc.close()'s wait_closed() so a half-open socket
+# can't hold _connect_lock (taken by _force_reconnect) and freeze the poller
+# and heartbeat; the client is being discarded, so abandoning it is safe
 _NOTIFY_RECONNECT_TIMEOUT = 3.0  # bound _live_nc_or_reconnect's fall-through
 # dial+provision (_CONNECT_PROVISION_TIMEOUT=20s) so a best-effort wake poke
 # stays best-effort — deliver() already published durably by the time this
@@ -142,9 +145,22 @@ async def safe_close(nc: NatsClient) -> None:
     Python 3.14 raises ``ssl.SSLError: APPLICATION_DATA_AFTER_CLOSE_NOTIFY``
     when the server sends data after the TLS close_notify.  This is harmless
     during intentional teardown — the connection is going away regardless.
+
+    The wait is bounded by ``_TEARDOWN_TIMEOUT``: nats-py's ``close()`` ends in
+    an unbounded ``wait_closed()`` that a half-open socket can stall, and
+    ``_force_reconnect`` calls this while holding ``_connect_lock``.  The client
+    is being discarded, so abandoning a close that will not finish costs only
+    the socket's own eventual cleanup, whereas a hung lock freezes every
+    slow-path caller.
     """
     try:
-        await nc.close()
+        async with asyncio.timeout(_TEARDOWN_TIMEOUT):
+            await nc.close()
+    except TimeoutError:
+        logger.warning(
+            "NATS client close did not finish within %.1fs — abandoning it",
+            _TEARDOWN_TIMEOUT,
+        )
     except ssl.SSLError as exc:
         if "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" not in str(exc):
             raise

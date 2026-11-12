@@ -21,7 +21,7 @@ import pytest
 from nats.js.errors import BucketNotFoundError, KeyNotFoundError, NotFoundError
 
 from biff.models import UserSession
-from biff.nats_relay import _WEDGE_FORCE_RECONNECT_THRESHOLD, NatsRelay
+from biff.nats_relay import _WEDGE_FORCE_RECONNECT_THRESHOLD, NatsRelay, safe_close
 
 _LOGGER_NAME = "biff.nats_relay"
 
@@ -59,6 +59,11 @@ async def _timeout() -> str:
 
 async def _ok() -> str:
     return "ok"
+
+
+async def _hang() -> None:
+    """A ``close()`` stuck in ``wait_closed()`` on a half-open socket."""
+    await asyncio.sleep(3600)
 
 
 async def _keynotfound() -> str:
@@ -327,6 +332,37 @@ class TestProactiveWedgeDetector:
         nc.close.assert_not_awaited()
         assert relay._nc is nc
         assert relay._js is not None
+
+
+class TestBoundedTeardown:
+    """A hung ``close()`` must not hold ``_connect_lock`` indefinitely.
+
+    nats-py's ``close()`` ends in an unbounded ``wait_closed()`` that a
+    half-open socket can stall for minutes; ``_force_reconnect`` runs it
+    under ``_connect_lock``, so an unbounded teardown freezes every slow-path
+    caller (poller, heartbeat).
+    """
+
+    @pytest.mark.anyio()
+    async def test_safe_close_gives_up_on_a_hung_close(self) -> None:
+        nc = _fake_nc()
+        nc.close = _hang
+
+        with patch("biff.nats_relay._TEARDOWN_TIMEOUT", 0.05):
+            await asyncio.wait_for(safe_close(nc), timeout=2.0)
+
+    @pytest.mark.anyio()
+    async def test_force_reconnect_releases_lock_after_hung_close(self) -> None:
+        relay, nc = _wedged_relay()
+        nc.close = _hang
+
+        with patch("biff.nats_relay._TEARDOWN_TIMEOUT", 0.05):
+            await asyncio.wait_for(
+                relay._force_reconnect(relay._reconnect_epoch), timeout=2.0
+            )
+
+        assert not relay._connect_lock.locked()
+        assert relay._nc is None
 
 
 class TestReconnectEpochGuard:

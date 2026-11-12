@@ -456,8 +456,21 @@ async def _run_kv_watch(
     Stays alive during napping — the NATS connection is no longer
     released on idle.  This ensures wall changes and session events
     are detected in real-time regardless of activity state.
+
+    The watch is the ``kvWatch`` kind of ``SubKind`` in ``nats-relay.tex``
+    and obeys its ``Subscribe`` transition: the generation it is bound to
+    is recorded at ``watchall()``, and when the relay dials a new client
+    past it the cycle ends so the supervisor re-subscribes.  A client
+    replacement silently orphans the subscription, and an orphaned
+    watcher's ``updates()`` times out exactly like an idle bucket, so the
+    generation comparison is the only way to tell them apart.  An in-place
+    nats-py reconnect keeps the generation and replays the subscription,
+    so it is left alone.
     """
     kv = await relay.get_kv()
+    # Recorded before ``watchall()``: a dial racing the subscribe is seen as
+    # an advance and costs one spurious restart, never a missed one.
+    bound_generation = relay.connection_generation
     watcher = await kv.watchall()  # pyright: ignore[reportUnknownMemberType]
     try:
         # Use watcher.updates() instead of ``async for`` because nats.py's
@@ -466,6 +479,9 @@ async def _run_kv_watch(
         # where notifications can be missed before the restart loop
         # re-creates the watcher.
         while not shutdown.is_set():
+            if relay.connection_generation > bound_generation:
+                logger.info("KV watcher superseded by a new client; rebinding")
+                return
             try:
                 entry = await watcher.updates(timeout=5.0)  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
             except TimeoutError:
@@ -483,7 +499,28 @@ async def _run_kv_watch(
                 continue
             await _handle_kv_entry(entry, relay, state, cache)
     finally:
-        await watcher.stop()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
+        # Tear the watcher down best-effort. On the generation-advance rebind
+        # path the superseding dial has already closed the old client, so the
+        # UNSUB that watcher.stop() sends raises ConnectionClosedError — an
+        # expected failure, suppressed exactly as _reconcile_always_on_sub
+        # suppresses the orphaned-handle unsubscribe. The close is also bounded
+        # like safe_close: on a half-open socket the underlying wait can stall,
+        # and this runs where a hang would freeze the supervisor. Letting either
+        # the expected close error or a timeout escape would replace the
+        # intentional return with an exception, sending every healthy rebind
+        # through the supervisor's error branch (a 2s blind window). The watcher
+        # is being discarded, so abandoning the stop is safe.
+        try:
+            async with asyncio.timeout(_TEARDOWN_STEP_TIMEOUT):
+                await watcher.stop()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
+        except TimeoutError:
+            logger.warning(
+                "KV watcher stop did not finish within %.1fs — abandoning it",
+                _TEARDOWN_STEP_TIMEOUT,
+            )
+        except Exception:  # noqa: BLE001
+            # Expected on the rebind path: UNSUB on an already-closed client.
+            logger.debug("KV watcher stop failed (client already closed)")
 
 
 async def _kv_watcher_loop(
