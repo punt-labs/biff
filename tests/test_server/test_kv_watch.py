@@ -322,3 +322,45 @@ class TestKvWatchGenerationReconcile:
         )
 
         assert watcher.stopped, "stale watcher was not stopped"
+
+
+class _HangingStopWatcher(_GenerationBumpingWatcher):
+    """Generation-advancing watcher whose ``stop()`` never completes.
+
+    Models the half-open-socket stall: the superseded client's UNSUB wait
+    hangs. ``_run_kv_watch`` must still return, bounded by the teardown
+    timeout, rather than freezing the supervisor on the rebind path.
+    """
+
+    async def stop(self) -> None:
+        self.stopped = True
+        await asyncio.Event().wait()  # never set — hang forever
+
+
+class TestKvWatchBoundedStop:
+    """A hung ``watcher.stop()`` on the rebind path must not freeze the loop."""
+
+    async def test_returns_even_when_stop_hangs(self, state: ServerState) -> None:
+        """``_run_kv_watch`` returns within the teardown bound despite a hung stop.
+
+        Without the ``asyncio.timeout`` around ``watcher.stop()`` this would
+        hang forever — the same unbounded-wait failure the bounded
+        ``safe_close`` cures, on the code path this fix adds.
+        """
+        shutdown = asyncio.Event()
+        fake_relay = FakeNatsRelay(kv=FakeKV(watcher=FakeWatcher([], shutdown)))
+        watcher = _HangingStopWatcher(fake_relay, shutdown)
+        fake_relay.kv = FakeKV(watcher=watcher)
+
+        with patch("biff.server.app._TEARDOWN_STEP_TIMEOUT", 0.1):
+            await asyncio.wait_for(
+                _run_kv_watch(
+                    fake_relay,  # type: ignore[arg-type]
+                    state,
+                    shutdown,
+                    {},
+                ),
+                timeout=2.0,
+            )
+
+        assert watcher.stopped, "stop was never attempted"

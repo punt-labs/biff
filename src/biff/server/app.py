@@ -499,7 +499,20 @@ async def _run_kv_watch(
                 continue
             await _handle_kv_entry(entry, relay, state, cache)
     finally:
-        await watcher.stop()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
+        # Bound like safe_close: watcher.stop() sends UNSUB over the wire and
+        # ends in the same unbounded wait a half-open socket can stall. On the
+        # generation-advance rebind path the old client is already closed, so
+        # this usually hits a fast path — but leaving it unbounded would
+        # reintroduce, on the very path that cures the freeze, the stall it
+        # cures. The watcher is being discarded, so abandoning the stop is safe.
+        try:
+            async with asyncio.timeout(_TEARDOWN_STEP_TIMEOUT):
+                await watcher.stop()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
+        except TimeoutError:
+            logger.warning(
+                "KV watcher stop did not finish within %.1fs — abandoning it",
+                _TEARDOWN_STEP_TIMEOUT,
+            )
 
 
 async def _kv_watcher_loop(
