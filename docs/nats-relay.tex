@@ -1471,9 +1471,11 @@ requested, and how many times the supervisor has restarted it.
 A stopped watcher implies shutdown was requested.  Initially the
 watcher is $idle$, with $shutdownRequested = zfalse$ and
 $restartCount = 0$ (the composed $Init$,
-\S\ref{sec:composed}).  The watcher operations are enabled
-only while $connState = connected$, which is consistent with the
-composed invariant $phase \neq idle \implies connState = connected$.
+\S\ref{sec:composed}).  The watcher operations other than
+$HandleError$ are enabled only while $connState = connected$; the
+watcher's $phase$ is the supervisor's belief about the consumer, not a
+function of the transport, so it may outlive the connection that
+carried it (see $NatsRelayState$, \S\ref{sec:composed}).
 
 \subsection{Start Watching}
 
@@ -1554,7 +1556,6 @@ the supervisor and trigger a restart.
   \Delta Watcher \\
   \Xi Connection
   \where
-  connState = connected \\
   phase \neq idle \\
   phase \neq stopped \\
   shutdownRequested = zfalse \\
@@ -1566,7 +1567,13 @@ the supervisor and trigger a restart.
 
 An unrecoverable error causes the supervisor to restart the
 watcher.  The new watcher begins in snapshotting phase
-(a fresh \texttt{watchall()}).
+(a fresh \texttt{watchall()}).  It is enabled in every $connState$,
+not only $connected$: a wedge ($halfOpen$) or a dropped client leaves
+the watcher in $streaming$ with a dead consumer, and the failure
+surfaces to the supervisor as an error whatever the transport state.
+$HandleError$ is thereby the recovery edge for the path
+$StartWatching \to SnapshotDone \to Request(reqTimeout)$, which
+leaves $phase = streaming$ with $connState = halfOpen$.
 
 \subsection{Request Shutdown}
 
@@ -1594,18 +1601,20 @@ checks \texttt{shutdown.is\_set()} on every iteration.
   SessionStore \\
   Watcher
   \where
-  phase \neq idle \implies connState = connected \\
-  phase = streaming \implies kvProvisioned = ztrue
+  phase = idle \implies restartCount = 0
 \end{schema}
 
-The watcher can only be active when the connection is
-established.  Streaming implies KV is provisioned (the watcher
-reads from it).  With the generalised handle-validity invariant,
-$phase = streaming \implies kvProvisioned = ztrue$ also implies
-$phase = streaming \implies connState = connected$: a wedge
-($halfOpen$, where $kvProvisioned = zfalse$) cannot coexist with a
-streaming watcher, which is consistent --- a wedge manifests to
-the watcher as a $weError$ and drives it through $HandleError$.
+A watcher that has never left $idle$ has never been restarted.  The
+state deliberately does \emph{not} assert that an active watcher implies
+a $connected$ transport, nor that $streaming$ implies $kvProvisioned$.
+Both were stated in an earlier draft and are false in the model, on
+exactly the path it exists to represent: $StartWatching \to SnapshotDone
+\to Request(reqTimeout)$ leaves $phase = streaming$ while the request
+timeout clears $kvProvisioned$ and moves $connState$ to $halfOpen$.
+(ProB reaches $phase = streaming \land connState \neq connected$
+within the composed model, \S\ref{sec:modelcheck}.)  The wedge manifests
+to the watcher as a $weError$ and is recovered through $HandleError$,
+which is enabled in every connection state.
 
 \begin{schema}{Init}
   NatsRelayState'
@@ -1842,10 +1851,12 @@ verified by model checking with probcli (\texttt{z-spec test}):
   \item \textbf{Error restart}: Only $HandleError$ increments
     $restartCount$.  Snapshot-done and timeout do not.
 
-  \item \textbf{Connection prerequisite}: The watcher cannot be
-    active ($phase \neq idle$) when the connection is not
-    $connected$; every session and watcher operation is enabled
-    only while $connState = connected$.
+  \item \textbf{Watcher may outlive the transport}: every session
+    operation and every watcher operation except $HandleError$ is
+    enabled only while $connState = connected$, but $phase \neq idle$
+    does not imply $connState = connected$: $phase = streaming \land
+    connState = halfOpen$ is reachable, and $HandleError$ is the
+    recovery edge out of it.
 
   \item \textbf{Session uniqueness}: The partial injection
     ($\pinj$) on sessions guarantees each session key maps to
