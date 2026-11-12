@@ -6,6 +6,7 @@ Unit tests for deploy/remove/check operations on
 
 from __future__ import annotations
 
+import re
 from importlib.metadata import version as _dist_version
 from pathlib import Path
 
@@ -134,6 +135,27 @@ class TestTemplateHardening:
             "BRANCH: ${{ github.event.workflow_run.head_branch || "
             "github.event.workflow_run.head_sha }}"
         ) in content
+
+
+class TestDeployedWorkflowPin:
+    """This repo's own deployed workflow must track the released package."""
+
+    def test_deployed_biff_pin_matches_package_version(self) -> None:
+        """The deployed copy's ``punt-biff==`` pin equals the package version.
+
+        Deliberately pin-scoped, not full-render equality: Dependabot bumps
+        the action SHAs in the deployed file but not in the template, so
+        comparing whole files would fail on every Dependabot bump and
+        pressure a regeneration that reverts those SHAs.
+        """
+        deployed = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / _WORKFLOW_NAME
+        ).read_text()
+        pins = re.findall(r"punt-biff==(\S+)", deployed)
+        assert pins == [_PINNED_BIFF_VERSION]
 
 
 class TestRenderPlaceholderGuard:
