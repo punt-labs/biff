@@ -296,6 +296,10 @@ class _GenerationBumpingWatcher(FakeWatcher):
         self._relay = relay
 
     async def updates(self, timeout: float = 5.0) -> FakeKVEntry | None:
+        # Yield so that if the generation check regresses and the loop spins,
+        # the enclosing wait_for timeout and cancellation can still fire —
+        # a failing test reports cleanly instead of hanging the process.
+        await asyncio.sleep(0)
         self._relay.connection_generation += 1
         raise TimeoutError("nats: timeout")
 
