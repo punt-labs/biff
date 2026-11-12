@@ -9,19 +9,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import signal
 import sys
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
-from contextlib import asynccontextmanager, nullcontext, suppress
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
-from biff._stdlib import active_dir, remove_active_session, sentinel_dir
+from biff._stdlib import remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
 
 if TYPE_CHECKING:
@@ -29,10 +28,11 @@ if TYPE_CHECKING:
 
     from mcp.types import InitializeRequest, InitializeResult
 
+from biff.caller_identity import CallerIdentity
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
-from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay, Relay
-from biff.server.session_pin import SessionPinMiddleware
-from biff.server.state import CompanionSession, ServerState
+from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
+from biff.server.caller_middleware import CallerIdentityMiddleware
+from biff.server.state import ServerState
 from biff.server.tools import register_all_tools
 from biff.server.tools._descriptions import (
     capture_session,
@@ -43,9 +43,10 @@ from biff.server.tools._descriptions import (
     refresh_wall,
     set_tty_name,
 )
-from biff.session_id import SessionHint
 from biff.session_lock import routing_lock
-from biff.tty import build_session_key, claim_tty_name, validate_reclaimable_name
+from biff.session_registry import register_session, write_marker
+from biff.session_routing import ID_RE, SessionRouting
+from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
 
@@ -161,148 +162,6 @@ class _SessionCaptureMiddleware(Middleware):
             except RuntimeError:
                 logger.debug("Session not available during initialize")
         return result
-
-
-def write_active_session(
-    repo_name: str, session_key: str, worktree_root: str = ""
-) -> None:
-    """Mark a session as active so SessionEnd hooks can find it.
-
-    Writes ``~/.punt-labs/biff/active/{safe_key}`` containing the session key,
-    repo name, and worktree root (one per line).  The SessionEnd hook
-    reads these files and converts them to sentinels for the reaper
-    to process.  The third line is optional for backwards compatibility.
-    """
-    d = active_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    safe = session_key.replace(":", "-")
-    (d / safe).write_text(f"{session_key}\n{repo_name}\n{worktree_root}\n")
-
-
-def _write_marker(repo_name: str, session_key: str, worktree_root: str) -> None:
-    """Write the active-session marker, logging OSError rather than swallowing it.
-
-    A missing marker breaks SessionEnd hook cleanup — failures must be
-    visible in logs so operators can diagnose them.
-    """
-    try:
-        write_active_session(repo_name, session_key, worktree_root=worktree_root)
-    except OSError as exc:
-        logger.warning("Failed to write active marker for %s: %s", session_key, exc)
-
-
-async def register_session(
-    relay: Relay,
-    user: str,
-    tty_hex: str,
-    *,
-    display_name: str,
-    kind: str,
-    hostname: str,
-    pwd: str,
-    repo: str,
-    preferred_name: str | None = None,
-    on_claim: Callable[[str], None] = lambda _name: None,
-) -> tuple[UserSession, str]:
-    """Claim a TTY name, then write the session row once with tty_name set.
-
-    Single atomic registration: if the TTY claim fails, no KV row is
-    written; if the claim succeeds, the row is written exactly once with
-    ``tty_name`` already populated.  Replaces the previous two-write
-    pattern (write-then-claim-then-write) that left half-initialised
-    rows in KV when anything failed between the two writes.
-
-    Returns ``(session, tty_name)``.  Does not write an active-marker
-    file; the caller owns that.
-    """
-    session_key = build_session_key(user, tty_hex)
-    # Resume reclaim: when no name is explicitly requested, prefer
-    # the ttyN this session_id last held so a resumed session keeps its alias.
-    # The routing token (tty_hex) is the session_id under identity routing.
-    from_hint = False
-    if preferred_name is None:
-        # The reclaim hint value is team-writable and flows into a KV key /
-        # NATS subject via claim_tty_name — validate at this trust boundary.
-        # A malformed or namespace-colliding value is ignored (fall back to a
-        # fresh alias), never fed to claim_tty_name.
-        candidate = await relay.get_session_tty_hint(user, tty_hex)
-        if candidate is not None and validate_reclaimable_name(candidate) is None:
-            preferred_name = candidate
-            from_hint = True
-        elif candidate is not None:
-            logger.warning(
-                "ignoring malformed reclaim hint %r for %s; using a fresh alias",
-                candidate,
-                user,
-            )
-    try:
-        tty_name = await claim_tty_name(
-            relay, user, session_key, preferred=preferred_name
-        )
-        if from_hint:
-            logger.info("reclaimed prior alias %s on resume", tty_name)
-    except ValueError:
-        # The fallback fires ONLY for a name that came from the resume hint
-        # (from_hint) — the prior ttyN was taken while this session was gone
-        # (edge case 6), so reassign the lowest-free alias.  Routing is
-        # unaffected: the inbox keys on the session_id, not the display alias;
-        # only the human-facing alias moves.  An explicitly-requested name
-        # (from_hint is False) still raises to its caller.
-        if not from_hint:
-            raise
-        tty_name = await claim_tty_name(relay, user, session_key, preferred=None)
-        logger.info(
-            "prior alias %s taken on resume; reassigned %s",
-            preferred_name,
-            tty_name,
-        )
-    on_claim(tty_name)
-    # Release any stale TTY name reservation left by a prior process that
-    # crashed after writing the KV row but before releasing its name.  The
-    # KV row itself is overwritten unconditionally below; without this
-    # check the old reservation leaks and compounds across crash-restart
-    # cycles.  Self-release is skipped when the stale name matches the
-    # newly claimed one.
-    #
-    # Ownership check (PR #215 round 3): only release when the reservation
-    # is still owned by *our* session_key.  If another live session has
-    # reclaimed the name since the crashed owner wrote the stale row, we
-    # must not revoke their reservation.  Use the authoritative *user*
-    # parameter (not ``existing.user``) so a corrupted/out-of-sync payload
-    # cannot direct a release against a different user's namespace.
-    existing = await relay.get_session(session_key)
-    if existing is not None and existing.tty_name and existing.tty_name != tty_name:
-        owner = await relay.get_tty_reservation_owner(user, existing.tty_name)
-        if owner == session_key:
-            try:
-                await relay.release_tty_name(user, existing.tty_name)
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                logger.warning(
-                    "Failed to release stale TTY name %s for %s",
-                    existing.tty_name,
-                    session_key,
-                )
-    # Both activity timestamps start identical: a session that has never
-    # invoked a tool reads idle as time-since-registration, its own
-    # meaningful start time — not epoch-era or spuriously fresh.
-    registered_at = datetime.now(UTC)
-    session = UserSession(
-        user=user,
-        tty=tty_hex,
-        tty_name=tty_name,
-        display_name=display_name,
-        kind=kind,
-        hostname=hostname,
-        pwd=pwd,
-        repo=repo,
-        last_active=registered_at,
-        last_tool_at=registered_at,
-    )
-    await relay.update_session(session)
-    # Record the claimed alias so the next resume of this session_id reclaims
-    # it (survives clean-exit reservation release).
-    await relay.set_session_tty_hint(user, tty_hex, tty_name)
-    return session, tty_name
 
 
 def _write_sentinel(repo_name: str, session_key: str) -> None:
@@ -485,55 +344,6 @@ async def _reap_loop(
         await _reap_sentinels(state)
 
 
-async def _poll_companion_registration(state: ServerState) -> None:
-    """Attempt companion registration from the ethos roster.
-
-    Called on each heartbeat tick while ``state.companion`` is ``None``.
-    The companion is always ``roster.root`` -- the human at the terminal
-    (spec § 3.2). When ``roster.root.handle == state.config.user`` the
-    agent is also the root and there is no human to register; do
-    nothing.
-
-    ``get_ethos_roster()`` runs via ``asyncio.to_thread`` so the
-    2-second subprocess timeout cannot stall the event loop (spec
-    invariant 11).
-    """
-    if not state.auto_companion:
-        return
-
-    from biff.config import get_ethos_roster  # noqa: PLC0415
-
-    roster = await asyncio.to_thread(get_ethos_roster)
-    if roster is None or roster.root is None:
-        return
-    if roster.root.handle == state.config.user:
-        return  # Root IS the agent -- no human companion to register
-    # Derive the companion's routing id from the agent's session_id
-    # (``state.tty`` under identity routing) salted by the human's handle:
-    # stable across resume and distinct from the agent by construction,
-    # so the human side is not volatile.
-    companion = CompanionSession(
-        user=roster.root.handle,
-        display_name=roster.root.display_name,
-        kind=roster.root.kind,
-        tty=SessionHint.derive_routing_id(state.tty, roster.root.handle),
-    )
-    object.__setattr__(state, "companion", companion)
-    try:
-        await _register_companion(state)
-    except Exception:
-        # Rollback — leave state clean so heartbeat doesn't pump a phantom.
-        object.__setattr__(state, "companion", None)
-        raise
-    # wtmp is best-effort — don't rollback a successful registration
-    # if only the login event fails (matches _active_lifespan pattern).
-    try:
-        await _append_companion_login_event(state)
-    except Exception:
-        logger.warning("Companion wtmp login failed", exc_info=True)
-    logger.info("Companion registered: %s", companion.session_key)
-
-
 async def _refresh_org_repos(state: ServerState) -> None:
     """Re-discover org repos and update state if changed.
 
@@ -578,14 +388,7 @@ async def _heartbeat_loop(
     — that field is the idle time ``/who`` and ``/finger`` display, and
     must only advance on a real tool call, not this unconditional tick.
 
-    On every tick while ``state.companion`` is ``None``, polls the
-    ethos roster for the human identity (spec § 3.2). The poll cost
-    is bounded by one subprocess call per ``interval`` and the
-    subprocess runs on a worker thread so it never blocks the event
-    loop (spec invariant 11).
-
-    Explicit session pins disable this policy: root authority is not
-    evidence of a human's live presence.
+    A companion, when one is set, is heartbeated alongside the primary.
     """
     while not shutdown.is_set():
         try:
@@ -600,11 +403,6 @@ async def _heartbeat_loop(
             # would spam a warning per tick.  The relay's _ConnectionHealth
             # logs the wedge onset/recovery once — it is the single source.
             logger.debug("Heartbeat failed", exc_info=True)
-        if state.auto_companion and state.companion is None:
-            try:
-                await _poll_companion_registration(state)
-            except Exception:
-                logger.warning("Companion registration poll failed", exc_info=True)
         if state.companion_session_key:
             try:
                 await state.relay.heartbeat(state.companion_session_key)
@@ -874,32 +672,6 @@ async def _append_logout_event(state: ServerState) -> None:
             await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
         except Exception:
             logger.warning("Failed to flush wtmp logout event", exc_info=True)
-
-
-async def _append_companion_login_event(state: ServerState) -> None:
-    """Append a login event to wtmp for the companion session."""
-    companion = state.companion
-    if companion is None:
-        return
-    session = await state.relay.get_session(companion.session_key)
-    if session is None:
-        return
-    login_event = SessionEvent(
-        session_key=companion.session_key,
-        event="login",
-        user=companion.user,
-        tty=companion.tty,
-        tty_name=companion.tty_name,
-        hostname=state.hostname,
-        pwd=state.pwd,
-        timestamp=session.last_active,
-        plan=session.plan,
-        repo=state.config.repo_name,
-    )
-    try:
-        await state.relay.append_wtmp(login_event)
-    except Exception:
-        logger.warning("Failed to append companion wtmp login event", exc_info=True)
 
 
 async def _append_companion_logout_event(state: ServerState) -> None:
@@ -1227,76 +999,23 @@ async def _lifespan_cleanup(
     await _run_cleanup_steps(steps)
 
 
-async def _register_companion(state: ServerState) -> None:
-    """Register the companion session: active file, KV entry, TTY name.
-
-    No-op when ``state.companion`` is ``None``.  Extracted from
-    ``_active_lifespan`` for complexity management (DES-039).
-
-    Claim-then-write: the TTY name is reserved first, then the KV row is
-    written exactly once with ``tty_name`` already populated.  A claim
-    failure leaves no KV row behind (atomic under failure — DES-039).
-    """
-    if state.companion is None:
-        return
-    # Claim TTY name and write KV row first.  The active-session marker
-    # is written only after registration succeeds so the invariant
-    # "marker exists iff KV row exists" holds under registration failure.
-    _, companion_name = await register_session(
-        state.relay,
-        state.companion.user,
-        state.companion.tty,
-        display_name=state.companion.display_name,
-        kind=state.companion.kind,
-        hostname=state.hostname,
-        pwd=state.pwd,
-        repo=state.config.repo_name,
-    )
-    # Store the repo-common-root so ``_detect_collisions`` matches this
-    # marker against a hook whose ``_repo_common_root`` also resolves to the
-    # common root -- two sessions in different linked worktrees of the same
-    # repo are one coordination unit (DES-054).
-    _write_marker(
-        state.config.repo_name,
-        state.companion.session_key,
-        str(state.repo_common_root),
-    )
-    # Frozen dataclass — update via object.__setattr__.
-    object.__setattr__(state.companion, "tty_name", companion_name)
-    logger.info(
-        "Companion ready: %s (%s)",
-        state.companion.session_key,
-        companion_name,
-    )
-
-
 @asynccontextmanager
 async def _active_lifespan(
-    mcp: FastMCP[ServerState], state: ServerState
+    state: ServerState, live: _LiveSession
 ) -> AsyncGenerator[ServerState]:
-    """Clean partial startup before the outer ownership boundary is released."""
-    registered_names: list[str] = []
-    startup_tasks: list[asyncio.Task[None]] = []
-    started = False
+    """Install signal handlers for the server's life and restore them after."""
     previous_handlers = {
         sig: signal.getsignal(sig)
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
     }
     try:
-        async with _running_lifespan(
-            mcp, state, registered_names, startup_tasks
-        ) as ctx:
-            started = True
+        async with _running_lifespan(state, live) as ctx:
             yield ctx
     finally:
-        # A failed or completed lifespan must not leave a handler capable of
-        # deleting the next incarnation after this one's lock is released.
+        # A completed lifespan must not leave a handler capable of deleting
+        # the next incarnation after this one's lock is released.
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
-        if not started:
-            await _finish_cleanup(
-                _startup_cleanup(state, registered_names, startup_tasks)
-            )
 
 
 async def _startup_cleanup(
@@ -1338,87 +1057,43 @@ async def _startup_cleanup(
     await _run_cleanup_steps(steps)
 
 
-async def _retire_pin_predecessors(state: ServerState) -> None:
-    """Retire old personas under the already-acquired routing lock.
-
-    The routing identity is exclusive across personas. Do not try to acquire
-    it again as a foreign reaper would; finish retirement before registration.
-    """
-    keys = {
-        build_session_key(session.user, session.tty)
-        for session in await state.relay.get_sessions()
-        if session.tty == state.tty
-    }
-    directory = sentinel_dir(state.config.repo_name)
-    for path in directory.glob("*"):
-        try:
-            key = path.read_text().strip()
-        except (OSError, UnicodeError):
-            continue
-        if path.name == key.replace(":", "-"):
-            keys.add(key)
-    if isinstance(state.relay, LocalRelay):
-        keys.update(state.relay.removal_sentinel_keys(state.tty))
-    keys.add(state.session_key)
-    for key in keys:
-        user, separator, routing_id = key.partition(":")
-        if (
-            not separator
-            or routing_id != state.tty
-            or re.fullmatch(r"[a-zA-Z0-9_-]+", user) is None
-        ):
-            continue
-        if key != state.session_key:
-            await _retire_pin_session(state, key)
-            with suppress(OSError):
-                remove_active_session(key)
-        _remove_sentinel(state.config.repo_name, key)
-        if isinstance(state.relay, LocalRelay):
-            state.relay.remove_own_sentinel(key)
-
-
-async def _retire_pin_session(state: ServerState, key: str) -> None:
-    """Strict retirement: preserve durable retry state until alias release.
-
-    Unlike the best-effort default reaper, replacement startup must not erase
-    the only row containing an alias it failed to release. Inner cancellation
-    also propagates before deletion; caller cancellation remains shielded.
-    """
-    session = await state.relay.get_session(key)
-    if session is not None:
-        if session.tty_name:
-            owner = await state.relay.get_tty_reservation_owner(
-                session.user, session.tty_name
-            )
-            if owner == key:
-                await asyncio.wait_for(
-                    state.relay.release_tty_name(session.user, session.tty_name),
-                    timeout=_TEARDOWN_STEP_TIMEOUT,
-                )
-        await asyncio.wait_for(
-            state.relay.append_wtmp(_build_logout_event(key, session)),
-            timeout=_TEARDOWN_STEP_TIMEOUT,
-        )
-    await asyncio.wait_for(
-        state.relay.delete_session(key), timeout=_TEARDOWN_STEP_TIMEOUT
+async def _discover_org_repos(state: ServerState) -> None:
+    """Discover repos for configured orgs (DES-034), before anything registers."""
+    if not (state.config.orgs and isinstance(state.relay, NatsRelay)):
+        return
+    logger.info("Org discovery: querying orgs=%s", state.config.orgs)
+    org_results = await asyncio.gather(
+        *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
     )
+    org_repos = frozenset[str]().union(*org_results)
+    # Counts as the first refresh attempt, so the first heartbeat tick's
+    # _refresh_org_repos doesn't immediately re-query on top of this one.
+    object.__setattr__(state, "org_repos_refreshed_at", time.monotonic())
+    logger.info(
+        "Org discovery: found %d repos: %s",
+        len(org_repos),
+        sorted(org_repos),
+    )
+    if org_repos:
+        # Mutate in-place so tool closures (which captured `state`
+        # during registration) see the updated visible_repos.
+        object.__setattr__(state, "org_repos", org_repos)
+    else:
+        logger.warning(
+            "Org discovery returned no repos — cross-repo visibility disabled",
+        )
 
 
 @asynccontextmanager
 async def _running_lifespan(
-    mcp: FastMCP[ServerState],
     state: ServerState,
-    registered_names: list[str],
-    startup_tasks: list[asyncio.Task[None]],
+    live: _LiveSession,
 ) -> AsyncGenerator[ServerState]:
     """Lifespan for an active (non-dormant) server.
 
-    Registers signal handlers, starts background tasks, and manages
-    session lifecycle.  Extracted from :func:`create_server` for
-    complexity management.
+    Registers signal handlers and tears down whatever the first identified
+    call attached.  Nothing is registered here: no session is declared yet.
     """
-    if state.ethos_session_pin is not None:
-        await _finish_cleanup(_retire_pin_predecessors(state))
     _cleaned_up = False
 
     def _signal_handler(signum: int, _frame: object) -> None:
@@ -1432,17 +1107,21 @@ async def _running_lifespan(
         # and run by ``_run_signal_cleanup_steps`` below -- see that
         # function for why a failed step reports via ``os.write(2, ...)``
         # rather than logging.
-        steps: list[_SignalCleanupStep] = [
-            (
-                lambda: _write_sentinel(state.config.repo_name, state.session_key),
-                # RuntimeError: sentinel_dir() -> biff_data_dir() calls
-                # Path.home() fresh on every invocation, which raises
-                # RuntimeError (not OSError) when HOME is unset and
-                # pwd.getpwuid() can't resolve the user.
-                (OSError, RuntimeError),
-                b"biff: signal cleanup: sentinel write failed\n",
-            ),
-        ]
+        steps: list[_SignalCleanupStep] = []
+        # An unbound server has no declared session: its placeholder key
+        # names nothing a reaper could clean, so it leaves no sentinel.
+        if state.is_bound:
+            steps.append(
+                (
+                    lambda: _write_sentinel(state.config.repo_name, state.session_key),
+                    # RuntimeError: sentinel_dir() -> biff_data_dir() calls
+                    # Path.home() fresh on every invocation, which raises
+                    # RuntimeError (not OSError) when HOME is unset and
+                    # pwd.getpwuid() can't resolve the user.
+                    (OSError, RuntimeError),
+                    b"biff: signal cleanup: sentinel write failed\n",
+                )
+            )
         if state.companion:
             companion = state.companion
             steps.append(
@@ -1535,116 +1214,219 @@ async def _running_lifespan(
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _signal_handler)
 
-    # Org discovery (DES-034): discover repos for configured orgs.
-    # Runs before registration so the log reflects final visibility,
-    # and before tty assignment (which needs visible_repos).
-    if state.config.orgs and isinstance(state.relay, NatsRelay):
-        logger.info("Org discovery: querying orgs=%s", state.config.orgs)
-        org_results = await asyncio.gather(
-            *(state.relay.discover_repos_for_org(org) for org in state.config.orgs)
-        )
-        org_repos = frozenset[str]().union(*org_results)
-        # Counts as the first refresh attempt, so the first heartbeat tick's
-        # _refresh_org_repos doesn't immediately re-query on top of this one.
-        object.__setattr__(state, "org_repos_refreshed_at", time.monotonic())
-        logger.info(
-            "Org discovery: found %d repos: %s",
-            len(org_repos),
-            sorted(org_repos),
-        )
-        if org_repos:
-            # Mutate in-place so tool closures (which captured `state`
-            # during registration) see the updated visible_repos.
-            object.__setattr__(state, "org_repos", org_repos)
-        else:
-            logger.warning(
-                "Org discovery returned no repos — cross-repo visibility disabled",
-            )
+    await _discover_org_repos(state)
 
     logger.info(
         "Visible repos: %s",
         sorted(state.visible_repos),
     )
 
-    # Claim-then-write (DES-035): reserve TTY name first, then
-    # write the KV row exactly once with ``tty_name`` already populated.
-    # An unreserved hex fallback would defeat the DES-035 invariant.
-    _, final_name = await register_session(
-        state.relay,
-        state.config.user,
-        state.tty,
-        display_name=state.config.display_name,
-        kind=state.config.kind,
-        hostname=state.hostname,
-        pwd=state.pwd,
-        repo=state.config.repo_name,
-        on_claim=registered_names.append,
-    )
-    set_tty_name(final_name)
-    # Keep the shared talk state's outgoing from_tty in sync with the
-    # claimed display name (talk_state.py send_* frames).
-    state.talk.set_tty_name(final_name)
-    # Register this session as active so SessionEnd hooks can find it.
-    # Written after register_session succeeds so the invariant
-    # "marker exists iff KV row exists" holds under registration failure.
-    _write_marker(
-        state.config.repo_name,
-        state.session_key,
-        str(state.repo_common_root),
-    )
-    logger.info("Session ready: %s (%s)", state.session_key, final_name)
-
-    # Companion (human) registration is deferred entirely to the
-    # heartbeat loop. The ethos roster is not yet available at
-    # startup on claude --resume (spec § 3.2).
-
-    # Write the initial unread file and wall state immediately so the
-    # status line has identity from the first render (before the poller ticks).
-    await refresh_read_messages(mcp, state)
-    await refresh_wall(mcp, state)
-
-    # Reap sentinels FIRST — writes logout events for sessions that
-    # received SIGTERM/SIGINT (the signal handler wrote a sentinel).
-    # Then re-fetch sessions so orphan detection has clean KV state.
-    await _reap_sentinels(state)
-    sessions = await state.relay.get_sessions()
-
-    await _append_login_event(state, final_name)
-    await _close_orphaned_logins(state, sessions)
-
-    shutdown = asyncio.Event()
-    poll_interval = state.config.poll_interval
-    # Always on, even at poll_interval <= 0: the always-on SUBs and
-    # their poke-driven recompute never depended on a periodic tick, only
-    # the periodic work (wall re-render, invite expiry, backstop) does —
-    # poll_inbox itself degrades that gracefully when interval <= 0.
-    poller: asyncio.Task[None] = asyncio.create_task(
-        poll_inbox(
-            mcp,
-            state,
-            shutdown=shutdown,
-            interval=poll_interval,
-            nap_interval=nap_interval_for(poll_interval),
-        )
-    )
-    startup_tasks.append(poller)
-    reaper = asyncio.create_task(_reap_loop(state, shutdown))
-    startup_tasks.append(reaper)
-    heartbeat = asyncio.create_task(_heartbeat_loop(state, shutdown))
-    startup_tasks.append(heartbeat)
-    watcher = asyncio.create_task(_kv_watcher_loop(state, shutdown))
-    startup_tasks.append(watcher)
     try:
         yield state
     finally:
-        await _finish_cleanup(
-            _lifespan_cleanup(
-                state,
-                shutdown,
-                reaper,
-                [poller, heartbeat, watcher],
+        if live.attached and live.reaper is not None:
+            await _finish_cleanup(
+                _lifespan_cleanup(
+                    state,
+                    live.shutdown,
+                    live.reaper,
+                    [t for t in live.tasks if t is not live.reaper],
+                )
+            )
+        else:
+            await _finish_cleanup(
+                _startup_cleanup(state, live.registered_names, live.tasks)
+            )
+
+
+class _LiveSession:
+    """The session-keyed resources attached on the first identified call.
+
+    The lifespan owns only what is session-independent.  Registration, the
+    unread file and the background tasks are keyed on the session the caller
+    declares, so :meth:`attach` creates them on the first identified call and
+    the lifespan tears them down if (and only if) that call happened.
+    """
+
+    def __init__(self) -> None:
+        self.shutdown = asyncio.Event()
+        self.registered_names: list[str] = []
+        self.tasks: list[asyncio.Task[None]] = []
+        self.reaper: asyncio.Task[None] | None = None
+        self.attached = False
+        # Calls run inside ``call``; a re-point waits for the running ones to
+        # finish and holds new ones back, so a tool never sees its session
+        # change underneath it.
+        self._gate = asyncio.Condition()
+        self._in_flight = 0
+        self._repointing = False
+
+    @asynccontextmanager
+    async def call(
+        self,
+        mcp: FastMCP[ServerState],
+        state: ServerState,
+        caller: CallerIdentity,
+    ) -> AsyncGenerator[None]:
+        """Run one tool call pointed at *caller*'s session, start to finish."""
+        async with self._gate:
+            await self._gate.wait_for(lambda: not self._repointing)
+            if state.bound_session_id != caller.session_id or not (
+                self.attached or state.dormant
+            ):
+                self._repointing = True
+                try:
+                    await self._gate.wait_for(lambda: self._in_flight == 0)
+                    await self.attach(mcp, state, caller.routing)
+                finally:
+                    self._repointing = False
+                    self._gate.notify_all()
+            self._in_flight += 1
+        try:
+            yield
+        finally:
+            async with self._gate:
+                self._in_flight -= 1
+                self._gate.notify_all()
+
+    async def start_declared(
+        self, mcp: FastMCP[ServerState], state: ServerState
+    ) -> None:
+        """Start the session Claude Code declared to this process, if any.
+
+        The server is a long-lived subprocess, so without this it would hold
+        no presence and no unread count until the first tool call.
+        ``CLAUDE_CODE_SESSION_ID`` names only the *starting* session: it goes
+        stale on ``/clear``, which the first stamped call corrects by
+        re-pointing.  It is never read per call.  Absent or malformed means
+        stay unbound.
+        """
+        raw = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        if not ID_RE.fullmatch(raw):
+            return
+        async with self._gate:
+            await self.attach(mcp, state, SessionRouting(raw))
+
+    async def attach(
+        self,
+        mcp: FastMCP[ServerState],
+        state: ServerState,
+        routing: SessionRouting,
+    ) -> None:
+        """Bind *state* to *routing*'s session, then register and start tasks.
+
+        Runs with no call in flight: from :meth:`call` or at startup.
+        """
+        if state.bound_session_id != routing.session_id and self.attached:
+            # /clear or resume changed session_id in place: release the old
+            # session before the server is pointed at the new one.
+            await self._detach(state)
+        state.bind(routing)
+        if state.dormant or self.attached:
+            return
+        try:
+            await self._register_and_start(mcp, state)
+        except BaseException:
+            logger.error(
+                "attaching session %s (key %s) failed; the server is bound but "
+                "not registered",
+                routing.session_id,
+                state.session_key,
+                exc_info=True,
+            )
+            for task in self.tasks:
+                task.cancel()
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+            self.tasks.clear()
+            self.reaper = None
+            raise
+        self.attached = True
+
+    async def _detach(self, state: ServerState) -> None:
+        """Stop the attached session's tasks and release what it registered."""
+        reaper = self.reaper
+        tasks = [t for t in self.tasks if t is not reaper]
+        old_key, old_tty_name = state.session_key, get_tty_name()
+        if reaper is not None:
+            reaper.cancel()
+            await asyncio.gather(reaper, return_exceptions=True)
+        await _run_cleanup_steps(
+            [
+                lambda: _append_logout_event(state),
+                lambda: _shutdown_tasks(self.shutdown, tasks),
+                lambda: _cleanup_action(
+                    lambda: _remove_unread_files(state.unread_path)
+                ),
+                lambda: _release_session(
+                    state,
+                    user=state.config.user,
+                    session_key=old_key,
+                    tty_name=old_tty_name,
+                ),
+                lambda: _cleanup_action(lambda: _remove_active_markers(state)),
+            ]
+        )
+        self.tasks.clear()
+        self.reaper = None
+        self.registered_names.clear()
+        self.shutdown = asyncio.Event()
+        self.attached = False
+
+    async def _register_and_start(
+        self, mcp: FastMCP[ServerState], state: ServerState
+    ) -> None:
+        # Claim-then-write (DES-035): reserve the TTY name first, then write
+        # the KV row once with ``tty_name`` populated.  ``register_session``
+        # is get-or-create: the SessionStart hook may have written the row.
+        _, final_name = await register_session(
+            state.relay,
+            state.config.user,
+            state.tty,
+            display_name=state.config.display_name,
+            kind=state.config.kind,
+            hostname=state.hostname,
+            pwd=state.pwd,
+            repo=state.config.repo_name,
+            on_claim=self.registered_names.append,
+        )
+        set_tty_name(final_name)
+        state.talk.set_tty_name(final_name)
+        # Written after register_session succeeds so "marker exists iff KV
+        # row exists" holds under registration failure.
+        write_marker(
+            state.config.repo_name,
+            state.session_key,
+            str(state.repo_common_root),
+        )
+        logger.info("Session ready: %s (%s)", state.session_key, final_name)
+
+        await refresh_read_messages(mcp, state)
+        await refresh_wall(mcp, state)
+
+        # Reap sentinels FIRST so orphan detection sees clean KV state.
+        await _reap_sentinels(state)
+        sessions = await state.relay.get_sessions()
+        await _append_login_event(state, final_name)
+        await _close_orphaned_logins(state, sessions)
+
+        poll_interval = state.config.poll_interval
+        # Always on, even at poll_interval <= 0: the always-on SUBs never
+        # depended on a periodic tick, only the periodic work does.
+        self.tasks.append(
+            asyncio.create_task(
+                poll_inbox(
+                    mcp,
+                    state,
+                    shutdown=self.shutdown,
+                    interval=poll_interval,
+                    nap_interval=nap_interval_for(poll_interval),
+                )
             )
         )
+        self.reaper = asyncio.create_task(_reap_loop(state, self.shutdown))
+        self.tasks.append(self.reaper)
+        self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
+        self.tasks.append(asyncio.create_task(_kv_watcher_loop(state, self.shutdown)))
 
 
 def create_server(state: ServerState) -> FastMCP[ServerState]:
@@ -1655,20 +1437,19 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     and status file in sync with incoming messages.
     """
 
+    live = _LiveSession()
+
     @asynccontextmanager
-    async def lifespan(mcp: FastMCP[ServerState]) -> AsyncGenerator[ServerState]:
-        pin = state.ethos_session_pin
-        # Acquire before registration, subscriptions, or unread writes. Keep
-        # ownership through every teardown step, including dormant cleanup.
-        with pin.ownership() if pin is not None else nullcontext():
-            if state.dormant:
-                try:
-                    yield state
-                finally:
-                    _remove_unread_files(state.unread_path)
-                return
-            async with _active_lifespan(mcp, state) as ctx:
-                yield ctx
+    async def lifespan(_mcp: FastMCP[ServerState]) -> AsyncGenerator[ServerState]:
+        if state.dormant:
+            try:
+                yield state
+            finally:
+                _remove_unread_files(state.unread_path)
+            return
+        async with _active_lifespan(state, live) as ctx:
+            await live.start_declared(mcp, state)
+            yield ctx
 
     mcp: FastMCP[ServerState] = FastMCP(
         "biff",
@@ -1702,7 +1483,12 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     )
 
     mcp.add_middleware(_SessionCaptureMiddleware())
-    if state.ethos_session_pin is not None:
-        mcp.add_middleware(SessionPinMiddleware(state.ethos_session_pin))
+
+    def accept_caller(
+        caller: CallerIdentity,
+    ) -> AbstractAsyncContextManager[None]:
+        return live.call(mcp, state, caller)
+
+    mcp.add_middleware(CallerIdentityMiddleware(accept_caller))
     register_all_tools(mcp, state)
     return mcp

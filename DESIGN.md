@@ -518,7 +518,9 @@ The `/biff:biff on|off` command (awkward after rename) was split into `/mesg y` 
 ## DES-011: Status Line — Per-Session Unread Counts via PPID
 
 **Date:** 2026-02-15 (revised 2026-02-17, 2026-02-22)
-**Status:** SETTLED
+**Status:** DEPRECATED — superseded by DES-064. The process-tree walk this ADR
+introduced to key per-session state is retired in favor of harness-declared
+caller identity (`{session_id, agent_id}` on the call). Kept as history.
 **Topic:** How unread message counts appear in Claude Code's status bar
 
 ### Design
@@ -557,6 +559,8 @@ When `biff_enabled=false` (set by `/mesg n`), the status line shows `user:tty(n)
 The MCP server deletes its PPID-keyed unread file in the lifespan `finally` block on shutdown. This prevents stale files from accumulating when sessions end.
 
 ### DES-011a: Ancestor Walk (2026-02-22)
+
+**Status:** DEPRECATED — superseded by DES-064 (process-tree inference retired).
 
 **New evidence:** Claude Code now interposes an intermediate child process between the main process and MCP servers. The direct-parent PPID assumption from DES-011 no longer holds:
 
@@ -607,6 +611,10 @@ The original design used `~/.punt-labs/biff/unread/{repo-name}.json` with the st
 | Session ID from stdin JSON | Available to the status line but not to the MCP server — no way to agree on a file key |
 
 ### DES-011b: Local Plugin Process Tree Divergence (2026-02-25)
+
+**Status:** DEPRECATED — superseded by DES-064. This divergence is an artifact
+of inferring identity from the process tree; a harness-declared caller removes
+the shared-ancestor assumption entirely. Kept as history.
 
 **New evidence:** The ancestor walk from DES-011a assumes the MCP server and status line are both descendants of the same `claude` process. This holds for **marketplace plugins** but breaks for **local plugins** installed via `biff install`.
 
@@ -4287,7 +4295,11 @@ Consequences, now normative:
 ## DES-039: Dual-Session Registration via Ethos Roster
 
 **Date:** 2026-04-14
-**Status:** PROPOSED — superseded in part by DES-040 (biff-8fg3)
+**Status:** DEPRECATED — superseded in part by DES-040 (biff-8fg3) and now fully
+by DES-064. The companion/roster read via the `ethos session roster` subprocess
+is removed with the rest of the ethos-CLI identity dependency; companion
+presence, when reintroduced, derives from the harness-declared caller. Kept as
+history.
 **Topic:** Registering both human and agent as separate biff sessions
 **Related:** DES-002 (session key format), DES-009 (identity),
 DES-030 (multi-agent coordination), DES-035 (TTY name reservation),
@@ -4400,7 +4412,11 @@ routing, edge cases, implementation sequence, and file change list.
 ## DES-040: Agent-First Identity Resolution
 
 **Date:** 2026-05-10
-**Status:** SETTLED
+**Status:** SETTLED — amended by DES-064. The disk resolution of *agent* identity
+(question A: who is the agent of this repo) stands and is the foundation DES-064
+builds on. The `get_ethos_roster` / `get_ethos_team` CLI calls this ADR left in
+place for team/companion enrichment are removed by DES-064; *caller* identity
+(question B) moves to the harness-declared channel.
 **Topic:** Primary identity from disk; companion deferred to heartbeat
 **Bead:** biff-8fg3
 **Related:** DES-009 (identity — GitHub login), DES-039 (dual-session
@@ -5471,6 +5487,14 @@ is not a property until the model checks it — so the window was modeled and pr
 not argued.
 
 ### DES-050: Route Directed Messages on the Claude session_id (2026-07-25)
+
+**Status:** The routing *derivation* (`derive_routing_id(session_id, role)`)
+stands. The `session_id` *acquisition* mechanism described in "Plumbing" (the
+SessionStart-hook → PPID-walk → `sessions/<pid>.json` bridge) is SUPERSEDED by
+DES-064 and still in the code: under DES-064 `session_id` arrives on the call
+via the harness-declared channel and is handed straight to `derive_routing_id`,
+and the acquisition bridge is removed when that channel ships (biff-ork0 /
+biff-khr9), not before.
 
 **Context.** The session key `{user}:{tty}` used `ttyN` — a display name minted
 fresh (`generate_tty()`, random hex) on every server start — as the *routing*
@@ -6684,7 +6708,11 @@ and `tests/test_commands/test_who.py::TestWho::test_all_dead_returns_no_sessions
 ## DES-058: `CLAUDE_PID` Env Var Corrects DES-011's Rejected Alternative
 
 **Date:** 2026-08-22
-**Status:** Settled
+**Status:** SUPERSEDED by DES-064, still in the code. This ADR corrected the
+process-tree walk with a corroborated `CLAUDE_PID`; DES-064 removes the walk and
+its env-var correction together, in favor of a harness-declared caller. The
+`is_live_ancestor` corroboration and the `CLAUDE_PID` keying are removed when the
+stamping hook ships (biff-ork0 / biff-khr9), not before. Kept as history.
 **Related:** DES-011 (recorded the now-stale rejection), DES-050 (the
 PID-walk hint-file mechanism this decision re-keys, without removing)
 
@@ -7585,3 +7613,209 @@ retest sessions, is recorded in quarry memory
 modified 2026-09-13). Anthropic's own troubleshooting text for the
 identical gate: code.claude.com/docs/en/remote-control
 ("Remote Control requires feature-flag evaluation").
+
+## DES-064: Caller Identity Is Harness-Declared, Never Inferred — Conform to the `mcp-caller-identity` Standard
+
+**Date:** 2026-11-10
+**Status:** SETTLED
+**Topic:** How biff learns which session, and which agent in it, is calling — on every harness
+**Supersedes:** DES-011, DES-011a, DES-011b (status-line PPID walk), DES-050 (routing-id acquisition via the PPID-walk hint bridge), DES-058 (`CLAUDE_PID` corroborated walk). **Amends:** DES-039, DES-040, DES-053 (identity resolution — see "Relationship to the identity ADRs").
+**Standard:** [punt-kit/standards/mcp-caller-identity.md](../punt-kit/standards/mcp-caller-identity.md) (org standard, 2026-11-04, built from ethos DES-074)
+**Related beads:** biff-ork0 (adopt the standard), biff-khr9 (remove the ethos-CLI identity dependency), biff-00v (biffd epic) and its harness children biff-lp5r (codex), biff-bhfj (opencode), biff-lt0v (pi)
+
+### The decision, in one line
+
+biff learns the caller's `session_id` and `agent_id` from a **harness-declared
+channel on the call itself**, validates them, and refuses an unidentified call.
+It never infers *per-call* caller identity from the process tree, the
+environment, the transport, git, or the OS user; and it never resolves identity
+by shelling out to the `ethos` CLI.
+
+**One bounded exception, for passive presence only.** The long-lived `biff mcp`
+server reads `CLAUDE_CODE_SESSION_ID` from its own environment **once at
+startup** to learn its *starting* session, so it can register and start the
+heartbeat and inbox poller before the agent's first tool call — otherwise a
+session that only waits for mail would drop out of `/who` after the 120 s
+liveness window and show unread `0` until it happened to call a biff tool. This
+is the server's own starting identity, not a *caller's* identity: every
+per-call `_caller` still comes exclusively from the declared channel and is
+never read from the environment. `CLAUDE_CODE_SESSION_ID` is frozen at spawn and
+goes stale on `/clear`; that staleness is corrected by the first identified
+call's re-point (the same mechanism that fixes the `/clear` wedge), so the
+startup env read is only ever the *initial* binding. `CLAUDE_CODE_SESSION_ID`
+reaching the MCP-server subprocess is recorded in "Alternatives Considered"
+below (Claude Code 2.1.234+); DES-058 already relies on an environment variable
+(`CLAUDE_PID`) in the routing path, so this is a narrow, precedented use, not a
+return to inference.
+
+### Why — the recurring defect class
+
+biff's caller identity has been patched across five ADRs — DES-011, 011a, 011b
+(the status-line PPID walk and its two topology breaks), DES-050 (routing
+stranded/misrouted on `--resume`), and DES-058 (`CLAUDE_PID` corrects the walk,
+then needs `is_live_ancestor` to corroborate a captured-once PID). Each patch
+kept the same flawed premise: **biff infers who is calling by reading something
+about the process it happens to be running in.** A process tree is re-derived
+but ambiguous (nested `claude` collapses onto its parent); an env var is
+unambiguous but captured once and goes stale on PID recycle. The model was
+missing a state, so the defect recurred. The org standard removes the premise:
+identity is **stated by the harness on the call**, not reconstructed by the
+engine. This ADR adopts that premise for biff and marks the inference lineage
+deprecated.
+
+A second, independent coupling is removed at the same time: the OpenCode
+session pin (`ethos_session.py`, PR #456) resolved identity by running
+`ethos session roster` and `ethos show` as subprocesses. Those CLI aliases were
+removed upstream (ethos commit 37130af), and the subprocess approach itself is
+what the standard forbids ("never by the transport, the connection, the process
+tree, the environment, git, or the OS user" — and never by calling another
+engine's CLI). The pin is deleted, not migrated to the renamed verbs.
+
+### The two identity questions, kept distinct
+
+| Question | Answer | Source |
+|---|---|---|
+| **(A) Who is the agent of this repo?** (biff's own identity) | Read `.punt-labs/ethos.yaml` → `identities/<handle>.yaml` from disk. No subprocess, any harness. | `resolve_agent_identity_from_disk` (DES-040, unchanged) |
+| **(B) Which session/agent is calling right now?** (caller identity) | `{session_id, agent_id}` declared by the harness on the call, validated, refused if absent. | This ADR / the standard |
+
+For one-boss-per-repo, (A) is the whole job of identifying biff itself. (B) is
+what routing, presence, plan-gating, and future multi-agent coordination key
+on. The deprecated mechanisms conflated the two by reconstructing (B) from
+process state; this ADR separates them.
+
+### The channel is per-harness; the engine side is one path
+
+The standard requires every client type to carry identity on a **declared
+channel**. biff resolves the same `{session_id, agent_id}` shape from whichever
+channel the harness uses, then runs one channel-agnostic path: strip the
+identity argument before tool-schema validation, validate the shape
+(`[A-Za-z0-9_-]+`, non-empty), refuse an unidentified call with a named error,
+and resolve.
+
+| Harness | Declared channel | Producer |
+|---|---|---|
+| Claude Code | PreToolUse hook stamps `_caller` via `updatedInput` | biff's own stamping hook (biff-ork0) |
+| codex | **Same hook** — codex's `ClaudeHooksEngine` is Claude-hooks-compatible (`CLAUDE_PLUGIN_ROOT`), so the Claude stamping hook runs near-verbatim | the same hook (biff-lp5r) |
+| OpenCode | MCP `params._meta["ai.opencode/sessionID"]` | OpenCode MCP metadata (biff-bhfj) |
+| pi | In-process: the extension passes `session_id`/`agent_id` directly to biff's thin-client calls (standard § 3.3: "hooks and applets are session clients too") | pi extension (biff-lt0v) |
+
+There are **three** producer mechanisms, not four: the Claude-style hook stamp
+serves Claude Code **and** codex; OpenCode uses MCP `_meta`; pi (and any
+applet) passes the facts in-process. The process-tree walk is retired for all
+of them.
+
+### The declared caller routes; it does not authenticate
+
+The shape check (`[A-Za-z0-9_-]+`, non-empty) is a well-formedness gate, not an
+identity proof. The standard is explicit that `_caller` **routes rather than
+authenticates** (`mcp-caller-identity.md` § 3.1.7, § 4.4), and biff adopts that
+boundary unchanged:
+
+- **Who may set each channel, and what "set correctly" means.** The stamping
+  hook sets `_caller` for Claude Code and codex; the OpenCode transport sets
+  `params._meta["ai.opencode/sessionID"]`; the pi extension passes the facts
+  in-process. Each producer is the component biff *expects* to populate the
+  channel, not a component biff can *verify* populated it. A client that can
+  send a tool call can also send a `_caller` argument or a `_meta` key itself,
+  and biff cannot distinguish a hook-stamped value from a model-written one
+  while no hook is running (§ 3.1.7). The hook prevents that forgery only while
+  it runs.
+- **What this means for routing, presence, and the plan gate.** All three key
+  on the declared `{session_id, agent_id}` and therefore trust it for
+  *addressing* — delivering a message to a session, showing who is present,
+  gating edits for a session. None of them is an authorization decision that a
+  forged caller could use to cross a privilege boundary: a spoofed caller can
+  misroute or mis-present within the same user's own sessions, which is the
+  same exposure the process-tree path had, not a new one.
+- **Where the real boundary sits.** For a local engine it is the loopback bind
+  and same-user filesystem access: every process of the same user can already
+  read `~/.punt-labs/biff/sessions/`, so no same-user process is kept from
+  acting as another by the shape check alone (§ 4.4). biff adds no authenticated
+  principal here. An engine reachable across hosts or users would need real
+  transport authentication (and OAuth where it exposes protected resources)
+  before the declared caller could carry any authorization weight — biff does
+  not expose such a surface today, and biff's own relay/message **security model
+  is unstarted** (tracked separately; not in scope for this ADR).
+
+### Sequence — before (deprecated) and after (this ADR)
+
+Before — biff infers identity from the process tree, and OpenCode shells to the
+ethos CLI (fail-closed, now broken):
+
+```text
+ Claude Code                           OpenCode
+ ───────────                           ────────
+ SessionStart hook                     launcher --ethos-session ses_X
+   │ writes sessions/<claude_pid>.json   │ biff mcp --ethos-session ses_X
+   ▼                                      ▼
+ biff server                           biff server (EthosSessionPin)
+   │ walk process tree → topmost claude   │ ethos session roster ses_X ─▶ ✘ REMOVED
+   │ read hint back (DES-050/058)         │ ethos show <persona>      ─▶ ✘ REMOVED
+   │ ⚠ nested claude clobbers the hint    │ ◀── error
+   ▼                                      ▼
+ routing-id (sometimes wrong)          FAIL-CLOSED → biff exits
+```
+
+After — the harness declares the caller on the call; biff validates and
+resolves; one engine path for every harness:
+
+```text
+ harness adapter (per channel)          biff server                     disk
+ ─────────────────────────────          ───────────                     ────
+   │  Claude Code / codex:                  │                              │
+   │    PreToolUse hook stamps              │                              │
+   │    _caller{session_id, agent_id} ─────▶│                              │
+   │  OpenCode:                             │  strip _caller before        │
+   │    params._meta[...sessionID]  ───────▶│  schema validation           │
+   │  pi / applet:                          │  validate shape              │
+   │    session_id, agent_id inline ───────▶│  [A-Za-z0-9_-]+, non-empty   │
+   │                                        │  refuse if unidentified      │
+   │                                        │  ├─ caller identity ◀─────────┤ (routing/presence/gate)
+   │                                        │  └─ agent identity  ──────────▶ .punt-labs/ethos.yaml
+   │                                        │     (A, DES-040, unchanged)   │ identities/<handle>.yaml
+   ▼                                        ▼                              │
+   one declared channel per harness      no process tree, no env,
+                                         no ethos CLI subprocess
+```
+
+The engine box is identical across all three producer channels — that is the
+"touch the key piece once" property. Only the thin left-hand adapter differs per
+harness.
+
+### Relationship to the identity ADRs (amended, not superseded)
+
+- **DES-040** (agent identity from disk) stands. It answers (A). This ADR builds
+  on it: (A) stays file-based; (B) becomes harness-declared. The `get_ethos_roster`
+  / `get_ethos_team` CLI calls DES-040 left in place for team/companion enrichment
+  are removed here — enrichment that needs the CLI is dropped, not migrated.
+- **DES-053** (CLI rejects a bot's GitHub login) stands as a guard on the disk
+  resolution path.
+- **DES-039** (dual-session registration via the ethos roster subprocess) is
+  retired: the companion/roster read via `ethos session roster` is removed with
+  the rest of the CLI dependency. Companion presence, when reintroduced, derives
+  from the declared caller, not a roster subprocess.
+
+### Relationship to the routing ADRs (superseded)
+
+DES-050's routing *derivation* — `derive_routing_id(session_id, role)` — is a
+downstream consumer and **survives**: given a `session_id`, it still derives the
+routing token. What is superseded is the *acquisition* of `session_id`: the
+SessionStart-hook → PPID-walk → hint-file bridge (DES-050's "Plumbing" section),
+and DES-058's `CLAUDE_PID` corroboration of that walk. Under this ADR
+`session_id` arrives on the call via the declared channel and is handed straight
+to `derive_routing_id`. The hint-file bridge, `topmost_claude_pid`,
+`is_live_ancestor`, and the `sessions/<pid>.json` mechanism are removed when the
+stamping hook ships (biff-ork0 / biff-khr9), not before — until then they remain
+the live acquisition path.
+
+### Scope of this ADR vs. the implementation
+
+This ADR is the design record and supersession. The implementation is one
+coherent change to biff's identity/routing path (biff-ork0 + biff-khr9 merged):
+remove the ethos-CLI identity calls and `ethos_session.py`; adopt the
+hook-stamped `_caller` for Claude Code and codex; keep (A) on disk; refuse
+unidentified calls. The OpenCode `_meta` and pi in-process adapters are children
+gated on their harness plugins (biff-bhfj, biff-lt0v) — the engine-side
+resolution lands once and each adapter feeds it. No shim and no interim state
+where an inferred path and a declared path coexist: the coexistence is itself
+the anti-pattern this ADR removes.

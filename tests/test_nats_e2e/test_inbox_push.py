@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 
 import nats as nats_lib
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, Message
@@ -25,10 +24,13 @@ from biff.server.app import create_server
 from biff.server.state import CompanionSession, ServerState, create_state
 from biff.server.tools._descriptions import nap_interval_for
 from biff.testing import NotificationTracker
+from biff.testing.caller import StampedClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
+
+    from fastmcp import Client
 
 pytestmark = pytest.mark.nats_local
 
@@ -244,7 +246,7 @@ async def kai_fast_backstop(
         config, tmp_path / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client, state
 
 
@@ -352,8 +354,8 @@ class TestCompanionPushNotification:
         eric_mcp = create_server(eric_state)
 
         async with (
-            Client(FastMCPTransport(kai_mcp)) as kai_client,
-            Client(FastMCPTransport(eric_mcp)),
+            StampedClient(FastMCPTransport(kai_mcp)) as kai_client,
+            StampedClient(FastMCPTransport(eric_mcp)),
         ):
             assert kai_state.companion is not None
             await asyncio.sleep(3.0)  # let the poller establish both inbox-notify SUBs
@@ -414,8 +416,8 @@ class TestCompanionTargetedPushNotification:
         eric_mcp = create_server(eric_state)
 
         async with (
-            Client(FastMCPTransport(kai_mcp)) as kai_client,
-            Client(FastMCPTransport(eric_mcp)),
+            StampedClient(FastMCPTransport(kai_mcp)) as kai_client,
+            StampedClient(FastMCPTransport(eric_mcp)),
         ):
             assert kai_state.companion_session_key is not None
             await asyncio.sleep(3.0)  # let the poller establish the companion talk SUB
@@ -472,8 +474,8 @@ class TestPollerAtDisabledInterval:
         eric_mcp = create_server(eric_state)
 
         async with (
-            Client(FastMCPTransport(kai_mcp)) as kai_client,
-            Client(FastMCPTransport(eric_mcp)),
+            StampedClient(FastMCPTransport(kai_mcp)) as kai_client,
+            StampedClient(FastMCPTransport(eric_mcp)),
         ):
             await asyncio.sleep(1.0)  # let the poller establish its SUBs
 

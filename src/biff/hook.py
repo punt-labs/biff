@@ -10,6 +10,7 @@ Layer 2: Git hooks — capture code lifecycle events.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -178,10 +179,9 @@ def _resolve_identity(data: dict[str, object]) -> str | None:
 
     Prefers ``agent_id`` over ``session_id`` when both are present: an
     in-process dispatched subagent shares its leader's OS ``claude``
-    process (and therefore the leader's ``session_id`` fallback via
-    ``SessionHint``), but Claude Code delivers the subagent's *own*
-    ``agent_id`` on its tool-call payloads, distinct from the leader's
-    top-level ``session_id``.  ``None`` when
+    process (and therefore the leader's ``session_id``), but Claude Code
+    delivers the subagent's *own* ``agent_id`` on its tool-call payloads,
+    distinct from the leader's top-level ``session_id``.  ``None`` when
     neither is present — headless/CI/SDK contexts with no Claude session
     at all — and the marker degrades to the shared, unscoped bucket.
     """
@@ -198,26 +198,28 @@ def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
     The gate's *write* path is scoped to a single identity — the caller's
     preferred one from :func:`_resolve_identity`, so a ``SessionStart``
     can never wipe a sibling's marker (om9's core invariant). The *read*
-    path, in contrast, walks a preference list: for a dispatched
-    in-process subagent whose ``Bash``-invoked ``biff plan`` wrote under
-    the leader's ``session_id`` (no channel today for a subagent's
-    ``Bash`` tool to learn its own ``agent_id``), a subsequent
-    ``PreToolUse`` payload's ``agent_id`` alone would find no marker and
-    strand the subagent's edits (design §3b RISK-2). Reading
-    ``agent_id`` first and ``session_id`` second is *this caller's own*
-    identity ladder, never a sibling's — the fallback closes RISK-2
-    without weakening om9 (DES-054 "Amendment: two-key fallback").
-    ``None`` (the shared bucket) is included as the terminal so
-    headless/CI/SDK writes remain visible.
+    path, in contrast, walks a preference list of *this caller's own*
+    identities:
+
+    1. ``agent_id`` — a dispatched in-process subagent's own id, delivered
+       on its tool-call payloads.
+    2. ``session_id`` — the top-level session. A subagent whose
+       ``Bash``-invoked ``biff plan`` wrote under the leader's
+       ``session_id`` (no channel today for a subagent's ``Bash`` to learn
+       its own ``agent_id``) would, on an ``agent_id``-only read, find no
+       marker and strand every edit (DES-054 RISK-2).
+    3. ``None`` (the shared bucket) — only when the payload carries no
+       identity at all, so headless/CI/SDK writes remain visible.  An
+       identified caller never reads it: the shared bucket is where an
+       unscoped CLI ``biff plan`` writes, and it must not authorize a
+       session it knows nothing about.
     """
     candidates: list[str | None] = []
     for key in ("agent_id", "session_id"):
         value = data.get(key)
-        if isinstance(value, str) and value:
+        if isinstance(value, str) and value and value not in candidates:
             candidates.append(value)
-    if None not in candidates:
-        candidates.append(None)
-    return tuple(candidates)
+    return tuple(candidates) or (None,)
 
 
 def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
@@ -225,6 +227,23 @@ def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
     from biff.markers import has_plan_marker  # noqa: PLC0415
 
     return any(has_plan_marker(root, identity) for identity in identities)
+
+
+def _log_skipped_shared_plan(root: str, identities: tuple[str | None, ...]) -> None:
+    """Say so when a plan exists only in the shared bucket an identified caller skips.
+
+    The CLI writes the shared bucket when its environment lacks the session id
+    the hook payload carries; without this line the resulting denial after
+    ``biff plan`` would have no visible cause.
+    """
+    from biff.markers import has_plan_marker  # noqa: PLC0415
+
+    if None not in identities and has_plan_marker(root, None):
+        logger.info(
+            "plan gate: a plan exists in the shared bucket but was skipped for "
+            "identified session %s; run /plan from this session to set its own",
+            identities[-1],
+        )
 
 
 def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
@@ -251,15 +270,34 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
     — a sibling session's marker never satisfies this caller's gate; the
     fallback closes DES-054 RISK-2 without weakening om9's scoping.
 
-    One state allows gracefully rather than deny, because a hard block
-    there would strand the agent: no active biff session, where the gate
-    has no session state to reason about.
+    Two states allow gracefully rather than deny, because a hard block in
+    either would strand the agent on state the gate cannot reason about:
+
+    1. No active biff session — no session state at all.
+    2. An unresolvable repo-common-root (``get_repo_common_root`` returned
+       ``""``: git unavailable, timed out, or a cwd briefly not a repo).
+       Every unresolved root collapses onto the one shared ``default``
+       hint bucket, so denying here would block the whole editing surface
+       on a transient git outage AND let one repo's ``default``-bucket plan
+       satisfy another's gate (the cross-repo contamination
+       ``markers.hint_dir`` warns about). With no repo to key on, the gate
+       has no marker store of its own to consult, so it allows and leaves
+       the warning as the diagnostic trail.
     """
     if not _has_active_session():
         return None
 
     root = _repo_common_root(data)
-    if not _has_any_plan_marker(root, _identity_candidates(data)):
+    if not root:
+        logger.warning(
+            "plan gate: repo-common-root unresolved; allowing edit rather "
+            "than wedging on the shared default bucket"
+        )
+        return None
+
+    identities = _identity_candidates(data)
+    if not _has_any_plan_marker(root, identities):
+        _log_skipped_shared_plan(root, identities)
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
             "Run /plan <what you're working on>, then retry the edit."
@@ -673,34 +711,21 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
     return collisions
 
 
-def _capture_session_hint(data: dict[str, object]) -> None:
-    """Persist the Claude ``session_id`` for the MCP server.
+def _open_session(data: dict[str, object]) -> None:
+    """Register the Claude session named by the SessionStart payload.
 
-    SessionStart is the only hook that sees ``session_id`` (on stdin); the
-    server reads the hint back from the same ``CLAUDE_PID``-keyed file this
-    hook writes to (DES-058), falling back to the process-tree walk only
-    when the env var is absent (DES-011).  A missing/empty id is a no-op —
-    the server then routes on a fresh hex fallback.
+    SessionStart is the harness declaring ``session_id`` to biff, so this is
+    where the durable record is opened (relay row, unread file, active
+    marker, handle).  Best-effort: a failure forfeits presence until the
+    first tool call opens the session instead, but must never break session
+    startup, so it is logged and swallowed.
     """
-    session_id = data.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        return
-    source = data.get("source")
-    from biff.session_id import SessionHint  # noqa: PLC0415
+    from biff.session_open import open_session_from_payload  # noqa: PLC0415
 
-    hint = SessionHint.capture(
-        session_id, source if isinstance(source, str) else "startup"
-    )
-    # Best-effort: a hint-write failure forfeits resume-reclaim (the server
-    # falls back to a fresh hex) but must never break session startup.  Log
-    # so a broken resume is observable, then swallow.
     try:
-        hint.write()
-    except OSError:
-        logger.warning(
-            "Failed to persist session hint; resume-reclaim disabled this session",
-            exc_info=True,
-        )
+        asyncio.run(open_session_from_payload(data))
+    except Exception:
+        logger.warning("Failed to open session at SessionStart", exc_info=True)
 
 
 def handle_session_start(data: dict[str, object] | None = None) -> str:
@@ -902,7 +927,7 @@ def cc_session_start() -> None:
     if not _is_biff_enabled():
         return
     data = _read_hook_input()
-    _capture_session_hint(data)
+    _open_session(data)
     result = handle_session_start(data)
     _emit(_hook_context("SessionStart", result))
 
@@ -912,7 +937,7 @@ def cc_session_resume() -> None:
     """SessionStart(resume/compact) — re-orient after context loss."""
     if not _is_biff_enabled():
         return
-    _capture_session_hint(_read_hook_input())
+    _open_session(_read_hook_input())
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 

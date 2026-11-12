@@ -31,7 +31,7 @@ from biff._stdlib import biff_data_dir
 logger = logging.getLogger(__name__)
 
 # Claude session_id / agent_id tokens are hex-and-dash UUIDs; this charset
-# is deliberately generous (also admits SessionHint-derived hex ids) while
+# is deliberately generous (also admits derived hex routing ids) while
 # still refusing anything that could traverse a path (`/`, `..`, etc.).
 # An identity that doesn't match falls back to the shared bucket rather
 # than being rejected outright -- untrusted hook-payload data degrading to

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import FastMCPTransport
 
@@ -15,6 +14,10 @@ from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient, bound_to
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 __all__ = ["CallToolResult"]
 
@@ -29,16 +32,14 @@ def config() -> BiffConfig:
 
 @pytest.fixture
 def state(tmp_path: Path, config: BiffConfig) -> ServerState:
-    return create_state(
-        config, tmp_path, tty="11111111", hostname="test-host", pwd="/test"
-    )
+    return bound_to(create_state(config, tmp_path, hostname="test-host", pwd="/test"))
 
 
 @pytest.fixture
 async def biff_client(state: ServerState) -> AsyncIterator[Client[Any]]:
     """MCP client connected to a biff server via in-memory transport."""
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -102,7 +103,7 @@ def eric_state(shared_data_dir: Path) -> ServerState:
 async def kai_client(kai_state: ServerState) -> AsyncIterator[Client[Any]]:
     """MCP client for user kai."""
     mcp = create_server(kai_state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -110,7 +111,7 @@ async def kai_client(kai_state: ServerState) -> AsyncIterator[Client[Any]]:
 async def eric_client(eric_state: ServerState) -> AsyncIterator[Client[Any]]:
     """MCP client for user eric."""
     mcp = create_server(eric_state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 

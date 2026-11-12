@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 from mcp.types import TextContent
 
+from biff.caller_identity import CALLER_KEY
+from biff.testing.caller import DEFAULT_CALLER
+
 if TYPE_CHECKING:
     from fastmcp import Client
 
@@ -107,14 +110,26 @@ class RecordingClient:
     user: str = ""
 
     async def call(self, tool_name: str, **kwargs: object) -> str:
-        """Call a tool and record the interaction in the transcript."""
-        result = await self.client.call_tool(tool_name, kwargs)
+        """Call a tool and record the interaction in the transcript.
+
+        The call declares :data:`~biff.testing.caller.DEFAULT_CALLER` the way
+        the stamping hook does.  Pass ``_caller=...`` to act as another
+        caller, or ``_caller=None`` to send none (the unidentified path).
+        """
+        if CALLER_KEY not in kwargs:
+            kwargs = {**kwargs, CALLER_KEY: DEFAULT_CALLER}
+        sent = {k: v for k, v in kwargs.items() if not (k == CALLER_KEY and v is None)}
+        result = await self.client.call_tool(tool_name, sent)
         is_error = bool(result.is_error)
         text_parts = [
             block.text for block in result.content if isinstance(block, TextContent)
         ]
         text = "\n".join(text_parts) if text_parts else "(no output)"
         self.transcript.add(
-            tool_name, dict(kwargs), text, is_error=is_error, user=self.user
+            tool_name,
+            {k: v for k, v in kwargs.items() if k != CALLER_KEY},
+            text,
+            is_error=is_error,
+            user=self.user,
         )
         return text

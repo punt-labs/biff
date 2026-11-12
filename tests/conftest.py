@@ -39,8 +39,8 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Strip ``CLAUDE_PID`` so tests run under Claude Code itself don't leak
-    the real running process's PID into code paths that prefer it
-    (``SessionHint.resolve_routing_id``, ``_resolve_claude_pid``). Tests
+    the real running process's PID into the stamping hook's main-agent id
+    (``caller_stamp.main_agent_id``). Tests
     that want to exercise the env-var path set it explicitly via
     ``monkeypatch.setenv``.
 
@@ -53,6 +53,7 @@ def _clear_claude_session_env(  # pyright: ignore[reportUnusedFunction]
     look here first.
     """
     monkeypatch.delenv("CLAUDE_PID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)

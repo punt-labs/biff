@@ -7,10 +7,9 @@ Client -> FastMCPTransport -> FastMCP server -> tool closure -> response.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent
 
@@ -18,8 +17,12 @@ from biff.models import UserSession
 from biff.server.app import create_server
 from biff.server.state import ServerState
 from biff.testing import NotificationTracker
+from biff.testing.caller import StampedClient
 
 from .conftest import CallToolResult
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 _ERIC_TTY = "tty2"
 
@@ -34,7 +37,7 @@ async def tracked_client(
     _reset_session()
     tracker = NotificationTracker()
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp), message_handler=tracker) as client:
+    async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
         yield client, tracker
     _reset_session()
 
@@ -422,7 +425,7 @@ class TestPendingNotifyRecoveryProtocol:
         _reset_session()
         mcp = create_server(state)
         try:
-            async with Client(FastMCPTransport(mcp)):
+            async with StampedClient(FastMCPTransport(mcp)):
                 assert _descriptions._session is not None
                 live_session = _descriptions._session
 
@@ -445,7 +448,7 @@ class TestPendingNotifyRecoveryProtocol:
             # client's tracker, because there is nothing more for it to see.
 
             tracker = NotificationTracker()
-            async with Client(FastMCPTransport(mcp), message_handler=tracker):
+            async with StampedClient(FastMCPTransport(mcp), message_handler=tracker):
                 # A genuine reconnect: on_initialize -> capture_session()
                 # sees _pending_notify still set and flushes it on the
                 # freshly captured session — observed here as a real

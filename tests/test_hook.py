@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 from biff.hook import (
@@ -32,6 +32,9 @@ from biff.hook import (
     handle_session_resume,
     handle_session_start,
 )
+
+if TYPE_CHECKING:
+    import pytest
 
 # Deterministic worktree root for hint file tests.
 _FAKE_WORKTREE = "/test/worktree"
@@ -414,51 +417,43 @@ class TestHandleSessionResume:
         assert "resumed" in result
 
 
-class TestCaptureSessionHint:
-    """SessionStart persists the Claude session_id for the server."""
+class TestOpenSessionFromHook:
+    """SessionStart opens the engine session from the payload's session_id."""
 
-    def test_writes_hint_from_payload(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint
+    def test_opens_with_the_payload(self) -> None:
+        from biff.hook import _open_session
 
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-        ):
-            _capture_session_hint({"session_id": "sid-from-hook", "source": "resume"})
-            loaded = sid_mod.SessionHint.load(4321)
+        opened: list[dict[str, object]] = []
 
-        assert loaded is not None
-        assert loaded.session_id == "sid-from-hook"
-        assert loaded.source == "resume"
-        assert loaded.claude_pid == 4321
+        async def _fake(data: dict[str, object], **_kw: object) -> str | None:
+            opened.append(data)
+            return "k"
 
-    def test_no_session_id_is_noop(self, tmp_path: Path) -> None:
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint
+        with patch("biff.session_open.open_session_from_payload", _fake):
+            _open_session({"session_id": "sid-1", "source": "resume"})
 
-        with patch.object(sid_mod, "biff_data_dir", return_value=tmp_path):
-            _capture_session_hint({"source": "startup"})
+        assert opened == [{"session_id": "sid-1", "source": "resume"}]
 
-        assert not (tmp_path / "sessions").exists()
+    def test_open_failure_is_swallowed(self) -> None:
+        """A registration failure must not break session startup."""
+        from biff.hook import _open_session
 
-    def test_write_failure_is_swallowed(self, tmp_path: Path) -> None:
-        """A hint-write OSError must not break session startup (best-effort)."""
-        import biff.session_id as sid_mod
-        from biff.hook import _capture_session_hint
+        async def _boom(data: dict[str, object], **_kw: object) -> str | None:
+            raise OSError("relay unreachable")
 
-        def _boom(_self: object) -> None:
-            raise OSError("disk full")
+        with patch("biff.session_open.open_session_from_payload", _boom):
+            _open_session({"session_id": "sid-1"})  # must not raise
 
-        with (
-            patch.object(sid_mod, "biff_data_dir", return_value=tmp_path),
-            patch.object(sid_mod, "_resolve_claude_pid", return_value=4321),
-            patch.object(sid_mod, "_process_start_time", return_value=42.0),
-            patch.object(sid_mod.SessionHint, "write", _boom),
-        ):
-            # Must not raise.
-            _capture_session_hint({"session_id": "sid", "source": "startup"})
+    def test_open_failure_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        from biff.hook import _open_session
+
+        async def _boom(data: dict[str, object], **_kw: object) -> str | None:
+            raise OSError("relay unreachable")
+
+        with patch("biff.session_open.open_session_from_payload", _boom):
+            _open_session({"session_id": "sid-1"})
+
+        assert "relay unreachable" in caplog.text
 
 
 class TestResolveIdentity:
@@ -1329,7 +1324,7 @@ class TestHandlePreToolUse:
         own* identity ladder, never a sibling's: a sibling ``agent-sibling``
         having a plan must not satisfy ``agent-me``'s gate when neither
         ``agent-me`` (agent_id) nor its leader (session_id) nor the shared
-        bucket has a plan of its own.
+        bucket has a plan of its own (the shared bucket is not consulted).
         """
         my_agent = "agent-me"
         my_session = "leader-sid"
@@ -1351,10 +1346,14 @@ class TestHandlePreToolUse:
         assert result is not None, "sibling's plan must not satisfy my gate"
         reason = _deny_reason(result)
         assert "/plan" in reason
-        # The gate consulted MY own identities (agent -> session -> shared),
-        # in preference order — never the sibling's key.
+        # The gate consulted MY own identities (agent -> session), in
+        # preference order — never the sibling's key, and never the shared
+        # bucket, which an identified caller does not read.
+        # (The trailing shared-bucket read is the diagnostic probe, which logs
+        # and never authorizes; the first two calls are the gate's ladder.)
         identities_queried = [call.args[1] for call in mock_has.call_args_list]
-        assert identities_queried == [my_agent, my_session, None]
+        assert identities_queried[:2] == [my_agent, my_session]
+        assert identities_queried[2:] in ([], [None])
         assert other_identity not in identities_queried
 
     def test_session_id_fallback_allows_when_agent_id_has_no_marker(self) -> None:
@@ -1851,3 +1850,71 @@ class TestReadHookInput:
             result = _read_hook_input()
         r.close()
         assert result == {}
+
+
+class TestPreToolStampDispatch:
+    """``biff-hook claude-code pre-tool-stamp`` emits the stamped input."""
+
+    def test_stamps_a_biff_tool_call_from_stdin(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import io
+
+        from biff import _hook_entry
+
+        payload = {
+            "session_id": "sess-1",
+            "agent_id": "sub-1",
+            "tool_name": "mcp__plugin_biff_tty__plan",
+            "tool_input": {"message": "hi"},
+        }
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        _hook_entry._cc_pre_tool_stamp()
+        out = json.loads(capsys.readouterr().out)
+        updated = out["hookSpecificOutput"]["updatedInput"]
+        assert updated["_caller"] == {"session_id": "sess-1", "agent_id": "sub-1"}
+        assert "permissionDecision" not in out["hookSpecificOutput"]
+
+    def test_runs_even_when_biff_is_not_enabled_in_the_repo(self) -> None:
+        from biff import _hook_entry
+
+        assert "pre-tool-stamp" in _hook_entry.UNGATED_CC_EVENTS
+
+    def test_a_stamper_crash_fails_closed_with_the_cause(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from biff import _hook_entry
+
+        def _boom(_env: object) -> str | None:
+            raise RuntimeError("psutil exploded")
+
+        monkeypatch.setattr("biff.caller_stamp.main_agent_id", _boom)
+        payload: dict[str, object] = {
+            "session_id": "s",
+            "tool_name": "mcp__plugin_biff_tty__who",
+            "tool_input": {},
+        }
+        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        _hook_entry._cc_pre_tool_stamp()
+        spec = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+        assert spec["permissionDecision"] == "deny"
+        assert "psutil exploded" in spec["permissionDecisionReason"]
+
+    def test_a_stamper_crash_on_another_tool_leaves_it_untouched(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from biff import _hook_entry
+
+        def _boom(_env: object) -> str | None:
+            raise RuntimeError("psutil exploded")
+
+        monkeypatch.setattr("biff.caller_stamp.main_agent_id", _boom)
+        payload: dict[str, object] = {
+            "session_id": "s",
+            "tool_name": "mcp__other__x",
+            "tool_input": {},
+        }
+        monkeypatch.setattr("biff.hook._read_hook_input", lambda: payload)
+        _hook_entry._cc_pre_tool_stamp()
+        assert capsys.readouterr().out == ""

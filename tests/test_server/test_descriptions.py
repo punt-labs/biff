@@ -23,7 +23,6 @@ from biff.server.state import CompanionSession, ServerState, create_state
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
-    MAX_UNREAD_COUNT,
     SubscriptionBinding,
     _active_tick,
     _CompanionSubs,
@@ -33,7 +32,6 @@ from biff.server.tools._descriptions import (
     _reconcile_talk_sub,
     _sync_unread_file,
     _talk_description,
-    _write_unread_file,
     nap_interval_for,
     poll_inbox,
     refresh_read_messages,
@@ -45,6 +43,7 @@ from biff.server.tools._descriptions import (
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
 from biff.talk_latch import TalkNotifyLatch
 from biff.talk_state import TalkState
+from biff.unread_file import MAX_UNREAD_COUNT, write_unread_file
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -241,7 +240,7 @@ class TestUnreadFile:
     async def test_clamps_unread_count_at_max(self, tmp_path: Path) -> None:
         path = tmp_path / "unread.json"
         summary = UnreadSummary(count=999)
-        _write_unread_file(
+        write_unread_file(
             path,
             summary,
             repo_name=_TEST_REPO,
@@ -261,7 +260,7 @@ class TestUnreadFile:
         not a placeholder.
         """
         path = tmp_path / "unread.json"
-        _write_unread_file(
+        write_unread_file(
             path,
             UnreadSummary(count=1),
             repo_name=_TEST_REPO,
@@ -634,7 +633,19 @@ class TestSleepOrWakeLostWakeRace:
 class TestPollInbox:
     """Verify the background inbox poller detects changes and refreshes."""
 
-    _FAST_INTERVAL = 0.01
+    # Each test sleeps a fixed multiple of this interval, then asserts the
+    # poller has completed a cycle (written unread.json, updated the tool
+    # description). The poller is a real asyncio task competing for the event
+    # loop, so the sleep must leave it enough wall-clock to be scheduled and
+    # finish a cycle. At 0.01s a three-cycle wait is 30ms — too little on a
+    # loaded machine (CI or a busy dev box), where the first write has not
+    # landed when the assertion runs and the test fails deterministically,
+    # not randomly. 0.05s gives every wait 5x the headroom while keeping the
+    # suite fast. 0.05s cleared ordinary load but still missed the initial
+    # write on a dev box spiking past ~60; 0.1s gives the first write ~300ms,
+    # clearing realistic contention while the longest wait stays ~1.5s. CI
+    # runs far below that load, so this is dev-box headroom, not a CI need.
+    _FAST_INTERVAL = 0.1
 
     @pytest.fixture
     def state_with_path(self, tmp_path: Path) -> ServerState:

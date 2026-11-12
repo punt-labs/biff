@@ -30,7 +30,6 @@ from pathlib import Path
 
 import nats as nats_lib
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
@@ -38,6 +37,7 @@ from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
 
 pytestmark = pytest.mark.nats_local
 
@@ -66,7 +66,7 @@ async def _serve(
     config = BiffConfig(user=user, repo_name=repo, relay_url=nats_server, peers=peers)
     state = create_state(config, data_dir, tty=tty, hostname="h", pwd="/w")
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield RecordingClient(client=client, transcript=transcript, user=user)
 
 
@@ -292,8 +292,8 @@ class TestVisibilityGate:
 
         try:
             async with (
-                Client(FastMCPTransport(kai_mcp)) as kai_raw,
-                Client(FastMCPTransport(eric_mcp)) as eric_raw,
+                StampedClient(FastMCPTransport(kai_mcp)) as kai_raw,
+                StampedClient(FastMCPTransport(eric_mcp)) as eric_raw,
             ):
                 kai_r = RecordingClient(
                     client=kai_raw, transcript=transcript, user="kai"

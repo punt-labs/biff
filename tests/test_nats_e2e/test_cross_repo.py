@@ -15,13 +15,13 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
 
 pytestmark = pytest.mark.nats_local
 
@@ -45,7 +45,7 @@ async def kai_biff(
         pwd="/biff",
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield RecordingClient(client=client, transcript=transcript, user="kai")
 
 
@@ -68,7 +68,7 @@ async def eric_vox(
         pwd="/vox",
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield RecordingClient(client=client, transcript=transcript, user="eric")
 
 
@@ -90,7 +90,7 @@ async def priya_quarry(
         pwd="/quarry",
     )
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield RecordingClient(client=client, transcript=transcript, user="priya")
 
 

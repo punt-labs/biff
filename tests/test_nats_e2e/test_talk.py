@@ -15,13 +15,13 @@ from pathlib import Path
 
 import nats as nats_lib
 import pytest
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
 
 pytestmark = pytest.mark.nats_local
 
@@ -202,9 +202,9 @@ class TestTalkTtyNameResolution:
         kai_mcp = create_server(kai_state)
 
         async with (
-            Client(FastMCPTransport(eric_a_mcp)) as eric_a_raw,
-            Client(FastMCPTransport(eric_b_mcp)) as eric_b_raw,
-            Client(FastMCPTransport(kai_mcp)) as kai_raw,
+            StampedClient(FastMCPTransport(eric_a_mcp)) as eric_a_raw,
+            StampedClient(FastMCPTransport(eric_b_mcp)) as eric_b_raw,
+            StampedClient(FastMCPTransport(kai_mcp)) as kai_raw,
         ):
             eric_a = RecordingClient(
                 client=eric_a_raw, transcript=transcript, user="eric-a"
@@ -267,8 +267,8 @@ class TestTalkInviteFrame:
 
         try:
             async with (
-                Client(FastMCPTransport(eric_mcp)) as eric_raw,
-                Client(FastMCPTransport(kai_mcp)) as kai_raw,
+                StampedClient(FastMCPTransport(eric_mcp)) as eric_raw,
+                StampedClient(FastMCPTransport(kai_mcp)) as kai_raw,
             ):
                 eric_r = RecordingClient(
                     client=eric_raw, transcript=transcript, user="eric"

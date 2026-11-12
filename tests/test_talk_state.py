@@ -1211,3 +1211,24 @@ class TestPendingBound:
             st.drain_idle()  # drain each so the queue bound never masks this
             assert len(st.pending_invites) <= MAX_PENDING_INVITES
         assert len(st.pending_invites) == MAX_PENDING_INVITES
+
+
+class TestRebind:
+    """An idle TalkState can be re-anchored to the session a caller declares."""
+
+    def test_rebind_moves_the_idle_sentinels_to_the_new_key(self) -> None:
+        st = _make_state()
+        st.rebind(tty="newtty", session_key="kai:newtty")
+        assert (st.partner_tty, st.partner_key) == ("newtty", "kai:newtty")
+
+    def test_rebind_changes_the_key_frames_are_addressed_from(self) -> None:
+        st = _make_state()
+        st.rebind(tty="newtty", session_key="kai:newtty")
+        invite = _invite("eric", "eric:t2", to_key="kai:newtty")
+        assert st.receive(invite) is True
+
+    def test_rebind_while_not_idle_is_refused(self) -> None:
+        st = _make_state()
+        st.begin_invite(partner="eric", partner_tty="t2", partner_key="eric:t2")
+        with pytest.raises(ValueError, match="idle"):
+            st.rebind(tty="newtty", session_key="kai:newtty")

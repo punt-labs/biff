@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Caller identity is now **harness-declared**, not inferred (DES-064). biff
+  learns which session and agent is calling from a `_caller` argument stamped
+  on each tool call by a PreToolUse hook, validates its shape, and refuses an
+  unidentified call with a named error. It no longer walks the process tree,
+  reads `CLAUDE_PID`, or keeps a `sessions/<pid>.json` hint file. The server
+  binds to a session on that session's first identified tool call (and
+  re-points cleanly across `/clear`, which changes the session id in place on
+  the long-lived server). Conforms to the org `mcp-caller-identity` standard
+  (biff-ork0).
+- **Permission rules are repo-level, granted by `biff enable`.** The
+  SessionStart hook used to add `mcp__plugin_biff_tty__*`, the `biff-dev`
+  wildcard and twelve `Skill(...)` rules to the global
+  `~/.claude/settings.json` in every session, without asking. Now `biff
+  enable` (and `/biff enable`) adds biff's rules (`Bash(biff:*)`, the MCP
+  wildcard and the `Skill(...)` rules) to the repo's
+  `.claude/settings.json`, prints each one, and `biff disable` removes exactly
+  those. It refuses a malformed or symlinked settings file and the home
+  directory, and never grants the `biff-dev` rules. Rules earlier versions
+  wrote globally are left alone; delete them by hand if you want them gone
+  ([punt-kit#396](https://github.com/punt-labs/punt-kit/pull/396)).
+- **SessionStart no longer installs the status line.** Run
+  `biff install-statusline` to install it.
+
+### Removed
+
+- The `ethos` CLI dependency in the identity path: biff no longer shells out to
+  `ethos session roster`, `ethos team for-repo`, or `ethos show` to resolve
+  identity. biff's own repo-agent identity is read from the committed
+  `.punt-labs/ethos.yaml` + `identities/<handle>.yaml` as before (DES-040,
+  unchanged); caller identity comes from the declared `_caller` channel
+  (biff-khr9).
+- The single-session OpenCode MCP mode and its `--ethos-session` /
+  `--ethos-agent-id` flags on `biff mcp`, and the session-pin middleware. Their
+  only job was resolving identity via the ethos CLI, which the standard forbids;
+  OpenCode caller identity will arrive on the declared channel like every other
+  harness.
+
+### Fixed
+
+- SessionEnd hook no longer prints "Hook cancelled" on exit. The
+  `session-end.sh` dispatcher ran `biff-hook claude-code session-end`
+  synchronously; its cost (interpreter startup plus local presence-cleanup
+  writes — sentinel files and active-marker removal, not a relay network
+  call) blocked process exit, so Claude Code cancelled the still-running
+  hook. The SessionEnd registration is now `async: true` (the harness no
+  longer waits for it, matching vox), and the script additionally detaches
+  the call (`nohup`, bounded by `timeout`/`gtimeout` where available) with
+  its stderr routed to `~/.punt-labs/biff/hook-errors.log` so a failed
+  detached cleanup stays debuggable. The enabled-marker and PATH gates are
+  unchanged (#471).
+
+## [1.20.0] - 2026-11-10
+
 ### Security
 
 - Clear 3 open Dependabot alerts (1 critical) by bumping `uv.lock`: certifi
@@ -23,6 +78,16 @@
 
 ### Fixed
 
+- Plan gate no longer wedges every Edit/Write after `/clear`. The
+  `SessionStart` matcher now routes `source=clear` to the hint-capturing
+  dispatcher, so the Claude session hint tracks the post-`/clear` session
+  id instead of the stale one; the `PreToolUse` gate's read ladder also
+  consults the CLAUDE_PID routing id the `/plan` write path keys on, so a
+  momentarily stale hint can no longer desync read from write; and an
+  unresolved repo-common-root now allows the edit (with a diagnostic
+  warning) rather than denying against the shared `default` bucket. The Z
+  model (`docs/claude-code-biff.tex` `PreToolHookAllow`/`Deny`) gains a
+  `rootResolved?` input proving the unresolved-root edit can only allow.
 - ProB validation preserves full checker output and fails on violations,
   timeouts, nonzero exits, or missing completion markers instead of masking
   errors with output-filtering pipelines. Timeout logs retain partial output;
@@ -48,20 +113,19 @@
 
 ### Changed
 
-- **Permission rules are repo-level, granted by `biff enable`.** The
-  SessionStart hook used to add `mcp__plugin_biff_tty__*`, the `biff-dev`
-  wildcard and twelve `Skill(...)` rules to the global
-  `~/.claude/settings.json` in every session, without asking. Now `biff
-  enable` (and `/biff enable`) adds biff's rules (`Bash(biff:*)`, the MCP
-  wildcard and the `Skill(...)` rules) to the repo's
-  `.claude/settings.json`, prints each one, and `biff disable` removes exactly
-  those. It refuses a malformed or symlinked settings file and the home
-  directory, and never grants the `biff-dev` rules. Rules earlier versions
-  wrote globally are left alone; delete them by hand if you want them gone
-  ([punt-kit#396](https://github.com/punt-labs/punt-kit/pull/396)).
-- **SessionStart no longer installs the status line.** Run
-  `biff install-statusline` to install it.
-
+- Vendor the ethos registry (`.punt-labs/ethos/`) instead of leaving it as an
+  untracked local clone of the retired `punt-labs/team` repo. The source
+  registry — identities, roles, teams, personalities, writing-styles, talents,
+  and generated agents — is now git-tracked so the team is reproducible from a
+  clean clone (`ethos hook session-start`), matching the vendoring model used
+  by the sibling tool repos (vox, lux). Removed the former half-wired
+  `punt-labs/team` submodule, resynced all roles to the canonical enriched
+  form (model pins + scoped MCP tool grants), dropped 12 unrendered
+  `collaborates_with` team edges that produced generation warnings, and purged
+  upstream dev scaffolding (`README.md`, `CHANGELOG.md`, `.github/`, lint
+  configs) from the vendored tree. The plugin ships from the `plugin/` subdir
+  via `git-subdir`, so tracking the registry never reaches plugin users.
+  `ethos doctor` is 18/18 with zero generation warnings.
 - `get_ethos_roster()`'s two previously-silent failure paths (`ethos session roster --json` exiting non-zero, or returning non-JSON output) now log at INFO, including `stderr`, so a future regression is diagnosable from `biff.log` — `logging_config.py`'s file handler is hardcoded at INFO, so a DEBUG-level log here would never actually reach the file. Investigated as part of biff-2zug (the companion/human `/who` row never appearing in a dual-session setup): `subprocess.run`'s call here was already correctly inheriting `CLAUDE_PID` with no `env=` override needed, so this is a diagnosability improvement only, not a behavior change. The actual blocker for biff-2zug is that Claude Code does not inject `CLAUDE_PID` into the MCP server's own environment at all — confirmed in the official env-vars documentation (set only for Bash/PowerShell tool commands and hook commands) and measured across every live `biff mcp` process on one host. Resolving that needs a non-ancestry-walk mechanism (a plain process-tree walk, in either direction, cannot soundly distinguish one session's `claude` process from one merely shared with it — nested sessions, MCP-manager layers, and daemon processes all look alike; see biff-3dd) and is tracked as biff-qou; this PR leaves the companion session unregistered in that case, same as before.
 - Bump ruff 0.15.1 → 0.16.4 and clear the new findings: removed 41 now-unused
   `# noqa: BLE001` directives (ruff 0.16 narrowed blind-except detection),

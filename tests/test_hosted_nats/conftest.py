@@ -26,11 +26,10 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 import pytest_asyncio
-from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig, RelayAuth
@@ -39,6 +38,10 @@ from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.server.tools._descriptions import _reset_session
 from biff.testing import RecordingClient, Transcript
+from biff.testing.caller import StampedClient
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 _TRANSCRIPT_DIR = Path(__file__).parent.parent / "transcripts"
 _TEST_REPO = "_test-hosted-nats"
@@ -168,7 +171,7 @@ async def kai_client(
     config = BiffConfig(user="kai", repo_name=_TEST_REPO)
     state = create_state(config, shared_data_dir / "kai", relay=kai_relay)
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 
@@ -181,7 +184,7 @@ async def eric_client(
     config = BiffConfig(user="eric", repo_name=_TEST_REPO)
     state = create_state(config, shared_data_dir / "eric", relay=eric_relay)
     mcp = create_server(state)
-    async with Client(FastMCPTransport(mcp)) as client:
+    async with StampedClient(FastMCPTransport(mcp)) as client:
         yield client
 
 

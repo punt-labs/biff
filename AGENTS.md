@@ -1,15 +1,6 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
-
-## Quick Reference
-
-```bash
-bd ready --limit=99   # Find available work (show all)
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
-```
+Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the tracker of record where this repo is migrated. Beads is a local mirror there and the tracker of record elsewhere.
 
 ## Workflow
 
@@ -36,7 +27,7 @@ Follow the protocol in CLAUDE.md. The short version:
 
 5. **Hand off** — provide context for next session
 
-**PR workflow (see CLAUDE.md):** Do NOT merge a PR immediately. Trigger GitHub Copilot code review, wait for feedback, evaluate and address valid issues, ensure quality gates pass, then merge.
+**PR workflow (see CLAUDE.md):** Do NOT merge a PR immediately. PR review follows punt-kit/standards/pr-review.md: local review before the PR, then Qodo and Bugbot once at open, at most two rounds, Copilot only on request. Address valid findings, ensure quality gates pass, then merge.
 
 ## Landing the Plane (Session Completion)
 

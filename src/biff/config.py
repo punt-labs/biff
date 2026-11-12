@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import getpass
 import importlib.resources
-import json
 import logging
 import os
 import re
@@ -145,124 +144,6 @@ class EthosIdentity:
     handle: str
     display_name: str
     kind: str  # "human", "agent", or ""
-
-
-@dataclass(frozen=True)
-class EthosRoster:
-    """Session roster from ``ethos session roster --json``."""
-
-    root: EthosIdentity | None
-    primary: EthosIdentity | None
-
-
-def _parse_roster_entry(data: dict[str, object]) -> EthosIdentity | None:
-    """Parse a single roster participant into an EthosIdentity.
-
-    Supports two formats:
-    - Legacy: ``{"handle": "...", "display_name": "...", "kind": "..."}``
-    - Current: ``{"agent_id": "...", "persona": "..."}``
-    """
-    # Current format: agent_id + persona
-    handle = data.get("persona", "") or data.get("handle", "")
-    if not isinstance(handle, str) or not handle:
-        return None
-    name = data.get("display_name", "")
-    display_name = name if isinstance(name, str) and name else handle
-    kind_val = data.get("kind", "")
-    kind = kind_val if isinstance(kind_val, str) else ""
-    return EthosIdentity(handle=handle, display_name=display_name, kind=kind)
-
-
-def _parse_roster_participants(
-    participants: list[object],
-) -> EthosRoster:
-    """Parse roster from the ``participants`` array format."""
-    root: EthosIdentity | None = None
-    primary: EthosIdentity | None = None
-    for p in participants:
-        if not isinstance(p, dict):
-            continue
-        entry = cast("dict[str, object]", p)
-        identity = _parse_roster_entry(entry)
-        if identity is None:
-            continue
-        if entry.get("parent"):
-            primary = identity
-        elif root is None:
-            root = identity
-    return EthosRoster(root=root, primary=primary)
-
-
-def _parse_roster_legacy(raw: dict[str, object]) -> EthosRoster:
-    """Parse roster from the legacy ``root`` + ``primary`` format."""
-    root_raw = raw.get("root")
-    primary_raw = raw.get("primary")
-    root = (
-        _parse_roster_entry(cast("dict[str, object]", root_raw))
-        if isinstance(root_raw, dict)
-        else None
-    )
-    primary = (
-        _parse_roster_entry(cast("dict[str, object]", primary_raw))
-        if isinstance(primary_raw, dict)
-        else None
-    )
-    return EthosRoster(root=root, primary=primary)
-
-
-def get_ethos_roster() -> EthosRoster | None:
-    """Resolve the session roster from ethos CLI.
-
-    Returns ``None`` when ethos is not installed, not configured,
-    returns malformed JSON, or times out.
-    """
-    # No ancestry-walk fallback when CLAUDE_PID is absent from os.environ: a
-    # plain process-tree walk (nearest OR topmost ancestor) cannot soundly
-    # distinguish this session's own claude process from one merely shared
-    # with it -- nested sessions, MCP-manager layers, and daemon processes
-    # all look alike to a bare walk (see biff-3dd's investigation, which
-    # falsified both directions). Passing through os.environ unmodified
-    # means the subprocess sees CLAUDE_PID exactly as inherited: correctly
-    # when Claude Code injected it, absent otherwise, with the same safe
-    # no-op (ethos refuses with "No active session.") as every other
-    # failure path below. Resolving the absent case soundly is tracked as
-    # biff-qou and needs its own dedicated design pass, not a quick walk.
-    try:
-        result = subprocess.run(
-            ["ethos", "session", "roster", "--json"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2,
-        )
-    except FileNotFoundError:
-        return None
-    except subprocess.TimeoutExpired:
-        return None
-    if result.returncode != 0:
-        logger.info(
-            "ethos session roster exited %d: stdout=%s stderr=%s",
-            result.returncode,
-            result.stdout.strip(),
-            result.stderr.strip(),
-        )
-        return None
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        logger.info(
-            "ethos session roster returned non-JSON output: stdout=%s stderr=%s",
-            result.stdout.strip(),
-            result.stderr.strip(),
-        )
-        return None
-    if not isinstance(data, dict):
-        return None
-    raw = cast("dict[str, object]", data)
-    participants = raw.get("participants")
-    if isinstance(participants, list):
-        return _parse_roster_participants(cast("list[object]", participants))
-    return _parse_roster_legacy(raw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -688,56 +569,6 @@ def resolve_agent_identity_from_disk(repo_root: Path) -> EthosIdentity | None:
     return _build_agent_identity(identity_path, agent)
 
 
-def _extract_team_members(teams: list[object]) -> set[str]:
-    """Extract the union of member identities from ethos team JSON."""
-    members: set[str] = set()
-    for team in teams:
-        if not isinstance(team, dict):
-            continue
-        raw_team = cast("dict[str, object]", team)
-        raw_members = raw_team.get("members", [])
-        if not isinstance(raw_members, list):
-            continue
-        for member in cast("list[object]", raw_members):
-            if isinstance(member, dict):
-                identity = cast("dict[str, object]", member).get("identity")
-                if isinstance(identity, str) and identity.strip():
-                    members.add(identity.strip())
-    return members
-
-
-def get_ethos_team() -> tuple[str, ...] | None:
-    """Resolve team members from the ethos CLI.
-
-    Returns a sorted tuple of identity handles, or ``None`` on any
-    failure or when the repo is not in any team.
-    """
-    try:
-        result = subprocess.run(
-            ["ethos", "team", "for-repo", "--json"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2,
-        )
-    except FileNotFoundError:
-        return None
-    except subprocess.TimeoutExpired:
-        return None
-    if result.returncode != 0:
-        return None
-    try:
-        teams = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(teams, list) or not teams:
-        return None
-    all_members = _extract_team_members(cast("list[object]", teams))
-    if not all_members:
-        return None
-    return tuple(sorted(all_members))
-
-
 def get_os_user() -> str | None:
     """Return the OS username, or ``None`` if unavailable."""
     try:
@@ -1037,16 +868,6 @@ def _relay_allow_env_override(raw: dict[str, object]) -> bool:
     return section.get("allow_env_override") is True
 
 
-def _enrich_team(cf: _ConfigFields) -> _ConfigFields:
-    """Enrich team from ethos when no explicit team is configured."""
-    if cf.team:
-        return cf
-    ethos_team = get_ethos_team()
-    if ethos_team is None:
-        return cf
-    return replace(cf, team=ethos_team)
-
-
 def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     """Resolve config fields from YAML or zero-config.
 
@@ -1080,7 +901,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         if not _has_orgs_key(merged):
             owner = get_repo_owner(repo_root)
             cf = replace(cf, orgs=(owner,) if owner else ())
-        return _enrich_team(cf)
+        return cf
 
     # Zero-config: derive org from remote, use demo relay.
     # Still read config.local.yaml — user may have set relay via
@@ -1100,7 +921,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
         # (which may be None) -- _apply_demo_relay_default, called after
         # _apply_env_relay_overrides in _load_base_config, is the single
         # place that fills in the demo relay fallback.
-        return _enrich_team(replace(cf, orgs=orgs))
+        return replace(cf, orgs=orgs)
 
     owner = get_repo_owner(repo_root)
     orgs = (owner,) if owner else ()
@@ -1111,7 +932,7 @@ def _resolve_config_fields(repo_root: Path) -> _ConfigFields:
     # truly zero-config repo look identical to a repo that has committed
     # its own relay.url, silently closing the gate that Sec 0 requires to
     # stay open in exactly this case.
-    return _enrich_team(_ConfigFields(orgs=orgs))
+    return _ConfigFields(orgs=orgs)
 
 
 def _apply_demo_relay_default(
@@ -1507,16 +1328,12 @@ def load_mcp_config(
     relay_url_override: object = RELAY_URL_UNSET,
     prefix: Path = _DEFAULT_PREFIX,
     start: Path | None = None,
-    pinned_identity: EthosIdentity | None = None,
 ) -> ResolvedConfig:
     """Discover and resolve configuration for the MCP server.
 
     Identity chain:
     ``user_override`` -> :func:`resolve_agent_identity_from_disk` ->
     :func:`get_github_identity` -> :func:`get_os_user`.
-
-    An explicitly resolved ``pinned_identity`` bypasses this entire chain;
-    it cannot be combined with ``user_override`` and never falls back.
 
     The MCP server runs inside the agent's process; its primary
     identity is the agent. Disk-based resolution avoids the
@@ -1533,16 +1350,6 @@ def load_mcp_config(
         prefix=prefix,
         start=start,
     )
-
-    if pinned_identity is not None:
-        if user_override is not None:
-            raise SystemExit("--user cannot override a pinned Ethos identity.")
-        return _assemble_config(
-            base,
-            pinned_identity.handle,
-            pinned_identity.display_name,
-            pinned_identity.kind,
-        )
 
     if user_override is not None:
         return _assemble_config(base, user_override, "", "")

@@ -165,8 +165,15 @@ class TestCliOnlyPlanSatisfiesGate:
     this fix, because the marker write path did not exist.
     """
 
-    async def test_cli_plan_then_hook_allows_edit(self, tmp_path: Path) -> None:
+    async def test_cli_plan_then_hook_allows_edit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         repo = _make_repo(tmp_path / "repo")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cli-session-id")
+        # plan() shells out to git in the process cwd; patching Path.cwd does
+        # not reach the subprocess, so a linked-worktree test run resolved the
+        # marker root to the real checkout instead of this temp repo.
+        monkeypatch.chdir(repo)
         relay = LocalRelay(tmp_path / "relay-data")
         ctx = CliContext(
             relay=relay,
@@ -179,10 +186,6 @@ class TestCliOnlyPlanSatisfiesGate:
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("pathlib.Path.cwd", return_value=repo),
-            patch(
-                "biff.commands.plan.SessionHint.resolve_routing_id",
-                return_value="cli-session-id",
-            ),
         ):
             result = await plan(ctx, "biff-ar1: fix the plan gate")
             assert not result.error
@@ -193,9 +196,13 @@ class TestCliOnlyPlanSatisfiesGate:
 
         assert gate_result is None  # allowed
 
-    async def test_cli_plan_clear_then_hook_denies(self, tmp_path: Path) -> None:
+    async def test_cli_plan_clear_then_hook_denies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Clearing the CLI plan (biff plan --clear) re-denies via the same path."""
         repo = _make_repo(tmp_path / "repo")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cli-session-id")
+        monkeypatch.chdir(repo)
         relay = LocalRelay(tmp_path / "relay-data")
         ctx = CliContext(
             relay=relay,
@@ -208,10 +215,6 @@ class TestCliOnlyPlanSatisfiesGate:
         with (
             patch("pathlib.Path.home", return_value=tmp_path / "home"),
             patch("pathlib.Path.cwd", return_value=repo),
-            patch(
-                "biff.commands.plan.SessionHint.resolve_routing_id",
-                return_value="cli-session-id",
-            ),
         ):
             await plan(ctx, "a plan")
             await plan(ctx, "")  # clear
@@ -221,6 +224,49 @@ class TestCliOnlyPlanSatisfiesGate:
             )
 
         assert gate_result is not None  # denied
+
+
+class TestUnresolvedRootDoesNotWedge:
+    """biff-ecl / PL-240: a transient git failure must not deny every edit.
+
+    When ``get_repo_common_root`` returns ``""`` (git unavailable, timed
+    out, or a cwd that is briefly not a repo), the gate cannot know *which*
+    repo's plan to consult -- every unresolved root collapses onto the one
+    shared ``default`` bucket. Reading that bucket and denying turns a
+    bookkeeping outage into a block on the whole editing surface, and (via
+    the shared bucket) lets one repo's plan satisfy another's gate. With no
+    resolvable repo the gate has no marker store to reason about, so it
+    allows -- the same graceful escape hatch as "no active session" -- and
+    the ``hook-errors.log`` warning from ``hint_dir`` records the cause.
+    """
+
+    def test_empty_root_allows_rather_than_denies(self, tmp_path: Path) -> None:
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("biff.hook._repo_common_root", return_value=""),
+        ):
+            result = handle_pre_tool_use({"session_id": "sid", "cwd": "/not/a/repo"})
+
+        assert result is None  # allowed -- no repo root to gate against
+
+    def test_resolved_root_without_marker_still_denies(self, tmp_path: Path) -> None:
+        """The empty-root allow must not leak into the resolved-root path.
+
+        Paired with the empty-root case: with a *resolved* root and no plan
+        marker for any of this caller's identities, the gate still denies.
+        This pins that the fix suppresses the edit requirement only when the
+        root is unresolvable, never when it resolves to a real repo with no
+        plan.
+        """
+        repo = _make_repo(tmp_path / "repo")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("pathlib.Path.cwd", return_value=repo),
+        ):
+            result = handle_pre_tool_use({"session_id": "sid", "cwd": str(repo)})
+
+        assert result is not None  # denied -- resolved root, no plan
 
 
 @pytest.fixture(autouse=True)
@@ -239,3 +285,118 @@ def _active_session(  # pyright: ignore[reportUnusedFunction]
     (active / "someone").write_text("someone:tty\nrepo\n")
     with patch("biff._stdlib.active_dir", return_value=active):
         yield
+
+
+class TestDeclaredSessionPlan:
+    """The MCP plan tool keys the marker on the session the caller declared."""
+
+    def test_marker_lands_under_the_declared_session_and_satisfies_its_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.commands.plan import sync_plan_marker
+
+        repo = _make_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            sync_plan_marker("declared plan", "declared-session")
+            allowed = handle_pre_tool_use(
+                {"session_id": "declared-session", "cwd": str(repo)}
+            )
+            sibling = handle_pre_tool_use(
+                {"session_id": "sibling-session", "cwd": str(repo)}
+            )
+
+        assert allowed is None
+        assert sibling is not None
+
+
+class TestSharedBucketDoesNotAuthorizeASession:
+    """An unscoped plan must not satisfy another session's edit gate."""
+
+    def test_shared_marker_does_not_satisfy_an_identified_session(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            from biff._stdlib import get_repo_common_root
+
+            write_plan_marker(get_repo_common_root(str(repo)), None, "cli plan")
+            result = handle_pre_tool_use(
+                {"session_id": "other-session", "cwd": str(repo)}
+            )
+        assert result is not None  # denied
+
+    def test_shared_marker_still_serves_a_payload_with_no_identity(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            from biff._stdlib import get_repo_common_root
+
+            write_plan_marker(get_repo_common_root(str(repo)), None, "headless")
+            assert handle_pre_tool_use({"cwd": str(repo)}) is None
+
+
+class TestCliPlanIsScopedToTheEnvironmentSession:
+    def test_cli_plan_writes_under_the_session_and_reset_clears_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.commands.plan import sync_plan_marker
+
+        repo = _make_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-session")
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("pathlib.Path.cwd", return_value=repo),
+        ):
+            from biff._stdlib import get_repo_common_root
+
+            root = get_repo_common_root(str(repo))
+            sync_plan_marker("cli plan")
+            assert has_plan_marker(root, "my-session")
+            assert not has_plan_marker(root, None)
+            assert handle_pre_tool_use({"session_id": "other", "cwd": str(repo)})
+            handle_session_start({"session_id": "my-session", "cwd": str(repo)})
+            assert not has_plan_marker(root, "my-session")
+
+    def test_a_malformed_environment_session_falls_to_the_shared_bucket(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.commands.plan import cli_session_id
+
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "../evil")
+        assert cli_session_id() is None
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+        assert cli_session_id() is None
+
+
+class TestSkippedSharedPlanIsDiagnosable:
+    def test_logs_when_only_a_shared_marker_exists_for_an_identified_caller(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with patch("pathlib.Path.home", return_value=tmp_path / "home"):
+            from biff._stdlib import get_repo_common_root
+
+            write_plan_marker(get_repo_common_root(str(repo)), None, "cli plan")
+            with caplog.at_level("INFO", logger="biff.hook"):
+                result = handle_pre_tool_use(
+                    {"session_id": "skewed-session", "cwd": str(repo)}
+                )
+        assert result is not None  # decision unchanged: still denied
+        assert any(
+            "skewed-session" in r.getMessage() and "shared" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_no_log_without_a_shared_marker(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        repo = _make_repo(tmp_path / "repo")
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            caplog.at_level("INFO", logger="biff.hook"),
+        ):
+            handle_pre_tool_use({"session_id": "s", "cwd": str(repo)})
+        assert not any("shared" in r.getMessage() for r in caplog.records)

@@ -14,6 +14,7 @@ in-process call has no process lifetime to observe.
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import signal
@@ -189,6 +190,50 @@ def active_server(tmp_path: Path) -> Generator[ActiveServer]:
             proc.wait(timeout=5)
 
 
+_BIND_MESSAGES = (
+    {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "signal-test", "version": "0"},
+        },
+    },
+    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+    {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "plan",
+            "arguments": {
+                "message": "signal test",
+                "_caller": {"session_id": "signal-test", "agent_id": "1"},
+            },
+        },
+    },
+)
+
+
+@pytest.fixture
+def bound_server(active_server: ActiveServer) -> ActiveServer:
+    """An active server whose first stamped call has bound it to a session.
+
+    An unbound server owns no session key, so it writes no sentinel; the
+    signal tests below need a bound one.  Binding is observable as the
+    unread-status file appearing under the session's routing id.
+    """
+    proc = active_server.proc
+    assert proc.stdin is not None
+    for message in _BIND_MESSAGES:
+        proc.stdin.write(json.dumps(message) + "\n")
+    proc.stdin.flush()
+    _wait_for_unread_json(active_server.home)
+    return active_server
+
+
 @pytest.mark.parametrize(
     "sig", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP], ids=lambda s: s.name
 )
@@ -196,7 +241,7 @@ class TestSignalTerminatesProcess:
     """SIGTERM, SIGINT, and SIGHUP each terminate the server after cleanup."""
 
     def test_process_exits_and_sentinel_precedes_exit(
-        self, active_server: ActiveServer, sig: signal.Signals
+        self, bound_server: ActiveServer, sig: signal.Signals
     ) -> None:
         """Sending *sig* to a real subprocess ends it and leaves a sentinel.
 
@@ -205,7 +250,7 @@ class TestSignalTerminatesProcess:
         assertion proves the signal terminated it, not the OS default action
         firing before our handler ran (which would also leave no sentinel).
         """
-        proc, home, _stderr_lines = active_server
+        proc, home, _stderr_lines = bound_server
         os.kill(proc.pid, sig)
         exit_code = _wait_for_exit(proc)
 
@@ -224,7 +269,7 @@ class TestSignalTerminatesProcess:
 class TestSignalSurvivesCleanupFailure:
     """A failing cleanup step must not stop the handler from terminating."""
 
-    def test_survives_sentinel_write_failure(self, active_server: ActiveServer) -> None:
+    def test_survives_sentinel_write_failure(self, bound_server: ActiveServer) -> None:
         """The handler must still exit when its first cleanup step raises.
 
         Makes the sentinels directory read-only so ``_write_sentinel``
@@ -238,7 +283,7 @@ class TestSignalSurvivesCleanupFailure:
         diagnostic ``os.write(2, ...)`` itself actually fired -- the exit
         code alone would also pass if that write were silently dropped.
         """
-        proc, home, stderr_lines = active_server
+        proc, home, stderr_lines = bound_server
         sentinels_root = _sentinel_dir(home).parent
         sentinels_root.mkdir(parents=True, exist_ok=True)
         sentinels_root.chmod(0o500)
@@ -307,9 +352,9 @@ class TestSignalRemovesUnreadFiles:
     """
 
     def test_unread_files_removed_after_signal(
-        self, active_server: ActiveServer, sig: signal.Signals
+        self, bound_server: ActiveServer, sig: signal.Signals
     ) -> None:
-        proc, home, _stderr_lines = active_server
+        proc, home, _stderr_lines = bound_server
         unread_json = _wait_for_unread_json(home)
         # Simulate a prior nudge having already recorded state for this
         # session -- the sidecar unread-nudge.sh itself would have
@@ -325,4 +370,20 @@ class TestSignalRemovesUnreadFiles:
         )
         assert not nudged.exists(), (
             "the .nudged sidecar should be removed alongside the JSON"
+        )
+
+
+class TestUnboundServerSignal:
+    """A signal before any call declared a session still terminates, cleanly."""
+
+    def test_unbound_server_exits_and_writes_no_sentinel(
+        self, active_server: ActiveServer
+    ) -> None:
+        proc, home, _stderr_lines = active_server
+        os.kill(proc.pid, signal.SIGTERM)
+        exit_code = _wait_for_exit(proc)
+
+        assert exit_code == -signal.SIGTERM.value
+        assert not _sentinel_dir(home).exists(), (
+            "an unbound server has no session key to leave a sentinel for"
         )

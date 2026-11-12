@@ -21,7 +21,7 @@ from pathlib import Path
 
 from biff._stdlib import BIFF_DATA_DIR
 from biff.relay import atomic_write
-from biff.session_key import find_session_key
+from biff.session_routing import SessionIdError, SessionRouting
 from biff.unread import (
     DisplayItemView,
     SessionUnread,
@@ -199,7 +199,7 @@ def run_statusline(
     else:
         base_segments = _base_segments(session)
 
-    unread = read_session_unread(unread_dir / f"{find_session_key()}.json")
+    unread = _read_unread(session, unread_dir)
     biff = _biff_segment(unread)
     display = _display_segment(unread.display_items if unread else ())
 
@@ -207,6 +207,24 @@ def run_statusline(
     line1 = " | ".join(segments)
     line2 = display if display.strip() else _LINE2_IDLE
     return f"{line1}\n{line2}"
+
+
+def _read_unread(session: dict[str, object], unread_dir: Path) -> SessionUnread | None:
+    """Read this session's unread file, keyed by the stdin ``session_id``.
+
+    The statusline is its own process and receives no ``_caller``; the
+    session_id Claude Code puts on stdin is the same value the hook and the
+    server key on, so :class:`SessionRouting` yields the same path.
+    """
+    session_id = session.get("session_id")
+    if not isinstance(session_id, str):
+        return None
+    try:
+        routing = SessionRouting(session_id)
+    except SessionIdError:
+        logger.warning("statusline stdin carried a malformed session_id")
+        return None
+    return read_session_unread(routing.unread_path(unread_dir))
 
 
 # Session data parsing ------------------------------------------------------

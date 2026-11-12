@@ -49,28 +49,28 @@ def main() -> None:
 
 def _cc_session_start() -> None:
     from biff.hook import (  # noqa: PLC0415
-        _capture_session_hint,
         _emit,
         _hook_context,
+        _open_session,
         _read_hook_input,
         handle_session_start,
     )
 
-    _capture_session_hint(_read_hook_input())
+    _open_session(_read_hook_input())
     result = handle_session_start()
     _emit(_hook_context("SessionStart", result))
 
 
 def _cc_session_resume() -> None:
     from biff.hook import (  # noqa: PLC0415
-        _capture_session_hint,
         _emit,
         _hook_context,
+        _open_session,
         _read_hook_input,
         handle_session_resume,
     )
 
-    _capture_session_hint(_read_hook_input())
+    _open_session(_read_hook_input())
     result = handle_session_resume()
     _emit(_hook_context("SessionStart", result))
 
@@ -86,6 +86,29 @@ def _cc_pre_tool_use() -> None:
 
     data = _read_hook_input()
     result = handle_pre_tool_use(data)
+    if result is not None:
+        _emit(result)
+
+
+def _cc_pre_tool_stamp() -> None:
+    import os  # noqa: PLC0415
+
+    from biff.caller_stamp import (  # noqa: PLC0415
+        BIFF_TOOL_RE,
+        CallerStamper,
+        main_agent_id,
+        stamp_failure,
+    )
+    from biff.hook import _emit, _read_hook_input  # noqa: PLC0415
+
+    data = _read_hook_input()
+    try:
+        result = CallerStamper(main_agent_id(os.environ)).stamp(data)
+    except Exception as exc:  # noqa: BLE001 - hook boundary: fail closed, never crash
+        tool = data.get("tool_name")
+        if not isinstance(tool, str) or not BIFF_TOOL_RE.fullmatch(tool):
+            return
+        result = stamp_failure(tool, exc)
     if result is not None:
         _emit(result)
 
@@ -132,10 +155,17 @@ _CC_HANDLERS: dict[str, Callable[[], None]] = {
     "session-resume": _cc_session_resume,
     "session-end": _cc_session_end,
     "pre-tool-use": _cc_pre_tool_use,
+    "pre-tool-stamp": _cc_pre_tool_stamp,
     "post-bash": _cc_post_bash,
     "post-pr": _cc_post_pr,
     "pre-compact": _cc_pre_compact,
 }
+
+
+# Events that run whether or not biff is enabled in the repo: the stamping hook
+# serves biff's MCP tools, which a user can call from any repo, and an
+# unstamped call is refused by the server.
+UNGATED_CC_EVENTS = frozenset({"pre-tool-stamp"})
 
 
 def _dispatch_cc(event: str) -> None:
@@ -147,7 +177,7 @@ def _dispatch_cc(event: str) -> None:
     # Gate: skip if biff not enabled in this repo.
     from biff.hook import _is_biff_enabled  # noqa: PLC0415
 
-    if not _is_biff_enabled():
+    if event not in UNGATED_CC_EVENTS and not _is_biff_enabled():
         return
 
     handler()
