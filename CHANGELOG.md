@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `biff statusline` now resolves the session from `CLAUDE_CODE_SESSION_ID`
+  when stdin carries no session JSON. The `/biff:read` mail gate runs
+  `biff statusline < /dev/null`, which left the command unable to identify the
+  session, so it printed the generic "enable" hint for an enabled session and
+  the gate never pulled mail. Stdin remains authoritative when Claude Code
+  pipes session JSON; the environment variable is only a fallback for the
+  empty-stdin case.
+
 ## [1.21.0] - 2026-11-11
 
 ### Changed

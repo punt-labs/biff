@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -210,19 +211,31 @@ def run_statusline(
 
 
 def _read_unread(session: dict[str, object], unread_dir: Path) -> SessionUnread | None:
-    """Read this session's unread file, keyed by the stdin ``session_id``.
+    """Read this session's unread file, keyed by the session id.
 
     The statusline is its own process and receives no ``_caller``; the
     session_id Claude Code puts on stdin is the same value the hook and the
     server key on, so :class:`SessionRouting` yields the same path.
+
+    When invoked with no session JSON on stdin — the ``/biff:read`` mail gate
+    runs ``biff statusline < /dev/null`` — fall back to the
+    ``CLAUDE_CODE_SESSION_ID`` environment variable, which carries that same
+    id. Without the fallback the gate would read the generic enable hint for
+    an enabled session and never pull mail.
     """
     session_id = session.get("session_id")
-    if not isinstance(session_id, str):
+    source = "stdin"
+    if not isinstance(session_id, str) or not session_id:
+        session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        source = "CLAUDE_CODE_SESSION_ID"
+    if not session_id:
         return None
     try:
         routing = SessionRouting(session_id)
     except SessionIdError:
-        logger.warning("statusline stdin carried a malformed session_id")
+        logger.warning(
+            "statusline could not resolve a valid session_id from %s", source
+        )
         return None
     return read_session_unread(routing.unread_path(unread_dir))
 
