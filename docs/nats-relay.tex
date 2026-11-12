@@ -225,7 +225,7 @@ times out; the cached handles are stale and must not be used.
 $closed$ is permanent shutdown --- no reconnection is possible.
 
 \begin{zed}
-  SubKind ::= talk | inboxNotify | inboxNotifyCompanion
+  SubKind ::= talk | inboxNotify | inboxNotifyCompanion | kvWatch
 \end{zed}
 
 $SubKind$ indexes the family of always-on core-NATS subscriptions the
@@ -247,11 +247,27 @@ gained a third constructor, every operation already quantified over
 $SubKind$ ($EnsureConnected$'s $subGen$ preservation, $Subscribe$,
 $ForceReconnect$'s stranding, the liveness obligation in
 \S\ref{sec:modelcheck}) needed no change, and only the two sites that
-name every kind explicitly ($InitConnection$'s literal and the
+name every kind explicitly ($Init$'s literal and the
 initial-state description) gained the third mapping. It is finite and
 closed: a further always-on subscription is added the same way, by
 extending $SubKind$ with one more constructor, not by introducing a new
 state variable.
+
+$kvWatch$ is the fourth kind: the sessions-KV watcher's consumer
+(\texttt{\_run\_kv\_watch}, \texttt{kv.watchall()}).  It is a core-NATS
+subscription like the other three --- bound to the client that created it,
+orphaned wholesale by $ForceReconnect$, replayed by an in-place reconnect.
+Its omission let the model call the watcher live in states where it was
+dead: $Watcher$ carried a phase but no generation binding, and a $HandleTimeout$
+on a dead subscription is indistinguishable, to the loop, from a quiet
+bucket.  The relay's \texttt{\_run\_kv\_watch} implements $Subscribe$ for this
+kind: it records \texttt{connection\_generation} at \texttt{kv.watchall()}
+and ends the cycle when the generation advances, so the supervisor
+\texttt{\_kv\_watcher\_loop} re-subscribes.  The liveness obligation of
+\S\ref{sec:modelcheck}, instantiated at $k = kvWatch$, is the property that
+code meets; the frozen variant \texttt{nats-relay-kvwatch-noreconcile.tex}
+removes $Subscribe$ and $SubscribeRetry$ for this kind alone, which is the
+code as it was before the fix, and probcli returns a counterexample to it.
 
 \begin{zed}
   ReqOutcome ::= reqOk | reqTimeout
@@ -301,14 +317,16 @@ unrecoverable NATS error.  $weShutdown$ is the shutdown signal.
   maxSessions : \nat \\
   restartDelaySeconds : \nat \\
   maxGeneration : \nat \\
-  maxEpoch : \nat
+  maxEpoch : \nat \\
+  maxRestarts : \nat
   \where
   kvTtlSeconds = 259200 \\
   watcherTimeoutSeconds = 5 \\
   maxSessions = 1000 \\
   restartDelaySeconds = 2 \\
   maxGeneration = 3 \\
-  maxEpoch = 2
+  maxEpoch = 2 \\
+  maxRestarts = 2
 \end{axdef}
 
 $kvTtlSeconds$ is the NATS KV TTL (3 days).
@@ -323,7 +341,9 @@ counts nats-py's transparent same-object reconnects rather than
 fresh dials; two is enough to exhibit a reconnect that completes
 \emph{after} a force-reconnect gate has observed the pre-reconnect
 value (gate epoch $0$, $reconnectEpoch = 1$), which is the whole
-of the biff-xko race.
+of the biff-xko race.  $maxRestarts$ bounds the watcher's supervisor
+restart counter for the same finiteness reason; two restarts exhibit a
+watcher that has been rebound more than once.
 
 %%----------------------------------------------------------------------
 \section{Connection State}
@@ -530,21 +550,6 @@ legitimate force-reconnect of a genuinely wedged client, which also
 lands in $disconnected$, from the spurious teardown of a healed one,
 since the two share an after-state and differ only in the transition
 that reached it.
-
-\begin{schema}{InitConnection}
-  Connection'
-  \where
-  connState' = disconnected \\
-  kvProvisioned' = zfalse \\
-  streamsProvisioned' = zfalse \\
-  namesProvisioned' = zfalse \\
-  wtmpAvailable' = zfalse \\
-  generation' = 0 \\
-  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, inboxNotifyCompanion \mapsto 0 \} \\
-  reconnectEpoch' = 0 \\
-  spuriousTeardown' = zfalse \\
-  epochPending' = zfalse
-\end{schema}
 
 %%----------------------------------------------------------------------
 \section{Connection Operations}
@@ -1379,10 +1384,9 @@ Sessions are a partial injection: each session key maps to
 exactly one value (the serialised $UserSession$).  $wallValue$
 is either empty (no wall) or a single mapping (active wall).
 Initially the store is empty: $sessions = \emptyset$ and
-$wallValue = \emptyset$.  There is no separate $InitSessionStore$
-schema: the model-checked state is the $Connection$ machine (see
-\S\ref{sec:modelcheck}), and the session store is exercised by
-the operations below only while $connState = connected$.
+$wallValue = \emptyset$.  The composed $Init$ (\S\ref{sec:composed}) sets it;
+the session store is exercised by the operations below only while
+$connState = connected$.
 
 \subsection{Update Session (Heartbeat / Login)}
 
@@ -1453,7 +1457,7 @@ and its supervisor \texttt{\_kv\_watcher\_loop}.
   shutdownRequested : ZBOOL \\
   restartCount : \nat
   \where
-  restartCount \leq 100 \\
+  restartCount \leq maxRestarts \\
   phase = stopped \implies shutdownRequested = ztrue
 \end{schema}
 
@@ -1461,8 +1465,8 @@ The watcher tracks its current phase, whether shutdown has been
 requested, and how many times the supervisor has restarted it.
 A stopped watcher implies shutdown was requested.  Initially the
 watcher is $idle$, with $shutdownRequested = zfalse$ and
-$restartCount = 0$.  As with the session store, there is no
-separate $InitWatcher$ schema; the watcher operations are enabled
+$restartCount = 0$ (the composed $Init$,
+\S\ref{sec:composed}).  The watcher operations are enabled
 only while $connState = connected$, which is consistent with the
 composed invariant $phase \neq idle \implies connState = connected$.
 
@@ -1549,6 +1553,7 @@ the supervisor and trigger a restart.
   phase \neq idle \\
   phase \neq stopped \\
   shutdownRequested = zfalse \\
+  restartCount < maxRestarts \\
   phase' = snapshotting \\
   shutdownRequested' = zfalse \\
   restartCount' = restartCount + 1
@@ -1576,6 +1581,7 @@ checks \texttt{shutdown.is\_set()} on every iteration.
 
 %%----------------------------------------------------------------------
 \section{Composed System State}
+\label{sec:composed}
 %%----------------------------------------------------------------------
 
 \begin{schema}{NatsRelayState}
@@ -1596,14 +1602,35 @@ $phase = streaming \implies connState = connected$: a wedge
 streaming watcher, which is consistent --- a wedge manifests to
 the watcher as a $weError$ and drives it through $HandleError$.
 
-The composed initial state is: $connState = disconnected$ with no
-handles and no always-on subscription of any kind
-($subGen = \{ talk \mapsto 0, inboxNotify \mapsto 0, inboxNotifyCompanion \mapsto 0 \}$, $InitConnection$),
-an empty session store, and an $idle$ watcher.  $InitConnection$ is the sole initialisation schema so
-that the model checker explores the $Connection$ lifecycle as a
-single, well-posed state machine; the session and watcher
-components are exercised as connection-gated operations rather
-than as independent initial states (see \S\ref{sec:modelcheck}).
+\begin{schema}{Init}
+  NatsRelayState'
+  \where
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = 0 \\
+  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, inboxNotifyCompanion \mapsto 0, kvWatch \mapsto 0 \} \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = zfalse \\
+  epochPending' = zfalse \\
+  sessions' = \emptyset \\
+  wallValue' = \emptyset \\
+  phase' = idle \\
+  shutdownRequested' = zfalse \\
+  restartCount' = 0
+\end{schema}
+
+The composed initial state, $Init$, is: $connState = disconnected$ with no
+handles and no always-on subscription of any kind ($subGen$ maps every
+$SubKind$, $kvWatch$ included, to $0$), an empty session store, and an
+$idle$ watcher.  $Init$ is the sole initialisation schema and ranges over
+the whole $NatsRelayState$, so the model checker explores the $Connection$
+lifecycle, the session store and the $Watcher$ as one machine: the watcher
+operations are reachable, and the $kvWatch$ liveness formula of
+\S\ref{sec:modelcheck} is checked against states in which the watcher is
+actually running rather than merely stated.
 
 %%----------------------------------------------------------------------
 \section{Key Properties and Model Checking}
@@ -1752,11 +1779,13 @@ verified by model checking with probcli (\texttt{z-spec test}):
 
     CTL model checking is not itself parametric, so probcli checks the
     formula once per instance of $k$ rather than as a single quantified
-    query; all three instances are confirmed \textbf{TRUE}, $k = talk$
+    query; all four instances are confirmed \textbf{TRUE}, $k = talk$
     (the original biff-9la property, unchanged in substance), $k =
     inboxNotify$ (the biff-5ex obligation for a session's own user), and
     $k = inboxNotifyCompanion$ (the same obligation for a dual session's
-    companion user) --- and the restriction of any of the three to
+    companion user), and $k = kvWatch$ (the sessions-KV watcher, whose
+    omission from the family let a wedged watcher go undetected) --- and
+    the restriction of any of the four to
     $connState = connected$ is TRUE as well; only the terminal $closed$
     state, in which the connection is permanently shut down and carries
     no subscription obligation of any kind, is excluded.  The escape for
