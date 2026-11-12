@@ -1278,7 +1278,7 @@ dropped-client window.)
   \where
   connState = connected \\
   subGen(kind?) < generation \\
-  kind? \neq kvWatch \\
+  (kind? \neq kvWatch \lor subGen(kvWatch) = 0) \\
   subGen' = subGen \oplus \{ kind? \mapsto generation \} \\
   connState' = connState \\
   kvProvisioned' = kvProvisioned \\
@@ -1345,7 +1345,7 @@ modelled kinds, not a property this spec proves.
   \where
   connState = connected \\
   subGen(kind?) < generation \\
-  kind? \neq kvWatch
+  (kind? \neq kvWatch \lor subGen(kvWatch) = 0)
 \end{schema}
 
 A subscribe attempt can fail: \texttt{subscribe} returns without
