@@ -3,6 +3,7 @@
     ".beads/",
     ".claude/",
     ".punt-labs/ethos/",
+    ".punt-labs/local/",
     ".punt-labs/quarry/captures/",
     ".tmp/",
     ".venv/"
