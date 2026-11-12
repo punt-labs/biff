@@ -941,7 +941,12 @@ timed-out request blocks $\sim$5\,s, so the bound is $3 \times
 5\,\mathrm{s} \approx 15\,$s --- four to five times faster than the
 keepalive path.  It is modelled atomically because the still-wedged case
 has no interesting intermediate state: the socket the gate condemned is
-the socket under the lock.  Enabled unconditionally from $halfOpen$, it
+the socket under the lock.  The \emph{duration} of that step is not
+atomic: \texttt{safe\_close} runs while \texttt{\_connect\_lock} is held and
+is bounded by \texttt{\_TEARDOWN\_TIMEOUT}, so a close that hangs on a
+half-open socket cannot freeze the lock.  That interval is modelled, and
+the bound proved, in \texttt{nats-relay-teardown.tex}.  Enabled
+unconditionally from $halfOpen$, it
 is also the second escape from the wedge (with $WedgeDetected$), so
 $halfOpen$ is never terminal.
 
