@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from typer.testing import CliRunner
+
+if TYPE_CHECKING:
+    import pytest
 
 from biff.__main__ import app
 from biff.session_routing import SessionRouting
@@ -969,6 +973,104 @@ class TestRunStatusline:
         # Empty successful original → its empty output is used (not native segments)
         # but the empty segment is filtered out, leaving just biff
         assert "kai:tty1(0)" in result
+
+    def test_empty_stdin_falls_back_to_env_session_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no session JSON on stdin, resolve the session from the env.
+
+        Claude Code's statusLine pipes session JSON on stdin, but the
+        ``/biff:read`` mail gate invokes ``biff statusline < /dev/null`` with
+        no stdin at all. The session is still identifiable from
+        ``CLAUDE_CODE_SESSION_ID`` in the environment, which carries the same
+        value the server keys the unread file on. Without this fallback the
+        gate reads the generic enable hint for an enabled session and never
+        pulls mail.
+        """
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_session_unread(unread_dir, "kai", 3, "tty1")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SESSION_ID)
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = ""
+            result = run_statusline(stash_path, unread_dir)
+        assert "kai:tty1(3)" in result
+        assert "/biff enable" not in result
+
+    def test_stdin_session_id_wins_over_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stdin session JSON takes priority over the env fallback.
+
+        The env fallback is only for the empty-stdin case; when Claude Code
+        does pipe session JSON, that id is authoritative even if a stale
+        ``CLAUDE_CODE_SESSION_ID`` names a different session.
+        """
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_session_unread(unread_dir, "kai", 5, "tty1")
+        other = SessionRouting("some-other-session").unread_path(unread_dir)
+        other.write_text(json.dumps({"user": "eric", "count": 9, "tty_name": "tty2"}))
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "some-other-session")
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = _STDIN
+            result = run_statusline(stash_path, unread_dir)
+        assert "kai:tty1(5)" in result
+        assert "eric" not in result
+
+    def test_empty_stdin_and_no_env_shows_enable_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No stdin and no env var leaves the session unidentifiable.
+
+        The enable hint is the correct output here — there is genuinely no
+        session to resolve — and the command must not crash.
+        """
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_session_unread(unread_dir, "kai", 3, "tty1")
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = ""
+            result = run_statusline(stash_path, unread_dir)
+        assert "/biff enable" in result
+        assert "kai:tty1(3)" not in result
+
+    def test_empty_stdin_malformed_env_shows_enable_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A malformed env session id falls through to the enable hint.
+
+        ``SessionRouting`` rejects an id with path separators; the statusline
+        must log and degrade to the hint, never crash the status bar.
+        """
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_session_unread(unread_dir, "kai", 3, "tty1")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "../../etc/passwd")
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = ""
+            result = run_statusline(stash_path, unread_dir)
+        assert "/biff enable" in result
+
+    def test_empty_stdin_env_session_without_file_shows_enable_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid env session id with no unread file yields the enable hint.
+
+        The id is well-formed but names a session the server never wrote a
+        file for; ``read_session_unread`` returns ``None`` and the segment is
+        the hint, with no crash.
+        """
+        stash_path = tmp_path / "stash.json"
+        unread_dir = tmp_path / "unread"
+        _write_session_unread(unread_dir, "kai", 3, "tty1")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "a-session-with-no-file")
+        with patch("biff.statusline.sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = ""
+            result = run_statusline(stash_path, unread_dir)
+        assert "/biff enable" in result
+        assert "kai:tty1(3)" not in result
 
 
 # --- CLI integration -------------------------------------------------------
