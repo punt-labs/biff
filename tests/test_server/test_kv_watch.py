@@ -83,6 +83,7 @@ class FakeNatsRelay:
     """Minimal mock of NatsRelay for _run_kv_watch."""
 
     kv: FakeKV
+    connection_generation: int = 1
 
     async def get_kv(self) -> FakeKV:
         return self.kv
@@ -279,3 +280,45 @@ class TestKvWatchSnapshotSurvival:
             timeout=2.0,
         )
         assert watcher.stopped
+
+
+class _GenerationBumpingWatcher(FakeWatcher):
+    """Watcher whose first poll advances the relay's dial generation.
+
+    Models ``_force_reconnect`` replacing the client the watch subscription
+    lives on: nats-py drops the subscription silently, so every later
+    ``updates()`` just times out, exactly like an idle bucket.
+    """
+
+    def __init__(self, relay: FakeNatsRelay, shutdown: asyncio.Event) -> None:
+        super().__init__([], shutdown)
+        self._relay = relay
+
+    async def updates(self, timeout: float = 5.0) -> FakeKVEntry | None:
+        self._relay.connection_generation += 1
+        raise TimeoutError("nats: timeout")
+
+
+class TestKvWatchGenerationReconcile:
+    """A watcher bound to a superseded client generation must rebind."""
+
+    async def test_returns_for_restart_when_generation_advances(
+        self, state: ServerState
+    ) -> None:
+        """``_run_kv_watch`` ends so the supervisor re-creates the watcher."""
+        shutdown = asyncio.Event()
+        fake_relay = FakeNatsRelay(kv=FakeKV(watcher=FakeWatcher([], shutdown)))
+        watcher = _GenerationBumpingWatcher(fake_relay, shutdown)
+        fake_relay.kv = FakeKV(watcher=watcher)
+
+        await asyncio.wait_for(
+            _run_kv_watch(
+                fake_relay,  # type: ignore[arg-type]
+                state,
+                shutdown,
+                {},
+            ),
+            timeout=2.0,
+        )
+
+        assert watcher.stopped, "stale watcher was not stopped"

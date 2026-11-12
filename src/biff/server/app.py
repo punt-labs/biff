@@ -456,8 +456,21 @@ async def _run_kv_watch(
     Stays alive during napping — the NATS connection is no longer
     released on idle.  This ensures wall changes and session events
     are detected in real-time regardless of activity state.
+
+    The watch is the ``kvWatch`` kind of ``SubKind`` in ``nats-relay.tex``
+    and obeys its ``Subscribe`` transition: the generation it is bound to
+    is recorded at ``watchall()``, and when the relay dials a new client
+    past it the cycle ends so the supervisor re-subscribes.  A client
+    replacement silently orphans the subscription, and an orphaned
+    watcher's ``updates()`` times out exactly like an idle bucket, so the
+    generation comparison is the only way to tell them apart.  An in-place
+    nats-py reconnect keeps the generation and replays the subscription,
+    so it is left alone.
     """
     kv = await relay.get_kv()
+    # Recorded before ``watchall()``: a dial racing the subscribe is seen as
+    # an advance and costs one spurious restart, never a missed one.
+    bound_generation = relay.connection_generation
     watcher = await kv.watchall()  # pyright: ignore[reportUnknownMemberType]
     try:
         # Use watcher.updates() instead of ``async for`` because nats.py's
@@ -466,6 +479,9 @@ async def _run_kv_watch(
         # where notifications can be missed before the restart loop
         # re-creates the watcher.
         while not shutdown.is_set():
+            if relay.connection_generation > bound_generation:
+                logger.info("KV watcher superseded by a new client; rebinding")
+                return
             try:
                 entry = await watcher.updates(timeout=5.0)  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
             except TimeoutError:
