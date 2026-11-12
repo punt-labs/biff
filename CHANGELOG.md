@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-11-11
+
 ### Changed
 
 - Caller identity is now **harness-declared**, not inferred (DES-064). biff
