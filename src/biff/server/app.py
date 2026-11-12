@@ -499,12 +499,17 @@ async def _run_kv_watch(
                 continue
             await _handle_kv_entry(entry, relay, state, cache)
     finally:
-        # Bound like safe_close: watcher.stop() sends UNSUB over the wire and
-        # ends in the same unbounded wait a half-open socket can stall. On the
-        # generation-advance rebind path the old client is already closed, so
-        # this usually hits a fast path — but leaving it unbounded would
-        # reintroduce, on the very path that cures the freeze, the stall it
-        # cures. The watcher is being discarded, so abandoning the stop is safe.
+        # Tear the watcher down best-effort. On the generation-advance rebind
+        # path the superseding dial has already closed the old client, so the
+        # UNSUB that watcher.stop() sends raises ConnectionClosedError — an
+        # expected failure, suppressed exactly as _reconcile_always_on_sub
+        # suppresses the orphaned-handle unsubscribe. The close is also bounded
+        # like safe_close: on a half-open socket the underlying wait can stall,
+        # and this runs where a hang would freeze the supervisor. Letting either
+        # the expected close error or a timeout escape would replace the
+        # intentional return with an exception, sending every healthy rebind
+        # through the supervisor's error branch (a 2s blind window). The watcher
+        # is being discarded, so abandoning the stop is safe.
         try:
             async with asyncio.timeout(_TEARDOWN_STEP_TIMEOUT):
                 await watcher.stop()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
@@ -513,6 +518,9 @@ async def _run_kv_watch(
                 "KV watcher stop did not finish within %.1fs — abandoning it",
                 _TEARDOWN_STEP_TIMEOUT,
             )
+        except Exception:  # noqa: BLE001
+            # Expected on the rebind path: UNSUB on an already-closed client.
+            logger.debug("KV watcher stop failed (client already closed)")
 
 
 async def _kv_watcher_loop(

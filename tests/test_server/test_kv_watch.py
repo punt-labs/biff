@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from nats.errors import ConnectionClosedError
 
 from biff.models import BiffConfig, UserSession
 from biff.server.app import _run_kv_watch
@@ -362,5 +363,46 @@ class TestKvWatchBoundedStop:
                 ),
                 timeout=2.0,
             )
+
+        assert watcher.stopped, "stop was never attempted"
+
+
+class _RaisingStopWatcher(_GenerationBumpingWatcher):
+    """Generation-advancing watcher whose ``stop()`` raises like a closed client.
+
+    Models the real rebind path: the superseding dial already closed the old
+    client, so nats-py's UNSUB raises ``ConnectionClosedError``. The finally
+    block must suppress that expected failure so the intentional ``return``
+    stands, rather than letting the exception divert the loop into the
+    supervisor's error branch (a mislabeled failure plus a 2s blind window).
+    """
+
+    async def stop(self) -> None:
+        self.stopped = True
+        raise ConnectionClosedError
+
+
+class TestKvWatchStopRaises:
+    """A ``stop()`` that raises on a closed client must not divert the return."""
+
+    async def test_returns_cleanly_when_stop_raises(self, state: ServerState) -> None:
+        """``_run_kv_watch`` returns (no exception escapes) when stop() raises.
+
+        Before the suppression this raised ``ConnectionClosedError`` out of the
+        finally, replacing the generation-advance return; the supervisor then
+        took its 2s error branch on every healthy rebind.
+        """
+        shutdown = asyncio.Event()
+        fake_relay = FakeNatsRelay(kv=FakeKV(watcher=FakeWatcher([], shutdown)))
+        watcher = _RaisingStopWatcher(fake_relay, shutdown)
+        fake_relay.kv = FakeKV(watcher=watcher)
+
+        # No exception should propagate — a bare await, not wait_for-for-hang.
+        await _run_kv_watch(
+            fake_relay,  # type: ignore[arg-type]
+            state,
+            shutdown,
+            {},
+        )
 
         assert watcher.stopped, "stop was never attempted"
