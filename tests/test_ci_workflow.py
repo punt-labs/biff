@@ -479,6 +479,93 @@ class TestRemoveCiWorkflow:
         assert outside.read_text() == "keep me"  # target untouched
 
 
+# ── externally-owned setup-uv pin ──────────────────────────────────
+
+_NEWER_SETUP_UV_SHA = "1234567890abcdef1234567890abcdef12345678"
+_NEWER_SETUP_UV_LINE = (
+    f"      - uses: astral-sh/setup-uv@{_NEWER_SETUP_UV_SHA} # v10.3.3"
+)
+
+
+def _setup_uv_line(text: str) -> str:
+    """Return the single ``setup-uv`` ``uses:`` line of a workflow."""
+    lines = [ln for ln in text.splitlines() if "astral-sh/setup-uv@" in ln]
+    assert len(lines) == 1
+    return lines[0]
+
+
+def _deploy_with_bumped_pin(repo: Path) -> Path:
+    """Deploy, then simulate Dependabot bumping setup-uv in the committed file."""
+    _write_workflow(repo, "ci.yml", "Tests")
+    deploy_ci_workflow(repo)
+    target = repo / ".github" / "workflows" / _WORKFLOW_NAME
+    bumped = target.read_text().replace(
+        _setup_uv_line(target.read_text()), _NEWER_SETUP_UV_LINE
+    )
+    target.write_text(bumped)
+    return target
+
+
+class TestSetupUvPinPreserved:
+    """Dependabot owns the ``setup-uv`` pin; biff never reverts it."""
+
+    def test_render_without_deployed_file_uses_template_pin(
+        self, tmp_path: Path
+    ) -> None:
+        rendered = NotifyWorkflow(_make_repo(tmp_path)).render()
+        assert f"setup-uv@{_LIVE_SETUP_UV_SHA}" in rendered
+
+    def test_render_keeps_deployed_pin_and_comment(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _deploy_with_bumped_pin(repo)
+        rendered = NotifyWorkflow(repo).render()
+        assert _setup_uv_line(rendered) == _NEWER_SETUP_UV_LINE
+        assert _LIVE_SETUP_UV_SHA not in rendered
+
+    def test_check_treats_bumped_pin_as_current(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _deploy_with_bumped_pin(repo)
+        assert check_ci_workflow(repo) is True
+
+    def test_deploy_leaves_bumped_pin_untouched(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        target = _deploy_with_bumped_pin(repo)
+        before = target.read_text()
+        assert deploy_ci_workflow(repo) is False
+        assert target.read_text() == before
+
+    def test_deploy_preserves_pin_while_updating_watched_list(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path)
+        target = _deploy_with_bumped_pin(repo)
+        _write_workflow(repo, "ci.yml", "Unit Tests")
+        assert check_ci_workflow(repo) is False
+        assert deploy_ci_workflow(repo) is True
+        text = target.read_text()
+        assert 'workflows: ["Unit Tests"]' in text
+        assert _setup_uv_line(text) == _NEWER_SETUP_UV_LINE
+
+    def test_unparseable_deployed_pin_falls_back_to_template(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path)
+        target = repo / ".github" / "workflows" / _WORKFLOW_NAME
+        target.parent.mkdir(parents=True)
+        target.write_text("      - uses: astral-sh/setup-uv@v10\n")
+        rendered = NotifyWorkflow(repo).render()
+        assert f"setup-uv@{_LIVE_SETUP_UV_SHA}" in rendered
+
+    def test_symlinked_deployed_file_is_not_read(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        outside = tmp_path / "outside.yml"
+        outside.write_text(_NEWER_SETUP_UV_LINE + "\n")
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / _WORKFLOW_NAME).symlink_to(outside)
+        assert _NEWER_SETUP_UV_SHA not in NotifyWorkflow(repo).render()
+
+
 # ── check_ci_workflow ──────────────────────────────────────────────
 
 

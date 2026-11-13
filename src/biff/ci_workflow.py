@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.resources
 import json
+import re
 from pathlib import Path
 from typing import Self, cast, final
 
@@ -28,6 +29,15 @@ _NOTIFY_WORKFLOW_NAME = "Biff CI Notifications"
 # repo -- the template value is a placeholder, never deposited verbatim.
 _WORKFLOWS_INDENT = "    "
 _WORKFLOWS_PLACEHOLDER = f"{_WORKFLOWS_INDENT}workflows: []  # BIFF_RENDER"
+
+# The ``astral-sh/setup-uv`` step's ``uses:`` line.  Dependabot bumps the
+# full-SHA pin (and its ``# vX.Y.Z`` comment) in each consumer repo, so the
+# render carries the DEPLOYED line over rather than reverting the bump to the
+# template's SHA.  Only a 40-hex SHA pin is treated as a Dependabot-owned pin;
+# anything else in the deployed file falls back to the template's line.
+_SETUP_UV_LINE = re.compile(
+    r"^[ \t]*-[ \t]+uses:[ \t]+astral-sh/setup-uv@[0-9a-f]{40}\b.*$", re.MULTILINE
+)
 
 # GitHub Actions reads workflows with either extension.
 _WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
@@ -80,7 +90,44 @@ class NotifyWorkflow:
                 "template and _WORKFLOWS_PLACEHOLDER have drifted. Refusing to "
                 "deposit a workflow that would watch nothing."
             )
-        return template.replace(_WORKFLOWS_PLACEHOLDER, self._workflows_block())
+        rendered = template.replace(_WORKFLOWS_PLACEHOLDER, self._workflows_block())
+        return self._with_deployed_setup_uv(rendered)
+
+    def _with_deployed_setup_uv(self, rendered: str) -> str:
+        """Graft the deployed ``setup-uv`` pin onto ``rendered``.
+
+        The one line in the file another system (Dependabot) maintains.  A
+        repo with no deployed file, or none carrying a SHA pin, keeps the
+        template's default.  Everything else in the render stays deterministic.
+        """
+        deployed = self._deployed_setup_uv_line()
+        if deployed is None:
+            return rendered
+        # A function replacement: the deployed line is data, not a regex template.
+        return _SETUP_UV_LINE.sub(lambda _m: deployed, rendered, count=1)
+
+    def _deployed_setup_uv_line(self) -> str | None:
+        """Return the deployed file's ``setup-uv`` line, or ``None`` if absent.
+
+        ``None`` is the contract for "nothing to preserve" (first deploy, an
+        unreadable file, or no SHA-pinned line): the template default applies.
+        Never follows a symlinked ``.github``, ``.github/workflows``, or
+        workflow file -- the read must stay inside the repo, matching the
+        write path's guards.
+        """
+        github_dir = self._root / ".github"
+        workflows_dir = github_dir / "workflows"
+        target = workflows_dir / _WORKFLOW_NAME
+        if github_dir.is_symlink() or workflows_dir.is_symlink():
+            return None
+        if not is_regular_file(target):
+            return None
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        match = _SETUP_UV_LINE.search(text)
+        return match.group(0) if match else None
 
     def _workflows_block(self) -> str:
         """Render the ``workflows:`` line (with a comment when nothing to watch)."""
