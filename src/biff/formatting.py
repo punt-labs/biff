@@ -304,6 +304,9 @@ WHO_SPECS: list[ColumnSpec] = [
 ]
 
 
+WHO_REPORTS_SPEC = ColumnSpec("REPORTS", min_width=7)
+
+
 def _format_who_name(s: UserSession) -> str:
     """Render a session as a copy-pasteable address for ``/write``.
 
@@ -324,28 +327,23 @@ def _format_who_kind(s: UserSession) -> str:
 
 
 def _format_who_reports_to(s: UserSession) -> str:
-    """Render the manager label, e.g. ``(reports to ceo)``; empty when none.
+    """Render the manager role for the REPORTS column; ``-`` when none.
 
     The role comes from team YAML on the owner's disk and travels on the
     session row, so it is repo-controlled text: neutralised and clipped
     like every other fixed-column cell.
     """
     role = _truncate(terminal_safe(s.reports_to)[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
-    return f"(reports to {role})" if role else ""
-
-
-def _format_who_name_cell(s: UserSession) -> str:
-    """Compose the NAME cell: the address, then the manager label if any."""
-    return " ".join(
-        part for part in (_format_who_name(s), _format_who_reports_to(s)) if part
-    )
+    return role or "-"
 
 
 def format_who(sessions: list[UserSession]) -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
-    The NAME column renders ``user:tty`` so agents can copy the
-    address directly into ``/write``.  P column shows ``+`` if the
+    The NAME column renders exactly ``user:tty`` so agents can copy the
+    address directly into ``/write``; the manager role lives in its own
+    trailing REPORTS column, shown only when some row carries one.
+    P column shows ``+`` if the
     session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.
 
@@ -354,19 +352,22 @@ def format_who(sessions: list[UserSession]) -> str:
     same reason :func:`_format_who_name` routes through
     :func:`sanitized_address`.
     """
+    show_reports = any(s.reports_to for s in sessions)
     rows: list[list[str]] = [
         [
-            _format_who_name_cell(s),
+            _format_who_name(s),
             _format_who_kind(s),
             display_repo_name(s.repo) or "-",
             format_idle(s.last_tool_at),
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
             _truncate(terminal_safe(s.hostname), _MAX_LABEL_WIDTH) or "-",
+            *([_format_who_reports_to(s)] if show_reports else []),
         ]
         for s in sessions
     ]
-    return format_table(WHO_SPECS, rows)
+    specs = [*WHO_SPECS, WHO_REPORTS_SPEC] if show_reports else WHO_SPECS
+    return format_table(specs, rows)
 
 
 def format_dead_footnote(dead: list[UserSession]) -> str:

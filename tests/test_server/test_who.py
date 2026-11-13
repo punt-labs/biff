@@ -38,7 +38,9 @@ async def _who(tmp_path: Path, reports_to: str) -> str:
 
 
 async def test_who_shows_the_manager_label(tmp_path: Path) -> None:
-    assert "(reports to ceo)" in await _who(tmp_path, "ceo")
+    out = await _who(tmp_path, "ceo")
+    assert "REPORTS" in out
+    assert "ceo" in out
 
 
 @pytest.mark.parametrize("empty", [""])
@@ -47,4 +49,4 @@ async def test_who_without_a_manager_has_no_label_and_no_error(
 ) -> None:
     out = await _who(tmp_path, empty)
     assert "claude:" in out
-    assert "reports to" not in out
+    assert "REPORTS" not in out
