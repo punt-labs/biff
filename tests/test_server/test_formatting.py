@@ -15,8 +15,8 @@ from biff._formatting import (
     visible_width,
     wrap_cells,
 )
-from biff.formatting import format_read
-from biff.models import Message
+from biff.formatting import format_read, format_who
+from biff.models import Message, UserSession
 
 
 class TestFormatIdle:
@@ -392,3 +392,61 @@ class TestFormatReadFromTty:
         data_lines = [line for line in lines[1:] if "kai" in line]
         assert data_lines
         assert "kai:" not in data_lines[0]
+
+
+class TestWhoManagerLabel:
+    def _row(self, reports_to: str) -> UserSession:
+        return UserSession(
+            user="claude",
+            tty="abcd1234",
+            tty_name="tty9",
+            kind="agent",
+            reports_to=reports_to,
+            last_active=datetime.now(UTC),
+        )
+
+    def test_label_is_its_own_column_not_part_of_the_name(self) -> None:
+        lines = format_who([self._row("ceo")]).splitlines()
+        assert "REPORTS" in lines[0].split()
+        assert lines[1].split()[0] == "claude:tty9"
+        assert lines[1].split()[-1] == "ceo"
+
+    def test_labelled_name_round_trips_through_address_resolution(self) -> None:
+        from biff.server.tools._session import resolve_tty_name
+        from biff.tty import parse_address
+
+        row = self._row("ceo")
+        name = format_who([row]).splitlines()[1].split()[0]
+        user, tty = parse_address(name)
+        assert tty is not None
+        assert resolve_tty_name([row], user, tty) is row
+
+    def test_no_label_table_is_byte_for_byte_the_old_output(self) -> None:
+        row = UserSession(
+            user="claude",
+            tty="abcd1234",
+            tty_name="tty9",
+            kind="agent",
+            repo="biff",
+            hostname="h",
+            last_active=datetime.now(UTC),
+            last_tool_at=datetime.now(UTC),
+        )
+        lines = format_who([row]).splitlines()
+        assert lines[1].split() == ["claude:tty9", "[A]", "biff", "0m", "+", "-", "h"]
+        assert "reports" not in lines[1]
+        assert "(" not in lines[1]
+        assert lines[1] == "   claude:tty9  [A]  biff  0m    +  -  h   "
+
+    def test_row_from_before_the_field_renders_as_without_it(self) -> None:
+        row = self._row("")
+        data = row.model_dump(mode="json")
+        del data["reports_to"]
+        old = UserSession.model_validate(data)
+        assert format_who([old]) == format_who([row])
+
+    def test_overlong_role_is_clipped(self) -> None:
+        out = format_who([self._row("r" * 200)])
+        assert "r" * 100 not in out
+        assert "r" * 30 in out
+        assert max(len(line) for line in out.splitlines()) < 200

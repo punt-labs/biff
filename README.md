@@ -104,6 +104,8 @@ sh install.sh
 
 `S` is message status: `+` means accepting messages, `-` means do not disturb.
 
+An agent whose repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`) also gets a trailing `REPORTS` column naming the role it reports to, for example `ceo`; the `NAME` column stays a copy-pasteable `user:tty`. The value is a role, not a person, and is omitted when the team data names no manager.
+
 ### Send a message
 
 ```text

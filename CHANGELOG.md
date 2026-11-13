@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `/who` shows `(reports to <role>)` beside an agent's name, resolved from the
+  repo's ethos team YAML on disk (the `reports_to` collaboration edge of the
+  agent's role). No live session lookup and no second session. A repo without
+  team data, or an agent with no manager, shows the row unchanged (PL-231).
+
 ### Removed
 
 - The dual-session "companion" machinery (DES-039/DES-040/DES-043), broken

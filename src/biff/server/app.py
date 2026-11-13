@@ -1330,6 +1330,7 @@ class _LiveSession:
             hostname=state.hostname,
             pwd=state.pwd,
             repo=state.config.repo_name,
+            reports_to=state.config.reports_to,
             on_claim=self.registered_names.append,
         )
         set_tty_name(final_name)

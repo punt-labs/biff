@@ -52,6 +52,7 @@ async def register_session(
     hostname: str,
     pwd: str,
     repo: str,
+    reports_to: str = "",
     preferred_name: str | None = None,
     on_claim: Callable[[str], None] = lambda _name: None,
 ) -> tuple[UserSession, str]:
@@ -146,6 +147,7 @@ async def register_session(
         hostname=hostname,
         pwd=pwd,
         repo=repo,
+        reports_to=reports_to,
         last_active=registered_at,
         last_tool_at=registered_at,
     )

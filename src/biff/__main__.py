@@ -47,9 +47,11 @@ from biff.commands import CommandResult
 from biff.commands._session import update_current_session
 from biff.config import (
     find_git_root,
+    get_repo_slug,
     is_enabled,
     load_mcp_config,
 )
+from biff.ethos_team import EthosTeams
 from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
 from biff.nats_relay import NatsRelay
@@ -1252,8 +1254,18 @@ def _create_mcp_server(
     # The session is unknown until the first call declares it: the SessionStart
     # hook has already opened the durable record, and the server binds its
     # routing key and unread file to the caller's session_id on that call.
+    config = resolved.config
+    if resolved.repo_root is not None:
+        try:
+            manager = EthosTeams.from_repo(
+                resolved.repo_root, get_repo_slug(resolved.repo_root) or ""
+            ).manager_of(config.user)
+        except LookupError:
+            pass  # no team data or no manager: the row carries no label
+        else:
+            config = config.model_copy(update={"reports_to": manager})
     state = create_state(
-        resolved.config,
+        config,
         resolved.data_dir,
         unread_dir=UNREAD_DIR,
         dormant=dormant,
