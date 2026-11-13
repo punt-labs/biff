@@ -10,7 +10,7 @@ import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
@@ -706,15 +706,17 @@ class TestInstallLeavesRepoAlone:
         def has_claude(_cmd: str) -> str | None:
             return "/usr/bin/claude"
 
-        real_run = subprocess.run
-
         def plugin_ok(
-            cmd: list[str], **kwargs: Any
+            cmd: list[str], **_kwargs: object
         ) -> subprocess.CompletedProcess[bytes]:
-            # Stub only the marketplace call; git keeps running for real.
-            if cmd[0] == "/usr/bin/claude":
-                return subprocess.CompletedProcess(cmd, 0)
-            return cast("subprocess.CompletedProcess[bytes]", real_run(cmd, **kwargs))
+            # install's only subprocess call is the marketplace plugin install
+            # (`claude plugin install ... --scope user`, passed check=False); it
+            # no longer shells out to git (PL-994 removed the hook deploy). The
+            # stub ignores the call's kwargs — nothing is forwarded to a real
+            # command — so any other command is unexpected and fails loudly.
+            if cmd[0] != "/usr/bin/claude":
+                raise AssertionError(f"unexpected subprocess call: {cmd!r}")
+            return subprocess.CompletedProcess(cmd, 0)
 
         def repo_root(_start: Path | None = None) -> Path:
             return repo
