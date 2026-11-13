@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Self, cast, final
 
@@ -23,35 +23,39 @@ _REPORTS_TO = "reports_to"
 
 @final
 class EthosTeams:
-    """The role graph read from ``.punt-labs/ethos/teams/*.yaml``.
+    """The role graphs read from ``.punt-labs/ethos/teams/*.yaml``.
 
-    Maps an identity handle to its role, and a role to the role it
-    reports to.  The answer is a role name (``"ceo"``), never a person:
-    a role can have several holders.
+    One graph per team: it maps an identity handle to its role, and a role
+    to the role it reports to.  Roles are shared names across teams, so a
+    handle is only ever resolved through the team it is a member of.  The
+    answer is a role name (``"ceo"``), never a person: a role can have
+    several holders.
     """
 
-    __slots__ = ("_reports_to", "_roles")
+    __slots__ = ("_teams",)
 
-    _roles: dict[str, str]
-    _reports_to: dict[str, str]
+    _teams: tuple[tuple[dict[str, str], dict[str, str]], ...]
 
-    def __new__(cls, roles: Mapping[str, str], reports_to: Mapping[str, str]) -> Self:
+    def __new__(
+        cls, teams: Iterable[tuple[Mapping[str, str], Mapping[str, str]]]
+    ) -> Self:
         self = super().__new__(cls)
-        self._roles = dict(roles)
-        self._reports_to = dict(reports_to)
+        self._teams = tuple((dict(roles), dict(edges)) for roles, edges in teams)
         return self
 
     @classmethod
-    def from_repo(cls, repo_root: Path) -> Self:
-        """Read every team file under *repo_root*; bad input is skipped.
+    def from_repo(cls, repo_root: Path, repo_slug: str) -> Self:
+        """Read the team files under *repo_root* that select *repo_slug*.
 
-        Never raises: a missing directory, unreadable or malformed file,
-        non-dict document, or malformed entry contributes nothing.  Files
-        are read in sorted order and the first team to mention a handle
-        (or a role's edge) wins, so the result is deterministic.
+        Mirrors ethos: a team applies to a repository only when its
+        ``repositories`` list names the ``owner/repo`` slug exactly, so a
+        team with no list is never selected.  Never raises: a missing
+        directory, unreadable or malformed file, non-dict document, or
+        malformed entry contributes nothing.  Files are read in sorted
+        order and the first selected team that resolves a handle wins, so
+        the result is deterministic.
         """
-        roles: dict[str, str] = {}
-        edges: dict[str, str] = {}
+        teams: list[tuple[dict[str, str], dict[str, str]]] = []
         teams_dir = repo_root / ".punt-labs" / "ethos" / "teams"
         try:
             paths = sorted(teams_dir.glob("*.yaml"))
@@ -63,19 +67,32 @@ class EthosTeams:
             except yaml.YAMLError:
                 logger.warning("Skipping malformed team file %s", path)
                 continue
+            if not cls._selects(doc.get("repositories"), repo_slug):
+                continue
+            roles: dict[str, str] = {}
             for handle, role in cls._members(doc.get("members")):
                 roles.setdefault(handle, role)
+            edges: dict[str, str] = {}
             for src, dst in cls._edges(doc.get("collaborations")):
                 edges.setdefault(src, dst)
-        return cls(roles, edges)
+            teams.append((roles, edges))
+        return cls(teams)
 
     def manager_of(self, handle: str) -> str:
         """Return the manager role for *handle*; raise LookupError when none."""
-        try:
-            return self._reports_to[self._roles[handle]]
-        except KeyError:
-            msg = f"no manager for {handle!r}"
-            raise LookupError(msg) from None
+        for roles, edges in self._teams:
+            manager = edges.get(roles.get(handle, ""))
+            if manager:
+                return manager
+        msg = f"no manager for {handle!r}"
+        raise LookupError(msg)
+
+    @staticmethod
+    def _selects(raw: object, repo_slug: str) -> bool:
+        """Return whether the ``repositories`` list *raw* names *repo_slug*."""
+        if not isinstance(raw, list):
+            return False
+        return repo_slug in cast("list[object]", raw)
 
     @staticmethod
     def _entries(raw: object) -> list[dict[str, object]]:

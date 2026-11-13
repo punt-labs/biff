@@ -242,6 +242,8 @@ class TestCliSessionLifecycle:
         teams = tmp_path / ".punt-labs" / "ethos" / "teams"
         teams.mkdir(parents=True)
         (teams / "engineering.yaml").write_text(
+            "repositories:\n"
+            "  - punt-labs/biff\n"
             "members:\n"
             "  - identity: kai\n"
             "    role: python-specialist\n"
@@ -262,6 +264,7 @@ class TestCliSessionLifecycle:
         )
         with (
             patch("biff.cli_session.load_cli_config", return_value=resolved),
+            patch("biff.cli_session.get_repo_slug", return_value="punt-labs/biff"),
             patch("biff.cli_session.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session() as _ctx:

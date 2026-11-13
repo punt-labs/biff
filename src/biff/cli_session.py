@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from biff.config import load_cli_config
+from biff.config import get_repo_slug, load_cli_config
 from biff.ethos_team import EthosTeams
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.nats_relay import NatsRelay
@@ -188,7 +188,9 @@ async def cli_session(
     config = resolved.config
     if resolved.repo_root is not None:
         try:
-            manager = EthosTeams.from_repo(resolved.repo_root).manager_of(config.user)
+            manager = EthosTeams.from_repo(
+                resolved.repo_root, get_repo_slug(resolved.repo_root) or ""
+            ).manager_of(config.user)
         except LookupError:
             pass  # no team data or no manager: the row carries no label
         else:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from biff._stdlib import get_repo_slug
 from biff.ethos_team import EthosTeams
 from biff.models import BiffConfig, UnreadSummary
 from biff.relay import Relay
@@ -95,7 +96,9 @@ async def open_session_from_payload(
     config = resolved.config
     if resolved.repo_root is not None:
         try:
-            manager = EthosTeams.from_repo(resolved.repo_root).manager_of(config.user)
+            manager = EthosTeams.from_repo(
+                resolved.repo_root, get_repo_slug(resolved.repo_root) or ""
+            ).manager_of(config.user)
         except LookupError:
             pass  # no team data or no manager: the row carries no label
         else:

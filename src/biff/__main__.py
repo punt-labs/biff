@@ -47,6 +47,7 @@ from biff.commands import CommandResult
 from biff.commands._session import update_current_session
 from biff.config import (
     find_git_root,
+    get_repo_slug,
     is_enabled,
     load_mcp_config,
 )
@@ -1256,7 +1257,9 @@ def _create_mcp_server(
     config = resolved.config
     if resolved.repo_root is not None:
         try:
-            manager = EthosTeams.from_repo(resolved.repo_root).manager_of(config.user)
+            manager = EthosTeams.from_repo(
+                resolved.repo_root, get_repo_slug(resolved.repo_root) or ""
+            ).manager_of(config.user)
         except LookupError:
             pass  # no team data or no manager: the row carries no label
         else:
