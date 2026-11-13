@@ -323,6 +323,24 @@ def _format_who_kind(s: UserSession) -> str:
     return ""
 
 
+def _format_who_reports_to(s: UserSession) -> str:
+    """Render the manager label, e.g. ``(reports to ceo)``; empty when none.
+
+    The role comes from team YAML on the owner's disk and travels on the
+    session row, so it is repo-controlled text: neutralised and clipped
+    like every other fixed-column cell.
+    """
+    role = _truncate(terminal_safe(s.reports_to)[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
+    return f"(reports to {role})" if role else ""
+
+
+def _format_who_name_cell(s: UserSession) -> str:
+    """Compose the NAME cell: the address, then the manager label if any."""
+    return " ".join(
+        part for part in (_format_who_name(s), _format_who_reports_to(s)) if part
+    )
+
+
 def format_who(sessions: list[UserSession]) -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
@@ -338,7 +356,7 @@ def format_who(sessions: list[UserSession]) -> str:
     """
     rows: list[list[str]] = [
         [
-            _format_who_name(s),
+            _format_who_name_cell(s),
             _format_who_kind(s),
             display_repo_name(s.repo) or "-",
             format_idle(s.last_tool_at),

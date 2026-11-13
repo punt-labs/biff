@@ -75,6 +75,7 @@ async def get_or_create_session(state: ServerState) -> UserSession:
             display_name=state.config.display_name,
             kind=state.config.kind,
             repo=state.config.repo_name,
+            reports_to=state.config.reports_to,
         )
         await state.relay.update_session(session)
     else:
