@@ -9,11 +9,9 @@ defect was a narrow window between a first KV write (empty tty_name)
 and a second KV write (populated tty_name) where a NATS I/O error
 could leave a half-formed row behind.  ``LocalRelay`` writes to an
 in-memory dict and cannot fail between the two calls, so the v1.8.0
-bug could not have failed these tests.
-
-The actual regression guard for the two-write pattern lives at
-``tests/test_nats_e2e/test_dual_session_lifespan.py`` (tier-3b) where
-real NATS I/O can fail between writes.
+bug could not have failed these tests.  A regression guard for the
+two-write pattern needs a tier-3b test against real NATS I/O that can
+fail between writes.
 """
 
 from __future__ import annotations
