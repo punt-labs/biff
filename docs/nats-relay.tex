@@ -1845,29 +1845,33 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %%
 %% The CTL property of the liveness item above is not parametric in
 %% probcli, so it is run once per SubKind instance.  Run from the repo
-%% root; PROBCLI is ~/Applications/ProB/probcli.  Each prints
-%% "CTL Formula TRUE." for the shipped spec.  Measured on the three-kind
-%% model: 63,363 states / 591,031 transitions at DEFAULT_SETSIZE 1;
-%% 554,404 states / 6,314,917 transitions at DEFAULT_SETSIZE 2
-%% (make prob SPEC=docs/nats-relay.tex PROB_SETSIZE=2).
+%% root.  PROBCLI defaults to ~/Applications/ProB/probcli (the Makefile
+%% default); override it to point elsewhere.  probcli is not assumed to be
+%% on PATH.  Each run prints "CTL Formula TRUE." for the shipped spec.
+%% Measured on the three-kind model: 63,363 states / 591,031 transitions
+%% at DEFAULT_SETSIZE 1; 554,404 states / 6,314,917 transitions at
+%% DEFAULT_SETSIZE 2 (make prob SPEC=docs/nats-relay.tex PROB_SETSIZE=2).
 %%
+%%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
 %%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 4 -p MAX_INITIALISATIONS 100 \
 %%      -p MAX_OPERATIONS 5000 -model_check"
 %%   for K in talk inboxNotify kvWatch; do
-%%     probcli docs/nats-relay.tex $P -ctlformula \
+%%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
 %%       "AG({connState/=closed & subGen($K)<generation} => EF {subGen($K)=generation})"
 %%   done
 %%
 %% The restriction to connState = connected (same three kinds):
 %%
-%%   probcli docs/nats-relay.tex $P -ctlformula \
-%%     "AG({connState=connected & subGen($K)<generation} => EF {subGen($K)=generation})"
+%%   for K in talk inboxNotify kvWatch; do
+%%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
+%%       "AG({connState=connected & subGen($K)<generation} => EF {subGen($K)=generation})"
+%%   done
 %%
 %% Negative controls, each of which must report a counterexample:
 %%
 %%   (a) kvWatch, against the frozen variant that removes Subscribe and
 %%       SubscribeRetry for that kind alone (counterexample of length 24):
-%%       probcli docs/nats-relay-kvwatch-noreconcile.tex $P -ctlformula \
+%%       "$PROBCLI" docs/nats-relay-kvwatch-noreconcile.tex $P -ctlformula \
 %%         "AG({connState/=closed & subGen(kvWatch)<generation} => EF {subGen(kvWatch)=generation})"
 %%
 %%   (b) talk, against a copy of this file whose Subscribe guard gains
@@ -1876,7 +1880,7 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %%       "re-subscribe only when never subscribed" condition
 %%       (counterexample of length 18, ending in EnsureConnected at
 %%       generation = 3 with subGen(talk) = 2):
-%%       probcli <copy>.tex $P -ctlformula \
+%%       "$PROBCLI" <copy>.tex $P -ctlformula \
 %%         "AG({connState/=closed & subGen(talk)<generation} => EF {subGen(talk)=generation})"
 %%----------------------------------------------------------------------
 
