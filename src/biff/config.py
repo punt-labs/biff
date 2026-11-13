@@ -585,7 +585,7 @@ def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
 # ── YAML config pipeline ───────────────────────────────────────────
 
 
-def _load_yaml(path: Path) -> dict[str, object]:
+def load_yaml(path: Path) -> dict[str, object]:
     """Load a YAML file and return a dict, or ``{}`` on error.
 
     Catches ``OSError`` (permissions, TOCTOU race) and
@@ -607,7 +607,7 @@ def load_yaml_config(repo_root: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
-        return _load_yaml(path)
+        return load_yaml(path)
     except yaml.YAMLError as exc:
         raise SystemExit(
             f"Failed to parse {path}:\n{exc}\n"
@@ -621,7 +621,7 @@ def load_yaml_local(repo_root: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
-        return _load_yaml(path)
+        return load_yaml(path)
     except yaml.YAMLError:
         return {}
 
