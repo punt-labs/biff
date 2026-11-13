@@ -228,6 +228,49 @@ class TestCliSessionLifecycle:
         assert len(logout_calls) == 0
 
     @pytest.mark.anyio()
+    async def test_registered_row_carries_manager_label(
+        self, mock_relay: AsyncMock, tmp_path: Path
+    ) -> None:
+        """A CLI-registered row carries reports_to from team data (PL-231).
+
+        The MCP server and the SessionStart hook resolve the manager label;
+        the CLI registration path must too, or a CLI-registered agent's /who
+        row silently drops the label.
+        """
+        from biff.config import ResolvedConfig
+
+        teams = tmp_path / ".punt-labs" / "ethos" / "teams"
+        teams.mkdir(parents=True)
+        (teams / "engineering.yaml").write_text(
+            "members:\n"
+            "  - identity: kai\n"
+            "    role: python-specialist\n"
+            "collaborations:\n"
+            "  - from: python-specialist\n"
+            "    to: coo\n"
+            "    type: reports_to\n"
+        )
+        resolved = ResolvedConfig(
+            config=BiffConfig(
+                user="kai",
+                repo_name="test",
+                relay_url="nats://localhost:4222",
+            ),
+            data_dir=tmp_path,
+            repo_root=tmp_path,
+            repo_common_root=tmp_path,
+        )
+        with (
+            patch("biff.cli_session.load_cli_config", return_value=resolved),
+            patch("biff.cli_session.NatsRelay", return_value=mock_relay),
+        ):
+            async with cli_session() as _ctx:
+                pass
+
+        registered = mock_relay.update_session.call_args_list[0][0][0]
+        assert registered.reports_to == "coo"
+
+    @pytest.mark.anyio()
     async def test_no_relay_url_raises(self, tmp_path: Path) -> None:
         from biff.config import ResolvedConfig
 
