@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- A long-lived server's NATS KV watcher no longer wedges after a forced
+  reconnect. When the relay dialed a new client, `safe_close` tore down the
+  old client the watcher's subscription lived on; nats-py silently dropped the
+  subscription and the connection generation advanced, leaving the watcher
+  stranded — it kept timing out on a dead subscription instead of rebinding, so
+  wall (and any KV-driven) updates froze on that session's status bar for the
+  life of the process. The watcher now records the connection generation when
+  it binds and rebinds when the generation advances, mirroring the periodic
+  subscription reconciler. A second cause is also fixed: `safe_close`'s client
+  close is bounded with a timeout, so a hung teardown held under the connect
+  lock can no longer freeze the poller and heartbeat. The connection-lifecycle
+  Z model (`docs/nats-relay.tex`) now carries the KV watcher as a reconciled
+  subscription kind, and the fix is proven by ProB — the wedge is a reachable
+  counterexample in the unreconciled variant and liveness holds in the fixed
+  spec.
 - `biff statusline` now resolves the session from `CLAUDE_CODE_SESSION_ID`
   when stdin carries no session JSON. The `/biff:read` mail gate runs
   `biff statusline < /dev/null`, which left the command unable to identify the
