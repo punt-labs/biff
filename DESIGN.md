@@ -4363,16 +4363,17 @@ Consequences, now normative:
 ## DES-039: Dual-Session Registration via Ethos Roster
 
 **Date:** 2026-04-14
-**Status:** DEPRECATED — superseded in part by DES-040 (biff-8fg3) and now fully
-by DES-064. The companion/roster read via the `ethos session roster` subprocess
-is removed with the rest of the ethos-CLI identity dependency; companion
-presence, when reintroduced, derives from the harness-declared caller. Kept as
-history.
+**Status:** SUPERSEDED by DES-075 (PL-231). The ethos-roster subprocess went
+first in DES-064; DES-075 then removed the remaining dual-session companion
+machinery outright (the second session row, its TTY/KV/NATS subscriptions, and
+the companion branches in the server lifecycle) and replaced the intent with a
+static "reports to MANAGER" label on `/who`. The companion is not reintroduced.
+Kept as history.
 **Topic:** Registering both human and agent as separate biff sessions
 **Related:** DES-002 (session key format), DES-009 (identity),
 DES-030 (multi-agent coordination), DES-035 (TTY name reservation),
 DES-040 (agent-first identity),
-`docs/ethos-integration.md`, `docs/dual-session.md`
+`docs/ethos-integration.md`, `docs/archive/dual-session.md`
 
 **Note (biff-8fg3, 2026-05-10):** Decision 5 ("Roster read once at
 startup") is superseded by DES-040. The companion is no longer
@@ -4474,7 +4475,7 @@ that does not preclude the process tree.
 
 ### Full Spec
 
-See `docs/dual-session.md` for the complete design including message
+See `docs/archive/dual-session.md` for the complete design including message
 routing, edge cases, implementation sequence, and file change list.
 
 ## DES-040: Agent-First Identity Resolution
@@ -4484,13 +4485,16 @@ routing, edge cases, implementation sequence, and file change list.
 (question A: who is the agent of this repo) stands and is the foundation DES-064
 builds on. The `get_ethos_roster` / `get_ethos_team` CLI calls this ADR left in
 place for team/companion enrichment are removed by DES-064; *caller* identity
-(question B) moves to the harness-declared channel.
+(question B) moves to the harness-declared channel. The companion half of this
+ADR is superseded by DES-075 (PL-231), which removed the dual-session machinery;
+the disk-based agent identity is untouched and DES-075's `/who` manager label
+builds on it.
 **Topic:** Primary identity from disk; companion deferred to heartbeat
 **Bead:** biff-8fg3
 **Related:** DES-009 (identity — GitHub login), DES-039 (dual-session
 registration), DES-053 (bot-GitHub-login rejection),
-`docs/spec-agent-first-identity.md`,
-`docs/agent-first-identity.md`
+`docs/archive/spec-agent-first-identity.md`,
+`docs/archive/agent-first-identity.md`
 
 ### Context
 
@@ -4611,8 +4615,8 @@ correct and adds at most 60s of latency to companion registration.
 
 ### Full Spec
 
-See ``docs/spec-agent-first-identity.md`` for the formal spec,
-``docs/agent-first-identity.md`` for the change plan, and the
+See ``docs/archive/spec-agent-first-identity.md`` for the formal spec,
+``docs/archive/agent-first-identity.md`` for the change plan, and the
 six commits referenced by biff-8fg3 for the implementation.
 
 ---
@@ -4924,7 +4928,10 @@ review.
 ## DES-043: Session-Scoped Talk — Talk Made Dual-Session-Aware
 
 **Date:** 2026-07-04
-**Status:** SETTLED
+**Status:** SETTLED. Unchanged by DES-075 (PL-231): the companion shadow no
+longer exists, but the session-scoping decision never depended on it — the
+`@user` ambiguity argument stands with a REPL and several agent sessions. The
+"Dual-Session-Aware" title is kept as the historical name.
 **Topic:** Talk targets a specific session (``user:tty``), never a bare
 user; broadcast belongs to ``/wall``
 **Bead:** biff-sqc
@@ -7354,8 +7361,13 @@ changes), DES-030 (bare-user addressing is repo-local), DES-036/DES-038
 (`MarkerConsistent`), DES-047 (`talkSubGen` generation guard — the template the
 second SUB generalizes), DES-048 (identity routing is for targeted delivery),
 DES-061 (`_pending_notify` re-arm / one lock / bounded send — untouched),
-`docs/design-nats-push.md` (the full design), `docs/nats-relay.tex`,
+`docs/archive/design-nats-push.md` (the full design), `docs/nats-relay.tex`,
 `docs/notification.tex`
+
+**Note (DES-075, PL-231):** the companion subscription variants described below
+are removed with the dual-session machinery; the `inboxNotifyCompanion`
+`SubKind` is gone from `nats-relay.tex`. The wake-poke design is otherwise
+unchanged.
 
 ### Problem
 
@@ -7887,3 +7899,77 @@ gated on their harness plugins (biff-bhfj, biff-lt0v) — the engine-side
 resolution lands once and each adapter feeds it. No shim and no interim state
 where an inferred path and a declared path coexist: the coexistence is itself
 the anti-pattern this ADR removes.
+
+## DES-075: Remove the Dual-Session Companion; Static Manager Label on `/who`
+
+**Date:** 2026-11-13
+**Status:** SETTLED
+**Topic:** Deleting the dual-session companion machinery and replacing its
+intent with a static "reports to MANAGER" annotation on an agent's own `/who`
+row, resolved from ethos team YAML on disk.
+**Related:** DES-039 (dual-session registration, superseded by this),
+DES-040 (agent-first identity — its companion half is superseded; the disk-based
+agent identity is untouched and this label builds on it), DES-043
+(session-scoped talk — unchanged; its ambiguity argument stands with a REPL and
+several agent sessions), DES-062 (push-driven inbox — the companion subscription
+variants it describes are removed; the wake-poke design is otherwise unchanged),
+DES-064 (harness-declared caller identity, which removed the roster subprocess
+this feature depended on). Ticket: PL-231. Supersedes/closes biff-qou (the
+ethos-side fix this would have waited on). Design doc:
+`docs/pl-231-companion-removal.md`.
+
+**Context.** The companion feature registered a second "companion" session (the
+human) beside the agent inside one MCP server, deciding who the human was via
+`ethos session roster`. Ethos re-keyed roster identification to require a
+corroborated `CLAUDE_PID` (ethos DES-074), which Claude Code never sets on MCP
+stdio subprocesses, so `get_ethos_roster()` could never satisfy it — the feature
+was broken from ~Aug–Sep 2026 (PR #455 / biff-2zug investigation, three
+falsified fix attempts). DES-064 (PR #482) then deleted the roster subprocess
+entirely, leaving the companion field, heartbeat, reaper, teardown, inbox,
+unread-count and NATS-subscription branches as dead machinery: nothing in `src/`
+ever assigned `state.companion`.
+
+**Decision.** Delete the dead machinery rather than maintain it, and replace the
+operator's stated intent — show who an agent answers to — with a cheaper,
+unbreakable static label:
+
+- **Remove** `CompanionSession`, `ServerState.companion` and
+  `companion_session_key`, the `create_state(companion=)` parameter, every
+  companion branch in `app.py` (active markers, reaper live-set, heartbeat,
+  reap-fallback, `_append_companion_logout_event`, cleanup step, sentinel and
+  signal-cleanup writes), the companion subscriptions/reconcile/inbox branches
+  in `_descriptions.py`, the companion unread-fetch and mark-read branches in
+  `messaging.py`, and the now-dead `format_read_dual`. `read_messages` always
+  renders `format_read`; the unread status file always carries the agent
+  identity and primary tty; `subscribe_inbox_notify` drops its `user` parameter;
+  `poll_inbox` opens two subscriptions, not four.
+- **Model.** `session-model.tex` drops the `human` role from the routing layer
+  (`RID == SESSION`, `derive` is the identity, the `k` parameter leaves the
+  routing schemas, `ttyalias : SESSION \pinj ALIAS`). `nats-relay.tex` and
+  `nats-relay-kvwatch-noreconcile.tex` drop the `inboxNotifyCompanion` `SubKind`
+  constructor (four kinds to three). Both re-proven: the session-model headline
+  invariant `routeMode = rmIdentity => lostF = zfalse /\ misF = zfalse` holds,
+  with the LOST/MISROUTED reachability goals D2/D3 still finding traces
+  (non-vacuous) and D4 finding none; the per-kind CTL liveness holds for the
+  three remaining kinds, with the pre-fix negative control still FALSE.
+- **Add (wave B).** A static manager label on `/who`: read the agent identity
+  (`resolve_agent_identity_from_disk`, DES-040), find its role in the ethos team
+  YAML, follow the `reports_to` collaboration edge, and render `(reports to
+  <role>)` on the agent's own row. No live session lookup, no `CLAUDE_PID`, no
+  second TTY/KV/NATS subscription — it cannot break the way the companion did. A
+  missing manager renders the row unchanged, silently.
+
+**Alternatives rejected.** (1) Re-key the roster call on the declared caller
+(DES-064's identity) and keep the companion — rejected: it preserves a second
+TTY, KV row and NATS subscriptions for a presence-only label. (2) Shell to the
+ethos CLI for the manager lookup — rejected: ethos needs `CLAUDE_PID` and
+`tests/test_no_ethos_cli.py` forbids any ethos subprocess; the team YAML is read
+directly with the existing `pyyaml` dependency.
+
+**Consequences.** The unread status file always shows the agent;
+`read_messages` has one format. The `prob_gate.py` session predicates track the
+simplified invariant (`ttyalias`/`abind` lose the `KIND` factor; `dom(entries)`
+becomes `entries`). Verified: `make check` green (2566 passed), `make
+prob-session` green (193 states, 0 violations), and a signal-kill demo shows a
+single-session lifecycle — exactly one session key across every biff state
+file, no companion artifact at startup or after SIGTERM.

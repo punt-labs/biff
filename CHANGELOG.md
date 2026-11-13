@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Removed
+
+- The dual-session "companion" machinery (DES-039/DES-040/DES-043), broken
+  since ethos re-keyed roster identification to require a `CLAUDE_PID` that MCP
+  stdio subprocesses never receive, and left dead after DES-064 removed the
+  roster subprocess. Gone: the second `/who` session row and its TTY/KV/NATS
+  subscriptions, `CompanionSession`, `state.companion`, and every companion
+  branch in the server lifecycle. User-visible effects: `read_messages` now has
+  a single format (the dual-session format is removed), and the unread status
+  file always carries the agent identity. The `inboxNotifyCompanion` NATS
+  subscription kind and the `human` routing role are removed from the Z specs
+  and the models re-proven. See DES-075 (PL-231).
+
 ## [1.22.0] - 2026-11-12
 
 ### Changed

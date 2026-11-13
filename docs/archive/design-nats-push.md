@@ -1,5 +1,10 @@
 # Design: NATS Push for Message/Talk Description Refresh (biff-5ex)
 
+> **SUPERSEDED (PL-231, DES-075).** This document describes the
+> dual-session companion feature, which has been removed. It is kept
+> for historical reference only. See DESIGN.md DES-075 and
+> `docs/pl-231-companion-removal.md`.
+
 Status: **implemented**, including a consolidated fix round (§6) that
 corrected two latency regressions a five-agent local-review sweep found
 against the original implementation of this design.
