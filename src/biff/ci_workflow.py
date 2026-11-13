@@ -103,6 +103,16 @@ class NotifyWorkflow:
         deployed = self._deployed_setup_uv_line()
         if deployed is None:
             return rendered
+        # Fail loud on template drift, symmetric with the BIFF_RENDER placeholder
+        # guard: if the bundled template's setup-uv line is ever edited to a form
+        # the SHA regex no longer matches, a silent sub() would discard a deployed
+        # pin we successfully read and revert every consumer repo. Catch it here.
+        if not _SETUP_UV_LINE.search(rendered):
+            msg = (
+                "biff-notify.yml template has no SHA-pinned setup-uv line to "
+                "graft the deployed pin onto; the bundled template drifted."
+            )
+            raise ValueError(msg)
         # A function replacement: the deployed line is data, not a regex template.
         return _SETUP_UV_LINE.sub(lambda _m: deployed, rendered, count=1)
 

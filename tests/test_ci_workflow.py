@@ -527,6 +527,22 @@ class TestSetupUvPinPreserved:
         _deploy_with_bumped_pin(repo)
         assert check_ci_workflow(repo) is True
 
+    def test_template_without_setup_uv_line_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Symmetric with the BIFF_RENDER placeholder guard: if the bundled
+        # template ever drops its SHA-pinned setup-uv line, a deployed pin we
+        # read would be silently discarded by the no-op graft. render() must
+        # fail loud instead, in every consumer repo, rather than revert the pin.
+        repo = _make_repo(tmp_path)
+        _deploy_with_bumped_pin(repo)
+        drifted = _template_content().replace(
+            _setup_uv_line(_template_content()), "      - uses: astral-sh/setup-uv@v10"
+        )
+        monkeypatch.setattr("biff.ci_workflow._template_content", lambda: drifted)
+        with pytest.raises(ValueError, match="setup-uv"):
+            NotifyWorkflow(repo).render()
+
     def test_deploy_leaves_bumped_pin_untouched(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         target = _deploy_with_bumped_pin(repo)
