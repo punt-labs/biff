@@ -160,9 +160,11 @@ class TestCheckBiffFile:
 
 
 class TestCheckGitHooks:
-    """Doctor's git-hooks guidance points at ``biff install`` (hooks are per-clone)."""
+    """Doctor's git-hooks guidance points at ``biff enable`` — the verb that
+    deploys this clone's hooks (a repo-level action; ``install`` is machine
+    scope only)."""
 
-    def test_missing_hooks_directs_to_install(self, tmp_path: Path) -> None:
+    def test_missing_hooks_directs_to_enable(self, tmp_path: Path) -> None:
         # Enabled repo (marker present) but no hooks deployed for this clone.
         with (
             patch("biff.doctor.find_git_root", return_value=tmp_path),
@@ -170,9 +172,9 @@ class TestCheckGitHooks:
         ):
             result = _check_git_hooks()
         assert result.passed is False
-        assert "biff install" in result.message
-        # Hooks come from install, not from the committed-policy enable toggle.
-        assert "biff enable" not in result.message
+        assert "biff enable" in result.message
+        # Hooks come from enable, the repo-level verb — not from machine-scope install.
+        assert "biff install" not in result.message
 
     def test_skipped_when_not_enabled(self, tmp_path: Path) -> None:
         with (
