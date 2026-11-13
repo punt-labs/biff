@@ -1338,8 +1338,7 @@ def load_mcp_config(
     The MCP server runs inside the agent's process; its primary
     identity is the agent. Disk-based resolution avoids the
     ``ethos whoami`` subprocess race on ``claude --resume`` (spec
-    invariant 9). Companion (human) registration is deferred to the
-    heartbeat loop.
+    invariant 9).
 
     Raises :class:`SystemExit` for the same conditions as
     :func:`_load_base_config`, plus when no identity source succeeds.

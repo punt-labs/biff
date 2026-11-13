@@ -892,18 +892,13 @@ class TestCheckMessagesTool:
         state.relay.fetch = _fetch_once_then_empty  # type: ignore[method-assign]
         state.relay.fetch_user_inbox = _user_inbox_always_fails  # type: ignore[method-assign]
 
-        (
-            (tty_unread, user_unread, comp_tty, comp_user),
-            warning,
-        ) = await _fetch_unread_with_retry(state)
+        (tty_unread, user_unread), warning = await _fetch_unread_with_retry(state)
 
         assert fetch_calls["n"] == 1, "the succeeded fetch must never be retried"
         assert [m.body for m in tty_unread] == ["tty message"], (
             "the already-fetched message must not be lost"
         )
         assert user_unread == []
-        assert comp_tty == []
-        assert comp_user == []
         assert warning is not None
         assert "your broadcast inbox" in warning
 

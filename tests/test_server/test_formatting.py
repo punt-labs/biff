@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from biff._formatting import (
-    TABLE_WIDTH,
     ColumnSpec,
     clip_to_width,
     format_idle,
@@ -16,7 +15,7 @@ from biff._formatting import (
     visible_width,
     wrap_cells,
 )
-from biff.formatting import format_read, format_read_dual
+from biff.formatting import format_read
 from biff.models import Message
 
 
@@ -393,81 +392,3 @@ class TestFormatReadFromTty:
         data_lines = [line for line in lines[1:] if "kai" in line]
         assert data_lines
         assert "kai:" not in data_lines[0]
-
-
-class TestFormatReadDual:
-    """format_read_dual renders per-identity sections with headers."""
-
-    def _make_msg(
-        self, from_user: str, to_user: str, body: str, from_tty: str = ""
-    ) -> Message:
-        return Message(
-            from_user=from_user, to_user=to_user, body=body, from_tty=from_tty
-        )
-
-    def test_both_sections_rendered(self) -> None:
-        human_msgs = [self._make_msg("kai", "jfreeman", "hey Jim", from_tty="tty2")]
-        agent_msgs = [self._make_msg("rmh", "claude", "impl done", from_tty="tty3")]
-        output = format_read_dual("jfreeman", human_msgs, "claude", agent_msgs)
-        assert "\u25b6  jfreeman" in output
-        assert "\u25b6  claude" in output
-        assert "hey Jim" in output
-        assert "impl done" in output
-
-    def test_human_section_first(self) -> None:
-        human_msgs = [self._make_msg("kai", "jfreeman", "for Jim")]
-        agent_msgs = [self._make_msg("rmh", "claude", "for Claude")]
-        output = format_read_dual("jfreeman", human_msgs, "claude", agent_msgs)
-        human_pos = output.index("\u25b6  jfreeman")
-        agent_pos = output.index("\u25b6  claude")
-        assert human_pos < agent_pos
-
-    def test_only_human_messages(self) -> None:
-        human_msgs = [self._make_msg("kai", "jfreeman", "only human")]
-        output = format_read_dual("jfreeman", human_msgs, "claude", [])
-        assert "\u25b6  jfreeman" in output
-        assert "claude" not in output
-        assert "only human" in output
-
-    def test_only_agent_messages(self) -> None:
-        agent_msgs = [self._make_msg("rmh", "claude", "only agent")]
-        output = format_read_dual("jfreeman", [], "claude", agent_msgs)
-        assert "\u25b6  claude" in output
-        assert "jfreeman" not in output
-        assert "only agent" in output
-
-    def test_column_headers_present_in_each_section(self) -> None:
-        human_msgs = [self._make_msg("kai", "jfreeman", "hello")]
-        agent_msgs = [self._make_msg("rmh", "claude", "world")]
-        output = format_read_dual("jfreeman", human_msgs, "claude", agent_msgs)
-        # Each section should have FROM/DATE/MESSAGE column headers
-        assert output.count("FROM") == 2
-        assert output.count("DATE") == 2
-        assert output.count("MESSAGE") == 2
-
-    def test_from_column_includes_tty(self) -> None:
-        human_msgs = [self._make_msg("kai", "jfreeman", "hey", from_tty="tty2")]
-        output = format_read_dual("jfreeman", human_msgs, "claude", [])
-        assert "kai:tty2" in output
-
-    def test_sections_separated_by_blank_line(self) -> None:
-        human_msgs = [self._make_msg("kai", "jfreeman", "a")]
-        agent_msgs = [self._make_msg("rmh", "claude", "b")]
-        output = format_read_dual("jfreeman", human_msgs, "claude", agent_msgs)
-        assert "\n\n" in output
-
-    def test_giant_sender_renders_bounded(self) -> None:
-        # Message.from_user/from_tty have no max_length on the wire. FROM
-        # is a fixed READ_SPECS column and MESSAGE is the shared
-        # variable/wrap column within each identity's section — an
-        # unbounded sender would widen FROM and collapse the wrap budget
-        # for every message in that section, not just the forged one.
-        human_msgs = [
-            self._make_msg("u" * 10_000, "jfreeman", "hey", from_tty="t" * 10_000),
-            self._make_msg("kai", "jfreeman", "short reply"),
-        ]
-        output = format_read_dual("jfreeman", human_msgs, "claude", [])
-        longest = max(visible_width(line) for line in output.splitlines())
-        assert longest <= 2 * TABLE_WIDTH
-        kai_line = next(line for line in output.splitlines() if "kai" in line)
-        assert visible_width(kai_line) <= 2 * TABLE_WIDTH

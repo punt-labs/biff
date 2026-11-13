@@ -42,7 +42,6 @@ __all__ = [
     "format_idle",
     "format_last",
     "format_read",
-    "format_read_dual",
     "format_remaining",
     "format_table",
     "format_talk_echo",
@@ -776,9 +775,8 @@ READ_SPECS: list[ColumnSpec] = [
 def _render_message_rows(messages: list[Message]) -> tuple[int, str, str]:
     """Return ``(count, noun, indented_table)`` for a list of messages.
 
-    Shared by :func:`format_read` and :func:`format_read_dual` so the count
-    is always derived from the exact list it's rendered beside — never
-    computed twice and never able to disagree between the two call sites.
+    The count is derived from the exact list it's rendered beside — never
+    computed separately, so it cannot disagree with the table.
     """
     rows: list[list[str]] = []
     for m in messages:
@@ -793,35 +791,6 @@ def _render_message_rows(messages: list[Message]) -> tuple[int, str, str]:
     # as a sub-table row.
     indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
     return count, noun, indented_table
-
-
-def format_read_dual(
-    human_user: str,
-    human_msgs: list[Message],
-    agent_user: str,
-    agent_msgs: list[Message],
-) -> str:
-    """Format messages with per-identity section headers.
-
-    ``Message.from_user``/``from_tty`` have no ``max_length`` on the wire.
-    FROM is a *fixed* :data:`READ_SPECS` column and MESSAGE is the shared
-    variable/wrap column, so the sender is routed through
-    :func:`sanitized_address` for the same two-fold reason
-    :func:`format_read` is: an unbounded value would widen FROM for every
-    row in a section's table, and collapse the MESSAGE wrap budget shared
-    by every message in that section.
-
-    Each section header carries its own count, derived from that
-    section's own message list — same synchronization guarantee as
-    :func:`format_read`.
-    """
-    sections: list[str] = []
-    for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
-        if not msgs:
-            continue
-        count, noun, indented_table = _render_message_rows(msgs)
-        sections.append(f"{HEADER_PREFIX}{user} ({count} new {noun})\n{indented_table}")
-    return "\n\n".join(sections)
 
 
 def format_read(messages: list[Message]) -> str:
