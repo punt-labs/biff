@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-11-12
+
 ### Changed
 
 - `biff install` now only registers the Claude Code plugin. It no longer
