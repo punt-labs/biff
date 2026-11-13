@@ -277,6 +277,11 @@ class TestEnableCommand:
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
         assert "enabled" in result.output
+        # The commit instruction must name every artifact enable wrote, or a
+        # user following it commits the marker + workflow but not the guide and
+        # its import — the guide silently never lands for the team.
+        assert ".punt-labs/biff/CLAUDE.md" in result.output
+        assert "@.punt-labs/biff/CLAUDE.md import" in result.output
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:

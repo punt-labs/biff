@@ -1385,9 +1385,10 @@ def enable(
         print(f"Git hooks: {', '.join(change.git_hooks_changed)}")
 
     print(
-        "biff enabled. Commit .punt-labs/biff/enabled and "
-        ".github/workflows/biff-notify.yml, then restart Claude Code "
-        "for changes to take effect."
+        "biff enabled. Commit .punt-labs/biff/enabled, "
+        ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, and the "
+        "@.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, then restart "
+        "Claude Code for changes to take effect."
     )
 
 
@@ -1421,8 +1422,9 @@ def disable(
         print(f"Git hooks removed: {', '.join(change.git_hooks_changed)}")
 
     print(
-        "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
-        ".github/workflows/biff-notify.yml, then restart Claude Code "
+        "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
+        ".github/workflows/biff-notify.yml, and the @.punt-labs/biff/CLAUDE.md "
+        "import from CLAUDE.md, then restart Claude Code "
         "for changes to take effect."
     )
 
