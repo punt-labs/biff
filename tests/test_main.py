@@ -10,7 +10,7 @@ import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
@@ -665,67 +665,70 @@ class TestInstallCliOnly:
         assert "Restart Claude Code" not in result.output
 
 
-class TestInstallDeploysGitHooks:
-    """`biff install` deploys the per-clone git hooks (local, never committed)."""
+class TestInstallLeavesRepoAlone:
+    """`biff install` is machine scope: it never writes this clone's git hooks.
 
-    def test_deploys_hooks_for_current_clone(
+    Hooks are a repo-level write owned by ``enable`` (and removed by
+    ``disable``), even though they are per-clone and uncommitted.
+    """
+
+    def _hook_files(self, repo: Path) -> list[Path]:
+        return sorted(p for p in (repo / ".git" / "hooks").iterdir() if p.is_file())
+
+    def test_cli_only_install_writes_no_hooks(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = tmp_path / "home"
         repo = _git_init_repo(tmp_path / "repo")
+        before = self._hook_files(repo)
 
         def no_claude(_cmd: str) -> str | None:
-            return None  # CLI-only install path
+            return None
 
         def repo_root(_start: Path | None = None) -> Path:
             return repo
 
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
         monkeypatch.setattr("shutil.which", no_claude)
         monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
 
         result = runner.invoke(app, ["install"])
 
         assert result.exit_code == 0
-        for name in ("post-checkout", "post-commit", "pre-push"):
-            hook = repo / ".git" / "hooks" / name
-            assert hook.is_file()
-            assert "biff hook git" in hook.read_text()
+        assert self._hook_files(repo) == before
+        assert "Git hooks" not in result.output
 
-    def test_deployed_hooks_gate_on_marker(
+    def test_plugin_install_writes_no_hooks(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A fresh clone's installed hooks fire biff only once the marker exists.
-
-        The dispatch line is guarded (``2>/dev/null || true``) and the biff
-        hook command itself gates on ``is_enabled`` (marker + biff on PATH), so
-        the deployed hook is inert until ``enable`` writes the committed marker.
-        """
-        from biff._stdlib import is_enabled, write_enabled_marker
-
-        home = tmp_path / "home"
         repo = _git_init_repo(tmp_path / "repo")
+        before = self._hook_files(repo)
 
-        # biff is on PATH (so the marker gate is decisive), claude is not
-        # (CLI-only install path).
-        def which(cmd: str) -> str | None:
-            return "/usr/bin/biff" if cmd == "biff" else None
+        def has_claude(_cmd: str) -> str | None:
+            return "/usr/bin/claude"
+
+        real_run = subprocess.run
+
+        def plugin_ok(
+            cmd: list[str], **kwargs: Any
+        ) -> subprocess.CompletedProcess[bytes]:
+            # Stub only the marketplace call; git keeps running for real.
+            if cmd[0] == "/usr/bin/claude":
+                return subprocess.CompletedProcess(cmd, 0)
+            return cast("subprocess.CompletedProcess[bytes]", real_run(cmd, **kwargs))
 
         def repo_root(_start: Path | None = None) -> Path:
             return repo
 
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr("shutil.which", which)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        monkeypatch.setattr("shutil.which", has_claude)
+        monkeypatch.setattr("subprocess.run", plugin_ok)
         monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
 
-        runner.invoke(app, ["install"])
-        # Hooks exist but the repo is not enabled yet (no marker).
-        assert (repo / ".git" / "hooks" / "post-commit").is_file()
-        assert is_enabled(repo) is False
+        result = runner.invoke(app, ["install"])
 
-        # Enabling writes the marker; is_enabled flips on (biff is on PATH here).
-        write_enabled_marker(repo)
-        assert is_enabled(repo) is True
+        assert result.exit_code == 0
+        assert self._hook_files(repo) == before
+        assert "Git hooks" not in result.output
 
 
 class TestUninstallRemovesGitHooks:

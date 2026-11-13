@@ -1446,41 +1446,10 @@ def _register_user_scope() -> None:
         print(f"Registered {USER_IMPORT_LINE} in ~/.claude/CLAUDE.md")
 
 
-def _deploy_repo_git_hooks() -> None:
-    """Deploy biff's git hooks into the current clone's ``.git/hooks/``.
-
-    Hooks are per-clone, local machinery — never committed (DES-052 rule 3).
-    Every clone deploys its own, so hook deployment lives at ``install`` (a
-    local, per-clone action), not at the committed-policy ``enable`` toggle.
-    They gate on the enablement marker at runtime, so deploying them in a
-    not-yet-enabled repo is a safe no-op until ``enable`` writes the marker.
-    Skips silently outside a git repo — ``install`` is also a global action.
-    """
-    from biff.git_hooks import (
-        HOOKS_DIR_UNRESOLVED_NOTICE,
-        deploy_git_hooks,
-        resolve_hooks_dir,
-    )
-
-    repo_root = find_git_root()
-    if repo_root is None:
-        return
-    if resolve_hooks_dir(repo_root) is None:
-        # Never a silent skip: a worktree/submodule or a missing git binary can
-        # leave no hooks dir to write to. Emit the shared NOTICE rather than
-        # reporting success while deploying nothing.
-        print(HOOKS_DIR_UNRESOLVED_NOTICE)
-        return
-    hooks = deploy_git_hooks(repo_root)
-    if hooks:
-        print(f"Git hooks: {', '.join(hooks)}")
-
-
 def _remove_repo_git_hooks() -> None:
     """Remove biff's git hooks from the current clone's ``.git/hooks/``.
 
-    The per-clone counterpart to :func:`_deploy_repo_git_hooks`.  Skips
-    silently outside a git repo.
+    Skips silently outside a git repo.
     """
     from biff.git_hooks import remove_git_hooks
 
@@ -1494,16 +1463,13 @@ def _remove_repo_git_hooks() -> None:
 
 @app.command("install")
 def install_cmd() -> None:
-    """Install biff via the punt-labs marketplace and this clone's git hooks."""
+    """Install biff via the punt-labs marketplace (machine scope; no repo writes)."""
     import shutil
     import subprocess
 
     # User-scope guidance first — it needs no marketplace and leaves no
     # dangling import (the guide is deposited before the line is registered).
     _register_user_scope()
-
-    # Per-clone git hooks (local, never committed). Safe no-op outside a repo.
-    _deploy_repo_git_hooks()
 
     claude = shutil.which("claude")
     if not claude:
