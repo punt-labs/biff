@@ -617,10 +617,11 @@ The `.punt-labs/biff/enabled` presence marker (§2.7 + `integration.md` L0) has 
 
 §2.6: `enable` is the sole path that deposits a guide and writes an import line; `install` never touches a `CLAUDE.md`; there is no user-scope import, and `~/.claude/CLAUDE.md` carries no tool guides. `install_cmd` therefore does one thing: `claude plugin install biff@punt-labs --scope user` (a missing `claude` is a successful CLI-only install).
 
-- `UserScope.install()`, `UserScopeResult`, the bundled `user-claude.md`, and `_register_user_scope()` are deleted.
+- `UserScope.install()`, `UserScopeResult`, and `_register_user_scope()` are deleted. The bundled `user-claude.md` stays: it is biff's agent guide, now deposited by `enable`.
+- `RepoEnablement.enable()` deposits `src/biff/data/user-claude.md` to `<repo>/.punt-labs/biff/CLAUDE.md` (wholesale overwrite, byte-compared so re-runs do not churn) and registers `@.punt-labs/biff/CLAUDE.md` in `<repo>/CLAUDE.md` through `ClaudeMdImport` (§2.3, §2.4, §2.5). `disable()` prunes that import and leaves the guide dormant (§2.9). The CLI verbs and the MCP `biff` tool both call `RepoEnablement`, so they stay equivalent (§2.14). This makes biff §2.5-compliant: before this change it shipped a guide only at user scope.
 - `UserScope.uninstall()` stays: §2.6 has `uninstall` strip the legacy `@~/.punt-labs/biff/CLAUDE.md` line an older release wrote. A guide file already deposited stays dormant (§2.9).
 - `doctor` drops the "Agent guide" check. It verified an import §2.6 says must not exist, and its remediation (`biff install`) no longer does anything about it.
 
 ### Rejected
 
-Repointing the doctor check at a repo-scope guide: biff's `enable` does not yet deposit a repo guide or import, so there is nothing to check.
+Repointing the doctor check at the repo-scope guide: left out of this change; the existing `Enabled` check covers repo state.

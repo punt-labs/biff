@@ -83,11 +83,17 @@ class TestBiffToggleTool:
 
 
 def _committed_files(root: Path) -> set[str]:
-    """Files under *root* relative to it, excluding git internals (``.git``)."""
+    """Files under *root* relative to it, excluding git internals and lock files.
+
+    ``ClaudeMdImport`` leaves a sibling ``.CLAUDE.md.punt-import.lock`` after a
+    write; it is a lock artifact, not an enablement artifact.
+    """
     return {
         str(p.relative_to(root))
         for p in root.rglob("*")
-        if p.is_file() and ".git" not in p.relative_to(root).parts
+        if p.is_file()
+        and ".git" not in p.relative_to(root).parts
+        and p.suffix != ".lock"
     }
 
 
@@ -226,7 +232,9 @@ class TestBiffEnableToggleTool:
         assert _committed_files(mcp_repo) == _committed_files(cli_repo)
         assert _committed_files(mcp_repo) == {
             ".punt-labs/biff/enabled",
+            ".punt-labs/biff/CLAUDE.md",
             ".github/workflows/biff-notify.yml",
+            "CLAUDE.md",
         }
         # ...and the same fully-active local git hooks on both.
         assert _deployed_hooks(mcp_repo) == _deployed_hooks(cli_repo)
