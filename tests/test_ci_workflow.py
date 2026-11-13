@@ -7,7 +7,6 @@ Unit tests for deploy/remove/check operations on
 from __future__ import annotations
 
 import re
-from importlib.metadata import version as _dist_version
 from pathlib import Path
 
 import pytest
@@ -47,13 +46,6 @@ _DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
 # already pins (test.yml, lint.yml, docs.yml, release.yml, subprocess-tests.yml,
 # hosted-nats.yml) -- verified against actions/checkout's tag refs.
 _LIVE_CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
-
-# Derived from the installed package, not hardcoded -- a release bumps
-# pyproject.toml's version and the template's `uvx --from punt-biff==X.Y.Z`
-# pin in lockstep (see scripts/release-plugin.sh), but never touches this
-# test file. A literal here would go stale on every release and fail CI
-# for a reason unrelated to the change being released.
-_PINNED_BIFF_VERSION = _dist_version("punt-biff")
 
 
 # ── template action pins ───────────────────────────────────────────
@@ -106,13 +98,16 @@ class TestTemplateHardening:
         content = _template_content()
         assert "persist-credentials: false" in content
 
-    def test_biff_package_pinned_to_known_version(self) -> None:
-        """``uvx --from punt-biff`` unpinned resolves latest at runtime --
-        non-reproducible and a supply-chain risk for a job that runs with a
-        live token in scope.
+    def test_biff_package_floats_to_latest(self) -> None:
+        """The notify job is fire-and-forget, so it runs the latest release.
+
+        A ``punt-biff==X.Y.Z`` pin goes stale after every release: nothing
+        bumps it, and ``biff enable`` only moves it to whatever biff version
+        the enabling machine has installed.
         """
         content = _template_content()
-        assert f"punt-biff=={_PINNED_BIFF_VERSION}" in content
+        assert "punt-biff==" not in content
+        assert re.search(r"uvx --from punt-biff biff --user github-actions", content)
 
     def test_timeout_survives_cold_uv_install(self) -> None:
         """2 minutes is too tight for ``setup-uv`` + a cold ``uvx`` install of
@@ -138,80 +133,14 @@ class TestTemplateHardening:
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_STAMPED_HEADING = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
-
-
-def _previous_released_version(changelog: str, current: str) -> str:
-    """Return the newest stamped CHANGELOG version other than ``current``."""
-    stamped: list[str] = _STAMPED_HEADING.findall(changelog)
-    return next(v for v in stamped if v != current)
-
-
-def _assert_pin_window(deployed: str, current: str, previous: str) -> None:
-    """Assert the one ``punt-biff==`` pin in ``deployed`` is current or previous."""
-    pins = re.findall(r"punt-biff==(\S+)", deployed)
-    assert len(pins) == 1
-    assert pins[0] in {current, previous}
 
 
 class TestDeployedWorkflowPin:
-    """This repo's own deployed workflow must reference a published release."""
+    """This repo's own deployed workflow floats like the template."""
 
-    def test_deployed_biff_pin_is_current_or_previous_release(self) -> None:
-        """The deployed ``punt-biff==`` pin is the package version or the one before.
-
-        The deployed notifier must name a version that is already on PyPI.
-        While a release is publishing, the package version has been bumped
-        but the deployed pin is only advanced once the new version is
-        published, so for that window the pin legitimately lags by exactly
-        one release. Anything older, a dropped pin, or a duplicated pin
-        fails.
-
-        Deliberately pin-scoped, not full-render equality: Dependabot bumps
-        the action SHAs in the deployed file but not in the template, so
-        comparing whole files would fail on every Dependabot bump and
-        pressure a regeneration that reverts those SHAs.
-        """
+    def test_deployed_workflow_has_no_biff_version_pin(self) -> None:
         deployed = (_REPO_ROOT / ".github" / "workflows" / _WORKFLOW_NAME).read_text()
-        changelog = (_REPO_ROOT / "CHANGELOG.md").read_text()
-        previous = _previous_released_version(changelog, _PINNED_BIFF_VERSION)
-        _assert_pin_window(deployed, _PINNED_BIFF_VERSION, previous)
-
-
-class TestPinWindow:
-    """The accepted window is {current, previous}: a bounded one-release lag."""
-
-    CHANGELOG = (
-        "## [Unreleased]\n\n## [1.21.0] - d\n\n## [1.20.0] - d\n\n## [1.19.0] - d\n"
-    )
-
-    @staticmethod
-    def _wf(*pins: str) -> str:
-        return "\n".join(f"uvx --from punt-biff=={p} biff wall" for p in pins)
-
-    def test_previous_is_entry_below_current(self) -> None:
-        assert _previous_released_version(self.CHANGELOG, "1.21.0") == "1.20.0"
-
-    def test_previous_when_current_not_yet_stamped(self) -> None:
-        assert _previous_released_version(self.CHANGELOG, "1.22.0") == "1.21.0"
-
-    def test_accepts_pin_equal_to_current(self) -> None:
-        _assert_pin_window(self._wf("1.21.0"), "1.21.0", "1.20.0")
-
-    def test_accepts_one_release_lag(self) -> None:
-        _assert_pin_window(self._wf("1.20.0"), "1.21.0", "1.20.0")
-
-    def test_rejects_two_release_drift(self) -> None:
-        with pytest.raises(AssertionError):
-            _assert_pin_window(self._wf("1.19.0"), "1.21.0", "1.20.0")
-
-    def test_rejects_dropped_pin(self) -> None:
-        with pytest.raises(AssertionError):
-            _assert_pin_window(self._wf(), "1.21.0", "1.20.0")
-
-    def test_rejects_duplicated_pin(self) -> None:
-        with pytest.raises(AssertionError):
-            _assert_pin_window(self._wf("1.21.0", "1.21.0"), "1.21.0", "1.20.0")
+        assert "punt-biff==" not in deployed
 
 
 class TestRenderPlaceholderGuard:
@@ -548,6 +477,154 @@ class TestRemoveCiWorkflow:
         assert remove_ci_workflow(repo) is True
         assert not (wf / _WORKFLOW_NAME).exists()  # the link is gone
         assert outside.read_text() == "keep me"  # target untouched
+
+
+# ── externally-owned setup-uv pin ──────────────────────────────────
+
+_NEWER_SETUP_UV_SHA = "1234567890abcdef1234567890abcdef12345678"
+_NEWER_SETUP_UV_LINE = (
+    f"      - uses: astral-sh/setup-uv@{_NEWER_SETUP_UV_SHA} # v10.3.3"
+)
+
+# An OLDER pin (e.g. a broken SHA biff shipped before the template was
+# corrected) and an UNVERSIONED pin: both must be repaired to the template,
+# not preserved, or a consumer is stranded on a pin biff itself distributed.
+_OLDER_SETUP_UV_SHA = "abcdef0123456789abcdef0123456789abcdef01"
+_OLDER_SETUP_UV_LINE = (
+    f"      - uses: astral-sh/setup-uv@{_OLDER_SETUP_UV_SHA} # v9.0.0"
+)
+_UNVERSIONED_SETUP_UV_LINE = f"      - uses: astral-sh/setup-uv@{_OLDER_SETUP_UV_SHA}"
+
+
+def _setup_uv_line(text: str) -> str:
+    """Return the single ``setup-uv`` ``uses:`` line of a workflow."""
+    lines = [ln for ln in text.splitlines() if "astral-sh/setup-uv@" in ln]
+    assert len(lines) == 1
+    return lines[0]
+
+
+def _deploy_with_pin(tmp_path: Path, pin_line: str) -> Path:
+    """Deploy, then overwrite the deployed setup-uv line with ``pin_line``."""
+    repo = _make_repo(tmp_path)
+    _write_workflow(repo, "ci.yml", "Tests")
+    deploy_ci_workflow(repo)
+    target = repo / ".github" / "workflows" / _WORKFLOW_NAME
+    target.write_text(
+        target.read_text().replace(_setup_uv_line(target.read_text()), pin_line)
+    )
+    return repo
+
+
+def _deploy_with_bumped_pin(repo: Path) -> Path:
+    """Deploy, then simulate Dependabot bumping setup-uv in the committed file."""
+    _write_workflow(repo, "ci.yml", "Tests")
+    deploy_ci_workflow(repo)
+    target = repo / ".github" / "workflows" / _WORKFLOW_NAME
+    bumped = target.read_text().replace(
+        _setup_uv_line(target.read_text()), _NEWER_SETUP_UV_LINE
+    )
+    target.write_text(bumped)
+    return target
+
+
+class TestSetupUvPinPreserved:
+    """Dependabot owns the ``setup-uv`` pin; biff never reverts it."""
+
+    def test_render_without_deployed_file_uses_template_pin(
+        self, tmp_path: Path
+    ) -> None:
+        rendered = NotifyWorkflow(_make_repo(tmp_path)).render()
+        assert f"setup-uv@{_LIVE_SETUP_UV_SHA}" in rendered
+
+    def test_render_keeps_deployed_pin_and_comment(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _deploy_with_bumped_pin(repo)
+        rendered = NotifyWorkflow(repo).render()
+        assert _setup_uv_line(rendered) == _NEWER_SETUP_UV_LINE
+        assert _LIVE_SETUP_UV_SHA not in rendered
+
+    def test_check_treats_bumped_pin_as_current(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _deploy_with_bumped_pin(repo)
+        assert check_ci_workflow(repo) is True
+
+    def test_template_without_setup_uv_line_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Symmetric with the BIFF_RENDER placeholder guard: if the bundled
+        # template ever drops its SHA-pinned setup-uv line, a deployed pin we
+        # read would be silently discarded by the no-op graft. render() must
+        # fail loud instead, in every consumer repo, rather than revert the pin.
+        repo = _make_repo(tmp_path)
+        _deploy_with_bumped_pin(repo)
+        drifted = _template_content().replace(
+            _setup_uv_line(_template_content()), "      - uses: astral-sh/setup-uv@v10"
+        )
+        monkeypatch.setattr("biff.ci_workflow._template_content", lambda: drifted)
+        with pytest.raises(ValueError, match="setup-uv"):
+            NotifyWorkflow(repo).render()
+
+    def test_older_deployed_pin_is_repaired_to_template(self, tmp_path: Path) -> None:
+        # A pin OLDER than the template (e.g. a broken SHA biff shipped before
+        # the template was corrected) must be repaired, not preserved — else the
+        # consumer is stranded on a bad pin biff itself distributed, and the
+        # notify job can never resolve its setup action again.
+        repo = _deploy_with_pin(tmp_path, _OLDER_SETUP_UV_LINE)
+        rendered = NotifyWorkflow(repo).render()
+        assert _setup_uv_line(rendered) == _setup_uv_line(_template_content())
+        assert _OLDER_SETUP_UV_SHA not in rendered
+
+    def test_unversioned_deployed_pin_is_repaired_to_template(
+        self, tmp_path: Path
+    ) -> None:
+        # A deployed pin with no `# vX.Y.Z` comment cannot be proven to be a
+        # forward Dependabot bump, so the template (the repair path) wins.
+        repo = _deploy_with_pin(tmp_path, _UNVERSIONED_SETUP_UV_LINE)
+        rendered = NotifyWorkflow(repo).render()
+        assert _setup_uv_line(rendered) == _setup_uv_line(_template_content())
+
+    def test_older_deployed_pin_reports_not_current(self, tmp_path: Path) -> None:
+        # check must flag the broken pin as drift so the next enable repairs it.
+        repo = _deploy_with_pin(tmp_path, _OLDER_SETUP_UV_LINE)
+        assert check_ci_workflow(repo) is False
+
+    def test_deploy_leaves_bumped_pin_untouched(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        target = _deploy_with_bumped_pin(repo)
+        before = target.read_text()
+        assert deploy_ci_workflow(repo) is False
+        assert target.read_text() == before
+
+    def test_deploy_preserves_pin_while_updating_watched_list(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path)
+        target = _deploy_with_bumped_pin(repo)
+        _write_workflow(repo, "ci.yml", "Unit Tests")
+        assert check_ci_workflow(repo) is False
+        assert deploy_ci_workflow(repo) is True
+        text = target.read_text()
+        assert 'workflows: ["Unit Tests"]' in text
+        assert _setup_uv_line(text) == _NEWER_SETUP_UV_LINE
+
+    def test_unparseable_deployed_pin_falls_back_to_template(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _make_repo(tmp_path)
+        target = repo / ".github" / "workflows" / _WORKFLOW_NAME
+        target.parent.mkdir(parents=True)
+        target.write_text("      - uses: astral-sh/setup-uv@v10\n")
+        rendered = NotifyWorkflow(repo).render()
+        assert f"setup-uv@{_LIVE_SETUP_UV_SHA}" in rendered
+
+    def test_symlinked_deployed_file_is_not_read(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        outside = tmp_path / "outside.yml"
+        outside.write_text(_NEWER_SETUP_UV_LINE + "\n")
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / _WORKFLOW_NAME).symlink_to(outside)
+        assert _NEWER_SETUP_UV_SHA not in NotifyWorkflow(repo).render()
 
 
 # ── check_ci_workflow ──────────────────────────────────────────────
