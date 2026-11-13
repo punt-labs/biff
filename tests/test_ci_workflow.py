@@ -7,7 +7,6 @@ Unit tests for deploy/remove/check operations on
 from __future__ import annotations
 
 import re
-from importlib.metadata import version as _dist_version
 from pathlib import Path
 
 import pytest
@@ -47,13 +46,6 @@ _DEAD_SETUP_UV_SHA = "e58605a9b6da7c637471fab8847a5e5a6b8df081"
 # already pins (test.yml, lint.yml, docs.yml, release.yml, subprocess-tests.yml,
 # hosted-nats.yml) -- verified against actions/checkout's tag refs.
 _LIVE_CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
-
-# Derived from the installed package, not hardcoded -- a release bumps
-# pyproject.toml's version and the template's `uvx --from punt-biff==X.Y.Z`
-# pin in lockstep (see scripts/release-plugin.sh), but never touches this
-# test file. A literal here would go stale on every release and fail CI
-# for a reason unrelated to the change being released.
-_PINNED_BIFF_VERSION = _dist_version("punt-biff")
 
 
 # ── template action pins ───────────────────────────────────────────
@@ -106,13 +98,16 @@ class TestTemplateHardening:
         content = _template_content()
         assert "persist-credentials: false" in content
 
-    def test_biff_package_pinned_to_known_version(self) -> None:
-        """``uvx --from punt-biff`` unpinned resolves latest at runtime --
-        non-reproducible and a supply-chain risk for a job that runs with a
-        live token in scope.
+    def test_biff_package_floats_to_latest(self) -> None:
+        """The notify job is fire-and-forget, so it runs the latest release.
+
+        A ``punt-biff==X.Y.Z`` pin goes stale after every release: nothing
+        bumps it, and ``biff enable`` only moves it to whatever biff version
+        the enabling machine has installed.
         """
         content = _template_content()
-        assert f"punt-biff=={_PINNED_BIFF_VERSION}" in content
+        assert "punt-biff==" not in content
+        assert re.search(r"uvx --from punt-biff biff --user github-actions", content)
 
     def test_timeout_survives_cold_uv_install(self) -> None:
         """2 minutes is too tight for ``setup-uv`` + a cold ``uvx`` install of
@@ -138,80 +133,14 @@ class TestTemplateHardening:
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_STAMPED_HEADING = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
-
-
-def _previous_released_version(changelog: str, current: str) -> str:
-    """Return the newest stamped CHANGELOG version other than ``current``."""
-    stamped: list[str] = _STAMPED_HEADING.findall(changelog)
-    return next(v for v in stamped if v != current)
-
-
-def _assert_pin_window(deployed: str, current: str, previous: str) -> None:
-    """Assert the one ``punt-biff==`` pin in ``deployed`` is current or previous."""
-    pins = re.findall(r"punt-biff==(\S+)", deployed)
-    assert len(pins) == 1
-    assert pins[0] in {current, previous}
 
 
 class TestDeployedWorkflowPin:
-    """This repo's own deployed workflow must reference a published release."""
+    """This repo's own deployed workflow floats like the template."""
 
-    def test_deployed_biff_pin_is_current_or_previous_release(self) -> None:
-        """The deployed ``punt-biff==`` pin is the package version or the one before.
-
-        The deployed notifier must name a version that is already on PyPI.
-        While a release is publishing, the package version has been bumped
-        but the deployed pin is only advanced once the new version is
-        published, so for that window the pin legitimately lags by exactly
-        one release. Anything older, a dropped pin, or a duplicated pin
-        fails.
-
-        Deliberately pin-scoped, not full-render equality: Dependabot bumps
-        the action SHAs in the deployed file but not in the template, so
-        comparing whole files would fail on every Dependabot bump and
-        pressure a regeneration that reverts those SHAs.
-        """
+    def test_deployed_workflow_has_no_biff_version_pin(self) -> None:
         deployed = (_REPO_ROOT / ".github" / "workflows" / _WORKFLOW_NAME).read_text()
-        changelog = (_REPO_ROOT / "CHANGELOG.md").read_text()
-        previous = _previous_released_version(changelog, _PINNED_BIFF_VERSION)
-        _assert_pin_window(deployed, _PINNED_BIFF_VERSION, previous)
-
-
-class TestPinWindow:
-    """The accepted window is {current, previous}: a bounded one-release lag."""
-
-    CHANGELOG = (
-        "## [Unreleased]\n\n## [1.21.0] - d\n\n## [1.20.0] - d\n\n## [1.19.0] - d\n"
-    )
-
-    @staticmethod
-    def _wf(*pins: str) -> str:
-        return "\n".join(f"uvx --from punt-biff=={p} biff wall" for p in pins)
-
-    def test_previous_is_entry_below_current(self) -> None:
-        assert _previous_released_version(self.CHANGELOG, "1.21.0") == "1.20.0"
-
-    def test_previous_when_current_not_yet_stamped(self) -> None:
-        assert _previous_released_version(self.CHANGELOG, "1.22.0") == "1.21.0"
-
-    def test_accepts_pin_equal_to_current(self) -> None:
-        _assert_pin_window(self._wf("1.21.0"), "1.21.0", "1.20.0")
-
-    def test_accepts_one_release_lag(self) -> None:
-        _assert_pin_window(self._wf("1.20.0"), "1.21.0", "1.20.0")
-
-    def test_rejects_two_release_drift(self) -> None:
-        with pytest.raises(AssertionError):
-            _assert_pin_window(self._wf("1.19.0"), "1.21.0", "1.20.0")
-
-    def test_rejects_dropped_pin(self) -> None:
-        with pytest.raises(AssertionError):
-            _assert_pin_window(self._wf(), "1.21.0", "1.20.0")
-
-    def test_rejects_duplicated_pin(self) -> None:
-        with pytest.raises(AssertionError):
-            _assert_pin_window(self._wf("1.21.0", "1.21.0"), "1.21.0", "1.20.0")
+        assert "punt-biff==" not in deployed
 
 
 class TestRenderPlaceholderGuard:
