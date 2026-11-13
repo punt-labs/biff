@@ -39,6 +39,14 @@ _SETUP_UV_LINE = re.compile(
     r"^[ \t]*-[ \t]+uses:[ \t]+astral-sh/setup-uv@[0-9a-f]{40}\b.*$", re.MULTILINE
 )
 
+# The ``# vX.Y.Z`` version comment Dependabot writes beside the pin.  It is the
+# ordering key: a deployed pin is preserved only when its version is at least
+# the template's, so a genuine forward bump is kept but an *older* or broken
+# pin biff previously shipped is repaired to the template on the next enable.
+# Preserving every SHA unconditionally would strand a consumer on a bad pin
+# biff itself distributed, defeating the template's role as the repair path.
+_SETUP_UV_VERSION = re.compile(r"#\s*v(\d+)\.(\d+)\.(\d+)\b")
+
 # GitHub Actions reads workflows with either extension.
 _WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
 
@@ -98,23 +106,48 @@ class NotifyWorkflow:
 
         The one line in the file another system (Dependabot) maintains.  A
         repo with no deployed file, or none carrying a SHA pin, keeps the
-        template's default.  Everything else in the render stays deterministic.
+        template's default.  A deployed pin is preserved only when its
+        ``# vX.Y.Z`` version is at least the template's: a genuine forward bump
+        is kept, but an older or broken pin biff previously shipped is repaired
+        to the template rather than stranded.  Everything else in the render
+        stays deterministic.
         """
-        deployed = self._deployed_setup_uv_line()
-        if deployed is None:
-            return rendered
         # Fail loud on template drift, symmetric with the BIFF_RENDER placeholder
         # guard: if the bundled template's setup-uv line is ever edited to a form
         # the SHA regex no longer matches, a silent sub() would discard a deployed
-        # pin we successfully read and revert every consumer repo. Catch it here.
-        if not _SETUP_UV_LINE.search(rendered):
+        # pin we read and revert every consumer repo. Catch it here.
+        template_match = _SETUP_UV_LINE.search(rendered)
+        if template_match is None:
             msg = (
                 "biff-notify.yml template has no SHA-pinned setup-uv line to "
                 "graft the deployed pin onto; the bundled template drifted."
             )
             raise ValueError(msg)
+        deployed = self._deployed_setup_uv_line()
+        if deployed is None:
+            return rendered
+        if not self._deployed_pin_is_newer(deployed, template_match.group(0)):
+            # Older, equal-but-stale, or unversioned deployed pin: let the
+            # template repair it. (Equal SHAs are a no-op either way.)
+            return rendered
         # A function replacement: the deployed line is data, not a regex template.
         return _SETUP_UV_LINE.sub(lambda _m: deployed, rendered, count=1)
+
+    @staticmethod
+    def _deployed_pin_is_newer(deployed: str, template: str) -> bool:
+        """True when ``deployed``'s ``# vX.Y.Z`` version is >= ``template``'s.
+
+        A deployed pin with no parseable version comment is not treated as
+        newer: biff cannot prove it is a forward Dependabot bump, so the
+        template (the repair path) wins.
+        """
+        dep = _SETUP_UV_VERSION.search(deployed)
+        tmpl = _SETUP_UV_VERSION.search(template)
+        if dep is None or tmpl is None:
+            return False
+        dep_version = tuple(int(part) for part in dep.groups())
+        tmpl_version = tuple(int(part) for part in tmpl.groups())
+        return dep_version >= tmpl_version
 
     def _deployed_setup_uv_line(self) -> str | None:
         """Return the deployed file's ``setup-uv`` line, or ``None`` if absent.

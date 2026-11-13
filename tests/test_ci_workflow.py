@@ -486,12 +486,33 @@ _NEWER_SETUP_UV_LINE = (
     f"      - uses: astral-sh/setup-uv@{_NEWER_SETUP_UV_SHA} # v10.3.3"
 )
 
+# An OLDER pin (e.g. a broken SHA biff shipped before the template was
+# corrected) and an UNVERSIONED pin: both must be repaired to the template,
+# not preserved, or a consumer is stranded on a pin biff itself distributed.
+_OLDER_SETUP_UV_SHA = "abcdef0123456789abcdef0123456789abcdef01"
+_OLDER_SETUP_UV_LINE = (
+    f"      - uses: astral-sh/setup-uv@{_OLDER_SETUP_UV_SHA} # v9.0.0"
+)
+_UNVERSIONED_SETUP_UV_LINE = f"      - uses: astral-sh/setup-uv@{_OLDER_SETUP_UV_SHA}"
+
 
 def _setup_uv_line(text: str) -> str:
     """Return the single ``setup-uv`` ``uses:`` line of a workflow."""
     lines = [ln for ln in text.splitlines() if "astral-sh/setup-uv@" in ln]
     assert len(lines) == 1
     return lines[0]
+
+
+def _deploy_with_pin(tmp_path: Path, pin_line: str) -> Path:
+    """Deploy, then overwrite the deployed setup-uv line with ``pin_line``."""
+    repo = _make_repo(tmp_path)
+    _write_workflow(repo, "ci.yml", "Tests")
+    deploy_ci_workflow(repo)
+    target = repo / ".github" / "workflows" / _WORKFLOW_NAME
+    target.write_text(
+        target.read_text().replace(_setup_uv_line(target.read_text()), pin_line)
+    )
+    return repo
 
 
 def _deploy_with_bumped_pin(repo: Path) -> Path:
@@ -542,6 +563,30 @@ class TestSetupUvPinPreserved:
         monkeypatch.setattr("biff.ci_workflow._template_content", lambda: drifted)
         with pytest.raises(ValueError, match="setup-uv"):
             NotifyWorkflow(repo).render()
+
+    def test_older_deployed_pin_is_repaired_to_template(self, tmp_path: Path) -> None:
+        # A pin OLDER than the template (e.g. a broken SHA biff shipped before
+        # the template was corrected) must be repaired, not preserved — else the
+        # consumer is stranded on a bad pin biff itself distributed, and the
+        # notify job can never resolve its setup action again.
+        repo = _deploy_with_pin(tmp_path, _OLDER_SETUP_UV_LINE)
+        rendered = NotifyWorkflow(repo).render()
+        assert _setup_uv_line(rendered) == _setup_uv_line(_template_content())
+        assert _OLDER_SETUP_UV_SHA not in rendered
+
+    def test_unversioned_deployed_pin_is_repaired_to_template(
+        self, tmp_path: Path
+    ) -> None:
+        # A deployed pin with no `# vX.Y.Z` comment cannot be proven to be a
+        # forward Dependabot bump, so the template (the repair path) wins.
+        repo = _deploy_with_pin(tmp_path, _UNVERSIONED_SETUP_UV_LINE)
+        rendered = NotifyWorkflow(repo).render()
+        assert _setup_uv_line(rendered) == _setup_uv_line(_template_content())
+
+    def test_older_deployed_pin_reports_not_current(self, tmp_path: Path) -> None:
+        # check must flag the broken pin as drift so the next enable repairs it.
+        repo = _deploy_with_pin(tmp_path, _OLDER_SETUP_UV_LINE)
+        assert check_ci_workflow(repo) is False
 
     def test_deploy_leaves_bumped_pin_untouched(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)

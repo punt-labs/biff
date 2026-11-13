@@ -2466,21 +2466,40 @@ that assumption was false for them:
   `wall` on failure), so the latest release is the correct one to run, and there
   is nothing left to go stale. Rejected: a release step that bumps the pin, which
   adds machinery for a pin that has no value to this job.
-- **PL-995: preserve the deployed `setup-uv` pin.** `NotifyWorkflow.render()`
-  reads the target repo's existing `biff-notify.yml`, and when it carries a
-  `astral-sh/setup-uv@<40-hex sha>` line, substitutes that whole line (SHA and its
-  `# vX.Y.Z` comment) for the template's. A repo with no deployed file, a symlinked
-  path, an unreadable file, or a non-SHA pin gets the template's default SHA.
-  Because `deploy_ci_workflow()` and `check_ci_workflow()` both compare against
-  `render()`, a Dependabot-bumped pin is current (check returns `True`) and is
-  never overwritten (deploy returns `False`), while a stale watched list still
-  re-renders with the bumped pin intact. `render()` stays deterministic for every
-  line except that one.
+- **PL-995: preserve a *forward* bump of the deployed `setup-uv` pin.**
+  `NotifyWorkflow.render()` reads the target repo's existing `biff-notify.yml`,
+  and when it carries a `astral-sh/setup-uv@<40-hex sha>` line whose `# vX.Y.Z`
+  comment is at least the template's version, substitutes that whole line for the
+  template's. A repo with no deployed file, a symlinked path, an unreadable file,
+  a non-SHA pin, or a pin whose version is *older than or unversioned relative to*
+  the template gets the template's default SHA. The version gate is load-bearing:
+  biff once shipped a nonexistent setup-uv SHA (the 2026-07-28 amendment above),
+  so the template must stay the repair path — preserving *every* deployed SHA
+  unconditionally would strand a consumer on a broken pin biff itself distributed,
+  with no way to fix it by updating the template. Because `deploy_ci_workflow()`
+  and `check_ci_workflow()` both compare against `render()`, a genuine
+  Dependabot-forward bump is current (check returns `True`) and never overwritten
+  (deploy returns `False`), a stale watched list still re-renders with the bumped
+  pin intact, and an older/broken pin reports not-current and is repaired on the
+  next enable. `render()` stays deterministic for every line except that one.
 - **Rejected: a major tag (`setup-uv@v10`).** Biff pins every action by full
   40-character SHA (`checkout`, `setup-python`, `setup-uv`), the form Dependabot
   maintains. A tag would break that convention.
 - **Rejected: move `biff-notify.yml` out of the generated set** and let Dependabot
   own it alone. That drops DES-025's goal of zero per-repo editing.
+- **Rejected: preserve every deployed SHA unconditionally.** Simpler, but it
+  defeats the template as a repair path — a consumer on a broken historical pin
+  could never be fixed. The version gate keeps forward bumps and still repairs
+  bad pins.
+
+**Outcome.** After this change: a Dependabot forward-bump of `setup-uv` survives
+every `biff enable` re-render (check reports current, deploy does not overwrite);
+an older or broken pin biff previously shipped reports not-current and is repaired
+to the template on the next enable; the watched-workflow list still re-renders
+independently with the pin intact; and the notify job runs the latest `punt-biff`
+release with no version pin to go stale. `render()` fails loud if the bundled
+template ever loses its SHA-pinned `setup-uv` line, symmetric with the
+`BIFF_RENDER` placeholder guard.
 
 **Principle.** A generated vendored file must not emit or overwrite a value
 another system maintains. Where biff must coexist with Dependabot or with the
