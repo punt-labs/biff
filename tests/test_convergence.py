@@ -73,11 +73,20 @@ class _Tree:
         return self
 
     def written_since(self, before: _Tree) -> set[Path]:
-        """Files created or modified relative to *before* (same root)."""
+        """Paths that changed relative to *before* (same root): created,
+        modified, OR deleted.
+
+        A deletion must count as a change, or a "byte-identical" / "no-op
+        re-enable" assertion would silently pass when a run *removes* a repo or
+        HOME file. So the result is every path whose bytes differ, taken over
+        the union of both snapshots' keys — a path missing from one side reads
+        as ``None`` and so differs from any real content.
+        """
+        before_files = before._files  # pyright: ignore[reportPrivateUsage]
         return {
             path
-            for path, data in self._files.items()
-            if before._files.get(path) != data  # pyright: ignore[reportPrivateUsage]
+            for path in self._files.keys() | before_files.keys()
+            if self._files.get(path) != before_files.get(path)
         }
 
 
@@ -147,6 +156,34 @@ def repo(tmp_path: Path) -> Path:
         "    steps: []\n"
     )
     return r
+
+
+class TestTreeSnapshot:
+    """The snapshot helper itself must catch every kind of change, or the
+    convergence guards below are hollow: a run that *deletes* a file would slip
+    past a "byte-identical" assertion that only looked at surviving files."""
+
+    def test_detects_creation_modification_and_deletion(self, tmp_path: Path) -> None:
+        (tmp_path / "keep").write_bytes(b"same")
+        (tmp_path / "change").write_bytes(b"old")
+        (tmp_path / "remove").write_bytes(b"gone-soon")
+        before = _Tree(tmp_path)
+
+        (tmp_path / "change").write_bytes(b"new")  # modified
+        (tmp_path / "remove").unlink()  # deleted
+        (tmp_path / "add").write_bytes(b"fresh")  # created
+        after = _Tree(tmp_path)
+
+        assert after.written_since(before) == {
+            Path("change"),
+            Path("remove"),
+            Path("add"),
+        }
+
+    def test_identical_tree_reports_no_change(self, tmp_path: Path) -> None:
+        (tmp_path / "a").write_bytes(b"x")
+        before = _Tree(tmp_path)
+        assert _Tree(tmp_path).written_since(before) == set()
 
 
 class TestInstallWritesNothingRepoLevel:
