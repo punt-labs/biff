@@ -2440,6 +2440,55 @@ messages.
 - **Keep inline steps:** Works but doesn't scale.  Every new workflow in every
   repo needs manual editing — the opposite of `biff enable` doing it for you.
 
+### Amendment (2026-11-12): second-writer collisions — Dependabot action pin and the version pin
+
+**Status:** SETTLED. **Related:** PL-993 (epic), PL-995, PL-996. DES-025's core is
+unchanged: `biff-notify.yml` stays a generated, biff-owned vendored file,
+re-rendered per repo by `biff enable`, with `check_ci_workflow()` reporting
+staleness and the watched list rendered from the target repo's own workflow names.
+
+**The gap.** The vendored-file contract (`tool-enable-disable.md` §2.2) assumes the
+tool is the sole writer of its vendored zone: same tool version, identical
+output. Two values inside the generated file are maintained by other systems, so
+that assumption was false for them:
+
+1. `astral-sh/setup-uv@<sha>`. Dependabot, adopted org-wide after DES-025, bumps
+   it per consumer repo. `render()` re-deposited the template's SHA and reverted
+   the bump. Observed 2026-11-12: v10.3.3 (PR #491) was rolled back to v10.3.2.
+2. `uvx --from punt-biff==X.Y.Z`. Nothing kept it current. The release process
+   does not bump it, and `biff enable` only moved it to the version installed on
+   the enabling machine. After the 1.21.1 release the deployed pin sat at 1.21.0.
+
+**Decisions.**
+
+- **PL-996: no version pin.** The template emits `uvx --from punt-biff biff ...`,
+  floating to the latest release. The notify job is fire-and-forget (it posts a
+  `wall` on failure), so the latest release is the correct one to run, and there
+  is nothing left to go stale. Rejected: a release step that bumps the pin, which
+  adds machinery for a pin that has no value to this job.
+- **PL-995: preserve the deployed `setup-uv` pin.** `NotifyWorkflow.render()`
+  reads the target repo's existing `biff-notify.yml`, and when it carries a
+  `astral-sh/setup-uv@<40-hex sha>` line, substitutes that whole line (SHA and its
+  `# vX.Y.Z` comment) for the template's. A repo with no deployed file, a symlinked
+  path, an unreadable file, or a non-SHA pin gets the template's default SHA.
+  Because `deploy_ci_workflow()` and `check_ci_workflow()` both compare against
+  `render()`, a Dependabot-bumped pin is current (check returns `True`) and is
+  never overwritten (deploy returns `False`), while a stale watched list still
+  re-renders with the bumped pin intact. `render()` stays deterministic for every
+  line except that one.
+- **Rejected: a major tag (`setup-uv@v10`).** Biff pins every action by full
+  40-character SHA (`checkout`, `setup-python`, `setup-uv`), the form Dependabot
+  maintains. A tag would break that convention.
+- **Rejected: move `biff-notify.yml` out of the generated set** and let Dependabot
+  own it alone. That drops DES-025's goal of zero per-repo editing.
+
+**Principle.** A generated vendored file must not emit or overwrite a value
+another system maintains. Where biff must coexist with Dependabot or with the
+release cadence, it either emits a form that cannot collide (no version pin) or
+carves that one value out of the deterministic-overwrite contract and preserves
+what it finds in the deployed file. This makes the §2.2 sole-writer assumption
+explicit where it does not hold.
+
 ---
 
 ## DES-026: PreToolUse Hook Deny Reason — `permissionDecisionReason` Not `reason`
