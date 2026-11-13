@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.21.1] - 2026-11-12
+
 ### Fixed
 
 - A long-lived server's NATS KV watcher no longer wedges after a forced
