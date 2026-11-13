@@ -99,7 +99,7 @@ This fully activates biff in one verb: it writes the committed `.punt-labs/biff/
 
 ## Git Hooks
 
-`biff enable` (or the superset `biff install`) deploys git hooks into this clone's `.git/hooks/` (they are per-clone and never committed, so each clone deploys its own):
+`biff enable` deploys git hooks into this clone's `.git/hooks/` (they are per-clone and never committed, so each clone deploys its own):
 
 - **post-checkout** --- updates your `/plan` when you switch branches
 - **post-commit** --- updates your `/plan` with the commit message

@@ -317,7 +317,7 @@ def _check_git_hooks() -> CheckResult:
     return CheckResult(
         "Git hooks",
         False,
-        f"missing: {', '.join(missing)} (run 'biff install')",
+        f"missing: {', '.join(missing)} (run 'biff enable')",
         required=False,
     )
 
