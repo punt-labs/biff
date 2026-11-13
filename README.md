@@ -276,7 +276,7 @@ biff talk kai "can you review?"           # Real-time conversation
 ### Admin commands
 
 ```bash
-biff install                # Install user-scope guide (+ plugin if Claude Code is present)
+biff install                # Register the Claude Code plugin (machine scope; no guide, no CLAUDE.md writes)
 biff enable                 # Enable biff for this repo (writes the committed marker + CI workflow)
 biff disable                # Disable biff for this repo (removes the marker + CI workflow)
 biff doctor                 # Check installation health
@@ -355,7 +355,7 @@ Biff ships with a shared demo relay so your team can start immediately. When you
 
 The `[peers]` section enables cross-repo commands (`/who`, `/write`, `/finger`). `orgs` auto-discovers repos with active sessions; `repos` lists peers that are always visible. Both are optional.
 
-`biff install` is machine-scoped setup: it registers the MCP server, installs slash commands, enables the plugin, and registers a user-scope agent guide (deposits `~/.punt-labs/biff/CLAUDE.md` and adds `@~/.punt-labs/biff/CLAUDE.md` to `~/.claude/CLAUDE.md` so the guide loads in every session). It makes no repo-level changes. `biff enable` fully activates biff in the current repo in one verb — it writes the two committed artifacts that constitute enablement policy (the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow) **and** deploys this clone's local, per-clone git hooks into `.git/hooks/` (never committed); it is exactly equivalent to `/biff enable` in Claude Code (`biff disable` / `/biff disable` remove all three). The hooks are resolved worktree/`core.hooksPath`-aware and gate on the marker at runtime. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
+`biff install` is machine-scoped setup: it registers the MCP server, installs slash commands, and enables the plugin. It deposits no agent guide and never touches any `CLAUDE.md`; it makes no repo-level changes. `biff enable` fully activates biff in the current repo in one verb — it writes the two committed artifacts that constitute enablement policy (the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow) **and** deploys this clone's local, per-clone git hooks into `.git/hooks/` (never committed); it is exactly equivalent to `/biff enable` in Claude Code (`biff disable` / `/biff disable` remove all three). The hooks are resolved worktree/`core.hooksPath`-aware and gate on the marker at runtime. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
 
 ## Status Bar
 

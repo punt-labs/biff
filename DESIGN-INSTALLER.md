@@ -23,8 +23,7 @@ refer to it, but do not read it as current state:
   (`plugin/.claude-plugin/`, `plugin/commands/`, `plugin/hooks/`) and the
   marketplace fetches only that directory via the `git-subdir` source.
 - **`biff install` is not a five-step copier.** `install_cmd`
-  (`src/biff/__main__.py`) deposits the user-scope agent guide, deploys this
-  clone's `.git/hooks` dispatchers, and shells out to
+  (`src/biff/__main__.py`) only shells out to
   `claude plugin install biff@punt-labs --scope user`. A missing `claude` is a
   successful CLI-only install, not a partial failure.
 - **Top-level `~/.claude/commands/*.md` deployment moved into the plugin.**
@@ -193,9 +192,7 @@ biff install            # Phase 2: Claude Code integration
 ```
 
 Phase 1 (`pip install` / `uv tool install`) provides the `biff` CLI and the
-MCP server code. Phase 2 (`biff install`) deposits the user-scope agent guide
-(`~/.punt-labs/biff/CLAUDE.md` + the `@`-import), deploys this clone's git
-hooks, and installs the Claude Code plugin via `claude plugin install
+MCP server code. Phase 2 (`biff install`) installs the Claude Code plugin via `claude plugin install
 biff@punt-labs --scope user` (see the current `install_cmd` in
 `src/biff/__main__.py`). MCP server registration is not a separate step —
 it's part of what the plugin itself declares in `plugin.json`'s
@@ -213,9 +210,7 @@ Keeping Phase 2 as a separate explicit command (`biff install`) means it runs wh
 
 ### Idempotency
 
-`biff install` is idempotent: the user-scope guide is overwritten wholesale on
-every run, the `@`-import is only added if not already present, git hooks are
-redeployed, and `claude plugin install` itself no-ops (with a warning) if the
+`biff install` is idempotent: `claude plugin install` itself no-ops (with a warning) if the
 plugin is already at that version.
 
 ### Bootstrap Script
@@ -580,7 +575,7 @@ Claude Code resolves commands from two paths: per-plugin (`plugins/<name>/comman
 ## INS-010: User-Scope Agent Guide — Bare `@`-Import, Not a Managed Section
 
 **Date:** 2026-07-25
-**Status:** SETTLED
+**Status:** SUPERSEDED by INS-011 (install no longer deposits a guide or writes an import; only the uninstall strip survives)
 **Topic:** How biff's agent-facing guidance reaches every session, per punt-kit `tool-enable-disable.md` §2.4–2.6 (biff-qmd)
 **Related:** INS-009 (user commands), the `tool-enable-disable.md` + `integration.md` standards
 
@@ -609,3 +604,23 @@ The user's `CLAUDE.md` is user-owned prose (§2.1). The only mutation biff makes
 ### Not in Scope Here
 
 The `.punt-labs/biff/enabled` presence marker (§2.7 + `integration.md` L0) has since **landed** — see DES-052 (runtime `DESIGN.md`). Biff's enablement is now committed, repo-level policy: the git-tracked marker is the single authoritative signal that `is_enabled()` and all ten hook gates read, replacing the old per-user, gitignored `config.local.yaml` `enabled:` key. The `enable` / `disable` verbs (CLI and `/biff`) write and remove it; the per-user preference layer lives separately in `mesg`.
+
+---
+
+## INS-011: Install Deposits No Guide and Writes No Import
+
+**Date:** 2026-11-12
+**Status:** SETTLED
+**Topic:** `biff install` is software-only, per punt-kit `tool-enable-disable.md` §2.6 (supersedes INS-010)
+
+### Design
+
+§2.6: `enable` is the sole path that deposits a guide and writes an import line; `install` never touches a `CLAUDE.md`; there is no user-scope import, and `~/.claude/CLAUDE.md` carries no tool guides. `install_cmd` therefore does one thing: `claude plugin install biff@punt-labs --scope user` (a missing `claude` is a successful CLI-only install).
+
+- `UserScope.install()`, `UserScopeResult`, the bundled `user-claude.md`, and `_register_user_scope()` are deleted.
+- `UserScope.uninstall()` stays: §2.6 has `uninstall` strip the legacy `@~/.punt-labs/biff/CLAUDE.md` line an older release wrote. A guide file already deposited stays dormant (§2.9).
+- `doctor` drops the "Agent guide" check. It verified an import §2.6 says must not exist, and its remediation (`biff install`) no longer does anything about it.
+
+### Rejected
+
+Repointing the doctor check at a repo-scope guide: biff's `enable` does not yet deposit a repo guide or import, so there is nothing to check.

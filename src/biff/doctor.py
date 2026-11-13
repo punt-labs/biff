@@ -237,36 +237,6 @@ def _check_biff_file() -> CheckResult:
     )
 
 
-def _check_user_import() -> CheckResult:
-    """Check the user-scope ``@``-import is registered (informational)."""
-    from biff.claude_md import ClaudeMdImport
-    from biff.user_scope import USER_IMPORT_LINE
-
-    host = Path.home() / ".claude" / "CLAUDE.md"
-    try:
-        registered = ClaudeMdImport(host, USER_IMPORT_LINE).is_registered()
-    except OSError:
-        # A diagnostic must never crash. Only OSError is possible: the read is
-        # byte-faithful (surrogateescape), so a non-UTF-8 host never raises
-        # UnicodeDecodeError — catching it would be unreachable dead code.
-        return CheckResult(
-            "Agent guide",
-            False,
-            "could not read ~/.claude/CLAUDE.md",
-            required=False,
-        )
-    if registered:
-        return CheckResult(
-            "Agent guide", True, "imported in ~/.claude/CLAUDE.md", required=False
-        )
-    return CheckResult(
-        "Agent guide",
-        False,
-        "not imported (run 'biff install')",
-        required=False,
-    )
-
-
 def _check_enabled() -> CheckResult:
     """Check whether the committed ``.punt-labs/biff/enabled`` marker exists.
 
@@ -404,7 +374,6 @@ def check_environment() -> int:
         _check_gh_cli(),
         _check_plugin_installed(),
         _check_user_commands(),
-        _check_user_import(),
         _check_relay(),
         _check_biff_file(),
         _check_enabled(),

@@ -18,7 +18,6 @@ from biff.doctor import (
     _check_relay,
     _check_statusline,
     _check_user_commands,
-    _check_user_import,
     _print_check,
     _resolve_relay_config,
     _test_nats_connection,
@@ -94,46 +93,6 @@ class TestCheckUserCommands:
         assert not result.passed
         assert not result.required
         assert "missing" in result.message
-
-
-class TestCheckUserImport:
-    def test_registered(self, tmp_path: Path) -> None:
-        host = tmp_path / ".claude" / "CLAUDE.md"
-        host.parent.mkdir(parents=True)
-        host.write_text("@~/.punt-labs/biff/CLAUDE.md\n")
-        with patch("biff.doctor.Path.home", return_value=tmp_path):
-            result = _check_user_import()
-        assert result.passed
-        assert not result.required
-
-    def test_not_registered(self, tmp_path: Path) -> None:
-        with patch("biff.doctor.Path.home", return_value=tmp_path):
-            result = _check_user_import()
-        assert not result.passed
-        assert "not imported" in result.message
-
-    def test_unreadable_does_not_crash(self, tmp_path: Path) -> None:
-        with (
-            patch("biff.doctor.Path.home", return_value=tmp_path),
-            patch(
-                "biff.claude_md.ClaudeMdImport.is_registered",
-                side_effect=OSError("boom"),
-            ),
-        ):
-            result = _check_user_import()
-        assert not result.passed
-        assert "could not read" in result.message
-
-    def test_non_utf8_host_does_not_crash(self, tmp_path: Path) -> None:
-        # A hand-authored CLAUDE.md with non-UTF-8 bytes must not traceback;
-        # the import is simply absent from the (byte-faithfully read) content.
-        host = tmp_path / ".claude" / "CLAUDE.md"
-        host.parent.mkdir(parents=True)
-        host.write_bytes(b"caf\xe9 rules\n")
-        with patch("biff.doctor.Path.home", return_value=tmp_path):
-            result = _check_user_import()
-        assert not result.passed
-        assert "not imported" in result.message
 
 
 class TestCheckBiffFile:
