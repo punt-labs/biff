@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from biff.chunking import chunk_message
 from biff.commands._messaging import deliver_with_retry
-from biff.formatting import format_read, format_read_dual
+from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
@@ -77,14 +77,12 @@ async def _resolve_recipient(
 
 _log = logging.getLogger(__name__)
 
-_UnreadFetch = tuple[list[Message], list[Message], list[Message], list[Message]]
+_UnreadFetch = tuple[list[Message], list[Message]]
 
 # Fetch-step labels, in the order results are unpacked into _UnreadFetch.
-_TTY, _USER, _COMP_TTY, _COMP_USER = (
+_TTY, _USER = (
     "your tty inbox",
     "your broadcast inbox",
-    "companion tty inbox",
-    "companion broadcast inbox",
 )
 
 
@@ -93,7 +91,7 @@ async def _fetch_unread_with_retry(
 ) -> tuple[_UnreadFetch, str | None]:
     """Fetch unread messages, retrying only the inboxes that failed.
 
-    Returns ``(fetched, warning)``. Each of the (up to four) inboxes is
+    Returns ``(fetched, warning)``. Each of the two inboxes is
     fetched independently and retried at most once on its own — NEVER as
     part of restarting the whole batch. ``NatsRelay.fetch``/
     ``fetch_user_inbox`` ack (destructively delete) messages from the
@@ -111,14 +109,10 @@ async def _fetch_unread_with_retry(
     even when another inbox's warning is also present, so a partial
     failure never costs the caller messages that were already pulled.
     """
-    companion = state.companion
     steps: dict[str, Callable[[], Coroutine[Any, Any, list[Message]]]] = {
         _TTY: lambda: state.relay.fetch(state.session_key),
         _USER: lambda: state.relay.fetch_user_inbox(state.config.user),
     }
-    if companion is not None:
-        steps[_COMP_TTY] = lambda: state.relay.fetch(companion.session_key)
-        steps[_COMP_USER] = lambda: state.relay.fetch_user_inbox(companion.user)
 
     results: dict[str, list[Message]] = {}
     pending = list(steps)
@@ -138,8 +132,6 @@ async def _fetch_unread_with_retry(
     fetched: _UnreadFetch = (
         results.get(_TTY, []),
         results.get(_USER, []),
-        results.get(_COMP_TTY, []),
-        results.get(_COMP_USER, []),
     )
     warning: str | None = None
     if pending:
@@ -154,23 +146,6 @@ async def _fetch_unread_with_retry(
             "State unknown for that inbox, not confirmed empty."
         )
     return fetched, warning
-
-
-async def _mark_companion_read(
-    state: ServerState,
-    tty_unread: list[Message],
-    user_unread: list[Message],
-) -> None:
-    """Mark companion inbox messages as read."""
-    companion = state.companion
-    if companion is None:
-        return
-    tty_ids = [m.id for m in tty_unread]
-    user_ids = [m.id for m in user_unread]
-    if tty_ids:
-        await state.relay.mark_read(companion.session_key, tty_ids)
-    if user_ids:
-        await state.relay.mark_read_user_inbox(companion.user, user_ids)
 
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
@@ -232,15 +207,9 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         session_key = state.session_key
         user = state.config.user
 
-        (
-            (tty_unread, user_unread, comp_tty, comp_user),
-            warning,
-        ) = await _fetch_unread_with_retry(state)
+        (tty_unread, user_unread), warning = await _fetch_unread_with_retry(state)
 
-        all_unread = sorted(
-            tty_unread + user_unread + comp_tty + comp_user,
-            key=lambda m: m.timestamp,
-        )
+        all_unread = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
 
         if not all_unread:
             if warning is not None:
@@ -255,19 +224,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await state.relay.mark_read(session_key, tty_ids)
         if user_ids:
             await state.relay.mark_read_user_inbox(user, user_ids)
-        await _mark_companion_read(state, comp_tty, comp_user)
 
         await refresh_read_messages(mcp, state)
 
-        if state.companion is not None:
-            human_msgs = sorted(comp_tty + comp_user, key=lambda m: m.timestamp)
-            agent_msgs = sorted(tty_unread + user_unread, key=lambda m: m.timestamp)
-            result = format_read_dual(
-                state.companion.user,
-                human_msgs,
-                state.config.user,
-                agent_msgs,
-            )
-        else:
-            result = format_read(all_unread)
+        result = format_read(all_unread)
         return f"{warning}\n\n{result}" if warning is not None else result

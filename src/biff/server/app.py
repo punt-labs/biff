@@ -106,12 +106,9 @@ async def _cleanup_action(action: Callable[[], None]) -> None:
 
 
 def _remove_active_markers(state: ServerState) -> None:
-    """Best-effort active-marker cleanup for both session identities."""
+    """Best-effort active-marker cleanup for this session."""
     with suppress(OSError):
         remove_active_session(state.session_key)
-    if state.companion:
-        with suppress(OSError):
-            remove_active_session(state.companion.session_key)
 
 
 # Org-repo discovery is non-critical (stale data is acceptable, per
@@ -277,8 +274,6 @@ async def _reap_sentinels(state: ServerState) -> None:
     # already registered live under it, and reaping would log us out, release
     # the alias we just reclaimed, and delete our own KV row.
     live_keys = {state.session_key}
-    if state.companion_session_key:
-        live_keys.add(state.companion_session_key)
     for sentinel in d.iterdir():
         if not sentinel.is_file():
             continue
@@ -387,8 +382,6 @@ async def _heartbeat_loop(
     session.  ``heartbeat()`` deliberately never touches ``last_tool_at``
     — that field is the idle time ``/who`` and ``/finger`` display, and
     must only advance on a real tool call, not this unconditional tick.
-
-    A companion, when one is set, is heartbeated alongside the primary.
     """
     while not shutdown.is_set():
         try:
@@ -403,11 +396,6 @@ async def _heartbeat_loop(
             # would spam a warning per tick.  The relay's _ConnectionHealth
             # logs the wedge onset/recovery once — it is the single source.
             logger.debug("Heartbeat failed", exc_info=True)
-        if state.companion_session_key:
-            try:
-                await state.relay.heartbeat(state.companion_session_key)
-            except Exception:
-                logger.debug("Companion heartbeat failed", exc_info=True)
         await _refresh_org_repos(state)
 
 
@@ -606,8 +594,6 @@ async def _handle_kv_delete(
     """
     if session_key == state.session_key:
         return  # Our own shutdown writes logout explicitly
-    if session_key == state.companion_session_key:
-        return  # Companion shutdown writes logout explicitly
     cached = cache.pop(session_key, None)
     if cached is None:
         logger.debug(
@@ -711,35 +697,6 @@ async def _append_logout_event(state: ServerState) -> None:
             logger.warning("Failed to flush wtmp logout event", exc_info=True)
 
 
-async def _append_companion_logout_event(state: ServerState) -> None:
-    """Append a logout event to wtmp for the companion session."""
-    companion = state.companion
-    if companion is None:
-        return
-    logout_event = SessionEvent(
-        session_key=companion.session_key,
-        event="logout",
-        user=companion.user,
-        tty=companion.tty,
-        tty_name=companion.tty_name,
-        hostname=state.hostname,
-        pwd=state.pwd,
-        timestamp=datetime.now(UTC),
-    )
-    try:
-        await asyncio.wait_for(
-            state.relay.append_wtmp(logout_event), timeout=_TEARDOWN_STEP_TIMEOUT
-        )
-    except Exception:
-        logger.warning("Failed to append companion wtmp logout event", exc_info=True)
-        return
-    if isinstance(state.relay, NatsRelay):
-        try:
-            await asyncio.wait_for(state.relay.flush(), timeout=_TEARDOWN_STEP_TIMEOUT)
-        except Exception:
-            logger.warning("Failed to flush companion wtmp logout event", exc_info=True)
-
-
 def _find_orphaned_logins(
     events: list[SessionEvent],
     active_keys: set[str],
@@ -790,8 +747,6 @@ async def _close_orphaned_logins(
     now = datetime.now(UTC)
     last_seen: dict[str, datetime] = {}
     active_keys: set[str] = {state.session_key}
-    if state.companion_session_key:
-        active_keys.add(state.companion_session_key)
     for session in active_sessions:
         key = build_session_key(session.user, session.tty)
         last_seen[key] = session.last_active
@@ -867,7 +822,7 @@ async def _delete_released_session(state: ServerState, session_key: str) -> None
         except (OSError, RuntimeError):
             # Best-effort: the row is already gone, so a failure to remove
             # its now-stale sentinel must not abort the rest of teardown
-            # (companion release, relay.close) -- the next reaper tick
+            # (relay.close) -- the next reaper tick
             # re-processing an already-deleted session is harmless, unlike
             # skipping the steps still queued after this one (Cursor
             # Bugbot, Medium).
@@ -887,22 +842,13 @@ async def _release_relay(state: ServerState) -> None:
             tty_name=get_tty_name(),
         )
 
-    async def companion() -> None:
-        if state.companion:
-            await _release_session(
-                state,
-                user=state.companion.user,
-                session_key=state.companion.session_key,
-                tty_name=state.companion.tty_name,
-            )
-
     async def close() -> None:
         try:
             await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
         except Exception:
             logger.warning("Failed to close relay", exc_info=True)
 
-    await _run_cleanup_steps([primary, companion, close])
+    await _run_cleanup_steps([primary, close])
 
 
 def _remove_unread_files(unread_path: Path | None) -> None:
@@ -957,15 +903,6 @@ def _write_reap_fallback_sentinels(state: ServerState) -> None:
             state.session_key,
             exc_info=True,
         )
-    if state.companion:
-        try:
-            _write_sentinel(state.config.repo_name, state.companion.session_key)
-        except (OSError, RuntimeError):
-            logger.warning(
-                "Failed to write companion reap-fallback sentinel for %s",
-                state.companion.session_key,
-                exc_info=True,
-            )
 
 
 async def _lifespan_cleanup(
@@ -1020,7 +957,6 @@ async def _lifespan_cleanup(
             [
                 lambda: _cleanup_action(lambda: _write_reap_fallback_sentinels(state)),
                 lambda: _append_logout_event(state),
-                lambda: _append_companion_logout_event(state),
             ]
         )
     steps.extend(
@@ -1159,17 +1095,6 @@ async def _running_lifespan(
                     b"biff: signal cleanup: sentinel write failed\n",
                 )
             )
-        if state.companion:
-            companion = state.companion
-            steps.append(
-                (
-                    lambda: _write_sentinel(
-                        state.config.repo_name, companion.session_key
-                    ),
-                    (OSError, RuntimeError),
-                    b"biff: signal cleanup: companion sentinel write failed\n",
-                )
-            )
         # Relay-agnostic, like the sentinel writes above: a hard SIGTERM/
         # SIGINT/SIGHUP kill previously skipped this entirely (only the
         # normal lifespan-teardown path called it), leaving both the
@@ -1199,25 +1124,6 @@ async def _running_lifespan(
                     b"biff: signal cleanup: session delete failed\n",
                 )
             )
-            if state.companion:
-                companion = state.companion
-                steps.append(
-                    (
-                        lambda: relay.write_remove_sentinel(companion.session_key),
-                        (OSError,),
-                        (
-                            b"biff: signal cleanup: companion remove-sentinel "
-                            b"write failed\n"
-                        ),
-                    )
-                )
-                steps.append(
-                    (
-                        lambda: relay.delete_session_sync(companion.session_key),
-                        (OSError, ValueError),
-                        b"biff: signal cleanup: companion session delete failed\n",
-                    )
-                )
         _run_signal_cleanup_steps(steps)
         # signal.signal() replaces the platform's default terminate
         # disposition, so returning here leaves the process running —

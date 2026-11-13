@@ -21,7 +21,7 @@ from fastmcp.client.transports import FastMCPTransport
 from biff.models import BiffConfig, Message
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
-from biff.server.state import CompanionSession, ServerState, create_state
+from biff.server.state import ServerState, create_state
 from biff.server.tools._descriptions import nap_interval_for
 from biff.testing import NotificationTracker
 from biff.testing.caller import StampedClient
@@ -311,132 +311,6 @@ class TestTargetedPushNotification:
             kai_client, "1 unread", timeout=6.0
         )
         assert "1 unread" in desc
-
-
-class TestCompanionPushNotification:
-    """A broadcast addressed to the companion's user pokes a subject only
-    the companion binding subscribes to — proving ``poll_inbox`` opens a
-    second, independent ``inbox_notify`` SUB when ``state.companion`` is
-    set, not just one bound to ``state.config.user``.
-
-    Builds both sides directly (rather than the shared ``kai_tracked`` /
-    ``eric_tracked`` fixtures) so both share this file's own
-    ``_TEST_REPO`` unambiguously — those shared fixtures live in
-    ``conftest.py`` under a different repo constant, and a companion
-    broadcast landing in the wrong repo's stream is exactly the kind of
-    silent cross-repo mismatch this test would otherwise fail to catch.
-    """
-
-    async def test_companion_addressed_broadcast_wakes_and_refreshes(
-        self, nats_server: str, tmp_path: Path
-    ) -> None:
-        kai_state = create_state(
-            BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server),
-            tmp_path / "kai-companion",
-            tty=_KAI_TTY,
-            hostname="test-host",
-            pwd="/test",
-            companion=CompanionSession(
-                user="jfreeman",
-                display_name="Jim Freeman",
-                kind="human",
-                tty="bbbb0099",
-            ),
-        )
-        eric_state = create_state(
-            BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server),
-            tmp_path / "eric-companion",
-            tty="eeee0098",
-            hostname="test-host",
-            pwd="/test",
-        )
-        kai_mcp = create_server(kai_state)
-        eric_mcp = create_server(eric_state)
-
-        async with (
-            StampedClient(FastMCPTransport(kai_mcp)) as kai_client,
-            StampedClient(FastMCPTransport(eric_mcp)),
-        ):
-            assert kai_state.companion is not None
-            await asyncio.sleep(3.0)  # let the poller establish both inbox-notify SUBs
-
-            await eric_state.relay.deliver(
-                Message(
-                    from_user="eric",
-                    to_user=kai_state.companion.user,  # addressed to the companion
-                    body="for the human",
-                )
-            )
-
-            # The combined unread count (primary + companion,
-            # _relay_pushes_inbox_notify's else-branch mirrors this sum for the
-            # LocalRelay fallback) must reflect the companion's message well
-            # inside push latency, not the 30s backstop.
-            desc = await _wait_for_read_messages_description(
-                kai_client, "1 unread", timeout=6.0
-            )
-            assert "1 unread" in desc
-
-
-class TestCompanionTargetedPushNotification:
-    """A *targeted* (``user:tty``) write to the companion's own session key
-    rides the companion's talk-notify subject, not its inbox-notify one —
-    proving ``poll_inbox`` opens a second talk-notify SUB bound to
-    ``state.companion.session_key``, distinct from both this session's own
-    talk SUB and either inbox-notify SUB. Before this SUB existed, nothing
-    in this process subscribed to that subject at all, so a targeted write
-    to the companion regressed to the backstop exactly as the untargeted
-    companion gap did before its own fix.
-    """
-
-    async def test_targeted_write_to_companion_wakes_and_refreshes(
-        self, nats_server: str, tmp_path: Path
-    ) -> None:
-        kai_state = create_state(
-            BiffConfig(user="kai", repo_name=_TEST_REPO, relay_url=nats_server),
-            tmp_path / "kai-companion-targeted",
-            tty=_KAI_TTY,
-            hostname="test-host",
-            pwd="/test",
-            companion=CompanionSession(
-                user="jfreeman",
-                display_name="Jim Freeman",
-                kind="human",
-                tty="bbbb0098",
-            ),
-        )
-        eric_state = create_state(
-            BiffConfig(user="eric", repo_name=_TEST_REPO, relay_url=nats_server),
-            tmp_path / "eric-companion-targeted",
-            tty="eeee0097",
-            hostname="test-host",
-            pwd="/test",
-        )
-        kai_mcp = create_server(kai_state)
-        eric_mcp = create_server(eric_state)
-
-        async with (
-            StampedClient(FastMCPTransport(kai_mcp)) as kai_client,
-            StampedClient(FastMCPTransport(eric_mcp)),
-        ):
-            assert kai_state.companion_session_key is not None
-            await asyncio.sleep(3.0)  # let the poller establish the companion talk SUB
-
-            await eric_state.relay.deliver(
-                Message(
-                    from_user="eric",
-                    to_user=kai_state.companion_session_key,  # targeted — user:tty
-                    body="direct ping for the human",
-                ),
-                sender_key=eric_state.session_key,
-            )
-
-            # Well under the 30s nap_interval backstop — proves the companion
-            # talk-notify wake poke detected it, not the periodic safety net.
-            desc = await _wait_for_read_messages_description(
-                kai_client, "1 unread", timeout=6.0
-            )
-            assert "1 unread" in desc
 
 
 class TestPollerAtDisabledInterval:

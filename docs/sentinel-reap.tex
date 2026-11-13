@@ -138,12 +138,10 @@ running \texttt{biff mcp} process.  It is a fixed, arbitrary element of
 $SESSIONKEY$: the model does not care \emph{which} key it is, only that
 every operation below agrees on it, exactly as \texttt{\_reap\_sentinels}
 compares every sentinel it finds against the one value
-\texttt{state.session\_key} for the life of the process.  Companion
-sessions (\texttt{state.companion\_session\_key}) are a second,
-independent instance of the same $own$-relative machinery --- the code
-folds both into one \texttt{live\_keys} set --- and are not modelled
-separately; every property proved of $own$ applies unchanged to a
-companion key.
+\texttt{state.session\_key} for the life of the process.  A process
+carries exactly one session key; the dual-session companion, which once
+supplied a second carrier folded into the same \texttt{live\_keys} set,
+was removed (PL-231).
 
 %%----------------------------------------------------------------------
 \section{State}
@@ -647,8 +645,7 @@ ProB finds it, five operations from $Init$:
   \item $OwnOrphanReapTick$ --- before \texttt{\_shutdown\_tasks} has
     run, $own$'s \emph{own} background \texttt{\_reap\_loop} ticks
     (its two-second interval elapses during one of the \texttt{await}s
-    in \texttt{\_append\_logout\_event} / \texttt{\_append\_companion\_
-    logout\_event}, each bounded at three seconds), finds its own
+    in \texttt{\_append\_logout\_event}, bounded at three seconds), finds its own
     sentinel, and discards it under the own-key skip.
     $sentinelPresent = \emptyset$; $rowPresent$ is untouched.
   \item $SignalShutdown$ --- \texttt{\_shutdown\_tasks} now runs,
@@ -829,9 +826,10 @@ permanently stuck once a process has gone, crashed or not.
     delete) that the code's own commentary in \texttt{\_handle\_kv\_
     delete} already accepts as harmless duplication, not a correctness
     hazard for this specification's property.
-  \item \textbf{Companion sessions as a distinct carrier} --- folded
-    into $own$ by the remark in \S\ref{sec:own}, not given a second
-    constant; every property proved of $own$ transfers unchanged.
+  \item \textbf{A second session carrier} --- a process carries exactly
+    one session key, $own$, so no second constant is needed.  (The removed
+    dual-session companion was the only source of a second carrier;
+    see \S\ref{sec:own}.)
   \item \textbf{The content of a KV row} --- $rowPresent$ is presence
     only, matching this document's use of \texttt{nats-relay.tex}'s
     $SessionStore$ for the underlying storage model.

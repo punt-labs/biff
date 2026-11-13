@@ -45,14 +45,14 @@ def _panel_summary(output: dict[str, object]) -> str:
 
 
 class TestReadMessagesCount:
-    """read_messages row counting — reads the count format_read/_dual emits.
+    """read_messages row counting — reads the count format_read emits.
 
     The panel count is parsed from the tool's own "N new
     message(s)" header line(s), never recounted from data rows — a row
     count also matches the (now differently indented) column-header row,
     and cannot in general distinguish a data row from a message body that
     happens to share the same indent. Fixtures below mirror the real
-    format_read/format_read_dual output shape exactly.
+    format_read output shape exactly.
     """
 
     def test_data_rows_counted(self) -> None:
@@ -111,22 +111,6 @@ class TestReadMessagesCount:
         output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
         summary = _panel_summary(output)
         assert summary == "1 new"
-
-    def test_dual_section_counts_summed(self) -> None:
-        """format_read_dual's per-identity counts sum to the panel total."""
-        response = (
-            "\u25b6  jfreeman (1 new message)\n"
-            "   FROM   DATE              MESSAGE\n"
-            "   kai    Mon Mar 31 14:00  hey\n"
-            "\n"
-            "\u25b6  claude (2 new messages)\n"
-            "   FROM   DATE              MESSAGE\n"
-            "   rmh    Mon Mar 31 14:00  done\n"
-            "   alpha  Mon Mar 31 14:01  ping"
-        )
-        output = _run_hook("mcp__plugin_biff_tty__read_messages", response)
-        summary = _panel_summary(output)
-        assert summary == "3 new"
 
 
 class TestWhoCount:

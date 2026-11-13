@@ -167,9 +167,8 @@ the two is which inbox they watch.  Rather than duplicate $talkSubGen$,
 its invariant, and its liveness obligation for a second variable, this
 specification replaces $talkSubGen$ with $subGen$, a total function from a
 free type $SubKind$ --- introduced here with two constructors, $talk$ and
-$inboxNotify$, and since extended to a third, $inboxNotifyCompanion$ (see
-its own free-type declaration below) --- to the generation each is bound
-to.  The
+$inboxNotify$, and since extended to a third, $kvWatch$ (see its own
+free-type declaration below) --- to the generation each is bound to.  The
 invariant $talkSubGen \leq generation$ becomes $\forall k : SubKind @
 subGen(k) \leq generation$, quantified once over the family rather than
 restated per kind, and the stranding property becomes an obligation
@@ -183,8 +182,10 @@ instead of one schema per kind.  This is a generalisation, not a
 restructuring: setting $SubKind$ to a singleton $\{ talk \}$ recovers
 exactly the third invariant's state space, and the family was
 deliberately built to outlive its original two members --- its later
-extension to $inboxNotifyCompanion$ is that prediction already exercised
-once, not a hypothetical.
+extension to $kvWatch$ is that prediction already exercised once, not a
+hypothetical.  (A fourth constructor, for the dual-session
+companion's inbox SUB, once existed; the companion was removed, PL-231,
+and the constructor with it.)
 
 %%----------------------------------------------------------------------
 \section{Basic Types}
@@ -225,37 +226,31 @@ times out; the cached handles are stale and must not be used.
 $closed$ is permanent shutdown --- no reconnection is possible.
 
 \begin{zed}
-  SubKind ::= talk | inboxNotify | inboxNotifyCompanion | kvWatch
+  SubKind ::= talk | inboxNotify | kvWatch
 \end{zed}
 
 $SubKind$ indexes the family of always-on core-NATS subscriptions the
 relay holds open for the life of the process: $talk$, the talk-inbox SUB
 (biff-9la); $inboxNotify$, the broadcast inbox-notify SUB for the
-session's own user (biff-5ex); and $inboxNotifyCompanion$, the same kind
-of SUB bound to a dual session's companion user instead. All three are
-the same class of resource --- bound to the particular client that
-created them, replayed by nats-py's in-place reconnect, and orphaned by a
-force-reconnect that discards the client wholesale --- so the model
-tracks one generation-binding per kind rather than duplicating the
-treatment. $inboxNotifyCompanion$ is not a new shape, only a further
-instance of $inboxNotify$'s: a companion-addressed broadcast pokes a
-subject keyed on the companion's user, which nothing subscribes to unless
-a second binding of the same kind exists for that user, exactly as a
-second live session of the same user would need its own binding. This is
-the family's extension point exercised exactly as designed: $SubKind$
-gained a third constructor, every operation already quantified over
-$SubKind$ ($EnsureConnected$'s $subGen$ preservation, $Subscribe$,
-$ForceReconnect$'s stranding, the liveness obligation in
-\S\ref{sec:modelcheck}) needed no change, and only the two sites that
-name every kind explicitly ($Init$'s literal and the
-initial-state description) gained the third mapping. It is finite and
-closed: a further always-on subscription is added the same way, by
-extending $SubKind$ with one more constructor, not by introducing a new
-state variable.
+session's own user (biff-5ex); and $kvWatch$, the sessions-KV watcher's
+consumer (below).  All three are the same class of resource --- bound to
+the particular client that created them, replayed by nats-py's in-place
+reconnect, and orphaned by a force-reconnect that discards the client
+wholesale --- so the model tracks one generation-binding per kind rather
+than duplicating the treatment.  This is the family's extension point
+exercised exactly as designed: $SubKind$ gained a constructor, every
+operation already quantified over $SubKind$ ($EnsureConnected$'s $subGen$
+preservation, $Subscribe$, $ForceReconnect$'s stranding, the liveness
+obligation in \S\ref{sec:modelcheck}) needed no change, and only the two
+sites that name every kind explicitly ($Init$'s literal and the
+initial-state description) gained the mapping.  It is finite and closed:
+a further always-on subscription is added the same way, by extending
+$SubKind$ with one more constructor, not by introducing a new state
+variable.
 
-$kvWatch$ is the fourth kind: the sessions-KV watcher's consumer
+$kvWatch$ is the third kind: the sessions-KV watcher's consumer
 (\texttt{\_run\_kv\_watch}, \texttt{kv.watchall()}).  It is a core-NATS
-subscription like the other three --- bound to the client that created it,
+subscription like the other two --- bound to the client that created it,
 orphaned wholesale by $ForceReconnect$, replayed by an in-place reconnect.
 Its omission let the model call the watcher live in states where it was
 dead: $Watcher$ carried a phase but no generation binding, and a $HandleTimeout$
@@ -1298,8 +1293,8 @@ SUB is bound to against the current connection generation and, for
 whichever kind $kind?$ differs, opens a fresh SUB of that kind on the live
 client and records the new binding.  One schema, indexed by $kind?$,
 covers the existing $talk$ reconciliation (\texttt{\_reconcile\_talk\_sub}),
-the biff-5ex $inboxNotify$ reconciliation, and its $inboxNotifyCompanion$
-extension, because $subGen(kind?) < generation$ is their common signature
+the biff-5ex $inboxNotify$ reconciliation, and the $kvWatch$
+watcher's re-subscribe, because $subGen(kind?) < generation$ is their common signature
 regardless of kind.  This one operation covers three cases the code
 treats uniformly for each kind.  The \emph{initial} subscribe: after
 the first dial, $subGen(kind?) = 0 < generation = 1$, and the first tick
@@ -1314,28 +1309,12 @@ kind? \mapsto generation \}$ is the whole repair for that kind: it moves
 the connection from stranded to current for $kind?$ in a single step, and
 it is the transition the code must implement for the biff-9la fix
 ($kind? = talk$), its biff-5ex extension ($kind? = inboxNotify$), and the
-dual-session companion's own inbox-notify SUB ($kind? = inboxNotifyCompanion$)
-alike.  Every other component of $Connection$ is preserved, $subGen$'s
+sessions-KV watcher ($kind? = kvWatch$) alike.  Every other component of $Connection$ is preserved, $subGen$'s
 other kinds included; a re-subscribe of one kind touches that kind's SUB
 and nothing else --- the three kinds reconcile independently, one
 $Subscribe$ per stranded kind per tick, exactly as \texttt{poll\_inbox}
-calls \texttt{\_reconcile\_talk\_sub}, its $inboxNotify$ counterpart, and
-the companion's $inboxNotifyCompanion$ counterpart as separate calls.
-
-A dual session's companion also gets its own talk-notify SUB
-(\texttt{subscribe\_companion\_talk} /
-\texttt{\_reconcile\_companion\_talk\_sub}), bound and reconciled the same
-lazy, generation-compared way as the three $SubKind$-indexed SUBs above ---
-but it is not itself a fourth $SubKind$ constructor.  The companion's talk
-SUB shares $talk$'s subject-naming and wake-only callback shape rather
-than $inboxNotify$'s, so it does not fit the $inboxNotifyCompanion$
-precedent of extending an existing kind with a second user-keyed instance;
-modelling it as its own $SubKind$ constructor is the extension the free
-type's own closing description anticipates (``a further always-on
-subscription is added the same way, by extending $SubKind$ with one more
-constructor'') but has not yet been made.  Until then its liveness is a
-corollary the code upholds structurally identically to the three
-modelled kinds, not a property this spec proves.
+calls \texttt{\_reconcile\_talk\_sub} and its $inboxNotify$ counterpart
+as separate calls, and the watcher supervisor re-subscribes $kvWatch$.
 
 \subsection{Subscribe Retry (Transient Subscribe Failure)}
 
@@ -1613,7 +1592,7 @@ halfOpen$, and the wedge is recovered through $HandleError$.
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
   generation' = 0 \\
-  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, inboxNotifyCompanion \mapsto 0, kvWatch \mapsto 0 \} \\
+  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, kvWatch \mapsto 0 \} \\
   reconnectEpoch' = 0 \\
   spuriousTeardown' = zfalse \\
   epochPending' = zfalse \\
@@ -1781,11 +1760,11 @@ verified by model checking with probcli (\texttt{z-spec test}):
 
     CTL model checking is not itself parametric, so probcli checks the
     formula once per instance of $k$ rather than as a single quantified
-    query; all three instances are confirmed \textbf{TRUE}, $k = talk$
-    (the original biff-9la property, unchanged in substance), $k =
-    inboxNotify$ (the biff-5ex obligation for a session's own user), and
-    $k = inboxNotifyCompanion$ (the same obligation for a dual session's
-    companion user) --- and the restriction of any of the three to
+    query; the instances $k = talk$ (the original biff-9la
+    property, unchanged in substance) and $k = inboxNotify$ (the biff-5ex
+    obligation for a session's own user) are confirmed \textbf{TRUE}, and
+    $k = kvWatch$ is the instance this frozen variant is built to refute
+    --- and the restriction of $talk$ and $inboxNotify$ to
     $connState = connected$ is TRUE as well; only the terminal $closed$
     state, in which the connection is permanently shut down and carries
     no subscription obligation of any kind, is excluded.  The escape for
@@ -1824,8 +1803,7 @@ verified by model checking with probcli (\texttt{z-spec test}):
     That state \emph{is} biff-9la, and the same defect shape --- a guard
     that checks ``never subscribed'' instead of ``subscribed to a
     superseded generation'' --- would equally strand $inboxNotify$ or
-    $inboxNotifyCompanion$ were the fix not applied uniformly across the
-    family.
+    $kvWatch$ were the fix not applied uniformly across the family.
 
   \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
     $streaming$, never to $idle$ or $stopped$.  The watcher

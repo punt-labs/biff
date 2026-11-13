@@ -19,15 +19,13 @@ from biff.models import BiffConfig, Message, UnreadSummary, WallPost
 from biff.nats_relay import NatsRelay
 from biff.relay import LocalRelay
 from biff.server.app import create_server
-from biff.server.state import CompanionSession, ServerState, create_state
+from biff.server.state import ServerState, create_state
 from biff.server.tools import _descriptions
 from biff.server.tools._descriptions import (
     _READ_MESSAGES_BASE,
     SubscriptionBinding,
     _active_tick,
-    _CompanionSubs,
     _InboxPokeGate,
-    _reconcile_companion_subs,
     _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
     _sync_unread_file,
@@ -35,7 +33,6 @@ from biff.server.tools._descriptions import (
     nap_interval_for,
     poll_inbox,
     refresh_read_messages,
-    subscribe_companion_talk,
     subscribe_inbox_notify,
     subscribe_talk,
     talk_signal,
@@ -295,23 +292,13 @@ class TestUnreadFile:
         await refresh_read_messages(mcp, state)
         assert nested.exists()
 
-    async def test_sync_with_no_summary_still_includes_companion_count(
+    async def test_sync_without_summary_reports_own_count_and_identity(
         self, tmp_path: Path
     ) -> None:
-        """``_sync_unread_file(state)`` with no ``summary=`` kwarg — the
-        shape the display-queue rotation path calls it with — must still
-        report the combined primary+companion total, not just the
-        primary session's own count.
-
-        Regression: a caller that omits ``summary=`` used to fall back to
-        fetching only ``state.session_key``'s count, silently dropping
-        the companion's half of the total from the status file on every
-        queue rotation, even though ``refresh_read_messages`` shows the
-        combined total in the tool description at the same moment.
+        """``_sync_unread_file(state)`` with no ``summary=`` — the shape the
+        display-queue rotation path calls it with — writes this session's
+        own unread count under the agent's own identity.
         """
-        companion = CompanionSession(
-            user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
-        )
         state = create_state(
             BiffConfig(user="kai", repo_name=_TEST_REPO),
             tmp_path,
@@ -319,25 +306,16 @@ class TestUnreadFile:
             hostname="test-host",
             pwd="/test",
             unread_path=tmp_path / "unread.json",
-            companion=companion,
         )
         await state.relay.deliver(
             Message(from_user="eric", to_user=_KAI_SESSION, body="for kai")
         )
-        assert state.companion_session_key is not None
-        await state.relay.deliver(
-            Message(
-                from_user="eric",
-                to_user=state.companion_session_key,
-                body="for the human",
-            )
-        )
 
-        await _sync_unread_file(state)  # no summary= — the rotation call shape
+        await _sync_unread_file(state)
 
         assert state.unread_path is not None
         data = json.loads(state.unread_path.read_text())
-        assert data["count"] == 2  # 1 primary + 1 companion, not just 1
+        assert (data["count"], data["user"]) == (1, "kai")
 
 
 class TestTalkSignal:
@@ -836,10 +814,8 @@ class TestPollInbox:
             latch: TalkNotifyLatch,
             gate: _InboxPokeGate,
             wake_event: asyncio.Event,
-            *,
-            user: str,
         ) -> SubscriptionBinding | None:
-            del state, latch, gate, wake_event, user
+            del state, latch, gate, wake_event
             inbox_subscribe_started.set()
             await asyncio.sleep(5.0)  # never resolves before the cancellation
             msg = "unreachable — cancellation must fire first"
@@ -1137,69 +1113,6 @@ class TestPollInbox:
         talk_handle.unsubscribe.assert_awaited_once()
         inbox_handle.unsubscribe.assert_awaited_once()
 
-    async def test_companion_registered_after_start_still_gets_a_sub(
-        self, tmp_path: Path
-    ) -> None:
-        """A companion set AFTER ``poll_inbox`` starts still opens its own
-        inbox-notify SUB — production always hits this path: the
-        heartbeat loop's ``_poll_companion_registration`` sets
-        ``state.companion`` (via ``object.__setattr__`` on the frozen
-        ``ServerState``) well after the poller task is already running,
-        never before it. A one-shot check for ``state.companion`` made
-        only before the tick loop starts would permanently miss this —
-        the per-tick reconcile must pick it up lazily.
-        """
-        nc = AsyncMock()
-        subjects: list[str] = []
-
-        async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
-            del cb
-            subjects.append(subject)
-            return AsyncMock()
-
-        nc.subscribe = AsyncMock(side_effect=fake_subscribe)
-
-        def _inbox_notify_subject(repo: str, user: str) -> str:
-            return f"biff.{repo}.notify.{user}"
-
-        relay = MagicMock(spec=NatsRelay)
-        relay.get_nc = AsyncMock(return_value=nc)
-        relay.connection_generation = 0
-        relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
-        relay.inbox_notify_subject = MagicMock(side_effect=_inbox_notify_subject)
-        relay.get_wall = AsyncMock(return_value=None)
-        relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
-
-        state = create_state(
-            BiffConfig(user="kai", repo_name=_TEST_REPO),
-            tmp_path,
-            tty="tty1",
-            hostname="test-host",
-            pwd="/test",
-            relay=relay,
-            # companion intentionally omitted — None at poller start,
-            # matching production.
-        )
-        mcp = create_server(state)
-        task = asyncio.create_task(poll_inbox(mcp, state, interval=self._FAST_INTERVAL))
-        await asyncio.sleep(self._FAST_INTERVAL * 3)
-
-        # The heartbeat loop's own mutation shape (ServerState is frozen).
-        object.__setattr__(
-            state,
-            "companion",
-            CompanionSession(
-                user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
-            ),
-        )
-        await asyncio.sleep(self._FAST_INTERVAL * 5)
-
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        assert f"biff.{_TEST_REPO}.notify.jfreeman" in subjects
-
     async def test_disabled_interval_recovers_from_a_client_discard(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1399,10 +1312,7 @@ class TestPollInbox:
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
             _wake_event: asyncio.Event,
-            *,
-            user: str,
         ) -> SubscriptionBinding:
-            del user
             subscribe_calls[0] += 1
             # First call is the startup bind at the pre-swap generation (0, now
             # stale); the cheap-nap reconcile rebinds to the live generation (1).
@@ -1911,367 +1821,6 @@ class TestTalkCallbackPreservesWireTypes:
         assert drained[0].nbody == ""
 
 
-class TestReconcileCompanionSubs:
-    """A newly (re)established companion inbox-notify SUB must mark the
-    gate so pre-existing broadcast mail is not stranded.
-
-    Core NATS has no replay: a broadcast poke published to the companion's
-    inbox before this process ever subscribed to it is gone forever. Only
-    ``stream_info`` (a real recompute) can discover mail that arrived
-    before the SUB existed — so the very first successful bind (or a retry
-    that finally succeeds after prior failures) must force that recompute,
-    the same way ``_InboxPokeGate.__init__`` starting poked already forces
-    it for this session's OWN inbox at poller startup.
-    """
-
-    @staticmethod
-    def _state(tmp_path: Path) -> ServerState:
-        companion = CompanionSession(
-            user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
-        )
-        return create_state(
-            BiffConfig(user="kai", repo_name=_TEST_REPO),
-            tmp_path,
-            tty="tty1",
-            hostname="test-host",
-            pwd="/test",
-            companion=companion,
-        )
-
-    async def test_first_bind_marks_the_gate_and_wakes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        state = self._state(tmp_path)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()  # consume the initial forced recompute — steady state
-        wake_event = asyncio.Event()
-
-        fresh = SubscriptionBinding(AsyncMock(), 0)
-
-        async def _fake_subscribe_inbox_notify(
-            _state: ServerState,
-            _latch: TalkNotifyLatch,
-            _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
-            *,
-            user: str,
-        ) -> SubscriptionBinding | None:
-            del user
-            return fresh
-
-        monkeypatch.setattr(
-            _descriptions, "subscribe_inbox_notify", _fake_subscribe_inbox_notify
-        )
-
-        result = await _reconcile_companion_subs(
-            state, _CompanionSubs(None, None, None, None), gate, wake_event
-        )
-
-        assert result.inbox_sub is fresh
-        assert wake_event.is_set()
-        assert gate.claim() is True  # the first bind forced a recompute
-
-    async def test_retry_that_finally_succeeds_marks_the_gate(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The same catch-up applies when a prior tick's subscribe failed
-        (``inbox_sub`` still ``None``) and this tick's retry succeeds."""
-        state = self._state(tmp_path)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()
-        wake_event = asyncio.Event()
-
-        fresh = SubscriptionBinding(AsyncMock(), 0)
-
-        async def _fake_subscribe_inbox_notify(
-            _state: ServerState,
-            _latch: TalkNotifyLatch,
-            _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
-            *,
-            user: str,
-        ) -> SubscriptionBinding | None:
-            del user
-            return fresh
-
-        monkeypatch.setattr(
-            _descriptions, "subscribe_inbox_notify", _fake_subscribe_inbox_notify
-        )
-
-        # A previously-failed attempt already created the latch (and
-        # recorded the companion's own identity), but inbox_sub is still
-        # None — this reconcile pass is the retry for the SAME identity.
-        assert state.companion is not None
-        previously_failed = _CompanionSubs(
-            _test_latch(), None, None, None, state.companion.session_key
-        )
-
-        result = await _reconcile_companion_subs(
-            state, previously_failed, gate, wake_event
-        )
-
-        assert result.inbox_sub is fresh
-        assert gate.claim() is True
-
-    async def test_steady_state_does_not_mark_the_gate(self, tmp_path: Path) -> None:
-        """Once bound, an ordinary no-op reconcile (generation unchanged,
-        identity unchanged) must not spuriously mark the gate on every
-        tick."""
-        state = self._state(tmp_path)
-        assert state.companion is not None
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()
-        wake_event = asyncio.Event()
-
-        already_bound = SubscriptionBinding(AsyncMock(), 0)
-        steady = _CompanionSubs(
-            _test_latch(),
-            already_bound,
-            _test_latch(),
-            SubscriptionBinding(AsyncMock(), 0),
-            state.companion.session_key,
-        )
-
-        result = await _reconcile_companion_subs(state, steady, gate, wake_event)
-
-        assert result.inbox_sub is already_bound
-        assert gate.claim() is False
-        assert not wake_event.is_set()
-
-    async def test_companion_rollback_to_none_unsubscribes_old_subs(
-        self, tmp_path: Path
-    ) -> None:
-        """``state.companion`` rolling back to ``None`` with the connection
-        generation unchanged must unsubscribe the old identity's SUBs, not
-        leave them bound forever.
-
-        A connection-generation-only reconcile would never notice this —
-        the SUBs are still live on the still-current client, so
-        ``_reconcile_always_on_sub`` alone sees nothing to do. Without
-        identity tracking, this process keeps waking for a companion that
-        is no longer relevant (Bugbot finding hwr78).
-        """
-        state = self._state(tmp_path)
-        assert state.companion is not None
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()  # consume the initial forced recompute — steady state
-        wake_event = asyncio.Event()
-
-        old_inbox_handle = AsyncMock()
-        old_talk_handle = AsyncMock()
-        bound = _CompanionSubs(
-            _test_latch(),
-            SubscriptionBinding(old_inbox_handle, 0),
-            _test_latch(),
-            SubscriptionBinding(old_talk_handle, 0),
-            state.companion.session_key,
-        )
-
-        object.__setattr__(state, "companion", None)
-        result = await _reconcile_companion_subs(state, bound, gate, wake_event)
-
-        old_inbox_handle.unsubscribe.assert_awaited_once()
-        old_talk_handle.unsubscribe.assert_awaited_once()
-        assert result.inbox_sub is None
-        assert result.talk_sub is None
-        assert result.identity is None
-        # The drop itself is an unread-state change (the companion's
-        # contribution vanishes from the next combined-count recompute)
-        # with no fresh SUB bind left to mark the gate on our behalf.
-        assert wake_event.is_set()
-        assert gate.claim() is True
-
-    async def test_companion_identity_change_unsubscribes_old_and_binds_new(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A different companion taking over the role (same connection
-        generation) must unsubscribe the old identity's SUBs and bind the
-        new identity's own — not silently keep listening on the stale
-        subject forever, and not silently skip binding the new one because
-        ``_reconcile_always_on_sub`` already sees a live SUB (Bugbot
-        finding hwr78).
-        """
-        state = self._state(tmp_path)
-        assert state.companion is not None
-        old_identity = state.companion.session_key
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()  # consume the initial forced recompute — steady state
-        wake_event = asyncio.Event()
-
-        old_inbox_handle = AsyncMock()
-        old_talk_handle = AsyncMock()
-        bound = _CompanionSubs(
-            _test_latch(),
-            SubscriptionBinding(old_inbox_handle, 0),
-            _test_latch(),
-            SubscriptionBinding(old_talk_handle, 0),
-            old_identity,
-        )
-
-        new_companion = CompanionSession(
-            user="newperson", display_name="New", kind="human", tty="cccc0002"
-        )
-        object.__setattr__(state, "companion", new_companion)
-
-        fresh_inbox = SubscriptionBinding(AsyncMock(), 0)
-        fresh_talk = SubscriptionBinding(AsyncMock(), 0)
-        bind_users: list[str] = []
-
-        async def _fake_subscribe_inbox_notify(
-            _state: ServerState,
-            _latch: TalkNotifyLatch,
-            _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
-            *,
-            user: str,
-        ) -> SubscriptionBinding | None:
-            bind_users.append(user)
-            return fresh_inbox
-
-        async def _fake_subscribe_companion_talk(
-            _state: ServerState,
-            companion: CompanionSession,
-            _latch: TalkNotifyLatch,
-            _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
-        ) -> SubscriptionBinding | None:
-            bind_users.append(companion.user)
-            return fresh_talk
-
-        monkeypatch.setattr(
-            _descriptions, "subscribe_inbox_notify", _fake_subscribe_inbox_notify
-        )
-        monkeypatch.setattr(
-            _descriptions, "subscribe_companion_talk", _fake_subscribe_companion_talk
-        )
-
-        result = await _reconcile_companion_subs(state, bound, gate, wake_event)
-
-        old_inbox_handle.unsubscribe.assert_awaited_once()
-        old_talk_handle.unsubscribe.assert_awaited_once()
-        assert bind_users == ["newperson", "newperson"]
-        assert result.inbox_sub is fresh_inbox
-        assert result.talk_sub is fresh_talk
-        assert result.identity == new_companion.session_key
-        assert result.identity != old_identity
-        # An identity CHANGE (not a drop) is covered by the normal
-        # fresh-bind path -- _reconcile_always_on_sub's own mark+wake on
-        # the new identity's successful inbox-notify subscribe, not the
-        # drop-specific handling above -- verified explicitly here rather
-        # than assumed.
-        assert wake_event.is_set()
-        assert gate.claim() is True
-
-
-class TestCompanionTalkCallbackGatesOnWakePoke:
-    """``subscribe_companion_talk``'s callback must mark the shared inbox
-    gate only for a wake poke, not for every frame on the companion's talk
-    subject.
-
-    Before this fix, the callback unconditionally called ``gate.mark()``
-    for every frame, including a genuine talk message/invite/end/withdraw
-    addressed to the companion — forcing a spurious ``stream_info``
-    recompute on every real conversation turn. ``subscribe_talk`` already
-    applies the wake-poke classification to this session's own talk
-    subject (DES-062's local-review fix round); the companion's subject
-    deserves the same discipline.
-    """
-
-    @staticmethod
-    def _state(tmp_path: Path, nc: AsyncMock) -> ServerState:
-        relay = MagicMock(spec=NatsRelay)
-        relay.connection_generation = 1
-        relay.get_nc = AsyncMock(return_value=nc)
-        relay.talk_notify_subject = MagicMock(
-            return_value="biff.talk.notify.jfreeman:bbbb0001"
-        )
-        companion = CompanionSession(
-            user="jfreeman", display_name="Jim", kind="human", tty="bbbb0001"
-        )
-        return create_state(
-            BiffConfig(user="kai", repo_name=_TEST_REPO),
-            tmp_path,
-            tty="tty1",
-            hostname="test-host",
-            pwd="/test",
-            relay=relay,
-            companion=companion,
-        )
-
-    async def test_genuine_talk_frame_wakes_but_does_not_mark_the_gate(
-        self, tmp_path: Path
-    ) -> None:
-        nc = AsyncMock()
-        state = self._state(tmp_path, nc)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()  # consume the initial forced recompute — steady state
-        wake_event = asyncio.Event()
-
-        assert state.companion is not None
-        await subscribe_companion_talk(
-            state, state.companion, _test_latch(), gate, wake_event
-        )
-        on_companion_talk = nc.subscribe.call_args.kwargs["cb"]
-
-        msg = MagicMock()
-        msg.data = json.dumps(
-            {
-                "type": "message",
-                "from": "eric",
-                "body": "hello",
-                "to_key": "jfreeman:bbbb0001",
-                "from_key": "eric:tty2",
-            }
-        ).encode()
-        await on_companion_talk(msg)
-
-        assert wake_event.is_set()  # presence is still active
-        assert gate.claim() is False  # but no spurious unread recompute
-
-    async def test_wake_poke_marks_the_gate(self, tmp_path: Path) -> None:
-        nc = AsyncMock()
-        state = self._state(tmp_path, nc)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()  # consume the initial forced recompute — steady state
-        wake_event = asyncio.Event()
-
-        assert state.companion is not None
-        await subscribe_companion_talk(
-            state, state.companion, _test_latch(), gate, wake_event
-        )
-        on_companion_talk = nc.subscribe.call_args.kwargs["cb"]
-
-        # A /write mail notification riding the talk subject: no "type" key.
-        msg = MagicMock()
-        msg.data = json.dumps(
-            {"from": "eric", "body": "for the human", "to_key": "jfreeman:bbbb0001"}
-        ).encode()
-        await on_companion_talk(msg)
-
-        assert wake_event.is_set()
-        assert gate.claim() is True  # the poke is owed a recompute
-
-    async def test_legacy_bare_wake_marks_the_gate(self, tmp_path: Path) -> None:
-        nc = AsyncMock()
-        state = self._state(tmp_path, nc)
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        gate.claim()  # consume the initial forced recompute — steady state
-        wake_event = asyncio.Event()
-
-        assert state.companion is not None
-        await subscribe_companion_talk(
-            state, state.companion, _test_latch(), gate, wake_event
-        )
-        on_companion_talk = nc.subscribe.call_args.kwargs["cb"]
-
-        msg = MagicMock()
-        msg.data = b"1"  # legacy non-dict payload
-        await on_companion_talk(msg)
-
-        assert wake_event.is_set()
-        assert gate.claim() is True
-
-
 class TestSubscribeTalkLatch:
     """The poller's ``subscribe_talk`` routes failures/successes through the latch.
 
@@ -2351,7 +1900,7 @@ class TestSubscribeInboxNotify:
         """LocalRelay (the default test relay) has no push mechanism."""
         gate = _InboxPokeGate(backstop_interval=1000.0)
         result = await subscribe_inbox_notify(
-            state, _test_latch(), gate, asyncio.Event(), user="kai"
+            state, _test_latch(), gate, asyncio.Event()
         )
         assert result is None
 
@@ -2359,29 +1908,10 @@ class TestSubscribeInboxNotify:
         state, relay = self._nats_state(tmp_path)
         relay.get_nc = AsyncMock(return_value=AsyncMock())
         gate = _InboxPokeGate(backstop_interval=1000.0)
-        sub = await subscribe_inbox_notify(
-            state, _test_latch(), gate, asyncio.Event(), user="kai"
-        )
+        sub = await subscribe_inbox_notify(state, _test_latch(), gate, asyncio.Event())
         assert sub is not None
         assert sub.generation == 1
         relay.inbox_notify_subject.assert_called_once_with("_test-server", "kai")
-
-    async def test_subscribes_on_a_different_users_subject_for_companion(
-        self, tmp_path: Path
-    ) -> None:
-        """The *user* argument, not always ``state.config.user``, decides
-        the subject — the companion binding passes the companion's user
-        so its broadcast pokes land on a subject this session actually
-        subscribes to.
-        """
-        state, relay = self._nats_state(tmp_path)
-        relay.get_nc = AsyncMock(return_value=AsyncMock())
-        gate = _InboxPokeGate(backstop_interval=1000.0)
-        sub = await subscribe_inbox_notify(
-            state, _test_latch(), gate, asyncio.Event(), user="eric"
-        )
-        assert sub is not None
-        relay.inbox_notify_subject.assert_called_once_with("_test-server", "eric")
 
     async def test_callback_marks_gate_and_wakes(self, tmp_path: Path) -> None:
         """The callback marks the poke gate and wakes the poller — nothing else."""
@@ -2393,7 +1923,7 @@ class TestSubscribeInboxNotify:
         wake_event = asyncio.Event()
         state.activity.enter_nap()
 
-        await subscribe_inbox_notify(state, _test_latch(), gate, wake_event, user="kai")
+        await subscribe_inbox_notify(state, _test_latch(), gate, wake_event)
         callback = nc.subscribe.call_args.kwargs["cb"]
         await callback(object())
 
@@ -2410,22 +1940,14 @@ class TestSubscribeInboxNotify:
         latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
 
         with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
-            assert (
-                await subscribe_inbox_notify(state, latch, gate, wake_event, user="kai")
-                is None
-            )
-            assert (
-                await subscribe_inbox_notify(state, latch, gate, wake_event, user="kai")
-                is None
-            )
+            assert await subscribe_inbox_notify(state, latch, gate, wake_event) is None
+            assert await subscribe_inbox_notify(state, latch, gate, wake_event) is None
 
             warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
             assert len(warnings) == 1  # not one per tick
 
             relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
-            sub = await subscribe_inbox_notify(
-                state, latch, gate, wake_event, user="kai"
-            )
+            sub = await subscribe_inbox_notify(state, latch, gate, wake_event)
 
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
@@ -2465,10 +1987,7 @@ class TestReconcileInboxNotifySub:
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
             _wake_event: asyncio.Event,
-            *,
-            user: str,
         ) -> SubscriptionBinding | None:
-            del user
             nonlocal calls
             calls += 1
             return SubscriptionBinding(AsyncMock(), 3)
@@ -2482,7 +2001,6 @@ class TestReconcileInboxNotifySub:
             _test_latch(),
             self._gate(),
             asyncio.Event(),
-            user="kai",
         )
 
         assert result is current
@@ -2500,10 +2018,7 @@ class TestReconcileInboxNotifySub:
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
             _wake_event: asyncio.Event,
-            *,
-            user: str,
         ) -> SubscriptionBinding | None:
-            del user
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
@@ -2515,7 +2030,6 @@ class TestReconcileInboxNotifySub:
             _test_latch(),
             self._gate(),
             asyncio.Event(),
-            user="kai",
         )
 
         assert result is fresh
@@ -2531,59 +2045,17 @@ class TestReconcileInboxNotifySub:
             _latch: TalkNotifyLatch,
             _gate: _InboxPokeGate,
             _wake_event: asyncio.Event,
-            *,
-            user: str,
         ) -> SubscriptionBinding | None:
-            del user
             return fresh
 
         monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
         monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(1))
 
         result = await _reconcile_inbox_notify_sub(
-            state, None, _test_latch(), self._gate(), asyncio.Event(), user="kai"
+            state, None, _test_latch(), self._gate(), asyncio.Event()
         )
 
         assert result is fresh
-
-    async def test_reconciles_the_companion_binding_independently(
-        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The companion's SUB is reconciled by the SAME helper,
-        parameterized on ``user`` — proving one generic reconcile serves
-        both the own-user and companion-user bindings without a second
-        code path.
-        """
-        stale = AsyncMock()
-        fresh = SubscriptionBinding(AsyncMock(), 4)
-        seen_users: list[str] = []
-
-        async def _sub(
-            _state: ServerState,
-            _latch: TalkNotifyLatch,
-            _gate: _InboxPokeGate,
-            _wake_event: asyncio.Event,
-            *,
-            user: str,
-        ) -> SubscriptionBinding | None:
-            seen_users.append(user)
-            return fresh
-
-        monkeypatch.setattr(_descriptions, "subscribe_inbox_notify", _sub)
-        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(4))
-
-        result = await _reconcile_inbox_notify_sub(
-            state,
-            SubscriptionBinding(stale, 3),
-            _test_latch(),
-            self._gate(),
-            asyncio.Event(),
-            user="eric",
-        )
-
-        assert result is fresh
-        assert seen_users == ["eric"]
-        stale.unsubscribe.assert_awaited_once()
 
 
 class TestStartupNotificationRace:

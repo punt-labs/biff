@@ -4,8 +4,8 @@
 so the SessionEnd hook can find running sessions on shutdown.  The
 marker write used to be wrapped in ``with suppress(OSError)``
 and silently skipped when it failed; a v1.8.0 defect on PID 983529
-showed a companion KV row with no corresponding marker file.  These
-tests pin the primary and companion marker invariants.
+showed a KV row with no corresponding marker file.  These tests pin the
+marker invariant.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def active_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class TestActiveMarkers:
-    """Lifespan startup writes marker files for primary and companion."""
+    """Lifespan startup writes marker files for the session."""
 
     async def test_marker_for_primary(self, tmp_path: Path, active_root: Path) -> None:
         config = BiffConfig(

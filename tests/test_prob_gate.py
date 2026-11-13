@@ -255,7 +255,7 @@ def test_session_close_requires_cleanup_and_frames_routing() -> None:
         0
     ]
     assert r"\Delta RouteWorld" in close
-    assert r"s? \notin \dom entries" in close
+    assert r"s? \notin entries" in close
     for variable in (
         "entries",
         "ttyalias",

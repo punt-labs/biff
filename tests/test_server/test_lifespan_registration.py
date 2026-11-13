@@ -1,7 +1,7 @@
 """Tier-1 invariant tests for session registration.
 
-These tests exercise :func:`biff.session_registry.register_session` and the
-companion registration helper against ``LocalRelay`` and assert the
+These tests exercise :func:`biff.session_registry.register_session`
+against ``LocalRelay`` and assert the
 post-condition that ``tty_name`` is non-empty on every written row.
 
 They are NOT regression guards for the v1.8.0 two-write defect: the
@@ -9,27 +9,27 @@ defect was a narrow window between a first KV write (empty tty_name)
 and a second KV write (populated tty_name) where a NATS I/O error
 could leave a half-formed row behind.  ``LocalRelay`` writes to an
 in-memory dict and cannot fail between the two calls, so the v1.8.0
-bug could not have failed these tests.
-
-The actual regression guard for the two-write pattern lives at
-``tests/test_nats_e2e/test_dual_session_lifespan.py`` (tier-3b) where
-real NATS I/O can fail between writes.
+bug could not have failed these tests.  A regression guard for the
+two-write pattern needs a tier-3b test against real NATS I/O that can
+fail between writes.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import ClassVar, TypedDict
+from typing import TYPE_CHECKING, ClassVar, TypedDict
 
-import pytest
 from fastmcp.client.transports import FastMCPTransport
 
 from biff.models import BiffConfig
 from biff.relay import LocalRelay
 from biff.server.app import create_server
-from biff.server.state import CompanionSession, ServerState, create_state
+from biff.server.state import create_state
 from biff.testing.caller import StampedClient
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class _RegistrationMetadata(TypedDict):
@@ -42,33 +42,8 @@ class _RegistrationMetadata(TypedDict):
     repo: str
 
 
-@pytest.fixture
-def primary_state_with_companion(tmp_path: Path) -> ServerState:
-    """A ServerState with both primary (claude) and companion (jfreeman)."""
-    config = BiffConfig(
-        user="claude",
-        display_name="Claude Agento",
-        kind="agent",
-        repo_name="_test-lifespan",
-    )
-    companion = CompanionSession(
-        user="jfreeman",
-        display_name="Jim Freeman",
-        kind="human",
-        tty="e5f6a7b8",
-    )
-    return create_state(
-        config,
-        tmp_path,
-        tty="a1b2c3d4",
-        hostname="test-host",
-        pwd="/test",
-        companion=companion,
-    )
-
-
 class TestLifespanRegistration:
-    """The active lifespan writes fully formed KV rows for primary and companion."""
+    """The active lifespan writes fully formed KV rows for the session."""
 
     async def test_active_lifespan_registers_primary_with_tty_name(
         self, tmp_path: Path
@@ -91,25 +66,6 @@ class TestLifespanRegistration:
         assert session is not None
         assert session.tty_name, "primary row must have non-empty tty_name"
         assert session.user == "kai"
-
-    async def test_active_lifespan_does_not_register_companion_at_startup(
-        self, primary_state_with_companion: ServerState
-    ) -> None:
-        """The lifespan never registers a companion row.
-
-        A companion set on the state (a test-populated dual-session
-        capability; nothing in production sets one now that the ethos
-        roster is no longer read) is heartbeated, not registered, by the
-        lifespan.
-        """
-        state = primary_state_with_companion
-        mcp = create_server(state)
-
-        async with StampedClient(FastMCPTransport(mcp)):
-            assert state.companion_session_key is not None
-            session = await state.relay.get_session(state.companion_session_key)
-
-        assert session is None, "lifespan must not register the companion at startup"
 
 
 class TestRegisterSessionHelper:
