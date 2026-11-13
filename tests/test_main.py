@@ -16,7 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from biff import logging_config
-from biff.__main__ import _register_user_scope, _suppress_nats_noise, app
+from biff.__main__ import _suppress_nats_noise, app
+from biff.claude_md import ClaudeMdImport
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
@@ -276,6 +277,11 @@ class TestEnableCommand:
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
         assert "enabled" in result.output
+        # The commit instruction must name every artifact enable wrote, or a
+        # user following it commits the marker + workflow but not the guide and
+        # its import — the guide silently never lands for the team.
+        assert ".punt-labs/biff/CLAUDE.md" in result.output
+        assert "@.punt-labs/biff/CLAUDE.md import" in result.output
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:
@@ -620,49 +626,70 @@ class TestNatsErrorStaysOffTerminal:
         assert "Operation timed out" in file_text
 
 
-class TestInstallUserScope:
-    """``install`` wiring deposits the guide and registers the user import."""
+class TestInstallWritesNoGuide:
+    """``install`` is software-only: no guide file, no ``CLAUDE.md`` import.
 
-    def test_register_user_scope_writes_to_home(
+    tool-enable-disable.md §2.6: ``enable`` is the sole path that deposits a
+    guide or writes an import; ``install`` never touches a ``CLAUDE.md``.
+    """
+
+    def _assert_no_guide(self, home: Path) -> None:
+        assert not (home / ".punt-labs" / "biff" / "CLAUDE.md").exists()
+        assert not (home / ".claude" / "CLAUDE.md").exists()
+
+    def test_cli_only_install_writes_no_guide(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def fake_home() -> Path:
-            return tmp_path
-
-        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
-
-        _register_user_scope()
-
-        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
-        host = tmp_path / ".claude" / "CLAUDE.md"
-        assert guide.is_file()
-        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
-
-
-class TestInstallCliOnly:
-    """`biff install` with no `claude` on PATH is a CLI-only SUCCESS."""
-
-    def test_no_claude_is_cli_only_success(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def fake_home() -> Path:
-            return tmp_path
-
         def no_claude(_cmd: str) -> str | None:
             return None
 
-        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         monkeypatch.setattr("shutil.which", no_claude)
 
         result = runner.invoke(app, ["install"])
 
         assert result.exit_code == 0
-        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
-        host = tmp_path / ".claude" / "CLAUDE.md"
-        assert guide.is_file()
-        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
+        self._assert_no_guide(tmp_path)
+        assert "guide" not in result.output.lower()
         # No plugin step ran, so no "restart Claude Code" instruction.
         assert "Restart Claude Code" not in result.output
+
+    def test_plugin_install_writes_no_guide(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def has_claude(_cmd: str) -> str | None:
+            return "/usr/bin/claude"
+
+        def plugin_ok(
+            cmd: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("shutil.which", has_claude)
+        monkeypatch.setattr("subprocess.run", plugin_ok)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        self._assert_no_guide(tmp_path)
+
+    def test_install_leaves_existing_claude_md_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        host = tmp_path / ".claude" / "CLAUDE.md"
+        host.parent.mkdir(parents=True)
+        host.write_text("# My global rules\n")
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("shutil.which", no_claude)
+
+        runner.invoke(app, ["install"])
+
+        assert host.read_text() == "# My global rules\n"
 
 
 class TestInstallLeavesRepoAlone:
@@ -768,10 +795,8 @@ class TestUninstallResilient:
     _LINE = "@~/.punt-labs/biff/CLAUDE.md"
 
     def _preinstall(self, tmp_path: Path) -> Path:
-        from biff.user_scope import UserScope
-
-        UserScope().install()
         host = tmp_path / ".claude" / "CLAUDE.md"
+        ClaudeMdImport(host, self._LINE).register()
         assert self._LINE in host.read_text()
         return host
 

@@ -62,13 +62,15 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
                 return HOOKS_DIR_UNRESOLVED_NOTICE
             return (
-                "biff enabled. Commit .punt-labs/biff/enabled and "
-                ".github/workflows/biff-notify.yml, then restart Claude Code "
-                "for changes to take effect."
+                "biff enabled. Commit .punt-labs/biff/enabled, "
+                ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, "
+                "and the @.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, "
+                "then restart Claude Code for changes to take effect."
             )
         RepoEnablement(repo_root).disable()
         return (
-            "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
-            ".github/workflows/biff-notify.yml, then restart Claude Code "
+            "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
+            ".github/workflows/biff-notify.yml, and the @.punt-labs/biff/CLAUDE.md "
+            "import from CLAUDE.md, then restart Claude Code "
             "for changes to take effect."
         )

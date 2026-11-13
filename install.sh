@@ -214,7 +214,7 @@ if [ "$SKIP_PLUGIN" = "1" ]; then
   printf '%b%bbiff CLI is ready!%b\n\n' "$GREEN" "$BOLD" "$NC"
   printf 'The biff CLI and MCP server are installed. Next steps:\n'
   printf '  biff doctor   # re-check installation health\n'
-  printf '  biff install  # register the user-scope agent guide (machine scope)\n'
+  printf '  biff install  # register the Claude Code plugin (machine scope)\n'
   printf '  biff enable   # enable biff in a git repo: committed marker + CI workflow + this clone'\''s git hooks\n'
   printf '  biff mcp      # stdio MCP server to register with your harness\n\n'
   printf 'To add the Claude Code plugin later:\n'

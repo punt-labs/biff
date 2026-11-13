@@ -1385,9 +1385,10 @@ def enable(
         print(f"Git hooks: {', '.join(change.git_hooks_changed)}")
 
     print(
-        "biff enabled. Commit .punt-labs/biff/enabled and "
-        ".github/workflows/biff-notify.yml, then restart Claude Code "
-        "for changes to take effect."
+        "biff enabled. Commit .punt-labs/biff/enabled, "
+        ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, and the "
+        "@.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, then restart "
+        "Claude Code for changes to take effect."
     )
 
 
@@ -1421,29 +1422,14 @@ def disable(
         print(f"Git hooks removed: {', '.join(change.git_hooks_changed)}")
 
     print(
-        "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
-        ".github/workflows/biff-notify.yml, then restart Claude Code "
+        "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
+        ".github/workflows/biff-notify.yml, and the @.punt-labs/biff/CLAUDE.md "
+        "import from CLAUDE.md, then restart Claude Code "
         "for changes to take effect."
     )
 
 
 _PLUGIN_ID = "biff@punt-labs"
-
-
-def _register_user_scope() -> None:
-    """Deposit the agent guide and register the user-scope ``@``-import.
-
-    Global-tool install (tool-enable-disable.md §2.6): guidance is universal, so
-    biff registers ``@~/.punt-labs/biff/CLAUDE.md`` in ``~/.claude/CLAUDE.md``
-    once at install rather than per repo.
-    """
-    from biff.user_scope import USER_IMPORT_LINE, UserScope
-
-    result = UserScope().install()
-    if result.guide_written:
-        print("Agent guide: ~/.punt-labs/biff/CLAUDE.md")
-    if result.import_registered:
-        print(f"Registered {USER_IMPORT_LINE} in ~/.claude/CLAUDE.md")
 
 
 def _remove_repo_git_hooks() -> None:
@@ -1467,16 +1453,12 @@ def install_cmd() -> None:
     import shutil
     import subprocess
 
-    # User-scope guidance first — it needs no marketplace and leaves no
-    # dangling import (the guide is deposited before the line is registered).
-    _register_user_scope()
-
     claude = shutil.which("claude")
     if not claude:
-        # CLI-only install is a SUCCESS, not a partial failure: the biff CLI,
-        # MCP server, and user-scope guide are all installed; only the Claude
-        # Code plugin is skipped (install-cli-only.md, matching install.sh's
-        # --no-plugin path). No "restart Claude Code" line — there's no plugin.
+        # CLI-only install is a SUCCESS, not a partial failure: the biff CLI
+        # and MCP server are installed; only the Claude Code plugin is skipped
+        # (install-cli-only.md, matching install.sh's --no-plugin path). No
+        # "restart Claude Code" line — there's no plugin.
         print("Installed (CLI-only). Claude Code not found; plugin step skipped.")
         return
 
@@ -1524,10 +1506,10 @@ def uninstall_cmd() -> None:
     # those (it also removes this clone's hooks).
     _remove_repo_git_hooks()
 
-    # User-scope teardown (§2.6) ALWAYS runs — never gated on the plugin step.
-    # The user asked to clean up, and a dangling @-import 404s every session, so
-    # a failed or skipped plugin uninstall must not strand the import line. The
-    # deposited guide stays dormant (§2.9).
+    # Legacy strip (§2.6): older releases wrote a user-scope @-import. It is
+    # removed here opportunistically and ALWAYS runs — never gated on the plugin
+    # step — because a dangling @-import 404s every session. Current releases
+    # write no such line, so this is a no-op on a clean machine.
     if UserScope().uninstall():
         print(f"Removed {USER_IMPORT_LINE} from ~/.claude/CLAUDE.md")
 

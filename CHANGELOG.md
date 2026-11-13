@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `biff install` now only registers the Claude Code plugin. It no longer
+  deposits `~/.punt-labs/biff/CLAUDE.md` or writes an `@`-import into
+  `~/.claude/CLAUDE.md` (punt-kit `tool-enable-disable.md` §2.6: `install`
+  never touches a `CLAUDE.md`). `biff uninstall` still strips the legacy import
+  line an older release wrote. `biff doctor` drops its "Agent guide" check,
+  which verified that now-forbidden import.
+
+### Added
+
+- `biff enable` now deposits the agent guide at `.punt-labs/biff/CLAUDE.md` and
+  registers `@.punt-labs/biff/CLAUDE.md` in the repo `CLAUDE.md`; `biff
+  disable` removes the import and leaves the guide file. The `/biff enable`
+  MCP tool does the same (`tool-enable-disable.md` §2.5).
+
 ## [1.21.1] - 2026-11-12
 
 ### Fixed
