@@ -243,6 +243,7 @@ async def cli_session(
             repo=config.repo_name,
             kind=config.kind,
             launched_by=config.launched_by,
+            owner_git=config.owner_git,
             last_active=registered_at,
             last_tool_at=registered_at,
         )

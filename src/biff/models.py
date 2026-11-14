@@ -113,6 +113,10 @@ class UserSession(BaseModel):
         default="",
         description="OS user of the human who launched the process, or empty",
     )
+    owner_git: str = Field(
+        default="",
+        description="The session owner's git user.name at registration, or empty",
+    )
     plan: str = ""
     plan_source: Literal["manual", "auto"] = "manual"
     last_active: datetime = Field(default_factory=_utc_now)
@@ -245,6 +249,10 @@ class BiffConfig(BaseModel):
     launched_by: str = Field(
         default="",
         description="OS user who launched this process, or empty when unknown",
+    )
+    owner_git: str = Field(
+        default="",
+        description="git user.name of the owner at startup, or empty when unset",
     )
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None

@@ -1331,6 +1331,7 @@ class _LiveSession:
             pwd=state.pwd,
             repo=state.config.repo_name,
             launched_by=state.config.launched_by,
+            owner_git=state.config.owner_git,
             on_claim=self.registered_names.append,
         )
         set_tty_name(final_name)

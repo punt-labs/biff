@@ -53,6 +53,7 @@ async def register_session(
     pwd: str,
     repo: str,
     launched_by: str = "",
+    owner_git: str = "",
     preferred_name: str | None = None,
     on_claim: Callable[[str], None] = lambda _name: None,
 ) -> tuple[UserSession, str]:
@@ -148,6 +149,7 @@ async def register_session(
         pwd=pwd,
         repo=repo,
         launched_by=launched_by,
+        owner_git=owner_git,
         last_active=registered_at,
         last_tool_at=registered_at,
     )

@@ -410,6 +410,7 @@ class TestWhoMgrColumn:
         launched_by: str = "",
         user: str = "claude",
         kind: str = "agent",
+        owner_git: str = "",
     ) -> UserSession:
         return UserSession(
             user=user,
@@ -419,12 +420,13 @@ class TestWhoMgrColumn:
             repo="biff",
             hostname="h",
             launched_by=launched_by,
+            owner_git=owner_git,
             last_active=datetime.now(UTC),
             last_tool_at=datetime.now(UTC),
         )
 
-    def test_agent_mgr_is_the_git_name(self) -> None:
-        lines = format_who([self._row("osjim")], "jmf-pobox").splitlines()
+    def test_agent_mgr_is_the_rows_owner_git(self) -> None:
+        lines = format_who([self._row("osjim", owner_git="jmf-pobox")]).splitlines()
         assert lines[0].split()[1:] == [
             "NAME",
             "K",
@@ -446,29 +448,42 @@ class TestWhoMgrColumn:
             "h",
         ]
 
-    def test_column_is_third_right_after_k(self) -> None:
-        header = format_who([self._row("jim")]).splitlines()[0]
-        assert header.index("K") < header.index("MGR") < header.index("REPO")
+    def test_each_row_uses_its_own_owner_not_the_viewers(self) -> None:
+        # Regression: a viewer-side git name was applied to every row.
+        a = self._row(user="alpha", owner_git="alice")
+        b = self._row(user="beta", owner_git="bob")
+        assert who_mgr(a) == "alice"
+        assert who_mgr(b) == "bob"
+        out = format_who([a, b])
+        assert "alice" in out
+        assert "bob" in out
 
-    def test_git_name_equal_to_self_falls_to_os_user(self) -> None:
-        assert who_mgr(self._row("jim"), "claude") == "jim"
+    def test_owner_git_equal_to_self_falls_to_os_user(self) -> None:
+        assert who_mgr(self._row("jim", owner_git="claude")) == "jim"
 
     def test_comparison_is_case_insensitive_and_stripped(self) -> None:
-        assert who_mgr(self._row("jim"), " CLAUDE ") == "jim"
+        assert who_mgr(self._row("jim", owner_git=" CLAUDE ")) == "jim"
 
-    def test_git_name_equal_to_self_and_no_os_user_is_blank(self) -> None:
-        assert who_mgr(self._row(""), "claude") == ""
+    def test_owner_git_equal_to_self_and_no_os_user_is_blank(self) -> None:
+        assert who_mgr(self._row("", owner_git="claude")) == ""
 
     def test_both_equal_to_self_is_blank(self) -> None:
-        assert who_mgr(self._row("claude"), "claude") == ""
+        assert who_mgr(self._row("claude", owner_git="claude")) == ""
 
-    def test_git_unset_uses_the_os_user_floor(self) -> None:
-        assert who_mgr(self._row("jim"), "") == "jim"
+    def test_owner_git_unset_uses_the_os_user_floor(self) -> None:
+        assert who_mgr(self._row("jim")) == "jim"
+
+    def test_full_name_is_not_addressable_and_falls_through(self) -> None:
+        assert who_mgr(self._row("jim", owner_git="Jane Doe")) == "jim"
+        assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
+
+    def test_unaddressable_os_user_is_blank(self) -> None:
+        assert who_mgr(self._row("a b")) == ""
 
     def test_human_row_is_always_blank(self) -> None:
-        human = self._row("jim", user="kai", kind="human")
-        assert who_mgr(human, "jmf-pobox") == ""
-        assert who_mgr(self._row("jim", kind=""), "jmf-pobox") == ""
+        human = self._row("jim", user="kai", kind="human", owner_git="jmf-pobox")
+        assert who_mgr(human) == ""
+        assert who_mgr(self._row("jim", kind="", owner_git="jmf-pobox")) == ""
 
     def test_human_rows_keep_the_column_when_an_agent_has_one(self) -> None:
         lines = format_who(
@@ -479,7 +494,7 @@ class TestWhoMgrColumn:
         assert "jim" in lines[2].split()
 
     def test_column_hidden_when_no_row_has_a_manager(self) -> None:
-        out = format_who([self._row(""), self._row("claude")], "claude")
+        out = format_who([self._row(""), self._row("claude", owner_git="claude")])
         assert "MGR" not in out
         assert out.splitlines()[1].split() == [
             "claude:tty9",
@@ -501,19 +516,26 @@ class TestWhoMgrColumn:
         assert tty is not None
         assert resolve_tty_name([row], user, tty) is row
 
-    def test_row_from_before_the_field_renders_as_without_it(self) -> None:
+    def test_row_from_before_the_fields_renders_as_without_them(self) -> None:
         row = self._row("")
         data = row.model_dump(mode="json")
         del data["launched_by"]
+        del data["owner_git"]
         old = UserSession.model_validate(data)
+        assert old.owner_git == ""
         assert format_who([old]) == format_who([row])
+
+    def test_row_from_before_owner_git_falls_to_launched_by(self) -> None:
+        data = self._row("jim").model_dump(mode="json")
+        del data["owner_git"]
+        assert who_mgr(UserSession.model_validate(data)) == "jim"
 
     def test_overlong_value_is_clipped(self) -> None:
         out = format_who([self._row("r" * 200)])
         assert "r" * 100 not in out
         assert "MGR" in out
 
-    def test_hostile_value_is_neutralised(self) -> None:
+    def test_hostile_value_is_never_addressable_and_never_rendered(self) -> None:
         out = format_who([self._row("a\x1b[31mb\nc")])
         assert "\x1b" not in out
         assert len(out.splitlines()) == 2
@@ -551,8 +573,14 @@ class TestGitUserName:
         monkeypatch.setenv("GIT_AUTHOR_NAME", "claude")
         monkeypatch.setenv("GIT_COMMITTER_NAME", "claude")
         repo = self._repo(tmp_path, "jmf-pobox")
-        row = UserSession(user="claude", tty="a", kind="agent", launched_by="osjim")
-        assert who_mgr(row, git_user_name(repo)) == "jmf-pobox"
+        row = UserSession(
+            user="claude",
+            tty="a",
+            kind="agent",
+            launched_by="osjim",
+            owner_git=git_user_name(repo),
+        )
+        assert who_mgr(row) == "jmf-pobox"
 
     @pytest.mark.parametrize(
         ("written", "want"),
@@ -585,8 +613,10 @@ class TestGitUserName:
         monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         repo = self._repo(tmp_path, None)
         (repo / ".git" / "config").write_text('[user]\n\tname = \\"jmf-pobox\\"\n')
-        row = UserSession(user="claude", tty="a", kind="agent")
-        out = format_who([row], git_user_name(repo))
+        row = UserSession(
+            user="claude", tty="a", kind="agent", owner_git=git_user_name(repo)
+        )
+        out = format_who([row])
         assert "jmf-pobox" in out
         assert '"' not in out
 

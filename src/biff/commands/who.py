@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from biff._stdlib import git_user_name
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.formatting import format_dead_footnote, format_who
@@ -29,7 +28,7 @@ async def who(ctx: CliContext) -> CommandResult:
         # (:func:`biff.formatting.format_who`) -- last_active is heartbeat
         # recency, unrelated to the idle value shown.
         sorted_sessions = sorted(live, key=lambda s: s.last_tool_at, reverse=True)
-        text = format_who(sorted_sessions, git_user_name(ctx.repo_root))
+        text = format_who(sorted_sessions)
         json_data = [s.model_dump(mode="json") for s in sorted_sessions]
     if footnote:
         text = f"{text}\n{footnote}"

@@ -11,6 +11,7 @@ The primitive layer (``ColumnSpec``, ``format_table``, ``format_idle``,
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
@@ -326,32 +327,35 @@ def _format_who_kind(s: UserSession) -> str:
     return ""
 
 
-def who_mgr(s: UserSession, git_name: str) -> str:
+_ADDRESSABLE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def who_mgr(s: UserSession) -> str:
     """Return the biff-addressable human behind an agent row; blank otherwise.
 
-    Derived on every render and stored nowhere: the first of *git_name* (the
-    ``git config user.name`` value, not the effective author, which a
-    provisioned host overrides with the bot) and the row's OS user that is
-    non-empty and differs from the row's own identity.  Humans get none.
+    Derived from the row's own captured data and stored nowhere: the first of
+    its ``owner_git`` (``git config user.name`` at registration, not the
+    effective author, which a provisioned host overrides with the bot) and
+    ``launched_by`` (OS user) that is addressable and differs from the row's
+    own identity.  A full name such as ``Jane Doe`` is not addressable, so it
+    never fills the cell.  Humans get none.
     """
     if s.kind != "agent":
         return ""
     own = s.user.strip().casefold()
-    for candidate in (git_name, s.launched_by):
+    for candidate in (s.owner_git, s.launched_by):
         name = candidate.strip()
-        if name and name.casefold() != own:
+        if _ADDRESSABLE_RE.match(name) and name.casefold() != own:
             return name
     return ""
 
 
-def _format_who_mgr(s: UserSession, git_name: str) -> str:
+def _format_who_mgr(s: UserSession) -> str:
     """Render :func:`who_mgr` as a neutralised, clipped fixed-column cell."""
-    return _truncate(
-        terminal_safe(who_mgr(s, git_name))[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH
-    )
+    return _truncate(terminal_safe(who_mgr(s))[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
 
 
-def format_who(sessions: list[UserSession], git_name: str = "") -> str:
+def format_who(sessions: list[UserSession]) -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
     The NAME column renders exactly ``user:tty`` so agents can copy the
@@ -367,7 +371,7 @@ def format_who(sessions: list[UserSession], git_name: str = "") -> str:
     same reason :func:`_format_who_name` routes through
     :func:`sanitized_address`.
     """
-    mgrs = [_format_who_mgr(s, git_name) for s in sessions]
+    mgrs = [_format_who_mgr(s) for s in sessions]
     show_mgr = any(mgrs)
     rows: list[list[str]] = [
         [

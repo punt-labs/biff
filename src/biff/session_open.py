@@ -46,6 +46,7 @@ class SessionOpener:
             pwd=self.pwd,
             repo=self.config.repo_name,
             launched_by=self.config.launched_by,
+            owner_git=self.config.owner_git,
         )
         write_marker(self.config.repo_name, key, str(self.repo_common_root))
         write_unread_file(
