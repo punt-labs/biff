@@ -19,7 +19,6 @@ from biff._stdlib import (
 )
 from biff.config import (
     DEMO_RELAY_URL,
-    GitHubIdentity,
     _deep_merge,
     demo_creds_path,
     ensure_gitignore_yaml,
@@ -29,6 +28,7 @@ from biff.config import (
     merge_config,
     write_yaml_config,
 )
+from biff.identity import GitHubIdentity
 from biff.models import RelayAuth
 
 # ── get_repo_owner ──────────────────────────────────────────────────
@@ -333,7 +333,7 @@ _KAI = GitHubIdentity(login="kai", display_name="Kai Chen")
 class TestLoadConfigZeroConfig:
     @patch("biff.config.get_repo_owner", return_value="punt-labs")
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_zero_config_derives_org(
         self, _gh: object, _slug: object, _owner: object, tmp_path: Path
     ) -> None:
@@ -343,7 +343,7 @@ class TestLoadConfigZeroConfig:
         assert resolved.config.orgs == ("punt-labs",)
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_zero_config_uses_demo_relay(
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:
@@ -354,7 +354,7 @@ class TestLoadConfigZeroConfig:
         assert resolved.config.relay_auth.user_credentials == str(demo_creds_path())
 
     @patch("biff.config.get_repo_owner", return_value=None)
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_zero_config_no_remote_no_orgs(
         self, _gh: object, _owner: object, tmp_path: Path
     ) -> None:
@@ -365,7 +365,7 @@ class TestLoadConfigZeroConfig:
         assert resolved.config.relay_url == DEMO_RELAY_URL
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_relay_tls_handshake_first_via_local_only(
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:
@@ -390,7 +390,7 @@ class TestLoadConfigZeroConfig:
 
 class TestLoadConfigYaml:
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_explicit_yaml_config(
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:
@@ -406,7 +406,7 @@ class TestLoadConfigYaml:
         assert resolved.config.orgs == ("my-org",)
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_yaml_local_overrides_shared(
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:
@@ -422,7 +422,7 @@ class TestLoadConfigYaml:
 
     @patch("biff.config.get_repo_owner", return_value="punt-labs")
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_yaml_config_without_orgs_derives_from_remote(
         self, _gh: object, _slug: object, _owner: object, tmp_path: Path
     ) -> None:
@@ -441,7 +441,7 @@ class TestLoadConfigYaml:
         assert resolved.config.relay_url == "tls://custom"
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_yaml_with_auth(self, _gh: object, _slug: object, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
         biff_dir = tmp_path / ".punt-labs" / "biff"
@@ -456,7 +456,7 @@ class TestLoadConfigYaml:
         )
 
     @patch("biff.config.get_repo_slug", return_value="punt-labs/biff")
-    @patch("biff.config.get_github_identity", return_value=_KAI)
+    @patch("biff.identity.get_github_identity", return_value=_KAI)
     def test_explicit_config_without_relay_gets_demo(
         self, _gh: object, _slug: object, tmp_path: Path
     ) -> None:

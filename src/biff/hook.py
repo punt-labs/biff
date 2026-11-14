@@ -461,12 +461,13 @@ def _expand_branch_plan(branch: str) -> str:
     with ``→`` to indicate automatic provenance.
     """
     from biff._stdlib import expand_bead_id  # noqa: PLC0415
+    from biff.models import truncate_plan  # noqa: PLC0415
 
     m = _BEAD_BRANCH_RE.search(branch)
     if m:
         expanded = expand_bead_id(m.group())
-        return f"→ {expanded}"
-    return f"→ {branch}"
+        return truncate_plan(f"→ {expanded}")
+    return truncate_plan(f"→ {branch}")
 
 
 def _repo_common_root(data: dict[str, object] | None = None) -> str:
@@ -588,7 +589,9 @@ def handle_post_commit() -> str | None:
     if not subject:
         return None
 
-    hint = f"✓ {subject}"
+    from biff.models import truncate_plan  # noqa: PLC0415
+
+    hint = truncate_plan(f"✓ {subject}")
     hint_path = _plan_hint_path()
     hint_path.parent.mkdir(parents=True, exist_ok=True)
     hint_path.write_text(f"{hint}\n")

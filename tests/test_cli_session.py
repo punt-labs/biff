@@ -228,33 +228,16 @@ class TestCliSessionLifecycle:
         assert len(logout_calls) == 0
 
     @pytest.mark.anyio()
-    async def test_registered_row_carries_manager_label(
+    async def test_registered_row_carries_launching_user(
         self, mock_relay: AsyncMock, tmp_path: Path
     ) -> None:
-        """A CLI-registered row carries reports_to from team data (PL-231).
-
-        The MCP server and the SessionStart hook resolve the manager label;
-        the CLI registration path must too, or a CLI-registered agent's /who
-        row silently drops the label.
-        """
+        """A CLI-registered row carries the OS user who launched it."""
         from biff.config import ResolvedConfig
 
-        teams = tmp_path / ".punt-labs" / "ethos" / "teams"
-        teams.mkdir(parents=True)
-        (teams / "engineering.yaml").write_text(
-            "repositories:\n"
-            "  - punt-labs/biff\n"
-            "members:\n"
-            "  - identity: kai\n"
-            "    role: python-specialist\n"
-            "collaborations:\n"
-            "  - from: python-specialist\n"
-            "    to: coo\n"
-            "    type: reports_to\n"
-        )
         resolved = ResolvedConfig(
             config=BiffConfig(
                 user="kai",
+                launched_by="jim",
                 repo_name="test",
                 relay_url="nats://localhost:4222",
             ),
@@ -264,14 +247,13 @@ class TestCliSessionLifecycle:
         )
         with (
             patch("biff.cli_session.load_cli_config", return_value=resolved),
-            patch("biff.cli_session.get_repo_slug", return_value="punt-labs/biff"),
             patch("biff.cli_session.NatsRelay", return_value=mock_relay),
         ):
             async with cli_session() as _ctx:
                 pass
 
         registered = mock_relay.update_session.call_args_list[0][0][0]
-        assert registered.reports_to == "coo"
+        assert registered.launched_by == "jim"
 
     @pytest.mark.anyio()
     async def test_no_relay_url_raises(self, tmp_path: Path) -> None:

@@ -16,7 +16,7 @@ from fastmcp.tools.function_tool import FunctionTool
 from biff._formatting import TABLE_WIDTH, visible_width
 from biff.chunking import chunk_message
 from biff.formatting import _NO_PRINTABLE_TEXT
-from biff.models import BiffConfig, Message, UserSession
+from biff.models import PLAN_MAX_LENGTH, BiffConfig, Message, UserSession
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 
@@ -457,6 +457,23 @@ class TestWhoTool:
 
 
 class TestPlanTool:
+    async def test_over_cap_plan_rejected(self, state: ServerState) -> None:
+        fn = await _get_tool_fn(state, "plan")
+        await fn(message="keep me")
+        result = await fn(message="x" * (PLAN_MAX_LENGTH + 1))
+        assert "too long" in result
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan == "keep me"
+
+    async def test_at_cap_plan_accepted(self, state: ServerState) -> None:
+        fn = await _get_tool_fn(state, "plan")
+        result = await fn(message="x" * PLAN_MAX_LENGTH)
+        assert "too long" not in result
+        session = await state.relay.get_session(state.session_key)
+        assert session is not None
+        assert session.plan == "x" * PLAN_MAX_LENGTH
+
     async def test_sets_plan(self, state: ServerState) -> None:
         fn = await _get_tool_fn(state, "plan")
         result = await fn(message="refactoring auth")

@@ -48,19 +48,19 @@ class TestFallbackThreadsRepoAndTtyName:
     async def test_missing_session_carries_manager_label(
         self, relay: LocalRelay
     ) -> None:
-        """The rebuild carries reports_to from ctx.config, so a long-lived
+        """The rebuild carries launched_by from ctx.config, so a long-lived
         REPL whose row is rebuilt mid-run (reaper/TTL/manual delete) keeps
-        its /who manager label instead of silently dropping it (PL-231)."""
+        its /who launching user instead of silently dropping it (PL-231)."""
         ctx = CliContext(
             relay=relay,
-            config=BiffConfig(user="kai", repo_name="biff", reports_to="coo"),
+            config=BiffConfig(user="kai", repo_name="biff", launched_by="jim"),
             session_key="kai:mgr00001",
             user="kai",
             tty="mgr00001",
             tty_name="tty5",
         )
         session = await update_current_session(ctx)
-        assert session.reports_to == "coo"
+        assert session.launched_by == "jim"
 
     async def test_missing_session_preserves_claimed_tty_name(
         self, relay: LocalRelay

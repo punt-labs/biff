@@ -1,8 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "Bash(bash:*)",
-      "Bash(bd:*)",
       "Bash(cat:*)",
       "Bash(chmod +x:*)",
       "Bash(claude mcp:*)",
@@ -14,7 +12,6 @@
       "Bash(ls:*)",
       "Bash(pip index:*)",
       "Bash(punt:*)",
-      "Bash(sed:*)",
       "Bash(shellcheck:*)",
       "Bash(tail:*)",
       "Bash(test:*)",

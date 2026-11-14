@@ -4,10 +4,18 @@
 
 ### Added
 
-- `/who` shows `(reports to <role>)` beside an agent's name, resolved from the
-  repo's ethos team YAML on disk (the `reports_to` collaboration edge of the
-  agent's role). No live session lookup and no second session. A repo without
-  team data, or an agent with no manager, shows the row unchanged (PL-231).
+- `/who` has a `MGR` column, third after `K`, naming the biff-addressable human
+  behind an agent. It is derived at render time and stored nowhere: the first of
+  `git config user.name` (the configured value, not the effective author) and the
+  OS user that is non-empty and differs from the agent's own identity. Human rows
+  are blank, and the column is hidden when no row has a value. Needs no ethos
+  data and no config.
+- `/finger` shows `Launched by: <os user>`, the owner of the process that
+  registered the session.
+- `/finger` shows the agent's ethos roles when the repo has team data: a `Role:`
+  line for one role, or a `Roles:` block with one line per role, each
+  `<role> (<team>) — reports to <role> (<person>)`, between the user header and
+  the on-since line. No team data leaves the output unchanged.
 
 ### Changed
 
@@ -15,12 +23,16 @@
   `mcp__plugin_biff_tty__*` and `Skill(biff:*)` — and puts an exact `ask` rule
   in `permissions.ask` for each machine- or repo-mutating verb (`install`,
   `uninstall`, `install-statusline`, `uninstall-statusline`, `enable`,
-  `disable`, `serve`, `mcp`, `hook`) and for any global option before the verb (`Bash(biff -*)`, so `biff --quiet uninstall` prompts too), so those still prompt while new safe
-  commands work without a rule update (punt-kit#471). It replaces the short
+  `disable`, `serve`, `mcp`, `hook`) and for any global option before the
+  verb (`Bash(biff -*)`, so `biff --quiet uninstall` prompts too), so those
+  still prompt while new safe commands work without a rule update
+  (punt-kit#471). It replaces the short
   forms `Skill(who)`, `Skill(write)`, …, which punt-kit `permissions.md` § 3
   bans. `biff disable` removes the same allow and ask values; rules an earlier
   `biff enable` added stay until you delete them by hand (PL-1035).
-
+- `/plan` (CLI and MCP tool) now rejects a message over 512 characters, the same
+  cap as `/write` and `/wall`, instead of storing unbounded text. The error names
+  the length and the limit, and the existing plan is left unchanged.
 - **Permission rules are repo-level, granted by `biff enable`.** The
   SessionStart hook used to add `mcp__plugin_biff_tty__*`, the `biff-dev`
   wildcard and twelve `Skill(...)` rules to the global

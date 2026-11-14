@@ -8,8 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import ValidationError
+
 from biff._stdlib import expand_bead_id
 from biff.formatting import format_talk_echo
+from biff.models import PLAN_MAX_LENGTH, validate_plan
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import refresh_read_messages
 from biff.server.tools._session import get_or_create_session, update_current_session
@@ -65,6 +68,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 sync_plan_marker(session.plan, state.bound_session_id)
                 return format_talk_echo("Plan unchanged (manual):", session.plan)
         message = expand_bead_id(message)
+        try:
+            validate_plan(message)
+        except ValidationError:
+            return f"Plan too long: {len(message)} characters (max {PLAN_MAX_LENGTH})"
         await update_current_session(state, plan=message, plan_source=source)
         await refresh_read_messages(mcp, state)
         sync_plan_marker(message, state.bound_session_id)
