@@ -17,7 +17,6 @@ from biff._formatting import (
     visible_width,
     wrap_cells,
 )
-from biff._stdlib import git_user_name
 from biff.ethos_team import RoleEntry
 from biff.formatting import (
     format_finger,
@@ -26,6 +25,7 @@ from biff.formatting import (
     format_who,
     who_mgr,
 )
+from biff.identity import git_user_name
 from biff.models import Message, UserSession
 
 
