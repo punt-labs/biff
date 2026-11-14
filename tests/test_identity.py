@@ -173,10 +173,47 @@ class TestGitUserName:
             for r in caplog.records
         )
 
-    def test_timeout_returns_empty(self, tmp_path: Path) -> None:
+    def test_timeout_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         timeout = subprocess.TimeoutExpired(cmd="git", timeout=5)
-        with patch("biff.identity.subprocess.run", side_effect=timeout):
+        with (
+            patch("biff.identity.subprocess.run", side_effect=timeout),
+            caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
+        ):
             assert git_user_name(tmp_path) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_generic_subprocess_error_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        err = subprocess.SubprocessError("boom")
+        with (
+            patch("biff.identity.subprocess.run", side_effect=err),
+            caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
+        ):
+            assert git_user_name(tmp_path) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_non_filenotfound_oserror_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        err = PermissionError("git not executable")
+        with (
+            patch("biff.identity.subprocess.run", side_effect=err),
+            caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
+        ):
+            assert git_user_name(tmp_path) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
+            for r in caplog.records
+        )
 
     def test_none_repo_root_runs_in_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
