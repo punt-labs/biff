@@ -105,16 +105,16 @@ async def test_open_from_payload_without_a_valid_session_id_is_a_no_op(
     assert not (tmp_path / ".punt-labs").exists()
 
 
-async def test_open_records_the_manager_role_on_the_row(
+async def test_open_records_the_launching_os_user_on_the_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     relay = LocalRelay(tmp_path / "relay")
     routing = SessionRouting("sess-1")
     opener = _opener(tmp_path, relay)
-    labelled = SessionOpener(
+    launched = SessionOpener(
         relay=relay,
-        config=opener.config.model_copy(update={"reports_to": "coo"}),
+        config=opener.config.model_copy(update={"launched_by": "jim"}),
         repo_common_root=opener.repo_common_root,
         unread_dir=opener.unread_dir,
         handles=opener.handles,
@@ -122,7 +122,7 @@ async def test_open_records_the_manager_role_on_the_row(
         pwd="/w",
     )
 
-    key = await labelled.open(routing)
+    key = await launched.open(routing)
 
     row = await relay.get_session(key)
-    assert row is not None and row.reports_to == "coo"
+    assert row is not None and row.launched_by == "jim"

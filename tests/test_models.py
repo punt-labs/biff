@@ -111,18 +111,18 @@ class TestUserSession:
         session = UserSession(user="kai", plan="refactoring auth")
         assert session.plan == "refactoring auth"
 
-    def test_reports_to_defaults_to_empty(self) -> None:
-        assert UserSession(user="kai", tty="a").reports_to == ""
+    def test_launched_by_defaults_to_empty(self) -> None:
+        assert UserSession(user="kai", tty="a").launched_by == ""
 
-    def test_row_without_reports_to_still_validates(self) -> None:
-        data = UserSession(user="kai", tty="a", reports_to="ceo").model_dump(
+    def test_row_without_launched_by_still_validates(self) -> None:
+        data = UserSession(user="kai", tty="a", launched_by="jim").model_dump(
             mode="json"
         )
-        del data["reports_to"]
-        assert UserSession.model_validate(data).reports_to == ""
+        del data["launched_by"]
+        assert UserSession.model_validate(data).launched_by == ""
 
-    def test_reports_to_round_trips(self) -> None:
-        row = UserSession(user="kai", tty="a", reports_to="coo")
+    def test_launched_by_round_trips(self) -> None:
+        row = UserSession(user="kai", tty="a", launched_by="jim")
         assert UserSession.model_validate_json(row.model_dump_json()) == row
 
     def test_plan_source_defaults_to_manual(self) -> None:

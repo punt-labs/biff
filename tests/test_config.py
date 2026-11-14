@@ -503,6 +503,18 @@ class TestLoadCliConfig:
         assert resolved.config.user == "jfreeman"
         assert resolved.config.display_name == ""
 
+    @patch("biff.config.get_os_user", return_value="jim")
+    @patch("biff.config.get_github_identity", return_value=None)
+    def test_launched_by_is_the_os_user_not_the_handle(
+        self, _mock_git: object, _mock_os: object, tmp_path: Path
+    ) -> None:
+        # No ethos data, no config key: the launching user is the OS user,
+        # even when the session's handle comes from the CLI override.
+        _setup_repo_with_yaml(tmp_path)
+        resolved = load_cli_config(start=tmp_path, user_override="claude")
+        assert resolved.config.user == "claude"
+        assert resolved.config.launched_by == "jim"
+
     @patch("biff.config.get_os_user", return_value=None)
     @patch("biff.config.get_github_identity", return_value=None)
     def test_exits_when_all_user_sources_fail(

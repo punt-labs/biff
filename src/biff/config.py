@@ -1304,6 +1304,7 @@ def _assemble_config(
         user=user,
         display_name=display_name,
         kind=kind,
+        launched_by=get_os_user() or "",
         repo_name=base.repo_name,
         relay_url=base.relay_url,
         relay_auth=base.relay_auth,

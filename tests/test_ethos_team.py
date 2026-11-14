@@ -6,9 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from biff.ethos_team import EthosTeams
-from biff.formatting import format_who
-from biff.models import UserSession
+from biff.ethos_team import EthosTeams, RoleEntry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -72,7 +70,7 @@ class TestManagerOf:
         assert EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude") == "ceo"
 
     def test_constructor_takes_the_graph(self) -> None:
-        teams = EthosTeams([({"claude": "coo"}, {"coo": "ceo"})])
+        teams = EthosTeams([({"claude": "coo"}, {"coo": "ceo"}, "t")])
         assert teams.manager_of("claude") == "ceo"
 
 
@@ -156,11 +154,51 @@ class TestHostileRole:
         with pytest.raises(LookupError):
             EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude")
 
-    def test_ansi_role_on_a_row_is_neutralised_in_the_label(self) -> None:
-        row = UserSession(user="x", tty="t", kind="agent", reports_to="a\x1b[31mb\nc")
-        out = format_who([row])
-        assert "\x1b" not in out
-        assert "\n" not in out.splitlines()[1]
+
+class TestRolesOf:
+    def test_role_team_and_manager(self, tmp_path: Path) -> None:
+        _write(tmp_path, "t.yaml", TEAM)
+        assert EthosTeams.from_repo(tmp_path, SLUG).roles_of("adb") == (
+            RoleEntry("infra-engineer", "t", "coo", "claude"),
+        )
+
+    def test_one_entry_per_team(self, tmp_path: Path) -> None:
+        _write(tmp_path, "a.yaml", TEAM.replace("name: t", "name: eng"))
+        _write(
+            tmp_path,
+            "b.yaml",
+            TEAM.replace("name: t", "name: gstack")
+            .replace("identity: claude", "identity: boss")
+            .replace("role: infra-engineer", "role: reviewer")
+            .replace("from: infra-engineer", "from: reviewer"),
+        )
+        roles = EthosTeams.from_repo(tmp_path, SLUG).roles_of("adb")
+        assert [(r.role, r.team, r.manager_role) for r in roles] == [
+            ("infra-engineer", "eng", "coo"),
+            ("reviewer", "gstack", "coo"),
+        ]
+        assert [r.manager_person for r in roles] == ["claude", "boss"]
+
+    def test_role_without_manager(self, tmp_path: Path) -> None:
+        _write(tmp_path, "t.yaml", TEAM)
+        assert EthosTeams.from_repo(tmp_path, SLUG).roles_of("jfreeman") == (
+            RoleEntry("ceo", "t"),
+        )
+
+    def test_unknown_handle_and_no_teams_yield_nothing(self, tmp_path: Path) -> None:
+        assert EthosTeams.from_repo(tmp_path, SLUG).roles_of("claude") == ()
+        _write(tmp_path, "t.yaml", TEAM)
+        assert EthosTeams.from_repo(tmp_path, SLUG).roles_of("nobody") == ()
+
+    def test_team_name_outside_grammar_falls_back_to_file_stem(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, "eng.yaml", TEAM.replace("name: t", 'name: "x y"'))
+        (entry,) = EthosTeams.from_repo(tmp_path, SLUG).roles_of("claude")
+        assert entry.team == "eng"
+
+    def test_for_repo_root_none_is_empty(self) -> None:
+        assert EthosTeams.for_repo_root(None).roles_of("claude") == ()
 
 
 def test_real_team_data_resolves_adb_to_coo() -> None:

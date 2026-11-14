@@ -15,7 +15,13 @@ from biff._formatting import (
     visible_width,
     wrap_cells,
 )
-from biff.formatting import format_read, format_who
+from biff.ethos_team import RoleEntry
+from biff.formatting import (
+    format_finger,
+    format_finger_multi,
+    format_read,
+    format_who,
+)
 from biff.models import Message, UserSession
 
 
@@ -394,59 +400,147 @@ class TestFormatReadFromTty:
         assert "kai:" not in data_lines[0]
 
 
-class TestWhoManagerLabel:
-    def _row(self, reports_to: str) -> UserSession:
+class TestWhoMgrColumn:
+    def _row(self, launched_by: str, user: str = "claude") -> UserSession:
         return UserSession(
-            user="claude",
-            tty="abcd1234",
-            tty_name="tty9",
-            kind="agent",
-            reports_to=reports_to,
-            last_active=datetime.now(UTC),
-        )
-
-    def test_label_is_its_own_column_not_part_of_the_name(self) -> None:
-        lines = format_who([self._row("ceo")]).splitlines()
-        assert "REPORTS" in lines[0].split()
-        assert lines[1].split()[0] == "claude:tty9"
-        assert lines[1].split()[-1] == "ceo"
-
-    def test_labelled_name_round_trips_through_address_resolution(self) -> None:
-        from biff.server.tools._session import resolve_tty_name
-        from biff.tty import parse_address
-
-        row = self._row("ceo")
-        name = format_who([row]).splitlines()[1].split()[0]
-        user, tty = parse_address(name)
-        assert tty is not None
-        assert resolve_tty_name([row], user, tty) is row
-
-    def test_no_label_table_is_byte_for_byte_the_old_output(self) -> None:
-        row = UserSession(
-            user="claude",
+            user=user,
             tty="abcd1234",
             tty_name="tty9",
             kind="agent",
             repo="biff",
             hostname="h",
+            launched_by=launched_by,
             last_active=datetime.now(UTC),
             last_tool_at=datetime.now(UTC),
         )
-        lines = format_who([row]).splitlines()
-        assert lines[1].split() == ["claude:tty9", "[A]", "biff", "0m", "+", "-", "h"]
-        assert "reports" not in lines[1]
-        assert "(" not in lines[1]
-        assert lines[1] == "   claude:tty9  [A]  biff  0m    +  -  h   "
+
+    def test_agent_launched_by_a_human_shows_the_human(self) -> None:
+        lines = format_who([self._row("jim")]).splitlines()
+        assert lines[0].split()[1:] == [
+            "NAME",
+            "K",
+            "MGR",
+            "REPO",
+            "IDLE",
+            "S",
+            "P",
+            "HOST",
+        ]
+        assert lines[1].split() == [
+            "claude:tty9",
+            "[A]",
+            "jim",
+            "biff",
+            "0m",
+            "+",
+            "-",
+            "h",
+        ]
+
+    def test_column_is_third_right_after_k(self) -> None:
+        header = format_who([self._row("jim")]).splitlines()[0]
+        assert header.index("K") < header.index("MGR") < header.index("REPO")
+
+    def test_humans_own_session_is_blank_and_other_rows_keep_the_column(
+        self,
+    ) -> None:
+        own = self._row("jim", user="jim")
+        agent = self._row("jim")
+        lines = format_who([own, agent]).splitlines()
+        assert "MGR" in lines[0].split()
+        assert "jim" not in lines[1].split()[1:]
+        assert "jim" in lines[2].split()
+
+    def test_column_hidden_when_no_row_has_a_manager(self) -> None:
+        out = format_who([self._row(""), self._row("claude")])
+        assert "MGR" not in out
+        assert out.splitlines()[1].split() == [
+            "claude:tty9",
+            "[A]",
+            "biff",
+            "0m",
+            "+",
+            "-",
+            "h",
+        ]
+
+    def test_labelled_name_round_trips_through_address_resolution(self) -> None:
+        from biff.server.tools._session import resolve_tty_name
+        from biff.tty import parse_address
+
+        row = self._row("jim")
+        name = format_who([row]).splitlines()[1].split()[0]
+        user, tty = parse_address(name)
+        assert tty is not None
+        assert resolve_tty_name([row], user, tty) is row
 
     def test_row_from_before_the_field_renders_as_without_it(self) -> None:
         row = self._row("")
         data = row.model_dump(mode="json")
-        del data["reports_to"]
+        del data["launched_by"]
         old = UserSession.model_validate(data)
         assert format_who([old]) == format_who([row])
 
-    def test_overlong_role_is_clipped(self) -> None:
+    def test_overlong_user_is_clipped(self) -> None:
         out = format_who([self._row("r" * 200)])
         assert "r" * 100 not in out
-        assert "r" * 30 in out
-        assert max(len(line) for line in out.splitlines()) < 200
+        assert "MGR" in out
+
+    def test_hostile_user_is_neutralised(self) -> None:
+        out = format_who([self._row("a\x1b[31mb\nc")])
+        assert "\x1b" not in out
+        assert len(out.splitlines()) == 2
+
+
+class TestFingerRoles:
+    def _row(self) -> UserSession:
+        return UserSession(
+            user="claude",
+            tty="abcd1234",
+            tty_name="tty9",
+            kind="agent",
+            last_active=datetime.now(UTC),
+            last_tool_at=datetime.now(UTC),
+        )
+
+    def test_no_ethos_output_is_unchanged(self) -> None:
+        row = self._row()
+        out = format_finger(row)
+        assert "Role" not in out
+        assert out == format_finger(row, ())
+        assert format_finger_multi([row]) == format_finger_multi([row], ())
+
+    def test_single_role_line_between_header_and_on_since(self) -> None:
+        roles = (RoleEntry("coo", "engineering", "ceo", "jfreeman"),)
+        lines = format_finger(self._row(), roles).splitlines()
+        role = next(i for i, ln in enumerate(lines) if "Role:" in ln)
+        since = next(i for i, ln in enumerate(lines) if "On since" in ln)
+        assert lines[0].startswith("\u25b6")
+        assert 0 < role < since
+        assert lines[role] == (
+            "   Role: coo (engineering) \u2014 reports to ceo (jfreeman)"
+        )
+        assert "Roles:" not in "\n".join(lines)
+
+    def test_multi_role_block_one_line_per_role(self) -> None:
+        roles = (
+            RoleEntry("coo", "engineering", "ceo", "jfreeman"),
+            RoleEntry("reviewer", "gstack", "coo", "claude"),
+        )
+        out = format_finger_multi([self._row()], roles)
+        assert "   Roles:\n" in out
+        assert "     coo (engineering) \u2014 reports to ceo (jfreeman)\n" in out
+        assert "     reviewer (gstack) \u2014 reports to coo (claude)\n" in out
+        assert out.index("Roles:") < out.index("On since")
+
+    def test_role_without_manager_has_no_reports_clause(self) -> None:
+        out = format_finger(self._row(), (RoleEntry("ceo", "engineering"),))
+        assert "   Role: ceo (engineering)\n" in out
+        assert "reports to" not in out
+
+    def test_hostile_and_overlong_role_text_is_neutralised_and_clipped(self) -> None:
+        roles = (RoleEntry("a\x1b[31mb\nc", "t" * 300, "m" * 300, "p"),)
+        out = format_finger(self._row(), roles)
+        assert "\x1b" not in out
+        assert "t" * 100 not in out
+        assert len([ln for ln in out.splitlines() if "Role:" in ln]) == 1

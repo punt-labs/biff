@@ -23,9 +23,9 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
-from biff.config import get_repo_slug, load_cli_config
-from biff.ethos_team import EthosTeams
+from biff.config import load_cli_config
 from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
@@ -52,6 +52,7 @@ class CliContext:
     tty: str
     tty_name: str = ""
     org_repos: frozenset[str] = frozenset()
+    repo_root: Path | None = None
     talk: TalkState = field(init=False)
 
     def __post_init__(self) -> None:
@@ -186,15 +187,6 @@ async def cli_session(
     """
     resolved = load_cli_config(user_override=user_override)
     config = resolved.config
-    if resolved.repo_root is not None:
-        try:
-            manager = EthosTeams.from_repo(
-                resolved.repo_root, get_repo_slug(resolved.repo_root) or ""
-            ).manager_of(config.user)
-        except LookupError:
-            pass  # no team data or no manager: the row carries no label
-        else:
-            config = config.model_copy(update={"reports_to": manager})
 
     if not config.relay_url:
         msg = (
@@ -250,7 +242,7 @@ async def cli_session(
             pwd=get_pwd(),
             repo=config.repo_name,
             kind=config.kind,
-            reports_to=config.reports_to,
+            launched_by=config.launched_by,
             last_active=registered_at,
             last_tool_at=registered_at,
         )
@@ -287,6 +279,7 @@ async def cli_session(
             tty=tty,
             tty_name=tty_name,
             org_repos=org_repos,
+            repo_root=resolved.repo_root,
         )
 
         yield ctx

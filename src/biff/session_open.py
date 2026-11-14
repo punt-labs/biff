@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from biff._stdlib import get_repo_slug
-from biff.ethos_team import EthosTeams
 from biff.models import BiffConfig, UnreadSummary
 from biff.relay import Relay
 from biff.session_handle import SessionHandleStore
@@ -47,7 +45,7 @@ class SessionOpener:
             hostname=self.hostname,
             pwd=self.pwd,
             repo=self.config.repo_name,
-            reports_to=self.config.reports_to,
+            launched_by=self.config.launched_by,
         )
         write_marker(self.config.repo_name, key, str(self.repo_common_root))
         write_unread_file(
@@ -94,15 +92,6 @@ async def open_session_from_payload(
         start=Path(cwd) if isinstance(cwd, str) and cwd else None,
     )
     config = resolved.config
-    if resolved.repo_root is not None:
-        try:
-            manager = EthosTeams.from_repo(
-                resolved.repo_root, get_repo_slug(resolved.repo_root) or ""
-            ).manager_of(config.user)
-        except LookupError:
-            pass  # no team data or no manager: the row carries no label
-        else:
-            config = config.model_copy(update={"reports_to": manager})
     state = create_state(config, resolved.data_dir, tty=routing.routing_id)
     data_root = biff_data_dir()
     try:

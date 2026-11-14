@@ -68,7 +68,7 @@ async def update_current_session(ctx: CliContext, **updates: object) -> UserSess
             pwd=get_pwd(),
             repo=ctx.config.repo_name,
             kind=ctx.config.kind,
-            reports_to=ctx.config.reports_to,
+            launched_by=ctx.config.launched_by,
         )
     now = datetime.now(UTC)
     updates["last_active"] = now

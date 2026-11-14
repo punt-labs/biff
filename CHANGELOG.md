@@ -4,10 +4,15 @@
 
 ### Added
 
-- `/who` shows `(reports to <role>)` beside an agent's name, resolved from the
-  repo's ethos team YAML on disk (the `reports_to` collaboration edge of the
-  agent's role). No live session lookup and no second session. A repo without
-  team data, or an agent with no manager, shows the row unchanged (PL-231).
+- `/who` has a `MGR` column, third after `K`, naming the human who launched an
+  agent: the OS user captured when the session registered (`getpass.getuser()`),
+  carried on the session row as `launched_by`. It is blank for a human's own
+  session (OS user equals the handle) and for a row with no value, and the column
+  is hidden when no visible row has one. It needs no ethos data and no config.
+- `/finger` shows the agent's ethos roles when the repo has team data: a `Role:`
+  line for one role, or a `Roles:` block with one line per role, each
+  `<role> (<team>) — reports to <role> (<person>)`, between the user header and
+  the on-since line. No team data leaves the output unchanged.
 
 ### Changed
 
