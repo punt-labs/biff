@@ -1,4 +1,4 @@
-"""biff's allow rules in a project's ``.claude/settings.json``.
+"""biff's allow and ask rules in a project's ``.claude/settings.json``.
 
 ``biff enable`` is the operator's explicit opt-in, so it -- not plugin startup
 -- grants Claude Code permission to call biff's MCP tools and slash commands
@@ -27,50 +27,34 @@ if TYPE_CHECKING:
 
 __all__ = ["BIFF_RULES", "PermissionChange", "ProjectPermissions"]
 
-_COMMANDS: Final = (
-    "biff",
-    "finger",
-    "last",
-    "mesg",
-    "plan",
-    "read",
-    "talk",
-    "tty",
-    "wall",
-    "who",
-    "write",
-)
-
-# Least privilege (permissions.md §6): only the read/messaging data plane runs
-# without a prompt. The machine- and repo-mutating verbs -- install, uninstall,
-# install-statusline, uninstall-statusline, enable, disable, serve, mcp, hook --
-# keep prompting, so no ``Bash(biff:*)`` wildcard is granted.
-_CLI_SUBCOMMANDS: Final = (
-    "doctor",
-    "finger",
-    "last",
-    "mesg",
-    "plan",
-    "read",
-    "status",
-    "statusline",
-    "talk",
-    "tty",
-    "version",
-    "wall",
-    "who",
-    "write",
-)
-
-# The deterministic rule set: enable adds every missing member, disable removes
-# these exact values. A rule retired here strands on disable, so it stays in the
-# set until no enabled repo can still carry it.
-BIFF_RULES: Final = (
-    "mcp__plugin_biff_tty__*",
-    *(f"Bash(biff {name}:*)" for name in _CLI_SUBCOMMANDS),
-    "Skill(biff:*)",
-    *(f"Skill({name})" for name in _COMMANDS),
-)
+# Broad allow per surface with exact ask carve-outs (permissions.md §6): ask
+# beats allow, so the machine- and repo-mutating verbs keep prompting while new
+# safe commands, MCP tools and skills work without a rule update.
+# ``Bash(biff -*)`` asks for any global option before the verb, which would
+# otherwise slip ``biff --quiet uninstall`` past the verb rules. The
+# deterministic rule set: enable adds every missing member, disable removes
+# these exact values. A rule dropped from the set is no longer removed by
+# disable; there is no cleanup code for it (punt-kit#396).
+BIFF_RULES: Final[dict[str, tuple[str, ...]]] = {
+    "allow": ("Bash(biff:*)", "mcp__plugin_biff_tty__*", "Skill(biff:*)"),
+    "ask": (
+        "Bash(biff -*)",
+        *(
+            f"Bash(biff {verb}:*)"
+            for verb in (
+                "install",
+                "uninstall",
+                "install-statusline",
+                "uninstall-statusline",
+                "enable",
+                "disable",
+                "serve",
+                "mcp",
+                "hook",
+            )
+        ),
+    ),
+}
 
 _NEW_FILE_MODE: Final = 0o644
 _SETTINGS: Final = "settings.json"
@@ -124,19 +108,29 @@ class ProjectPermissions:
         """Append each missing biff rule; return the rules added."""
         return self._update(BIFF_RULES, add=True)
 
-    def revoke(self, rules: Iterable[str] = BIFF_RULES) -> PermissionChange:
+    def revoke(self, rules: Iterable[str] | None = None) -> PermissionChange:
         """Remove *rules* (default: every biff rule); return the rules removed."""
+        if rules is None:
+            return self._update(BIFF_RULES, add=False)
         selected = set(rules)
-        return self._update(tuple(r for r in BIFF_RULES if r in selected), add=False)
+        return self._update(
+            {
+                tier: tuple(r for r in owned if r in selected)
+                for tier, owned in BIFF_RULES.items()
+            },
+            add=False,
+        )
 
-    def _update(self, rules: tuple[str, ...], *, add: bool) -> PermissionChange:
+    def _update(
+        self, rules: dict[str, tuple[str, ...]], *, add: bool
+    ) -> PermissionChange:
         """Apply the grant or revoke under the lock, reporting any refusal."""
         if self._root.resolve() == Path.home().resolve():
             return PermissionChange(
                 error="the repo is the home directory, whose .claude/"
                 "settings.json is user-global"
             )
-        if not rules:
+        if not any(rules.values()):
             return PermissionChange()
         try:
             root_fd = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
@@ -188,13 +182,17 @@ def _open_claude_dir(root_fd: int, *, create: bool) -> int | None:
         raise _refuse_link(exc, ".claude") from exc
 
 
-def _locked_apply(dir_fd: int, rules: tuple[str, ...], *, add: bool) -> tuple[str, ...]:
+def _locked_apply(
+    dir_fd: int, rules: dict[str, tuple[str, ...]], *, add: bool
+) -> tuple[str, ...]:
     """Run :func:`_apply` holding the shared lock in ``.claude``."""
     if not add and not _exists(dir_fd, _SETTINGS):
         return ()
     # Refuse a bad file before creating the lock, so a refusal leaves nothing
     # behind; the locked pass below re-validates.
-    _allow_list(_read(dir_fd)[0])
+    settings = _read(dir_fd)[0]
+    for tier in rules:
+        _rule_list(settings, tier)
     try:
         lock = os.open(_LOCK, os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600, dir_fd=dir_fd)
     except OSError as exc:
@@ -217,16 +215,22 @@ def _exists(dir_fd: int, name: str) -> bool:
     return True
 
 
-def _apply(dir_fd: int, rules: tuple[str, ...], *, add: bool) -> tuple[str, ...]:
-    """Edit the allow list in place and write it back if it changed."""
+def _apply(
+    dir_fd: int, rules: dict[str, tuple[str, ...]], *, add: bool
+) -> tuple[str, ...]:
+    """Edit each tier's list in place and write it back if it changed."""
     settings, mode = _read(dir_fd)
-    allow = _allow_list(settings)
-    if add:
-        changed = tuple(rule for rule in rules if rule not in allow)
-        allow.extend(changed)
-    else:
-        changed = tuple(rule for rule in rules if rule in allow)
-        allow[:] = [rule for rule in allow if rule not in changed]
+    changed: tuple[str, ...] = ()
+    for tier, owned in rules.items():
+        have = _rule_list(settings, tier, create=add)
+        if add:
+            added = tuple(rule for rule in owned if rule not in have)
+            have.extend(added)
+            changed += added
+        else:
+            removed = tuple(rule for rule in owned if rule in have)
+            have[:] = [rule for rule in have if rule not in removed]
+            changed += removed
     if changed:
         _write(dir_fd, json.dumps(settings, indent=2) + "\n", mode)
     return changed
@@ -263,21 +267,25 @@ def _read(dir_fd: int) -> tuple[dict[str, object], int]:
     return cast("dict[str, object]", data), stat.S_IMODE(info.st_mode)
 
 
-def _allow_list(settings: dict[str, object]) -> list[object]:
-    """Return ``permissions.allow``, creating it if absent; refuse bad shapes.
+def _rule_list(
+    settings: dict[str, object], tier: str, *, create: bool = True
+) -> list[object]:
+    """Return ``permissions.<tier>``, created if absent and *create*.
 
-    A ``permissions`` or ``allow`` of the wrong type is the user's data, so it
-    is reported rather than overwritten.
+    A ``permissions`` or tier list of the wrong type is the user's data, so it
+    is reported rather than overwritten. Containers created here are only
+    written when a rule changes.
     """
     permissions = settings.setdefault("permissions", {})
     if not isinstance(permissions, dict):
         msg = ".claude/settings.json 'permissions' is not an object"
         raise ValueError(msg)
-    allow = cast("dict[str, object]", permissions).setdefault("allow", [])
-    if not isinstance(allow, list):
-        msg = ".claude/settings.json 'permissions.allow' is not a list"
+    tiers = cast("dict[str, object]", permissions)
+    rules = tiers.setdefault(tier, []) if create else tiers.get(tier, [])
+    if not isinstance(rules, list):
+        msg = f".claude/settings.json 'permissions.{tier}' is not a list"
         raise ValueError(msg)
-    return cast("list[object]", allow)
+    return cast("list[object]", rules)
 
 
 def _write(dir_fd: int, text: str, mode: int) -> None:

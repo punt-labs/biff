@@ -240,17 +240,18 @@ class TestPermissions:
     def test_enable_grants_repo_level_rules(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         change = RepoEnablement(tmp_path).enable()
-        assert change.permissions.changed == BIFF_RULES
+        assert change.permissions.changed == (*BIFF_RULES["allow"], *BIFF_RULES["ask"])
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-        assert settings["permissions"]["allow"] == list(BIFF_RULES)
+        assert settings["permissions"]["allow"] == list(BIFF_RULES["allow"])
+        assert settings["permissions"]["ask"] == list(BIFF_RULES["ask"])
 
     def test_disable_revokes_exactly_those_rules(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         RepoEnablement(tmp_path).enable()
         change = RepoEnablement(tmp_path).disable()
-        assert change.permissions.changed == BIFF_RULES
+        assert change.permissions.changed == (*BIFF_RULES["allow"], *BIFF_RULES["ask"])
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-        assert settings["permissions"]["allow"] == []
+        assert settings["permissions"] == {"allow": [], "ask": []}
 
     def test_unresolvable_hooks_grants_nothing(self, tmp_path: Path) -> None:
         change = RepoEnablement(tmp_path).enable()
@@ -274,7 +275,9 @@ class TestPermissions:
         _make_repo(tmp_path)
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir()
-        settings.write_text(json.dumps({"permissions": {"allow": ["Skill(plan)"]}}))
+        settings.write_text(
+            json.dumps({"permissions": {"allow": ["Skill(biff:plan)"]}})
+        )
 
         def boom(_root: Path) -> None:
             raise OSError(28, "No space left on device")
@@ -283,7 +286,7 @@ class TestPermissions:
         with pytest.raises(OSError, match="No space"):
             RepoEnablement(tmp_path).enable()
         allow = json.loads(settings.read_text())["permissions"]["allow"]
-        assert allow == ["Skill(plan)"]
+        assert allow == ["Skill(biff:plan)"]
 
     def test_disable_revokes_even_when_hook_removal_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -24,6 +24,17 @@
 
 ### Changed
 
+- `biff enable` allows each biff surface broadly — `Bash(biff:*)`,
+  `mcp__plugin_biff_tty__*` and `Skill(biff:*)` — and puts an exact `ask` rule
+  in `permissions.ask` for each machine- or repo-mutating verb (`install`,
+  `uninstall`, `install-statusline`, `uninstall-statusline`, `enable`,
+  `disable`, `serve`, `mcp`, `hook`) and for any global option before the
+  verb (`Bash(biff -*)`, so `biff --quiet uninstall` prompts too), so those
+  still prompt while new safe commands work without a rule update
+  (punt-kit#471). It replaces the short
+  forms `Skill(who)`, `Skill(write)`, …, which punt-kit `permissions.md` § 3
+  bans. `biff disable` removes the same allow and ask values; rules an earlier
+  `biff enable` added stay until you delete them by hand (PL-1035).
 - `/plan` (CLI and MCP tool) now rejects a message over 512 characters, the same
   cap as `/write` and `/wall`, instead of storing unbounded text. The error names
   the length and the limit, and the existing plan is left unchanged.
