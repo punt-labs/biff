@@ -1371,10 +1371,12 @@ def enable(
     ``.punt-labs/biff/enabled`` and the CI notify workflow
     ``.github/workflows/biff-notify.yml``, AND deploys this clone's local
     ``.git/hooks`` biff dispatchers so the repo is active here in one verb
-    (the beads ``bd setup`` model).  Equivalent to the MCP ``/biff enable``
-    toggle — both do exactly this.  Idempotent.  The committed files are
-    tracked: commit them via a PR so every contributor participates; the git
-    hooks are per-clone and never committed.  Invokes git only read-only (to
+    (the beads ``bd setup`` model), and allows biff's MCP tools and commands
+    in this repo's ``.claude/settings.json``, printing each rule added.
+    Equivalent to the MCP ``/biff enable`` toggle — both do exactly this.
+    Idempotent.  The committed files are tracked: commit them via a PR so
+    every contributor participates; the git hooks are per-clone and never
+    committed.  Invokes git only read-only (to
     resolve the hooks directory) and never creates commits.
     """
     repo_root = find_git_root(start)
@@ -1395,13 +1397,10 @@ def enable(
         print("CI workflow: .github/workflows/biff-notify.yml")
     if change.git_hooks_changed:
         print(f"Git hooks: {', '.join(change.git_hooks_changed)}")
-
-    print(
-        "biff enabled. Commit .punt-labs/biff/enabled, "
-        ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, and the "
-        "@.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, then restart "
-        "Claude Code for changes to take effect."
-    )
+    for line in change.enable_report():
+        print(line)
+    if change.failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -1416,7 +1415,8 @@ def disable(
     Removes exactly what ``enable`` added: the committed marker
     ``.punt-labs/biff/enabled`` and CI workflow
     ``.github/workflows/biff-notify.yml``, AND this clone's local
-    ``.git/hooks`` biff dispatchers.  Equivalent to the MCP ``/biff disable``
+    ``.git/hooks`` biff dispatchers and ``.claude/settings.json`` allow
+    rules.  Equivalent to the MCP ``/biff disable``
     toggle.  Idempotent.  Commit the removal of the tracked files via a PR
     for it to take effect for every contributor.  Invokes git only read-only
     (to resolve the hooks directory) and never creates commits.
@@ -1432,13 +1432,10 @@ def disable(
         print("CI workflow removed: biff-notify.yml")
     if change.git_hooks_changed:
         print(f"Git hooks removed: {', '.join(change.git_hooks_changed)}")
-
-    print(
-        "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
-        ".github/workflows/biff-notify.yml, and the @.punt-labs/biff/CLAUDE.md "
-        "import from CLAUDE.md, then restart Claude Code "
-        "for changes to take effect."
-    )
+    for line in change.disable_report():
+        print(line)
+    if change.failed:
+        raise typer.Exit(code=1)
 
 
 _PLUGIN_ID = "biff@punt-labs"

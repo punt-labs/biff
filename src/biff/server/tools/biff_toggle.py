@@ -9,7 +9,8 @@ produce an identical committed result (DES-052).
 ``action="enable"`` fully activates this clone: it writes the committed
 marker ``.punt-labs/biff/enabled`` and CI notify workflow
 ``.github/workflows/biff-notify.yml`` AND deploys this clone's local
-``.git/hooks`` biff dispatchers; ``action="disable"`` removes all three.
+``.git/hooks`` biff dispatchers and allows biff's tools in the repo's
+``.claude/settings.json``; ``action="disable"`` removes all four.
 The committed files are tracked repo files the user commits via a PR like
 any other change; the git hooks are per-clone and never committed.  This
 tool invokes git only read-only (to resolve the hooks directory) and never
@@ -61,16 +62,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 from biff.git_hooks import HOOKS_DIR_UNRESOLVED_NOTICE  # noqa: PLC0415
 
                 return HOOKS_DIR_UNRESOLVED_NOTICE
-            return (
-                "biff enabled. Commit .punt-labs/biff/enabled, "
-                ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, "
-                "and the @.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, "
-                "then restart Claude Code for changes to take effect."
-            )
-        RepoEnablement(repo_root).disable()
-        return (
-            "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
-            ".github/workflows/biff-notify.yml, and the @.punt-labs/biff/CLAUDE.md "
-            "import from CLAUDE.md, then restart Claude Code "
-            "for changes to take effect."
-        )
+            return "\n".join(change.enable_report())
+        return "\n".join(RepoEnablement(repo_root).disable().disable_report())

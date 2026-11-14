@@ -14,11 +14,14 @@ the enclosing project repo.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
 
+from biff import enablement
+from biff.claude_permissions import BIFF_RULES
 from biff.enablement import RepoEnablement
 from biff.git_hooks import GIT_HOOKS, resolve_hooks_dir
 
@@ -231,6 +234,94 @@ class TestSurfaceEquivalence:
 
         assert state(cli_repo) == state(mcp_repo)
         assert state(cli_repo) == (True, True, frozenset(GIT_HOOKS))
+
+
+class TestPermissions:
+    def test_enable_grants_repo_level_rules(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        change = RepoEnablement(tmp_path).enable()
+        assert change.permissions.changed == BIFF_RULES
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert settings["permissions"]["allow"] == list(BIFF_RULES)
+
+    def test_disable_revokes_exactly_those_rules(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        RepoEnablement(tmp_path).enable()
+        change = RepoEnablement(tmp_path).disable()
+        assert change.permissions.changed == BIFF_RULES
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert settings["permissions"]["allow"] == []
+
+    def test_unresolvable_hooks_grants_nothing(self, tmp_path: Path) -> None:
+        change = RepoEnablement(tmp_path).enable()
+        assert change.permissions.changed == ()
+        assert not (tmp_path / ".claude").exists()
+
+    def test_refused_grant_writes_nothing_and_fails(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".claude" / "settings.json").write_text("{not json")
+        change = RepoEnablement(tmp_path).enable()
+        assert change.failed
+        assert "biff not enabled" in change.enable_report()[-1]
+        assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
+        assert not (tmp_path / ".github").exists()
+        assert not (tmp_path / "CLAUDE.md").exists()
+
+    def test_later_failure_rolls_back_granted_rules(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_repo(tmp_path)
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"permissions": {"allow": ["Skill(plan)"]}}))
+
+        def boom(_root: Path) -> None:
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(enablement, "write_enabled_marker", boom)
+        with pytest.raises(OSError, match="No space"):
+            RepoEnablement(tmp_path).enable()
+        allow = json.loads(settings.read_text())["permissions"]["allow"]
+        assert allow == ["Skill(plan)"]
+
+    def test_disable_revokes_even_when_hook_removal_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_repo(tmp_path)
+        RepoEnablement(tmp_path).enable()
+
+        def boom(_root: Path) -> list[str]:
+            raise OSError(13, "Permission denied")
+
+        monkeypatch.setattr(enablement, "remove_git_hooks", boom)
+        with pytest.raises(OSError, match="Permission denied"):
+            RepoEnablement(tmp_path).disable()
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert settings["permissions"]["allow"] == []
+
+    def test_refused_revoke_reports_failure(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        RepoEnablement(tmp_path).enable()
+        (tmp_path / ".claude" / "settings.json").write_text("[]")
+        change = RepoEnablement(tmp_path).disable()
+        assert change.failed
+        assert "still in .claude/settings.json" in change.disable_report()[-1]
+
+    def test_enable_ignores_punt_locks_once(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("dist/")
+        RepoEnablement(tmp_path).enable()
+        RepoEnablement(tmp_path).enable()
+        assert (tmp_path / ".gitignore").read_text() == "dist/\n*.punt-import.lock\n"
+
+    def test_enable_skips_symlinked_gitignore(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        outside = tmp_path.parent / f"{tmp_path.name}-ignore"
+        outside.write_text("keep\n")
+        (tmp_path / ".gitignore").symlink_to(outside)
+        RepoEnablement(tmp_path).enable()
+        assert outside.read_text() == "keep\n"
 
 
 _REPO_IMPORT = "@.punt-labs/biff/CLAUDE.md"

@@ -59,7 +59,7 @@ Line 2: ▶ eric: can you review PR #42?
 ### Managing the Status Bar
 
 ```bash
-biff install-statusline    # Install (done automatically by biff install)
+biff install-statusline    # Install (opt-in; nothing installs it automatically)
 biff uninstall-statusline  # Remove biff from status bar, restore original
 ```
 
