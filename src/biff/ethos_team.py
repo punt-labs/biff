@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Self, cast, final
 
 import yaml
 
-from biff.config import load_yaml
+from biff.config import get_repo_slug, load_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,20 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _REPORTS_TO = "reports_to"
 
 
+@dataclass(frozen=True, slots=True)
+class RoleEntry:
+    """One role a handle holds in one team, and who it reports to there.
+
+    ``manager_role`` and ``manager_person`` are empty when the team names no
+    manager, or no member holds the manager role.
+    """
+
+    role: str
+    team: str
+    manager_role: str = ""
+    manager_person: str = ""
+
+
 @final
 class EthosTeams:
     """The role graphs read from ``.punt-labs/ethos/teams/*.yaml``.
@@ -28,19 +43,21 @@ class EthosTeams:
     One graph per team: it maps an identity handle to its role, and a role
     to the role it reports to.  Roles are shared names across teams, so a
     handle is only ever resolved through the team it is a member of.  The
-    answer is a role name (``"ceo"``), never a person: a role can have
-    several holders.
+    manager is a role name (``"ceo"``); :meth:`roles_of` also names the
+    first member holding it.
     """
 
     __slots__ = ("_teams",)
 
-    _teams: tuple[tuple[dict[str, str], dict[str, str]], ...]
+    _teams: tuple[tuple[dict[str, str], dict[str, str], str], ...]
 
     def __new__(
-        cls, teams: Iterable[tuple[Mapping[str, str], Mapping[str, str]]]
+        cls, teams: Iterable[tuple[Mapping[str, str], Mapping[str, str], str]]
     ) -> Self:
         self = super().__new__(cls)
-        self._teams = tuple((dict(roles), dict(edges)) for roles, edges in teams)
+        self._teams = tuple(
+            (dict(roles), dict(edges), name) for roles, edges, name in teams
+        )
         return self
 
     @classmethod
@@ -55,17 +72,21 @@ class EthosTeams:
         order and the first selected team that resolves a handle wins, so
         the result is deterministic.
         """
-        teams: list[tuple[dict[str, str], dict[str, str]]] = []
+        teams: list[tuple[dict[str, str], dict[str, str], str]] = []
         teams_dir = repo_root / ".punt-labs" / "ethos" / "teams"
         try:
             paths = sorted(teams_dir.glob("*.yaml"))
-        except OSError:
+        except OSError as exc:
+            logger.warning("Cannot list team files in %s: %s", teams_dir, exc)
             paths = []
         for path in paths:
             try:
                 doc = load_yaml(path)
             except yaml.YAMLError:
                 logger.warning("Skipping malformed team file %s", path)
+                continue
+            if not doc:
+                logger.warning("Skipping unreadable or empty team file %s", path)
                 continue
             if not cls._selects(doc.get("repositories"), repo_slug):
                 continue
@@ -75,17 +96,38 @@ class EthosTeams:
             edges: dict[str, str] = {}
             for src, dst in cls._edges(doc.get("collaborations")):
                 edges.setdefault(src, dst)
-            teams.append((roles, edges))
+            teams.append((roles, edges, cls._name(doc.get("name")) or path.stem))
         return cls(teams)
 
-    def manager_of(self, handle: str) -> str:
-        """Return the manager role for *handle*; raise LookupError when none."""
-        for roles, edges in self._teams:
-            manager = edges.get(roles.get(handle, ""))
-            if manager:
-                return manager
-        msg = f"no manager for {handle!r}"
-        raise LookupError(msg)
+    @classmethod
+    def for_repo_root(cls, repo_root: Path | None) -> Self:
+        """Return the teams of the repository at *repo_root*; none when unknown."""
+        if repo_root is None:
+            return cls(())
+        slug = get_repo_slug(repo_root)
+        if slug is None:
+            logger.warning("No origin slug for %s; ethos roles unavailable", repo_root)
+            return cls(())
+        return cls.from_repo(repo_root, slug)
+
+    def roles_of(self, handle: str) -> tuple[RoleEntry, ...]:
+        """Return one entry per selected team *handle* is a member of.
+
+        Empty when no team names the handle.  Order follows the sorted team
+        files, so the result is deterministic.
+        """
+        entries: list[RoleEntry] = []
+        for roles, edges, team in self._teams:
+            role = roles.get(handle)
+            if not role:
+                continue
+            manager_role = edges.get(role, "")
+            person = next(
+                (h for h, r in roles.items() if manager_role and r == manager_role),
+                "",
+            )
+            entries.append(RoleEntry(role, team, manager_role, person))
+        return tuple(entries)
 
     @staticmethod
     def _selects(raw: object, repo_slug: str) -> bool:

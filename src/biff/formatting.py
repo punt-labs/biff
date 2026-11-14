@@ -11,6 +11,7 @@ The primitive layer (``ColumnSpec``, ``format_table``, ``format_idle``,
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
@@ -28,7 +29,11 @@ from biff._formatting import (
     wrap_cells,
 )
 from biff._stdlib import display_repo_name
+from biff.ethos_team import RoleEntry
 from biff.models import Message, SessionEvent, UserSession, WallPost
+from biff.session_routing import ID_RE
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "HEADER_PREFIX",
@@ -61,6 +66,7 @@ __all__ = [
     "sanitized_sender",
     "terminal_safe",
     "visible_text",
+    "who_mgr",
 ]
 
 # Never wrap a talk body narrower than this, however long the sender
@@ -296,15 +302,13 @@ def format_remaining(expires_at: datetime) -> str:
 WHO_SPECS: list[ColumnSpec] = [
     ColumnSpec("NAME", min_width=10),
     ColumnSpec("K", min_width=1),
+    ColumnSpec("MGR", min_width=3),
     ColumnSpec("REPO", min_width=4),
     ColumnSpec("IDLE", min_width=4),
     ColumnSpec("S", min_width=1),
     ColumnSpec("P", min_width=1),
     ColumnSpec("HOST", min_width=4),
 ]
-
-
-WHO_REPORTS_SPEC = ColumnSpec("REPORTS", min_width=7)
 
 
 def _format_who_name(s: UserSession) -> str:
@@ -326,23 +330,43 @@ def _format_who_kind(s: UserSession) -> str:
     return ""
 
 
-def _format_who_reports_to(s: UserSession) -> str:
-    """Render the manager role for the REPORTS column; ``-`` when none.
+def who_mgr(s: UserSession) -> str:
+    """Return the biff-addressable human behind an agent row; blank otherwise.
 
-    The role comes from team YAML on the owner's disk and travels on the
-    session row, so it is repo-controlled text: neutralised and clipped
-    like every other fixed-column cell.
+    Derived from the row's own captured data and stored nowhere: the first of
+    its ``owner_git`` (``git config user.name`` at registration, not the
+    effective author, which a provisioned host overrides with the bot) and
+    ``launched_by`` (OS user) that is addressable and differs from the row's
+    own identity.  A full name such as ``Jane Doe`` is not addressable, so it
+    never fills the cell.  Humans get none.
     """
-    role = _truncate(terminal_safe(s.reports_to)[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
-    return role or "-"
+    if s.kind != "agent":
+        return ""
+    own = s.user.strip().casefold()
+    for candidate in (s.owner_git, s.launched_by):
+        name = candidate.strip()
+        if not name:
+            continue
+        if not ID_RE.fullmatch(name):
+            logger.debug("MGR candidate %r is not an addressable identity", name)
+            continue
+        if name.casefold() != own:
+            return name
+    return ""
+
+
+def _format_who_mgr(s: UserSession) -> str:
+    """Render :func:`who_mgr` as a neutralised, clipped fixed-column cell."""
+    return _truncate(terminal_safe(who_mgr(s))[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
 
 
 def format_who(sessions: list[UserSession]) -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
     The NAME column renders exactly ``user:tty`` so agents can copy the
-    address directly into ``/write``; the manager role lives in its own
-    trailing REPORTS column, shown only when some row carries one.
+    address directly into ``/write``.  The MGR column, third after ``K``,
+    names the human behind an agent (see :func:`who_mgr`); it is blank for
+    human rows and hidden when no row has a value.
     P column shows ``+`` if the
     session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.
@@ -352,21 +376,22 @@ def format_who(sessions: list[UserSession]) -> str:
     same reason :func:`_format_who_name` routes through
     :func:`sanitized_address`.
     """
-    show_reports = any(s.reports_to for s in sessions)
+    mgrs = [_format_who_mgr(s) for s in sessions]
+    show_mgr = any(mgrs)
     rows: list[list[str]] = [
         [
             _format_who_name(s),
             _format_who_kind(s),
+            *([mgr] if show_mgr else []),
             display_repo_name(s.repo) or "-",
             format_idle(s.last_tool_at),
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
             _truncate(terminal_safe(s.hostname), _MAX_LABEL_WIDTH) or "-",
-            *([_format_who_reports_to(s)] if show_reports else []),
         ]
-        for s in sessions
+        for s, mgr in zip(sessions, mgrs, strict=True)
     ]
-    specs = [*WHO_SPECS, WHO_REPORTS_SPEC] if show_reports else WHO_SPECS
+    specs = WHO_SPECS if show_mgr else [c for c in WHO_SPECS if c.header != "MGR"]
     return format_table(specs, rows)
 
 
@@ -456,6 +481,9 @@ def format_tty_block(session: UserSession) -> str:
     )
 
     lines = [f"   On since {since} on {tty_label}, idle {idle}"]
+    if session.launched_by:
+        launched = _truncate(terminal_safe(session.launched_by), _MAX_LABEL_WIDTH)
+        lines.append(f"   Launched by: {launched}")
     if session.hostname or session.pwd:
         host = terminal_safe(session.hostname) or "?"
         pwd = terminal_safe(session.pwd) or "?"
@@ -472,12 +500,45 @@ def format_tty_block(session: UserSession) -> str:
     return "\n".join(lines)
 
 
-def format_finger(session: UserSession) -> str:
+def _format_role(entry: RoleEntry) -> str:
+    """Render ``<role> (<team>) — reports to <role> (<person>)``, clipped."""
+    text = f"{entry.role} ({entry.team})"
+    if entry.manager_role:
+        text += f" \N{EM DASH} reports to {entry.manager_role}"
+        if entry.manager_person:
+            text += f" ({entry.manager_person})"
+    return _truncate(terminal_safe(text), _ROW_TEXT_WIDTH - 5)
+
+
+def format_roles(roles: tuple[RoleEntry, ...]) -> str:
+    """Render a ``/finger`` role section; ``""`` when *roles* is empty.
+
+    One role is a ``Role:`` line; several are a ``Roles:`` block, one line
+    per role.  Role data is repo-controlled text, so each line is
+    neutralised and clipped like every other fixed-width cell.
+    """
+    if not roles:
+        return ""
+    if len(roles) == 1:
+        return f"   Role: {_format_role(roles[0])}"
+    lines = ["   Roles:", *(f"     {_format_role(r)}" for r in roles)]
+    return "\n".join(lines)
+
+
+def _join_blocks(*blocks: str) -> str:
+    return "\n".join(b for b in blocks if b)
+
+
+def format_finger(session: UserSession, roles: tuple[RoleEntry, ...] = ()) -> str:
     """Format a single session in BSD ``finger(1)`` style."""
-    return f"{format_user_header(session)}\n{format_tty_block(session)}"
+    return _join_blocks(
+        format_user_header(session), format_roles(roles), format_tty_block(session)
+    )
 
 
-def format_finger_multi(sessions: list[UserSession]) -> str:
+def format_finger_multi(
+    sessions: list[UserSession], roles: tuple[RoleEntry, ...] = ()
+) -> str:
     """Format all sessions for a user (header once, multiple tty blocks).
 
     Ordered most-recently-active first by ``last_tool_at``, matching the
@@ -488,7 +549,7 @@ def format_finger_multi(sessions: list[UserSession]) -> str:
     by_idle = sorted(sessions, key=lambda s: s.last_tool_at, reverse=True)
     header = format_user_header(by_idle[0])
     tty_blocks = [format_tty_block(s) for s in by_idle]
-    return header + "\n" + "\n".join(tty_blocks)
+    return _join_blocks(header, format_roles(roles), "\n".join(tty_blocks))
 
 
 # ---------------------------------------------------------------------------

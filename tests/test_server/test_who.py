@@ -1,4 +1,4 @@
-"""The MCP ``who`` tool shows the manager label on an agent's own row."""
+"""The MCP ``who`` tool shows the human behind an agent on its own row."""
 
 from __future__ import annotations
 
@@ -14,13 +14,13 @@ from biff.server.state import create_state
 from biff.testing.caller import StampedClient, caller_for
 
 
-async def _who(tmp_path: Path, reports_to: str) -> str:
+async def _who(tmp_path: Path, launched_by: str) -> str:
     state = create_state(
         BiffConfig(
             user="claude",
             kind="agent",
             repo_name="_test-who",
-            reports_to=reports_to,
+            launched_by=launched_by,
             poll_interval=0.05,
         ),
         tmp_path / "data",
@@ -37,16 +37,22 @@ async def _who(tmp_path: Path, reports_to: str) -> str:
     return block.text
 
 
-async def test_who_shows_the_manager_label(tmp_path: Path) -> None:
-    out = await _who(tmp_path, "ceo")
-    assert "REPORTS" in out
-    assert "ceo" in out
+@pytest.fixture(autouse=True)
+def _no_git_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the host's git user.name so only the OS-user floor can fill MGR."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
 
-@pytest.mark.parametrize("empty", [""])
-async def test_who_without_a_manager_has_no_label_and_no_error(
-    tmp_path: Path, empty: str
+async def test_who_shows_the_os_user_floor(tmp_path: Path) -> None:
+    out = await _who(tmp_path, "jim")
+    assert "MGR" in out
+    assert "jim" in out
+
+
+async def test_who_without_any_candidate_has_no_column_and_no_error(
+    tmp_path: Path,
 ) -> None:
-    out = await _who(tmp_path, empty)
+    out = await _who(tmp_path, "")
     assert "claude:" in out
-    assert "REPORTS" not in out
+    assert "MGR" not in out

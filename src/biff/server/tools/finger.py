@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff.ethos_team import EthosTeams
 from biff.formatting import format_finger, format_finger_multi
 from biff.relay import live_sessions
 from biff.server.tools._activity import track_activity
@@ -47,6 +48,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             await state.relay.get_sessions_for_repos(state.visible_repos)
         )
 
+        teams = EthosTeams.for_repo_root(state.repo_root)
         blocks: list[str] = []
         for addr in addresses:
             bare_user, tty = parse_address(addr)
@@ -60,11 +62,13 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 if session is None:
                     blocks.append(f"Login: {bare_user}\nNo session on tty {tty}.")
                 else:
-                    blocks.append(format_finger(session))
+                    blocks.append(format_finger(session, teams.roles_of(session.user)))
             else:
                 sessions = [s for s in all_sessions if s.user == bare_user]
                 if not sessions:
                     blocks.append(f"Login: {bare_user}\nNever logged in.")
                 else:
-                    blocks.append(format_finger_multi(sessions))
+                    blocks.append(
+                        format_finger_multi(sessions, teams.roles_of(bare_user))
+                    )
         return "\n\n".join(blocks)

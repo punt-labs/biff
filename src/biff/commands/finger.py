@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
+from biff.ethos_team import EthosTeams
 from biff.formatting import format_finger, format_finger_multi
 from biff.relay import live_sessions
 from biff.server.tools._session import resolve_tty_name
@@ -23,6 +24,7 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
         await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     )
 
+    teams = EthosTeams.for_repo_root(ctx.repo_root)
     blocks: list[str] = []
     json_parts: list[object] = []
     has_error = False
@@ -45,7 +47,7 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
                 json_parts.append({"error": f"No session on tty {tty}."})
                 has_error = True
             else:
-                blocks.append(format_finger(session))
+                blocks.append(format_finger(session, teams.roles_of(session.user)))
                 json_parts.append(session.model_dump(mode="json"))
         else:
             sessions = [s for s in all_sessions if s.user == bare_user]
@@ -54,7 +56,7 @@ async def finger(ctx: CliContext, user: str) -> CommandResult:
                 json_parts.append({"error": f"{bare_user} never logged in."})
                 has_error = True
             else:
-                blocks.append(format_finger_multi(sessions))
+                blocks.append(format_finger_multi(sessions, teams.roles_of(bare_user)))
                 json_parts.append([s.model_dump(mode="json") for s in sessions])
 
     return CommandResult(

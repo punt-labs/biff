@@ -104,7 +104,15 @@ sh install.sh
 
 `S` is message status: `+` means accepting messages, `-` means do not disturb.
 
-An agent whose repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`) also gets a trailing `REPORTS` column naming the role it reports to, for example `ceo`; the `NAME` column stays a copy-pasteable `user:tty`. The value is a role, not a person, and is omitted when the team data names no manager.
+On agent rows a `MGR` column (third, after `K`) names the human behind the agent: `git config user.name` in the session's repo, else the OS user, skipping any value equal to the agent's own identity. Human rows are blank and the column is hidden when no row has a value. It is computed when `/who` renders and stored nowhere. `/finger` adds `Launched by: <os user>`.
+
+```text
+> /who
+
+▶  NAME         K    MGR  REPO  IDLE  S  P  HOST     
+   jim:tty1               biff  0m    +  +  m2-mb-air
+   claude:tty2  [A]  jim  biff  3m    +  -  m2-mb-air
+```
 
 ### Send a message
 
@@ -139,6 +147,17 @@ Message sent to kai.
    Host: m2-mb-air  Dir: /Users/kai/code/myapp
    Plan:
     refactoring auth module
+```
+
+When the repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`), `/finger` also shows the agent's role between the header and the on-since line (a `Roles:` block when it holds several):
+
+```text
+> /finger claude
+
+▶  Login: claude [agent]                   Messages: on
+   Role: coo (engineering) — reports to ceo (jfreeman)
+   On since Sat Feb 15 14:01 (UTC) on tty2, idle 0:03
+   No Plan.
 ```
 
 ### Set your status

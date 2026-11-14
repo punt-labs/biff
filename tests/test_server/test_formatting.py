@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -15,7 +17,15 @@ from biff._formatting import (
     visible_width,
     wrap_cells,
 )
-from biff.formatting import format_read, format_who
+from biff._stdlib import git_user_name
+from biff.ethos_team import RoleEntry
+from biff.formatting import (
+    format_finger,
+    format_finger_multi,
+    format_read,
+    format_who,
+    who_mgr,
+)
 from biff.models import Message, UserSession
 
 
@@ -394,59 +404,339 @@ class TestFormatReadFromTty:
         assert "kai:" not in data_lines[0]
 
 
-class TestWhoManagerLabel:
-    def _row(self, reports_to: str) -> UserSession:
+class TestWhoMgrColumn:
+    def _row(
+        self,
+        launched_by: str = "",
+        user: str = "claude",
+        kind: str = "agent",
+        owner_git: str = "",
+    ) -> UserSession:
         return UserSession(
-            user="claude",
+            user=user,
             tty="abcd1234",
             tty_name="tty9",
-            kind="agent",
-            reports_to=reports_to,
+            kind=kind,
+            repo="biff",
+            hostname="h",
+            launched_by=launched_by,
+            owner_git=owner_git,
             last_active=datetime.now(UTC),
+            last_tool_at=datetime.now(UTC),
         )
 
-    def test_label_is_its_own_column_not_part_of_the_name(self) -> None:
-        lines = format_who([self._row("ceo")]).splitlines()
-        assert "REPORTS" in lines[0].split()
-        assert lines[1].split()[0] == "claude:tty9"
-        assert lines[1].split()[-1] == "ceo"
+    def test_agent_mgr_is_the_rows_owner_git(self) -> None:
+        lines = format_who([self._row("osjim", owner_git="jmf-pobox")]).splitlines()
+        assert lines[0].split()[1:] == [
+            "NAME",
+            "K",
+            "MGR",
+            "REPO",
+            "IDLE",
+            "S",
+            "P",
+            "HOST",
+        ]
+        assert lines[1].split() == [
+            "claude:tty9",
+            "[A]",
+            "jmf-pobox",
+            "biff",
+            "0m",
+            "+",
+            "-",
+            "h",
+        ]
+
+    def test_each_row_uses_its_own_owner_not_the_viewers(self) -> None:
+        # Regression: a viewer-side git name was applied to every row.
+        a = self._row(user="alpha", owner_git="alice")
+        b = self._row(user="beta", owner_git="bob")
+        assert who_mgr(a) == "alice"
+        assert who_mgr(b) == "bob"
+        out = format_who([a, b])
+        assert "alice" in out
+        assert "bob" in out
+
+    def test_owner_git_equal_to_self_falls_to_os_user(self) -> None:
+        assert who_mgr(self._row("jim", owner_git="claude")) == "jim"
+
+    def test_comparison_is_case_insensitive_and_stripped(self) -> None:
+        assert who_mgr(self._row("jim", owner_git=" CLAUDE ")) == "jim"
+
+    def test_owner_git_equal_to_self_and_no_os_user_is_blank(self) -> None:
+        assert who_mgr(self._row("", owner_git="claude")) == ""
+
+    def test_both_equal_to_self_is_blank(self) -> None:
+        assert who_mgr(self._row("claude", owner_git="claude")) == ""
+
+    def test_owner_git_unset_uses_the_os_user_floor(self) -> None:
+        assert who_mgr(self._row("jim")) == "jim"
+
+    def test_full_name_is_not_addressable_and_falls_through(self) -> None:
+        assert who_mgr(self._row("jim", owner_git="Jane Doe")) == "jim"
+        assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
+
+    def test_rejected_candidate_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("DEBUG", logger="biff.formatting"):
+            assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
+        assert "Jane Doe" in caplog.text
+
+    def test_unaddressable_os_user_is_blank(self) -> None:
+        assert who_mgr(self._row("a b")) == ""
+
+    def test_human_row_is_always_blank(self) -> None:
+        human = self._row("jim", user="kai", kind="human", owner_git="jmf-pobox")
+        assert who_mgr(human) == ""
+        assert who_mgr(self._row("jim", kind="", owner_git="jmf-pobox")) == ""
+
+    def test_human_rows_keep_the_column_when_an_agent_has_one(self) -> None:
+        lines = format_who(
+            [self._row("jim", user="kai", kind="human"), self._row("jim")]
+        ).splitlines()
+        assert "MGR" in lines[0].split()
+        assert "jim" not in lines[1].split()[1:]
+        assert "jim" in lines[2].split()
+
+    def test_column_hidden_when_no_row_has_a_manager(self) -> None:
+        out = format_who([self._row(""), self._row("claude", owner_git="claude")])
+        assert "MGR" not in out
+        assert out.splitlines()[1].split() == [
+            "claude:tty9",
+            "[A]",
+            "biff",
+            "0m",
+            "+",
+            "-",
+            "h",
+        ]
 
     def test_labelled_name_round_trips_through_address_resolution(self) -> None:
         from biff.server.tools._session import resolve_tty_name
         from biff.tty import parse_address
 
-        row = self._row("ceo")
+        row = self._row("jim")
         name = format_who([row]).splitlines()[1].split()[0]
         user, tty = parse_address(name)
         assert tty is not None
         assert resolve_tty_name([row], user, tty) is row
 
-    def test_no_label_table_is_byte_for_byte_the_old_output(self) -> None:
+    def test_row_from_before_the_fields_renders_as_without_them(self) -> None:
+        row = self._row("")
+        data = row.model_dump(mode="json")
+        del data["launched_by"]
+        del data["owner_git"]
+        old = UserSession.model_validate(data)
+        assert old.owner_git == ""
+        assert format_who([old]) == format_who([row])
+
+    def test_row_from_before_owner_git_falls_to_launched_by(self) -> None:
+        data = self._row("jim").model_dump(mode="json")
+        del data["owner_git"]
+        assert who_mgr(UserSession.model_validate(data)) == "jim"
+
+    def test_overlong_value_is_clipped(self) -> None:
+        out = format_who([self._row("r" * 128)])
+        assert "r" * 100 not in out
+        assert "MGR" in out
+
+    def test_value_beyond_the_identity_bound_is_not_addressable(self) -> None:
+        assert who_mgr(self._row("r" * 129)) == ""
+
+    def test_hostile_value_is_never_addressable_and_never_rendered(self) -> None:
+        out = format_who([self._row("a\x1b[31mb\nc")])
+        assert "\x1b" not in out
+        assert len(out.splitlines()) == 2
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), *args],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+
+
+class TestGitUserName:
+    def _repo(self, tmp_path: Path, name: str | None) -> Path:
+        repo = tmp_path / "r"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        if name is not None:
+            _git(repo, "config", "user.name", name)
+        return repo
+
+    def test_reads_the_config_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        assert git_user_name(self._repo(tmp_path, "jmf-pobox")) == "jmf-pobox"
+
+    def test_provisioned_host_config_wins_over_author_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "claude")
+        monkeypatch.setenv("GIT_COMMITTER_NAME", "claude")
+        repo = self._repo(tmp_path, "jmf-pobox")
         row = UserSession(
+            user="claude",
+            tty="a",
+            kind="agent",
+            launched_by="osjim",
+            owner_git=git_user_name(repo),
+        )
+        assert who_mgr(row) == "jmf-pobox"
+
+    @pytest.mark.parametrize(
+        ("written", "want"),
+        [
+            ('\\"jmf-pobox\\"', "jmf-pobox"),
+            ("'jmf-pobox'", "jmf-pobox"),
+            ("jmf-pobox", "jmf-pobox"),
+            ("'mismatch\\\"", "'mismatch\""),
+        ],
+    )
+    def test_surrounding_quotes_are_stripped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        written: str,
+        want: str,
+    ) -> None:
+        # ``written`` is the config-file text; git's own quoting yields the
+        # literal quotes that the reader must remove.
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        repo = self._repo(tmp_path, None)
+        (repo / ".git" / "config").write_text(f"[user]\n\tname = {written}\n")
+        assert git_user_name(repo) == want
+
+    def test_quoted_value_renders_unquoted_in_who(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        repo = self._repo(tmp_path, None)
+        (repo / ".git" / "config").write_text('[user]\n\tname = \\"jmf-pobox\\"\n')
+        row = UserSession(
+            user="claude", tty="a", kind="agent", owner_git=git_user_name(repo)
+        )
+        out = format_who([row])
+        assert "jmf-pobox" in out
+        assert '"' not in out
+
+    def test_unset_is_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        assert git_user_name(self._repo(tmp_path, None)) == ""
+
+    def test_unset_is_logged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        with caplog.at_level("DEBUG", logger="biff._stdlib"):
+            git_user_name(self._repo(tmp_path, None))
+        assert "user.name" in caplog.text
+
+    def test_missing_git_is_empty_not_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PATH", str(tmp_path))
+        assert git_user_name(tmp_path) == ""
+
+
+class TestFingerLaunchedBy:
+    def _row(self, launched_by: str) -> UserSession:
+        return UserSession(
             user="claude",
             tty="abcd1234",
             tty_name="tty9",
             kind="agent",
-            repo="biff",
-            hostname="h",
+            launched_by=launched_by,
             last_active=datetime.now(UTC),
             last_tool_at=datetime.now(UTC),
         )
-        lines = format_who([row]).splitlines()
-        assert lines[1].split() == ["claude:tty9", "[A]", "biff", "0m", "+", "-", "h"]
-        assert "reports" not in lines[1]
-        assert "(" not in lines[1]
-        assert lines[1] == "   claude:tty9  [A]  biff  0m    +  -  h   "
 
-    def test_row_from_before_the_field_renders_as_without_it(self) -> None:
-        row = self._row("")
-        data = row.model_dump(mode="json")
-        del data["reports_to"]
-        old = UserSession.model_validate(data)
-        assert format_who([old]) == format_who([row])
+    def test_shown_without_ethos(self) -> None:
+        out = format_finger(self._row("jim"))
+        assert "   Launched by: jim\n" in out
+        assert "Role" not in out
 
-    def test_overlong_role_is_clipped(self) -> None:
-        out = format_who([self._row("r" * 200)])
-        assert "r" * 100 not in out
-        assert "r" * 30 in out
-        assert max(len(line) for line in out.splitlines()) < 200
+    def test_shown_with_ethos(self) -> None:
+        roles = (RoleEntry("coo", "engineering", "ceo", "jfreeman"),)
+        out = format_finger(self._row("jim"), roles)
+        assert "   Launched by: jim\n" in out
+        assert "   Role: coo" in out
+
+    def test_absent_when_unknown(self) -> None:
+        assert "Launched by" not in format_finger(self._row(""))
+
+    def test_hostile_and_overlong_value_is_neutralised_and_clipped(self) -> None:
+        out = format_finger(self._row("a\x1b[31m" + "z" * 300))
+        assert "\x1b" not in out
+        assert "z" * 100 not in out
+
+
+class TestFingerRoles:
+    def _row(self) -> UserSession:
+        return UserSession(
+            user="claude",
+            tty="abcd1234",
+            tty_name="tty9",
+            kind="agent",
+            last_active=datetime.now(UTC),
+            last_tool_at=datetime.now(UTC),
+        )
+
+    def test_no_ethos_output_is_unchanged(self) -> None:
+        row = self._row()
+        out = format_finger(row)
+        assert "Role" not in out
+        assert out == format_finger(row, ())
+        assert format_finger_multi([row]) == format_finger_multi([row], ())
+
+    def test_single_role_line_between_header_and_on_since(self) -> None:
+        roles = (RoleEntry("coo", "engineering", "ceo", "jfreeman"),)
+        lines = format_finger(self._row(), roles).splitlines()
+        role = next(i for i, ln in enumerate(lines) if "Role:" in ln)
+        since = next(i for i, ln in enumerate(lines) if "On since" in ln)
+        assert lines[0].startswith("\u25b6")
+        assert 0 < role < since
+        assert lines[role] == (
+            "   Role: coo (engineering) \u2014 reports to ceo (jfreeman)"
+        )
+        assert "Roles:" not in "\n".join(lines)
+
+    def test_multi_role_block_one_line_per_role(self) -> None:
+        roles = (
+            RoleEntry("coo", "engineering", "ceo", "jfreeman"),
+            RoleEntry("reviewer", "gstack", "coo", "claude"),
+        )
+        out = format_finger_multi([self._row()], roles)
+        assert "   Roles:\n" in out
+        assert "     coo (engineering) \u2014 reports to ceo (jfreeman)\n" in out
+        assert "     reviewer (gstack) \u2014 reports to coo (claude)\n" in out
+        assert out.index("Roles:") < out.index("On since")
+
+    def test_role_without_manager_has_no_reports_clause(self) -> None:
+        out = format_finger(self._row(), (RoleEntry("ceo", "engineering"),))
+        assert "   Role: ceo (engineering)\n" in out
+        assert "reports to" not in out
+
+    def test_hostile_and_overlong_role_text_is_neutralised_and_clipped(self) -> None:
+        roles = (RoleEntry("a\x1b[31mb\nc", "t" * 300, "m" * 300, "p"),)
+        out = format_finger(self._row(), roles)
+        assert "\x1b" not in out
+        assert "t" * 100 not in out
+        assert len([ln for ln in out.splitlines() if "Role:" in ln]) == 1

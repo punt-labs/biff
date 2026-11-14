@@ -7958,6 +7958,13 @@ unbreakable static label:
   <role>)` on the agent's own row. No live session lookup, no `CLAUDE_PID`, no
   second TTY/KV/NATS subscription — it cannot break the way the companion did. A
   missing manager renders the row unchanged, silently.
+  **SUPERSEDED by DES-076 (PL-1038).** This wave-B label shipped as a trailing
+  `REPORTS` column showing an ethos *role* (`ceo`), which is not a
+  biff-addressable identity and depended on ethos for the `/who` value. DES-076
+  replaces it: `/who` shows the owning human's addressable identity via a
+  runtime difference rule (standalone, ethos-optional), and the agent's ethos
+  role(s) move to `/finger`. The companion *removal* above (and its model
+  re-proof) stands unchanged.
 
 **Alternatives rejected.** (1) Re-key the roster call on the declared caller
 (DES-064's identity) and keep the companion — rejected: it preserves a second
@@ -7973,3 +7980,111 @@ becomes `entries`). Verified: `make check` green (2566 passed), `make
 prob-session` green (193 states, 0 violations), and a signal-kill demo shows a
 single-session lifecycle — exactly one session key across every biff state
 file, no companion artifact at startup or after SIGTERM.
+
+## DES-076: The biff Identity Model — Sources, Precedence, and the Addressable-Display Rule
+
+**Date:** 2026-11-14
+**Status:** SETTLED
+**Topic:** The one place that states, precisely, where biff gets every name it
+uses — for a session's own identity, for routing, and for display — and the rule
+that governs which source a given surface may show.
+**Consolidates (does not supersede):** DES-009 (identity is the GitHub login),
+DES-040 (agent-first disk resolution), DES-053 (a bot's GitHub login is
+rejected), DES-064 (caller identity is harness-declared). Those ADRs remain the
+authority for their own mechanisms; this entry is the map that ties them into
+one model and adds the identity source and display rule introduced by PL-1038.
+**Supersedes:** the wave-B manager-label specifics of DES-075 (the ethos-role
+`REPORTS` column), replaced by the `/who` MGR rule below. The companion removal
+and model re-proof of DES-075 stand.
+**Ticket:** PL-1038.
+
+### The four identity sources
+
+biff draws names from exactly four sources. Each has a different trust and
+stability profile, and that is why precedence matters.
+
+1. **Agent handle** — the ethos identity on disk (`.punt-labs/ethos/identities/
+   <h>.yaml`, `resolve_agent_identity_from_disk`, DES-040). A team identity:
+   stable, addressable, meaningful to other agents. Exists only for agents.
+2. **GitHub login** — `gh api user` (DES-009). A human's team identity: stable
+   across machines, addressable. Guarded by DES-053 — a login that matches a
+   known `kind: agent` identity (a bot `GH_TOKEN` in a human's shell) is
+   rejected, so a bot token never becomes a human's biff identity.
+3. **git config `user.name`** — `git config user.name` for the repo
+   (`git_user_name`, PL-1038). A local, addressable human identity, present on
+   essentially every dev machine with no network and no `gh`. **The configured
+   value, never the effective author:** a provisioned host exports
+   `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` as the bot via
+   `~/.punt-labs/git-identity.env`, but `git config user.name` stays the human.
+   So `git var GIT_AUTHOR_IDENT` is contaminated and must not be used for
+   identity; `git config user.name` is clean.
+4. **OS user** — `getpass.getuser()`. A machine fact: who owns the process on
+   this host. Not a team identity, not addressable, not stable across hosts. The
+   last-resort floor only.
+
+### Precedence, by question
+
+Identity is resolved per *question*, not once globally (DES-064's distinction):
+
+- **Who is the agent of this repo?** (the MCP server's own identity)
+  `user_override → agent handle (disk) → GitHub login → OS user`
+  (`resolve_config`, DES-040). The agent handle wins, which is why a `claude`
+  session shows `claude`.
+- **Who is the human running the CLI?** (`biff who`, `biff write`)
+  `user_override → GitHub login → OS user` (`resolve_human_identity`, DES-009 +
+  DES-053 guard). No agent step.
+- **Which session, and which agent in it, is calling — per tool call?**
+  Harness-declared, validated, never inferred (DES-064). Not drawn from the four
+  sources above; it is the routing identity, carried on the call.
+
+### The addressable-display rule (PL-1038)
+
+Every name biff *displays* must be a biff-addressable identity — something a
+teammate can `/write`. The OS user is never shown as a name in a roster; it is a
+machine fact and belongs only in a diagnostic line (`/finger`'s `Launched by:`).
+
+**`/who` MGR column** — the human who owns an agent, derived by a **difference
+rule** from *that session's own* captured identity, stored on the row only as
+its raw inputs. Each session records, at registration, its own
+`git config user.name` (quote-stripped) and OS user — the owner's environment,
+not the viewer's. `/who` renders each row from the row's own pair: for a row with
+`kind == "agent"` and own identity `self = row.user`, MGR is the first of
+`[row.owner_git, row.launched_by]` (the owner's `git config user.name` and OS
+user, both captured at registration) that is non-empty, **addressable** (a valid
+biff identity — no whitespace, so a git *full name* like `Jane Doe` is rejected),
+and differs from `self` (case-insensitive). None qualify, or a non-agent
+row → blank.
+Deriving from the row's own captured identity — never the viewer's — is what
+makes `/who` correct across hosts and owners: an agent another person launched on
+another machine shows *their* name, because its row carries *their* git identity.
+The difference test is self-filtering: on a provisioned host the bot's git-author
+and `gh` login equal the agent identity and are skipped automatically; the human
+(`git config user.name`) differs and wins. The OS-user floor fills only when it
+too differs from the agent, so MGR never echoes the agent's own name. The MGR
+string itself is computed at render time and persisted nowhere; only its raw
+inputs (`owner_git` and `launched_by`, the owner's git name and OS user) live on
+the row.
+
+**`/finger`** — shows the process owner (`Launched by: <os-user>`, a machine
+fact, always available standalone) and, when ethos team data resolves, the
+agent's own role(s) as `Role:`/`Roles:` lines. Ethos is enrichment here and
+nowhere else on the display path.
+
+### Dependency rule
+
+biff works **standalone**, is **better with ethos**, and **never depends solely
+on ethos**. The `/who` MGR value comes from git/OS (standalone); ethos, when
+present, only canonicalizes a found name to its formal team handle and supplies
+the `/finger` role chain. No biff config key duplicates ethos's reporting model
+(there is no `manager:`/`reports_to:` in `.punt-labs/biff/config.yaml`); MGR is
+runtime-derived and persisted nowhere. The only identity field stored on the
+session row for this is `launched_by` (the OS user), used solely for `/finger`.
+
+### Why
+
+The PL-1038 review found the shipped `REPORTS` column showing an ethos *role*
+(`ceo`) — not addressable, and read as if the agent *were* the ceo. The root
+cause was treating one source as canonical rather than asking what each surface
+needs: a roster needs an addressable name; a diagnostic line can show a machine
+fact; routing needs a harness-declared id. This ADR exists so the next change to
+any identity-bearing surface starts from the whole model, not one scattered DES.

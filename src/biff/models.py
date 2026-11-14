@@ -109,9 +109,13 @@ class UserSession(BaseModel):
         default="",
         description="Identity kind: human, agent, or empty",
     )
-    reports_to: str = Field(
+    launched_by: str = Field(
         default="",
-        description="Manager role from ethos team data, or empty",
+        description="OS user of the human who launched the process, or empty",
+    )
+    owner_git: str = Field(
+        default="",
+        description="The session owner's git user.name at registration, or empty",
     )
     plan: str = ""
     plan_source: Literal["manual", "auto"] = "manual"
@@ -242,9 +246,13 @@ class BiffConfig(BaseModel):
     display_name: str = ""
     kind: str = Field(default="", description="Identity kind: human, agent, or empty")
     repo_name: str = Field(min_length=1)
-    reports_to: str = Field(
+    launched_by: str = Field(
         default="",
-        description="Manager role from ethos team data, or empty",
+        description="OS user who launched this process, or empty when unknown",
+    )
+    owner_git: str = Field(
+        default="",
+        description="git user.name of the owner at startup, or empty when unset",
     )
     relay_url: str | None = None
     relay_auth: RelayAuth | None = None
