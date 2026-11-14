@@ -70,6 +70,22 @@ def _check_gh_cli() -> CheckResult:
     return CheckResult("gh CLI", True, "authenticated", required=False)
 
 
+def installed_plugin_version() -> str | None:
+    """Return the installed biff plugin version, or ``None`` if unresolvable.
+
+    ``None`` is the contract for "no plugin install found": a CLI-only
+    install, a missing or unreadable registry, or an entry without a version.
+    """
+    registry_path = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+    try:
+        registry = json.loads(registry_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    entries = registry.get("plugins", {}).get(PLUGIN_ID, [])
+    versions = [e["version"] for e in entries if isinstance(e.get("version"), str)]
+    return versions[-1] if versions else None
+
+
 def _check_plugin_installed() -> CheckResult:
     """Check biff plugin is installed via marketplace."""
     registry_path = Path.home() / ".claude" / "plugins" / "installed_plugins.json"

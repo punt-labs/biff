@@ -9,6 +9,7 @@ import subprocess
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +22,7 @@ from biff.claude_md import ClaudeMdImport
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
+from biff.doctor import installed_plugin_version
 from biff.logging_config import configure_logging
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
@@ -111,6 +113,55 @@ class TestVersionCommand:
         result = runner.invoke(app, ["--json", "version"])
         assert result.exit_code == 0
         assert '"version"' in result.output
+        assert '"plugin_version"' in result.output
+
+
+class TestVersionFlag:
+    def test_flag_without_subcommand(self) -> None:
+        with patch("biff.__main__.installed_plugin_version", return_value=None):
+            result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert result.output.strip() == f"biff {pkg_version('punt-biff')}"
+
+    def test_flag_names_plugin_version(self) -> None:
+        with patch("biff.__main__.installed_plugin_version", return_value="9.9.9"):
+            result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert result.output.strip() == (
+            f"biff {pkg_version('punt-biff')} (plugin 9.9.9)"
+        )
+
+    def test_flag_agrees_with_subcommand(self) -> None:
+        with patch("biff.__main__.installed_plugin_version", return_value="9.9.9"):
+            flag = runner.invoke(app, ["--version"])
+            sub = runner.invoke(app, ["version"])
+        assert flag.output == sub.output
+
+
+class TestInstalledPluginVersion:
+    def test_missing_registry_is_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert installed_plugin_version() is None
+
+    def test_corrupt_registry_is_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        reg = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        reg.parent.mkdir(parents=True)
+        reg.write_text("{not json")
+        assert installed_plugin_version() is None
+
+    def test_reads_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        reg = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        reg.parent.mkdir(parents=True)
+        reg.write_text('{"plugins": {"biff@punt-labs": [{"version": "1.2.3"}]}}')
+        assert installed_plugin_version() == "1.2.3"
 
 
 class TestServeCommand:
