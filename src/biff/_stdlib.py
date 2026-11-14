@@ -90,7 +90,13 @@ def git_user_name(repo_root: Path | None) -> str:
         )
     except (OSError, subprocess.SubprocessError):
         return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
+    if result.returncode != 0:
+        return ""
+    name = result.stdout.strip()
+    # A value with spaces or special characters is stored quoted in the file.
+    if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'":
+        name = name[1:-1].strip()
+    return name
 
 
 def display_repo_name(name: str) -> str:

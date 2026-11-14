@@ -554,6 +554,42 @@ class TestGitUserName:
         row = UserSession(user="claude", tty="a", kind="agent", launched_by="osjim")
         assert who_mgr(row, git_user_name(repo)) == "jmf-pobox"
 
+    @pytest.mark.parametrize(
+        ("written", "want"),
+        [
+            ('\\"jmf-pobox\\"', "jmf-pobox"),
+            ("'jmf-pobox'", "jmf-pobox"),
+            ("jmf-pobox", "jmf-pobox"),
+            ("'mismatch\\\"", "'mismatch\""),
+        ],
+    )
+    def test_surrounding_quotes_are_stripped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        written: str,
+        want: str,
+    ) -> None:
+        # ``written`` is the config-file text; git's own quoting yields the
+        # literal quotes that the reader must remove.
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        repo = self._repo(tmp_path, None)
+        (repo / ".git" / "config").write_text(f"[user]\n\tname = {written}\n")
+        assert git_user_name(repo) == want
+
+    def test_quoted_value_renders_unquoted_in_who(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        repo = self._repo(tmp_path, None)
+        (repo / ".git" / "config").write_text('[user]\n\tname = \\"jmf-pobox\\"\n')
+        row = UserSession(user="claude", tty="a", kind="agent")
+        out = format_who([row], git_user_name(repo))
+        assert "jmf-pobox" in out
+        assert '"' not in out
+
     def test_unset_is_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
