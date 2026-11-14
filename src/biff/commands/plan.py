@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import os
 
+from pydantic import ValidationError
+
 from biff._stdlib import expand_bead_id, get_repo_common_root
 from biff.cli_session import CliContext
 from biff.commands._result import CommandResult
 from biff.commands._session import update_current_session
 from biff.formatting import format_talk_echo
 from biff.markers import clear_plan_marker, write_plan_marker
+from biff.models import PLAN_MAX_LENGTH, validate_plan
 from biff.session_routing import ID_RE
 
 
@@ -47,6 +50,11 @@ def sync_plan_marker(message: str, session_id: str | None = None) -> None:
 async def plan(ctx: CliContext, message: str) -> CommandResult:
     """Set what you're currently working on."""
     message = expand_bead_id(message)
+    try:
+        validate_plan(message)
+    except ValidationError:
+        error = f"Plan too long: {len(message)} characters (max {PLAN_MAX_LENGTH})"
+        return CommandResult(text=error, json_data={"error": error}, error=True)
     await update_current_session(ctx, plan=message, plan_source="manual")
     sync_plan_marker(message)
     return CommandResult(

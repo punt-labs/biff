@@ -12,9 +12,16 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, tzinfo
-from typing import Literal, cast
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 
 def _utc_now() -> datetime:
@@ -38,6 +45,40 @@ def _ensure_utc(v: datetime) -> datetime:
 def _is_utc(tz: tzinfo) -> bool:
     """Check if a tzinfo is effectively UTC."""
     return tz.utcoffset(None) == UTC.utcoffset(None)
+
+
+PLAN_MAX_LENGTH = 512
+"""Longest accepted plan; matches ``Message.body`` and ``WallPost.text``."""
+
+_PLAN_TEXT: TypeAdapter[str] = TypeAdapter(
+    Annotated[str, Field(max_length=PLAN_MAX_LENGTH)]
+)
+
+
+def validate_plan(text: str) -> str:
+    """Return *text* if it fits :data:`PLAN_MAX_LENGTH`, else raise.
+
+    Empty is valid: an empty plan clears the status.  Raises
+    :class:`pydantic.ValidationError` when *text* is too long.
+
+    Use this for plan text a caller supplied directly; for machine-generated
+    hints that must not fail, :func:`truncate_plan` instead.
+    """
+    return _PLAN_TEXT.validate_python(text)
+
+
+def truncate_plan(text: str) -> str:
+    """Clip machine-generated plan text to fit :data:`PLAN_MAX_LENGTH`.
+
+    Generated hints (a branch name, a commit subject) are not user-supplied
+    plans and must never reach the reject path — a long branch would otherwise
+    fail its own automatic ``/plan`` and leave the plan cleared.  An over-long
+    value is cut to ``PLAN_MAX_LENGTH`` with a trailing ellipsis; a value that
+    already fits is returned unchanged.
+    """
+    if len(text) <= PLAN_MAX_LENGTH:
+        return text
+    return text[: PLAN_MAX_LENGTH - 1] + "…"
 
 
 class Message(BaseModel):
