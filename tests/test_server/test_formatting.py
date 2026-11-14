@@ -17,7 +17,6 @@ from biff._formatting import (
     visible_width,
     wrap_cells,
 )
-from biff._stdlib import git_user_name
 from biff.ethos_team import RoleEntry
 from biff.formatting import (
     format_finger,
@@ -26,6 +25,7 @@ from biff.formatting import (
     format_who,
     who_mgr,
 )
+from biff.identity import git_user_name
 from biff.models import Message, UserSession
 
 
@@ -645,7 +645,7 @@ class TestGitUserName:
     ) -> None:
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
         monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-        with caplog.at_level("DEBUG", logger="biff._stdlib"):
+        with caplog.at_level("DEBUG", logger="biff.identity"):
             git_user_name(self._repo(tmp_path, None))
         assert "user.name" in caplog.text
 
