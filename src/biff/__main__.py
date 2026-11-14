@@ -1397,15 +1397,10 @@ def enable(
         print("CI workflow: .github/workflows/biff-notify.yml")
     if change.git_hooks_changed:
         print(f"Git hooks: {', '.join(change.git_hooks_changed)}")
-    for line in change.permissions.lines("added to"):
+    for line in change.enable_report():
         print(line)
-
-    print(
-        "biff enabled. Commit .punt-labs/biff/enabled, "
-        ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, and the "
-        "@.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, then restart "
-        "Claude Code for changes to take effect."
-    )
+    if change.failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -1437,15 +1432,10 @@ def disable(
         print("CI workflow removed: biff-notify.yml")
     if change.git_hooks_changed:
         print(f"Git hooks removed: {', '.join(change.git_hooks_changed)}")
-    for line in change.permissions.lines("removed from"):
+    for line in change.disable_report():
         print(line)
-
-    print(
-        "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
-        ".github/workflows/biff-notify.yml, and the @.punt-labs/biff/CLAUDE.md "
-        "import from CLAUDE.md, then restart Claude Code "
-        "for changes to take effect."
-    )
+    if change.failed:
+        raise typer.Exit(code=1)
 
 
 _PLUGIN_ID = "biff@punt-labs"

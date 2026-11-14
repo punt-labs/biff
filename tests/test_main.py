@@ -271,6 +271,38 @@ class TestEnableCommand:
         assert "Git hooks:" in result.output
 
     @patch("biff.__main__.find_git_root")
+    def test_refused_permissions_exit_nonzero(
+        self, mock_root: MagicMock, tmp_path: Path
+    ) -> None:
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "settings.json").write_text("{not json")
+        result = runner.invoke(app, ["enable"])
+        assert result.exit_code == 1
+        assert "Permissions not changed" in result.output
+        assert "biff not enabled" in result.output
+        assert not (repo / ".punt-labs" / "biff" / "enabled").exists()
+
+    @patch("biff.__main__.find_git_root")
+    def test_prints_each_rule_and_settings_commit(
+        self, mock_root: MagicMock, tmp_path: Path
+    ) -> None:
+        from biff.claude_permissions import BIFF_RULES
+
+        repo = _git_init_repo(tmp_path)
+        mock_root.return_value = repo
+        result = runner.invoke(app, ["enable"])
+        assert result.exit_code == 0
+        for rule in BIFF_RULES:
+            assert f"Permission added to .claude/settings.json: {rule}\n" in (
+                result.output
+            )
+        assert ".claude/settings.json, and .gitignore" in " ".join(
+            result.output.split()
+        )
+
+    @patch("biff.__main__.find_git_root")
     def test_reports_enabled(self, mock_root: MagicMock, tmp_path: Path) -> None:
         repo = _git_init_repo(tmp_path)
         mock_root.return_value = repo

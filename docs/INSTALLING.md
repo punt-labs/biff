@@ -63,7 +63,11 @@ biff doctor
 1. Registers the biff MCP server with Claude Code
 2. Installs slash commands (`/who`, `/write`, `/read`, etc.)
 3. Installs hooks (SessionStart, PostToolUse, SessionEnd)
-4. Sets up the status bar (wraps your existing status line)
+
+The status bar is opt-in: run `biff install-statusline` to wrap your existing
+status line (`biff uninstall-statusline` restores it). Neither `biff install`
+nor the SessionStart hook touches it, and SessionStart grants no permissions --
+`biff enable` adds biff's allow rules to the repo's `.claude/settings.json`.
 
 All files are deployed to `~/.claude/plugins/biff/`. The MCP server runs automatically when Claude Code starts.
 

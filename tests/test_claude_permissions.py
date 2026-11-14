@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING
 
 import pytest
 
+from biff import claude_permissions
 from biff.claude_permissions import BIFF_RULES, PermissionChange, ProjectPermissions
 
 if TYPE_CHECKING:
@@ -104,8 +106,15 @@ class TestGrant:
 
     def test_lines_report_each_rule(self, tmp_path: Path) -> None:
         lines = ProjectPermissions(tmp_path).grant().lines("added to")
-        assert len(lines) == 1
-        assert all(rule in lines[0] for rule in BIFF_RULES)
+        assert lines == [
+            f"Permission added to .claude/settings.json: {rule}" for rule in BIFF_RULES
+        ]
+
+    def test_no_blanket_cli_wildcard(self) -> None:
+        assert "Bash(biff:*)" not in BIFF_RULES
+        for verb in ("install", "uninstall", "install-statusline", "enable", "disable"):
+            assert not any(rule.startswith(f"Bash(biff {verb}:") for rule in BIFF_RULES)
+        assert "Bash(biff who:*)" in BIFF_RULES
 
 
 class TestRevoke:
@@ -121,6 +130,16 @@ class TestRevoke:
 
     def test_lines_empty_when_unchanged(self, tmp_path: Path) -> None:
         assert ProjectPermissions(tmp_path).revoke().lines("removed from") == []
+
+    def test_revoke_subset_leaves_other_rules(self, tmp_path: Path) -> None:
+        _write(tmp_path, {"permissions": {"allow": list(BIFF_RULES)}})
+        change = ProjectPermissions(tmp_path).revoke(BIFF_RULES[:2])
+        assert change.changed == BIFF_RULES[:2]
+        assert _allow(tmp_path) == list(BIFF_RULES[2:])
+
+    def test_revoke_nothing_writes_nothing(self, tmp_path: Path) -> None:
+        assert ProjectPermissions(tmp_path).revoke(()) == PermissionChange()
+        assert not (tmp_path / ".claude").exists()
 
 
 class TestHardening:
@@ -139,3 +158,43 @@ class TestHardening:
         change = ProjectPermissions(tmp_path).grant()
         assert change.error
         assert victim.read_text() == "keep me"
+
+    def test_refuses_non_regular_settings(self, tmp_path: Path) -> None:
+        (tmp_path / ".claude").mkdir()
+        os.mkfifo(_settings(tmp_path))
+        change = ProjectPermissions(tmp_path).grant()
+        assert "not a regular file" in change.error
+
+    def test_lock_is_not_truncated(self, tmp_path: Path) -> None:
+        (tmp_path / ".claude").mkdir()
+        lock = tmp_path / ".claude" / ".settings.json.punt-import.lock"
+        lock.write_text("held by another tool")
+        assert not ProjectPermissions(tmp_path).grant().error
+        assert lock.read_text() == "held by another tool"
+
+    def test_swapped_claude_dir_cannot_redirect_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``.claude`` swapped for a symlink after it is opened: the write stays put.
+
+        Every step is relative to the pinned directory descriptor, so the
+        settings land in the directory that was opened, never the link target.
+        """
+        repo = tmp_path / "repo"
+        (repo / ".claude").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        moved = tmp_path / "moved"
+        real_read = claude_permissions._read
+
+        def swap_then_read(dir_fd: int) -> tuple[dict[str, object], int]:
+            (repo / ".claude").rename(moved)
+            (repo / ".claude").symlink_to(outside, target_is_directory=True)
+            return real_read(dir_fd)
+
+        monkeypatch.setattr(claude_permissions, "_read", swap_then_read)
+        change = ProjectPermissions(repo).grant()
+        assert change.changed == BIFF_RULES
+        assert list(outside.iterdir()) == []
+        allow = json.loads((moved / "settings.json").read_text())["permissions"]
+        assert allow["allow"] == list(BIFF_RULES)

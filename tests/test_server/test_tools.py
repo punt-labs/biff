@@ -235,6 +235,7 @@ class TestBiffEnableToggleTool:
             ".punt-labs/biff/CLAUDE.md",
             ".github/workflows/biff-notify.yml",
             ".claude/settings.json",
+            ".gitignore",
             "CLAUDE.md",
         }
         # ...and the same fully-active local git hooks on both.

@@ -84,11 +84,19 @@
   SessionStart hook used to add `mcp__plugin_biff_tty__*`, the `biff-dev`
   wildcard and twelve `Skill(...)` rules to the global
   `~/.claude/settings.json` in every session, without asking. Now `biff
-  enable` (and `/biff enable`) adds biff's rules (`Bash(biff:*)`, the MCP
-  wildcard and the `Skill(...)` rules) to the repo's
-  `.claude/settings.json`, prints each one, and `biff disable` removes exactly
-  those. It refuses a malformed or symlinked settings file and the home
-  directory, and never grants the `biff-dev` rules. Rules earlier versions
+  enable` (and `/biff enable`) adds biff's rules (the MCP wildcard,
+  `Bash(biff <cmd>:*)` for the read/messaging subcommands only -- never
+  `install`, `uninstall`, `install-statusline`, `enable` or `disable` -- and
+  the `Skill(...)` rules) to the repo's `.claude/settings.json`, prints each
+  one on its own line, and `biff disable` removes exactly those. The grant
+  runs first: if it is refused (malformed, non-regular or symlinked settings
+  file, symlinked `.claude/` or lock, the home directory) enable writes
+  nothing else and exits non-zero; a later enable failure revokes the rules
+  it just added. `biff disable` revokes the rules right after removing the
+  marker and exits non-zero if the revoke is refused. Every settings write is
+  pinned to an `O_NOFOLLOW` `.claude/` descriptor, and enable adds
+  `*.punt-import.lock` to `.gitignore`. biff never grants the `biff-dev`
+  rules. Rules earlier versions
   wrote globally are left alone; delete them by hand if you want them gone
   ([punt-kit#396](https://github.com/punt-labs/punt-kit/pull/396)).
 - **SessionStart no longer installs the status line.** Run

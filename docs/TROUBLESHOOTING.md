@@ -26,7 +26,7 @@ This runs ten checks (two required: plugin installed, NATS relay reachable; the 
 
 ### Status bar not showing
 
-**Cause:** The status bar setup was skipped or overwritten.
+**Cause:** The status bar is opt-in and was never installed, or was overwritten.
 
 **Fix:**
 
