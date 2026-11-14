@@ -88,9 +88,11 @@ def git_user_name(repo_root: Path | None) -> str:
         result = subprocess.run(  # noqa: S603
             cmd, capture_output=True, text=True, check=False, timeout=5
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("git user.name could not be read: %s", exc)
         return ""
     if result.returncode != 0:
+        logger.debug("git user.name is unset (git exited %d)", result.returncode)
         return ""
     name = result.stdout.strip()
     # A value with spaces or special characters is stored quoted in the file.

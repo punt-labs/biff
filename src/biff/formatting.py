@@ -11,7 +11,7 @@ The primitive layer (``ColumnSpec``, ``format_table``, ``format_idle``,
 
 from __future__ import annotations
 
-import re
+import logging
 from datetime import UTC, datetime, timedelta
 
 from biff._formatting import (
@@ -31,6 +31,9 @@ from biff._formatting import (
 from biff._stdlib import display_repo_name
 from biff.ethos_team import RoleEntry
 from biff.models import Message, SessionEvent, UserSession, WallPost
+from biff.session_routing import ID_RE
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "HEADER_PREFIX",
@@ -327,9 +330,6 @@ def _format_who_kind(s: UserSession) -> str:
     return ""
 
 
-_ADDRESSABLE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
 def who_mgr(s: UserSession) -> str:
     """Return the biff-addressable human behind an agent row; blank otherwise.
 
@@ -345,7 +345,12 @@ def who_mgr(s: UserSession) -> str:
     own = s.user.strip().casefold()
     for candidate in (s.owner_git, s.launched_by):
         name = candidate.strip()
-        if _ADDRESSABLE_RE.match(name) and name.casefold() != own:
+        if not name:
+            continue
+        if not ID_RE.fullmatch(name):
+            logger.debug("MGR candidate %r is not an addressable identity", name)
+            continue
+        if name.casefold() != own:
             return name
     return ""
 

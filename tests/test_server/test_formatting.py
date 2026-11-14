@@ -477,6 +477,13 @@ class TestWhoMgrColumn:
         assert who_mgr(self._row("jim", owner_git="Jane Doe")) == "jim"
         assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
 
+    def test_rejected_candidate_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("DEBUG", logger="biff.formatting"):
+            assert who_mgr(self._row("", owner_git="Jane Doe")) == ""
+        assert "Jane Doe" in caplog.text
+
     def test_unaddressable_os_user_is_blank(self) -> None:
         assert who_mgr(self._row("a b")) == ""
 
@@ -531,9 +538,12 @@ class TestWhoMgrColumn:
         assert who_mgr(UserSession.model_validate(data)) == "jim"
 
     def test_overlong_value_is_clipped(self) -> None:
-        out = format_who([self._row("r" * 200)])
+        out = format_who([self._row("r" * 128)])
         assert "r" * 100 not in out
         assert "MGR" in out
+
+    def test_value_beyond_the_identity_bound_is_not_addressable(self) -> None:
+        assert who_mgr(self._row("r" * 129)) == ""
 
     def test_hostile_value_is_never_addressable_and_never_rendered(self) -> None:
         out = format_who([self._row("a\x1b[31mb\nc")])
@@ -626,6 +636,18 @@ class TestGitUserName:
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
         monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
         assert git_user_name(self._repo(tmp_path, None)) == ""
+
+    def test_unset_is_logged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        with caplog.at_level("DEBUG", logger="biff._stdlib"):
+            git_user_name(self._repo(tmp_path, None))
+        assert "user.name" in caplog.text
 
     def test_missing_git_is_empty_not_an_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
