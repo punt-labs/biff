@@ -104,7 +104,7 @@ sh install.sh
 
 `S` is message status: `+` means accepting messages, `-` means do not disturb.
 
-When an agent was launched by a human, a `MGR` column (third, after `K`) names that human: the OS user who started the process, for example `jim`. It is blank on a human's own session and hidden when no row has a value. It needs no ethos data and no configuration.
+On agent rows a `MGR` column (third, after `K`) names the human behind the agent: `git config user.name` in the session's repo, else the OS user, skipping any value equal to the agent's own identity. Human rows are blank and the column is hidden when no row has a value. It is computed when `/who` renders and stored nowhere. `/finger` adds `Launched by: <os user>`.
 
 ```text
 > /who

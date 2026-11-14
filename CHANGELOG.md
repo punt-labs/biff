@@ -4,11 +4,14 @@
 
 ### Added
 
-- `/who` has a `MGR` column, third after `K`, naming the human who launched an
-  agent: the OS user captured when the session registered (`getpass.getuser()`),
-  carried on the session row as `launched_by`. It is blank for a human's own
-  session (OS user equals the handle) and for a row with no value, and the column
-  is hidden when no visible row has one. It needs no ethos data and no config.
+- `/who` has a `MGR` column, third after `K`, naming the biff-addressable human
+  behind an agent. It is derived at render time and stored nowhere: the first of
+  `git config user.name` (the configured value, not the effective author) and the
+  OS user that is non-empty and differs from the agent's own identity. Human rows
+  are blank, and the column is hidden when no row has a value. Needs no ethos
+  data and no config.
+- `/finger` shows `Launched by: <os user>`, the owner of the process that
+  registered the session.
 - `/finger` shows the agent's ethos roles when the repo has team data: a `Role:`
   line for one role, or a `Roles:` block with one line per role, each
   `<role> (<team>) — reports to <role> (<person>)`, between the user header and

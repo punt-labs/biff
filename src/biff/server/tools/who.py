@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from biff._stdlib import git_user_name
 from biff.formatting import format_dead_footnote, format_who
 from biff.relay import dead_sessions, live_sessions
 from biff.server.tools._activity import track_activity
@@ -44,5 +45,5 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             # renders (:func:`biff.formatting.format_who`) -- last_active is
             # heartbeat recency, unrelated to the idle value shown.
             sorted_sessions = sorted(live, key=lambda s: s.last_tool_at, reverse=True)
-            text = format_who(sorted_sessions)
+            text = format_who(sorted_sessions, git_user_name(state.repo_root))
         return f"{text}\n{footnote}" if footnote else text

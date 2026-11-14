@@ -74,6 +74,25 @@ def get_repo_slug(repo_root: Path) -> str | None:
         return None
 
 
+def git_user_name(repo_root: Path | None) -> str:
+    """Return ``git config user.name`` for *repo_root*, or ``""``.
+
+    The configured value, not the effective author: provisioned hosts export
+    ``GIT_AUTHOR_NAME`` as the bot, and the config still names the human.
+    Never raises; any failure reads as unset.
+    """
+    cmd = ["git", "config", "user.name"]
+    if repo_root is not None:
+        cmd[1:1] = ["-C", str(repo_root)]
+    try:
+        result = subprocess.run(  # noqa: S603
+            cmd, capture_output=True, text=True, check=False, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def display_repo_name(name: str) -> str:
     """Convert a sanitized repo name back to display form.
 

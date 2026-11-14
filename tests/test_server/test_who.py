@@ -1,4 +1,4 @@
-"""The MCP ``who`` tool shows who launched an agent on its own row."""
+"""The MCP ``who`` tool shows the human behind an agent on its own row."""
 
 from __future__ import annotations
 
@@ -37,17 +37,22 @@ async def _who(tmp_path: Path, launched_by: str) -> str:
     return block.text
 
 
-async def test_who_shows_the_launching_user(tmp_path: Path) -> None:
+@pytest.fixture(autouse=True)
+def _no_git_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the host's git user.name so only the OS-user floor can fill MGR."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+
+
+async def test_who_shows_the_os_user_floor(tmp_path: Path) -> None:
     out = await _who(tmp_path, "jim")
     assert "MGR" in out
     assert "jim" in out
 
 
-@pytest.mark.parametrize("empty", [""])
-async def test_who_without_a_launching_user_has_no_column_and_no_error(
-    tmp_path: Path, empty: str
+async def test_who_without_any_candidate_has_no_column_and_no_error(
+    tmp_path: Path,
 ) -> None:
-    # No ethos team data and no config key: the value is the row's OS user.
-    out = await _who(tmp_path, empty)
+    out = await _who(tmp_path, "")
     assert "claude:" in out
     assert "MGR" not in out

@@ -43,9 +43,8 @@ class EthosTeams:
     One graph per team: it maps an identity handle to its role, and a role
     to the role it reports to.  Roles are shared names across teams, so a
     handle is only ever resolved through the team it is a member of.  The
-    answer to :meth:`manager_of` is a role name (``"ceo"``), never a person:
-    a role can have several holders.  :meth:`roles_of` also names the
-    first member holding the manager role.
+    manager is a role name (``"ceo"``); :meth:`roles_of` also names the
+    first member holding it.
     """
 
     __slots__ = ("_teams",)
@@ -77,13 +76,17 @@ class EthosTeams:
         teams_dir = repo_root / ".punt-labs" / "ethos" / "teams"
         try:
             paths = sorted(teams_dir.glob("*.yaml"))
-        except OSError:
+        except OSError as exc:
+            logger.warning("Cannot list team files in %s: %s", teams_dir, exc)
             paths = []
         for path in paths:
             try:
                 doc = load_yaml(path)
             except yaml.YAMLError:
                 logger.warning("Skipping malformed team file %s", path)
+                continue
+            if not doc:
+                logger.warning("Skipping unreadable or empty team file %s", path)
                 continue
             if not cls._selects(doc.get("repositories"), repo_slug):
                 continue
@@ -101,16 +104,11 @@ class EthosTeams:
         """Return the teams of the repository at *repo_root*; none when unknown."""
         if repo_root is None:
             return cls(())
-        return cls.from_repo(repo_root, get_repo_slug(repo_root) or "")
-
-    def manager_of(self, handle: str) -> str:
-        """Return the manager role for *handle*; raise LookupError when none."""
-        for roles, edges, _ in self._teams:
-            manager = edges.get(roles.get(handle, ""))
-            if manager:
-                return manager
-        msg = f"no manager for {handle!r}"
-        raise LookupError(msg)
+        slug = get_repo_slug(repo_root)
+        if slug is None:
+            logger.warning("No origin slug for %s; ethos roles unavailable", repo_root)
+            return cls(())
+        return cls.from_repo(repo_root, slug)
 
     def roles_of(self, handle: str) -> tuple[RoleEntry, ...]:
         """Return one entry per selected team *handle* is a member of.

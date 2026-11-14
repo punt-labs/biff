@@ -325,25 +325,38 @@ def _format_who_kind(s: UserSession) -> str:
     return ""
 
 
-def _format_who_mgr(s: UserSession) -> str:
-    """Render the human who launched an agent for the MGR column.
+def who_mgr(s: UserSession, git_name: str) -> str:
+    """Return the biff-addressable human behind an agent row; blank otherwise.
 
-    Blank when unknown or when it equals the session's own handle (a human's
-    own session).  The value travels on the session row, so it is neutralised
-    and clipped like every other fixed-column cell.
+    Derived on every render and stored nowhere: the first of *git_name* (the
+    ``git config user.name`` value, not the effective author, which a
+    provisioned host overrides with the bot) and the row's OS user that is
+    non-empty and differs from the row's own identity.  Humans get none.
     """
-    if not s.launched_by or s.launched_by == s.user:
+    if s.kind != "agent":
         return ""
-    return _truncate(terminal_safe(s.launched_by)[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
+    own = s.user.strip().casefold()
+    for candidate in (git_name, s.launched_by):
+        name = candidate.strip()
+        if name and name.casefold() != own:
+            return name
+    return ""
 
 
-def format_who(sessions: list[UserSession]) -> str:
+def _format_who_mgr(s: UserSession, git_name: str) -> str:
+    """Render :func:`who_mgr` as a neutralised, clipped fixed-column cell."""
+    return _truncate(
+        terminal_safe(who_mgr(s, git_name))[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH
+    )
+
+
+def format_who(sessions: list[UserSession], git_name: str = "") -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
     The NAME column renders exactly ``user:tty`` so agents can copy the
     address directly into ``/write``.  The MGR column, third after ``K``,
-    names the OS user who launched an agent; it is blank for a human's own
-    session and hidden when no row has a value.
+    names the human behind an agent (see :func:`who_mgr`); it is blank for
+    human rows and hidden when no row has a value.
     P column shows ``+`` if the
     session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.
@@ -353,7 +366,7 @@ def format_who(sessions: list[UserSession]) -> str:
     same reason :func:`_format_who_name` routes through
     :func:`sanitized_address`.
     """
-    mgrs = [_format_who_mgr(s) for s in sessions]
+    mgrs = [_format_who_mgr(s, git_name) for s in sessions]
     show_mgr = any(mgrs)
     rows: list[list[str]] = [
         [
@@ -458,6 +471,9 @@ def format_tty_block(session: UserSession) -> str:
     )
 
     lines = [f"   On since {since} on {tty_label}, idle {idle}"]
+    if session.launched_by:
+        launched = _truncate(terminal_safe(session.launched_by), _MAX_LABEL_WIDTH)
+        lines.append(f"   Launched by: {launched}")
     if session.hostname or session.pwd:
         host = terminal_safe(session.hostname) or "?"
         pwd = terminal_safe(session.pwd) or "?"

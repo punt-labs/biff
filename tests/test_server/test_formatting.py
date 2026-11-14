@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -15,12 +17,14 @@ from biff._formatting import (
     visible_width,
     wrap_cells,
 )
+from biff._stdlib import git_user_name
 from biff.ethos_team import RoleEntry
 from biff.formatting import (
     format_finger,
     format_finger_multi,
     format_read,
     format_who,
+    who_mgr,
 )
 from biff.models import Message, UserSession
 
@@ -401,12 +405,17 @@ class TestFormatReadFromTty:
 
 
 class TestWhoMgrColumn:
-    def _row(self, launched_by: str, user: str = "claude") -> UserSession:
+    def _row(
+        self,
+        launched_by: str = "",
+        user: str = "claude",
+        kind: str = "agent",
+    ) -> UserSession:
         return UserSession(
             user=user,
             tty="abcd1234",
             tty_name="tty9",
-            kind="agent",
+            kind=kind,
             repo="biff",
             hostname="h",
             launched_by=launched_by,
@@ -414,8 +423,8 @@ class TestWhoMgrColumn:
             last_tool_at=datetime.now(UTC),
         )
 
-    def test_agent_launched_by_a_human_shows_the_human(self) -> None:
-        lines = format_who([self._row("jim")]).splitlines()
+    def test_agent_mgr_is_the_git_name(self) -> None:
+        lines = format_who([self._row("osjim")], "jmf-pobox").splitlines()
         assert lines[0].split()[1:] == [
             "NAME",
             "K",
@@ -429,7 +438,7 @@ class TestWhoMgrColumn:
         assert lines[1].split() == [
             "claude:tty9",
             "[A]",
-            "jim",
+            "jmf-pobox",
             "biff",
             "0m",
             "+",
@@ -441,18 +450,36 @@ class TestWhoMgrColumn:
         header = format_who([self._row("jim")]).splitlines()[0]
         assert header.index("K") < header.index("MGR") < header.index("REPO")
 
-    def test_humans_own_session_is_blank_and_other_rows_keep_the_column(
-        self,
-    ) -> None:
-        own = self._row("jim", user="jim")
-        agent = self._row("jim")
-        lines = format_who([own, agent]).splitlines()
+    def test_git_name_equal_to_self_falls_to_os_user(self) -> None:
+        assert who_mgr(self._row("jim"), "claude") == "jim"
+
+    def test_comparison_is_case_insensitive_and_stripped(self) -> None:
+        assert who_mgr(self._row("jim"), " CLAUDE ") == "jim"
+
+    def test_git_name_equal_to_self_and_no_os_user_is_blank(self) -> None:
+        assert who_mgr(self._row(""), "claude") == ""
+
+    def test_both_equal_to_self_is_blank(self) -> None:
+        assert who_mgr(self._row("claude"), "claude") == ""
+
+    def test_git_unset_uses_the_os_user_floor(self) -> None:
+        assert who_mgr(self._row("jim"), "") == "jim"
+
+    def test_human_row_is_always_blank(self) -> None:
+        human = self._row("jim", user="kai", kind="human")
+        assert who_mgr(human, "jmf-pobox") == ""
+        assert who_mgr(self._row("jim", kind=""), "jmf-pobox") == ""
+
+    def test_human_rows_keep_the_column_when_an_agent_has_one(self) -> None:
+        lines = format_who(
+            [self._row("jim", user="kai", kind="human"), self._row("jim")]
+        ).splitlines()
         assert "MGR" in lines[0].split()
         assert "jim" not in lines[1].split()[1:]
         assert "jim" in lines[2].split()
 
     def test_column_hidden_when_no_row_has_a_manager(self) -> None:
-        out = format_who([self._row(""), self._row("claude")])
+        out = format_who([self._row(""), self._row("claude")], "claude")
         assert "MGR" not in out
         assert out.splitlines()[1].split() == [
             "claude:tty9",
@@ -481,15 +508,96 @@ class TestWhoMgrColumn:
         old = UserSession.model_validate(data)
         assert format_who([old]) == format_who([row])
 
-    def test_overlong_user_is_clipped(self) -> None:
+    def test_overlong_value_is_clipped(self) -> None:
         out = format_who([self._row("r" * 200)])
         assert "r" * 100 not in out
         assert "MGR" in out
 
-    def test_hostile_user_is_neutralised(self) -> None:
+    def test_hostile_value_is_neutralised(self) -> None:
         out = format_who([self._row("a\x1b[31mb\nc")])
         assert "\x1b" not in out
         assert len(out.splitlines()) == 2
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), *args],  # noqa: S607
+        check=True,
+        capture_output=True,
+    )
+
+
+class TestGitUserName:
+    def _repo(self, tmp_path: Path, name: str | None) -> Path:
+        repo = tmp_path / "r"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        if name is not None:
+            _git(repo, "config", "user.name", name)
+        return repo
+
+    def test_reads_the_config_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        assert git_user_name(self._repo(tmp_path, "jmf-pobox")) == "jmf-pobox"
+
+    def test_provisioned_host_config_wins_over_author_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "claude")
+        monkeypatch.setenv("GIT_COMMITTER_NAME", "claude")
+        repo = self._repo(tmp_path, "jmf-pobox")
+        row = UserSession(user="claude", tty="a", kind="agent", launched_by="osjim")
+        assert who_mgr(row, git_user_name(repo)) == "jmf-pobox"
+
+    def test_unset_is_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+        assert git_user_name(self._repo(tmp_path, None)) == ""
+
+    def test_missing_git_is_empty_not_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PATH", str(tmp_path))
+        assert git_user_name(tmp_path) == ""
+
+
+class TestFingerLaunchedBy:
+    def _row(self, launched_by: str) -> UserSession:
+        return UserSession(
+            user="claude",
+            tty="abcd1234",
+            tty_name="tty9",
+            kind="agent",
+            launched_by=launched_by,
+            last_active=datetime.now(UTC),
+            last_tool_at=datetime.now(UTC),
+        )
+
+    def test_shown_without_ethos(self) -> None:
+        out = format_finger(self._row("jim"))
+        assert "   Launched by: jim\n" in out
+        assert "Role" not in out
+
+    def test_shown_with_ethos(self) -> None:
+        roles = (RoleEntry("coo", "engineering", "ceo", "jfreeman"),)
+        out = format_finger(self._row("jim"), roles)
+        assert "   Launched by: jim\n" in out
+        assert "   Role: coo" in out
+
+    def test_absent_when_unknown(self) -> None:
+        assert "Launched by" not in format_finger(self._row(""))
+
+    def test_hostile_and_overlong_value_is_neutralised_and_clipped(self) -> None:
+        out = format_finger(self._row("a\x1b[31m" + "z" * 300))
+        assert "\x1b" not in out
+        assert "z" * 100 not in out
 
 
 class TestFingerRoles:

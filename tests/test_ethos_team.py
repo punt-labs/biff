@@ -39,39 +39,47 @@ def _write(root: Path, name: str, text: str) -> None:
     (teams / name).write_text(text)
 
 
+def _manager_of(teams: EthosTeams, handle: str) -> str:
+    """Manager role of *handle* via roles_of; LookupError when none."""
+    for entry in teams.roles_of(handle):
+        if entry.manager_role:
+            return entry.manager_role
+    raise LookupError(handle)
+
+
 class TestManagerOf:
     def test_manager_found_through_role(self, tmp_path: Path) -> None:
         _write(tmp_path, "t.yaml", TEAM)
         teams = EthosTeams.from_repo(tmp_path, SLUG)
-        assert teams.manager_of("claude") == "ceo"
+        assert _manager_of(teams, "claude") == "ceo"
 
     def test_manager_of_specialist_is_coo(self, tmp_path: Path) -> None:
         _write(tmp_path, "t.yaml", TEAM)
-        assert EthosTeams.from_repo(tmp_path, SLUG).manager_of("adb") == "coo"
+        assert _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "adb") == "coo"
 
     def test_identity_not_in_any_team(self, tmp_path: Path) -> None:
         _write(tmp_path, "t.yaml", TEAM)
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("nobody")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "nobody")
 
     def test_role_without_reports_to_edge(self, tmp_path: Path) -> None:
         _write(tmp_path, "t.yaml", TEAM)
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("jfreeman")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "jfreeman")
 
     def test_edge_of_other_type_is_ignored(self, tmp_path: Path) -> None:
         _write(tmp_path, "t.yaml", TEAM.replace("reports_to", "collaborates"))
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude")
 
     def test_first_sorted_file_wins(self, tmp_path: Path) -> None:
         _write(tmp_path, "b.yaml", TEAM.replace("to: ceo", "to: cto"))
         _write(tmp_path, "a.yaml", TEAM)
-        assert EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude") == "ceo"
+        assert _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude") == "ceo"
 
     def test_constructor_takes_the_graph(self) -> None:
         teams = EthosTeams([({"claude": "coo"}, {"coo": "ceo"}, "t")])
-        assert teams.manager_of("claude") == "ceo"
+        assert _manager_of(teams, "claude") == "ceo"
 
 
 UNSCOPED = TEAM.replace("repositories:\n  - punt-labs/biff\n", "")
@@ -86,28 +94,28 @@ class TestTeamScoping:
             "b.yaml",
             TEAM.replace("identity: claude", "identity: kai"),
         )
-        assert EthosTeams.from_repo(tmp_path, SLUG).manager_of("kai") == "ceo"
+        assert _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "kai") == "ceo"
 
     def test_team_for_another_repo_is_not_read(self, tmp_path: Path) -> None:
         _write(tmp_path, "t.yaml", TEAM.replace("punt-labs/biff", "punt-labs/other"))
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude")
 
     def test_team_without_repositories_is_not_read(self, tmp_path: Path) -> None:
         _write(tmp_path, "t.yaml", UNSCOPED)
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude")
 
     def test_unselected_team_does_not_shadow(self, tmp_path: Path) -> None:
         _write(tmp_path, "a.yaml", UNSCOPED.replace("to: ceo", "to: cto"))
         _write(tmp_path, "b.yaml", TEAM)
-        assert EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude") == "ceo"
+        assert _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude") == "ceo"
 
 
 class TestMalformedInput:
     def test_missing_teams_dir(self, tmp_path: Path) -> None:
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude")
 
     @pytest.mark.parametrize(
         "text",
@@ -133,18 +141,18 @@ class TestMalformedInput:
         _write(tmp_path, "t.yaml", text)
         teams = EthosTeams.from_repo(tmp_path, SLUG)
         with pytest.raises(LookupError):
-            teams.manager_of("claude")
+            _manager_of(teams, "claude")
 
     def test_bad_file_does_not_hide_good_file(self, tmp_path: Path) -> None:
         _write(tmp_path, "a.yaml", "key: [unclosed\n")
         _write(tmp_path, "b.yaml", TEAM)
-        assert EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude") == "ceo"
+        assert _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude") == "ceo"
 
     def test_non_utf8_file_is_skipped(self, tmp_path: Path) -> None:
         _write(tmp_path, "a.yaml", "")
         (tmp_path / ".punt-labs/ethos/teams/a.yaml").write_bytes(b"\xff\xfe\x00bad")
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude")
 
 
 class TestHostileRole:
@@ -152,7 +160,7 @@ class TestHostileRole:
         text = TEAM.replace("to: ceo", 'to: "ce\\x1b[31mo"')
         _write(tmp_path, "t.yaml", text)
         with pytest.raises(LookupError):
-            EthosTeams.from_repo(tmp_path, SLUG).manager_of("claude")
+            _manager_of(EthosTeams.from_repo(tmp_path, SLUG), "claude")
 
 
 class TestRolesOf:
@@ -202,4 +210,22 @@ class TestRolesOf:
 
 
 def test_real_team_data_resolves_adb_to_coo() -> None:
-    assert EthosTeams.from_repo(REPO_ROOT, SLUG).manager_of("adb") == "coo"
+    assert _manager_of(EthosTeams.from_repo(REPO_ROOT, SLUG), "adb") == "coo"
+
+
+class TestDiagnosable:
+    def test_unreadable_team_file_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _write(tmp_path, "a.yaml", "")
+        (tmp_path / ".punt-labs/ethos/teams/a.yaml").write_bytes(b"\xff\xfe\x00bad")
+        with caplog.at_level("WARNING", logger="biff.ethos_team"):
+            EthosTeams.from_repo(tmp_path, SLUG)
+        assert "a.yaml" in caplog.text
+
+    def test_missing_origin_slug_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING", logger="biff.ethos_team"):
+            assert EthosTeams.for_repo_root(tmp_path).roles_of("claude") == ()
+        assert "No origin slug" in caplog.text
