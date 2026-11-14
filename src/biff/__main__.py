@@ -50,6 +50,7 @@ from biff.config import (
     is_enabled,
     load_mcp_config,
 )
+from biff.doctor import installed_plugin_version
 from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
 from biff.nats_relay import NatsRelay
@@ -123,6 +124,23 @@ app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
 
 
+def _versions() -> tuple[str, str | None]:
+    """Return (PyPI package version, plugin version or None if no plugin)."""
+    return pkg_version("punt-biff"), installed_plugin_version()
+
+
+def _version_line(ver: str, plugin: str | None) -> str:
+    if plugin is None:
+        return f"biff {ver}"
+    return f"biff {ver} (plugin {plugin})"
+
+
+def _print_version_and_exit(value: bool) -> None:
+    if value:
+        print(_version_line(*_versions()))
+        raise typer.Exit
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -142,8 +160,19 @@ def main(
         str | None,
         typer.Option("--user", help="Identity override (e.g. for CI bots)."),
     ] = None,
+    version_flag: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            help="Print the package and plugin versions and exit.",
+            callback=_print_version_and_exit,
+            is_eager=True,
+        ),
+    ] = False,
 ) -> None:
     """Biff: team communication for software engineers."""
+    # The eager option callback already printed and exited when set.
+    del version_flag
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive.")
 
@@ -1223,11 +1252,11 @@ def status() -> None:
 @app.command("version")
 def version() -> None:
     """Print the biff version."""
-    ver = pkg_version("punt-biff")
+    ver, plugin = _versions()
     if _json_output:
-        _print_json({"version": ver})
+        _print_json({"version": ver, "plugin_version": plugin})
         return
-    print(f"biff {ver}")
+    print(_version_line(ver, plugin))
 
 
 def _create_mcp_server(

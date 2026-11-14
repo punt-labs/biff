@@ -4,6 +4,11 @@
 
 ### Added
 
+- `biff --version` prints the PyPI `punt-biff` package version and, when a
+  plugin install is found in Claude Code's registry, the plugin version
+  (`biff 1.22.0 (plugin 1.22.0)`), so the two release channels can be told
+  apart. `biff version` prints the same line; `biff --json version` gains a
+  `plugin_version` field (`null` when no plugin is installed).
 - `/who` has a `MGR` column, third after `K`, naming the biff-addressable human
   behind an agent. It is derived at render time and stored nowhere: the first of
   `git config user.name` (the configured value, not the effective author) and the

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from biff.config import find_git_root, is_enabled, resolve_relay_config
 from biff.models import RelayAuth
@@ -70,27 +71,69 @@ def _check_gh_cli() -> CheckResult:
     return CheckResult("gh CLI", True, "authenticated", required=False)
 
 
+def _registry_path() -> Path:
+    return Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+
+
+def _plugin_registry_entries() -> list[object] | None:
+    """Return the biff plugin's registry entries, or ``None`` if unreadable.
+
+    ``None`` means the registry could not be read as a plugin registry at all:
+    a read/parse error, or a shape deviation (top-level not an object,
+    ``plugins`` not an object, the plugin value present but not a list). A
+    *well-formed* registry that simply has no biff entry returns ``[]`` — that
+    is "not installed", a distinct outcome from "could not read". Never raises;
+    the ``--version`` flag reads this and must never crash.
+    """
+    try:
+        registry: object = json.loads(_registry_path().read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(registry, dict):
+        return None
+    registry_map = cast("dict[str, object]", registry)
+    plugins = registry_map.get("plugins")
+    if not isinstance(plugins, dict):
+        return None
+    plugins_map = cast("dict[str, object]", plugins)
+    entries = plugins_map.get(PLUGIN_ID)
+    if entries is None:
+        return []  # well-formed registry, biff simply not installed
+    if not isinstance(entries, list):
+        return None
+    return cast("list[object]", entries)
+
+
+def installed_plugin_version() -> str | None:
+    """Return the installed biff plugin version, or ``None`` if unresolvable.
+
+    ``None`` is the contract for "no plugin install found": a CLI-only
+    install, a missing, unreadable, or malformed registry, or an entry
+    without a version.
+    """
+    entries = _plugin_registry_entries()
+    if entries is None:
+        return None
+    versions: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        version = cast("dict[str, object]", entry).get("version")
+        if isinstance(version, str):
+            versions.append(version)
+    return versions[-1] if versions else None
+
+
 def _check_plugin_installed() -> CheckResult:
     """Check biff plugin is installed via marketplace."""
-    registry_path = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
-    if not registry_path.exists():
-        return CheckResult(
-            "Plugin",
-            False,
-            "not installed (run: biff install)",
-        )
-    try:
-        registry = json.loads(registry_path.read_text())
-        plugins = registry.get("plugins", {})
-        if PLUGIN_ID in plugins:
-            return CheckResult("Plugin", True, f"{PLUGIN_ID} installed")
-        return CheckResult(
-            "Plugin",
-            False,
-            "not installed (run: biff install)",
-        )
-    except (json.JSONDecodeError, OSError):
+    if not _registry_path().exists():
+        return CheckResult("Plugin", False, "not installed (run: biff install)")
+    entries = _plugin_registry_entries()
+    if entries is None:
         return CheckResult("Plugin", False, "could not read plugin registry")
+    if entries:
+        return CheckResult("Plugin", True, f"{PLUGIN_ID} installed")
+    return CheckResult("Plugin", False, "not installed (run: biff install)")
 
 
 def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:

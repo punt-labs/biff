@@ -78,6 +78,29 @@ class TestCheckPluginInstalled:
         with patch("biff.doctor.Path.home", return_value=tmp_path):
             result = _check_plugin_installed()
         assert not result.passed
+        # a well-formed registry without biff is "not installed", not unreadable
+        assert "not installed" in result.message
+
+    def test_malformed_registry_reports_unreadable(self, tmp_path: Path) -> None:
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        plugins_dir.mkdir(parents=True)
+        # valid JSON, wrong shape: plugins is a list, not an object
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps({"plugins": []}))
+        with patch("biff.doctor.Path.home", return_value=tmp_path):
+            result = _check_plugin_installed()
+        assert not result.passed
+        assert "could not read" in result.message
+
+    def test_empty_entry_list_is_not_installed(self, tmp_path: Path) -> None:
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "installed_plugins.json").write_text(
+            json.dumps({"plugins": {"biff@punt-labs": []}})
+        )
+        with patch("biff.doctor.Path.home", return_value=tmp_path):
+            result = _check_plugin_installed()
+        assert not result.passed
+        assert "not installed" in result.message
 
 
 class TestCheckUserCommands:

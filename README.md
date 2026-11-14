@@ -304,8 +304,10 @@ biff doctor                 # Check installation health
 biff mcp                    # Start MCP server (stdio, called by plugin)
 biff serve                  # Start MCP server (HTTP)
 biff uninstall              # Remove plugin, deregister the agent guide
-biff version                # Print version
+biff version                # Print package version (and plugin version if installed)
 ```
+
+`biff --version` prints the same line without a subcommand.
 
 ### Global flags
 
@@ -323,9 +325,11 @@ biff --json read            # JSON array of messages
 biff --verbose who          # Debug logging to stderr
 biff --quiet write kai "msg"  # Suppress non-JSON output
 biff --user github-actions wall "CI failed"  # Identity override for bots
+biff --version              # Package version, plus plugin version when installed
 ```
 
-Global flags (`--json`, `--verbose`, `--quiet`, `--user`) go before the subcommand.
+Global flags (`--json`, `--verbose`, `--quiet`, `--user`) go before the
+subcommand. `--version` is eager — it prints and exits with no subcommand.
 
 ### Library API
 
