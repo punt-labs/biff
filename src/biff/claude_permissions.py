@@ -63,13 +63,12 @@ _CLI_SUBCOMMANDS: Final = (
 )
 
 # The deterministic rule set: enable adds every missing member, disable removes
-# these exact values. A rule retired here strands on disable, so it stays in the
-# set until no enabled repo can still carry it.
+# these exact values. A rule dropped from the set is no longer removed by
+# disable; there is no cleanup code for it (punt-kit#396).
 BIFF_RULES: Final = (
     "mcp__plugin_biff_tty__*",
     *(f"Bash(biff {name}:*)" for name in _CLI_SUBCOMMANDS),
-    "Skill(biff:*)",
-    *(f"Skill({name})" for name in _COMMANDS),
+    *(f"Skill(biff:{name})" for name in _COMMANDS),
 )
 
 _NEW_FILE_MODE: Final = 0o644

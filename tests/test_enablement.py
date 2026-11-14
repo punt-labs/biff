@@ -274,7 +274,9 @@ class TestPermissions:
         _make_repo(tmp_path)
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir()
-        settings.write_text(json.dumps({"permissions": {"allow": ["Skill(plan)"]}}))
+        settings.write_text(
+            json.dumps({"permissions": {"allow": ["Skill(biff:plan)"]}})
+        )
 
         def boom(_root: Path) -> None:
             raise OSError(28, "No space left on device")
@@ -283,7 +285,7 @@ class TestPermissions:
         with pytest.raises(OSError, match="No space"):
             RepoEnablement(tmp_path).enable()
         allow = json.loads(settings.read_text())["permissions"]["allow"]
-        assert allow == ["Skill(plan)"]
+        assert allow == ["Skill(biff:plan)"]
 
     def test_disable_revokes_even_when_hook_removal_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

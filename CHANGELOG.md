@@ -11,6 +11,13 @@
 
 ### Changed
 
+- `biff enable` grants one plugin-scoped `Skill(biff:<cmd>)` rule per shipped
+  command (`Skill(biff:who)`, `Skill(biff:write)`, …) in place of
+  `Skill(biff:*)` and the short forms `Skill(who)`, `Skill(write)`, …, which
+  punt-kit `permissions.md` § 3 bans. `biff disable` removes the scoped rules;
+  rules an earlier `biff enable` added stay until you delete them by hand
+  (PL-1035).
+
 - **Permission rules are repo-level, granted by `biff enable`.** The
   SessionStart hook used to add `mcp__plugin_biff_tty__*`, the `biff-dev`
   wildcard and twelve `Skill(...)` rules to the global

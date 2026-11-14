@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from biff import claude_permissions
 from biff.claude_permissions import BIFF_RULES, PermissionChange, ProjectPermissions
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _settings(root: Path) -> Path:
@@ -115,6 +112,16 @@ class TestGrant:
         for verb in ("install", "uninstall", "install-statusline", "enable", "disable"):
             assert not any(rule.startswith(f"Bash(biff {verb}:") for rule in BIFF_RULES)
         assert "Bash(biff who:*)" in BIFF_RULES
+
+    def test_skill_rules_are_scoped_one_per_shipped_command(self) -> None:
+        commands = Path(__file__).parents[1] / "plugin" / "commands"
+        shipped = sorted(
+            path.stem
+            for path in commands.glob("*.md")
+            if not path.stem.endswith("-dev")
+        )
+        skills = [rule for rule in BIFF_RULES if rule.startswith("Skill(")]
+        assert skills == [f"Skill(biff:{name})" for name in shipped]
 
 
 class TestRevoke:
