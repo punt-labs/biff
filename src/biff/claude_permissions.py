@@ -29,25 +29,30 @@ __all__ = ["BIFF_RULES", "PermissionChange", "ProjectPermissions"]
 
 # Broad allow per surface with exact ask carve-outs (permissions.md §6): ask
 # beats allow, so the machine- and repo-mutating verbs keep prompting while new
-# safe commands, MCP tools and skills work without a rule update. The
+# safe commands, MCP tools and skills work without a rule update.
+# ``Bash(biff -*)`` asks for any global option before the verb, which would
+# otherwise slip ``biff --quiet uninstall`` past the verb rules. The
 # deterministic rule set: enable adds every missing member, disable removes
 # these exact values. A rule dropped from the set is no longer removed by
 # disable; there is no cleanup code for it (punt-kit#396).
 BIFF_RULES: Final[dict[str, tuple[str, ...]]] = {
     "allow": ("Bash(biff:*)", "mcp__plugin_biff_tty__*", "Skill(biff:*)"),
-    "ask": tuple(
-        f"Bash(biff {verb}:*)"
-        for verb in (
-            "install",
-            "uninstall",
-            "install-statusline",
-            "uninstall-statusline",
-            "enable",
-            "disable",
-            "serve",
-            "mcp",
-            "hook",
-        )
+    "ask": (
+        "Bash(biff -*)",
+        *(
+            f"Bash(biff {verb}:*)"
+            for verb in (
+                "install",
+                "uninstall",
+                "install-statusline",
+                "uninstall-statusline",
+                "enable",
+                "disable",
+                "serve",
+                "mcp",
+                "hook",
+            )
+        ),
     ),
 }
 

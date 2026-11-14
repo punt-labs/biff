@@ -126,6 +126,9 @@ class TestGrant:
         assert "Bash(biff who:*)" not in _ASK
         assert all(rule.startswith("Bash(biff ") for rule in _ASK)
 
+    def test_global_options_before_the_verb_ask(self) -> None:
+        assert "Bash(biff -*)" in _ASK
+
 
 class TestRevoke:
     def test_removes_exactly_biff_rules(self, tmp_path: Path) -> None:

@@ -15,7 +15,7 @@
   `mcp__plugin_biff_tty__*` and `Skill(biff:*)` — and puts an exact `ask` rule
   in `permissions.ask` for each machine- or repo-mutating verb (`install`,
   `uninstall`, `install-statusline`, `uninstall-statusline`, `enable`,
-  `disable`, `serve`, `mcp`, `hook`), so those still prompt while new safe
+  `disable`, `serve`, `mcp`, `hook`) and for any global option before the verb (`Bash(biff -*)`, so `biff --quiet uninstall` prompts too), so those still prompt while new safe
   commands work without a rule update (punt-kit#471). It replaces the short
   forms `Skill(who)`, `Skill(write)`, …, which punt-kit `permissions.md` § 3
   bans. `biff disable` removes the same allow and ask values; rules an earlier
