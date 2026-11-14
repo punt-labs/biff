@@ -76,13 +76,14 @@ def _registry_path() -> Path:
 
 
 def _plugin_registry_entries() -> list[object] | None:
-    """Return the biff plugin's registry entries, or ``None`` if unresolvable.
+    """Return the biff plugin's registry entries, or ``None`` if unreadable.
 
-    Fails closed on every structural deviation, not just parse/IO errors: a
-    hand-edited or future-reformatted registry whose JSON is valid but whose
-    shape is unexpected (top-level not an object, ``plugins`` not an object,
-    the plugin value not a list) yields ``None``, never a raised exception.
-    The ``--version`` flag reads this and must never crash.
+    ``None`` means the registry could not be read as a plugin registry at all:
+    a read/parse error, or a shape deviation (top-level not an object,
+    ``plugins`` not an object, the plugin value present but not a list). A
+    *well-formed* registry that simply has no biff entry returns ``[]`` — that
+    is "not installed", a distinct outcome from "could not read". Never raises;
+    the ``--version`` flag reads this and must never crash.
     """
     try:
         registry: object = json.loads(_registry_path().read_text())
@@ -96,6 +97,8 @@ def _plugin_registry_entries() -> list[object] | None:
         return None
     plugins_map = cast("dict[str, object]", plugins)
     entries = plugins_map.get(PLUGIN_ID)
+    if entries is None:
+        return []  # well-formed registry, biff simply not installed
     if not isinstance(entries, list):
         return None
     return cast("list[object]", entries)
