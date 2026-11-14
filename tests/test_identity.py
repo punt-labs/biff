@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,7 @@ from biff.identity import (
     _SubmoduleDeclaration,
     get_github_identity,
     get_os_user,
+    git_user_name,
     resolve_agent_identity_from_disk,
 )
 
@@ -106,6 +108,139 @@ class TestGetOsUser:
     def test_returns_none_on_error(self) -> None:
         with patch("biff.identity.getpass.getuser", side_effect=OSError):
             assert get_os_user() is None
+
+
+# -- git_user_name --
+
+
+def _init_repo(path: Path, name: str | None) -> Path:
+    """Create a git repo at *path*, optionally with a configured user.name."""
+    path.mkdir()
+    args = [["init", "-q"]]
+    if name is not None:
+        args.append(["config", "user.name", name])
+    for cmd in args:
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(path), *cmd],  # noqa: S607
+            check=True,
+            capture_output=True,
+        )
+    return path
+
+
+@pytest.fixture
+def isolated_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide host git config so only the repo-local config is visible."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+
+
+@pytest.mark.usefixtures("isolated_git")
+class TestGitUserName:
+    def test_returns_configured_name(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path / "repo", "J Freeman")
+        assert git_user_name(repo) == "J Freeman"
+
+    def test_strips_one_surrounding_quote_pair(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path / "repo", '"jmf-pobox"')
+        assert git_user_name(repo) == "jmf-pobox"
+
+    def test_strips_only_one_quote_pair(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path / "repo", "\"'x'\"")
+        assert git_user_name(repo) == "'x'"
+
+    def test_unset_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        repo = _init_repo(tmp_path / "repo", None)
+        with caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER):
+            assert git_user_name(repo) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "user.name is unset" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_missing_git_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with (
+            patch("biff.identity.subprocess.run", side_effect=FileNotFoundError("git")),
+            caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
+        ):
+            assert git_user_name(tmp_path) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_timeout_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        timeout = subprocess.TimeoutExpired(cmd="git", timeout=5)
+        with (
+            patch("biff.identity.subprocess.run", side_effect=timeout),
+            caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
+        ):
+            assert git_user_name(tmp_path) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_generic_subprocess_error_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        err = subprocess.SubprocessError("boom")
+        with (
+            patch("biff.identity.subprocess.run", side_effect=err),
+            caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
+        ):
+            assert git_user_name(tmp_path) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_non_filenotfound_oserror_returns_empty_and_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        err = PermissionError("git not executable")
+        with (
+            patch("biff.identity.subprocess.run", side_effect=err),
+            caplog.at_level(logging.DEBUG, logger=_IDENTITY_LOGGER),
+        ):
+            assert git_user_name(tmp_path) == ""
+        assert any(
+            r.levelno == logging.DEBUG and "could not be read" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_none_repo_root_runs_in_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _init_repo(tmp_path / "repo", "cwd-user")
+        monkeypatch.chdir(repo)
+        assert git_user_name(None) == "cwd-user"
+
+    def test_none_repo_root_omits_dash_c(self) -> None:
+        with patch("biff.identity.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "x\n"
+            git_user_name(None)
+        assert mock_run.call_args.args[0] == ["git", "config", "user.name"]
+
+    def test_repo_root_passes_dash_c(self, tmp_path: Path) -> None:
+        with patch("biff.identity.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "x\n"
+            git_user_name(tmp_path)
+        assert mock_run.call_args.args[0] == [
+            "git",
+            "-C",
+            str(tmp_path),
+            "config",
+            "user.name",
+        ]
 
 
 # -- resolve_agent_identity_from_disk --
