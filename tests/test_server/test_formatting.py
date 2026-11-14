@@ -645,7 +645,7 @@ class TestGitUserName:
     ) -> None:
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
         monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-        with caplog.at_level("DEBUG", logger="biff._stdlib"):
+        with caplog.at_level("DEBUG", logger="biff.identity"):
             git_user_name(self._repo(tmp_path, None))
         assert "user.name" in caplog.text
 
