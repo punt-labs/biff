@@ -62,6 +62,7 @@ __all__ = [
     "sanitized_sender",
     "terminal_safe",
     "visible_text",
+    "who_mgr",
 ]
 
 # Never wrap a talk body narrower than this, however long the sender
