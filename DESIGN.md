@@ -8088,3 +8088,15 @@ cause was treating one source as canonical rather than asking what each surface
 needs: a roster needs an addressable name; a diagnostic line can show a machine
 fact; routing needs a harness-declared id. This ADR exists so the next change to
 any identity-bearing surface starts from the whole model, not one scattered DES.
+
+### Implementation
+
+The who-am-I resolution layer lives in one module, `src/biff/identity.py`: the
+four source helpers (`resolve_agent_identity_from_disk`, `get_github_identity`,
+`git_user_name`, `get_os_user`), the two resolution chains (`resolve_human_identity`
+for the CLI and `resolve_mcp_identity` for the agent), the `GitHubIdentity` and
+`EthosIdentity` dataclasses, and the DES-053 bot-rejection guard. `config.py`
+holds the config-file machinery (YAML, relay, peers, poll interval) and imports
+identity from `identity.py`; the dependency points inward and `identity.py` never
+imports `config.py`. This consolidation was behavior-preserving — the model
+above did not change, only the physical location of the code realizing it.
