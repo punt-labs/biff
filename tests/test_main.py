@@ -16,7 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from biff import logging_config
-from biff.__main__ import _register_user_scope, _suppress_nats_noise, app
+from biff.__main__ import _suppress_nats_noise, app
+from biff.claude_md import ClaudeMdImport
 from biff.cli_session import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
@@ -276,6 +277,11 @@ class TestEnableCommand:
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
         assert "enabled" in result.output
+        # The commit instruction must name every artifact enable wrote, or a
+        # user following it commits the marker + workflow but not the guide and
+        # its import — the guide silently never lands for the team.
+        assert ".punt-labs/biff/CLAUDE.md" in result.output
+        assert "@.punt-labs/biff/CLAUDE.md import" in result.output
 
     @patch("biff.__main__.find_git_root", return_value=None)
     def test_not_in_repo(self, _mock: MagicMock) -> None:
@@ -620,112 +626,138 @@ class TestNatsErrorStaysOffTerminal:
         assert "Operation timed out" in file_text
 
 
-class TestInstallUserScope:
-    """``install`` wiring deposits the guide and registers the user import."""
+class TestInstallWritesNoGuide:
+    """``install`` is software-only: no guide file, no ``CLAUDE.md`` import.
 
-    def test_register_user_scope_writes_to_home(
+    tool-enable-disable.md §2.6: ``enable`` is the sole path that deposits a
+    guide or writes an import; ``install`` never touches a ``CLAUDE.md``.
+    """
+
+    def _assert_no_guide(self, home: Path) -> None:
+        assert not (home / ".punt-labs" / "biff" / "CLAUDE.md").exists()
+        assert not (home / ".claude" / "CLAUDE.md").exists()
+
+    def test_cli_only_install_writes_no_guide(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def fake_home() -> Path:
-            return tmp_path
+        def no_claude(_cmd: str) -> str | None:
+            return None
 
-        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("shutil.which", no_claude)
 
-        _register_user_scope()
+        result = runner.invoke(app, ["install"])
 
-        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        assert result.exit_code == 0
+        self._assert_no_guide(tmp_path)
+        assert "guide" not in result.output.lower()
+        # No plugin step ran, so no "restart Claude Code" instruction.
+        assert "Restart Claude Code" not in result.output
+
+    def test_plugin_install_writes_no_guide(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def has_claude(_cmd: str) -> str | None:
+            return "/usr/bin/claude"
+
+        def plugin_ok(
+            cmd: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("shutil.which", has_claude)
+        monkeypatch.setattr("subprocess.run", plugin_ok)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        self._assert_no_guide(tmp_path)
+
+    def test_install_leaves_existing_claude_md_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         host = tmp_path / ".claude" / "CLAUDE.md"
-        assert guide.is_file()
-        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
-
-
-class TestInstallCliOnly:
-    """`biff install` with no `claude` on PATH is a CLI-only SUCCESS."""
-
-    def test_no_claude_is_cli_only_success(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def fake_home() -> Path:
-            return tmp_path
+        host.parent.mkdir(parents=True)
+        host.write_text("# My global rules\n")
 
         def no_claude(_cmd: str) -> str | None:
             return None
 
-        monkeypatch.setattr(Path, "home", staticmethod(fake_home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         monkeypatch.setattr("shutil.which", no_claude)
-
-        result = runner.invoke(app, ["install"])
-
-        assert result.exit_code == 0
-        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
-        host = tmp_path / ".claude" / "CLAUDE.md"
-        assert guide.is_file()
-        assert host.read_text().rstrip("\n").endswith("@~/.punt-labs/biff/CLAUDE.md")
-        # No plugin step ran, so no "restart Claude Code" instruction.
-        assert "Restart Claude Code" not in result.output
-
-
-class TestInstallDeploysGitHooks:
-    """`biff install` deploys the per-clone git hooks (local, never committed)."""
-
-    def test_deploys_hooks_for_current_clone(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        repo = _git_init_repo(tmp_path / "repo")
-
-        def no_claude(_cmd: str) -> str | None:
-            return None  # CLI-only install path
-
-        def repo_root(_start: Path | None = None) -> Path:
-            return repo
-
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr("shutil.which", no_claude)
-        monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
-
-        result = runner.invoke(app, ["install"])
-
-        assert result.exit_code == 0
-        for name in ("post-checkout", "post-commit", "pre-push"):
-            hook = repo / ".git" / "hooks" / name
-            assert hook.is_file()
-            assert "biff hook git" in hook.read_text()
-
-    def test_deployed_hooks_gate_on_marker(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A fresh clone's installed hooks fire biff only once the marker exists.
-
-        The dispatch line is guarded (``2>/dev/null || true``) and the biff
-        hook command itself gates on ``is_enabled`` (marker + biff on PATH), so
-        the deployed hook is inert until ``enable`` writes the committed marker.
-        """
-        from biff._stdlib import is_enabled, write_enabled_marker
-
-        home = tmp_path / "home"
-        repo = _git_init_repo(tmp_path / "repo")
-
-        # biff is on PATH (so the marker gate is decisive), claude is not
-        # (CLI-only install path).
-        def which(cmd: str) -> str | None:
-            return "/usr/bin/biff" if cmd == "biff" else None
-
-        def repo_root(_start: Path | None = None) -> Path:
-            return repo
-
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr("shutil.which", which)
-        monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
 
         runner.invoke(app, ["install"])
-        # Hooks exist but the repo is not enabled yet (no marker).
-        assert (repo / ".git" / "hooks" / "post-commit").is_file()
-        assert is_enabled(repo) is False
 
-        # Enabling writes the marker; is_enabled flips on (biff is on PATH here).
-        write_enabled_marker(repo)
-        assert is_enabled(repo) is True
+        assert host.read_text() == "# My global rules\n"
+
+
+class TestInstallLeavesRepoAlone:
+    """`biff install` is machine scope: it never writes this clone's git hooks.
+
+    Hooks are a repo-level write owned by ``enable`` (and removed by
+    ``disable``), even though they are per-clone and uncommitted.
+    """
+
+    def _hook_files(self, repo: Path) -> list[Path]:
+        return sorted(p for p in (repo / ".git" / "hooks").iterdir() if p.is_file())
+
+    def test_cli_only_install_writes_no_hooks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _git_init_repo(tmp_path / "repo")
+        before = self._hook_files(repo)
+
+        def no_claude(_cmd: str) -> str | None:
+            return None
+
+        def repo_root(_start: Path | None = None) -> Path:
+            return repo
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        monkeypatch.setattr("shutil.which", no_claude)
+        monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        assert self._hook_files(repo) == before
+        assert "Git hooks" not in result.output
+
+    def test_plugin_install_writes_no_hooks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _git_init_repo(tmp_path / "repo")
+        before = self._hook_files(repo)
+
+        def has_claude(_cmd: str) -> str | None:
+            return "/usr/bin/claude"
+
+        def plugin_ok(
+            cmd: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            # install's only subprocess call is the marketplace plugin install
+            # (`claude plugin install ... --scope user`, passed check=False); it
+            # no longer shells out to git (PL-994 removed the hook deploy). The
+            # stub ignores the call's kwargs — nothing is forwarded to a real
+            # command — so any other command is unexpected and fails loudly.
+            if cmd[0] != "/usr/bin/claude":
+                raise AssertionError(f"unexpected subprocess call: {cmd!r}")
+            return subprocess.CompletedProcess(cmd, 0)
+
+        def repo_root(_start: Path | None = None) -> Path:
+            return repo
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        monkeypatch.setattr("shutil.which", has_claude)
+        monkeypatch.setattr("subprocess.run", plugin_ok)
+        monkeypatch.setattr("biff.__main__.find_git_root", repo_root)
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        assert self._hook_files(repo) == before
+        assert "Git hooks" not in result.output
 
 
 class TestUninstallRemovesGitHooks:
@@ -763,10 +795,8 @@ class TestUninstallResilient:
     _LINE = "@~/.punt-labs/biff/CLAUDE.md"
 
     def _preinstall(self, tmp_path: Path) -> Path:
-        from biff.user_scope import UserScope
-
-        UserScope().install()
         host = tmp_path / ".claude" / "CLAUDE.md"
+        ClaudeMdImport(host, self._LINE).register()
         assert self._LINE in host.read_text()
         return host
 

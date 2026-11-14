@@ -68,12 +68,12 @@ cat ~/.punt-labs/biff/statusline-original.json
 
 ### Git hooks not firing
 
-**Cause:** `biff enable` (or the superset `biff install`) deploys hooks to this clone's `.git/hooks/` (they are per-clone, never committed). If you cloned an already-enabled repo but never ran `biff enable`/`biff install` in it, the hooks are absent. If the hooks directory doesn't exist or permissions are wrong, hooks won't fire either.
+**Cause:** `biff enable` deploys hooks to this clone's `.git/hooks/` (they are per-clone, never committed). If you cloned an already-enabled repo but never ran `biff enable` in it, the hooks are absent. If the hooks directory doesn't exist or permissions are wrong, hooks won't fire either.
 
 **Fix:**
 
 ```bash
-biff enable     # Deploys this clone's hooks (biff install does too)
+biff enable     # Deploys this clone's hooks
 ls -la .git/hooks/post-checkout .git/hooks/post-commit .git/hooks/pre-push
 ```
 

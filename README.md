@@ -17,7 +17,7 @@ Named after the Berkeley dog whose 1980 mail notification program was part of th
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/a2b0f7e/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh | sh
 ```
 
 Restart Claude Code twice. Type `/who` to see your team.
@@ -29,14 +29,14 @@ non-Claude harness (Codex, Cursor, a plain terminal) or an org that blocks
 plugin installation --- pass `--no-plugin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/a2b0f7e/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh | sh -s -- --no-plugin
 ```
 
 The `BIFF_NO_PLUGIN=1` environment variable does the same, for contexts that
 cannot pass arguments through the pipe:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/a2b0f7e/install.sh | BIFF_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh | BIFF_NO_PLUGIN=1 sh
 ```
 
 Missing `claude` or `git` auto-skips the plugin the same way. In CLI-only mode
@@ -71,7 +71,7 @@ biff doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/a2b0f7e/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
@@ -103,6 +103,8 @@ sh install.sh
 ```
 
 `S` is message status: `+` means accepting messages, `-` means do not disturb.
+
+An agent whose repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`) also gets a trailing `REPORTS` column naming the role it reports to, for example `ceo`; the `NAME` column stays a copy-pasteable `user:tty`. The value is a role, not a person, and is omitted when the team data names no manager.
 
 ### Send a message
 
@@ -276,7 +278,7 @@ biff talk kai "can you review?"           # Real-time conversation
 ### Admin commands
 
 ```bash
-biff install                # Install user-scope guide + this clone's git hooks (+ plugin if Claude Code is present)
+biff install                # Register the Claude Code plugin (machine scope; no guide, no CLAUDE.md writes)
 biff enable                 # Enable biff for this repo (writes the committed marker + CI workflow)
 biff disable                # Disable biff for this repo (removes the marker + CI workflow)
 biff doctor                 # Check installation health
@@ -355,7 +357,7 @@ Biff ships with a shared demo relay so your team can start immediately. When you
 
 The `[peers]` section enables cross-repo commands (`/who`, `/write`, `/finger`). `orgs` auto-discovers repos with active sessions; `repos` lists peers that are always visible. Both are optional.
 
-`biff install` is the superset entry point: it registers the MCP server, installs slash commands, enables the plugin, registers a user-scope agent guide (deposits `~/.punt-labs/biff/CLAUDE.md` and adds `@~/.punt-labs/biff/CLAUDE.md` to `~/.claude/CLAUDE.md` so the guide loads in every session), and deploys this clone's per-clone git hooks into `.git/hooks/` (local, never committed). `biff enable` fully activates biff in the current repo in one verb — it writes the two committed artifacts that constitute enablement policy (the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow), allows biff's MCP tools and commands in the repo's `.claude/settings.json` (printing each rule; biff never writes permission rules to `~/.claude/settings.json`), **and** deploys this clone's local git hooks, so no separate `biff install` is needed to start; it is exactly equivalent to `/biff enable` in Claude Code (`biff disable` / `/biff disable` remove all of it). The hooks are resolved worktree/`core.hooksPath`-aware and gate on the marker at runtime. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
+`biff install` is machine-scoped setup: it registers the MCP server, installs slash commands, and enables the plugin. It deposits no agent guide and never touches any `CLAUDE.md`; it makes no repo-level changes. `biff enable` fully activates biff in the current repo in one verb — it writes the two committed artifacts that constitute enablement policy (the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow) allows biff's MCP tools and commands in the repo's `.claude/settings.json` (printing each rule; biff never writes permission rules to `~/.claude/settings.json`), **and** deploys this clone's local, per-clone git hooks into `.git/hooks/` (never committed); it is exactly equivalent to `/biff enable` in Claude Code (`biff disable` / `/biff disable` remove all of it). The hooks are resolved worktree/`core.hooksPath`-aware and gate on the marker at runtime. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
 
 ## Status Bar
 

@@ -1,0 +1,132 @@
+%
+% nats-relay-teardown.tex
+%
+% Z Specification for the force-reconnect teardown held under _connect_lock.
+% Companion to nats-relay.tex, which models ForceReconnect atomically.
+%
+% Running `probcli nats-relay-teardown.tex -init -model_check -ctlformula
+%   "AG({lock = held} => EF {lock = free})"` is TRUE.  Deleting the
+% AbandonTeardown schema (the unbounded close, frozen as
+% nats-relay-teardown-unbounded.tex) makes the same formula FALSE with the
+% counterexample BeginTeardown(closeHung=ztrue): a hung close() holds the
+% lock forever.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+
+\begin{document}
+
+\title{Biff NATS Relay: Teardown Under the Connect Lock}
+\date{November 2026}
+\maketitle
+
+\section{Why this is separate}
+
+\texttt{nats-relay.tex} models $ForceReconnect$ as one atomic step because
+the still-wedged case has no interesting intermediate state.  That is true
+of the \emph{state} the step reaches, and false of the \emph{time} it takes:
+the relay runs \texttt{safe\_close(nc)} while holding \texttt{\_connect\_lock},
+and nats-py's \texttt{close()} ends in an unbounded \texttt{wait\_closed()}
+that a half-open socket can stall.  While it stalls, every slow-path caller
+(the poller, the heartbeat) is blocked on the lock.  This module splits the
+step into begin, complete and abandon so the held-lock interval is a
+modelled state, and proves the bound makes the frozen-lock state
+unreachable.
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  LockState ::= free | held
+\end{zed}
+
+\section{State}
+
+\begin{schema}{Teardown}
+  lock : LockState \\
+  inFlight : ZBOOL \\
+  closeHung : ZBOOL
+  \where
+  inFlight = ztrue \implies lock = held \\
+  closeHung = ztrue \implies inFlight = ztrue
+\end{schema}
+
+$inFlight$ is the interval in which \texttt{\_force\_reconnect} holds the
+lock and awaits \texttt{safe\_close}.  $closeHung$ records that this close
+will never finish by itself; it is chosen when the teardown begins, since
+whether the socket is half-open is a property of the environment, not of the
+relay.
+
+\begin{schema}{Init}
+  Teardown'
+  \where
+  lock' = free \\
+  inFlight' = zfalse \\
+  closeHung' = zfalse
+\end{schema}
+
+\section{Operations}
+
+\begin{schema}{BeginTeardown}
+  \Delta Teardown
+  \where
+  lock = free \\
+  lock' = held \\
+  inFlight' = ztrue
+\end{schema}
+
+The relay takes the lock and starts closing the wedged client.
+$closeHung'$ is left free, so the checker explores both a close that
+finishes and one that does not.
+
+\begin{schema}{CompleteTeardown}
+  \Delta Teardown
+  \where
+  inFlight = ztrue \\
+  closeHung = zfalse \\
+  lock' = free \\
+  inFlight' = zfalse \\
+  closeHung' = zfalse
+\end{schema}
+
+The close finished; the relay drops the client and releases the lock.
+
+\begin{schema}{AbandonTeardown}
+  \Delta Teardown
+  \where
+  inFlight = ztrue \\
+  lock' = free \\
+  inFlight' = zfalse \\
+  closeHung' = zfalse
+\end{schema}
+
+The bound (\texttt{asyncio.timeout(\_TEARDOWN\_TIMEOUT)} around the close)
+expired.  It is enabled whenever a teardown is in flight, because a timer
+may fire at any point, and it is the only exit from a hung close.  The
+client is being discarded, so abandoning the close loses nothing the relay
+needs.
+
+\section{Properties}
+
+Both are checked with probcli:
+
+\begin{quote}
+  $AG\,(\,lock = held \Rightarrow EF\;lock = free\,)$
+\end{quote}
+
+\textbf{TRUE} with $AbandonTeardown$ present: from every reachable state
+the lock is eventually released.  With $AbandonTeardown$ deleted
+(\texttt{safe\_close} unbounded, the code before the fix) the same formula
+is \textbf{FALSE}, and the model checker reports the state $lock = held \land inFlight = ztrue \land
+closeHung = ztrue$ as terminal.  That state is the frozen
+\texttt{\_connect\_lock}: the poller and heartbeat block on it forever.
+
+The two modules are not yet one machine: $Teardown$ is not a component of
+$Connection$ in \texttt{nats-relay.tex}, so this module proves the bound on
+the lock but not its interaction with $subGen$ and $generation$.  Folding
+$inFlight$ into $Connection$ is tracked as follow-up work.
+
+\end{document}

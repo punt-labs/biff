@@ -66,9 +66,11 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 [
                     *change.permissions.lines("added to"),
                     (
-                        "biff enabled. Commit .punt-labs/biff/enabled and "
-                        ".github/workflows/biff-notify.yml, then restart "
-                        "Claude Code for changes to take effect."
+                        "biff enabled. Commit .punt-labs/biff/enabled, "
+                        ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, "
+                        "the @.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, "
+                        "and .claude/settings.json, then restart Claude Code for "
+                        "changes to take effect."
                     ),
                 ]
             )
@@ -77,9 +79,10 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             [
                 *change.permissions.lines("removed from"),
                 (
-                    "biff disabled. Commit the removal of .punt-labs/biff/enabled "
-                    "and .github/workflows/biff-notify.yml, then restart Claude "
-                    "Code for changes to take effect."
+                    "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
+                    ".github/workflows/biff-notify.yml, the @.punt-labs/biff/CLAUDE.md "
+                    "import from CLAUDE.md, and the .claude/settings.json change, "
+                    "then restart Claude Code for changes to take effect."
                 ),
             ]
         )

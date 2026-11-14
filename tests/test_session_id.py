@@ -15,7 +15,7 @@ class TestDeriveRoutingId:
         assert a == b
 
     def test_stable_across_resume(self) -> None:
-        """The same session_id (a resume) derives the same companion id."""
+        """The same session_id (a resume) derives the same routing id."""
         before = derive_routing_id("sid-abc", "eric")
         after = derive_routing_id("sid-abc", "eric")
         assert before == after

@@ -18,7 +18,6 @@ from biff.doctor import (
     _check_relay,
     _check_statusline,
     _check_user_commands,
-    _check_user_import,
     _print_check,
     _resolve_relay_config,
     _test_nats_connection,
@@ -96,46 +95,6 @@ class TestCheckUserCommands:
         assert "missing" in result.message
 
 
-class TestCheckUserImport:
-    def test_registered(self, tmp_path: Path) -> None:
-        host = tmp_path / ".claude" / "CLAUDE.md"
-        host.parent.mkdir(parents=True)
-        host.write_text("@~/.punt-labs/biff/CLAUDE.md\n")
-        with patch("biff.doctor.Path.home", return_value=tmp_path):
-            result = _check_user_import()
-        assert result.passed
-        assert not result.required
-
-    def test_not_registered(self, tmp_path: Path) -> None:
-        with patch("biff.doctor.Path.home", return_value=tmp_path):
-            result = _check_user_import()
-        assert not result.passed
-        assert "not imported" in result.message
-
-    def test_unreadable_does_not_crash(self, tmp_path: Path) -> None:
-        with (
-            patch("biff.doctor.Path.home", return_value=tmp_path),
-            patch(
-                "biff.claude_md.ClaudeMdImport.is_registered",
-                side_effect=OSError("boom"),
-            ),
-        ):
-            result = _check_user_import()
-        assert not result.passed
-        assert "could not read" in result.message
-
-    def test_non_utf8_host_does_not_crash(self, tmp_path: Path) -> None:
-        # A hand-authored CLAUDE.md with non-UTF-8 bytes must not traceback;
-        # the import is simply absent from the (byte-faithfully read) content.
-        host = tmp_path / ".claude" / "CLAUDE.md"
-        host.parent.mkdir(parents=True)
-        host.write_bytes(b"caf\xe9 rules\n")
-        with patch("biff.doctor.Path.home", return_value=tmp_path):
-            result = _check_user_import()
-        assert not result.passed
-        assert "not imported" in result.message
-
-
 class TestCheckBiffFile:
     @patch("biff.doctor.find_git_root", return_value=None)
     def test_no_git_repo(self, _mock: object) -> None:
@@ -160,9 +119,11 @@ class TestCheckBiffFile:
 
 
 class TestCheckGitHooks:
-    """Doctor's git-hooks guidance points at ``biff install`` (hooks are per-clone)."""
+    """Doctor's git-hooks guidance points at ``biff enable`` — the verb that
+    deploys this clone's hooks (a repo-level action; ``install`` is machine
+    scope only)."""
 
-    def test_missing_hooks_directs_to_install(self, tmp_path: Path) -> None:
+    def test_missing_hooks_directs_to_enable(self, tmp_path: Path) -> None:
         # Enabled repo (marker present) but no hooks deployed for this clone.
         with (
             patch("biff.doctor.find_git_root", return_value=tmp_path),
@@ -170,9 +131,9 @@ class TestCheckGitHooks:
         ):
             result = _check_git_hooks()
         assert result.passed is False
-        assert "biff install" in result.message
-        # Hooks come from install, not from the committed-policy enable toggle.
-        assert "biff enable" not in result.message
+        assert "biff enable" in result.message
+        # Hooks come from enable, the repo-level verb — not from machine-scope install.
+        assert "biff install" not in result.message
 
     def test_skipped_when_not_enabled(self, tmp_path: Path) -> None:
         with (

@@ -34,8 +34,7 @@ async def get_or_create_session(state: ServerState) -> UserSession:
     backfills ``tty_name`` from the session-local stash (set by the
     lifespan after claim) so a created-on-tool-call row is never
     written with an empty ``tty_name`` — guarding against a v1.8.0
-    defect (the companion TTY name going unset) resurfacing from a
-    different code path.
+    defect resurfacing from a different code path.
     """
     session = await state.relay.get_session(state.session_key)
     if session is None:
@@ -76,6 +75,7 @@ async def get_or_create_session(state: ServerState) -> UserSession:
             display_name=state.config.display_name,
             kind=state.config.kind,
             repo=state.config.repo_name,
+            reports_to=state.config.reports_to,
         )
         await state.relay.update_session(session)
     else:

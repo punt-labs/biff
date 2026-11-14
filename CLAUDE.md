@@ -137,7 +137,7 @@ One rule follows from that, and it is load-bearing: **the plugin surface must no
 
 ### Installer Is Source of Truth
 
-`biff install` deposits the user-scope agent guide (`~/.punt-labs/biff/CLAUDE.md` plus the `@` import in `~/.claude/CLAUDE.md`), deploys this clone's `.git/hooks` dispatchers, and installs the plugin from the punt-labs marketplace. Do not hand-edit the installed plugin cache under `~/.claude/plugins/` — a `claude plugin update` overwrites it. To change command or hook behavior, edit `plugin/commands/` or `plugin/hooks/` here and release; to try a change without releasing, run Claude Code with `--plugin-dir` pointed at this repo's `plugin/` directory.
+`biff install` deposits the user-scope agent guide (`~/.punt-labs/biff/CLAUDE.md` plus the `@` import in `~/.claude/CLAUDE.md`) and installs the plugin from the punt-labs marketplace — machine scope only. This clone's `.git/hooks` dispatchers are deployed by `biff enable` (a repo-level action), not `install`. Do not hand-edit the installed plugin cache under `~/.claude/plugins/` — a `claude plugin update` overwrites it. To change command or hook behavior, edit `plugin/commands/` or `plugin/hooks/` here and release; to try a change without releasing, run Claude Code with `--plugin-dir` pointed at this repo's `plugin/` directory.
 
 ### Release Process
 

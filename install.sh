@@ -50,7 +50,7 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1"; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
-VERSION="1.21.0"
+VERSION="1.22.0"
 MARKETPLACE_REPO="punt-labs/claude-plugins"
 MARKETPLACE_NAME="punt-labs"
 PLUGIN_NAME="biff"
@@ -214,8 +214,8 @@ if [ "$SKIP_PLUGIN" = "1" ]; then
   printf '%b%bbiff CLI is ready!%b\n\n' "$GREEN" "$BOLD" "$NC"
   printf 'The biff CLI and MCP server are installed. Next steps:\n'
   printf '  biff doctor   # re-check installation health\n'
-  printf '  biff install  # deploy this clone'\''s git hooks + user-scope agent guide\n'
-  printf '  biff enable   # enable biff in a git repo (writes the committed marker + CI workflow)\n'
+  printf '  biff install  # register the Claude Code plugin (machine scope)\n'
+  printf '  biff enable   # enable biff in a git repo: committed marker + CI workflow + this clone'\''s git hooks\n'
   printf '  biff mcp      # stdio MCP server to register with your harness\n\n'
   printf 'To add the Claude Code plugin later:\n'
   printf '  claude plugin marketplace add %s\n' "$MARKETPLACE_REPO"

@@ -238,9 +238,6 @@ class TestLifespanCleanupSentinelOrdering:
         async def _fake_append_logout(_state: ServerState) -> None:
             calls.append("append_logout")
 
-        async def _fake_append_companion_logout(_state: ServerState) -> None:
-            calls.append("append_companion_logout")
-
         async def _fake_shutdown_tasks(
             _shutdown: asyncio.Event, _tasks: list[asyncio.Task[None]]
         ) -> None:
@@ -256,9 +253,6 @@ class TestLifespanCleanupSentinelOrdering:
             return None
 
         monkeypatch.setattr(app, "_append_logout_event", _fake_append_logout)
-        monkeypatch.setattr(
-            app, "_append_companion_logout_event", _fake_append_companion_logout
-        )
         monkeypatch.setattr(app, "_shutdown_tasks", _fake_shutdown_tasks)
         monkeypatch.setattr(
             app, "_write_reap_fallback_sentinels", _fake_write_sentinels
@@ -278,7 +272,7 @@ class TestLifespanCleanupSentinelOrdering:
 
 class TestReleaseSessionSentinelRemovalDoesNotAbort:
     """A failure removing the now-stale sentinel must not skip the rest of
-    teardown (companion release, ``relay.close()``) -- the row itself is
+    teardown (``relay.close()``) -- the row itself is
     already gone, so re-processing it on the next reaper tick is harmless,
     unlike losing steps still queued after this one (Cursor Bugbot, Medium).
     """
@@ -325,9 +319,6 @@ class TestLifespanCleanupSurvivesFailedReaper:
         async def _fake_append_logout(_state: ServerState) -> None:
             calls.append("append_logout")
 
-        async def _fake_append_companion_logout(_state: ServerState) -> None:
-            calls.append("append_companion_logout")
-
         async def _fake_shutdown_tasks(
             _shutdown: asyncio.Event, _tasks: list[asyncio.Task[None]]
         ) -> None:
@@ -343,9 +334,6 @@ class TestLifespanCleanupSurvivesFailedReaper:
             return None
 
         monkeypatch.setattr(app, "_append_logout_event", _fake_append_logout)
-        monkeypatch.setattr(
-            app, "_append_companion_logout_event", _fake_append_companion_logout
-        )
         monkeypatch.setattr(app, "_shutdown_tasks", _fake_shutdown_tasks)
         monkeypatch.setattr(
             app, "_write_reap_fallback_sentinels", _fake_write_sentinels
@@ -360,7 +348,6 @@ class TestLifespanCleanupSurvivesFailedReaper:
         assert calls == [
             "write_sentinels",
             "append_logout",
-            "append_companion_logout",
             "shutdown_tasks",
             "release_relay",
         ]
@@ -432,7 +419,6 @@ class TestLifespanCleanupRemovesNudgeSidecar:
             return None
 
         monkeypatch.setattr(app, "_append_logout_event", _noop)
-        monkeypatch.setattr(app, "_append_companion_logout_event", _noop)
         monkeypatch.setattr(app, "_shutdown_tasks", _noop_shutdown)
         monkeypatch.setattr(
             app, "_write_reap_fallback_sentinels", _noop_write_sentinels

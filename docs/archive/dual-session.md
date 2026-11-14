@@ -1,5 +1,10 @@
 # Design: Dual-Session Biff (Ethos Roster)
 
+> **SUPERSEDED (PL-231, DES-075).** This document describes the
+> dual-session companion feature, which has been removed. It is kept
+> for historical reference only. See DESIGN.md DES-075 and
+> `docs/pl-231-companion-removal.md`.
+
 **Bead:** biff-plqr
 **Date:** 2026-04-14
 **Status:** PROPOSED

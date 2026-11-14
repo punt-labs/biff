@@ -47,9 +47,11 @@ from biff.commands import CommandResult
 from biff.commands._session import update_current_session
 from biff.config import (
     find_git_root,
+    get_repo_slug,
     is_enabled,
     load_mcp_config,
 )
+from biff.ethos_team import EthosTeams
 from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
 from biff.nats_relay import NatsRelay
@@ -1252,8 +1254,18 @@ def _create_mcp_server(
     # The session is unknown until the first call declares it: the SessionStart
     # hook has already opened the durable record, and the server binds its
     # routing key and unread file to the caller's session_id on that call.
+    config = resolved.config
+    if resolved.repo_root is not None:
+        try:
+            manager = EthosTeams.from_repo(
+                resolved.repo_root, get_repo_slug(resolved.repo_root) or ""
+            ).manager_of(config.user)
+        except LookupError:
+            pass  # no team data or no manager: the row carries no label
+        else:
+            config = config.model_copy(update={"reports_to": manager})
     state = create_state(
-        resolved.config,
+        config,
         resolved.data_dir,
         unread_dir=UNREAD_DIR,
         dormant=dormant,
@@ -1389,9 +1401,10 @@ def enable(
         print(line)
 
     print(
-        "biff enabled. Commit .punt-labs/biff/enabled and "
-        ".github/workflows/biff-notify.yml, then restart Claude Code "
-        "for changes to take effect."
+        "biff enabled. Commit .punt-labs/biff/enabled, "
+        ".github/workflows/biff-notify.yml, .punt-labs/biff/CLAUDE.md, and the "
+        "@.punt-labs/biff/CLAUDE.md import added to CLAUDE.md, then restart "
+        "Claude Code for changes to take effect."
     )
 
 
@@ -1428,8 +1441,9 @@ def disable(
         print(line)
 
     print(
-        "biff disabled. Commit the removal of .punt-labs/biff/enabled and "
-        ".github/workflows/biff-notify.yml, then restart Claude Code "
+        "biff disabled. Commit the removal of .punt-labs/biff/enabled, "
+        ".github/workflows/biff-notify.yml, and the @.punt-labs/biff/CLAUDE.md "
+        "import from CLAUDE.md, then restart Claude Code "
         "for changes to take effect."
     )
 
@@ -1437,57 +1451,10 @@ def disable(
 _PLUGIN_ID = "biff@punt-labs"
 
 
-def _register_user_scope() -> None:
-    """Deposit the agent guide and register the user-scope ``@``-import.
-
-    Global-tool install (tool-enable-disable.md §2.6): guidance is universal, so
-    biff registers ``@~/.punt-labs/biff/CLAUDE.md`` in ``~/.claude/CLAUDE.md``
-    once at install rather than per repo.
-    """
-    from biff.user_scope import USER_IMPORT_LINE, UserScope
-
-    result = UserScope().install()
-    if result.guide_written:
-        print("Agent guide: ~/.punt-labs/biff/CLAUDE.md")
-    if result.import_registered:
-        print(f"Registered {USER_IMPORT_LINE} in ~/.claude/CLAUDE.md")
-
-
-def _deploy_repo_git_hooks() -> None:
-    """Deploy biff's git hooks into the current clone's ``.git/hooks/``.
-
-    Hooks are per-clone, local machinery — never committed (DES-052 rule 3).
-    Every clone deploys its own, so hook deployment lives at ``install`` (a
-    local, per-clone action), not at the committed-policy ``enable`` toggle.
-    They gate on the enablement marker at runtime, so deploying them in a
-    not-yet-enabled repo is a safe no-op until ``enable`` writes the marker.
-    Skips silently outside a git repo — ``install`` is also a global action.
-    """
-    from biff.git_hooks import (
-        HOOKS_DIR_UNRESOLVED_NOTICE,
-        deploy_git_hooks,
-        resolve_hooks_dir,
-    )
-
-    repo_root = find_git_root()
-    if repo_root is None:
-        return
-    if resolve_hooks_dir(repo_root) is None:
-        # Never a silent skip: a worktree/submodule or a missing git binary can
-        # leave no hooks dir to write to. Emit the shared NOTICE rather than
-        # reporting success while deploying nothing.
-        print(HOOKS_DIR_UNRESOLVED_NOTICE)
-        return
-    hooks = deploy_git_hooks(repo_root)
-    if hooks:
-        print(f"Git hooks: {', '.join(hooks)}")
-
-
 def _remove_repo_git_hooks() -> None:
     """Remove biff's git hooks from the current clone's ``.git/hooks/``.
 
-    The per-clone counterpart to :func:`_deploy_repo_git_hooks`.  Skips
-    silently outside a git repo.
+    Skips silently outside a git repo.
     """
     from biff.git_hooks import remove_git_hooks
 
@@ -1501,23 +1468,16 @@ def _remove_repo_git_hooks() -> None:
 
 @app.command("install")
 def install_cmd() -> None:
-    """Install biff via the punt-labs marketplace and this clone's git hooks."""
+    """Install biff via the punt-labs marketplace (machine scope; no repo writes)."""
     import shutil
     import subprocess
 
-    # User-scope guidance first — it needs no marketplace and leaves no
-    # dangling import (the guide is deposited before the line is registered).
-    _register_user_scope()
-
-    # Per-clone git hooks (local, never committed). Safe no-op outside a repo.
-    _deploy_repo_git_hooks()
-
     claude = shutil.which("claude")
     if not claude:
-        # CLI-only install is a SUCCESS, not a partial failure: the biff CLI,
-        # MCP server, and user-scope guide are all installed; only the Claude
-        # Code plugin is skipped (install-cli-only.md, matching install.sh's
-        # --no-plugin path). No "restart Claude Code" line — there's no plugin.
+        # CLI-only install is a SUCCESS, not a partial failure: the biff CLI
+        # and MCP server are installed; only the Claude Code plugin is skipped
+        # (install-cli-only.md, matching install.sh's --no-plugin path). No
+        # "restart Claude Code" line — there's no plugin.
         print("Installed (CLI-only). Claude Code not found; plugin step skipped.")
         return
 
@@ -1565,10 +1525,10 @@ def uninstall_cmd() -> None:
     # those (it also removes this clone's hooks).
     _remove_repo_git_hooks()
 
-    # User-scope teardown (§2.6) ALWAYS runs — never gated on the plugin step.
-    # The user asked to clean up, and a dangling @-import 404s every session, so
-    # a failed or skipped plugin uninstall must not strand the import line. The
-    # deposited guide stays dormant (§2.9).
+    # Legacy strip (§2.6): older releases wrote a user-scope @-import. It is
+    # removed here opportunistically and ALWAYS runs — never gated on the plugin
+    # step — because a dangling @-import 404s every session. Current releases
+    # write no such line, so this is a no-op on a clean machine.
     if UserScope().uninstall():
         print(f"Removed {USER_IMPORT_LINE} from ~/.claude/CLAUDE.md")
 

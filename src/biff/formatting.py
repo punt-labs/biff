@@ -42,7 +42,6 @@ __all__ = [
     "format_idle",
     "format_last",
     "format_read",
-    "format_read_dual",
     "format_remaining",
     "format_table",
     "format_talk_echo",
@@ -305,6 +304,9 @@ WHO_SPECS: list[ColumnSpec] = [
 ]
 
 
+WHO_REPORTS_SPEC = ColumnSpec("REPORTS", min_width=7)
+
+
 def _format_who_name(s: UserSession) -> str:
     """Render a session as a copy-pasteable address for ``/write``.
 
@@ -324,11 +326,24 @@ def _format_who_kind(s: UserSession) -> str:
     return ""
 
 
+def _format_who_reports_to(s: UserSession) -> str:
+    """Render the manager role for the REPORTS column; ``-`` when none.
+
+    The role comes from team YAML on the owner's disk and travels on the
+    session row, so it is repo-controlled text: neutralised and clipped
+    like every other fixed-column cell.
+    """
+    role = _truncate(terminal_safe(s.reports_to)[:_MAX_LABEL_CHARS], _MAX_LABEL_WIDTH)
+    return role or "-"
+
+
 def format_who(sessions: list[UserSession]) -> str:
     """Build a columnar table matching BSD ``w(1)`` style.
 
-    The NAME column renders ``user:tty`` so agents can copy the
-    address directly into ``/write``.  P column shows ``+`` if the
+    The NAME column renders exactly ``user:tty`` so agents can copy the
+    address directly into ``/write``; the manager role lives in its own
+    trailing REPORTS column, shown only when some row carries one.
+    P column shows ``+`` if the
     session has a plan, ``-`` otherwise.  Use ``/finger user`` to
     see the full plan text.
 
@@ -337,6 +352,7 @@ def format_who(sessions: list[UserSession]) -> str:
     same reason :func:`_format_who_name` routes through
     :func:`sanitized_address`.
     """
+    show_reports = any(s.reports_to for s in sessions)
     rows: list[list[str]] = [
         [
             _format_who_name(s),
@@ -346,10 +362,12 @@ def format_who(sessions: list[UserSession]) -> str:
             "+" if s.biff_enabled else "-",
             "+" if s.plan else "-",
             _truncate(terminal_safe(s.hostname), _MAX_LABEL_WIDTH) or "-",
+            *([_format_who_reports_to(s)] if show_reports else []),
         ]
         for s in sessions
     ]
-    return format_table(WHO_SPECS, rows)
+    specs = [*WHO_SPECS, WHO_REPORTS_SPEC] if show_reports else WHO_SPECS
+    return format_table(specs, rows)
 
 
 def format_dead_footnote(dead: list[UserSession]) -> str:
@@ -776,9 +794,8 @@ READ_SPECS: list[ColumnSpec] = [
 def _render_message_rows(messages: list[Message]) -> tuple[int, str, str]:
     """Return ``(count, noun, indented_table)`` for a list of messages.
 
-    Shared by :func:`format_read` and :func:`format_read_dual` so the count
-    is always derived from the exact list it's rendered beside — never
-    computed twice and never able to disagree between the two call sites.
+    The count is derived from the exact list it's rendered beside — never
+    computed separately, so it cannot disagree with the table.
     """
     rows: list[list[str]] = []
     for m in messages:
@@ -793,35 +810,6 @@ def _render_message_rows(messages: list[Message]) -> tuple[int, str, str]:
     # as a sub-table row.
     indented_table = ROW_PREFIX + table[len(HEADER_PREFIX) :]
     return count, noun, indented_table
-
-
-def format_read_dual(
-    human_user: str,
-    human_msgs: list[Message],
-    agent_user: str,
-    agent_msgs: list[Message],
-) -> str:
-    """Format messages with per-identity section headers.
-
-    ``Message.from_user``/``from_tty`` have no ``max_length`` on the wire.
-    FROM is a *fixed* :data:`READ_SPECS` column and MESSAGE is the shared
-    variable/wrap column, so the sender is routed through
-    :func:`sanitized_address` for the same two-fold reason
-    :func:`format_read` is: an unbounded value would widen FROM for every
-    row in a section's table, and collapse the MESSAGE wrap budget shared
-    by every message in that section.
-
-    Each section header carries its own count, derived from that
-    section's own message list — same synchronization guarantee as
-    :func:`format_read`.
-    """
-    sections: list[str] = []
-    for user, msgs in ((human_user, human_msgs), (agent_user, agent_msgs)):
-        if not msgs:
-            continue
-        count, noun, indented_table = _render_message_rows(msgs)
-        sections.append(f"{HEADER_PREFIX}{user} ({count} new {noun})\n{indented_table}")
-    return "\n\n".join(sections)
 
 
 def format_read(messages: list[Message]) -> str:

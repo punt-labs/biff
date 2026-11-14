@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from nats.errors import ConnectionClosedError
 
 from biff.models import BiffConfig, UserSession
 from biff.server.app import _run_kv_watch
@@ -83,6 +84,7 @@ class FakeNatsRelay:
     """Minimal mock of NatsRelay for _run_kv_watch."""
 
     kv: FakeKV
+    connection_generation: int = 1
 
     async def get_kv(self) -> FakeKV:
         return self.kv
@@ -279,3 +281,132 @@ class TestKvWatchSnapshotSurvival:
             timeout=2.0,
         )
         assert watcher.stopped
+
+
+class _GenerationBumpingWatcher(FakeWatcher):
+    """Watcher whose first poll advances the relay's dial generation.
+
+    Models ``_force_reconnect`` replacing the client the watch subscription
+    lives on: nats-py drops the subscription silently, so every later
+    ``updates()`` just times out, exactly like an idle bucket.
+    """
+
+    def __init__(self, relay: FakeNatsRelay, shutdown: asyncio.Event) -> None:
+        super().__init__([], shutdown)
+        self._relay = relay
+
+    async def updates(self, timeout: float = 5.0) -> FakeKVEntry | None:
+        # Yield so that if the generation check regresses and the loop spins,
+        # the enclosing wait_for timeout and cancellation can still fire —
+        # a failing test reports cleanly instead of hanging the process.
+        await asyncio.sleep(0)
+        self._relay.connection_generation += 1
+        raise TimeoutError("nats: timeout")
+
+
+class TestKvWatchGenerationReconcile:
+    """A watcher bound to a superseded client generation must rebind."""
+
+    async def test_returns_for_restart_when_generation_advances(
+        self, state: ServerState
+    ) -> None:
+        """``_run_kv_watch`` ends so the supervisor re-creates the watcher."""
+        shutdown = asyncio.Event()
+        fake_relay = FakeNatsRelay(kv=FakeKV(watcher=FakeWatcher([], shutdown)))
+        watcher = _GenerationBumpingWatcher(fake_relay, shutdown)
+        fake_relay.kv = FakeKV(watcher=watcher)
+
+        await asyncio.wait_for(
+            _run_kv_watch(
+                fake_relay,  # type: ignore[arg-type]
+                state,
+                shutdown,
+                {},
+            ),
+            timeout=2.0,
+        )
+
+        assert watcher.stopped, "stale watcher was not stopped"
+
+
+class _HangingStopWatcher(_GenerationBumpingWatcher):
+    """Generation-advancing watcher whose ``stop()`` never completes.
+
+    Models the half-open-socket stall: the superseded client's UNSUB wait
+    hangs. ``_run_kv_watch`` must still return, bounded by the teardown
+    timeout, rather than freezing the supervisor on the rebind path.
+    """
+
+    async def stop(self) -> None:
+        self.stopped = True
+        await asyncio.Event().wait()  # never set — hang forever
+
+
+class TestKvWatchBoundedStop:
+    """A hung ``watcher.stop()`` on the rebind path must not freeze the loop."""
+
+    async def test_returns_even_when_stop_hangs(self, state: ServerState) -> None:
+        """``_run_kv_watch`` returns within the teardown bound despite a hung stop.
+
+        Without the ``asyncio.timeout`` around ``watcher.stop()`` this would
+        hang forever — the same unbounded-wait failure the bounded
+        ``safe_close`` cures, on the code path this fix adds.
+        """
+        shutdown = asyncio.Event()
+        fake_relay = FakeNatsRelay(kv=FakeKV(watcher=FakeWatcher([], shutdown)))
+        watcher = _HangingStopWatcher(fake_relay, shutdown)
+        fake_relay.kv = FakeKV(watcher=watcher)
+
+        with patch("biff.server.app._TEARDOWN_STEP_TIMEOUT", 0.1):
+            await asyncio.wait_for(
+                _run_kv_watch(
+                    fake_relay,  # type: ignore[arg-type]
+                    state,
+                    shutdown,
+                    {},
+                ),
+                timeout=2.0,
+            )
+
+        assert watcher.stopped, "stop was never attempted"
+
+
+class _RaisingStopWatcher(_GenerationBumpingWatcher):
+    """Generation-advancing watcher whose ``stop()`` raises like a closed client.
+
+    Models the real rebind path: the superseding dial already closed the old
+    client, so nats-py's UNSUB raises ``ConnectionClosedError``. The finally
+    block must suppress that expected failure so the intentional ``return``
+    stands, rather than letting the exception divert the loop into the
+    supervisor's error branch (a mislabeled failure plus a 2s blind window).
+    """
+
+    async def stop(self) -> None:
+        self.stopped = True
+        raise ConnectionClosedError
+
+
+class TestKvWatchStopRaises:
+    """A ``stop()`` that raises on a closed client must not divert the return."""
+
+    async def test_returns_cleanly_when_stop_raises(self, state: ServerState) -> None:
+        """``_run_kv_watch`` returns (no exception escapes) when stop() raises.
+
+        Before the suppression this raised ``ConnectionClosedError`` out of the
+        finally, replacing the generation-advance return; the supervisor then
+        took its 2s error branch on every healthy rebind.
+        """
+        shutdown = asyncio.Event()
+        fake_relay = FakeNatsRelay(kv=FakeKV(watcher=FakeWatcher([], shutdown)))
+        watcher = _RaisingStopWatcher(fake_relay, shutdown)
+        fake_relay.kv = FakeKV(watcher=watcher)
+
+        # No exception should propagate — a bare await, not wait_for-for-hang.
+        await _run_kv_watch(
+            fake_relay,  # type: ignore[arg-type]
+            state,
+            shutdown,
+            {},
+        )
+
+        assert watcher.stopped, "stop was never attempted"

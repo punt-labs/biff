@@ -6,7 +6,7 @@ definition is what makes the two surfaces equivalent -- the "two equivalent ways
 to one state" model (DES-052).
 
 ``enable`` fully activates the current clone in one verb (the beads ``bd setup``
-model), writing four artifacts:
+model), writing five artifacts:
 
 - ``.punt-labs/biff/enabled`` -- the **committed** policy marker ``is_enabled()``
   reads; commit it via a PR so the whole team's repo is on.
@@ -20,8 +20,13 @@ model), writing four artifacts:
   lands (§2.11).
 - ``.claude/settings.json`` allow rules for biff's MCP tools and commands --
   the operator's opt-in, repo-level only (:mod:`biff.claude_permissions`).
+- ``.punt-labs/biff/CLAUDE.md`` plus the ``@.punt-labs/biff/CLAUDE.md`` import
+  in the repo ``CLAUDE.md`` -- the agent guide.  ``enable`` is the sole path that
+  deposits a guide (``tool-enable-disable.md`` §2.5/§2.6); ``install`` never does.
 
-``disable`` removes exactly those four.  ``enable``/``disable`` invoke git only
+``disable`` removes the marker, hooks, CI workflow, allow rules and the import
+line.  The
+deposited guide is left dormant (§2.9).  ``enable``/``disable`` invoke git only
 read-only (``git rev-parse`` to resolve the hooks directory); they never create
 commits or stage files -- the user commits the tracked marker + CI workflow via
 a PR like any repo change, while the local hooks are activated per-clone (each
@@ -33,11 +38,13 @@ touch them.
 
 from __future__ import annotations
 
+import importlib.resources
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self, final
 
 from biff._stdlib import remove_enabled_marker, write_enabled_marker
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
+from biff.claude_md import ClaudeMdImport
 from biff.claude_permissions import PermissionChange, ProjectPermissions
 from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
 
@@ -45,6 +52,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["EnablementChange", "RepoEnablement"]
+
+_GUIDE_RESOURCE = "user-claude.md"
+_REPO_IMPORT_LINE = "@.punt-labs/biff/CLAUDE.md"
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +118,8 @@ class RepoEnablement:
             )
         ci_changed = deploy_ci_workflow(self._root)
         hooks_changed = tuple(deploy_git_hooks(self._root))
+        self._deposit_guide()
+        self._guide_import().register()
         permissions = ProjectPermissions(self._root).grant()
         write_enabled_marker(self._root)
         return EnablementChange(
@@ -131,6 +143,7 @@ class RepoEnablement:
         remove_enabled_marker(self._root)
         hooks_changed = tuple(remove_git_hooks(self._root))
         ci_changed = remove_ci_workflow(self._root)
+        self._guide_import().prune()
         permissions = ProjectPermissions(self._root).revoke()
         return EnablementChange(
             ci_workflow_changed=ci_changed,
@@ -138,3 +151,24 @@ class RepoEnablement:
             git_hooks_resolved=resolved,
             permissions=permissions,
         )
+
+    def _guide_import(self) -> ClaudeMdImport:
+        return ClaudeMdImport(self._root / "CLAUDE.md", _REPO_IMPORT_LINE)
+
+    def _deposit_guide(self) -> None:
+        """Write the bundled guide to ``.punt-labs/biff/CLAUDE.md`` wholesale.
+
+        Overwrites (§2.2 vendored zone); skips the write when the bytes already
+        match so re-running ``enable`` never churns the file.  The compare is on
+        bytes so a tampered non-UTF-8 guide is overwritten, not a crash.
+        """
+        want = (
+            importlib.resources.files("biff.data")
+            .joinpath(_GUIDE_RESOURCE)
+            .read_bytes()
+        )
+        guide = self._root / ".punt-labs" / "biff" / "CLAUDE.md"
+        if guide.is_file() and guide.read_bytes() == want:
+            return
+        guide.parent.mkdir(parents=True, exist_ok=True)
+        guide.write_bytes(want)

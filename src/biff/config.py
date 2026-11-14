@@ -585,7 +585,7 @@ def compute_data_dir(repo_root: Path, prefix: Path) -> Path:
 # ── YAML config pipeline ───────────────────────────────────────────
 
 
-def _load_yaml(path: Path) -> dict[str, object]:
+def load_yaml(path: Path) -> dict[str, object]:
     """Load a YAML file and return a dict, or ``{}`` on error.
 
     Catches ``OSError`` (permissions, TOCTOU race) and
@@ -607,7 +607,7 @@ def load_yaml_config(repo_root: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
-        return _load_yaml(path)
+        return load_yaml(path)
     except yaml.YAMLError as exc:
         raise SystemExit(
             f"Failed to parse {path}:\n{exc}\n"
@@ -621,7 +621,7 @@ def load_yaml_local(repo_root: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
-        return _load_yaml(path)
+        return load_yaml(path)
     except yaml.YAMLError:
         return {}
 
@@ -1338,8 +1338,7 @@ def load_mcp_config(
     The MCP server runs inside the agent's process; its primary
     identity is the agent. Disk-based resolution avoids the
     ``ethos whoami`` subprocess race on ``claude --resume`` (spec
-    invariant 9). Companion (human) registration is deferred to the
-    heartbeat loop.
+    invariant 9).
 
     Raises :class:`SystemExit` for the same conditions as
     :func:`_load_base_config`, plus when no identity source succeeds.

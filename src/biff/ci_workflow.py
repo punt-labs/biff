@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.resources
 import json
+import re
 from pathlib import Path
 from typing import Self, cast, final
 
@@ -28,6 +29,23 @@ _NOTIFY_WORKFLOW_NAME = "Biff CI Notifications"
 # repo -- the template value is a placeholder, never deposited verbatim.
 _WORKFLOWS_INDENT = "    "
 _WORKFLOWS_PLACEHOLDER = f"{_WORKFLOWS_INDENT}workflows: []  # BIFF_RENDER"
+
+# The ``astral-sh/setup-uv`` step's ``uses:`` line.  Dependabot bumps the
+# full-SHA pin (and its ``# vX.Y.Z`` comment) in each consumer repo, so the
+# render carries the DEPLOYED line over rather than reverting the bump to the
+# template's SHA.  Only a 40-hex SHA pin is treated as a Dependabot-owned pin;
+# anything else in the deployed file falls back to the template's line.
+_SETUP_UV_LINE = re.compile(
+    r"^[ \t]*-[ \t]+uses:[ \t]+astral-sh/setup-uv@[0-9a-f]{40}\b.*$", re.MULTILINE
+)
+
+# The ``# vX.Y.Z`` version comment Dependabot writes beside the pin.  It is the
+# ordering key: a deployed pin is preserved only when its version is at least
+# the template's, so a genuine forward bump is kept but an *older* or broken
+# pin biff previously shipped is repaired to the template on the next enable.
+# Preserving every SHA unconditionally would strand a consumer on a bad pin
+# biff itself distributed, defeating the template's role as the repair path.
+_SETUP_UV_VERSION = re.compile(r"#\s*v(\d+)\.(\d+)\.(\d+)\b")
 
 # GitHub Actions reads workflows with either extension.
 _WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
@@ -80,7 +98,79 @@ class NotifyWorkflow:
                 "template and _WORKFLOWS_PLACEHOLDER have drifted. Refusing to "
                 "deposit a workflow that would watch nothing."
             )
-        return template.replace(_WORKFLOWS_PLACEHOLDER, self._workflows_block())
+        rendered = template.replace(_WORKFLOWS_PLACEHOLDER, self._workflows_block())
+        return self._with_deployed_setup_uv(rendered)
+
+    def _with_deployed_setup_uv(self, rendered: str) -> str:
+        """Graft the deployed ``setup-uv`` pin onto ``rendered``.
+
+        The one line in the file another system (Dependabot) maintains.  A
+        repo with no deployed file, or none carrying a SHA pin, keeps the
+        template's default.  A deployed pin is preserved only when its
+        ``# vX.Y.Z`` version is at least the template's: a genuine forward bump
+        is kept, but an older or broken pin biff previously shipped is repaired
+        to the template rather than stranded.  Everything else in the render
+        stays deterministic.
+        """
+        # Fail loud on template drift, symmetric with the BIFF_RENDER placeholder
+        # guard: if the bundled template's setup-uv line is ever edited to a form
+        # the SHA regex no longer matches, a silent sub() would discard a deployed
+        # pin we read and revert every consumer repo. Catch it here.
+        template_match = _SETUP_UV_LINE.search(rendered)
+        if template_match is None:
+            msg = (
+                "biff-notify.yml template has no SHA-pinned setup-uv line to "
+                "graft the deployed pin onto; the bundled template drifted."
+            )
+            raise ValueError(msg)
+        deployed = self._deployed_setup_uv_line()
+        if deployed is None:
+            return rendered
+        if not self._deployed_pin_is_newer(deployed, template_match.group(0)):
+            # Older, equal-but-stale, or unversioned deployed pin: let the
+            # template repair it. (Equal SHAs are a no-op either way.)
+            return rendered
+        # A function replacement: the deployed line is data, not a regex template.
+        return _SETUP_UV_LINE.sub(lambda _m: deployed, rendered, count=1)
+
+    @staticmethod
+    def _deployed_pin_is_newer(deployed: str, template: str) -> bool:
+        """True when ``deployed``'s ``# vX.Y.Z`` version is >= ``template``'s.
+
+        A deployed pin with no parseable version comment is not treated as
+        newer: biff cannot prove it is a forward Dependabot bump, so the
+        template (the repair path) wins.
+        """
+        dep = _SETUP_UV_VERSION.search(deployed)
+        tmpl = _SETUP_UV_VERSION.search(template)
+        if dep is None or tmpl is None:
+            return False
+        dep_version = tuple(int(part) for part in dep.groups())
+        tmpl_version = tuple(int(part) for part in tmpl.groups())
+        return dep_version >= tmpl_version
+
+    def _deployed_setup_uv_line(self) -> str | None:
+        """Return the deployed file's ``setup-uv`` line, or ``None`` if absent.
+
+        ``None`` is the contract for "nothing to preserve" (first deploy, an
+        unreadable file, or no SHA-pinned line): the template default applies.
+        Never follows a symlinked ``.github``, ``.github/workflows``, or
+        workflow file -- the read must stay inside the repo, matching the
+        write path's guards.
+        """
+        github_dir = self._root / ".github"
+        workflows_dir = github_dir / "workflows"
+        target = workflows_dir / _WORKFLOW_NAME
+        if github_dir.is_symlink() or workflows_dir.is_symlink():
+            return None
+        if not is_regular_file(target):
+            return None
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        match = _SETUP_UV_LINE.search(text)
+        return match.group(0) if match else None
 
     def _workflows_block(self) -> str:
         """Render the ``workflows:`` line (with a comment when nothing to watch)."""

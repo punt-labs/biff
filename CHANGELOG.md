@@ -2,6 +2,71 @@
 
 ## [Unreleased]
 
+### Added
+
+- `/who` shows `(reports to <role>)` beside an agent's name, resolved from the
+  repo's ethos team YAML on disk (the `reports_to` collaboration edge of the
+  agent's role). No live session lookup and no second session. A repo without
+  team data, or an agent with no manager, shows the row unchanged (PL-231).
+
+### Removed
+
+- The dual-session "companion" machinery (DES-039/DES-040/DES-043), broken
+  since ethos re-keyed roster identification to require a `CLAUDE_PID` that MCP
+  stdio subprocesses never receive, and left dead after DES-064 removed the
+  roster subprocess. Gone: the second `/who` session row and its TTY/KV/NATS
+  subscriptions, `CompanionSession`, `state.companion`, and every companion
+  branch in the server lifecycle. User-visible effects: `read_messages` now has
+  a single format (the dual-session format is removed), and the unread status
+  file always carries the agent identity. The `inboxNotifyCompanion` NATS
+  subscription kind and the `human` routing role are removed from the Z specs
+  and the models re-proven. See DES-075 (PL-231).
+
+## [1.22.0] - 2026-11-12
+
+### Changed
+
+- `biff install` now only registers the Claude Code plugin. It no longer
+  deposits `~/.punt-labs/biff/CLAUDE.md` or writes an `@`-import into
+  `~/.claude/CLAUDE.md` (punt-kit `tool-enable-disable.md` §2.6: `install`
+  never touches a `CLAUDE.md`). `biff uninstall` still strips the legacy import
+  line an older release wrote. `biff doctor` drops its "Agent guide" check,
+  which verified that now-forbidden import.
+
+### Added
+
+- `biff enable` now deposits the agent guide at `.punt-labs/biff/CLAUDE.md` and
+  registers `@.punt-labs/biff/CLAUDE.md` in the repo `CLAUDE.md`; `biff
+  disable` removes the import and leaves the guide file. The `/biff enable`
+  MCP tool does the same (`tool-enable-disable.md` §2.5).
+
+## [1.21.1] - 2026-11-12
+
+### Fixed
+
+- A long-lived server's NATS KV watcher no longer wedges after a forced
+  reconnect. When the relay dialed a new client, `safe_close` tore down the
+  old client the watcher's subscription lived on; nats-py silently dropped the
+  subscription and the connection generation advanced, leaving the watcher
+  stranded — it kept timing out on a dead subscription instead of rebinding, so
+  wall (and any KV-driven) updates froze on that session's status bar for the
+  life of the process. The watcher now records the connection generation when
+  it binds and rebinds when the generation advances, mirroring the periodic
+  subscription reconciler. A second cause is also fixed: `safe_close`'s client
+  close is bounded with a timeout, so a hung teardown held under the connect
+  lock can no longer freeze the poller and heartbeat. The connection-lifecycle
+  Z model (`docs/nats-relay.tex`) now carries the KV watcher as a reconciled
+  subscription kind, and the fix is proven by ProB — the wedge is a reachable
+  counterexample in the unreconciled variant and liveness holds in the fixed
+  spec.
+- `biff statusline` now resolves the session from `CLAUDE_CODE_SESSION_ID`
+  when stdin carries no session JSON. The `/biff:read` mail gate runs
+  `biff statusline < /dev/null`, which left the command unable to identify the
+  session, so it printed the generic "enable" hint for an enabled session and
+  the gate never pulled mail. Stdin remains authoritative when Claude Code
+  pipes session JSON; the environment variable is only a fallback for the
+  empty-stdin case.
+
 ## [1.21.0] - 2026-11-11
 
 ### Changed

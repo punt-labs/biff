@@ -1,0 +1,1827 @@
+%
+% nats-relay.tex
+%
+% Z Specification for Biff NATS Relay
+% Formal model of connection lifecycle, KV watcher state machine,
+% and session presence management.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Biff NATS Relay: A Z Specification}
+\author{Formal Model of Connection Lifecycle and KV Watcher}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Biff NATS Relay: A Z Specification},
+  pdfauthor={punt-labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+%%----------------------------------------------------------------------
+\section{Introduction}
+%%----------------------------------------------------------------------
+
+The NATS relay is the networked backend for biff's communication
+system.  It manages a TCP connection to a NATS server, lazily
+provisions infrastructure (KV bucket, JetStream streams), and runs
+a KV watcher that detects session changes and wall broadcasts in
+real-time.
+
+This specification models three interacting state machines:
+
+\begin{enumerate}
+  \item \textbf{Connection lifecycle} --- lazy connect, disconnect,
+    reconnect, and close transitions.
+  \item \textbf{KV watcher} --- the long-lived watcher that observes
+    session and wall changes, survives snapshot-done markers and
+    timeouts, and restarts only on errors.
+  \item \textbf{Session presence} --- KV-backed sessions with TTL
+    expiry, heartbeat refresh, and logout detection.
+\end{enumerate}
+
+The key invariant proven by this model: the KV watcher remains
+alive across snapshot-done markers and idle timeouts.  Only
+explicit shutdown or unrecoverable errors terminate it.  This
+captures the fix for biff-udp.
+
+A second invariant, added to close a recurring class of wedge
+bugs, concerns the connection itself.  A NATS connection can
+enter a \emph{half-open} state: the TCP socket is up
+(\texttt{is\_closed} is false) but every JetStream or KV request
+times out.  If no transition can leave that state, the relay is
+wedged --- every tool call blocks on \texttt{nats: timeout} with
+no recovery (biff-tww).  This specification adds the half-open
+state explicitly and proves a liveness property: the connection
+can never be stuck there.  Two independent transitions escape the
+wedge.  The keepalive detector ($WedgeDetected$) waits for
+nats-py's ping loop to declare the socket dead and hands it to the
+background reconnect; the proactive detector ($ForceReconnect$,
+biff-3hp) force-closes the socket after three consecutive request
+timeouts and drops the client, so the next lazy connect dials a
+fresh one.  The proof is by deadlock analysis --- in the absence
+of \emph{any} wedge-detection transition, probcli finds half-open
+to be a reachable terminal state, and that terminal state
+\emph{is} biff-tww.  With either recovery transition present,
+half-open is deadlock-free.
+
+A third invariant, added here, concerns a resource the earlier model
+did not track at all: the always-on core-NATS talk subscription
+(biff-9la).  The relay opens one long-lived SUB on the talk inbox and
+holds it for the life of the process.  A core-NATS subscription is
+bound to the particular client that created it and dies with that
+client, so the proactive force-reconnect ($ForceReconnect$, biff-3hp),
+which discards the client wholesale, silently orphans it: presence and
+wall recover on the fresh connection, but talk stays dead for the rest
+of the session because nothing re-opens the SUB.  This is the exact
+converse of nats-py's in-place reconnect, which keeps the client and
+replays its subscriptions, so the SUB must be \emph{preserved} there
+and \emph{re-established} after a force-reconnect --- the same
+distinction the handle-rebuild machinery already draws, but for a
+resource the earlier model omitted.  The specification adds the
+subscription's generation binding as state and proves a liveness
+property: a live connection whose talk SUB is stranded on a superseded
+generation always eventually re-binds it.  The defect is reproduced as
+a ProB counterexample against the pre-fix ``re-subscribe only when the
+handle is \texttt{None}'' guard, and the generation-tracked guard makes
+the stranded state recover.
+
+A fourth invariant, added here, closes the converse of the wedge race:
+not a failure to \emph{escape} the wedge, but an unnecessary
+\emph{teardown} of a connection that has already left it.  The proactive
+force-reconnect ($ForceReconnect$, biff-3hp) is a two-phase act --- a
+gate that decides, after three request timeouts, that the socket is
+wedged, and a scheduled coroutine that later takes the lock and
+force-closes it.  Between the two, nats-py's keepalive can complete a
+\emph{transparent} reconnect on the \emph{same} client object: the
+socket the gate condemned is healthy again, with no new dial and so no
+change to \texttt{\_generation}.  The scheduled teardown, re-checking
+under the lock, sees \texttt{is\_connected} true --- exactly as it was
+during the wedge --- and, unable to tell a healed connection from a
+still-wedged one, force-closes a freshly-healthy client (biff-xko).  The
+cost is one unnecessary reconnect-and-reprovision ($\sim$20\,ms, no data
+loss), but it recurs, and it is the same class of half-open
+indistinguishability the earlier fixes met from the other side.
+\texttt{is\_connected} cannot separate the two states because it is true
+in both; the model separates them with $reconnectEpoch$, a per-client
+counter of transparent reconnects that advances where
+\texttt{\_generation} does not.  This specification adds that counter as
+state and proves a safety property: a scheduled force-reconnect whose
+gate observed an earlier epoch is a no-op against a client that has since
+reconnected --- the live connection is invariant under the stale
+teardown.  The defect is reproduced as a ProB counterexample against the
+pre-fix \texttt{is\_connected}-only re-check (the frozen variant
+\texttt{nats-relay-xko-isconnected.tex}), and the epoch-guarded re-check
+makes the spurious teardown unreachable while leaving the force-reconnect
+of a genuinely wedged client intact.
+
+A fifth refinement, added here, corrects an over-idealisation in the
+fourth.  The epoch guard just described assumes nats-py's transparent
+reconnect is atomic in $(connState, reconnectEpoch)$ --- that the socket
+comes up and the epoch advances in one step, so an under-lock re-check
+that reads \texttt{is\_connected} true always also reads the advanced
+epoch.  It is not atomic.  In \texttt{nats/aio/client.py} the reconnect
+coroutine sets the status to \texttt{CONNECTED}, then \texttt{await
+self.flush()}, and only afterwards fires \texttt{reconnected\_cb} ---
+biff's \texttt{\_on\_reconnect}, which increments the epoch.  There is a
+reachable interleaving in which the socket is up but the epoch has not yet
+been bumped, and a scheduled force-teardown, re-checking under the lock,
+sees \texttt{is\_connected} true and \texttt{\_reconnect\_epoch ==
+gate\_epoch} --- both conjuncts the fix relied on to skip --- and so does
+\emph{not} skip: it tears a freshly-healed client down.  The deferred
+\texttt{\_on\_reconnect} then lands on the reset epoch, momentarily
+leaving $reconnectEpoch = 1$ while the connection is $disconnected$ and
+the client is $None$, which the fourth model's state invariant $connState
+\in \{ disconnected, closed \} \implies reconnectEpoch = 0$ wrongly
+declared impossible.  This specification adds the flush window as an
+explicit state ($epochPending$), splits the atomic reconnect into
+$ReconnectSocketUp$ and $ReconnectEpochObserved$, models the flush-window
+teardown as $FlushWindowForceTeardown$, and reclassifies the epoch-reset
+invariant from a global always-property to an \emph{eventually}-true
+recovery property.  It then proves what matters: the flush-window teardown
+of a healthy client is bounded and self-healing --- every trace through it
+returns to a healthy $connected$ state via a fresh dial --- the biff-tww
+deadlock remains unreachable, and no new bad state is introduced.  The
+epoch guard is not weakened; it is shown to eliminate exactly the
+teardowns it \emph{can} observe, with the residual, unobservable window
+proved harmless rather than hidden.
+
+A sixth refinement, added here, generalises the third invariant from one
+always-on subscription to a finite family of them.  biff-5ex adds a second
+long-lived core-NATS SUB alongside the talk SUB of the third
+invariant --- the broadcast inbox-notify subscription, which wakes every
+live session of a user when a broadcast message (no \texttt{:tty}) arrives,
+exactly as the talk SUB wakes a session on a talk message.  It is bound to
+the same client, orphaned by the same $ForceReconnect$, and repaired by the
+same generation-tracked re-subscribe; the only thing that differs between
+the two is which inbox they watch.  Rather than duplicate $talkSubGen$,
+its invariant, and its liveness obligation for a second variable, this
+specification replaces $talkSubGen$ with $subGen$, a total function from a
+free type $SubKind$ --- introduced here with two constructors, $talk$ and
+$inboxNotify$, and since extended to a third, $kvWatch$ (see its own
+free-type declaration below) --- to the generation each is bound to.  The
+invariant $talkSubGen \leq generation$ becomes $\forall k : SubKind @
+subGen(k) \leq generation$, quantified once over the family rather than
+restated per kind, and the stranding property becomes an obligation
+quantified the same way (\S\ref{sec:modelcheck}).  Every operation that
+touched $talkSubGen$ is updated to the uniform $subGen' = subGen$ it
+already needed --- $ForceReconnect$ strands \emph{every} member of the
+family in one step, because it discards the client wholesale and does not
+distinguish which SUBs were opened on it --- and $Subscribe$ and
+$SubscribeRetry$ gain a $kind?$ input so one schema serves every member
+instead of one schema per kind.  This is a generalisation, not a
+restructuring: setting $SubKind$ to a singleton $\{ talk \}$ recovers
+exactly the third invariant's state space, and the family was
+deliberately built to outlive its original two members --- its later
+extension to $kvWatch$ is that prediction already exercised once, not a
+hypothetical.  (A fourth constructor, for the dual-session
+companion's inbox SUB, once existed; the companion was removed, PL-231,
+and the constructor with it.)
+
+%%----------------------------------------------------------------------
+\section{Basic Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  [USER, TTY, REPO, KVKEY, KVVALUE, SESSIONKEY]
+\end{zed}
+
+$USER$ identifies a human user.  $TTY$ identifies a terminal
+session (random 8-char hex).  $REPO$ scopes all state to a
+repository.  $KVKEY$ and $KVVALUE$ are opaque KV store keys and
+values.  $SESSIONKEY$ is the composite $\{user\}:\{tty\}$ identifier.
+
+%%----------------------------------------------------------------------
+\section{Free Types}
+%%----------------------------------------------------------------------
+
+\begin{zed}
+  ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+  ConnState ::= disconnected | reconnecting | connected | halfOpen | closed
+\end{zed}
+
+The connection has five states.  $disconnected$ is a deliberate,
+reversible release of the TCP connection (the relay's own
+\texttt{disconnect()}); a subsequent call reconnects.
+$reconnecting$ is distinct: nats-py's background reconnect loop is
+in progress after a dropped socket --- \texttt{is\_closed} is
+false, \texttt{is\_connected} is false, and cached handles have
+already been invalidated by \texttt{\_on\_disconnect}.
+$connected$ is an active TCP connection whose JetStream and KV
+handles are provisioned.  $halfOpen$ is the wedge: the socket is
+up (\texttt{is\_closed} false) but every JetStream or KV request
+times out; the cached handles are stale and must not be used.
+$closed$ is permanent shutdown --- no reconnection is possible.
+
+\begin{zed}
+  SubKind ::= talk | inboxNotify | kvWatch
+\end{zed}
+
+$SubKind$ indexes the family of always-on core-NATS subscriptions the
+relay holds open for the life of the process: $talk$, the talk-inbox SUB
+(biff-9la); $inboxNotify$, the broadcast inbox-notify SUB for the
+session's own user (biff-5ex); and $kvWatch$, the sessions-KV watcher's
+consumer (below).  All three are the same class of resource --- bound to
+the particular client that created them, replayed by nats-py's in-place
+reconnect, and orphaned by a force-reconnect that discards the client
+wholesale --- so the model tracks one generation-binding per kind rather
+than duplicating the treatment.  This is the family's extension point
+exercised exactly as designed: $SubKind$ gained a constructor, every
+operation already quantified over $SubKind$ ($EnsureConnected$'s $subGen$
+preservation, $Subscribe$, $ForceReconnect$'s stranding, the liveness
+obligation in \S\ref{sec:modelcheck}) needed no change, and only the two
+sites that name every kind explicitly ($Init$'s literal and the
+initial-state description) gained the mapping.  It is finite and closed:
+a further always-on subscription is added the same way, by extending
+$SubKind$ with one more constructor, not by introducing a new state
+variable.
+
+$kvWatch$ is the third kind: the sessions-KV watcher's consumer
+(\texttt{\_run\_kv\_watch}, \texttt{kv.watchall()}).  It is a core-NATS
+subscription like the other two --- bound to the client that created it,
+orphaned wholesale by $ForceReconnect$, replayed by an in-place reconnect.
+Its omission let the model call the watcher live in states where it was
+dead: $Watcher$ carried a phase but no generation binding, and a $HandleTimeout$
+on a dead subscription is indistinguishable, to the loop, from a quiet
+bucket.  The relay's \texttt{\_run\_kv\_watch} swallows every
+\texttt{TimeoutError} and never compares \texttt{connection\_generation},
+so it implements no $Subscribe$ for this kind.  The liveness obligation of
+\S\ref{sec:modelcheck}, instantiated at $k = kvWatch$, is the property the
+code must meet; the frozen variant \texttt{nats-relay-kvwatch-noreconcile.tex}
+removes $Subscribe$ and $SubscribeRetry$ for this kind alone, which is the
+code as shipped, and probcli returns a counterexample to it.
+
+\begin{zed}
+  ReqOutcome ::= reqOk | reqTimeout
+\end{zed}
+
+The outcome of a JetStream or KV request issued on a $connected$
+connection.  $reqOk$ is a normal response.  $reqTimeout$ is a
+\texttt{nats.errors.TimeoutError}: the request was sent but no
+reply arrived within the deadline, which is the observable
+signature of a half-open connection.
+
+\begin{zed}
+  WatcherPhase ::= idle | snapshotting | streaming | stopped
+\end{zed}
+
+The KV watcher progresses through phases: $idle$ (not yet started),
+$snapshotting$ (receiving the initial KV snapshot), $streaming$
+(receiving live updates post-snapshot), and $stopped$ (shutdown
+complete).
+
+\begin{zed}
+  KVOp ::= kvPut | kvDelete | kvPurge
+\end{zed}
+
+Operations observed on KV entries.  $kvPut$ stores or updates a
+value.  $kvDelete$ and $kvPurge$ remove entries (TTL expiry
+produces $kvDelete$).
+
+\begin{zed}
+  WatcherEvent ::=
+  weEntry | weSnapshotDone | weTimeout | weError | weShutdown
+\end{zed}
+
+Events that the KV watcher loop must handle.  $weEntry$ is a KV
+change.  $weSnapshotDone$ is the $None$ marker from
+\texttt{watcher.updates()}.  $weTimeout$ is a
+\texttt{TimeoutError} from idle periods.  $weError$ is an
+unrecoverable NATS error.  $weShutdown$ is the shutdown signal.
+
+%%----------------------------------------------------------------------
+\section{Global Constants}
+%%----------------------------------------------------------------------
+
+\begin{axdef}
+  kvTtlSeconds : \nat \\
+  watcherTimeoutSeconds : \nat \\
+  maxSessions : \nat \\
+  restartDelaySeconds : \nat \\
+  maxGeneration : \nat \\
+  maxEpoch : \nat \\
+  maxRestarts : \nat
+  \where
+  kvTtlSeconds = 259200 \\
+  watcherTimeoutSeconds = 5 \\
+  maxSessions = 1000 \\
+  restartDelaySeconds = 2 \\
+  maxGeneration = 3 \\
+  maxEpoch = 2 \\
+  maxRestarts = 2
+\end{axdef}
+
+$kvTtlSeconds$ is the NATS KV TTL (3 days).
+$watcherTimeoutSeconds$ is the \texttt{updates()} timeout that
+keeps the shutdown check responsive.  $maxSessions$ bounds the
+model for animation.  $maxGeneration$ bounds the per-dial
+generation counter (below) so the reachable state space stays
+finite; three is enough to exhibit a superseded generation
+alongside the live one.  $maxEpoch$ bounds the per-client
+\emph{in-place reconnect} counter $reconnectEpoch$ (below), which
+counts nats-py's transparent same-object reconnects rather than
+fresh dials; two is enough to exhibit a reconnect that completes
+\emph{after} a force-reconnect gate has observed the pre-reconnect
+value (gate epoch $0$, $reconnectEpoch = 1$), which is the whole
+of the biff-xko race.  $maxRestarts$ bounds the watcher's supervisor
+restart counter for the same finiteness reason; two restarts exhibit a
+watcher that has been rebound more than once.
+
+%%----------------------------------------------------------------------
+\section{Connection State}
+%%----------------------------------------------------------------------
+
+\begin{schema}{Connection}
+  connState : ConnState \\
+  kvProvisioned : ZBOOL \\
+  streamsProvisioned : ZBOOL \\
+  namesProvisioned : ZBOOL \\
+  wtmpAvailable : ZBOOL \\
+  generation : \nat \\
+  subGen : SubKind \fun \nat \\
+  reconnectEpoch : \nat \\
+  spuriousTeardown : ZBOOL \\
+  epochPending : ZBOOL
+  \where
+  connState \neq connected \implies
+  kvProvisioned = zfalse \land
+  streamsProvisioned = zfalse \land
+  namesProvisioned = zfalse \\
+  connState = connected \implies
+  kvProvisioned = ztrue \land
+  streamsProvisioned = ztrue \land
+  namesProvisioned = ztrue \\
+  connState \in \{ connected, reconnecting, halfOpen \} \implies
+  generation \geq 1 \\
+  generation \leq maxGeneration \\
+  ( \forall k : SubKind @ subGen(k) \leq generation ) \\
+  reconnectEpoch \leq maxEpoch \\
+  epochPending = ztrue \implies
+  connState \in \{ connected, disconnected \}
+\end{schema}
+
+This is the generalised handle-validity invariant: valid
+JetStream, sessions-KV, and names-KV handles exist \emph{if and
+only if} the connection is $connected$.  In particular they do
+not exist in $halfOpen$ --- the stale handles cached during the
+wedge are, in the model, no handles at all.  This generalises the
+earlier ``$disconnected$ or $closed \implies$ no handles'' (DES-029)
+to cover $reconnecting$ and $halfOpen$ as well.  It is the
+formal statement that a half-open connection must never be treated
+as usable: the biff-tww crash-loop arose precisely because the code
+kept and re-used handles that this invariant forbids.
+$wtmpAvailable$ degrades independently --- wtmp provisioning
+failure is non-fatal --- and is cleared whenever the handles are.
+
+$generation$ is the formal counterpart of the relay's per-dial
+token \texttt{\_generation}.  Each fresh \texttt{nats.connect}
+(the slow path of \texttt{\_ensure\_connected}, taken when the
+client was dropped) bumps it; nats-py's own in-place reconnect,
+which reuses the same client, does not.  It exists so the model
+can distinguish a request settling on the \emph{current} client
+from one settling on a \emph{superseded} client that a rebuild has
+already replaced --- the race $ForceReconnect$'s identity guard
+must survive.  A settle carries the generation it was issued on;
+comparing that to $generation$ is the model's \texttt{self.\_nc is
+owner} check.  It is bounded by $maxGeneration$ so the state space
+stays finite.
+
+The added invariant $connState \in \{ connected, reconnecting,
+halfOpen \} \implies generation \geq 1$ (equivalently $generation =
+0 \implies connState \in \{ disconnected, closed \}$) makes
+machine-checked the fact that reaching a live or recovering state
+requires at least one dial.  It holds by induction --- $generation$
+starts at $0$ in $disconnected$ and the only path to $connected$ is
+$EnsureConnected$ from $disconnected$, which bumps it to at least
+$1$ --- but stating it as an invariant makes machine-checked the one
+fact $StaleRequestTimeout$ needs: a live state has $generation \geq 1$,
+so a strictly-smaller $owner?$ value exists.  It does \emph{not} prove
+that a genuinely-superseded live generation was ever issued --- $owner?$
+is a free $\nat$ the model never ties to an actually-dialled generation,
+so the precondition $owner? < generation$ can name a value that was never
+live.  This is sound only because $StaleRequestTimeout$ is a $\Xi$ no-op
+on connection state: a stale settle changes nothing, so a spurious
+$owner?$ cannot corrupt anything.  The invariant also guards against a
+future edit that reaches $connected$ without a dial.
+
+$subGen$ is a total function recording, for each kind of always-on
+core-NATS subscription, the generation it is currently bound to.  For each
+$k : SubKind$ the relay opens one long-lived SUB (the talk inbox for
+$talk$, biff-9la; the broadcast inbox-notify subject for $inboxNotify$,
+biff-5ex) and holds it for the life of the process; a core-NATS
+subscription is bound to the \emph{particular} client that created it, and
+so it dies with that client.  A value $subGen(k) = 0$ means no SUB of kind
+$k$ has been established on any dial --- the initial state, and the
+window between a fresh connect and the poller's first subscribe of that
+kind.  A value $subGen(k) = g \geq 1$ means the live SUB of kind $k$ was
+subscribed on the client of generation $g$.  The subscription of kind $k$
+is \emph{current} exactly when $subGen(k) = generation$ and
+\emph{stranded} --- bound to a client the rebuild has already replaced, so
+no message of that kind will ever arrive --- when $subGen(k) <
+generation$.  The invariant $\forall k : SubKind @ subGen(k) \leq
+generation$ records the one thing that can never happen for any kind: a
+SUB cannot be bound to a client that was never dialled.  It is the exact
+analogue of the handle-provisioned flags, but where those are cleared and
+re-established on \emph{every} reconnect, each kind's SUB is preserved
+across nats-py's in-place reconnect (same client, $generation$ unchanged,
+SUBs replayed) and re-established only when a fresh dial advances
+$generation$ past $subGen(k)$.  This is the distinction the biff-9la bug
+missed for $talk$, and the distinction biff-5ex's $inboxNotify$ binding
+must not miss either: a force-reconnect (biff-3hp) replaces the client and
+orphans \emph{every} kind's SUB in one step, and unless the poller
+re-subscribes each stranded kind on the new generation, that kind's
+notifications die silently for the rest of the session.  The stranded
+state $connState = connected \land subGen(k) < generation$ is reachable
+and legal for any $k$ --- it is the transient window before the poller
+ticks --- so the property that forbids the bug is not a state invariant
+but the liveness obligation, quantified over the family, that every
+kind's stranding is always eventually lifted (\S\ref{sec:modelcheck}).
+
+$reconnectEpoch$ is the resource $generation$ deliberately does not
+count: nats-py's \emph{transparent, same-object} reconnect.  When the
+keepalive loop declares a socket dead and its background reconnect
+succeeds, nats-py fires \texttt{\_on\_reconnect} on the \emph{same}
+\texttt{Client} object --- no new \texttt{nats.connect}, so $generation$
+is unchanged --- and replays the client's subscriptions.  Each such
+completion advances $reconnectEpoch$ (saturating at $maxEpoch$).  It is
+reset to $0$ whenever the client is discarded: on a fresh dial, on
+$Disconnect$, on $Close$, and on the force-reconnect teardown.  The pair
+$(generation, reconnectEpoch)$ is thus the model's complete identity of
+the live transport: $generation$ changes exactly on a new dial,
+$reconnectEpoch$ exactly on an in-place reconnect, and the two never
+change together.  This is the distinction \texttt{is\_connected} cannot
+draw and the whole of what the biff-xko fix turns on.
+
+An earlier version of this specification pinned the reset with the state
+invariant $connState \in \{ disconnected, closed \} \implies
+reconnectEpoch = 0$: a counter of reconnects on the current client is
+meaningless once there is no current client.  That invariant is
+\emph{false} of the code, and the correction is the subject of
+\S\ref{sec:flushwindow}.  nats-py's in-place reconnect is not atomic in
+$(connState, reconnectEpoch)$.  It sets the socket status to $connected$,
+then performs a network flush, and only \emph{afterwards} fires
+\texttt{\_on\_reconnect} --- the callback in which the relay executes
+\texttt{self.\_reconnect\_epoch += 1}.  A scheduled force-teardown can
+run in that flush window, discard the client (resetting the epoch to
+$0$), and then have the deferred \texttt{\_on\_reconnect} land on the
+already-reset counter, leaving $reconnectEpoch = 1$ while $connState =
+disconnected$ and the client is $None$: exactly the state the old
+invariant forbids.  The reset is therefore not a global always-property
+but an \emph{eventually}-true recovery property --- the next dial resets
+the epoch --- proved as a $CTL$ formula in \S\ref{sec:modelcheck} rather
+than asserted over every state.
+
+$epochPending$ is the state that makes the flush window visible.  It is
+$ztrue$ from the moment nats-py's reconnect brings the socket up
+($ReconnectSocketUp$: $connState = connected$, but $reconnectEpoch$ not
+yet advanced) until the deferred \texttt{\_on\_reconnect} lands and bumps
+the epoch ($ReconnectEpochObserved$).  It is the model's record of a
+transparent reconnect that has \emph{completed at the socket} but has
+\emph{not yet been observed} through the epoch --- the one thing the
+under-lock re-check cannot know, because \texttt{is\_connected} is $ztrue$
+throughout it and $reconnectEpoch$ has not moved.  While it is set, the
+epoch guard $gateEpoch? < reconnectEpoch$ is \emph{false} (the epoch still
+equals the gate's), so the re-check does not skip: it tears the
+freshly-healed client down.  The invariant $epochPending = ztrue \implies
+connState \in \{ connected, disconnected \}$ records that a pending epoch
+observation exists only where a client (or its just-discarded remains)
+does: in the flush window itself ($connected$) or in the brief interval
+after a flush-window teardown but before the deferred bump lands and the
+next dial supersedes it ($disconnected$).
+
+The force-reconnect decision itself --- the \emph{gate} ---
+is not carried in the state.  The relay's \texttt{\_tracked} wrapper,
+after three consecutive request timeouts on a still-\texttt{is\_connected}
+socket, decides to force-reconnect and schedules
+\texttt{\_force\_reconnect}; only later does that coroutine take the
+connection lock and re-check before tearing the client down.  Between
+the decision and the teardown an arbitrary interleaving is possible ---
+and that window is the biff-xko race.  Following the treatment of the
+DES-042 identity guard already in this model, the value the gate
+\emph{observed} is modelled not as a stored flag but as the input
+$gateEpoch?$ of the re-check operation $StaleForceTeardown$ below,
+exactly as $StaleRequestTimeout$ carries the superseded generation as
+the input $owner?$ rather than as connection state.  The gate is a
+latency parameter of the detector, recorded in prose as
+\texttt{ping\_interval} and the three-timeout threshold are; what the
+model must make checkable is only the \emph{comparison} the under-lock
+re-check performs, and that comparison lives in the guard of the
+re-check, against the input the gate supplied.
+
+$spuriousTeardown$ is not relay state but a \emph{ghost observer}.  It
+starts $zfalse$, every genuine transport operation preserves it, and it
+is flipped to $ztrue$ only by a re-check that tears down a client which
+has \emph{detectably} reconnected since the gate --- exactly the
+biff-xko event: an unnecessary teardown of a freshly-healthy connection.
+Deliberately it is \emph{not} pinned by the state invariant; it is a
+free boolean the model-checker carries so that the safety property can
+be stated over reachable states as the temporal formula
+$AG\,(spuriousTeardown = zfalse)$ (\S\ref{sec:modelcheck}), rather than
+as a latch invariant.  A latch invariant would be unsound against the
+constraint-based deadlock check, which explores invariant-violating
+candidate states and would read a pinned-but-set observer as a dead
+sink; a $CTL$ property over reachable states has no such hazard.  In the
+shipped model no operation can flip the observer --- the re-check
+($StaleForceTeardown$) is a $\Xi$ no-op --- so $AG\,(spuriousTeardown =
+zfalse)$ is $TRUE$.  In the frozen pre-fix variant
+\texttt{nats-relay-xko-isconnected.tex}, whose re-check reads only
+\texttt{is\_connected} and tears the healed client down, the observer is
+flipped and probcli returns the flip as the counterexample.  The
+observer is not idle scaffolding: it is the only way to distinguish a
+legitimate force-reconnect of a genuinely wedged client, which also
+lands in $disconnected$, from the spurious teardown of a healed one,
+since the two share an after-state and differ only in the transition
+that reached it.
+
+%%----------------------------------------------------------------------
+\section{Connection Operations}
+%%----------------------------------------------------------------------
+
+\subsection{Ensure Connected (Lazy Connect)}
+
+\begin{schema}{EnsureConnected}
+  \Delta Connection
+  \where
+  connState = disconnected \lor connState = connected \\
+  connState' = connected \\
+  kvProvisioned' = ztrue \\
+  streamsProvisioned' = ztrue \\
+  namesProvisioned' = ztrue \\
+  wtmpAvailable' = wtmpAvailable \\
+  ( connState = disconnected \land
+    ( ( generation < maxGeneration \land
+        generation' = generation + 1 ) \lor
+      ( generation = maxGeneration \land
+        generation' = generation ) ) \land
+    reconnectEpoch' = 0 \land epochPending' = zfalse ) \lor \\
+  ( connState = connected \land generation' = generation \land
+    reconnectEpoch' = reconnectEpoch \land epochPending' = epochPending ) \\
+  subGen' = subGen \\
+  spuriousTeardown' = spuriousTeardown
+\end{schema}
+
+The relay's lazy connect (\texttt{\_ensure\_connected}).  It is
+enabled only from $disconnected$ (a fresh connect) or $connected$
+(idempotent no-op).  The fresh connect from $disconnected$ dials a
+new client and so bumps $generation$ (saturating at
+$maxGeneration$ to keep the model finite); the idempotent no-op
+from $connected$ reuses the live client and leaves $generation$
+unchanged.  It is \emph{not} enabled from $halfOpen$:
+this is the formal counterpart of the DES-029 bug.  The fast path
+sees \texttt{is\_closed} false and returns the stale cached
+handles without reconnecting, so $EnsureConnected$ makes no
+progress out of the wedge and must not be modelled as if it did.
+Nor is it enabled from $reconnecting$ (nats-py owns that window;
+provisioning would block until reconnect completes, bounded by
+\texttt{\_CONNECT\_PROVISION\_TIMEOUT}, biff-wr3) or from $closed$
+(no reconnection after close).  The fresh dial resets $reconnectEpoch$
+to $0$ (the relay's \texttt{self.\_reconnect\_epoch = 0} in
+\texttt{\_open\_connection}): the new client has undergone no in-place
+reconnects, and this is the transition that heals the transient
+$reconnectEpoch > 0$ state a flush-window teardown can leave behind
+(\S\ref{sec:flushwindow}); it also clears $epochPending$, since a fresh
+dial bumps $generation$ and so supersedes any deferred
+\texttt{\_on\_reconnect} bound to the discarded client.  The idempotent
+no-op from $connected$ preserves both.  $wtmpAvailable$ is preserved ---
+it only changes during provisioning.  $subGen$ is likewise preserved
+entire, for every kind: dialling a fresh client bumps $generation$ but does
+\emph{not} re-open any always-on SUB.  This is deliberate, and it is where
+the stranding becomes observable.  When the slow path fires from
+$disconnected$, $generation$ advances while every $subGen(k)$ stays on the
+old value, so the post-connect state is $connState = connected$ with
+$subGen(k) < generation$ for every $k$ --- a live connection whose talk
+\emph{and} inbox-notify SUBs are both bound to the client that was just
+discarded.  Re-establishing a SUB is not the connect's job but the
+poller's, modelled by $Subscribe$ below; the model thus separates ``the
+client came back'' from ``kind $k$'s SUB was rebound to it,'' which is
+exactly the separation the biff-9la bug elided for $talk$, and which
+biff-5ex's $inboxNotify$ inherits by construction rather than by a second,
+hand-written proof.
+
+\subsection{Disconnect (Reversible)}
+
+\begin{schema}{Disconnect}
+  \Delta Connection
+  \where
+  connState = connected \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = zfalse
+\end{schema}
+
+The relay's explicit, reversible \texttt{disconnect()}: it acts
+on a healthy $connected$ connection and releases it.  The next
+relay call reconnects via $EnsureConnected$.  It is deliberately
+\emph{not} the escape from $halfOpen$ --- the running server does
+not autonomously call \texttt{disconnect()} while wedged.  The
+wedge is left only by autonomous detection: the keepalive path
+($WedgeDetected$) or the proactive force-close ($ForceReconnect$),
+never by an ordinary \texttt{disconnect()}.  Note, however, that
+$disconnected$ is the state $ForceReconnect$ moves \emph{to}: a
+force-closed socket with its client dropped is, like a deliberate
+\texttt{disconnect()}, a connection whose next call must dial
+afresh.
+
+\subsection{Close (Permanent)}
+
+\begin{schema}{Close}
+  \Delta Connection
+  \where
+  connState \neq halfOpen \\
+  connState' = closed \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = zfalse
+\end{schema}
+
+Permanent shutdown, reachable from any \emph{definite} transport
+state.  The precondition $connState \neq halfOpen$ records a
+modelling decision that is load-bearing for the liveness proof:
+an orderly close cannot be the escape from the wedge.  In the
+biff-tww crash-loop the server never reaches an orderly
+\texttt{close()} --- it is blocked awaiting a request that will
+never return --- so $halfOpen$ must be escaped by autonomous
+wedge detection, not by $Close$.  From $closed$ the operation is
+an idempotent self-loop, which keeps $closed$ deadlock-free.
+
+\subsection{Reset Infrastructure}
+
+\begin{schema}{ResetInfrastructure}
+  \Delta Connection
+  \where
+  connState \neq halfOpen \\
+  connState' = connState \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = reconnectEpoch \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = epochPending
+\end{schema}
+
+Clears cached handles without changing the transport state
+(\texttt{reset\_infrastructure()}).  By the handle-validity
+invariant, $connState' = connState$ together with cleared handles
+forces $connState \neq connected$; the operation is therefore a
+self-loop at $disconnected$, $reconnecting$, and $closed$, where
+the handles are already absent.  It is excluded from $halfOpen$
+for the same reason as $Close$: clearing a cached handle does not
+lift the wedge (the socket is still up and still unresponsive),
+so it must not be modelled as an escape.
+
+\subsection{Request (JetStream / KV Round-Trip)}
+
+\begin{schema}{Request}
+  \Delta Connection \\
+  result! : ReqOutcome
+  \where
+  connState = connected \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = reconnectEpoch \\
+  spuriousTeardown' = spuriousTeardown \\
+  ( result! = reqOk \land
+    connState' = connected \land
+    kvProvisioned' = ztrue \land
+    streamsProvisioned' = ztrue \land
+    namesProvisioned' = ztrue \land
+    wtmpAvailable' = wtmpAvailable \land
+    epochPending' = epochPending ) \\
+  \lor \\
+  ( result! = reqTimeout \land
+    connState' = halfOpen \land
+    kvProvisioned' = zfalse \land
+    streamsProvisioned' = zfalse \land
+    namesProvisioned' = zfalse \land
+    wtmpAvailable' = zfalse \land
+    epochPending' = zfalse )
+\end{schema}
+
+Every JetStream or KV round-trip issued \emph{and settled} on the
+current client --- \texttt{stream\_info} in
+\texttt{get\_unread\_summary}, \texttt{kv.get} in
+\texttt{heartbeat}, and the like.  From $connected$ it has two
+outcomes.  $reqOk$ leaves the connection $connected$ with its
+handles intact.  $reqTimeout$ is the half-open signature: the
+request timed out, the connection moves to $halfOpen$, and the
+handles are invalidated to satisfy the handle-validity invariant.
+This is the operation that makes $halfOpen$ reachable, and the
+crash-loop of biff-tww is exactly $reqTimeout$ fired repeatedly
+with no way out.
+
+Because $Request$ both issues and settles on the current client,
+its $reqTimeout$ is the \emph{current-generation} timeout ---
+$\texttt{self.\_nc is owner}$ holds --- so it legitimately drives
+the wedge.  The distinct case where the client was replaced
+between issue and settle is $StaleRequestTimeout$ below, which does
+\emph{not} drive the wedge.  $generation$ is preserved either way:
+a round-trip never dials a new client.
+
+$epochPending$ is preserved on $reqOk$ (a healthy round-trip, whether or
+not the connection is mid-flush-window) and cleared on $reqTimeout$.  The
+clear is what keeps the flush window from leaking into the wedge: a fresh
+timeout drives $connected \to halfOpen$, a new wedge episode whose
+recovery is a new reconnect cycle, so any epoch observation still pending
+from the \emph{previous} reconnect is scoped out here.  Because
+$reqTimeout$ is the only edge into $halfOpen$, this clear is exactly what
+makes $halfOpen$ --- and hence $reconnecting$, reached only from
+$halfOpen$ by $WedgeDetected$ --- always carry $epochPending = zfalse$,
+which is the precondition $ReconnectSocketUp$ relies on to be enabled.
+
+\subsection{Wedge Detected (Recovery)}
+
+\begin{schema}{WedgeDetected}
+  \Delta Connection
+  \where
+  connState = halfOpen \\
+  connState' = reconnecting \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = reconnectEpoch \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = zfalse
+\end{schema}
+
+The keepalive-driven recovery transition.
+Keepalive PINGs (\texttt{ping\_interval=20}, \texttt{max\_outstanding\_pings=3})
+detect that the server has stopped answering within
+$\sim$60\,s and fire nats-py's \texttt{\_on\_disconnect}, which
+invalidates the cached handles and hands the socket to nats-py's
+infinite reconnect loop.  Before the proactive detector this was
+the \emph{only} operation enabled in $halfOpen$; removing it (the
+pre-fix code, whose \texttt{ping\_interval} default of 240\,s never
+fired in practice) made $halfOpen$ a terminal state, and probcli
+surfaced that terminal state --- biff-tww --- as a reachable
+deadlock (the frozen \texttt{nats-relay-passA-nowedge} artifacts).
+$ForceReconnect$ (below) now adds a second, faster escape from the
+same state; with either operation present, $halfOpen$ is
+deadlock-free.
+
+\subsection{Reconnect Socket Up (nats-py Reconnect Reaches CONNECTED)}
+\label{sec:flushwindow}
+
+nats-py's transparent reconnect is not a single step.  In
+\texttt{nats/aio/client.py} the reconnect coroutine sets
+\texttt{self.\_status = CONNECTED} (the socket is up,
+\texttt{is\_connected} becomes $ztrue$), then \texttt{await
+self.flush()} --- a network round-trip --- and only afterwards fires
+\texttt{reconnected\_cb}, the relay's \texttt{\_on\_reconnect}, in which
+\texttt{self.\_reconnect\_epoch += 1} runs.  The socket coming up and the
+epoch advancing are therefore \emph{two} steps with an \texttt{await}
+between them, and an arbitrary interleaving is possible in the flush
+window.  The earlier model collapsed both into one atomic $Reconnect$;
+that atomicity is exactly the divergence this section corrects.  The
+completion is split into $ReconnectSocketUp$ (the socket reaches
+$connected$, epoch unchanged, observation pending) and
+$ReconnectEpochObserved$ (the deferred \texttt{\_on\_reconnect} lands and
+advances the epoch).  A force-teardown may interleave between them.
+
+\begin{schema}{ReconnectSocketUp}
+  \Delta Connection
+  \where
+  connState = reconnecting \\
+  epochPending = zfalse \\
+  connState' = connected \\
+  kvProvisioned' = ztrue \\
+  streamsProvisioned' = ztrue \\
+  namesProvisioned' = ztrue \\
+  wtmpAvailable' = wtmpAvailable \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = reconnectEpoch \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = ztrue
+\end{schema}
+
+nats-py brings the socket back up on the \emph{same} client and sets its
+status to CONNECTED; the next relay call re-provisions the handles.
+$generation$ is unchanged --- no new \texttt{nats.connect} --- so the
+per-dial token does not advance.  Crucially $reconnectEpoch$ is
+\emph{also} unchanged: the epoch bump lives in
+\texttt{\_on\_reconnect}, which has not yet fired.  The step records that
+fact by setting $epochPending' = ztrue$.  This closes the socket half of
+the recovery path $connected \to halfOpen \to reconnecting \to
+connected$, so no reachable state is stuck in $halfOpen$; the epoch half
+follows in $ReconnectEpochObserved$.  The precondition $epochPending =
+zfalse$ is discharged for free: $reconnecting$ is entered only by
+$WedgeDetected$ from $halfOpen$, and $halfOpen$ always carries
+$epochPending = zfalse$ (the $Request(reqTimeout)$ edge that is its only
+entry clears it), so the step is always enabled in $reconnecting$ and
+$reconnecting$ never deadlocks.
+
+$subGen$ is preserved entire: every kind's SUB was created on this very
+client, and nats-py replays all of them on reconnect.  Because $generation$
+is unchanged, a SUB of any kind $k$ that was current before the wedge
+($subGen(k) = generation$) is current after it, with no re-subscribe
+required.  This is the load-bearing contrast with $ForceReconnect$: the
+keepalive path keeps the client, so every kind's SUB survives; the
+force-close path discards it, so every kind's SUB must be rebuilt.
+
+\subsection{Reconnect Epoch Observed (Deferred \texttt{\_on\_reconnect}
+Lands)}
+
+\begin{schema}{ReconnectEpochObserved}
+  \Delta Connection
+  \where
+  epochPending = ztrue \\
+  connState \in \{ connected, disconnected \} \\
+  connState' = connState \\
+  kvProvisioned' = kvProvisioned \\
+  streamsProvisioned' = streamsProvisioned \\
+  namesProvisioned' = namesProvisioned \\
+  wtmpAvailable' = wtmpAvailable \\
+  generation' = generation \\
+  subGen' = subGen \\
+  ( ( reconnectEpoch < maxEpoch \land
+      reconnectEpoch' = reconnectEpoch + 1 ) \lor
+    ( reconnectEpoch = maxEpoch \land
+      reconnectEpoch' = reconnectEpoch ) ) \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = zfalse
+\end{schema}
+
+The deferred \texttt{\_on\_reconnect} fires and runs
+\texttt{self.\_reconnect\_epoch += 1} (saturating at $maxEpoch$),
+clearing the pending observation.  This is the single most important
+transition for biff-xko: it is the model's record that a transparent
+same-object reconnect has been \emph{observed}.  Because $generation$ is
+fixed while $reconnectEpoch$ ticks, a force-reconnect whose gate fired
+before it --- observing the pre-reconnect epoch $gateEpoch?$ --- can now
+determine, under its lock, that $gateEpoch? < reconnectEpoch$: the wedge
+it was dispatched to tear down has already healed.  This is the
+observation \texttt{is\_connected} cannot make, because
+\texttt{is\_connected} is $ztrue$ across the whole window; the epoch
+separates healed from wedged, \texttt{is\_connected} conflates them.
+
+The operation is enabled from $connected$ \emph{and} from $disconnected$,
+and the second case is the crux of the divergence.  The normal
+completion is from $connected$: the flush window resolves with the client
+still live, the epoch advances to $1$, and the connection is fully
+healed.  But if a $FlushWindowForceTeardown$ (below) has already fired
+--- discarding the client, dropping to $disconnected$, and resetting the
+epoch to $0$ --- the deferred \texttt{\_on\_reconnect}, still bound to the
+un-superseded $generation$, lands \emph{after} the teardown and bumps the
+reset counter to $reconnectEpoch = 1$ while $connState = disconnected$.
+That is the state the old always-invariant $connState \in \{
+disconnected, closed \} \implies reconnectEpoch = 0$ declared impossible,
+and it is genuinely reachable in the code (\texttt{\_force\_reconnect}
+resets the epoch to $0$; the late \texttt{\_on\_reconnect} increments it).
+The model states it honestly; the recovery property in
+\S\ref{sec:modelcheck} proves it transient --- the next $EnsureConnected$
+dial resets the epoch and re-supersedes the callback.
+
+\subsection{Force Reconnect (Proactive Wedge Teardown)}
+
+\begin{schema}{ForceReconnect}
+  \Delta Connection
+  \where
+  connState = halfOpen \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = zfalse
+\end{schema}
+
+The proactive escape from the wedge (\texttt{\_force\_reconnect},
+biff-3hp), and the outcome of an under-lock re-check that finds the
+client \emph{still wedged}.  Where $WedgeDetected$ waits for nats-py's
+keepalive to declare the socket dead --- a $\sim$60--80\,s floor ---
+this operation acts on the relay's own evidence: after
+\texttt{\_WEDGE\_FORCE\_RECONNECT\_THRESHOLD} $= 3$ consecutive runtime
+request timeouts on a still-\texttt{is\_connected} socket,
+\texttt{\_tracked} schedules \texttt{\_force\_reconnect}, which takes the
+lock, confirms the client is the same wedged one (no reconnect has
+intervened --- the condition made precise in $StaleForceTeardown$
+below), calls \texttt{safe\_close(nc)}, and drops the client.  Each
+timed-out request blocks $\sim$5\,s, so the bound is $3 \times
+5\,\mathrm{s} \approx 15\,$s --- four to five times faster than the
+keepalive path.  It is modelled atomically because the still-wedged case
+has no interesting intermediate state: the socket the gate condemned is
+the socket under the lock.  Enabled unconditionally from $halfOpen$, it
+is also the second escape from the wedge (with $WedgeDetected$), so
+$halfOpen$ is never terminal.
+
+The target is $disconnected$, not $reconnecting$ --- the load-bearing
+distinction between the two escapes.  $WedgeDetected$ leaves the
+\emph{same} client in nats-py's hands and recovers through
+$reconnecting$ by $Reconnect$; $ForceReconnect$ discards the client
+entirely, so there is no socket for nats-py to reconnect and recovery is
+the existing lazy connect from $disconnected$.  The full proactive path
+is $connected \to halfOpen \to disconnected \to connected$, closed by
+operations the model already contains.  $reconnectEpoch$ is reset to $0$
+--- the discarded client's in-place reconnect count dies with it --- and
+the three-consecutive-timeout threshold is not modelled as a counter,
+for the same symmetry reason the keepalive's three-missed-PING criterion
+is abstracted into the single enabling of $WedgeDetected$: it is a
+latency parameter of the detector, not a component of $Connection$.
+
+No kind's SUB survives it, and for $talk$ this is the crux of biff-9la.
+\texttt{safe\_close(nc)} tears down the client on which \emph{every}
+always-on subscription was opened, so every SUB is dead --- $talk$ and
+$inboxNotify$ alike, since $ForceReconnect$ has no way to close one
+without the other; they share the client.  Yet $ForceReconnect$ leaves
+$subGen$ unchanged --- and rightly so: $generation$ has not advanced yet
+(it advances only on the subsequent $EnsureConnected$ dial), so
+$subGen(k) = generation$ still holds for every $k$ and no kind's SUB is
+yet formally stranded.  The stranding crystallises one step later, when
+$EnsureConnected$ dials the replacement client and bumps $generation$ past
+every $subGen(k)$; only $Subscribe$, ticked once per stranded kind,
+repairs it.  A code path that stops after $EnsureConnected$ --- restoring
+JetStream and KV but never re-opening a kind's SUB --- is precisely the
+biff-9la defect for $talk$, and the same failure mode biff-5ex must avoid
+for $inboxNotify$: presence and wall recover, the SUB's own inbox does
+not.
+
+\subsection{Wedge-Detection Cadence Dependency (biff-5ex, Timing
+Prerequisite)}
+\label{sec:cadence}
+
+The two escapes from $halfOpen$ are not equally fast, and the CTL
+properties of \S\ref{sec:modelcheck} do not --- cannot, being untimed ---
+say so: $WedgeDetected$ waits on nats-py's keepalive, a $\sim$60--80\,s
+floor, while $ForceReconnect$ acts after three consecutive
+\texttt{\_tracked} request timeouts, $\sim$15\,s at the $\sim$5\,s
+JetStream timeout.  That 4--5$\times$ advantage is real only if something
+keeps feeding \texttt{\_tracked} while the connection is otherwise idle:
+the three consecutive timeouts the gate counts must actually occur inside
+one keepalive window, which requires \emph{some} periodic
+\texttt{\_tracked}-wrapped request to fire at a cadence no coarser than
+the keepalive floor.  Today that source is the poller's tick loop, which
+issues a \texttt{get\_wall()} round-trip every \texttt{poll\_interval}
+(active) or \texttt{nap\_interval} (napping) regardless of whether wall's
+content changed, because the countdown text must keep re-rendering.  This
+is a normative dependency, not an incidental one: \textbf{some periodic
+\texttt{\_tracked} request source must run at a cadence no coarser than
+the relay's poll interval for $ForceReconnect$ to retain its speed
+advantage over $WedgeDetected$}; remove the last such source without
+replacing it and the proactive detector degrades to the keepalive floor or
+worse, inverting the ordering \S\ref{sec:modelcheck}'s wedge-liveness
+property was written to describe.  biff-5ex's push design
+(\texttt{docs/design-nats-push.md}, \S3) identifies exactly this risk when
+it proposes removing the unread-count poll from the tick loop, and
+resolves it by retaining the wall-countdown tick as the surviving cadence
+source rather than removing the tick loop outright.  The dependency is
+recorded here as prose because it is a real-time property of an untimed
+model: $\S\ref{sec:modelcheck}$'s $AG(connState = halfOpen \Rightarrow
+EF\,connState = disconnected)$ proves $ForceReconnect$ and $WedgeDetected$
+both \emph{eventually} fire, and continues to hold with or without a
+surviving cadence source; it says nothing, and by construction cannot say
+anything, about which of the two fires \emph{first}.  A timed CTL
+extension (real-time model checking, or an explicit tick-count bound) could
+make the cadence dependency machine-checked rather than merely recorded,
+but that is disproportionate to what closing this dependency needs and is
+left as a future refinement, not required here.
+
+\subsection{Stale Force Teardown (Under-Lock Re-check After Transparent
+Reconnect)}
+
+\begin{schema}{StaleForceTeardown}
+  \Xi Connection \\
+  gateEpoch? : \nat
+  \where
+  connState = connected \\
+  gateEpoch? < reconnectEpoch
+\end{schema}
+
+This is the biff-xko fix, and it is the exact analogue of
+$StaleRequestTimeout$: where that guards the \emph{redial} race (a
+settle on a superseded \emph{generation}), this guards the
+\emph{transparent-reconnect} race (a scheduled teardown on a superseded
+\emph{epoch}).  The scenario is the DES-042 lineage carried one step
+further.  \texttt{\_tracked} decided to force-reconnect a wedged client
+and captured, at that gate, the client's in-place reconnect count ---
+modelled, exactly as $StaleRequestTimeout$ models $owner?$, as the input
+$gateEpoch?$ rather than as stored state.  Between the gate and the lock
+nats-py's keepalive completed a transparent reconnect on the \emph{same}
+client: $Request(reqTimeout) \to WedgeDetected \to ReconnectSocketUp \to
+ReconnectEpochObserved$ carried the connection $connected \to halfOpen
+\to reconnecting \to connected$ and, at $ReconnectEpochObserved$, advanced
+$reconnectEpoch$ past the value the gate saw.  When
+\texttt{\_force\_reconnect} finally takes the lock, the socket it was
+dispatched to tear down is healthy again --- and, because the epoch has
+been \emph{observed}, this operation ($StaleForceTeardown$) skips.  Had
+the lock been taken one step earlier, in the flush window before
+$ReconnectEpochObserved$, the epoch would still equal the gate's and the
+teardown would proceed: that earlier interleaving is
+$FlushWindowForceTeardown$.
+
+The guard $gateEpoch? < reconnectEpoch$ is precisely
+\texttt{self.\_reconnect\_epoch != gate\_epoch} on the same client
+object: the reconnect count the lock-holder reads has moved past the one
+the gate captured, so a transparent reconnect has intervened.  The
+operation is a $\Xi Connection$ --- it changes \emph{nothing} --- and
+that is the whole of the fix.  The correct behaviour on discovering that
+the client has already healed is to \emph{skip the teardown}: leave the
+healthy connection exactly as it is.  Modelling the stale re-check as a
+no-op from $connected$ makes machine-checked the safety property that
+the live connection is invariant under it --- a scheduled force-reconnect
+that lands after a transparent reconnect \emph{that has been observed}
+cannot move the healthy client to $disconnected$.  The qualification
+``observed'' is essential and is the whole subject of
+\S\ref{sec:flushwindow}: the guard $gateEpoch? < reconnectEpoch$ can only
+recognise a reconnect whose epoch bump has already landed.  A reconnect
+that has brought the socket up but whose \texttt{\_on\_reconnect} has not
+yet fired ($epochPending = ztrue$, $reconnectEpoch$ still equal to the
+gate's) is \emph{not} recognised, and the teardown proceeds --- that is
+$FlushWindowForceTeardown$ below.  So there are two transitions that
+force-close a client: $ForceReconnect$, from $halfOpen$, a
+\emph{genuinely} wedged connection; and $FlushWindowForceTeardown$, from
+$connected$, a client whose reconnect is real but not yet observable.
+The first is intended.  The second is unavoidable given nats-py's
+non-atomic reconnect --- no epoch guard can skip a bump that has not
+happened --- and the model's task is not to forbid it but to prove it
+benign and self-healing.
+
+The \texttt{is\_connected}-only re-check --- the pre-fix code --- cannot
+make this distinction.  \texttt{is\_connected} is $ztrue$ in both
+$halfOpen$ and $connected$, the same for a still-wedged socket and a
+healed one, so a re-check that reads only \texttt{is\_connected} tears
+the client down regardless, charging a $\sim$20\,ms
+reconnect-and-reprovision to a connection that needed nothing.  That is
+biff-xko.  The frozen variant \texttt{nats-relay-xko-isconnected.tex}
+models exactly that re-check: it turns $StaleForceTeardown$ from a $\Xi$
+no-op into a $\Delta$ teardown ($connected \to disconnected$) that
+flips the observer $spuriousTeardown$, and probcli returns the flip as a
+reachable counterexample (\S\ref{sec:modelcheck}).
+
+The precondition is faithful, not merely convenient.
+$gateEpoch? < reconnectEpoch$ demands $reconnectEpoch \geq 1$, and a
+$connected$ state has $reconnectEpoch \geq 1$ only after a $Reconnect$
+--- an actual transparent reconnect.  A freshly-dialled client has
+$reconnectEpoch = 0$, so $StaleForceTeardown$ cannot fire against it:
+the operation is enabled exactly when a same-object reconnect has really
+occurred since the gate, which is the biff-xko precondition and nothing
+wider.  Like $StaleRequestTimeout$, it is enabled only from $connected$,
+so it adds no transition out of $halfOpen$ (the wedge-liveness proof is
+untouched) and removes none (a $connected$ state has many other enabled
+operations, so no deadlock is introduced).
+
+The exact guard the code must implement, therefore, has two conjuncts
+read under the lock, and $StaleForceTeardown$ together with
+$StaleRequestTimeout$ names both.  Proceed with \texttt{safe\_close}
+only when \emph{(i)} the client object is still identical
+(\texttt{self.\_nc is owner}, the DES-042 guard $StaleRequestTimeout$
+already models on $generation$) \emph{and} \emph{(ii)} the client's
+reconnect epoch still equals the epoch captured at the gate
+(\texttt{self.\_reconnect\_epoch == gate\_epoch}, the new guard this
+operation models).  If \emph{either} has advanced --- a full redial
+bumped the object and \texttt{\_generation}, or a transparent reconnect
+bumped \texttt{\_reconnect\_epoch} on the same object --- the wedge has
+already been resolved and the teardown must be skipped.  Concretely, the
+relay installs an \texttt{\_on\_reconnect} callback that increments
+\texttt{self.\_reconnect\_epoch}; \texttt{\_tracked} records
+\texttt{gate\_epoch = self.\_reconnect\_epoch} (and the client identity)
+when it schedules the teardown; and \texttt{\_force\_reconnect}, under
+the lock, force-closes only if both the identity and the epoch are
+unchanged.  Comparing \texttt{\_reconnect\_epoch} is the field the fix
+adds; it is the one datum \texttt{is\_connected} does not carry.
+
+One subtlety mirrors the $maxGeneration$ note for $StaleRequestTimeout$:
+the $maxEpoch$ saturation clamp is sound only because no stated property
+distinguishes reconnects at or above the clamp.  At saturation two
+distinct in-place reconnects share the same $reconnectEpoch$, so
+$gateEpoch? < reconnectEpoch$ would fail to recognise a reconnect that
+completed once the epoch had already pinned to $maxEpoch$ --- benign
+here, where the counterexample and the proof both live below the clamp
+($gateEpoch? = 0$, $reconnectEpoch = 1$), but load-bearing if the model
+is ever strengthened to tie a scheduled teardown to a specific reconnect
+rather than to a monotone epoch.  The real \texttt{\_reconnect\_epoch}
+is a wide counter that never aliases in practice.
+
+\subsection{Flush Window Force Teardown (Teardown of an Unobserved
+Reconnect)}
+
+\begin{schema}{FlushWindowForceTeardown}
+  \Delta Connection \\
+  gateEpoch? : \nat
+  \where
+  connState = connected \\
+  epochPending = ztrue \\
+  gateEpoch? = reconnectEpoch \\
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = generation \\
+  subGen' = subGen \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = ztrue
+\end{schema}
+
+This is the divergence djb traced in wire review, modelled honestly.
+$StaleForceTeardown$ is the re-check that finds the reconnect
+\emph{observed} ($gateEpoch? < reconnectEpoch$) and skips;
+$FlushWindowForceTeardown$ is the same re-check firing one interleaving
+earlier, in the flush window, where the reconnect has brought the socket
+up ($epochPending = ztrue$) but the epoch bump has not yet landed, so the
+lock-holder reads $reconnectEpoch$ still \emph{equal} to the gate's
+($gateEpoch? = reconnectEpoch$).  The under-lock guard in
+\texttt{\_force\_reconnect} is \texttt{self.\_reconnect\_epoch ==
+gate\_epoch} together with \texttt{is\_connected} true and the same
+client object; in the flush window every conjunct holds --- the socket is
+up, the object is the same, the epoch has not moved --- so the code does
+\emph{not} skip.  It calls \texttt{safe\_close} on a client whose socket
+is healthy.  The precondition $epochPending = ztrue$ is what distinguishes
+this from a freshly-dialled $connected$ client, which also has
+$reconnectEpoch = gateEpoch? = 0$ but against which the gate never fired:
+the flag marks a reconnect that has completed at the socket and is
+awaiting observation, and only such a client can be torn down here.
+
+The effect is the effect of \texttt{\_force\_reconnect}: the client is
+discarded, the connection drops to $disconnected$, the handles are
+cleared, and $reconnectEpoch$ is reset to $0$ (the relay's
+\texttt{self.\_reconnect\_epoch = 0}, line 603).  Two components do
+\emph{not} follow $ForceReconnect$'s pattern.  First, $epochPending$ stays
+$ztrue$: the deferred \texttt{\_on\_reconnect} scheduled by nats-py is
+still pending; \texttt{safe\_close} does not un-schedule it, and it will
+land through $ReconnectEpochObserved$ --- now from $disconnected$ --- to
+produce the transient $reconnectEpoch = 1 \land connState = disconnected$
+that the reconciled recovery property covers.  Second, $spuriousTeardown$
+is \emph{not} flipped.  The ghost observer, as defined for
+$StaleForceTeardown$, marks the teardown of a \emph{detectably}
+reconnected client --- one whose epoch has advanced past the gate.  Here
+the reconnect is precisely \emph{not} detectable at teardown time: the
+epoch has not moved, and no reading of the client's state
+(\texttt{is\_connected}, \texttt{\_reconnect\_epoch}) could tell the
+lock-holder to skip.  Marking this as the biff-xko ``spurious teardown of
+a detectably-healed client'' would misstate what happened; it is a
+distinct, unavoidable event, and the model tracks its aftermath through
+$epochPending$ and $reconnectEpoch$ rather than through the observer.
+The safety property $AG\,(spuriousTeardown = zfalse)$ thus remains the
+faithful statement of what the epoch guard achieves --- it eliminates
+every teardown the guard \emph{could} have skipped --- while the residual
+flush-window teardown is bounded and self-healing by the separate
+liveness property of \S\ref{sec:modelcheck}.
+
+The cost is one unnecessary reconnect-and-reprovision ($\sim$20\,ms, no
+data loss), identical to the original biff-xko cost, and the recovery is
+the model's existing lazy connect: from $disconnected$, $EnsureConnected$
+dials a fresh client, resets the epoch, bumps $generation$ past the stale
+callback, and returns to a healthy $connected$ state.  The full path is
+$connected \to disconnected \to connected$, closed by operations the
+model already contains, so $FlushWindowForceTeardown$ introduces no new
+terminal state and no deadlock.  It is enabled only from $connected$, so
+it adds no transition out of $halfOpen$ and the biff-tww wedge-liveness
+proof is untouched.
+
+\subsection{Stale Request Timeout (Superseded-Generation No-Op)}
+
+\begin{schema}{StaleRequestTimeout}
+  \Xi Connection \\
+  owner? : \nat
+  \where
+  connState = connected \\
+  owner? < generation
+\end{schema}
+
+The formal counterpart of \texttt{\_tracked}'s identity guard
+(Copilot: tracked-timeout race).  A JetStream or KV request issued
+on generation $owner?$ can still be in flight when its client is
+declared dead, force-closed, and replaced: $ForceReconnect$ drops
+to $disconnected$ and a fresh $EnsureConnected$ dials a new client,
+advancing $generation$ past $owner?$.  When that superseded request
+finally times out, the live connection is a \emph{different},
+healthy client.  The guard $owner? < generation$ is exactly
+\texttt{self.\_nc is not owner}: the settling timeout belongs to a
+generation the rebuild has already left behind.
+
+The operation is a $\Xi Connection$ --- it changes nothing.  This
+is the whole point: a timeout attributed to a superseded generation
+must \emph{not} record a wedge, must \emph{not} move the live
+connection to $halfOpen$, and must \emph{not} drive
+$ForceReconnect$ of the healthy client.  Without the guard, the
+pre-fix code read \texttt{self.\_nc} at exception time and charged
+the timeout --- and the force-close --- to whatever client happened
+to be current, tearing down a live connection.  Modelling the
+superseded timeout as a no-op from $connected$ proves that the live
+connection's state is invariant under it: the only transition that
+can move $connected \to halfOpen$ is $Request(reqTimeout)$, the
+\emph{current}-generation timeout.  The symmetric success case
+(\texttt{record\_success} on a superseded client clearing the live
+wedge latch) is likewise a no-op, and for the same reason: the
+guard fires before any health accounting.  $StaleRequestTimeout$
+is enabled only when $generation > 0$ --- a superseded generation
+must exist for a stale settle to be possible --- and only from
+$connected$, so it neither adds a transition out of $halfOpen$
+(the liveness proof is untouched) nor removes one (the current
+connection has other enabled operations, so no deadlock is
+introduced).
+
+Two subtleties are worth recording.  First, the $maxGeneration = 3$
+saturation clamp is sound only because no stated property
+distinguishes dials at or above the clamp: at saturation two
+distinct dials share the same $generation$ value, so $owner? <
+generation$ would treat a superseded timeout on the clamped dial as
+\emph{current} --- benign today, but load-bearing if
+$StaleRequestTimeout$ is ever strengthened to tie a request to a
+specific rebuild rather than to a monotone generation.  Second, the
+guard is a partial refinement of \texttt{self.\_nc is not owner}:
+$owner? < generation$ captures the redial-to-newer-live case (a
+fresh client already dialed), while the client-dropped-to-$None$
+-not-yet-redialed case is handled implicitly by the $connState =
+connected$ guard --- a settle arriving in that window lands in
+$disconnected$, an unmodelled no-op.  ($reconnecting$ is nats-py's
+in-place reconnect of the \emph{same} client and generation, so
+\texttt{self.\_nc is owner} still holds; it is a current settle, not a
+dropped-client window.)
+
+\subsection{Subscribe (Always-On SUB Bind / Rebind)}
+
+\begin{schema}{Subscribe}
+  \Delta Connection \\
+  kind? : SubKind
+  \where
+  connState = connected \\
+  subGen(kind?) < generation \\
+  (kind? \neq kvWatch \lor subGen(kvWatch) = 0) \\
+  subGen' = subGen \oplus \{ kind? \mapsto generation \} \\
+  connState' = connState \\
+  kvProvisioned' = kvProvisioned \\
+  streamsProvisioned' = streamsProvisioned \\
+  namesProvisioned' = namesProvisioned \\
+  wtmpAvailable' = wtmpAvailable \\
+  generation' = generation \\
+  reconnectEpoch' = reconnectEpoch \\
+  spuriousTeardown' = spuriousTeardown \\
+  epochPending' = epochPending
+\end{schema}
+
+The poller's re-subscribe transition
+(\texttt{poll\_inbox} / \texttt{\_active\_tick}): on each tick, once the
+connection is $connected$, the poller compares the generation each kind's
+SUB is bound to against the current connection generation and, for
+whichever kind $kind?$ differs, opens a fresh SUB of that kind on the live
+client and records the new binding.  One schema, indexed by $kind?$,
+covers the existing $talk$ reconciliation (\texttt{\_reconcile\_talk\_sub}),
+the biff-5ex $inboxNotify$ reconciliation, and the $kvWatch$
+watcher's re-subscribe, because $subGen(kind?) < generation$ is their common signature
+regardless of kind.  This one operation covers three cases the code
+treats uniformly for each kind.  The \emph{initial} subscribe: after
+the first dial, $subGen(kind?) = 0 < generation = 1$, and the first tick
+binds that kind's SUB to generation $1$.  The \emph{re-subscribe} after a
+force-reconnect: a fresh dial has advanced $generation$ past the stranded
+$subGen(kind?)$, and the tick rebinds to the new generation.  The
+idempotent \emph{no-op}: when $subGen(kind?) = generation$ already, the
+guard fails and $Subscribe$ is not enabled for that kind --- the poller
+does not open a second, redundant SUB of a kind that already carries one
+on the live client.  The post-condition $subGen' = subGen \oplus \{
+kind? \mapsto generation \}$ is the whole repair for that kind: it moves
+the connection from stranded to current for $kind?$ in a single step, and
+it is the transition the code must implement for the biff-9la fix
+($kind? = talk$), its biff-5ex extension ($kind? = inboxNotify$), and the
+sessions-KV watcher ($kind? = kvWatch$) alike.  Every other component of $Connection$ is preserved, $subGen$'s
+other kinds included; a re-subscribe of one kind touches that kind's SUB
+and nothing else --- the three kinds reconcile independently, one
+$Subscribe$ per stranded kind per tick, exactly as \texttt{poll\_inbox}
+calls \texttt{\_reconcile\_talk\_sub} and its $inboxNotify$ counterpart
+as separate calls, and the watcher supervisor re-subscribes $kvWatch$.
+
+\subsection{Subscribe Retry (Transient Subscribe Failure)}
+
+\begin{schema}{SubscribeRetry}
+  \Xi Connection \\
+  kind? : SubKind
+  \where
+  connState = connected \\
+  subGen(kind?) < generation \\
+  (kind? \neq kvWatch \lor subGen(kvWatch) = 0)
+\end{schema}
+
+A subscribe attempt can fail: \texttt{subscribe} returns without
+establishing a SUB (the JetStream/core request times out, or the client
+is momentarily unhealthy), so the binding is not advanced and the next
+tick tries again.  $SubscribeRetry$ is the $\Xi Connection$ no-op that
+models this outcome, for whichever kind the attempt was for --- it is
+enabled in exactly the stranded state $Subscribe$ is enabled in for that
+kind, and leaves every component, $subGen$ included, unchanged.  It
+exists for two reasons.  First, without it the model would assert that a
+re-subscribe \emph{always} succeeds on the first attempt, which the code
+cannot guarantee for either kind; modelling the failure explicitly is
+what makes each kind's subscription-liveness property a genuine liveness
+claim (the SUB is \emph{eventually} rebound) rather than a one-step
+safety claim.  Second, it closes the audit: the buggy behaviour ---
+retrying forever without ever succeeding --- is now a modelled
+transition, so a test partition covers the failure branch rather than
+leaving it a $GAP$, for both kinds.  Because $Subscribe$ is enabled
+alongside it in the same state, $SubscribeRetry$ adds a stalling path but
+never removes the escaping one: the liveness proof ($EF\,subGen(k) =
+generation$, for the kind $k$ in question) holds because \emph{some} path
+rebinds, even though this operation offers a path that does not.
+
+%%----------------------------------------------------------------------
+\section{Session Presence}
+%%----------------------------------------------------------------------
+
+\begin{schema}{SessionStore}
+  sessions : SESSIONKEY \pinj KVVALUE \\
+  wallValue : KVKEY \pfun KVVALUE
+  \where
+  \# sessions \leq maxSessions \\
+  \# wallValue \leq 1
+\end{schema}
+
+Sessions are a partial injection: each session key maps to
+exactly one value (the serialised $UserSession$).  $wallValue$
+is either empty (no wall) or a single mapping (active wall).
+Initially the store is empty: $sessions = \emptyset$ and
+$wallValue = \emptyset$.  The composed $Init$ (\S\ref{sec:composed}) sets it;
+the session store is exercised by the operations below only while
+$connState = connected$.
+
+\subsection{Update Session (Heartbeat / Login)}
+
+\begin{schema}{UpdateSession}
+  \Delta SessionStore \\
+  \Xi Connection \\
+  key? : SESSIONKEY \\
+  value? : KVVALUE
+  \where
+  connState = connected \\
+  sessions' = sessions \oplus \{ key? \mapsto value? \} \\
+  wallValue' = wallValue \\
+  \# sessions' \leq maxSessions
+\end{schema}
+
+Creates or refreshes a session.  Override ($\oplus$) ensures
+idempotent updates.
+
+\subsection{Delete Session (Logout / TTL Expiry)}
+
+\begin{schema}{DeleteSession}
+  \Delta SessionStore \\
+  \Xi Connection \\
+  key? : SESSIONKEY
+  \where
+  connState = connected \\
+  key? \in \dom sessions \\
+  sessions' = \{ key? \} \ndres sessions \\
+  wallValue' = wallValue
+\end{schema}
+
+Removes a session.  In production, this is triggered by
+explicit delete or KV TTL expiry.
+
+\subsection{Set Wall}
+
+\begin{schema}{SetWall}
+  \Delta SessionStore \\
+  \Xi Connection \\
+  wallKey? : KVKEY \\
+  wallVal? : KVVALUE
+  \where
+  connState = connected \\
+  sessions' = sessions \\
+  wallValue' = \{ wallKey? \mapsto wallVal? \}
+\end{schema}
+
+\subsection{Clear Wall}
+
+\begin{schema}{ClearWall}
+  \Delta SessionStore \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  sessions' = sessions \\
+  wallValue' = \emptyset
+\end{schema}
+
+%%----------------------------------------------------------------------
+\section{KV Watcher State Machine}
+%%----------------------------------------------------------------------
+
+This section models the watcher loop from \texttt{\_run\_kv\_watch}
+and its supervisor \texttt{\_kv\_watcher\_loop}.
+
+\begin{schema}{Watcher}
+  phase : WatcherPhase \\
+  shutdownRequested : ZBOOL \\
+  restartCount : \nat
+  \where
+  restartCount \leq maxRestarts \\
+  phase = stopped \implies shutdownRequested = ztrue
+\end{schema}
+
+The watcher tracks its current phase, whether shutdown has been
+requested, and how many times the supervisor has restarted it.
+A stopped watcher implies shutdown was requested.  Initially the
+watcher is $idle$, with $shutdownRequested = zfalse$ and
+$restartCount = 0$ (the composed $Init$,
+\S\ref{sec:composed}).  The watcher operations other than
+$HandleError$ are enabled only while $connState = connected$; the
+watcher's $phase$ is the supervisor's belief about the consumer, not a
+function of the transport, so it may outlive the connection that
+carried it (see $NatsRelayState$, \S\ref{sec:composed}).
+
+\subsection{Start Watching}
+
+\begin{schema}{StartWatching}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  phase = idle \\
+  shutdownRequested = zfalse \\
+  phase' = snapshotting \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+Transitions from idle to snapshotting when the watcher is
+created.  The first entries from \texttt{watchall()} are the
+snapshot.
+
+\subsection{Snapshot Done}
+
+\begin{schema}{SnapshotDone}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  phase = snapshotting \\
+  shutdownRequested = zfalse \\
+  phase' = streaming \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+The $None$ marker from \texttt{updates()} signals the end of
+the snapshot.  \textbf{The watcher continues into streaming
+phase.}  This is the key property: the old \texttt{async~for}
+pattern terminated here (biff-udp).
+
+\subsection{Receive Entry}
+
+\begin{schema}{ReceiveEntry}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  (phase = snapshotting \lor phase = streaming) \\
+  shutdownRequested = zfalse \\
+  phase' = phase \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+A KV entry is received.  The phase does not change --- entries
+arrive during both snapshotting and streaming.
+
+\subsection{Handle Timeout}
+
+\begin{schema}{HandleTimeout}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  phase = streaming \\
+  shutdownRequested = zfalse \\
+  phase' = streaming \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount
+\end{schema}
+
+A \texttt{TimeoutError} from \texttt{updates(timeout=5.0)} is
+caught and the loop continues.  \textbf{The watcher stays in
+streaming phase.}  Without the catch, this would propagate to
+the supervisor and trigger a restart.
+
+\subsection{Handle Error (Supervisor Restart)}
+
+\begin{schema}{HandleError}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  phase \neq idle \\
+  phase \neq stopped \\
+  shutdownRequested = zfalse \\
+  restartCount < maxRestarts \\
+  phase' = snapshotting \\
+  shutdownRequested' = zfalse \\
+  restartCount' = restartCount + 1
+\end{schema}
+
+An unrecoverable error causes the supervisor to restart the
+watcher.  The new watcher begins in snapshotting phase
+(a fresh \texttt{watchall()}).  It is enabled in every $connState$,
+not only $connected$: a wedge ($halfOpen$) or a dropped client leaves
+the watcher in $streaming$ with a dead consumer, and $HandleError$ is
+the recovery edge for the path $StartWatching \to SnapshotDone \to
+Request(reqTimeout)$.
+
+\subsection{Request Shutdown}
+
+\begin{schema}{RequestShutdown}
+  \Delta Watcher \\
+  \Xi Connection
+  \where
+  connState = connected \\
+  shutdownRequested = zfalse \\
+  shutdownRequested' = ztrue \\
+  phase' = stopped \\
+  restartCount' = restartCount
+\end{schema}
+
+The shutdown event signals the watcher to exit.  The loop
+checks \texttt{shutdown.is\_set()} on every iteration.
+
+%%----------------------------------------------------------------------
+\section{Composed System State}
+\label{sec:composed}
+%%----------------------------------------------------------------------
+
+\begin{schema}{NatsRelayState}
+  Connection \\
+  SessionStore \\
+  Watcher
+  \where
+  phase = idle \implies restartCount = 0
+\end{schema}
+
+A watcher that has never left $idle$ has never been restarted.  The
+state does \emph{not} assert that an active watcher implies a
+$connected$ transport: $StartWatching \to SnapshotDone \to
+Request(reqTimeout)$ leaves $phase = streaming$ with $connState =
+halfOpen$, and the wedge is recovered through $HandleError$.
+
+\begin{schema}{Init}
+  NatsRelayState'
+  \where
+  connState' = disconnected \\
+  kvProvisioned' = zfalse \\
+  streamsProvisioned' = zfalse \\
+  namesProvisioned' = zfalse \\
+  wtmpAvailable' = zfalse \\
+  generation' = 0 \\
+  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, kvWatch \mapsto 0 \} \\
+  reconnectEpoch' = 0 \\
+  spuriousTeardown' = zfalse \\
+  epochPending' = zfalse \\
+  sessions' = \emptyset \\
+  wallValue' = \emptyset \\
+  phase' = idle \\
+  shutdownRequested' = zfalse \\
+  restartCount' = 0
+\end{schema}
+
+The composed initial state, $Init$, is: $connState = disconnected$ with no
+handles and no always-on subscription of any kind ($subGen$ maps every
+$SubKind$, $kvWatch$ included, to $0$), an empty session store, and an
+$idle$ watcher.  $Init$ is the sole initialisation schema and ranges over
+the whole $NatsRelayState$, so the model checker explores the $Connection$
+lifecycle, the session store and the $Watcher$ as one machine: the watcher
+operations are reachable, and the $kvWatch$ liveness formula of
+\S\ref{sec:modelcheck} is checked against states in which the watcher is
+actually running rather than merely stated.
+
+%%----------------------------------------------------------------------
+\section{Key Properties and Model Checking}
+\label{sec:modelcheck}
+%%----------------------------------------------------------------------
+
+The specification captures these properties, each of which can be
+verified by model checking with probcli (\texttt{z-spec test}):
+
+\begin{enumerate}
+  \item \textbf{Handle validity}: valid JetStream, sessions-KV, and
+    names-KV handles exist if and only if $connState = connected$.
+    A $halfOpen$, $disconnected$, $reconnecting$, or $closed$
+    connection has no valid handles.  This generalises DES-029 and
+    is the safety half of the biff-tww fix: stale handles cached
+    during a wedge are, in the model, no handles at all.
+
+  \item \textbf{Wedge liveness (biff-tww)}: no reachable state is
+    stuck in $halfOpen$.  Two independent recovery paths leave the
+    wedge: the keepalive path $WedgeDetected \to ReconnectSocketUp$ (via
+    $reconnecting$, on the same client) and the proactive path
+    $ForceReconnect \to EnsureConnected$ (via $disconnected$, on a
+    fresh client).  Each is always enabled in $halfOpen$, so the
+    connection cannot deadlock in the wedge.  The proof is by
+    deadlock analysis: removing \emph{every} operation enabled in
+    $halfOpen$ (the pre-fix code, whose keepalive ping never fired
+    in time, with no proactive detector) makes $halfOpen$ a
+    reachable terminal state.  probcli surfaces it as a deadlock
+    along the trace $EnsureConnected \to Request(reqTimeout)$,
+    which \emph{is} biff-tww.  With either recovery transition
+    present the state space is deadlock-free.
+
+  \item \textbf{Generation-guarded wedge (tracked-timeout race)}: a
+    timeout on a \emph{superseded} generation
+    ($StaleRequestTimeout$, $owner? < generation$) is a no-op ---
+    the live $connected$ connection is invariant under it.  Only
+    the \emph{current}-generation timeout $Request(reqTimeout)$
+    moves $connected \to halfOpen$, so a settle on a client the
+    rebuild has already replaced can never drive $ForceReconnect$
+    of the healthy connection.  $generation$ advances only on a
+    fresh dial ($EnsureConnected$ from $disconnected$), never on
+    nats-py's in-place $Reconnect$, mirroring the relay's
+    \texttt{\_generation} token.
+
+  \item \textbf{Epoch-guarded teardown (biff-xko)}: a scheduled
+    force-reconnect whose gate observed the epoch $gateEpoch?$ is a no-op
+    against a client that has since transparently reconnected
+    ($StaleForceTeardown$, $gateEpoch? < reconnectEpoch$) --- the live
+    $connected$ connection is invariant under it.  The safety property is
+    stated over reachable states as the observer-guarded formula
+
+    \begin{quote}
+      $AG\,(\,spuriousTeardown = zfalse\,)$
+    \end{quote}
+
+    where $spuriousTeardown$ is a ghost flipped only by a teardown of a
+    detectably-reconnected client.  probcli reports this \textbf{TRUE}
+    for the shipped spec: the epoch-guarded re-check never tears down a
+    healed connection, because $reconnectEpoch$ advances on nats-py's
+    in-place $Reconnect$ where \texttt{is\_connected} cannot distinguish
+    healed from wedged.  It advances \emph{independently} of $generation$
+    --- a transparent reconnect bumps $reconnectEpoch$ and leaves
+    $generation$ fixed, a fresh dial the reverse --- so the pair
+    $(generation, reconnectEpoch)$ is the full transport identity the
+    two guards $StaleRequestTimeout$ and $StaleForceTeardown$ compare
+    against.  The pre-fix defect is reproduced in the frozen variant
+    \texttt{nats-relay-xko-isconnected.tex}, whose re-check reads only
+    \texttt{is\_connected} and so turns $StaleForceTeardown$ into a
+    $connected \to disconnected$ teardown: the same formula then goes
+    \textbf{FALSE}, with probcli returning the eight-step trace
+    $EnsureConnected \to Subscribe \to Request(reqTimeout) \to
+    WedgeDetected \to Reconnect \to StaleForceTeardown$ --- a client
+    force-closed one step after nats-py had transparently reconnected it.
+    That trace \emph{is} biff-xko.  Liveness is not regressed: the
+    genuinely-wedged teardown $ForceReconnect$ (enabled from $halfOpen$)
+    is untouched, and probcli confirms $AG\,(connState = halfOpen
+    \Rightarrow EF\;connState = disconnected)$ remains \textbf{TRUE}.
+    In the shipped spec the atomic $Reconnect$ this trace names is split
+    into $ReconnectSocketUp \to ReconnectEpochObserved$; the frozen
+    variant is unchanged and retains the single-step $Reconnect$, so its
+    counterexample trace stands verbatim.
+
+  \item \textbf{Flush-window teardown is bounded and self-healing
+    (biff-xko, wire-review correction)}: the epoch guard of the previous
+    property recognises only a reconnect whose epoch bump has \emph{landed}.
+    nats-py's reconnect is not atomic --- socket up, then flush, then the
+    epoch-bumping \texttt{\_on\_reconnect} --- so the model splits it into
+    $ReconnectSocketUp$ (socket $connected$, $epochPending = ztrue$,
+    $reconnectEpoch$ unchanged) and $ReconnectEpochObserved$ (the bump
+    lands).  Between them, $FlushWindowForceTeardown$ (guard $connState =
+    connected \land epochPending = ztrue \land gateEpoch? = reconnectEpoch$)
+    force-closes a client whose socket is healthy but whose reconnect is
+    not yet observable --- the guard \texttt{\_reconnect\_epoch ==
+    gate\_epoch} passes because the epoch has not moved.  This is the
+    divergence djb traced: the state it reaches, $connState = disconnected
+    \land reconnectEpoch = 1$ (the deferred bump landing after the teardown
+    reset the epoch), \emph{violates} the old state invariant $connState
+    \in \{ disconnected, closed \} \implies reconnectEpoch = 0$.  That
+    invariant is therefore reclassified from a global always-property to an
+    eventually-true recovery property, proved as
+
+    \begin{quote}
+      $AG\,(\,connState = disconnected \land reconnectEpoch > 0
+      \;\Rightarrow\; EF\;reconnectEpoch = 0\,)$
+    \end{quote}
+
+    which probcli reports \textbf{TRUE}: the next $EnsureConnected$ dial
+    resets the epoch.  The state $connState = disconnected \land
+    reconnectEpoch > 0$ is confirmed \emph{reachable}
+    ($EF$ \textbf{TRUE}), so the property is not vacuous --- the model
+    genuinely reaches the state the old invariant forbade and proves it
+    transient.  The flush-window teardown itself is bounded and
+    self-healing:
+
+    \begin{quote}
+      $AG\,(\,connState = disconnected \land epochPending = ztrue
+      \;\Rightarrow\; EF\;(connState = connected \land epochPending =
+      zfalse)\,)$
+    \end{quote}
+
+    is \textbf{TRUE} --- every trace through the teardown returns to a
+    healthy $connected$ state via a fresh dial.  The observer property
+    $AG\,(spuriousTeardown = zfalse)$ is unaffected: the flush-window
+    teardown does not flip $spuriousTeardown$, because the reconnect it
+    tears down is by definition \emph{not} detectable at teardown time
+    (the epoch has not advanced), so it is a distinct event from the
+    detectably-healed teardown the observer marks.  probcli confirms the
+    biff-tww wedge-liveness and biff-9la talk-liveness properties both
+    remain \textbf{TRUE} across the extended state space, and the
+    constraint-based deadlock check finds no deadlock: the new operations
+    add no terminal state.
+
+  \item \textbf{Always-on subscription liveness (biff-9la, generalised
+    for biff-5ex)}: every kind's always-on SUB is tracked by
+    $subGen(k)$, the generation it is bound to, with the state invariant
+    $\forall k : SubKind @ subGen(k) \leq generation$ (a SUB is never
+    bound to a client never dialled, for any kind).  A live connection
+    whose SUB of kind $k$ is stranded on a superseded generation always
+    eventually re-binds it, stated once and quantified over the family:
+
+    \begin{quote}
+      $\forall k : SubKind @\;
+      AG\,(\,connState \neq closed \land subGen(k) < generation
+      \;\Rightarrow\; EF\;subGen(k) = generation\,)$
+    \end{quote}
+
+    CTL model checking is not itself parametric, so probcli checks the
+    formula once per instance of $k$ rather than as a single quantified
+    query; the instances $k = talk$ (the original biff-9la
+    property, unchanged in substance) and $k = inboxNotify$ (the biff-5ex
+    obligation for a session's own user) are confirmed \textbf{TRUE}, and
+    $k = kvWatch$ is the instance this frozen variant is built to refute
+    --- and the restriction of $talk$ and $inboxNotify$ to
+    $connState = connected$ is TRUE as well; only the terminal $closed$
+    state, in which the connection is permanently shut down and carries
+    no subscription obligation of any kind, is excluded.  The escape for
+    kind $k$ is $Subscribe$ with $kind? = k$ (guard $subGen(k) <
+    generation$, effect $subGen' = subGen \oplus \{ k \mapsto generation
+    \}$), the poller's generation-tracked re-subscribe for that kind; it
+    is preserved unchanged across nats-py's in-place $Reconnect$ (same
+    client, same generation, every kind's SUB replayed) and
+    re-established after $ForceReconnect$ once the replacement dial
+    advances $generation$ past $subGen(k)$.  The property is a genuine
+    liveness claim, not a one-step safety claim, for any of the three
+    kinds: $SubscribeRetry$ models a subscribe of kind $kind?$ that fails
+    and is retried next tick, so that kind's SUB is \emph{eventually},
+    not \emph{immediately}, re-bound.  ``Next tick'' names the model's
+    retry point without timing it --- $EF$ makes no claim about how soon
+    the eventually is --- but the property is only as true in practice as
+    the real scheduler that keeps calling $Subscribe$/$SubscribeRetry$ at
+    all: a poller that stops ticking makes ``eventually'' vacuous no
+    matter what the model proves.  The relay's poller ticks at a
+    configurable cadence and, when that cadence is disabled outright
+    (interval $\leq 0$, biff-5ex), still retries on a bounded fallback
+    interval rather than waiting on wake signals alone --- the wake path
+    depends on a live SUB of the very kind that may be stranded, so with
+    every SUB down, nothing but a time-bounded retry can ever restart the
+    cycle.  This is an implementation-level fairness obligation the
+    untimed model does not and cannot state; it is recorded here as the
+    condition under which the proven liveness property actually holds in
+    the running system, not as a gap in the property itself.  The pre-fix
+    defect is reproduced,
+    for $k = talk$, by replacing the $Subscribe$ guard with the
+    ``re-subscribe only when the handle is \texttt{None}'' condition
+    $subGen(talk) = 0$: the same CTL formula then goes \textbf{FALSE},
+    with probcli returning the counterexample $connState = connected
+    \land generation = 3 \land subGen(talk) = 2$ --- a live client whose
+    talk SUB is stuck on the superseded generation $2$, never re-opened.
+    That state \emph{is} biff-9la, and the same defect shape --- a guard
+    that checks ``never subscribed'' instead of ``subscribed to a
+    superseded generation'' --- would equally strand $inboxNotify$ or
+    $kvWatch$ were the fix not applied uniformly across the family.
+
+  \item \textbf{Snapshot survival}: $SnapshotDone$ transitions to
+    $streaming$, never to $idle$ or $stopped$.  The watcher
+    remains alive.
+
+  \item \textbf{Timeout resilience}: $HandleTimeout$ keeps the
+    watcher in $streaming$ phase.  No restart, no phase change.
+
+  \item \textbf{Error restart}: Only $HandleError$ increments
+    $restartCount$.  Snapshot-done and timeout do not.
+
+  \item \textbf{Watcher may outlive the transport}: $phase \neq idle$
+    does not imply $connState = connected$; $HandleError$ is the
+    recovery edge.
+
+  \item \textbf{Session uniqueness}: The partial injection
+    ($\pinj$) on sessions guarantees each session key maps to
+    exactly one value.
+\end{enumerate}
+
+\end{document}

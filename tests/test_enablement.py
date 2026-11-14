@@ -255,3 +255,58 @@ class TestPermissions:
         change = RepoEnablement(tmp_path).enable()
         assert change.permissions.changed == ()
         assert not (tmp_path / ".claude").exists()
+
+
+_REPO_IMPORT = "@.punt-labs/biff/CLAUDE.md"
+
+
+class TestRepoGuide:
+    """``enable`` is the sole guide path (tool-enable-disable.md §2.5/§2.6)."""
+
+    def test_enable_deposits_guide_and_registers_import(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+
+        RepoEnablement(tmp_path).enable()
+
+        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        assert "Biff (team messaging)" in guide.read_text()
+        host = (tmp_path / "CLAUDE.md").read_text()
+        assert host.rstrip("\n").endswith(_REPO_IMPORT)
+
+    def test_enable_is_idempotent(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        RepoEnablement(tmp_path).enable()
+        guide = tmp_path / ".punt-labs" / "biff" / "CLAUDE.md"
+        first = guide.read_bytes()
+
+        RepoEnablement(tmp_path).enable()
+
+        assert guide.read_bytes() == first
+        assert (tmp_path / "CLAUDE.md").read_text().count(_REPO_IMPORT) == 1
+
+    def test_enable_preserves_existing_repo_prose(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        (tmp_path / "CLAUDE.md").write_text("# Repo rules\n\nUse uv.\n")
+
+        RepoEnablement(tmp_path).enable()
+
+        text = (tmp_path / "CLAUDE.md").read_text()
+        assert text.startswith("# Repo rules\n\nUse uv.\n")
+        assert text.rstrip("\n").endswith(_REPO_IMPORT)
+
+    def test_disable_removes_import_and_leaves_guide(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        RepoEnablement(tmp_path).enable()
+
+        RepoEnablement(tmp_path).disable()
+
+        assert _REPO_IMPORT not in (tmp_path / "CLAUDE.md").read_text()
+        # Dormant: the deposited guide survives disable (§2.9).
+        assert (tmp_path / ".punt-labs" / "biff" / "CLAUDE.md").is_file()
+
+    def test_unresolvable_hooks_dir_writes_no_guide(self, tmp_path: Path) -> None:
+        # Not a git repo: enable writes nothing, guide included.
+        RepoEnablement(tmp_path).enable()
+
+        assert not (tmp_path / ".punt-labs" / "biff" / "CLAUDE.md").exists()
+        assert not (tmp_path / "CLAUDE.md").exists()
