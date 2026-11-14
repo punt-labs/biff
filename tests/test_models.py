@@ -15,6 +15,7 @@ from biff.models import (
     RelayAuth,
     UnreadSummary,
     UserSession,
+    truncate_plan,
     validate_plan,
 )
 
@@ -398,3 +399,22 @@ class TestValidatePlan:
 
     def test_cap_matches_wall_and_message(self) -> None:
         assert PLAN_MAX_LENGTH == 512
+
+
+class TestTruncatePlan:
+    def test_short_text_unchanged(self) -> None:
+        assert truncate_plan("→ short") == "→ short"
+
+    def test_at_cap_unchanged(self) -> None:
+        text = "x" * PLAN_MAX_LENGTH
+        assert truncate_plan(text) == text
+
+    def test_over_cap_clipped_to_fit(self) -> None:
+        result = truncate_plan("x" * (PLAN_MAX_LENGTH + 100))
+        assert len(result) == PLAN_MAX_LENGTH
+        assert result.endswith("…")
+
+    def test_clipped_result_passes_validate_plan(self) -> None:
+        # a generated hint from a pathologically long branch must not fail
+        # its own automatic /plan — truncated output is always acceptable.
+        validate_plan(truncate_plan("→ " + "b" * 1000))

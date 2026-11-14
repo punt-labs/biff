@@ -60,8 +60,25 @@ def validate_plan(text: str) -> str:
 
     Empty is valid: an empty plan clears the status.  Raises
     :class:`pydantic.ValidationError` when *text* is too long.
+
+    Use this for plan text a caller supplied directly; for machine-generated
+    hints that must not fail, :func:`truncate_plan` instead.
     """
     return _PLAN_TEXT.validate_python(text)
+
+
+def truncate_plan(text: str) -> str:
+    """Clip machine-generated plan text to fit :data:`PLAN_MAX_LENGTH`.
+
+    Generated hints (a branch name, a commit subject) are not user-supplied
+    plans and must never reach the reject path — a long branch would otherwise
+    fail its own automatic ``/plan`` and leave the plan cleared.  An over-long
+    value is cut to ``PLAN_MAX_LENGTH`` with a trailing ellipsis; a value that
+    already fits is returned unchanged.
+    """
+    if len(text) <= PLAN_MAX_LENGTH:
+        return text
+    return text[: PLAN_MAX_LENGTH - 1] + "…"
 
 
 class Message(BaseModel):
