@@ -11,9 +11,9 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from biff import logging_config
@@ -26,9 +26,6 @@ from biff.doctor import installed_plugin_version
 from biff.logging_config import configure_logging
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
-
-if TYPE_CHECKING:
-    import pytest
 
 runner = CliRunner()
 
@@ -162,6 +159,26 @@ class TestInstalledPluginVersion:
         reg.parent.mkdir(parents=True)
         reg.write_text('{"plugins": {"biff@punt-labs": [{"version": "1.2.3"}]}}')
         assert installed_plugin_version() == "1.2.3"
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "[]",  # top-level not an object
+            '{"plugins": []}',  # plugins not an object
+            '{"plugins": {"biff@punt-labs": {"version": "1.2.3"}}}',  # value not a list
+            '{"plugins": {"biff@punt-labs": ["garbage"]}}',  # entry not an object
+            '{"plugins": {"biff@punt-labs": [{"name": "x"}]}}',  # entry without version
+            '{"plugins": {"biff@punt-labs": []}}',  # empty entries
+        ],
+    )
+    def test_malformed_registry_is_none_not_crash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        reg = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        reg.parent.mkdir(parents=True)
+        reg.write_text(content)
+        assert installed_plugin_version() is None
 
 
 class TestServeCommand:
