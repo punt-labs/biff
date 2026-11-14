@@ -19,6 +19,9 @@
 
 ### Changed
 
+- `/plan` (CLI and MCP tool) now rejects a message over 512 characters, the same
+  cap as `/write` and `/wall`, instead of storing unbounded text. The error names
+  the length and the limit, and the existing plan is left unchanged.
 - **Permission rules are repo-level, granted by `biff enable`.** The
   SessionStart hook used to add `mcp__plugin_biff_tty__*`, the `biff-dev`
   wildcard and twelve `Skill(...)` rules to the global

@@ -6,6 +6,7 @@ from biff._formatting import TABLE_WIDTH, visible_width
 from biff.cli_session import CliContext
 from biff.commands.plan import plan
 from biff.formatting import _NO_PRINTABLE_TEXT, _NO_VISIBLE_CONTENT
+from biff.models import PLAN_MAX_LENGTH
 from biff.relay import LocalRelay
 
 
@@ -43,6 +44,22 @@ class TestPlan:
         session = await relay.get_session("kai:abc12345")
         assert session is not None
         assert session.plan == ""
+
+    async def test_over_cap_plan_rejected(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await plan(ctx, "keep me")
+        result = await plan(ctx, "x" * (PLAN_MAX_LENGTH + 1))
+        assert result.error
+        session = await relay.get_session("kai:abc12345")
+        assert session is not None
+        assert session.plan == "keep me"
+
+    async def test_at_cap_plan_accepted(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        result = await plan(ctx, "x" * PLAN_MAX_LENGTH)
+        assert not result.error
 
     async def test_creates_session_when_none_exists(
         self, ctx: CliContext, relay: LocalRelay

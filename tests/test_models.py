@@ -8,7 +8,15 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from biff.models import BiffConfig, Message, RelayAuth, UnreadSummary, UserSession
+from biff.models import (
+    PLAN_MAX_LENGTH,
+    BiffConfig,
+    Message,
+    RelayAuth,
+    UnreadSummary,
+    UserSession,
+    validate_plan,
+)
 
 
 class TestMessage:
@@ -374,3 +382,19 @@ class TestRelayAuthRepr:
     def test_str_does_not_leak_token_either(self) -> None:
         auth = RelayAuth(token="super-secret-token")
         assert "super-secret-token" not in str(auth)
+
+
+class TestValidatePlan:
+    def test_at_cap_accepted(self) -> None:
+        text = "x" * PLAN_MAX_LENGTH
+        assert validate_plan(text) == text
+
+    def test_over_cap_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="at most 512"):
+            validate_plan("x" * (PLAN_MAX_LENGTH + 1))
+
+    def test_empty_accepted_clears_plan(self) -> None:
+        assert validate_plan("") == ""
+
+    def test_cap_matches_wall_and_message(self) -> None:
+        assert PLAN_MAX_LENGTH == 512

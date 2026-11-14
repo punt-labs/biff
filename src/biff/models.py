@@ -12,9 +12,16 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, tzinfo
-from typing import Literal, cast
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 
 def _utc_now() -> datetime:
@@ -38,6 +45,23 @@ def _ensure_utc(v: datetime) -> datetime:
 def _is_utc(tz: tzinfo) -> bool:
     """Check if a tzinfo is effectively UTC."""
     return tz.utcoffset(None) == UTC.utcoffset(None)
+
+
+PLAN_MAX_LENGTH = 512
+"""Longest accepted plan; matches ``Message.body`` and ``WallPost.text``."""
+
+_PLAN_TEXT: TypeAdapter[str] = TypeAdapter(
+    Annotated[str, Field(max_length=PLAN_MAX_LENGTH)]
+)
+
+
+def validate_plan(text: str) -> str:
+    """Return *text* if it fits :data:`PLAN_MAX_LENGTH`, else raise.
+
+    Empty is valid: an empty plan clears the status.  Raises
+    :class:`pydantic.ValidationError` when *text* is too long.
+    """
+    return _PLAN_TEXT.validate_python(text)
 
 
 class Message(BaseModel):
