@@ -22,29 +22,39 @@ def _write(root: Path, data: object) -> None:
     path.write_text(json.dumps(data))
 
 
-def _allow(root: Path) -> list[str]:
+def _tier(root: Path, tier: str) -> list[str]:
     data = json.loads(_settings(root).read_text())
-    allow: list[str] = data["permissions"]["allow"]
-    return allow
+    rules: list[str] = data["permissions"][tier]
+    return rules
+
+
+def _allow(root: Path) -> list[str]:
+    return _tier(root, "allow")
+
+
+_ALLOW = BIFF_RULES["allow"]
+_ASK = BIFF_RULES["ask"]
+_ALL = (*_ALLOW, *_ASK)
 
 
 class TestGrant:
     def test_creates_settings_with_every_rule(self, tmp_path: Path) -> None:
         change = ProjectPermissions(tmp_path).grant()
-        assert change == PermissionChange(changed=BIFF_RULES)
-        assert _allow(tmp_path) == list(BIFF_RULES)
+        assert change == PermissionChange(changed=_ALL)
+        assert _allow(tmp_path) == list(_ALLOW)
+        assert _tier(tmp_path, "ask") == list(_ASK)
 
     def test_keeps_other_settings_and_rules(self, tmp_path: Path) -> None:
         _write(tmp_path, {"env": {"A": "1"}, "permissions": {"allow": ["Read"]}})
         ProjectPermissions(tmp_path).grant()
         data = json.loads(_settings(tmp_path).read_text())
         assert data["env"] == {"A": "1"}
-        assert data["permissions"]["allow"] == ["Read", *BIFF_RULES]
+        assert data["permissions"]["allow"] == ["Read", *_ALLOW]
 
     def test_adds_only_missing_rules(self, tmp_path: Path) -> None:
-        _write(tmp_path, {"permissions": {"allow": [BIFF_RULES[0]]}})
+        _write(tmp_path, {"permissions": {"allow": [_ALLOW[0]], "ask": [_ASK[0]]}})
         change = ProjectPermissions(tmp_path).grant()
-        assert change.changed == BIFF_RULES[1:]
+        assert change.changed == (*_ALLOW[1:], *_ASK[1:])
 
     def test_noop_does_not_rewrite(self, tmp_path: Path) -> None:
         ProjectPermissions(tmp_path).grant()
@@ -54,7 +64,7 @@ class TestGrant:
 
     def test_never_grants_dev_rules(self, tmp_path: Path) -> None:
         ProjectPermissions(tmp_path).grant()
-        assert not [rule for rule in _allow(tmp_path) if "biff-dev" in rule]
+        assert not [rule for rule in _ALL if "biff-dev" in rule]
 
     @pytest.mark.parametrize(
         ("content", "reason"),
@@ -104,32 +114,40 @@ class TestGrant:
     def test_lines_report_each_rule(self, tmp_path: Path) -> None:
         lines = ProjectPermissions(tmp_path).grant().lines("added to")
         assert lines == [
-            f"Permission added to .claude/settings.json: {rule}" for rule in BIFF_RULES
+            f"Permission added to .claude/settings.json: {rule}" for rule in _ALL
         ]
 
-    def test_no_blanket_cli_wildcard(self) -> None:
-        assert "Bash(biff:*)" not in BIFF_RULES
-        for verb in ("install", "uninstall", "install-statusline", "enable", "disable"):
-            assert not any(rule.startswith(f"Bash(biff {verb}:") for rule in BIFF_RULES)
-        assert "Bash(biff who:*)" in BIFF_RULES
+    def test_each_surface_is_allowed_broadly(self) -> None:
+        assert _ALLOW == ("Bash(biff:*)", "mcp__plugin_biff_tty__*", "Skill(biff:*)")
 
-    def test_skill_rules_are_scoped_one_per_shipped_command(self) -> None:
-        commands = Path(__file__).parents[1] / "plugin" / "commands"
-        shipped = sorted(
-            path.stem
-            for path in commands.glob("*.md")
-            if not path.stem.endswith("-dev")
-        )
-        skills = [rule for rule in BIFF_RULES if rule.startswith("Skill(")]
-        assert skills == [f"Skill(biff:{name})" for name in shipped]
+    def test_mutating_verbs_are_ask_carve_outs(self) -> None:
+        for verb in ("install", "uninstall", "install-statusline", "enable", "disable"):
+            assert f"Bash(biff {verb}:*)" in _ASK
+        assert "Bash(biff who:*)" not in _ASK
+        assert all(rule.startswith("Bash(biff ") for rule in _ASK)
 
 
 class TestRevoke:
     def test_removes_exactly_biff_rules(self, tmp_path: Path) -> None:
-        _write(tmp_path, {"permissions": {"allow": ["Read", *BIFF_RULES, "Bash(x)"]}})
+        _write(
+            tmp_path,
+            {
+                "permissions": {
+                    "allow": ["Read", *_ALLOW, "Bash(x)"],
+                    "ask": [*_ASK, "Z"],
+                }
+            },
+        )
         change = ProjectPermissions(tmp_path).revoke()
-        assert change.changed == BIFF_RULES
+        assert change.changed == _ALL
         assert _allow(tmp_path) == ["Read", "Bash(x)"]
+        assert _tier(tmp_path, "ask") == ["Z"]
+
+    def test_adds_no_tier_the_file_lacks(self, tmp_path: Path) -> None:
+        _write(tmp_path, {"permissions": {"allow": ["Read", *_ALLOW]}})
+        assert ProjectPermissions(tmp_path).revoke().changed == _ALLOW
+        data = json.loads(_settings(tmp_path).read_text())
+        assert data == {"permissions": {"allow": ["Read"]}}
 
     def test_absent_settings_creates_nothing(self, tmp_path: Path) -> None:
         assert ProjectPermissions(tmp_path).revoke() == PermissionChange()
@@ -139,16 +157,17 @@ class TestRevoke:
         assert ProjectPermissions(tmp_path).revoke().lines("removed from") == []
 
     def test_revoke_subset_leaves_other_rules(self, tmp_path: Path) -> None:
-        _write(tmp_path, {"permissions": {"allow": list(BIFF_RULES)}})
-        change = ProjectPermissions(tmp_path).revoke(BIFF_RULES[:2])
-        assert change.changed == BIFF_RULES[:2]
-        assert _allow(tmp_path) == list(BIFF_RULES[2:])
+        _write(tmp_path, {"permissions": {"allow": list(_ALLOW), "ask": list(_ASK)}})
+        change = ProjectPermissions(tmp_path).revoke((_ALLOW[0], _ASK[0]))
+        assert change.changed == (_ALLOW[0], _ASK[0])
+        assert _allow(tmp_path) == list(_ALLOW[1:])
+        assert _tier(tmp_path, "ask") == list(_ASK[1:])
 
     def test_revoke_accepts_an_iterator(self, tmp_path: Path) -> None:
-        _write(tmp_path, {"permissions": {"allow": list(BIFF_RULES)}})
-        change = ProjectPermissions(tmp_path).revoke(iter(BIFF_RULES[:3]))
-        assert change.changed == BIFF_RULES[:3]
-        assert _allow(tmp_path) == list(BIFF_RULES[3:])
+        _write(tmp_path, {"permissions": {"allow": list(_ALLOW)}})
+        change = ProjectPermissions(tmp_path).revoke(iter(_ALLOW[:2]))
+        assert change.changed == _ALLOW[:2]
+        assert _allow(tmp_path) == list(_ALLOW[2:])
 
     def test_revoke_nothing_writes_nothing(self, tmp_path: Path) -> None:
         assert ProjectPermissions(tmp_path).revoke(()) == PermissionChange()
@@ -216,7 +235,7 @@ class TestHardening:
 
         monkeypatch.setattr(claude_permissions, "_read", swap_then_read)
         change = ProjectPermissions(repo).grant()
-        assert change.changed == BIFF_RULES
+        assert change.changed == _ALL
         assert list(outside.iterdir()) == []
         allow = json.loads((moved / "settings.json").read_text())["permissions"]
-        assert allow["allow"] == list(BIFF_RULES)
+        assert allow["allow"] == list(_ALLOW)

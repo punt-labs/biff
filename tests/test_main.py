@@ -294,7 +294,7 @@ class TestEnableCommand:
         mock_root.return_value = repo
         result = runner.invoke(app, ["enable"])
         assert result.exit_code == 0
-        for rule in BIFF_RULES:
+        for rule in (*BIFF_RULES["allow"], *BIFF_RULES["ask"]):
             assert f"Permission added to .claude/settings.json: {rule}\n" in (
                 result.output
             )

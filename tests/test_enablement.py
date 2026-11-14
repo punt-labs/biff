@@ -240,17 +240,18 @@ class TestPermissions:
     def test_enable_grants_repo_level_rules(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         change = RepoEnablement(tmp_path).enable()
-        assert change.permissions.changed == BIFF_RULES
+        assert change.permissions.changed == (*BIFF_RULES["allow"], *BIFF_RULES["ask"])
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-        assert settings["permissions"]["allow"] == list(BIFF_RULES)
+        assert settings["permissions"]["allow"] == list(BIFF_RULES["allow"])
+        assert settings["permissions"]["ask"] == list(BIFF_RULES["ask"])
 
     def test_disable_revokes_exactly_those_rules(self, tmp_path: Path) -> None:
         _make_repo(tmp_path)
         RepoEnablement(tmp_path).enable()
         change = RepoEnablement(tmp_path).disable()
-        assert change.permissions.changed == BIFF_RULES
+        assert change.permissions.changed == (*BIFF_RULES["allow"], *BIFF_RULES["ask"])
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-        assert settings["permissions"]["allow"] == []
+        assert settings["permissions"] == {"allow": [], "ask": []}
 
     def test_unresolvable_hooks_grants_nothing(self, tmp_path: Path) -> None:
         change = RepoEnablement(tmp_path).enable()
