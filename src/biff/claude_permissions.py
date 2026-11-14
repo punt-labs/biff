@@ -126,7 +126,8 @@ class ProjectPermissions:
 
     def revoke(self, rules: Iterable[str] = BIFF_RULES) -> PermissionChange:
         """Remove *rules* (default: every biff rule); return the rules removed."""
-        return self._update(tuple(r for r in BIFF_RULES if r in set(rules)), add=False)
+        selected = set(rules)
+        return self._update(tuple(r for r in BIFF_RULES if r in selected), add=False)
 
     def _update(self, rules: tuple[str, ...], *, add: bool) -> PermissionChange:
         """Apply the grant or revoke under the lock, reporting any refusal."""
@@ -191,6 +192,9 @@ def _locked_apply(dir_fd: int, rules: tuple[str, ...], *, add: bool) -> tuple[st
     """Run :func:`_apply` holding the shared lock in ``.claude``."""
     if not add and not _exists(dir_fd, _SETTINGS):
         return ()
+    # Refuse a bad file before creating the lock, so a refusal leaves nothing
+    # behind; the locked pass below re-validates.
+    _allow_list(_read(dir_fd)[0])
     try:
         lock = os.open(_LOCK, os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600, dir_fd=dir_fd)
     except OSError as exc:

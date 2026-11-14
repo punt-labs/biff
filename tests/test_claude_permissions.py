@@ -137,6 +137,12 @@ class TestRevoke:
         assert change.changed == BIFF_RULES[:2]
         assert _allow(tmp_path) == list(BIFF_RULES[2:])
 
+    def test_revoke_accepts_an_iterator(self, tmp_path: Path) -> None:
+        _write(tmp_path, {"permissions": {"allow": list(BIFF_RULES)}})
+        change = ProjectPermissions(tmp_path).revoke(iter(BIFF_RULES[:3]))
+        assert change.changed == BIFF_RULES[:3]
+        assert _allow(tmp_path) == list(BIFF_RULES[3:])
+
     def test_revoke_nothing_writes_nothing(self, tmp_path: Path) -> None:
         assert ProjectPermissions(tmp_path).revoke(()) == PermissionChange()
         assert not (tmp_path / ".claude").exists()
@@ -165,6 +171,14 @@ class TestHardening:
         change = ProjectPermissions(tmp_path).grant()
         assert "not a regular file" in change.error
 
+    def test_refusal_creates_no_lock(self, tmp_path: Path) -> None:
+        (tmp_path / ".claude").mkdir()
+        _settings(tmp_path).write_text("{not json")
+        assert ProjectPermissions(tmp_path).grant().error
+        assert sorted(p.name for p in (tmp_path / ".claude").iterdir()) == [
+            "settings.json"
+        ]
+
     def test_lock_is_not_truncated(self, tmp_path: Path) -> None:
         (tmp_path / ".claude").mkdir()
         lock = tmp_path / ".claude" / ".settings.json.punt-import.lock"
@@ -188,8 +202,9 @@ class TestHardening:
         real_read = claude_permissions._read
 
         def swap_then_read(dir_fd: int) -> tuple[dict[str, object], int]:
-            (repo / ".claude").rename(moved)
-            (repo / ".claude").symlink_to(outside, target_is_directory=True)
+            if not moved.exists():
+                (repo / ".claude").rename(moved)
+                (repo / ".claude").symlink_to(outside, target_is_directory=True)
             return real_read(dir_fd)
 
         monkeypatch.setattr(claude_permissions, "_read", swap_then_read)
