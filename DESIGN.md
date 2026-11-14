@@ -8043,17 +8043,27 @@ Every name biff *displays* must be a biff-addressable identity — something a
 teammate can `/write`. The OS user is never shown as a name in a roster; it is a
 machine fact and belongs only in a diagnostic line (`/finger`'s `Launched by:`).
 
-**`/who` MGR column** — the human who owns an agent, derived at render time by a
-**difference rule**, stored nowhere. For a row with `kind == "agent"` and own
-identity `self = row.user`: take the first of `[git config user.name, OS user]`
-that is non-empty and differs from `self` (case-insensitive). None differ, or a
-non-agent row → blank. The difference test is what makes the rule
-host-independent and self-filtering: on a provisioned host the bot's git-author
+**`/who` MGR column** — the human who owns an agent, derived by a **difference
+rule** from *that session's own* captured identity, stored on the row only as
+its raw inputs. Each session records, at registration, its own
+`git config user.name` (quote-stripped) and OS user — the owner's environment,
+not the viewer's. `/who` renders each row from the row's own pair: for a row with
+`kind == "agent"` and own identity `self = row.user`, MGR is the first of
+`[row.owner_git, row.launched_by]` (the owner's `git config user.name` and OS
+user, both captured at registration) that is non-empty, **addressable** (a valid
+biff identity — no whitespace, so a git *full name* like `Jane Doe` is rejected),
+and differs from `self` (case-insensitive). None qualify, or a non-agent
+row → blank.
+Deriving from the row's own captured identity — never the viewer's — is what
+makes `/who` correct across hosts and owners: an agent another person launched on
+another machine shows *their* name, because its row carries *their* git identity.
+The difference test is self-filtering: on a provisioned host the bot's git-author
 and `gh` login equal the agent identity and are skipped automatically; the human
 (`git config user.name`) differs and wins. The OS-user floor fills only when it
-too differs from the agent, so MGR never echoes the agent's own name. git's
-value is read with surrounding quotes stripped (`git config` returns `"name"`
-literally on some hosts).
+too differs from the agent, so MGR never echoes the agent's own name. The MGR
+string itself is computed at render time and persisted nowhere; only its raw
+inputs (`owner_git` and `launched_by`, the owner's git name and OS user) live on
+the row.
 
 **`/finger`** — shows the process owner (`Launched by: <os-user>`, a machine
 fact, always available standalone) and, when ethos team data resolves, the
