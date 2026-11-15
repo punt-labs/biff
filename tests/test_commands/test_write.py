@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from biff.cli_session import CliContext
+from biff.commands._messaging import Delivery
 from biff.commands.write import write
 from biff.models import UserSession
 from biff.relay import LocalRelay
+from biff.server.tools._session import resolve_write_target
 
 
 class TestWrite:
@@ -169,3 +171,71 @@ class TestWrite:
             "to": "@eric:",
             "error": result.text,
         }
+
+
+class TestForwardReport:
+    async def test_forwarded_multi_chunk_reports_parts(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
+        result = await write(ctx, "@eric:tty99", " ".join(["word"] * 200))
+        assert not result.error
+        assert "(2 parts)" in result.text
+        assert "delivered to eric's mailbox" in result.text
+
+    def test_failed_delivery_is_not_reported_as_forwarded(self) -> None:
+        target = resolve_write_target(
+            [UserSession(user="eric", tty="aa", tty_name="tty1")],
+            "eric",
+            "tty9",
+            local_repo="",
+            visible_repos=set(),
+        )
+        failed = Delivery(text="Could not deliver to eric", ok=False, parts=1)
+        assert target.report(failed) == "Could not deliver to eric"
+
+
+class TestResolveWriteTarget:
+    def test_forward_routes_to_recipients_repo(self) -> None:
+        # The recipient restarted into repo-b; a mailbox forward sent from
+        # repo-a must be published to repo-b, where they poll.
+        sessions = [UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-b")]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b"},
+        )
+        assert target.forwarded
+        assert target.target_repo == "repo-b"
+
+    def test_forward_stays_local_when_recipient_is_local(self) -> None:
+        sessions = [
+            UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-a"),
+            UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b"},
+        )
+        assert target.target_repo is None
+
+    def test_forward_picks_first_repo_by_name_when_not_local(self) -> None:
+        sessions = [
+            UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-c"),
+            UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b", "repo-c"},
+        )
+        assert target.target_repo == "repo-b"

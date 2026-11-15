@@ -18,6 +18,7 @@ _NO_SESSION_HINT = (
 _SELF_TALK = "You can't talk to your own session."
 
 if TYPE_CHECKING:
+    from biff.commands._messaging import Delivery
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def resolve_tty_name(
     return candidates[0]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WriteTarget:
     """Where a ``write`` is delivered.
 
@@ -140,14 +141,16 @@ class WriteTarget:
     forwarded: bool = False
     notice: str = ""
 
-    def report(self, delivery_text: str) -> str:
-        """Return the text to show the sender for a completed delivery.
+    def report(self, delivery: Delivery) -> str:
+        """Return the text to show the sender for a finished delivery.
 
-        A forwarded send says so; a failed delivery keeps its own text.
+        A successful forward says so (with the part count, like a plain
+        send); a failed delivery keeps its own text.
         """
-        if self.forwarded and delivery_text.startswith("Message sent"):
-            return self.notice
-        return delivery_text
+        if self.forwarded and delivery.ok:
+            suffix = f" ({delivery.parts} parts)" if delivery.parts > 1 else ""
+            return f"{self.notice}{suffix}"
+        return delivery.text
 
 
 def resolve_write_target(
@@ -162,39 +165,49 @@ def resolve_write_target(
 
     A bare ``user`` targets the user's mailbox.  ``user:tty`` targets the
     session holding that tty; when nobody holds it but the user is known,
-    the message is forwarded to the user's mailbox.  Raises ``ValueError``
-    when the user is not visible, so a message never reaches a user the
-    sender did not name.
+    the message is forwarded to the user's mailbox in a repo where they
+    are present.  Raises ``ValueError`` when the user is not visible, so a
+    message never reaches a user the sender did not name.
     """
     if not tty:
         return WriteTarget(relay_key=user, display=user, target_repo=None)
     session = resolve_tty_name(sessions, user, tty, local_repo=local_repo)
     if session is not None:
-        target_repo = (
-            session.repo
-            if session.repo
-            and session.repo != local_repo
-            and session.repo in visible_repos
-            else None
-        )
         return WriteTarget(
             relay_key=build_session_key(session.user, session.tty),
             display=f"{user}:{tty}",
-            target_repo=target_repo,
+            target_repo=_remote_repo(session.repo, local_repo, visible_repos),
         )
-    if not any(s.user == user for s in sessions):
+    user_repos = {s.repo for s in sessions if s.user == user}
+    if not user_repos:
         msg = f"user {user} not found in visible repos"
         raise ValueError(msg)
+    # The mailbox is repo-scoped: the recipient polls the inbox of the repo
+    # they are in, so publish there.  With several repos, prefer the local
+    # one, else the first by name, so the choice is deterministic.
+    if local_repo in user_repos:
+        target_repo = None
+    else:
+        target_repo = _remote_repo(min(user_repos), local_repo, visible_repos)
     return WriteTarget(
         relay_key=user,
         display=user,
-        target_repo=None,
+        target_repo=target_repo,
         forwarded=True,
         notice=(
             f"{tty} has no active session; delivered to {user}'s mailbox"
             " (any of their sessions will see it)."
         ),
     )
+
+
+def _remote_repo(
+    repo: str, local_repo: str, visible_repos: Collection[str]
+) -> str | None:
+    """Return *repo* when delivery must cross repos, else ``None``."""
+    if repo and repo != local_repo and repo in visible_repos:
+        return repo
+    return None
 
 
 def resolve_talk_target(

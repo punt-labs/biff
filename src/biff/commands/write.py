@@ -41,7 +41,7 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
 
     chunks = chunk_message(message)
     try:
-        result_text = await deliver_with_retry(
+        delivery = await deliver_with_retry(
             ctx.relay,
             from_user=ctx.user,
             from_tty=ctx.tty_name,
@@ -60,14 +60,14 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             json_data={"status": "error", "to": to, "error": str(exc)},
             error=True,
         )
-    if result_text.startswith("Could not deliver"):
+    if not delivery.ok:
         return CommandResult(
-            text=result_text,
-            json_data={"status": "error", "to": to, "error": result_text},
+            text=delivery.text,
+            json_data={"status": "error", "to": to, "error": delivery.text},
             error=True,
         )
     return CommandResult(
-        text=target.report(result_text),
+        text=target.report(delivery),
         json_data={
             "status": "forwarded" if target.forwarded else "sent",
             "to": target.display,

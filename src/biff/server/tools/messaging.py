@@ -121,11 +121,12 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         await update_current_session(state)
         try:
             user, tty = parse_address(to)
-            sessions = (
-                await state.relay.get_sessions_for_repos(state.visible_repos)
-                if tty
-                else []
-            )
+        except ValueError as exc:
+            return str(exc)
+        sessions = (
+            await state.relay.get_sessions_for_repos(state.visible_repos) if tty else []
+        )
+        try:
             target = resolve_write_target(
                 sessions,
                 user,
@@ -134,11 +135,16 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 visible_repos=state.visible_repos,
             )
         except ValueError as exc:
-            _log.warning("Write failed: %s", exc)
+            _log.warning(
+                "Write failed: %r (visible_repos=%s, sessions=%d)",
+                str(exc),
+                sorted(state.visible_repos),
+                len(sessions),
+            )
             return str(exc)
         chunks = chunk_message(message)
         await refresh_read_messages(mcp, state)
-        result = await deliver_with_retry(
+        delivery = await deliver_with_retry(
             state.relay,
             from_user=state.config.user,
             from_tty=get_tty_name(),
@@ -148,7 +154,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             chunks=chunks,
             display=target.display,
         )
-        return target.report(result)
+        return target.report(delivery)
 
     @mcp.tool(
         name="read_messages",
