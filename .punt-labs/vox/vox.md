@@ -1,7 +1,7 @@
 ---
 notify: "y"
 provider: "elevenlabs"
-speak: "n"
+speak: "y"
 model: "eleven_v3"
-voice: "charlie"
+voice: "river"
 ---
