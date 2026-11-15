@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import threading
+import time
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -579,7 +583,15 @@ class TestSweepScope:
         assert host.selector.store.read(record.session_id).state == "live"
 
 
-class TestConcurrentLifecycle:
+class TestStaleHandlesAreJudgedOnCurrentState:
+    """Sequential, not racing: a handle from before an end or renewal is re-read.
+
+    These pin the re-read-under-lock behavior.  They do not exercise the lock
+    itself; ``TestLifecycleLockUnderRealContention`` does, with real threads,
+    and ``test_cli_session_store.py::test_concurrent_creates_one_wins`` covers
+    the store flock across threads.
+    """
+
     async def test_end_then_late_attach_cannot_resurrect_presence(
         self, tmp_path: Path
     ) -> None:
@@ -605,30 +617,6 @@ class TestConcurrentLifecycle:
 
         assert await host.relay.get_tty_reservation_owner("kai", "alpha") == new_key
         assert await host.relay.get_session(new_key) is not None
-
-    async def test_concurrent_attach_and_end_leave_a_consistent_session(
-        self, tmp_path: Path
-    ) -> None:
-        import asyncio
-
-        host = _host(tmp_path)
-        record = await host.create("alpha")
-        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
-
-        results = await asyncio.gather(
-            host.attach(record), host.end(record), return_exceptions=True
-        )
-
-        state = host.selector.store.read(record.session_id).state
-        row = await host.relay.get_session(key)
-        if state == "ended":
-            assert row is None
-        else:
-            assert row is not None
-        assert not any(
-            isinstance(r, BaseException) and not isinstance(r, CliSessionEndedError)
-            for r in results
-        )
 
     async def test_sweep_judges_the_current_state_not_the_listing(
         self, tmp_path: Path
@@ -674,3 +662,131 @@ class TestContextActsAsTheRecordsUser:
         assert ctx.session_key == (
             SessionRouting(attached.record.session_id, role=CLI_ROLE).session_key("kai")
         )
+
+
+class _SlowRelay(LocalRelay):
+    """LocalRelay whose calls yield for a while, widening every race window.
+
+    A host method only interleaves with another where it awaits the relay, so
+    without latency each runs to completion before the other starts.
+    """
+
+    FETCH_DELAY = 0.3  # a release is slow, so an attach can land inside it
+    WRITE_DELAY = 0.4  # a row write that lands after a concurrent end's delete
+
+    async def fetch(self, session_key: str) -> list[Message]:
+        await asyncio.sleep(self.FETCH_DELAY)
+        return await super().fetch(session_key)
+
+    async def update_session(self, session: UserSession) -> None:
+        await asyncio.sleep(self.WRITE_DELAY)
+        await super().update_session(session)
+
+
+def _race(
+    host: SessionHost,
+    relay_dir: Path,
+    *jobs: tuple[float, Callable[[SessionHost], Coroutine[object, object, object]]],
+) -> list[object]:
+    """Run each job in its own thread and event loop, released together.
+
+    Every thread gets its own ``SessionHost`` over the same store and relay
+    directories, which is what two ``biff`` processes look like.  Each job
+    starts after its own head start so the order of the first steps is fixed
+    and only the lock decides what happens next.
+    """
+    barrier = threading.Barrier(len(jobs))
+    results: list[object] = [None] * len(jobs)
+
+    def run(
+        i: int,
+        head_start: float,
+        job: Callable[[SessionHost], Coroutine[object, object, object]],
+    ) -> None:
+        mine = dataclasses.replace(host, relay=_SlowRelay(relay_dir))
+        barrier.wait()
+        time.sleep(head_start)
+        try:
+            results[i] = asyncio.run(job(mine))
+        except (CliSessionEndedError, SessionSelectionError, OSError) as exc:
+            results[i] = exc
+
+    threads = [
+        threading.Thread(target=run, args=(i, head, job))
+        for i, (head, job) in enumerate(jobs)
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    return results
+
+
+class TestLifecycleLockUnderRealContention:
+    """Two OS threads, each with its own event loop, contend on the session lock.
+
+    Neutering ``SessionLock`` turns each of these red; the lock is the guard.
+    """
+
+    def test_attach_racing_end_never_leaves_an_ended_session_with_a_live_row(
+        self, tmp_path: Path
+    ) -> None:
+        host = _host(tmp_path)
+        record = asyncio.run(host.create("alpha"))
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+
+        # attach moves the record to live, then writes its row slowly; end
+        # starts while that write is pending.
+        results = _race(
+            host,
+            tmp_path / "relay",
+            (0.0, lambda h: h.attach(record)),
+            (0.05, lambda h: h.end(record)),
+        )
+
+        state = host.selector.store.read(record.session_id).state
+        row = asyncio.run(host.relay.get_session(key))
+        owner = asyncio.run(host.relay.get_tty_reservation_owner("kai", "alpha"))
+        assert state == "ended", results
+        assert row is None, "an ended session must not keep a live presence row"
+        assert owner is None
+        assert not [
+            r
+            for r in results
+            if isinstance(r, Exception) and not isinstance(r, CliSessionEndedError)
+        ]
+
+    def test_attach_racing_expiry_never_strands_a_revived_session(
+        self, tmp_path: Path
+    ) -> None:
+        host = _host(tmp_path)
+        record = asyncio.run(host.create("alpha"))
+        store = host.selector.store
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        store.lapse(record.session_id)
+        _backdate(
+            store,
+            record.session_id,
+            last_attached_at=datetime.now(UTC) - RETENTION - timedelta(minutes=1),
+        )
+
+        # The sweep finds the dormant record past retention and starts to
+        # release it (slowly); an attach revives it in the meantime.
+        _race(
+            host,
+            tmp_path / "relay",
+            (0.0, lambda h: h.sweep()),
+            (0.1, lambda h: h.attach(record)),
+        )
+
+        remaining = store.list()
+        row = asyncio.run(host.relay.get_session(key))
+        owner = asyncio.run(host.relay.get_tty_reservation_owner("kai", "alpha"))
+        if remaining:
+            (live,) = remaining
+            assert live.state == "live"
+            assert row is not None, "a live session lost its presence row"
+            assert owner == key, "a live session lost its tty name"
+        else:
+            assert row is None
+            assert owner is None
