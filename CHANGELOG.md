@@ -4,6 +4,14 @@
 
 ### Added
 
+- Named CLI sessions. `biff session new [--tty NAME] [--repo PATH] [--as USER]`
+  creates one, `session ls [--all] [--json]` lists them, `session use` makes one
+  this repo's default, and `session end` ends one after moving its unread mail
+  into your user mailbox. The global `-s`/`--session` option (and the
+  `BIFF_SESSION` environment variable) runs one command as a named session;
+  an unknown or ended session is an error and `-s` never creates one. Without
+  `-s` a command runs as the Claude Code session it was started from, else this
+  repo's default session, else a new one.
 - `biff --version` prints the PyPI `punt-biff` package version and, when a
   plugin install is found in Claude Code's registry, the plugin version
   (`biff 1.22.0 (plugin 1.22.0)`), so the two release channels can be told
@@ -24,6 +32,11 @@
 
 ### Changed
 
+- Two `biff` commands from one shell now report the same `ttyN`. A CLI
+  invocation attaches to a persistent session instead of registering a fresh
+  row and deleting it on exit, so the session's address and inbox survive
+  between commands. An idle session goes dormant after 8 hours and is removed
+  after 3 days; its inbox is moved to the user mailbox first.
 - `biff enable` allows each biff surface broadly — `Bash(biff:*)`,
   `mcp__plugin_biff_tty__*` and `Skill(biff:*)` — and puts an exact `ask` rule
   in `permissions.ask` for each machine- or repo-mutating verb (`install`,

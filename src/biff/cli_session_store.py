@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
+import logging
 import os
 import re
 import secrets
 import tempfile
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractContextManager, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self, cast, get_args
 
+from biff.cli_session_lock import SessionLock
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
+
+logger = logging.getLogger(__name__)
 
 SessionState = Literal["live", "dormant", "ended"]
 
@@ -155,6 +158,12 @@ class CliSessionRecord:
         _require_aware(now)
         return replace(self, state="ended", ended_at=now.astimezone(UTC))
 
+    def renamed(self, tty: str) -> Self:
+        """Return the record under a new display name; an ended record refuses."""
+        if self.state == "ended":
+            raise self.ended_error()
+        return replace(self, tty=tty)
+
     def ended_error(self) -> CliSessionEndedError:
         """Return the error naming when this session ended and how to recover."""
         msg = (
@@ -222,11 +231,19 @@ class CliSessionStore:
                 records.append(self.read(d.name))
             except FileNotFoundError:
                 continue  # expired between the scan and the read
+            except ValueError:
+                # One unreadable record (corrupt, or written by a newer biff)
+                # must not make every command fail.
+                logger.warning("skipping unreadable session %s", d.name, exc_info=True)
         return tuple(sorted(records, key=lambda r: r.created_at))
 
     def attach(self, session_id: str, *, now: datetime) -> CliSessionRecord:
         """Renew a live lease or revive a dormant session; ended raises."""
         return self._apply(session_id, lambda r: r.attached(now))
+
+    def rename(self, session_id: str, tty: str) -> CliSessionRecord:
+        """Change the session's display name, keeping its id and everything else."""
+        return self._apply(session_id, lambda r: r.renamed(tty))
 
     def lapse(self, session_id: str) -> CliSessionRecord:
         """Move a live session to dormant; nothing else is released."""
@@ -263,17 +280,19 @@ class CliSessionStore:
             msg = f"unknown session: {session_id}"
             raise FileNotFoundError(msg)
 
-    @contextmanager
-    def _locked(self, session_id: str) -> Generator[None]:
-        # The lock file lives outside the session directory so create and
-        # expire, which make and remove that directory, hold the same lock as
-        # every transition. flock is released by the OS when the process
-        # exits, so a killed holder can never wedge the session.
-        lock_dir = self.root / _LOCK_DIR
-        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with (lock_dir / f"{session_id}.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+    @property
+    def _lock(self) -> SessionLock:
+        return SessionLock(self.root / _LOCK_DIR)
+
+    @asynccontextmanager
+    async def lifecycle(self, session_id: str) -> AsyncGenerator[None]:
+        """Hold the session's lock across a transition AND its relay side effects."""
+        self._record_path(session_id)  # validates the id before any path is built
+        async with self._lock.hold(session_id):
             yield
+
+    def _locked(self, session_id: str) -> AbstractContextManager[None]:
+        return self._lock.hold_blocking(session_id)
 
     def _record_path(self, session_id: str) -> Path:
         # Validate before building any path so a hostile id cannot escape root.

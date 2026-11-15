@@ -21,7 +21,7 @@ from biff.__main__ import (
     _release_prompt,
     _repl_loop,
 )
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands import CommandResult
 from biff.models import BiffConfig
 from biff.relay import LocalRelay

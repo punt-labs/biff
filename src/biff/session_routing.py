@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,7 @@ class SessionRouting:
     """
 
     session_id: str
+    role: str = CLAUDE_CODE_ROLE
 
     def __post_init__(self) -> None:
         if not ID_RE.fullmatch(self.session_id):
@@ -36,10 +38,20 @@ class SessionRouting:
             )
             raise SessionIdError(msg)
 
+    @classmethod
+    def declared_by_harness(cls) -> SessionRouting | None:
+        """Return the session Claude Code declares in this process's environment.
+
+        ``None`` when ``CLAUDE_CODE_SESSION_ID`` is unset or outside the
+        identity charset.
+        """
+        value = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        return cls(value) if ID_RE.fullmatch(value) else None
+
     @property
     def routing_id(self) -> str:
         """Domain-separated routing token for this session."""
-        return derive_routing_id(self.session_id, CLAUDE_CODE_ROLE)
+        return derive_routing_id(self.session_id, self.role)
 
     def session_key(self, user: str) -> str:
         """Composite relay key ``{user}:{routing_id}``."""

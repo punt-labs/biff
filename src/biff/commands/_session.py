@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.models import UserSession
 from biff.tty import get_hostname, get_pwd
 

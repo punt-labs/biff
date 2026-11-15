@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib.metadata import version as pkg_version
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
 from biff.formatting import format_idle, format_wall_status_line
 

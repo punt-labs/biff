@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.dispatch import available_commands, dispatch
 from biff.models import BiffConfig, UserSession
 from biff.relay import LocalRelay

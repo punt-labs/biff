@@ -12,6 +12,9 @@ routing id from this one constant; a mismatch would strand the session's
 state under a key nobody reads.
 """
 
+CLI_ROLE = "biff.cli.session.v1"
+"""Domain separator for routing ids derived from a CLI session_id."""
+
 _DERIVE_DIGEST_BYTES = 8  # 16 hex chars — inside the routing-id charset
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.finger import finger
 from biff.commands.mesg import mesg
 from biff.commands.plan import plan

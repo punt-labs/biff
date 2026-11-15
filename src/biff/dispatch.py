@@ -16,7 +16,7 @@ import shlex
 from collections.abc import Awaitable, Callable
 
 from biff import commands
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands import CommandResult
 
 _DURATION_RE = re.compile(r"^\d+[mhd]$")

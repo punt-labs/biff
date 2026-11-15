@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from biff.chunking import chunk_message
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands._messaging import deliver_with_retry
 from biff.commands._result import CommandResult
 from biff.server.tools._session import resolve_write_target

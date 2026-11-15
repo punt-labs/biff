@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.status import status
 from biff.commands.wall import wall
 from biff.models import UserSession, WallPost

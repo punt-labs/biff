@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
 from biff.ethos_team import EthosTeams
 from biff.formatting import format_finger, format_finger_multi

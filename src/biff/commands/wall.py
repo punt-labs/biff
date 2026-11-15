@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from pydantic import ValidationError
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
 from biff.formatting import (
     format_wall,

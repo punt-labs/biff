@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from biff.cli_session import CliContext, _heartbeat_loop, cli_session
+from biff.cli_context import CliContext
+from biff.cli_session import _heartbeat_loop, cli_session
 from biff.models import BiffConfig, UserSession
 
 
@@ -66,6 +67,21 @@ class TestHeartbeatLoop:
         await task
 
     @pytest.mark.anyio()
+    async def test_renews_the_lease_on_each_tick(self) -> None:
+        relay = AsyncMock()
+        renew = AsyncMock()
+        shutdown = asyncio.Event()
+
+        async def _stop_after_one() -> None:
+            await asyncio.sleep(0.05)
+            shutdown.set()
+
+        task = asyncio.create_task(_stop_after_one())
+        await _heartbeat_loop(relay, "kai:abc", shutdown, interval=0.01, renew=renew)
+        await task
+        assert renew.await_count >= 1
+
+    @pytest.mark.anyio()
     async def test_survives_cancelled_error(self) -> None:
         """CancelledError during heartbeat returns cleanly, no warning."""
         relay = AsyncMock()
@@ -113,6 +129,12 @@ class TestCliSessionLifecycle:
     lifecycle without a real NATS connection.
     """
 
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
     @pytest.fixture()
     def mock_relay(self) -> AsyncMock:
         relay = AsyncMock()
@@ -143,7 +165,7 @@ class TestCliSessionLifecycle:
         )
 
     @pytest.mark.anyio()
-    async def test_session_registered_and_deleted(
+    async def test_session_registered_and_kept(
         self, mock_relay: AsyncMock, mock_config: object
     ) -> None:
         with (
@@ -161,14 +183,15 @@ class TestCliSessionLifecycle:
         assert registered.user == "kai"
         assert registered.tty_name == "tty1"
 
-        # Session was deleted on exit
-        mock_relay.delete_session.assert_awaited_once()
+        # The session outlives the invocation: row and name are not released.
+        mock_relay.delete_session.assert_not_awaited()
+        mock_relay.release_tty_name.assert_not_awaited()
 
         # Relay was closed
         mock_relay.close.assert_awaited_once()
 
     @pytest.mark.anyio()
-    async def test_wtmp_login_and_logout_written(
+    async def test_wtmp_login_written_once_and_no_logout_on_exit(
         self, mock_relay: AsyncMock, mock_config: object
     ) -> None:
         with (
@@ -178,13 +201,9 @@ class TestCliSessionLifecycle:
             async with cli_session() as _ctx:
                 pass
 
-        # Two wtmp events: login + logout
-        assert mock_relay.append_wtmp.await_count == 2
-        login_event = mock_relay.append_wtmp.call_args_list[0][0][0]
-        logout_event = mock_relay.append_wtmp.call_args_list[1][0][0]
-        assert login_event.event == "login"
-        assert logout_event.event == "logout"
-        assert login_event.session_key == logout_event.session_key
+        # Only the creation is a login; detaching writes no logout.
+        events = [c[0][0].event for c in mock_relay.append_wtmp.call_args_list]
+        assert events == ["login"]
 
     @pytest.mark.anyio()
     async def test_interactive_starts_heartbeat(
@@ -219,7 +238,6 @@ class TestCliSessionLifecycle:
 
         # Relay still closed despite failure
         mock_relay.close.assert_awaited_once()
-        # No logout written (session was never registered)
         logout_calls = [
             c
             for c in mock_relay.append_wtmp.call_args_list
@@ -271,3 +289,57 @@ class TestCliSessionLifecycle:
         ):
             async with cli_session() as _ctx:
                 pass
+
+
+class TestSessionPersistence:
+    """Two invocations from one shell are one session with one address."""
+
+    @pytest.fixture()
+    def env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> object:
+        from biff.config import ResolvedConfig
+        from biff.relay import LocalRelay
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        resolved = ResolvedConfig(
+            config=BiffConfig(
+                user="kai", repo_name="test", relay_url="nats://localhost:4222"
+            ),
+            data_dir=tmp_path,
+            repo_root=repo,
+            repo_common_root=repo,
+        )
+        return resolved, LocalRelay(tmp_path / "relay")
+
+    @pytest.mark.anyio()
+    async def test_two_invocations_report_the_same_session(
+        self, env: tuple[object, object]
+    ) -> None:
+        resolved, relay = env
+        with (
+            patch("biff.cli_session.load_cli_config", return_value=resolved),
+            patch("biff.cli_session.NatsRelay", return_value=relay),
+        ):
+            async with cli_session() as first:
+                pass
+            async with cli_session() as second:
+                pass
+
+        assert first.session_key == second.session_key
+        assert first.tty_name == second.tty_name
+
+    @pytest.mark.anyio()
+    async def test_relay_row_survives_exit(self, env: tuple[object, object]) -> None:
+        resolved, relay = env
+        with (
+            patch("biff.cli_session.load_cli_config", return_value=resolved),
+            patch("biff.cli_session.NatsRelay", return_value=relay),
+        ):
+            async with cli_session() as ctx:
+                pass
+
+        row = await relay.get_session(ctx.session_key)  # type: ignore[attr-defined]
+        assert row is not None

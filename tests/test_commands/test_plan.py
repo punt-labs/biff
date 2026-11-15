@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from biff._formatting import TABLE_WIDTH, visible_width
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.plan import plan
 from biff.formatting import _NO_PRINTABLE_TEXT, _NO_VISIBLE_CONTENT
 from biff.models import PLAN_MAX_LENGTH

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.mesg import mesg
 from biff.relay import LocalRelay
 
