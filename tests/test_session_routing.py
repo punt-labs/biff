@@ -27,6 +27,35 @@ def test_unread_path_is_keyed_by_session_id(tmp_path: Path) -> None:
     assert SessionRouting("sess-1").unread_path(tmp_path) == tmp_path / "sess-1.json"
 
 
+def test_nested_sessions_get_distinct_unread_paths(tmp_path: Path) -> None:
+    # Regression guard for the process-tree-walk collapse: find_session_key()
+    # keyed the unread file on the topmost claude ancestor PID, so a nested
+    # claude process (spawned by `claude -p` or another plugin's hook) resolved
+    # to its parent's PID and overwrote the parent's unread file. Keying on the
+    # harness-declared session_id instead, a nested session — a distinct
+    # session_id — can never share the parent's file.
+    parent = SessionRouting("parent-session")
+    nested = SessionRouting("nested-session")
+    assert parent.unread_path(tmp_path) != nested.unread_path(tmp_path)
+    assert parent.session_key("u") != nested.session_key("u")
+
+
+def test_unread_path_carries_no_process_component(tmp_path: Path) -> None:
+    # Regression guard for the local-plugin process-tree divergence (PL-276):
+    # the MCP server and the status line walked up to *different* claude PIDs, so
+    # the server wrote one unread file and the status line read another (the
+    # status bar showed bare "biff"). The fix is that the filename is a pure
+    # function of the harness-declared session_id with NO process component —
+    # then any two processes bearing the same session_id resolve the same file.
+    # Asserting exact equality to "{session_id}.json" is what makes this guard
+    # fail if a PID (os.getpid(), the old topmost-ancestor PID, etc.) were ever
+    # mixed back into the name; a two-SessionRouting-in-one-process check would
+    # not, since both would observe the same PID (Qodo finding on this PR).
+    sid = "one-session-two-processes"
+    assert SessionRouting(sid).unread_path(tmp_path) == tmp_path / f"{sid}.json"
+    assert SessionRouting(sid).unread_path(tmp_path).name == f"{sid}.json"
+
+
 def test_hook_server_and_statusline_agree_on_every_key(tmp_path: Path) -> None:
     sid = "7f3c9a-4b2e"
     from_hook = SessionRouting(sid)  # SessionStart payload session_id

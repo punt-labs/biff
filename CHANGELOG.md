@@ -73,6 +73,16 @@
   subscription kind and the `human` routing role are removed from the Z specs
   and the models re-proven. See DES-075 (PL-231).
 
+### Fixed
+
+- Nested `claude` sessions no longer collapse onto a parent's status-line unread
+  count, and a local-plugin install's MCP server and status line no longer
+  disagree on which unread file to use. Both were process-tree-walk defects
+  (`find_session_key()`'s topmost-ancestor PID); DES-064 replaced the walk with
+  the harness-declared `session_id`, so the unread file is keyed by that id and
+  every producer and reader agrees on it. Regression guards added. (PL-242,
+  PL-276)
+
 ## [1.22.0] - 2026-11-12
 
 ### Changed
