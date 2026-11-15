@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.read import read
 from biff.models import Message
 from biff.relay import LocalRelay

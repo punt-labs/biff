@@ -18,7 +18,8 @@ from unittest.mock import patch
 import nats
 import pytest
 
-from biff.cli_session import CliContext, cli_session
+from biff.cli_context import CliContext
+from biff.cli_session import cli_session
 from biff.config import ResolvedConfig
 from biff.models import BiffConfig
 

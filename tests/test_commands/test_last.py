@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.last import last
 from biff.models import BiffConfig, SessionEvent, UserSession
 

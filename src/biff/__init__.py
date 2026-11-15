@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from biff import commands as commands
-    from biff.cli_session import CliContext as CliContext
+    from biff.cli_context import CliContext as CliContext
     from biff.commands import CommandResult as CommandResult
     from biff.config import (
         load_cli_config as load_cli_config,

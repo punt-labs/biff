@@ -15,7 +15,7 @@ writing the record.
 
 from __future__ import annotations
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands._session import update_current_session
 from biff.commands.mesg import mesg
 from biff.commands.plan import plan

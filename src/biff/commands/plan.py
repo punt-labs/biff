@@ -7,7 +7,7 @@ import os
 from pydantic import ValidationError
 
 from biff._stdlib import expand_bead_id, get_repo_common_root
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands._result import CommandResult
 from biff.commands._session import update_current_session
 from biff.formatting import format_talk_echo

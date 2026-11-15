@@ -199,3 +199,22 @@ class TestFromResolvedUsesTheCommonRoot:
         )
 
         assert from_worktree.repo_root == from_main.repo_root == main
+
+
+class TestIdentityIsFrozen:
+    def test_other_identity_error_names_the_owner_and_the_way_out(
+        self, tmp_path: Path
+    ) -> None:
+        sel = _selector(tmp_path)
+        _make(sel, "main", user="eric")
+        with pytest.raises(SessionSelectionError) as info:
+            sel.lookup("main")
+        text = str(info.value)
+        assert "belongs to eric, not kai" in text
+        assert "keeps the identity it was created with" in text
+        assert "--user eric" in text
+
+    def test_the_owner_can_reach_it_with_user(self, tmp_path: Path) -> None:
+        sel = _selector(tmp_path, user="eric")
+        rec = _make(sel, "main", user="eric")
+        assert sel.explicit("main") == rec

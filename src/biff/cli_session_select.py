@@ -78,9 +78,11 @@ class SessionSelector:
         self, ref: str, others: list[CliSessionRecord]
     ) -> SessionSelectionError:
         if others:
+            owner = others[0].user
             msg = (
-                f"session {ref} belongs to {others[0].user}, not {self.user}; "
-                "a session's user is fixed, so --user cannot override it"
+                f"session {ref} belongs to {owner}, not {self.user}; a session "
+                f"keeps the identity it was created with, so run with "
+                f"--user {owner} or create a new session"
             )
             return SessionSelectionError(msg)
         return SessionSelectionError(f"unknown session: {ref}")

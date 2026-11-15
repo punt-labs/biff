@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from biff.__main__ import _clear_talk_plan, _set_talk_plan
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.mesg import mesg
 from biff.commands.plan import plan
 from biff.commands.tty import tty

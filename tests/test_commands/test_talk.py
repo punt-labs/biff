@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import biff.commands.talk as talk_commands
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.models import BiffConfig, UserSession
 from biff.relay import LocalRelay
 from biff.talk_types import TalkPhase

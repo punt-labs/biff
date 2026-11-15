@@ -42,7 +42,8 @@ if TYPE_CHECKING:
 
 import biff.commands.talk as talk_commands
 from biff import commands
-from biff.cli_session import CliContext, cli_session, cli_session_host
+from biff.cli_context import CliContext
+from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
 from biff.commands.session import SessionVerbs

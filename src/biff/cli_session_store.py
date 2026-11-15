@@ -2,33 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
-import fcntl
 import json
 import logging
 import os
 import re
 import secrets
 import tempfile
-from collections.abc import AsyncGenerator, Callable, Generator
-from contextlib import asynccontextmanager, contextmanager
-from contextvars import ContextVar
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractContextManager, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self, cast, get_args
 
+from biff.cli_session_lock import SessionLock
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
 
 logger = logging.getLogger(__name__)
-
-_held: ContextVar[frozenset[str]] = ContextVar(
-    "cli_session_locks_held", default=frozenset()
-)
-"""Session ids whose lock the current task already holds, so a transition made
-inside :meth:`CliSessionStore.lifecycle` does not wait on its own lock."""
-
-_LOCK_POLL_SECONDS = 0.05
 
 SessionState = Literal["live", "dormant", "ended"]
 
@@ -290,48 +280,19 @@ class CliSessionStore:
             msg = f"unknown session: {session_id}"
             raise FileNotFoundError(msg)
 
+    @property
+    def _lock(self) -> SessionLock:
+        return SessionLock(self.root / _LOCK_DIR)
+
     @asynccontextmanager
     async def lifecycle(self, session_id: str) -> AsyncGenerator[None]:
-        """Hold the session's lock across a transition AND its relay side effects.
-
-        The same flock every store transition takes, so an attach, an end and
-        a sweep in different processes serialize on one session.  Waiting
-        polls without blocking the event loop, and transitions made inside
-        the block reuse the held lock.
-        """
+        """Hold the session's lock across a transition AND its relay side effects."""
         self._record_path(session_id)  # validates the id before any path is built
-        if session_id in _held.get():
+        async with self._lock.hold(session_id):
             yield
-            return
-        lock_dir = self.root / _LOCK_DIR
-        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with (lock_dir / f"{session_id}.lock").open("a") as lock:
-            while True:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    await asyncio.sleep(_LOCK_POLL_SECONDS)
-            token = _held.set(_held.get() | {session_id})
-            try:
-                yield
-            finally:
-                _held.reset(token)
 
-    @contextmanager
-    def _locked(self, session_id: str) -> Generator[None]:
-        # The lock file lives outside the session directory so create and
-        # expire, which make and remove that directory, hold the same lock as
-        # every transition. flock is released by the OS when the process
-        # exits, so a killed holder can never wedge the session.
-        if session_id in _held.get():
-            yield
-            return
-        lock_dir = self.root / _LOCK_DIR
-        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with (lock_dir / f"{session_id}.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            yield
+    def _locked(self, session_id: str) -> AbstractContextManager[None]:
+        return self._lock.hold_blocking(session_id)
 
     def _record_path(self, session_id: str) -> Path:
         # Validate before building any path so a hostile id cannot escape root.

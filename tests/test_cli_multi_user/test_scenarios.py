@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from biff import commands
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 
 pytestmark = pytest.mark.cli_multi_user
 

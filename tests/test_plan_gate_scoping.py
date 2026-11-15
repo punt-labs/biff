@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 import pytest
 
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands.plan import plan
 from biff.hook import handle_pre_tool_use, handle_session_start
 from biff.markers import has_plan_marker, write_plan_marker

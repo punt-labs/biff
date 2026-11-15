@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from biff.cli_session import CliContext, _heartbeat_loop, cli_session
+from biff.cli_context import CliContext
+from biff.cli_session import _heartbeat_loop, cli_session
 from biff.models import BiffConfig, UserSession
 
 

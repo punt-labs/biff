@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from biff.cli_session_drain import InboxDrain
 from biff.cli_session_host import LEASE, RETENTION, SessionHost
 from biff.cli_session_pointer import CurrentPointer
 from biff.cli_session_select import SessionSelectionError, SessionSelector
@@ -533,9 +534,9 @@ class TestDrainIsIdempotent:
         msg = Message(from_user="eric", to_user=key, body="once")
         await host.relay.deliver(msg)
 
-        await host._drain("kai", key)
+        await InboxDrain(host.relay).move(key, "kai")
         await host.relay.deliver(msg)  # the same message shows up again
-        await host._drain("kai", key)
+        await InboxDrain(host.relay).move(key, "kai")
 
         assert [m.body for m in await host.relay.fetch_user_inbox("kai")] == ["once"]
 
@@ -660,4 +661,16 @@ class TestConcurrentLifecycle:
         await host.renew(record)
         assert store.read(record.session_id).last_attached_at > (
             datetime.now(UTC) - timedelta(minutes=1)
+        )
+
+
+class TestContextActsAsTheRecordsUser:
+    async def test_cli_context_uses_the_stored_user(self, tmp_path: Path) -> None:
+        host = _host(tmp_path)
+        attached = await host.resolve(None)
+        ctx = host.context_for(attached)
+        assert attached.record is not None
+        assert ctx.user == attached.record.user == "kai"
+        assert ctx.session_key == (
+            SessionRouting(attached.record.session_id, role=CLI_ROLE).session_key("kai")
         )

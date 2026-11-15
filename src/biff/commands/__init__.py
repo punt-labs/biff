@@ -1,6 +1,6 @@
 """Pure async command functions for the biff CLI.
 
-Each function takes a :class:`~biff.cli_session.CliContext` plus
+Each function takes a :class:`~biff.cli_context.CliContext` plus
 command-specific arguments and returns a
 :class:`~biff.commands._result.CommandResult`.  No I/O, no exit
 codes — the CLI adapter in ``__main__`` handles those.

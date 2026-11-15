@@ -2,38 +2,26 @@
 
 from __future__ import annotations
 
+import functools
 import logging
-import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from biff.cli_context import CliContext
+from biff.cli_session_drain import InboxDrain
 from biff.cli_session_select import SessionSelectionError, SessionSelector
 from biff.cli_session_store import (
     CliSessionEndedError,
     CliSessionRecord,
 )
-from biff.models import BiffConfig, Message, SessionEvent, UserSession
+from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.relay import SESSION_TTL_SECONDS, Relay
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
 from biff.tty import claim_tty_name, validate_tty_name
 
 logger = logging.getLogger(__name__)
-
-_TRANSFER_NS = uuid.UUID("5d0c3f0e-8f4e-4f43-9a6f-0d2d6f1b7e11")
-_RESTORE_NS = uuid.UUID("b3a1c7d2-2e49-4c52-8d1a-6e0f9c5a4b72")
-
-
-def _transfer_id(source: uuid.UUID) -> uuid.UUID:
-    """Stable id of *source*'s copy in the user mailbox."""
-    return uuid.uuid5(_TRANSFER_NS, str(source))
-
-
-def _restored_id(source: uuid.UUID) -> uuid.UUID:
-    """Stable id of *source*'s copy put back in the session inbox."""
-    return uuid.uuid5(_RESTORE_NS, str(source))
-
 
 LEASE = timedelta(hours=8)
 """A session with no attach for this long moves from live to dormant."""
@@ -133,6 +121,44 @@ class SessionHost:
             renewed = store.attach(record.session_id, now=datetime.now(UTC))
             await self._register(renewed)
         return Attachment(self._routing(renewed), renewed.tty, renewed)
+
+    def context_for(
+        self,
+        attached: Attachment,
+        *,
+        relay: Relay | None = None,
+        org_repos: frozenset[str] = frozenset(),
+        repo_root: Path | None = None,
+    ) -> CliContext:
+        """Return the command context for *attached*.
+
+        A CLI session's context can rename its stored record; a client of a
+        harness session cannot, because it has none.
+        """
+        record = attached.record
+        # A CLI session keeps the identity it was created with (frozen at
+        # creation); only a harness client acts as the invocation's user.
+        user = self.config.user if record is None else record.user
+        return CliContext(
+            relay=relay or self.relay,
+            config=self.config,
+            session_key=attached.routing.session_key(user),
+            user=user,
+            tty=attached.routing.routing_id,
+            tty_name=attached.tty_name,
+            org_repos=org_repos,
+            repo_root=repo_root,
+            rename_record=(
+                None
+                if record is None
+                else functools.partial(self._rename, record.session_id)
+            ),
+        )
+
+    async def _rename(self, session_id: str, tty: str) -> None:
+        store = self.selector.store
+        async with store.lifecycle(session_id):
+            store.rename(session_id, tty)
 
     async def renew(self, record: CliSessionRecord) -> None:
         """Extend *record*'s lease while a process stays attached to it."""
@@ -259,80 +285,11 @@ class SessionHost:
     async def _release(self, record: CliSessionRecord) -> None:
         """Drain the inbox into the owner's mailbox, then free the name and row."""
         key = self._key(record)
-        await self._drain(record.user, key)
+        await InboxDrain(self.relay).move(key, record.user)
         owner = await self.relay.get_tty_reservation_owner(record.user, record.tty)
         if owner == key:
             await self.relay.release_tty_name(record.user, record.tty)
         await self.relay.delete_session(key)
-
-    async def _drain(self, user: str, key: str) -> None:
-        """Move every unread message for *key* into *user*'s mailbox.
-
-        ``fetch`` returns one batch at a time, so this loops until a fetch
-        yields nothing new.  Each message is delivered to the mailbox under an
-        id derived from its own, and only then marked read, so a retry of the
-        same transfer is deduplicated by the relay instead of copied twice.
-
-        Relays differ in what ``fetch`` does.  ``LocalRelay`` leaves messages
-        in place, so after a failure the unmoved ones are still there.  The
-        NATS relay consumes them as it returns them: once ``fetch`` has
-        returned, the in-memory batch is the only copy, and a hard crash
-        (SIGKILL, power loss) before the loop finishes loses the unmoved mail.
-        The Relay API has no acknowledge-after-write to close that window.
-        A failure that can be caught is handled in :meth:`_restore`.
-        """
-        moved: set[uuid.UUID] = set()
-        while batch := [m for m in await self.relay.fetch(key) if m.id not in moved]:
-            unmoved = list(batch)
-            try:
-                for message in batch:
-                    await self.relay.deliver(
-                        message.model_copy(
-                            update={
-                                "id": _transfer_id(message.id),
-                                "to_user": user,
-                                "read": False,
-                            }
-                        )
-                    )
-                    await self.relay.mark_read(key, [message.id])
-                    moved.add(message.id)
-                    unmoved.remove(message)
-            except BaseException:
-                await self._restore(key, unmoved)
-                raise
-
-    async def _restore(self, key: str, unmoved: list[Message]) -> None:
-        """Put *unmoved* back in the session inbox if the relay consumed them.
-
-        A consuming relay no longer holds them after ``fetch``, so a probe
-        fetch finds none of their ids and they are re-delivered, along with
-        anything the probe itself consumed.  A non-consuming relay still
-        holds them and the probe finds their ids, so nothing is re-delivered.
-
-        Restored copies get ids derived from the originals, so repeating the
-        restore cannot duplicate them.  One message can still be duplicated:
-        the one whose mailbox delivery raised after the relay accepted it (a
-        lost acknowledgement) is restored too.  A copy is the safe side of
-        that ambiguity; losing mail is not.
-        """
-        probe = await self.relay.fetch(key)
-        held = {m.id for m in probe}
-        if any(m.id in held for m in unmoved):
-            return
-        failed: list[uuid.UUID] = []
-        for message in [*unmoved, *probe]:
-            try:
-                await self.relay.deliver(
-                    message.model_copy(update={"id": _restored_id(message.id)})
-                )
-            except Exception:
-                failed.append(message.id)
-                logger.error(
-                    "could not restore message %s to %s", message.id, key, exc_info=True
-                )
-        if failed:
-            logger.error("%d message(s) lost from %s; see the log", len(failed), key)
 
     async def _wtmp(self, record: CliSessionRecord, event: str) -> None:
         try:

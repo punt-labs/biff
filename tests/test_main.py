@@ -20,7 +20,7 @@ from typer.testing import CliRunner
 from biff import logging_config
 from biff.__main__ import _suppress_nats_noise, app
 from biff.claude_md import ClaudeMdImport
-from biff.cli_session import CliContext
+from biff.cli_context import CliContext
 from biff.commands import CommandResult
 from biff.config import ResolvedConfig
 from biff.doctor import installed_plugin_version

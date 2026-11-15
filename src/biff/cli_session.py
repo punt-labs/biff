@@ -21,61 +21,18 @@ import functools
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
+from biff.cli_context import CliContext
 from biff.cli_session_host import SessionHost
 from biff.cli_session_select import SessionSelector
 from biff.config import ResolvedConfig, load_cli_config
-from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
-from biff.talk_state import TalkState
 from biff.tty import get_hostname, get_pwd
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class CliContext:
-    """Context for a CLI command: relay connection + identity."""
-
-    relay: Relay
-    config: BiffConfig
-    session_key: str
-    user: str
-    tty: str
-    tty_name: str = ""
-    org_repos: frozenset[str] = frozenset()
-    repo_root: Path | None = None
-    talk: TalkState = field(init=False)
-
-    def __post_init__(self) -> None:
-        """Compose the shared ephemeral talk state from this session's identity.
-
-        ``TalkState`` is mutable and held by reference inside the frozen
-        context — the same seating ``ServerState`` gives its
-        ``ActivityTracker``.  Both front-ends feed it every talk
-        notification and drain it in their own idiom (talk_state.py).
-        """
-        object.__setattr__(
-            self,
-            "talk",
-            TalkState(
-                relay=self.relay,
-                user=self.user,
-                tty=self.tty,
-                session_key=self.session_key,
-                tty_name=self.tty_name,
-            ),
-        )
-
-    @property
-    def visible_repos(self) -> frozenset[str]:
-        """All repos visible: self + explicit peers + org-discovered (DES-034)."""
-        if not self.org_repos:
-            return self.config.visible_repos
-        return self.config.visible_repos | self.org_repos
 
 
 async def _heartbeat_loop(
@@ -211,13 +168,9 @@ async def cli_session(
                     _heartbeat_loop(handle.relay, session_key, shutdown, renew=renew)
                 )
 
-            yield CliContext(
+            yield handle.host.context_for(
+                attached,
                 relay=handle.relay,
-                config=config,
-                session_key=session_key,
-                user=config.user,
-                tty=attached.routing.routing_id,
-                tty_name=attached.tty_name,
                 org_repos=org_repos,
                 repo_root=handle.resolved.repo_root,
             )
