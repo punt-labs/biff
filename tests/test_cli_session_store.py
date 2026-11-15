@@ -482,3 +482,30 @@ class TestStoreHardening:
         _write_raw(store, "cli-aaaaaaaaaaaaaaaa", data)
         with pytest.raises(ValueError, match="id mismatch"):
             store.read("cli-aaaaaaaaaaaaaaaa")
+
+
+class TestListSkipsUnreadableRecords:
+    def test_malformed_record_is_skipped_not_fatal(
+        self, store: CliSessionStore, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        good = _record("tty1")
+        store.create(good)
+        bad = store.root / "cli-0000000000000bad"
+        bad.mkdir()
+        (bad / "session.json").write_text("{ not json")
+
+        with caplog.at_level("WARNING", logger="biff.cli_session_store"):
+            listed = store.list()
+
+        assert listed == (good,)
+        assert "cli-0000000000000bad" in caplog.text
+
+    def test_newer_schema_record_is_skipped(self, store: CliSessionStore) -> None:
+        good = _record("tty1")
+        store.create(good)
+        newer = _record("tty2")
+        store.create(newer)
+        path = store.root / newer.session_id / "session.json"
+        path.write_text(path.read_text().replace('"version": 1', '"version": 99'))
+
+        assert store.list() == (good,)

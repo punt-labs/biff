@@ -325,4 +325,5 @@ class TestSessionPersistence:
             async with cli_session() as ctx:
                 pass
 
-        assert await relay.get_session(ctx.session_key) is not None  # type: ignore[attr-defined]
+        row = await relay.get_session(ctx.session_key)  # type: ignore[attr-defined]
+        assert row is not None

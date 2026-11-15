@@ -39,7 +39,9 @@ class SessionSelector:
             pointer=CurrentPointer.default(),
             user=resolved.config.user,
             repo=resolved.config.repo_name,
-            repo_root=resolved.repo_root or resolved.repo_common_root,
+            # Common root, so a linked worktree and the main checkout share one
+            # default session.
+            repo_root=resolved.repo_common_root,
             hostname=get_hostname(),
         )
 

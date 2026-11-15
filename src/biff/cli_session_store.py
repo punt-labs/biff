@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import re
 import secrets
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Literal, Self, cast, get_args
 
 from biff.session_routing import ID_RE, MAX_ID_LENGTH, SessionIdError
+
+logger = logging.getLogger(__name__)
 
 SessionState = Literal["live", "dormant", "ended"]
 
@@ -222,6 +225,10 @@ class CliSessionStore:
                 records.append(self.read(d.name))
             except FileNotFoundError:
                 continue  # expired between the scan and the read
+            except ValueError:
+                # One unreadable record (corrupt, or written by a newer biff)
+                # must not make every command fail.
+                logger.warning("skipping unreadable session %s", d.name, exc_info=True)
         return tuple(sorted(records, key=lambda r: r.created_at))
 
     def attach(self, session_id: str, *, now: datetime) -> CliSessionRecord:

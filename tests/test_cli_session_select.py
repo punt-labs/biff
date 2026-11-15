@@ -168,3 +168,34 @@ class TestExplicitAndPointed:
         assert sel.pointed() is None
         sel.pointer.write(sel.repo_root, "../../etc/passwd")
         assert sel.pointed() is None
+
+
+class TestFromResolvedUsesTheCommonRoot:
+    def test_worktree_and_main_checkout_share_one_pointer_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from biff.config import ResolvedConfig
+        from biff.models import BiffConfig
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        main = tmp_path / "main"
+        worktree = tmp_path / "wt"
+        main.mkdir()
+        worktree.mkdir()
+        config = BiffConfig(user="kai", repo_name="biff")
+
+        from_main = SessionSelector.from_resolved(
+            ResolvedConfig(
+                config=config, data_dir=tmp_path, repo_root=main, repo_common_root=main
+            )
+        )
+        from_worktree = SessionSelector.from_resolved(
+            ResolvedConfig(
+                config=config,
+                data_dir=tmp_path,
+                repo_root=worktree,
+                repo_common_root=main,
+            )
+        )
+
+        assert from_worktree.repo_root == from_main.repo_root == main
