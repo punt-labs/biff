@@ -212,6 +212,16 @@ class TestFenceMarkerMatching:
         assert imp.prune() is False
         assert host.read_text() == f"````text\n```\n{_LINE}\n````\n"
 
+    def test_info_tagged_run_does_not_close_block(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        # An info string is valid on an opener only: ```python is content.
+        text = f"```\n```python\n{_LINE}\n```\n"
+        host.write_text(text)
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+        assert imp.prune() is False
+        assert host.read_text() == text
+
     def test_tilde_block_shields_import(self, tmp_path: Path) -> None:
         host = tmp_path / "CLAUDE.md"
         host.write_text(f"~~~\n{_LINE}\n~~~\n")

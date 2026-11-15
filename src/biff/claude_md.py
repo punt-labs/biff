@@ -204,10 +204,12 @@ class ClaudeMdImport:
 
         A block opened by a run of *N* of a marker closes only on a later
         **same-marker** delimiter of length ``>= N`` (CommonMark); a mismatched
-        marker or a shorter run is content, not a close, so an inner ``~~~`` in a
-        ```` ``` ```` block never toggles the state. An opener that never
-        closes is returned separately: Claude Code's Markdown lexer treats it
-        as running to the end of the file, so a line after it is fenced.
+        marker, a shorter run, or a run followed by an info string (valid on an
+        opener only) is content, not a close, so an inner ``~~~`` or
+        ```` ```python ```` in a ```` ``` ```` block never toggles the state.
+        An opener that never closes is returned separately: Claude Code's
+        Markdown lexer treats it as running to the end of the file, so a line
+        after it is fenced.
         Blocks do not nest — once open, every line up to the matching
         close is content.
         """
@@ -220,7 +222,12 @@ class ClaudeMdImport:
             if open_at is None:
                 if fence is not None:
                     open_at, (open_marker, open_len) = i, fence
-            elif fence is not None and fence[0] == open_marker and fence[1] >= open_len:
+            elif (
+                fence is not None
+                and fence[0] == open_marker
+                and fence[1] >= open_len
+                and not line.strip()[fence[1] :]
+            ):
                 ranges.append((open_at, i))
                 open_at = None
         return ranges, open_at
