@@ -40,20 +40,20 @@ def test_nested_sessions_get_distinct_unread_paths(tmp_path: Path) -> None:
     assert parent.session_key("u") != nested.session_key("u")
 
 
-def test_divergent_server_and_statusline_processes_share_one_key(
-    tmp_path: Path,
-) -> None:
-    # Regression guard for the local-plugin process-tree divergence: the MCP
-    # server and the status line walked up to *different* claude PIDs, so the
-    # server wrote one unread file and the status line read another. Both now
-    # derive the path from the same harness-declared session_id, independent of
-    # which process tree each runs in, so they always agree.
+def test_unread_path_carries_no_process_component(tmp_path: Path) -> None:
+    # Regression guard for the local-plugin process-tree divergence (PL-276):
+    # the MCP server and the status line walked up to *different* claude PIDs, so
+    # the server wrote one unread file and the status line read another (the
+    # status bar showed bare "biff"). The fix is that the filename is a pure
+    # function of the harness-declared session_id with NO process component —
+    # then any two processes bearing the same session_id resolve the same file.
+    # Asserting exact equality to "{session_id}.json" is what makes this guard
+    # fail if a PID (os.getpid(), the old topmost-ancestor PID, etc.) were ever
+    # mixed back into the name; a two-SessionRouting-in-one-process check would
+    # not, since both would observe the same PID (Qodo finding on this PR).
     sid = "one-session-two-processes"
-    mcp_server_side = SessionRouting(sid)
-    statusline_side = SessionRouting(sid)
-    assert mcp_server_side.unread_path(tmp_path) == statusline_side.unread_path(
-        tmp_path
-    )
+    assert SessionRouting(sid).unread_path(tmp_path) == tmp_path / f"{sid}.json"
+    assert SessionRouting(sid).unread_path(tmp_path).name == f"{sid}.json"
 
 
 def test_hook_server_and_statusline_agree_on_every_key(tmp_path: Path) -> None:
