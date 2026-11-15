@@ -289,7 +289,7 @@ enough for the model to use correctly.
 
 The tiers above split cleanly into "what runs automatically" and "what
 you run deliberately." Neither list is arbitrary — every gap below has
-a concrete blocking reason, tracked as a bead, not a permanent design
+a concrete blocking reason, tracked as a Linear issue, not a permanent design
 choice unless stated otherwise.
 
 ### On your dev box

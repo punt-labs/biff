@@ -1,6 +1,5 @@
 {
   "ignores": [
-    ".beads/",
     ".claude/",
     ".punt-labs/ethos/",
     ".punt-labs/local/",

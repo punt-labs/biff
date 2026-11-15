@@ -96,7 +96,7 @@ Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 ### Push Policy
 
-**All changes go through a PR** — no exceptions. Branch protection requires CI checks and review. Zero direct pushes to main, including README edits, beads sync, and release bumps. Every change gets a PR.
+**All changes go through a PR** — no exceptions. Branch protection requires CI checks and review. Zero direct pushes to main, including README edits and release bumps. Every change gets a PR.
 
 PR review follows punt-kit/standards/pr-review.md: local review (qodo review + silent-failure-hunter + code-reviewer) before the PR, then Qodo and Bugbot once at open, at most two rounds, Copilot only on request.
 
@@ -131,7 +131,7 @@ Everything the Claude Code plugin ships lives under `plugin/`, and nothing else 
 | `plugin/commands/` | Slash commands (`name.md` + `name-dev.md` pairs). |
 | `plugin/hooks/` | Hook dispatcher scripts and `hooks.json`. |
 
-The marketplace installs this directory with Claude Code's `git-subdir` source (`"source": "git-subdir"`, `"path": "plugin"`), which is a blobless partial clone plus `git sparse-checkout set --cone plugin` — so an install never fetches `src/`, `tests/`, `docs/`, `scripts/`, `research/`, `spikes/`, `.github/`, `.beads/`, or this repo's own `.punt-labs/` and `.claude/` working state. Cone mode does always materialize the files sitting in the *repo root*, so the large root documents (`DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`) still travel with an install; only whole directories are excluded.
+The marketplace installs this directory with Claude Code's `git-subdir` source (`"source": "git-subdir"`, `"path": "plugin"`), which is a blobless partial clone plus `git sparse-checkout set --cone plugin` — so an install never fetches `src/`, `tests/`, `docs/`, `scripts/`, `research/`, `spikes/`, `.github/`, or this repo's own `.punt-labs/` and `.claude/` working state. Cone mode does always materialize the files sitting in the *repo root*, so the large root documents (`DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`) still travel with an install; only whole directories are excluded.
 
 One rule follows from that, and it is load-bearing: **the plugin surface must not reach outside itself at runtime.** A hook script may use `$HOME`, the `biff`/`biff-hook` binaries, and paths under the *consumer's* repo root; it may not reference a file elsewhere in this repo, because that file will not exist on an installed plugin. `${CLAUDE_PLUGIN_ROOT}` is `plugin/`.
 
@@ -278,7 +278,7 @@ This creates one mission per stage, wired with `depends_on` edges. The worker pi
 
 **Contract field notes:**
 
-- Use `inputs.ticket` (not `inputs.bead` — deprecated alias).
+- Use `inputs.ticket`.
 - `ethos mission lint` suggests a pipeline and flags common contract issues.
 - Escalation only goes up. If `quick` reveals unexpected scope, escalate to `standard`. Never demote mid-flight.
 
@@ -315,13 +315,13 @@ If the pattern is reusable across projects:
 
 - **Pattern file** — Create or update `punt-kit/patterns/<name>.md` if a new architectural pattern emerged (e.g., process tree walk, sentinel types, relay round-trip elimination).
 - **Standard update** — Update `punt-kit/standards/*.md` if an existing standard was invalidated or needs refinement.
-- **PR directly** for factual corrections to existing patterns. **Bead** in punt-kit for broader standards work.
+- **PR directly** for factual corrections to existing patterns. **Linear issue** (label `repo:punt-kit`) for broader standards work.
 
 ### 3. Hand off to public-website
 
 If the discovery is interesting to external developers (plugin authors, MCP server builders, Claude Code users):
 
-- Create a **bead** in `public-website/` describing what to add to the existing blog post (or a new post if warranted).
+- Create a **Linear issue** (label `repo:public-website`) describing what to add to the existing blog post (or a new post if warranted).
 - Include: the story arc (what broke, how we found it, what the fix teaches), technical details, and audience.
 
 ### 4. Update prfaq.tex and README
@@ -333,7 +333,7 @@ If the feature was on the roadmap, move it to "Shipped" in both `README.md` and 
 ```text
 [ ] DESIGN.md updated (if design decision)
 [ ] punt-kit patterns/ or standards/ updated (if reusable pattern)
-[ ] public-website bead created (if externally interesting)
+[ ] public-website Linear issue created (if externally interesting)
 [ ] README.md and prfaq.tex updated (if shipped feature)
 [ ] prfaq.pdf recompiled
 ```
@@ -445,7 +445,7 @@ make check
 
 | Tool | What It Does |
 |------|-------------|
-| `punt init` | Scaffold missing files (CI, config, permissions, beads) |
+| `punt init` | Scaffold missing files (CI, config, permissions) |
 | `punt audit` | Check compliance against Punt Labs standards |
 | `punt audit --fix` | Auto-create missing mechanical files |
 | `/punt reconcile` | LLM-powered contextual reconciliation (workflows, CLAUDE.md, permissions) |
