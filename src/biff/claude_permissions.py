@@ -31,12 +31,14 @@ __all__ = ["BIFF_RULES", "PermissionChange", "ProjectPermissions"]
 # beats allow, so the machine- and repo-mutating verbs keep prompting while new
 # safe commands, MCP tools and skills work without a rule update.
 # A global option may precede the verb (``biff --quiet uninstall``), so each
-# verb gets four rules: bare, with arguments, and both again behind a flag
-# (``biff * V``). No rule matches a verbless flag command, so read-only
+# verb gets four rules: bare, with arguments, and both again behind an option
+# (``biff -* V``). The ``-`` is load-bearing: a bare ``*`` would match any text
+# before the verb and prompt on ``biff wall enable``, a message that merely
+# names a verb. No rule matches a verbless flag command either, so read-only
 # ``biff --version`` and ``biff --help`` stay covered by the allow rule. The
 # deterministic rule set: enable adds every missing member, disable removes
 # these exact values. A rule dropped from the set is no longer removed by
-# disable; there is no cleanup code for it (punt-kit#396).
+# disable; there is no cleanup code for it.
 _ASK_VERBS: Final = (
     "install",
     "uninstall",
@@ -53,7 +55,7 @@ BIFF_RULES: Final[dict[str, tuple[str, ...]]] = {
     "ask": tuple(
         f"Bash(biff {prefix}{verb}{suffix})"
         for verb in _ASK_VERBS
-        for prefix in ("", "* ")
+        for prefix in ("", "-* ")
         for suffix in ("", ":*")
     ),
 }

@@ -178,6 +178,18 @@ class TestGrant:
     def test_read_only_flag_commands_do_not_ask(self, command: str) -> None:
         assert not _asks(command)
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "biff wall enable",
+            "biff plan hook",
+            "biff write user:tty disable",
+            'biff wall "please enable it"',
+        ],
+    )
+    def test_message_text_naming_a_verb_does_not_ask(self, command: str) -> None:
+        assert not _asks(command)
+
     def test_no_catch_all_flag_rule(self) -> None:
         assert "Bash(biff -*)" not in _ASK
 
