@@ -321,6 +321,14 @@ class TestUnbalancedFence:
         assert imp.prune() is True
         assert host.read_text() == f"```text\nopen\n{_LINE}\n"
 
+    def test_inline_triple_backtick_span_is_not_a_fence(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"```example``` inline\n{_LINE}\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is True
+        assert imp.append_would_be_fenced() is False
+        assert imp.prune() is True
+
     def test_balanced_fence_still_shields_inner_line(self, tmp_path: Path) -> None:
         # A balanced fence below the import must still shield an inner copy.
         host = tmp_path / "CLAUDE.md"

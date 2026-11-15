@@ -168,7 +168,10 @@ class ClaudeMdImport:
         A fence delimiter is a run of three or more of a single marker char
         (a backtick or a tilde) after up to three leading spaces. An **indented**
         line (a tab, or four or more leading spaces) is an inert indented-code
-        line, never a fence delimiter (§2.4). Returns ``None`` otherwise.
+        line, never a fence delimiter (§2.4). A backtick run followed later on
+        the line by another backtick is an inline code span, not a fence: a
+        backtick fence's info string cannot contain a backtick (CommonMark).
+        Returns ``None`` otherwise.
         """
         bare = line.rstrip("\r\n")
         if bare.startswith("\t"):
@@ -180,7 +183,9 @@ class ClaudeMdImport:
             return None
         marker = stripped[0]
         run = len(stripped) - len(stripped.lstrip(marker))
-        return (marker, run) if run >= 3 else None
+        if run < 3 or (marker == "`" and "`" in stripped[run:]):
+            return None
+        return marker, run
 
     @classmethod
     def _fenced_ranges(cls, lines: list[str]) -> list[tuple[int, int]]:
