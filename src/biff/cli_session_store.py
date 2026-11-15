@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import secrets
 import tempfile
 from collections.abc import Callable, Generator
@@ -25,7 +26,8 @@ collide with a Claude Code id in the shared sessions directory."""
 SCHEMA_VERSION = 1
 _ID_HEX_CHARS = 16
 _RECORD_FILE = "session.json"
-_LOCK_FILE = ".lock"
+_LOCK_DIR = "locks"
+_CLI_ID_RE = re.compile(rf"{CLI_ID_PREFIX}[0-9a-f]{{{_ID_HEX_CHARS}}}")
 
 
 class CliSessionEndedError(ValueError):
@@ -94,18 +96,21 @@ class CliSessionRecord:
         if state not in get_args(SessionState):
             msg = f"unknown session state: {state!r}"
             raise ValueError(msg)
+        if raw["version"] != SCHEMA_VERSION or isinstance(raw["version"], bool):
+            msg = f"unsupported schema version: {raw['version']!r}"
+            raise ValueError(msg)
         ended = raw["ended_at"]
         return cls(
-            version=int(str(raw["version"])),
-            session_id=str(raw["session_id"]),
-            tty=str(raw["tty"]),
-            user=str(raw["user"]),
-            repo=str(raw["repo"]),
-            repo_root=str(raw["repo_root"]),
-            hostname=str(raw["hostname"]),
-            created_at=_parse_time(raw["created_at"]),
+            version=SCHEMA_VERSION,
+            session_id=_require_str(raw, "session_id"),
+            tty=_require_str(raw, "tty"),
+            user=_require_str(raw, "user"),
+            repo=_require_str(raw, "repo"),
+            repo_root=_require_str(raw, "repo_root"),
+            hostname=_require_str(raw, "hostname"),
+            created_at=_parse_time(_require_str(raw, "created_at")),
             state=cast("SessionState", state),
-            last_attached_at=_parse_time(raw["last_attached_at"]),
+            last_attached_at=_parse_time(_require_str(raw, "last_attached_at")),
             ended_at=None if ended is None else _parse_time(ended),
         )
 
@@ -135,7 +140,7 @@ class CliSessionRecord:
         if self.state == "ended":
             raise self.ended_error()
         _require_aware(now)
-        return replace(self, state="live", last_attached_at=now)
+        return replace(self, state="live", last_attached_at=now.astimezone(UTC))
 
     def lapsed(self) -> Self:
         """Return the record after its lease lapsed: dormant."""
@@ -148,7 +153,7 @@ class CliSessionRecord:
         if self.state == "ended":
             return self
         _require_aware(now)
-        return replace(self, state="ended", ended_at=now)
+        return replace(self, state="ended", ended_at=now.astimezone(UTC))
 
     def ended_error(self) -> CliSessionEndedError:
         """Return the error naming when this session ended and how to recover."""
@@ -174,12 +179,19 @@ class CliSessionStore:
         return cls(Path.home() / ".punt-labs" / "biff" / "sessions")
 
     def create(self, record: CliSessionRecord) -> None:
-        """Persist a new record; refuse an id that already exists."""
+        """Persist a new record; refuse an id that exists or is not a CLI id."""
+        if not _CLI_ID_RE.fullmatch(record.session_id):
+            msg = (
+                f"session_id must be {CLI_ID_PREFIX!r} plus {_ID_HEX_CHARS} "
+                f"hex characters, got {record.session_id!r}"
+            )
+            raise ValueError(msg)
         path = self._record_path(record.session_id)
-        if path.exists():
-            msg = f"session id already exists: {record.session_id}"
-            raise FileExistsError(msg)
-        self._write(path, record)
+        with self._locked(record.session_id):
+            if path.exists():
+                msg = f"session id already exists: {record.session_id}"
+                raise FileExistsError(msg)
+            self._write(path, record)
 
     def read(self, session_id: str) -> CliSessionRecord:
         """Return the record for *session_id*; FileNotFoundError when absent."""
@@ -189,17 +201,27 @@ class CliSessionStore:
         except FileNotFoundError:
             msg = f"unknown session: {session_id}"
             raise FileNotFoundError(msg) from None
-        return CliSessionRecord.from_json(text)
+        record = CliSessionRecord.from_json(text)
+        if record.session_id != session_id:
+            msg = (
+                f"malformed session record: id mismatch, directory "
+                f"{session_id!r} holds {record.session_id!r}"
+            )
+            raise ValueError(msg)
+        return record
 
     def list(self) -> tuple[CliSessionRecord, ...]:
         """Return every stored record, ordered by creation time."""
         if not self.root.is_dir():
             return ()
-        records = [
-            self.read(d.name)
-            for d in self.root.iterdir()
-            if d.name.startswith(CLI_ID_PREFIX) and (d / _RECORD_FILE).is_file()
-        ]
+        records: list[CliSessionRecord] = []
+        for d in self.root.iterdir():
+            if not _CLI_ID_RE.fullmatch(d.name):
+                continue
+            try:
+                records.append(self.read(d.name))
+            except FileNotFoundError:
+                continue  # expired between the scan and the read
         return tuple(sorted(records, key=lambda r: r.created_at))
 
     def attach(self, session_id: str, *, now: datetime) -> CliSessionRecord:
@@ -217,38 +239,39 @@ class CliSessionStore:
     def expire(self, session_id: str) -> None:
         """Remove a dormant or ended record and its directory."""
         path = self._record_path(session_id)
-        if not path.parent.is_dir():
-            msg = f"unknown session: {session_id}"
-            raise FileNotFoundError(msg)
-        with self._locked(path.parent):
+        self._require_known(session_id)
+        with self._locked(session_id):
             if self.read(session_id).state == "live":
                 msg = f"cannot expire live session {session_id}"
                 raise ValueError(msg)
             path.unlink()
-            (path.parent / _LOCK_FILE).unlink()
-        path.parent.rmdir()
+            path.parent.rmdir()
 
-    def _apply(
-        self,
-        session_id: str,
-        step: _Step,
-    ) -> CliSessionRecord:
+    def _apply(self, session_id: str, step: _Step) -> CliSessionRecord:
         path = self._record_path(session_id)
-        if not path.parent.is_dir():
-            msg = f"unknown session: {session_id}"
-            raise FileNotFoundError(msg)
+        self._require_known(session_id)
         # Held across read, compute and write so a concurrent process cannot
         # write back a stale state (e.g. revive a session another just ended).
-        with self._locked(path.parent):
+        with self._locked(session_id):
             updated = step(self.read(session_id))
             self._write(path, updated)
         return updated
 
+    def _require_known(self, session_id: str) -> None:
+        # Cheap pre-check so an unknown id never creates a lock file.
+        if not (self.root / session_id).is_dir():
+            msg = f"unknown session: {session_id}"
+            raise FileNotFoundError(msg)
+
     @contextmanager
-    def _locked(self, directory: Path) -> Generator[None]:
-        # flock is released by the OS when the process exits, so a killed
-        # holder can never wedge the session.
-        with (directory / _LOCK_FILE).open("a") as lock:
+    def _locked(self, session_id: str) -> Generator[None]:
+        # The lock file lives outside the session directory so create and
+        # expire, which make and remove that directory, hold the same lock as
+        # every transition. flock is released by the OS when the process
+        # exits, so a killed holder can never wedge the session.
+        lock_dir = self.root / _LOCK_DIR
+        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with (lock_dir / f"{session_id}.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             yield
 
@@ -276,6 +299,14 @@ class CliSessionStore:
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
+
+
+def _require_str(raw: dict[str, object], key: str) -> str:
+    value = raw[key]
+    if not isinstance(value, str):
+        msg = f"field {key!r} must be a string, got {value!r}"
+        raise ValueError(msg)
+    return value
 
 
 def _parse_time(value: object) -> datetime:

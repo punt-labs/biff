@@ -121,7 +121,7 @@ class TestFilesystem:
         store.create(rec)
         store.attach(rec.session_id, now=T1)
         d = tmp_path / "sessions" / rec.session_id
-        assert sorted(p.name for p in d.iterdir()) == [".lock", "session.json"]
+        assert [p.name for p in d.iterdir()] == ["session.json"]
 
     def test_write_is_atomic(
         self,
@@ -141,7 +141,7 @@ class TestFilesystem:
         monkeypatch.undo()
         assert store.read(rec.session_id) == rec
         d = tmp_path / "sessions" / rec.session_id
-        assert sorted(p.name for p in d.iterdir()) == [".lock", "session.json"]
+        assert [p.name for p in d.iterdir()] == ["session.json"]
 
     @pytest.mark.parametrize(
         "bad", ["", "../etc", "a/b", "cli-ab cd", "x" * 129, "cli-\n"]
@@ -362,3 +362,123 @@ def test_non_utc_now_round_trips() -> None:
     assert rec.created_at == T0
     assert rec.created_at.tzinfo is UTC
     assert CliSessionRecord.from_json(rec.to_json()) == rec
+
+
+def _write_raw(
+    store: CliSessionStore, session_id: str, data: dict[str, object]
+) -> None:
+    d = store.root / session_id
+    d.mkdir(parents=True)
+    (d / "session.json").write_text(json.dumps(data))
+
+
+class TestStoreHardening:
+    def test_concurrent_creates_one_wins(self, store: CliSessionStore) -> None:
+        rec = _record()
+        barrier = threading.Barrier(8)
+        outcomes: list[str] = []
+
+        def attempt() -> None:
+            barrier.wait()
+            try:
+                store.create(rec)
+                outcomes.append("ok")
+            except FileExistsError:
+                outcomes.append("exists")
+
+        threads = [threading.Thread(target=attempt) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert sorted(outcomes) == ["exists"] * 7 + ["ok"]
+
+    def test_second_create_raises(self, store: CliSessionStore) -> None:
+        rec = _record()
+        store.create(rec)
+        with pytest.raises(FileExistsError):
+            store.create(rec)
+
+    def test_expire_with_contending_attach_leaves_no_orphan(
+        self, store: CliSessionStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rec = _record()
+        store.create(rec)
+        store.lapse(rec.session_id)
+        errors: list[BaseException] = []
+        real_read = CliSessionStore.read
+        started: list[threading.Thread] = []
+
+        def attach() -> None:
+            try:
+                CliSessionStore(store.root).attach(rec.session_id, now=T2)
+            except BaseException as exc:  # noqa: BLE001 - recorded for the assert
+                errors.append(exc)
+
+        def read_and_contend(self: CliSessionStore, sid: str) -> CliSessionRecord:
+            record = real_read(self, sid)
+            if not started:
+                th = threading.Thread(target=attach)
+                started.append(th)
+                th.start()
+                th.join(timeout=0.3)
+            return record
+
+        monkeypatch.setattr(CliSessionStore, "read", read_and_contend)
+        store.expire(rec.session_id)
+        started[0].join()
+        monkeypatch.undo()
+        assert not (store.root / rec.session_id).exists()
+        assert [type(e) for e in errors] == [FileNotFoundError]
+
+    def test_null_identity_field_rejected(self) -> None:
+        data = json.loads(_record().to_json())
+        data["tty"] = None
+        with pytest.raises(ValueError, match="malformed"):
+            CliSessionRecord.from_json(json.dumps(data))
+
+    def test_unsupported_version_rejected(self) -> None:
+        data = json.loads(_record().to_json())
+        data["version"] = 99
+        with pytest.raises(ValueError, match="version"):
+            CliSessionRecord.from_json(json.dumps(data))
+
+    def test_attach_and_end_normalize_to_utc(self, store: CliSessionStore) -> None:
+        tz = timezone(timedelta(hours=-7))
+        rec = _record()
+        attached = rec.attached(T1.astimezone(tz))
+        ended = attached.ended(T2.astimezone(tz))
+        assert attached.last_attached_at.tzinfo is UTC
+        assert ended.ended_at is not None
+        assert ended.ended_at.tzinfo is UTC
+        assert CliSessionRecord.from_json(ended.to_json()) == ended
+
+    def test_list_skips_entry_expired_mid_scan(
+        self, store: CliSessionStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        a, b = _record("tty1"), _record("tty2")
+        store.create(a)
+        store.create(b)
+        store.lapse(b.session_id)
+        real_read = CliSessionStore.read
+
+        def read_expiring(self: CliSessionStore, sid: str) -> CliSessionRecord:
+            if sid == b.session_id:
+                monkeypatch.undo()
+                self.expire(b.session_id)
+            return real_read(self, sid)
+
+        monkeypatch.setattr(CliSessionStore, "read", read_expiring)
+        assert [r.session_id for r in store.list()] == [a.session_id]
+
+    @pytest.mark.parametrize("bad", ["tty1", "cli-xyz", "cli-" + "g" * 16, "cli-abc"])
+    def test_create_rejects_non_cli_id(self, store: CliSessionStore, bad: str) -> None:
+        rec = dataclasses.replace(_record(), session_id=bad)
+        with pytest.raises(ValueError, match="cli-"):
+            store.create(rec)
+
+    def test_read_rejects_embedded_id_mismatch(self, store: CliSessionStore) -> None:
+        data = json.loads(_record().to_json())
+        _write_raw(store, "cli-aaaaaaaaaaaaaaaa", data)
+        with pytest.raises(ValueError, match="id mismatch"):
+            store.read("cli-aaaaaaaaaaaaaaaa")
