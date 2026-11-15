@@ -18,61 +18,13 @@ from biff.formatting import format_read
 from biff.models import Message
 from biff.server.tools._activity import track_activity
 from biff.server.tools._descriptions import get_tty_name, refresh_read_messages
-from biff.server.tools._session import resolve_tty_name, update_current_session
-from biff.tty import build_session_key, parse_address
+from biff.server.tools._session import resolve_write_target, update_current_session
+from biff.tty import parse_address
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from biff.server.state import ServerState
-
-
-async def _resolve_recipient(
-    state: ServerState, to: str
-) -> tuple[str, str, str | None]:
-    """Resolve an address to ``(relay_key, display_name, target_repo)``.
-
-    For targeted addresses (``user:tty``), searches sessions across all
-    visible repos.  When the resolved session is in a different repo,
-    *target_repo* is set for cross-repo delivery.  Bare ``user``
-    addresses stay repo-local (``target_repo=None``).
-    """
-    user, tty = parse_address(to)
-    target_repo: str | None = None
-    if tty:
-        # Search across visible repos for the target session.
-        all_sessions = await state.relay.get_sessions_for_repos(state.visible_repos)
-        session = resolve_tty_name(
-            all_sessions, user, tty, local_repo=state.config.repo_name
-        )
-        if session:
-            relay_key = build_session_key(session.user, session.tty)
-            if (
-                session.repo
-                and session.repo != state.config.repo_name
-                and session.repo in state.visible_repos
-            ):
-                target_repo = session.repo
-        else:
-            user_exists = any(s.user == user for s in all_sessions)
-            if user_exists:
-                msg = (
-                    f"No active session {user}:{tty}."
-                    " Run /who to find their current address."
-                )
-            else:
-                msg = f"User {user} not found in visible repos."
-            _log.warning(
-                "Write failed: %r (visible_repos=%s, sessions=%d)",
-                msg,
-                sorted(state.visible_repos),
-                len(all_sessions),
-            )
-            raise ValueError(msg)
-    else:
-        relay_key = user
-    display = f"{user}:{tty}" if tty else user
-    return relay_key, display, target_repo
 
 
 _log = logging.getLogger(__name__)
@@ -168,21 +120,41 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         """
         await update_current_session(state)
         try:
-            to_user, display, target_repo = await _resolve_recipient(state, to)
+            user, tty = parse_address(to)
         except ValueError as exc:
+            return str(exc)
+        sessions = (
+            await state.relay.get_sessions_for_repos(state.visible_repos) if tty else []
+        )
+        try:
+            target = resolve_write_target(
+                sessions,
+                user,
+                tty,
+                local_repo=state.config.repo_name,
+                visible_repos=state.visible_repos,
+            )
+        except ValueError as exc:
+            _log.warning(
+                "Write failed: %r (visible_repos=%s, sessions=%d)",
+                str(exc),
+                sorted(state.visible_repos),
+                len(sessions),
+            )
             return str(exc)
         chunks = chunk_message(message)
         await refresh_read_messages(mcp, state)
-        return await deliver_with_retry(
+        delivery = await deliver_with_retry(
             state.relay,
             from_user=state.config.user,
             from_tty=get_tty_name(),
             session_key=state.session_key,
-            to_user=to_user,
-            target_repo=target_repo,
+            to_user=target.relay_key,
+            target_repo=target.target_repo,
             chunks=chunks,
-            display=display,
+            display=target.display,
         )
+        return target.report(delivery)
 
     @mcp.tool(
         name="read_messages",

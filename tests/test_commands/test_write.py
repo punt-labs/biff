@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from biff.cli_session import CliContext
+from biff.commands._messaging import Delivery
 from biff.commands.write import write
 from biff.models import UserSession
 from biff.relay import LocalRelay
+from biff.server.tools._session import resolve_write_target
 
 
 class TestWrite:
@@ -69,15 +73,37 @@ class TestWrite:
         assert result.error
         assert "not found" in result.text
 
-    async def test_targeted_wrong_tty_suggests_broadcast(
+    async def test_stale_tty_forwards_to_mailbox(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
         await relay.update_session(
             UserSession(user="eric", tty="abc12345", tty_name="tty1")
         )
         result = await write(ctx, "@eric:tty99", "hello")
-        assert result.error
-        assert "Run /who to find their current address" in result.text
+        assert not result.error
+        assert result.json_data == {
+            "status": "forwarded",
+            "to": "eric",
+            "parts": 1,
+        }
+        assert "tty99 has no active session" in result.text
+        assert "delivered to eric's mailbox" in result.text
+        msgs = await relay.fetch_user_inbox("eric")
+        assert [m.body for m in msgs] == ["hello"]
+
+    async def test_live_holder_wins_over_mailbox(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
+        result = await write(ctx, "@eric:tty1", "targeted")
+        assert not result.error
+        json_data = result.json_data
+        assert isinstance(json_data, dict)
+        assert json_data["status"] == "sent"
+        assert await relay.fetch_user_inbox("eric") == []
+        assert len(await relay.fetch("eric:abc12345")) == 1
 
     async def test_targeted_unknown_user_error(self, ctx: CliContext) -> None:
         result = await write(ctx, "@nobody:tty1", "hello")
@@ -147,3 +173,121 @@ class TestWrite:
             "to": "@eric:",
             "error": result.text,
         }
+
+
+class TestForwardReport:
+    async def test_forwarded_multi_chunk_reports_parts(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
+        result = await write(ctx, "@eric:tty99", " ".join(["word"] * 200))
+        assert not result.error
+        assert "(2 parts)" in result.text
+        assert "delivered to eric's mailbox" in result.text
+
+    def test_failed_delivery_is_not_reported_as_forwarded(self) -> None:
+        target = resolve_write_target(
+            [UserSession(user="eric", tty="aa", tty_name="tty1")],
+            "eric",
+            "tty9",
+            local_repo="",
+            visible_repos=set(),
+        )
+        failed = Delivery(text="Could not deliver to eric", ok=False, parts=1)
+        assert target.report(failed) == "Could not deliver to eric"
+
+
+class TestResolveWriteTarget:
+    def test_forward_routes_to_recipients_repo(self) -> None:
+        # The recipient restarted into repo-b; a mailbox forward sent from
+        # repo-a must be published to repo-b, where they poll.
+        sessions = [UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-b")]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b"},
+        )
+        assert target.forwarded
+        assert target.target_repo == "repo-b"
+
+    def test_forward_stays_local_when_recipient_is_local(self) -> None:
+        sessions = [
+            UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-a"),
+            UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b"},
+        )
+        assert target.target_repo is None
+
+    def test_forward_picks_first_repo_by_name_when_not_local(self) -> None:
+        sessions = [
+            UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-c"),
+            UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b", "repo-c"},
+        )
+        assert target.target_repo == "repo-b"
+
+    def test_forward_prefers_live_repo_over_stale_local_row(self) -> None:
+        # A stale row in the sender's repo must not win: the recipient only
+        # drains the mailbox of the repo where they are live.
+        stale = datetime.now(UTC) - timedelta(hours=1)
+        sessions = [
+            UserSession(
+                user="eric",
+                tty="aa",
+                tty_name="tty1",
+                repo="repo-a",
+                last_active=stale,
+            ),
+            UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b"},
+        )
+        assert target.target_repo == "repo-b"
+
+    def test_forward_with_no_live_session_still_picks_a_repo(self) -> None:
+        stale = datetime.now(UTC) - timedelta(hours=1)
+        sessions = [
+            UserSession(
+                user="eric",
+                tty="aa",
+                tty_name="tty1",
+                repo="repo-c",
+                last_active=stale,
+            ),
+            UserSession(
+                user="eric",
+                tty="bb",
+                tty_name="tty2",
+                repo="repo-b",
+                last_active=stale,
+            ),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b", "repo-c"},
+        )
+        assert target.target_repo == "repo-b"

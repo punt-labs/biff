@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
+from biff.relay import live_sessions
 from biff.server.tools._descriptions import get_tty_name
 from biff.tty import build_session_key
 
@@ -17,6 +19,7 @@ _NO_SESSION_HINT = (
 _SELF_TALK = "You can't talk to your own session."
 
 if TYPE_CHECKING:
+    from biff.commands._messaging import Delivery
     from biff.server.state import ServerState
 
 logger = logging.getLogger(__name__)
@@ -123,6 +126,93 @@ def resolve_tty_name(
         if local:
             return local[0]
     return candidates[0]
+
+
+@dataclass(frozen=True, slots=True)
+class WriteTarget:
+    """Where a ``write`` is delivered.
+
+    *forwarded* is true when the addressed tty has no holder and the
+    message goes to the user's mailbox instead.
+    """
+
+    relay_key: str
+    display: str
+    target_repo: str | None
+    forwarded: bool = False
+    notice: str = ""
+
+    def report(self, delivery: Delivery) -> str:
+        """Return the text to show the sender for a finished delivery.
+
+        A successful forward says so (with the part count, like a plain
+        send); a failed delivery keeps its own text.
+        """
+        if self.forwarded and delivery.ok:
+            suffix = f" ({delivery.parts} parts)" if delivery.parts > 1 else ""
+            return f"{self.notice}{suffix}"
+        return delivery.text
+
+
+def resolve_write_target(
+    sessions: Sequence[UserSession],
+    user: str,
+    tty: str | None,
+    *,
+    local_repo: str,
+    visible_repos: Collection[str],
+) -> WriteTarget:
+    """Resolve a write address to its delivery target.
+
+    A bare ``user`` targets the user's mailbox.  ``user:tty`` targets the
+    session holding that tty; when nobody holds it but the user is known,
+    the message is forwarded to the user's mailbox in a repo where they
+    are present.  Raises ``ValueError`` when the user is not visible, so a
+    message never reaches a user the sender did not name.
+    """
+    if not tty:
+        return WriteTarget(relay_key=user, display=user, target_repo=None)
+    session = resolve_tty_name(sessions, user, tty, local_repo=local_repo)
+    if session is not None:
+        return WriteTarget(
+            relay_key=build_session_key(session.user, session.tty),
+            display=f"{user}:{tty}",
+            target_repo=_remote_repo(session.repo, local_repo, visible_repos),
+        )
+    theirs = [s for s in sessions if s.user == user]
+    if not theirs:
+        msg = f"user {user} not found in visible repos"
+        raise ValueError(msg)
+    # The mailbox is repo-scoped and a recipient drains only the repo where
+    # they are live, so publish there.  Prefer repos with a live session;
+    # with none live, any repo they are present in (a dormant session
+    # revives and drains it).  Within the candidates prefer the local repo,
+    # else the first by name, so the choice is deterministic.
+    live = live_sessions(theirs)
+    candidates = {s.repo for s in (live or theirs)}
+    if local_repo in candidates:
+        target_repo = None
+    else:
+        target_repo = _remote_repo(min(candidates), local_repo, visible_repos)
+    return WriteTarget(
+        relay_key=user,
+        display=user,
+        target_repo=target_repo,
+        forwarded=True,
+        notice=(
+            f"{tty} has no active session; delivered to {user}'s mailbox"
+            " (any of their sessions will see it)."
+        ),
+    )
+
+
+def _remote_repo(
+    repo: str, local_repo: str, visible_repos: Collection[str]
+) -> str | None:
+    """Return *repo* when delivery must cross repos, else ``None``."""
+    if repo and repo != local_repo and repo in visible_repos:
+        return repo
+    return None
 
 
 def resolve_talk_target(

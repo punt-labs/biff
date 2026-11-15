@@ -8,6 +8,7 @@ drifting from the other.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from nats.errors import Error as NatsError
@@ -20,6 +21,15 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    """Outcome of a delivery: the sender-facing text and whether it succeeded."""
+
+    text: str
+    ok: bool
+    parts: int
+
+
 async def deliver_with_retry(
     relay: Relay,
     *,
@@ -30,11 +40,12 @@ async def deliver_with_retry(
     target_repo: str | None,
     chunks: list[str],
     display: str,
-) -> str:
+) -> Delivery:
     """Deliver chunks, retrying once from the first undelivered chunk on failure.
 
-    Returns the user-facing result string. Delivery is awaited here, not
-    fire-and-forget: a fire-and-forget design that returns "Message sent"
+    Returns a :class:`Delivery` carrying the user-facing text and a success
+    flag. Delivery is awaited here, not fire-and-forget: a fire-and-forget
+    design that returns "Message sent"
     before delivery is even attempted leaves a publish failure — surfaced
     only as a background log line nobody reads — reporting a message as
     arrived when it never did, with no error on either end and no recovery
@@ -89,11 +100,15 @@ async def deliver_with_retry(
                 exc,
                 exc_info=exc,
             )
-            return (
-                f"Could not deliver to {display} — failed twice. "
-                f"{delivered}/{len(chunks)} part(s) confirmed sent; "
-                "the rest may not have arrived. Not confirmed sent."
+            return Delivery(
+                text=(
+                    f"Could not deliver to {display} — failed twice. "
+                    f"{delivered}/{len(chunks)} part(s) confirmed sent; "
+                    "the rest may not have arrived. Not confirmed sent."
+                ),
+                ok=False,
+                parts=len(chunks),
             )
     parts = len(chunks)
     suffix = f" ({parts} parts)" if parts > 1 else ""
-    return f"Message sent to {display}.{suffix}"
+    return Delivery(text=f"Message sent to {display}.{suffix}", ok=True, parts=parts)

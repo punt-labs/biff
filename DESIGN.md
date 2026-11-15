@@ -8100,3 +8100,79 @@ holds the config-file machinery (YAML, relay, peers, poll interval) and imports
 identity from `identity.py`; the dependency points inward and `identity.py` never
 imports `config.py`. This consolidation was behavior-preserving — the model
 above did not change, only the physical location of the code realizing it.
+
+## DES-077: A Stale `user:tty` Write Forwards to the User's Mailbox, Not Bounce
+
+**Date:** 2026-11-15
+**Status:** SETTLED
+**Topic:** What `biff write user:tty` does when no session holds that tty — the
+first user-facing slice of the CLI session-identity design.
+**Related:** DES-048/DES-050 (route on the session identity; repo and org are
+visibility, not routing coordinates — the principle this builds on), DES-064
+(harness-declared caller identity), DES-035 (tty-name reservation and recycling).
+Design doc: `docs/pl-245-246-cli-session-identity.md` §4 (the full named-session
+model this slice begins).
+
+**Context.** A `user:tty` address is a display alias resolved at send time. When
+the holder's session restarts, the alias names nothing and `biff write` refused
+with "No active session", forcing the sender to run `/who` and retype. On a
+heavy multi-agent day this bounced repeatedly (tty5→tty7, tty19→tty29 within
+hours).
+
+**Decision.** When a `user:tty` names no live or dormant holder but the user is
+known (has a session on record in a visible repo), the write is **forwarded to
+that user's mailbox** — the same repo-scoped mailbox a bare-`user` write targets,
+which `read_messages` already drains — and reported to the sender with a distinct
+`forwarded` status and a notice naming the mailbox. A live holder of the alias
+always wins. An unknown user still errors; a message is never delivered to a user
+the sender did not name.
+
+- **One resolver.** `resolve_write_target()` (`src/biff/server/tools/_session.py`)
+  is the single resolution both the CLI (`commands/write.py`) and the MCP write
+  tool (`server/tools/messaging.py`) call; the tool's former private
+  `_resolve_recipient` is deleted. It returns a frozen `WriteTarget`
+  (`relay_key`, `display`, `target_repo`, `forwarded`, `notice`).
+- **The forward is repo-scoped.** The mailbox is per repo, and a recipient reads
+  only the mailbox of a repo where they have a live session. So the forward's
+  `target_repo` is chosen from the recipient's **live** sessions (preferring the
+  sender's local repo when the recipient is live there, otherwise a deterministic
+  pick among the repos where they are live), not from any stale row. Choosing by
+  a stale local row or an arbitrary remote repo would report a successful forward
+  to a mailbox nobody drains — the cross-repo silent-drop the local review and
+  Qodo both caught before merge.
+- **Structured delivery result.** `deliver_with_retry` returns
+  `Delivery(text, ok, parts)`; the sender-facing text is chosen on `delivery.ok`,
+  not by matching a success string, so a failed send is never reported as a
+  forward.
+
+**Alternatives rejected.** (1) **Keep bouncing** — strictly safe but preserves
+the restart problem the feature exists to remove. (2) **`@user/repo` addressing**
+— makes repo a routing coordinate, which DES-048/DES-050 forbid; it also does not
+help, since a user may have several sessions in one repo and a restart still
+changes which. (3) **A forwarding pointer from the dead tty to a successor
+session** — needs new durable per-tty state that must itself expire, and must
+pick one successor when the user has several; the mailbox gives a defined outcome
+(whichever of the user's sessions reads first) with no new store.
+
+**Relationship to the formal model.** `docs/session-model.tex` models a stale
+alias as either stranding (`DeliverAliasLost`, `lostF` latches, under `rmAlias`)
+or, under identity routing, declining to send. The forward is a **third**
+outcome that file does not yet model. It is deliberately not bolted onto
+`session-model.tex`: the full CLI-session lifecycle (live/dormant/ended, the
+per-repo pointer, `new`/`use`/`end`, and this forward as a `SendStaleToMailbox`
+operation) is specified for a **new** `docs/cli-session.tex` with its own eight
+invariants (design doc §5), to be formalized with `fuzz`/ProB before the
+named-session state-machine code lands. Until that spec exists, this entry is the
+record that the shipped forward diverges from `session-model.tex`'s stale-alias
+outcomes by design, and the gap is tracked to `cli-session.tex`.
+
+**Scope.** This ships the stale-tty forward only. The named CLI session store,
+the `-s`/`BIFF_SESSION` attach, the `session new|ls|use|end` verbs, the per-repo
+current-session pointer, and the plan-gate keying all follow on the same design
+(`docs/pl-245-246-cli-session-identity.md` §3, §6), in later changes.
+
+**Consequences.** A send to a restarted teammate's old `user:tty` reaches them
+instead of bouncing; the sender is told it went to the mailbox, not the exact
+session. The resolver is shared, so the CLI and MCP write paths cannot drift.
+Verified: `make check` green; TDD red→green for same-repo forward, cross-repo
+repo selection, live-holder precedence, and failed-delivery reporting.

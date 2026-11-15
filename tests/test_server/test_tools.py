@@ -677,11 +677,14 @@ class TestSendMessageTool:
         result = await fn(to="nobody:tty99", message="hello")
         assert "not found" in result
 
-    async def test_targeted_wrong_tty_suggests_who(self, state: ServerState) -> None:
+    async def test_stale_tty_forwards_to_mailbox(self, state: ServerState) -> None:
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
         result = await fn(to="eric:fakeTty", message="hello")
-        assert "Run /who to find their current address" in result
+        assert "fakeTty has no active session" in result
+        assert "delivered to eric's mailbox" in result
+        msgs = await state.relay.fetch_user_inbox("eric")
+        assert [m.body for m in msgs] == ["hello"]
 
     async def test_write_bare_nonexistent_user_delivers(
         self, state: ServerState
