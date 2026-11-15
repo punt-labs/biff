@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from biff.caller_identity import CallerIdentity
-from biff.session_id import CLAUDE_CODE_ROLE, derive_routing_id
+from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE, derive_routing_id
 from biff.session_routing import SessionIdError, SessionRouting
 
 
@@ -118,3 +118,11 @@ def test_caller_identity_applies_the_same_bound() -> None:
         CallerIdentity.from_wire({"session_id": "a" * 129, "agent_id": "x"})
     with pytest.raises(CallerIdentityError):
         CallerIdentity.from_wire({"session_id": "x", "agent_id": "a" * 129})
+
+
+def test_cli_role_routes_differently_from_the_harness_role() -> None:
+    harness = SessionRouting("sess-1")
+    cli = SessionRouting("sess-1", role=CLI_ROLE)
+    assert cli.routing_id == derive_routing_id("sess-1", CLI_ROLE)
+    assert cli.routing_id != harness.routing_id
+    assert cli.session_key("rmh") == f"rmh:{cli.routing_id}"

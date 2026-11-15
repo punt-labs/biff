@@ -27,6 +27,7 @@ class SessionRouting:
     """
 
     session_id: str
+    role: str = CLAUDE_CODE_ROLE
 
     def __post_init__(self) -> None:
         if not ID_RE.fullmatch(self.session_id):
@@ -39,7 +40,7 @@ class SessionRouting:
     @property
     def routing_id(self) -> str:
         """Domain-separated routing token for this session."""
-        return derive_routing_id(self.session_id, CLAUDE_CODE_ROLE)
+        return derive_routing_id(self.session_id, self.role)
 
     def session_key(self, user: str) -> str:
         """Composite relay key ``{user}:{routing_id}``."""
