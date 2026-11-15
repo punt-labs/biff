@@ -107,7 +107,7 @@ This fully activates biff in one verb: it writes the committed `.punt-labs/biff/
 
 All hooks:
 
-- Coexist with existing git hooks (including beads)
+- Coexist with existing git hooks
 - Gate on the committed `.punt-labs/biff/enabled` marker --- silent when biff is not enabled
 - Are lightweight shell scripts that call `biff` CLI commands
 

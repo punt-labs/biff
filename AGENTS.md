@@ -1,6 +1,6 @@
 # Agent Instructions
 
-Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the tracker of record where this repo is migrated. Beads is a local mirror there and the tracker of record elsewhere.
+Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the tracker of record (label `repo:biff`).
 
 ## Workflow
 
@@ -14,9 +14,9 @@ Pipelines" in `CLAUDE.md` for mission archetypes (`implement`, `design`,
 
 Follow the protocol in CLAUDE.md. The short version:
 
-1. **File issues** for remaining work (`bd create`)
+1. **File issues** in Linear (label `repo:biff`) for remaining work
 2. **Quality gates** must pass (`make check`)
-3. **Close beads** for finished work (`bd close <id>`)
+3. **Close Linear issues** for finished work (state Done)
 4. **Push to remote** — work is NOT complete until `git push` succeeds:
 
    ```bash

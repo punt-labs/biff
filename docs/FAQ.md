@@ -91,6 +91,6 @@ Yes. Each agent gets its own TTY session and shows up separately in `/who`. Use 
 - **Channels or rooms.** Communication is directed: you message a person or broadcast to the team.
 - **Message history or search.** Messages are ephemeral. Biff is not a system of record.
 - **Video or voice.** Biff is text. Use dedicated tools for calls.
-- **Project management.** No tasks, no boards, no sprints. Use beads, Linear, or GitHub Issues.
+- **Project management.** No tasks, no boards, no sprints. Use Linear or GitHub Issues.
 - **A mobile app.** Biff is for engineers at their terminals.
 - **Artifact sharing.** Use git, GitHub Issues, or PR comments for diffs and files.
