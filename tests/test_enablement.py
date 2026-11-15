@@ -275,6 +275,7 @@ class TestPermissions:
         change = RepoEnablement(tmp_path).enable()
         assert change.failed
         assert "unclosed code fence" in change.permissions.error
+        assert "Close the code fence in CLAUDE.md" in change.enable_report()[-1]
         assert not (tmp_path / ".claude").exists()
         assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
         assert (tmp_path / "CLAUDE.md").read_text() == "```text\nnever closed\n"

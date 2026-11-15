@@ -101,12 +101,14 @@ class EnablementChange:
     def enable_report(self) -> list[str]:
         """Return the permission lines and closing line for an ``enable`` run."""
         if self.failed:
+            fix = (
+                "Close the code fence in CLAUDE.md"
+                if self.permissions.error == UNCLOSED_FENCE
+                else "Fix .claude/settings.json"
+            )
             return [
                 *self.permissions.lines("added to"),
-                (
-                    "biff not enabled; nothing was written. Fix "
-                    ".claude/settings.json and rerun biff enable."
-                ),
+                f"biff not enabled; nothing was written. {fix} and rerun biff enable.",
             ]
         return [*self.permissions.lines("added to"), ENABLED_MESSAGE]
 

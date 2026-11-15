@@ -226,7 +226,7 @@ class ClaudeMdImport:
                 fence is not None
                 and fence[0] == open_marker
                 and fence[1] >= open_len
-                and not line.strip()[fence[1] :]
+                and not line.rstrip("\r\n").lstrip(" ")[fence[1] :].strip(" ")
             ):
                 ranges.append((open_at, i))
                 open_at = None
