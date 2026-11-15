@@ -25,6 +25,9 @@ class CliContext:
     repo_root: Path | None = None
     # Renames the stored CLI session record; ``None`` for a client of a harness
     # session, which has no record of its own.
+    # The stored CLI session's id; ``None`` for a client of a harness session.
+    # ``biff plan`` keys its plan-gate marker on it.
+    record_session_id: str | None = None
     rename_record: Callable[[str], Awaitable[None]] | None = None
     talk: TalkState = field(init=False)
 

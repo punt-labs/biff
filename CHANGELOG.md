@@ -32,6 +32,10 @@
 
 ### Changed
 
+- `biff plan` run outside Claude Code keys its plan-gate marker on the CLI
+  session's own id instead of the shared marker bucket. Inside Claude Code it
+  still keys on `CLAUDE_CODE_SESSION_ID`, so that session's edit gate unlocks.
+  The shared bucket is now used only when there is no session at all.
 - Two `biff` commands from one shell now report the same `ttyN`. A CLI
   invocation attaches to a persistent session instead of registering a fresh
   row and deleting it on exit, so the session's address and inbox survive
