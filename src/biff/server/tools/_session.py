@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -123,6 +124,77 @@ def resolve_tty_name(
         if local:
             return local[0]
     return candidates[0]
+
+
+@dataclass(frozen=True)
+class WriteTarget:
+    """Where a ``write`` is delivered.
+
+    *forwarded* is true when the addressed tty has no holder and the
+    message goes to the user's mailbox instead.
+    """
+
+    relay_key: str
+    display: str
+    target_repo: str | None
+    forwarded: bool = False
+    notice: str = ""
+
+    def report(self, delivery_text: str) -> str:
+        """Return the text to show the sender for a completed delivery.
+
+        A forwarded send says so; a failed delivery keeps its own text.
+        """
+        if self.forwarded and delivery_text.startswith("Message sent"):
+            return self.notice
+        return delivery_text
+
+
+def resolve_write_target(
+    sessions: Sequence[UserSession],
+    user: str,
+    tty: str | None,
+    *,
+    local_repo: str,
+    visible_repos: Collection[str],
+) -> WriteTarget:
+    """Resolve a write address to its delivery target.
+
+    A bare ``user`` targets the user's mailbox.  ``user:tty`` targets the
+    session holding that tty; when nobody holds it but the user is known,
+    the message is forwarded to the user's mailbox.  Raises ``ValueError``
+    when the user is not visible, so a message never reaches a user the
+    sender did not name.
+    """
+    if not tty:
+        return WriteTarget(relay_key=user, display=user, target_repo=None)
+    session = resolve_tty_name(sessions, user, tty, local_repo=local_repo)
+    if session is not None:
+        target_repo = (
+            session.repo
+            if session.repo
+            and session.repo != local_repo
+            and session.repo in visible_repos
+            else None
+        )
+        return WriteTarget(
+            relay_key=build_session_key(session.user, session.tty),
+            display=f"{user}:{tty}",
+            target_repo=target_repo,
+        )
+    if not any(s.user == user for s in sessions):
+        msg = f"user {user} not found in visible repos"
+        raise ValueError(msg)
+    return WriteTarget(
+        relay_key=user,
+        display=user,
+        target_repo=None,
+        forwarded=True,
+        notice=(
+            f"{tty} has no active session; delivered to {user}'s mailbox"
+            " (any of their sessions will see it)."
+        ),
+    )
 
 
 def resolve_talk_target(

@@ -69,15 +69,37 @@ class TestWrite:
         assert result.error
         assert "not found" in result.text
 
-    async def test_targeted_wrong_tty_suggests_broadcast(
+    async def test_stale_tty_forwards_to_mailbox(
         self, ctx: CliContext, relay: LocalRelay
     ) -> None:
         await relay.update_session(
             UserSession(user="eric", tty="abc12345", tty_name="tty1")
         )
         result = await write(ctx, "@eric:tty99", "hello")
-        assert result.error
-        assert "Run /who to find their current address" in result.text
+        assert not result.error
+        assert result.json_data == {
+            "status": "forwarded",
+            "to": "eric",
+            "parts": 1,
+        }
+        assert "tty99 has no active session" in result.text
+        assert "delivered to eric's mailbox" in result.text
+        msgs = await relay.fetch_user_inbox("eric")
+        assert [m.body for m in msgs] == ["hello"]
+
+    async def test_live_holder_wins_over_mailbox(
+        self, ctx: CliContext, relay: LocalRelay
+    ) -> None:
+        await relay.update_session(
+            UserSession(user="eric", tty="abc12345", tty_name="tty1")
+        )
+        result = await write(ctx, "@eric:tty1", "targeted")
+        assert not result.error
+        json_data = result.json_data
+        assert isinstance(json_data, dict)
+        assert json_data["status"] == "sent"
+        assert await relay.fetch_user_inbox("eric") == []
+        assert len(await relay.fetch("eric:abc12345")) == 1
 
     async def test_targeted_unknown_user_error(self, ctx: CliContext) -> None:
         result = await write(ctx, "@nobody:tty1", "hello")

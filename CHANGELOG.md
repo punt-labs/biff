@@ -75,6 +75,11 @@
 
 ### Fixed
 
+- `write user:tty` to a tty with no active session (for example after the
+  recipient restarted) is now forwarded to that user's mailbox, and reported
+  as `forwarded` rather than failing with "No active session". A live holder
+  of the tty still wins; an unknown user still errors. The CLI and the MCP
+  `write` tool share one resolver (PL-246).
 - Nested `claude` sessions no longer collapse onto a parent's status-line unread
   count, and a local-plugin install's MCP server and status line no longer
   disagree on which unread file to use. Both were process-tree-walk defects

@@ -6,8 +6,8 @@ from biff.chunking import chunk_message
 from biff.cli_session import CliContext
 from biff.commands._messaging import deliver_with_retry
 from biff.commands._result import CommandResult
-from biff.server.tools._session import resolve_tty_name
-from biff.tty import build_session_key, parse_address
+from biff.server.tools._session import resolve_write_target
+from biff.tty import parse_address
 
 
 async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
@@ -20,34 +20,24 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             json_data={"status": "error", "to": to, "error": str(exc)},
             error=True,
         )
-    target_repo: str | None = None
-    if tty:
-        # Search across visible repos for the target session.
-        all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
-        session = resolve_tty_name(
-            all_sessions, bare_user, tty, local_repo=ctx.config.repo_name
+    # A bare user needs no session lookup: it targets the user's mailbox.
+    all_sessions = (
+        await ctx.relay.get_sessions_for_repos(ctx.visible_repos) if tty else []
+    )
+    try:
+        target = resolve_write_target(
+            all_sessions,
+            bare_user,
+            tty,
+            local_repo=ctx.config.repo_name,
+            visible_repos=ctx.visible_repos,
         )
-        if session:
-            relay_key = build_session_key(session.user, session.tty)
-            if session.repo and session.repo != ctx.config.repo_name:
-                target_repo = session.repo
-        else:
-            user_exists = any(s.user == bare_user for s in all_sessions)
-            if user_exists:
-                err = (
-                    f"No active session {bare_user}:{tty}."
-                    f" Run /who to find their current address."
-                )
-            else:
-                err = f"User {bare_user} not found in visible repos."
-            return CommandResult(
-                text=err,
-                json_data={"status": "error", "to": to, "error": err},
-                error=True,
-            )
-    else:
-        relay_key = bare_user
-    display = f"{bare_user}:{tty}" if tty else bare_user
+    except ValueError as exc:
+        return CommandResult(
+            text=str(exc),
+            json_data={"status": "error", "to": to, "error": str(exc)},
+            error=True,
+        )
 
     chunks = chunk_message(message)
     try:
@@ -56,10 +46,10 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             from_user=ctx.user,
             from_tty=ctx.tty_name,
             session_key=ctx.session_key,
-            to_user=relay_key,
-            target_repo=target_repo,
+            to_user=target.relay_key,
+            target_repo=target.target_repo,
             chunks=chunks,
-            display=display,
+            display=target.display,
         )
     except ValueError as exc:
         # A deterministic validation failure (deliver_with_retry does not
@@ -77,6 +67,10 @@ async def write(ctx: CliContext, to: str, message: str) -> CommandResult:
             error=True,
         )
     return CommandResult(
-        text=result_text,
-        json_data={"status": "sent", "to": display, "parts": len(chunks)},
+        text=target.report(result_text),
+        json_data={
+            "status": "forwarded" if target.forwarded else "sent",
+            "to": target.display,
+            "parts": len(chunks),
+        },
     )
