@@ -118,7 +118,11 @@ fi
 
 # ── write ────────────────────────────────────────────────────────────
 if [[ "$TOOL_NAME" == "write" ]]; then
-  if printf '%s' "$RESULT" | grep -Eqi 'Message sent|Delivered'; then
+  if [[ "$RESULT" == *"has no active session; delivered to "* ]]; then
+    # A forwarded write: keep the notice so the sender learns it went to
+    # the user's mailbox, not the session they named.
+    emit_simple "$RESULT"
+  elif printf '%s' "$RESULT" | grep -Eqi 'Message sent|Delivered'; then
     emit_simple "sent"
   else
     emit_simple "$RESULT"

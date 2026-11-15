@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from biff.models import UserSession
+from biff.relay import live_sessions
 from biff.server.tools._descriptions import get_tty_name
 from biff.tty import build_session_key
 
@@ -178,17 +179,21 @@ def resolve_write_target(
             display=f"{user}:{tty}",
             target_repo=_remote_repo(session.repo, local_repo, visible_repos),
         )
-    user_repos = {s.repo for s in sessions if s.user == user}
-    if not user_repos:
+    theirs = [s for s in sessions if s.user == user]
+    if not theirs:
         msg = f"user {user} not found in visible repos"
         raise ValueError(msg)
-    # The mailbox is repo-scoped: the recipient polls the inbox of the repo
-    # they are in, so publish there.  With several repos, prefer the local
-    # one, else the first by name, so the choice is deterministic.
-    if local_repo in user_repos:
+    # The mailbox is repo-scoped and a recipient drains only the repo where
+    # they are live, so publish there.  Prefer repos with a live session;
+    # with none live, any repo they are present in (a dormant session
+    # revives and drains it).  Within the candidates prefer the local repo,
+    # else the first by name, so the choice is deterministic.
+    live = live_sessions(theirs)
+    candidates = {s.repo for s in (live or theirs)}
+    if local_repo in candidates:
         target_repo = None
     else:
-        target_repo = _remote_repo(min(user_repos), local_repo, visible_repos)
+        target_repo = _remote_repo(min(candidates), local_repo, visible_repos)
     return WriteTarget(
         relay_key=user,
         display=user,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from biff.cli_session import CliContext
 from biff.commands._messaging import Delivery
 from biff.commands.write import write
@@ -230,6 +232,56 @@ class TestResolveWriteTarget:
         sessions = [
             UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-c"),
             UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b", "repo-c"},
+        )
+        assert target.target_repo == "repo-b"
+
+    def test_forward_prefers_live_repo_over_stale_local_row(self) -> None:
+        # A stale row in the sender's repo must not win: the recipient only
+        # drains the mailbox of the repo where they are live.
+        stale = datetime.now(UTC) - timedelta(hours=1)
+        sessions = [
+            UserSession(
+                user="eric",
+                tty="aa",
+                tty_name="tty1",
+                repo="repo-a",
+                last_active=stale,
+            ),
+            UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
+        ]
+        target = resolve_write_target(
+            sessions,
+            "eric",
+            "tty9",
+            local_repo="repo-a",
+            visible_repos={"repo-a", "repo-b"},
+        )
+        assert target.target_repo == "repo-b"
+
+    def test_forward_with_no_live_session_still_picks_a_repo(self) -> None:
+        stale = datetime.now(UTC) - timedelta(hours=1)
+        sessions = [
+            UserSession(
+                user="eric",
+                tty="aa",
+                tty_name="tty1",
+                repo="repo-c",
+                last_active=stale,
+            ),
+            UserSession(
+                user="eric",
+                tty="bb",
+                tty_name="tty2",
+                repo="repo-b",
+                last_active=stale,
+            ),
         ]
         target = resolve_write_target(
             sessions,
