@@ -156,15 +156,23 @@ class TestGrant:
         assert all(rule.startswith("Bash(biff ") for rule in _ASK)
 
     @pytest.mark.parametrize("verb", _VERBS)
-    @pytest.mark.parametrize("form", ["biff {v}", "biff {v} x", "biff --quiet {v}"])
-    def test_mutating_verb_asks_bare_and_behind_a_global_flag(
-        self, verb: str, form: str
-    ) -> None:
+    @pytest.mark.parametrize("form", ["biff {v}", "biff {v} x"])
+    def test_mutating_verb_asks_bare_and_with_args(self, verb: str, form: str) -> None:
         assert _asks(form.format(v=verb))
 
     @pytest.mark.parametrize("verb", _VERBS)
-    def test_mutating_verb_asks_behind_a_global_flag_with_args(self, verb: str) -> None:
-        assert _asks(f"biff --quiet {verb} x")
+    @pytest.mark.parametrize("form", ["biff --quiet {v}", "biff --quiet {v} x"])
+    def test_global_flag_before_the_verb_does_not_ask(
+        self, verb: str, form: str
+    ) -> None:
+        # No glob can tell a flag from a subcommand whose message names a verb.
+        assert not _asks(form.format(v=verb))
+
+    def test_no_ask_rule_has_a_wildcard_before_the_verb(self) -> None:
+        assert not [r for r in _ASK if "*" in r.removesuffix(":*)")]
+
+    def test_flagged_message_naming_a_verb_does_not_ask(self) -> None:
+        assert not _asks("biff --quiet wall enable")
 
     @pytest.mark.parametrize(
         "command",
@@ -192,6 +200,40 @@ class TestGrant:
 
     def test_no_catch_all_flag_rule(self) -> None:
         assert "Bash(biff -*)" not in _ASK
+
+
+class TestLegacyAskRule:
+    """A repo enabled by an older biff holds ``Bash(biff -*)``, which we own."""
+
+    def _seed(self, root: Path) -> None:
+        _write(
+            root,
+            {"permissions": {"ask": ["Bash(ls:*)", "Bash(biff -*)", *_ASK]}},
+        )
+
+    def test_grant_removes_it(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        ProjectPermissions(tmp_path).grant()
+        assert "Bash(biff -*)" not in _tier(tmp_path, "ask")
+
+    def test_grant_keeps_unrelated_rules(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        ProjectPermissions(tmp_path).grant()
+        assert "Bash(ls:*)" in _tier(tmp_path, "ask")
+
+    def test_revoke_removes_it(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        ProjectPermissions(tmp_path).revoke()
+        assert _tier(tmp_path, "ask") == ["Bash(ls:*)"]
+
+    def test_revoke_reports_it(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        assert "Bash(biff -*)" in ProjectPermissions(tmp_path).revoke().changed
+
+    def test_revoke_of_a_subset_leaves_it(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+        ProjectPermissions(tmp_path).revoke((_ASK[0],))
+        assert "Bash(biff -*)" in _tier(tmp_path, "ask")
 
 
 class TestRevoke:
