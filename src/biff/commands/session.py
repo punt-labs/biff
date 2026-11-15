@@ -55,9 +55,11 @@ class SessionVerbs:
 
     async def end(self, ref: str) -> CommandResult:
         """End *ref*, draining its inbox into the owner's mailbox first."""
-        record = self.host.selector.lookup(ref)
+        sel = self.host.selector
+        record = sel.lookup(ref)
         if record.state == "ended":
             raise record.ended_error()
+        sel.require_repo(record)
         ended = await self.host.end(record)
         return CommandResult(text=f"ended {ended.tty}", json_data=self._row(ended))
 

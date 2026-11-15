@@ -21,6 +21,20 @@ from biff.tty import claim_tty_name, validate_tty_name
 
 logger = logging.getLogger(__name__)
 
+_TRANSFER_NS = uuid.UUID("5d0c3f0e-8f4e-4f43-9a6f-0d2d6f1b7e11")
+_RESTORE_NS = uuid.UUID("b3a1c7d2-2e49-4c52-8d1a-6e0f9c5a4b72")
+
+
+def _transfer_id(source: uuid.UUID) -> uuid.UUID:
+    """Stable id of *source*'s copy in the user mailbox."""
+    return uuid.uuid5(_TRANSFER_NS, str(source))
+
+
+def _restored_id(source: uuid.UUID) -> uuid.UUID:
+    """Stable id of *source*'s copy put back in the session inbox."""
+    return uuid.uuid5(_RESTORE_NS, str(source))
+
+
 LEASE = timedelta(hours=8)
 """A session with no attach for this long moves from live to dormant."""
 
@@ -108,40 +122,84 @@ class SessionHost:
         return record
 
     async def attach(self, record: CliSessionRecord) -> Attachment:
-        """Revive or renew *record* and refresh its relay row."""
-        renewed = self.selector.store.attach(record.session_id, now=datetime.now(UTC))
-        await self._register(renewed)
+        """Revive or renew *record* and refresh its relay row.
+
+        The session lock is held across the store transition and the relay
+        write, so a concurrent ``end`` or sweep either finishes first (and this
+        raises the ended error) or waits for the row to be written.
+        """
+        store = self.selector.store
+        async with store.lifecycle(record.session_id):
+            renewed = store.attach(record.session_id, now=datetime.now(UTC))
+            await self._register(renewed)
         return Attachment(self._routing(renewed), renewed.tty, renewed)
 
+    async def renew(self, record: CliSessionRecord) -> None:
+        """Extend *record*'s lease while a process stays attached to it."""
+        store = self.selector.store
+        async with store.lifecycle(record.session_id):
+            store.attach(record.session_id, now=datetime.now(UTC))
+
     async def end(self, record: CliSessionRecord) -> CliSessionRecord:
-        """End *record*: drain its inbox, release its name and row, mark ended."""
-        await self._release(record)
-        await self._wtmp(record, "logout")
-        return self.selector.store.end(record.session_id, now=datetime.now(UTC))
+        """End *record*: drain its inbox, release its name and row, mark ended.
+
+        Idempotent: a record another process already ended is returned as it
+        is, with no relay change, so a late ``end`` cannot disturb a name the
+        first one released and someone else has since taken.
+        """
+        store = self.selector.store
+        async with store.lifecycle(record.session_id):
+            current = store.read(record.session_id)
+            if current.state == "ended":
+                return current
+            await self._release(current)
+            await self._wtmp(current, "logout")
+            return store.end(record.session_id, now=datetime.now(UTC))
 
     async def sweep(self) -> None:
         """Lapse idle sessions to dormant and expire those past retention.
 
+        Only this repo's sessions are touched: another repo's inbox and
+        presence live in a namespace this relay connection does not address.
         Housekeeping must never block the command that triggered it, so a
-        failure on one record is logged and the sweep moves on.
+        failure is logged and the sweep moves on.  Each record is re-read
+        under its lock, so a session attached or ended since the listing is
+        judged on its current state.
         """
-        store = self.selector.store
-        now = datetime.now(UTC)
-        for record in store.list():
-            if record.user != self.config.user or record.hostname != self.hostname:
+        try:
+            records = self.selector.store.list()
+        except OSError:
+            logger.warning("session sweep could not list sessions", exc_info=True)
+            return
+        for record in records:
+            if (
+                record.user != self.config.user
+                or record.hostname != self.hostname
+                or record.repo != self.config.repo_name
+            ):
                 continue
             try:
-                if record.state == "live" and now - record.last_attached_at > LEASE:
-                    store.lapse(record.session_id)
-                elif record.state != "live" and (
-                    now - (record.ended_at or record.last_attached_at) > RETENTION
-                ):
-                    await self._release(record)
-                    store.expire(record.session_id)
+                await self._sweep_one(record.session_id)
             except Exception:
                 logger.warning(
                     "session sweep failed for %s", record.session_id, exc_info=True
                 )
+
+    async def _sweep_one(self, session_id: str) -> None:
+        store = self.selector.store
+        async with store.lifecycle(session_id):
+            try:
+                record = store.read(session_id)
+            except FileNotFoundError:
+                return  # expired by another process since the listing
+            now = datetime.now(UTC)
+            if record.state == "live":
+                if now - record.last_attached_at > LEASE:
+                    store.lapse(session_id)
+            elif now - (record.ended_at or record.last_attached_at) > RETENTION:
+                if record.state != "ended":
+                    await self._release(record)
+                store.expire(session_id)
 
     def _routing(self, record: CliSessionRecord) -> SessionRouting:
         return SessionRouting(record.session_id, role=CLI_ROLE)
@@ -210,33 +268,39 @@ class SessionHost:
     async def _drain(self, user: str, key: str) -> None:
         """Move every unread message for *key* into *user*'s mailbox.
 
-        Each message is delivered to the mailbox and only then marked read in
-        the session inbox, so a failure leaves a clean split: moved messages
-        are in the mailbox only, the rest are still in the session inbox, and
-        a retry finishes the job.
+        ``fetch`` returns one batch at a time, so this loops until a fetch
+        yields nothing new.  Each message is delivered to the mailbox under an
+        id derived from its own, and only then marked read, so a retry of the
+        same transfer is deduplicated by the relay instead of copied twice.
 
         Relays differ in what ``fetch`` does.  ``LocalRelay`` leaves messages
-        in place, so the unmoved ones are simply still there.  The NATS relay
-        consumes them as it returns them, so once ``fetch`` has returned, the
-        in-memory list is the only copy; a hard crash (SIGKILL, power loss)
-        before the loop finishes loses the unmoved mail, and the Relay API
-        has no acknowledge-after-write to close that window.  A failure we can
-        catch is handled in :meth:`_restore`.
+        in place, so after a failure the unmoved ones are still there.  The
+        NATS relay consumes them as it returns them: once ``fetch`` has
+        returned, the in-memory batch is the only copy, and a hard crash
+        (SIGKILL, power loss) before the loop finishes loses the unmoved mail.
+        The Relay API has no acknowledge-after-write to close that window.
+        A failure that can be caught is handled in :meth:`_restore`.
         """
-        pending = await self.relay.fetch(key)
-        unmoved = list(pending)
-        try:
-            for message in pending:
-                await self.relay.deliver(
-                    message.model_copy(
-                        update={"id": uuid.uuid4(), "to_user": user, "read": False}
+        moved: set[uuid.UUID] = set()
+        while batch := [m for m in await self.relay.fetch(key) if m.id not in moved]:
+            unmoved = list(batch)
+            try:
+                for message in batch:
+                    await self.relay.deliver(
+                        message.model_copy(
+                            update={
+                                "id": _transfer_id(message.id),
+                                "to_user": user,
+                                "read": False,
+                            }
+                        )
                     )
-                )
-                await self.relay.mark_read(key, [message.id])
-                unmoved.remove(message)
-        except BaseException:
-            await self._restore(key, unmoved)
-            raise
+                    await self.relay.mark_read(key, [message.id])
+                    moved.add(message.id)
+                    unmoved.remove(message)
+            except BaseException:
+                await self._restore(key, unmoved)
+                raise
 
     async def _restore(self, key: str, unmoved: list[Message]) -> None:
         """Put *unmoved* back in the session inbox if the relay consumed them.
@@ -245,12 +309,30 @@ class SessionHost:
         fetch finds none of their ids and they are re-delivered, along with
         anything the probe itself consumed.  A non-consuming relay still
         holds them and the probe finds their ids, so nothing is re-delivered.
+
+        Restored copies get ids derived from the originals, so repeating the
+        restore cannot duplicate them.  One message can still be duplicated:
+        the one whose mailbox delivery raised after the relay accepted it (a
+        lost acknowledgement) is restored too.  A copy is the safe side of
+        that ambiguity; losing mail is not.
         """
         probe = await self.relay.fetch(key)
-        if any(m.id in {u.id for u in unmoved} for m in probe):
+        held = {m.id for m in probe}
+        if any(m.id in held for m in unmoved):
             return
+        failed: list[uuid.UUID] = []
         for message in [*unmoved, *probe]:
-            await self.relay.deliver(message.model_copy(update={"id": uuid.uuid4()}))
+            try:
+                await self.relay.deliver(
+                    message.model_copy(update={"id": _restored_id(message.id)})
+                )
+            except Exception:
+                failed.append(message.id)
+                logger.error(
+                    "could not restore message %s to %s", message.id, key, exc_info=True
+                )
+        if failed:
+            logger.error("%d message(s) lost from %s; see the log", len(failed), key)
 
     async def _wtmp(self, record: CliSessionRecord, event: str) -> None:
         try:

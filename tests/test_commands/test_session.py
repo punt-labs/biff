@@ -149,3 +149,25 @@ class TestEnd:
     async def test_unknown_is_an_error(self, host: SessionHost) -> None:
         with pytest.raises(SessionSelectionError, match="unknown session"):
             await SessionVerbs(host).end("ghost")
+
+
+class TestForeignRepo:
+    async def test_end_refuses_a_session_of_another_repo(
+        self, host: SessionHost, tmp_path: Path
+    ) -> None:
+        import dataclasses
+
+        other_sel = dataclasses.replace(
+            host.selector, repo="other", repo_root=tmp_path / "other"
+        )
+        other = dataclasses.replace(host, selector=other_sel)
+        record = await host.create("alpha")
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        await host.relay.deliver(Message(from_user="eric", to_user=key, body="keep me"))
+
+        with pytest.raises(SessionSelectionError, match="belongs to repo biff"):
+            await SessionVerbs(other).end("alpha")
+
+        assert host.selector.store.read(record.session_id).state == "live"
+        assert await host.relay.get_session(key) is not None
+        assert [m.body for m in await host.relay.fetch(key)] == ["keep me"]

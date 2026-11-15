@@ -17,8 +17,9 @@ Interactive mode adds a heartbeat loop while attached.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,9 +79,18 @@ class CliContext:
 
 
 async def _heartbeat_loop(
-    relay: Relay, session_key: str, shutdown: asyncio.Event, *, interval: float = 60.0
+    relay: Relay,
+    session_key: str,
+    shutdown: asyncio.Event,
+    *,
+    interval: float = 60.0,
+    renew: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    """Periodic heartbeat to keep the CLI session alive in KV."""
+    """Periodic heartbeat to keep the CLI session alive in KV.
+
+    *renew* also extends the stored lease, so a long-running REPL is never
+    mistaken for an abandoned session by another command's sweep.
+    """
     while not shutdown.is_set():
         try:
             await asyncio.wait_for(shutdown.wait(), timeout=interval)
@@ -89,6 +99,8 @@ async def _heartbeat_loop(
             pass
         try:
             await relay.heartbeat(session_key)
+            if renew is not None:
+                await renew()
         except asyncio.CancelledError:
             return
         except Exception:
@@ -189,8 +201,14 @@ async def cli_session(
                 org_repos = frozenset[str]().union(*org_results)
 
             if interactive:
+                record = attached.record
+                renew = (
+                    None
+                    if record is None
+                    else functools.partial(handle.host.renew, record)
+                )
                 heartbeat_task = asyncio.create_task(
-                    _heartbeat_loop(handle.relay, session_key, shutdown)
+                    _heartbeat_loop(handle.relay, session_key, shutdown, renew=renew)
                 )
 
             yield CliContext(

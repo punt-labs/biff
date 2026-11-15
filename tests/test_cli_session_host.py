@@ -478,3 +478,186 @@ class TestPointerRace:
         assert host.selector.pointer.read(host.selector.repo_root) == (
             attached.record.session_id
         )
+
+
+class _BatchedConsuming(LocalRelay):
+    """Models the NATS work queue: fetch returns at most 100 and consumes them."""
+
+    BATCH = 100
+
+    async def fetch(self, session_key: str) -> list[Message]:
+        unread = (await super().fetch(session_key))[: self.BATCH]
+        await self.mark_read(session_key, [m.id for m in unread])
+        return unread
+
+
+class TestDrainBeyondOneBatch:
+    async def test_every_message_past_the_first_batch_reaches_the_mailbox(
+        self, tmp_path: Path
+    ) -> None:
+        base = _host(tmp_path)
+        record = await base.create("alpha")
+        host = _with_relay(base, _BatchedConsuming(tmp_path / "relay"))
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        for n in range(250):
+            await host.relay.deliver(
+                Message(from_user="eric", to_user=key, body=f"m{n:03d}")
+            )
+
+        await host.end(record)
+
+        bodies = sorted(m.body for m in await host.relay.fetch_user_inbox("kai"))
+        assert bodies == [f"m{n:03d}" for n in range(250)]
+
+    async def test_non_consuming_relay_terminates(self, tmp_path: Path) -> None:
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        for n in range(3):
+            await host.relay.deliver(
+                Message(from_user="eric", to_user=key, body=f"m{n}")
+            )
+        await host.end(record)
+        assert len(await host.relay.fetch_user_inbox("kai")) == 3
+
+
+class TestDrainIsIdempotent:
+    async def test_redrain_of_a_message_already_in_the_mailbox_adds_no_copy(
+        self, tmp_path: Path
+    ) -> None:
+        # deliver() reached the mailbox but the caller saw an error (lost ack),
+        # so the same source message is drained again on retry.
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        msg = Message(from_user="eric", to_user=key, body="once")
+        await host.relay.deliver(msg)
+
+        await host._drain("kai", key)
+        await host.relay.deliver(msg)  # the same message shows up again
+        await host._drain("kai", key)
+
+        assert [m.body for m in await host.relay.fetch_user_inbox("kai")] == ["once"]
+
+
+class TestSweepScope:
+    async def test_foreign_repo_records_are_left_for_their_own_sweep(
+        self, tmp_path: Path
+    ) -> None:
+        base = _host(tmp_path)
+        record = await base.create("alpha")
+        store = base.selector.store
+        store.lapse(record.session_id)
+        old = datetime.now(UTC) - RETENTION - timedelta(minutes=1)
+        _backdate(store, record.session_id, last_attached_at=old)
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        await base.relay.deliver(
+            Message(from_user="eric", to_user=key, body="not yours to drain")
+        )
+        other = dataclasses.replace(
+            base,
+            config=BiffConfig(user="kai", repo_name="other"),
+        )
+
+        await other.sweep()
+
+        assert store.read(record.session_id).state == "dormant"
+        assert await base.relay.get_session(key) is not None
+
+    async def test_unreadable_record_does_not_fail_the_sweep(
+        self, tmp_path: Path
+    ) -> None:
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        bad = host.selector.store.root / "cli-0000000000000bad"
+        bad.mkdir()
+        (bad / "session.json").write_text("garbage")
+
+        await host.sweep()
+
+        assert host.selector.store.read(record.session_id).state == "live"
+
+
+class TestConcurrentLifecycle:
+    async def test_end_then_late_attach_cannot_resurrect_presence(
+        self, tmp_path: Path
+    ) -> None:
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+
+        await host.end(record)
+        with pytest.raises(CliSessionEndedError):
+            await host.attach(record)  # a stale handle from before the end
+
+        assert await host.relay.get_session(key) is None
+        assert await host.relay.get_tty_reservation_owner("kai", "alpha") is None
+
+    async def test_second_end_leaves_a_reused_name_alone(self, tmp_path: Path) -> None:
+        host = _host(tmp_path)
+        old = await host.create("alpha")
+        await host.end(old)
+        new = await host.create("alpha")
+        new_key = SessionRouting(new.session_id, role=CLI_ROLE).session_key("kai")
+
+        await host.end(old)  # a late duplicate end of the first session
+
+        assert await host.relay.get_tty_reservation_owner("kai", "alpha") == new_key
+        assert await host.relay.get_session(new_key) is not None
+
+    async def test_concurrent_attach_and_end_leave_a_consistent_session(
+        self, tmp_path: Path
+    ) -> None:
+        import asyncio
+
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+
+        results = await asyncio.gather(
+            host.attach(record), host.end(record), return_exceptions=True
+        )
+
+        state = host.selector.store.read(record.session_id).state
+        row = await host.relay.get_session(key)
+        if state == "ended":
+            assert row is None
+        else:
+            assert row is not None
+        assert not any(
+            isinstance(r, BaseException) and not isinstance(r, CliSessionEndedError)
+            for r in results
+        )
+
+    async def test_sweep_judges_the_current_state_not_the_listing(
+        self, tmp_path: Path
+    ) -> None:
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        store = host.selector.store
+        _backdate(
+            store,
+            record.session_id,
+            last_attached_at=datetime.now(UTC) - LEASE - timedelta(minutes=1),
+        )
+        await host.attach(record)  # renewed after it went stale
+
+        await host.sweep()
+
+        assert store.read(record.session_id).state == "live"
+
+    async def test_renew_extends_the_lease_of_an_attached_session(
+        self, tmp_path: Path
+    ) -> None:
+        host = _host(tmp_path)
+        record = await host.create("alpha")
+        store = host.selector.store
+        _backdate(
+            store,
+            record.session_id,
+            last_attached_at=datetime.now(UTC) - LEASE + timedelta(seconds=1),
+        )
+        await host.renew(record)
+        assert store.read(record.session_id).last_attached_at > (
+            datetime.now(UTC) - timedelta(minutes=1)
+        )

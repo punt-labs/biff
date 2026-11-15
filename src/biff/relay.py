@@ -405,12 +405,16 @@ class LocalRelay:
             user_part = message.to_user.split(":")[0]
             self._validate_user(user_part)
             path = self._inbox_path_for_key(message.to_user)
+            if any(m.id == message.id for m in self._read_inbox_file(path)):
+                return  # same id twice is one message, as JetStream dedups it
             with path.open("a") as f:
                 f.write(message.model_dump_json() + "\n")
         else:
             # Broadcast — single user mailbox, no session lookup
             self._validate_user(message.to_user)
             path = self._user_inbox_path(message.to_user)
+            if any(m.id == message.id for m in self._read_inbox_file(path)):
+                return
             with path.open("a") as f:
                 f.write(message.model_dump_json() + "\n")
 

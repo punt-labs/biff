@@ -66,6 +66,21 @@ class TestHeartbeatLoop:
         await task
 
     @pytest.mark.anyio()
+    async def test_renews_the_lease_on_each_tick(self) -> None:
+        relay = AsyncMock()
+        renew = AsyncMock()
+        shutdown = asyncio.Event()
+
+        async def _stop_after_one() -> None:
+            await asyncio.sleep(0.05)
+            shutdown.set()
+
+        task = asyncio.create_task(_stop_after_one())
+        await _heartbeat_loop(relay, "kai:abc", shutdown, interval=0.01, renew=renew)
+        await task
+        assert renew.await_count >= 1
+
+    @pytest.mark.anyio()
     async def test_survives_cancelled_error(self) -> None:
         """CancelledError during heartbeat returns cleanly, no warning."""
         relay = AsyncMock()
