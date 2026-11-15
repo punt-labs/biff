@@ -104,6 +104,13 @@
 
 ### Fixed
 
+- **An unclosed code fence in `CLAUDE.md` runs to the end of the file
+  (PL-1087).** Claude Code's Markdown lexer treats a fence that never closes
+  as code through EOF, so an `@`-import after it never loads. `biff enable`
+  now refuses, before granting any rule, instead of appending an inert
+  import; an import before the open fence is unaffected. A triple-backtick
+  inline span such as ```` ```x``` ```` is not a fence.
+
 - `write user:tty` to a tty with no active session (for example after the
   recipient restarted) is now forwarded to that user's mailbox, and reported
   as `forwarded` rather than failing with "No active session". A live holder

@@ -212,6 +212,30 @@ class TestFenceMarkerMatching:
         assert imp.prune() is False
         assert host.read_text() == f"````text\n```\n{_LINE}\n````\n"
 
+    @pytest.mark.parametrize("tail", ["\t", "\u00a0"])
+    def test_only_spaces_may_follow_closing_run(
+        self, tmp_path: Path, tail: str
+    ) -> None:
+        # Claude Code's lexer closes on trailing spaces only: a tab or a
+        # non-breaking space after the run leaves the block open through EOF.
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"~~~\n~~~{tail}\n{_LINE}\n", encoding="utf-8")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+        assert imp.append_would_be_fenced() is True
+        host.write_text(f"~~~\n~~~  \n{_LINE}\n", encoding="utf-8")
+        assert imp.is_registered() is True
+
+    def test_info_tagged_run_does_not_close_block(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        # An info string is valid on an opener only: ```python is content.
+        text = f"```\n```python\n{_LINE}\n```\n"
+        host.write_text(text)
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is False
+        assert imp.prune() is False
+        assert host.read_text() == text
+
     def test_tilde_block_shields_import(self, tmp_path: Path) -> None:
         host = tmp_path / "CLAUDE.md"
         host.write_text(f"~~~\n{_LINE}\n~~~\n")
@@ -285,28 +309,49 @@ class TestIsRegistered:
 
 
 class TestUnbalancedFence:
-    """An unterminated fence must not swallow biff's column-0 import line.
+    """A fence that never closes runs to EOF, as in Claude Code's lexer.
 
-    Only balanced ```…``` (or ~~~…~~~) pairs delimit a code block; a dangling
-    opener in the user's prose must not misclassify the import as fenced, which
-    would let register() duplicate and prune() fail to remove.
+    An import after it is inert, so register() refuses to append there and
+    prune() leaves an inert copy alone; an import before it stays active.
     """
 
-    def test_unterminated_fence_above_does_not_hide_import(
+    def test_import_after_unterminated_fence_is_inert(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        text = f"```text\nunclosed fence in user prose\n{_LINE}\n"
+        host.write_text(text)
+        imp = ClaudeMdImport(host, _LINE)
+
+        assert imp.is_registered() is False
+        assert imp.append_would_be_fenced() is True
+        assert imp.prune() is False
+        assert host.read_text() == text
+
+    def test_register_refuses_to_append_into_open_fence(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text("```text\nunclosed\n")
+        with pytest.raises(ValueError, match="unclosed code fence"):
+            ClaudeMdImport(host, _LINE).register()
+        assert host.read_text() == "```text\nunclosed\n"
+
+    def test_import_before_unterminated_fence_stays_active(
         self, tmp_path: Path
     ) -> None:
         host = tmp_path / "CLAUDE.md"
-        host.write_text("```text\nunclosed fence in user prose\n\nmore prose\n")
+        host.write_text(f"{_LINE}\n```text\nopen\n{_LINE}\n")
         imp = ClaudeMdImport(host, _LINE)
-
-        assert imp.register() is True
         assert imp.is_registered() is True
-        # No duplicate on a second run.
+        assert imp.append_would_be_fenced() is False
         assert imp.register() is False
-        assert host.read_text().count(_LINE) == 1
-        # And it can be removed.
         assert imp.prune() is True
-        assert _LINE not in host.read_text()
+        assert host.read_text() == f"```text\nopen\n{_LINE}\n"
+
+    def test_inline_triple_backtick_span_is_not_a_fence(self, tmp_path: Path) -> None:
+        host = tmp_path / "CLAUDE.md"
+        host.write_text(f"```example``` inline\n{_LINE}\n")
+        imp = ClaudeMdImport(host, _LINE)
+        assert imp.is_registered() is True
+        assert imp.append_would_be_fenced() is False
+        assert imp.prune() is True
 
     def test_balanced_fence_still_shields_inner_line(self, tmp_path: Path) -> None:
         # A balanced fence below the import must still shield an inner copy.

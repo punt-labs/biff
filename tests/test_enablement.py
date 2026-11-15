@@ -269,6 +269,17 @@ class TestPermissions:
         assert not (tmp_path / ".github").exists()
         assert not (tmp_path / "CLAUDE.md").exists()
 
+    def test_unclosed_fence_refuses_before_granting(self, tmp_path: Path) -> None:
+        _make_repo(tmp_path)
+        (tmp_path / "CLAUDE.md").write_text("```text\nnever closed\n")
+        change = RepoEnablement(tmp_path).enable()
+        assert change.failed
+        assert "unclosed code fence" in change.permissions.error
+        assert "Close the code fence in CLAUDE.md" in change.enable_report()[-1]
+        assert not (tmp_path / ".claude").exists()
+        assert not (tmp_path / ".punt-labs" / "biff" / "enabled").exists()
+        assert (tmp_path / "CLAUDE.md").read_text() == "```text\nnever closed\n"
+
     def test_later_failure_rolls_back_granted_rules(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

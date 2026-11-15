@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff._stdlib import remove_enabled_marker, write_enabled_marker
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
-from biff.claude_md import ClaudeMdImport
+from biff.claude_md import UNCLOSED_FENCE, ClaudeMdImport
 from biff.claude_permissions import PermissionChange, ProjectPermissions
 from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
 
@@ -101,12 +101,14 @@ class EnablementChange:
     def enable_report(self) -> list[str]:
         """Return the permission lines and closing line for an ``enable`` run."""
         if self.failed:
+            fix = (
+                "Close the code fence in CLAUDE.md"
+                if self.permissions.error == UNCLOSED_FENCE
+                else "Fix .claude/settings.json"
+            )
             return [
                 *self.permissions.lines("added to"),
-                (
-                    "biff not enabled; nothing was written. Fix "
-                    ".claude/settings.json and rerun biff enable."
-                ),
+                f"biff not enabled; nothing was written. {fix} and rerun biff enable.",
             ]
         return [*self.permissions.lines("added to"), ENABLED_MESSAGE]
 
@@ -167,6 +169,13 @@ class RepoEnablement:
                 ci_workflow_changed=False,
                 git_hooks_changed=(),
                 git_hooks_resolved=False,
+            )
+        if self._guide_import().append_would_be_fenced():
+            return EnablementChange(
+                ci_workflow_changed=False,
+                git_hooks_changed=(),
+                git_hooks_resolved=True,
+                permissions=PermissionChange(error=UNCLOSED_FENCE),
             )
         permissions = ProjectPermissions(self._root).grant()
         if permissions.error:
