@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `biff enable` no longer makes read-only flag commands such as
+  `biff --version` and `biff --help` prompt. The catch-all ask rule
+  `Bash(biff -*)` is replaced by per-verb rules that match each mutating verb
+  bare or behind a global option, and never a verbless flag command.
+
 ## [1.23.0] - 2026-11-15
 
 ### Added
