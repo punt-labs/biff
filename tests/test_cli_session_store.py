@@ -5,7 +5,8 @@ from __future__ import annotations
 import dataclasses
 import json
 import stat
-from datetime import UTC, datetime, timedelta
+import threading
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -120,7 +121,7 @@ class TestFilesystem:
         store.create(rec)
         store.attach(rec.session_id, now=T1)
         d = tmp_path / "sessions" / rec.session_id
-        assert [p.name for p in d.iterdir()] == ["session.json"]
+        assert sorted(p.name for p in d.iterdir()) == [".lock", "session.json"]
 
     def test_write_is_atomic(
         self,
@@ -140,7 +141,7 @@ class TestFilesystem:
         monkeypatch.undo()
         assert store.read(rec.session_id) == rec
         d = tmp_path / "sessions" / rec.session_id
-        assert [p.name for p in d.iterdir()] == ["session.json"]
+        assert sorted(p.name for p in d.iterdir()) == [".lock", "session.json"]
 
     @pytest.mark.parametrize(
         "bad", ["", "../etc", "a/b", "cli-ab cd", "x" * 129, "cli-\n"]
@@ -299,3 +300,65 @@ class TestExpire:
         with pytest.raises(ValueError, match="live"):
             store.expire(rec.session_id)
         assert store.read(rec.session_id) == rec
+
+
+class TestConcurrency:
+    def test_concurrent_end_is_not_clobbered_by_stale_attach(
+        self,
+        store: CliSessionStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rec = _record()
+        store.create(rec)
+        other = CliSessionStore(store.root)
+        real_read = CliSessionStore.read
+        done = threading.Event()
+
+        def end_elsewhere() -> None:
+            other.end(rec.session_id, now=T1)
+
+        def read_then_race(self: CliSessionStore, session_id: str) -> CliSessionRecord:
+            record = real_read(self, session_id)
+            if not done.is_set():
+                done.set()
+                racer = threading.Thread(target=end_elsewhere)
+                racer.start()
+                racer.join(timeout=0.5)
+                read_then_race.racer = racer  # type: ignore[attr-defined]
+            return record
+
+        monkeypatch.setattr(CliSessionStore, "read", read_then_race)
+        store.attach(rec.session_id, now=T2)
+        read_then_race.racer.join()  # type: ignore[attr-defined]
+        monkeypatch.undo()
+        assert store.read(rec.session_id).state == "ended"
+
+
+class TestErrorContract:
+    def test_read_unknown_is_file_not_found(self, store: CliSessionStore) -> None:
+        with pytest.raises(FileNotFoundError):
+            store.read("cli-0000000000000000")
+
+    def test_from_json_missing_key_is_value_error(self) -> None:
+        data = json.loads(_record().to_json())
+        del data["tty"]
+        with pytest.raises(ValueError, match="malformed"):
+            CliSessionRecord.from_json(json.dumps(data))
+
+    def test_from_json_bad_value_is_value_error(self) -> None:
+        data = json.loads(_record().to_json())
+        data["created_at"] = "not-a-date"
+        with pytest.raises(ValueError, match="malformed"):
+            CliSessionRecord.from_json(json.dumps(data))
+
+    def test_from_json_non_object_is_value_error(self) -> None:
+        with pytest.raises(ValueError, match="malformed"):
+            CliSessionRecord.from_json("[1, 2]")
+
+
+def test_non_utc_now_round_trips() -> None:
+    tz = timezone(timedelta(hours=5))
+    rec = _record(now=datetime(2026, 11, 14, 17, 0, tzinfo=tz))
+    assert rec.created_at == T0
+    assert rec.created_at.tzinfo is UTC
+    assert CliSessionRecord.from_json(rec.to_json()) == rec

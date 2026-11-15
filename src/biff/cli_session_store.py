@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import secrets
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +25,7 @@ collide with a Claude Code id in the shared sessions directory."""
 SCHEMA_VERSION = 1
 _ID_HEX_CHARS = 16
 _RECORD_FILE = "session.json"
+_LOCK_FILE = ".lock"
 
 
 class CliSessionEndedError(ValueError):
@@ -70,23 +73,30 @@ class CliSessionRecord:
             repo=repo,
             repo_root=repo_root,
             hostname=hostname,
-            created_at=now,
+            created_at=now.astimezone(UTC),
             state="live",
-            last_attached_at=now,
+            last_attached_at=now.astimezone(UTC),
             ended_at=None,
         )
 
     @classmethod
     def from_json(cls, text: str) -> Self:
-        """Parse a stored record, raising ValueError on any malformed field."""
-        raw = json.loads(text)
+        """Parse a stored record; any malformed or missing field raises ValueError."""
+        try:
+            return cls._from_raw(json.loads(text))
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            msg = f"malformed session record: {exc!r}"
+            raise ValueError(msg) from exc
+
+    @classmethod
+    def _from_raw(cls, raw: dict[str, object]) -> Self:
         state = raw["state"]
         if state not in get_args(SessionState):
             msg = f"unknown session state: {state!r}"
             raise ValueError(msg)
         ended = raw["ended_at"]
         return cls(
-            version=int(raw["version"]),
+            version=int(str(raw["version"])),
             session_id=str(raw["session_id"]),
             tty=str(raw["tty"]),
             user=str(raw["user"]),
@@ -172,7 +182,7 @@ class CliSessionStore:
         self._write(path, record)
 
     def read(self, session_id: str) -> CliSessionRecord:
-        """Return the record for *session_id* or raise UnknownCliSessionError."""
+        """Return the record for *session_id*; FileNotFoundError when absent."""
         path = self._record_path(session_id)
         try:
             text = path.read_text()
@@ -206,12 +216,16 @@ class CliSessionStore:
 
     def expire(self, session_id: str) -> None:
         """Remove a dormant or ended record and its directory."""
-        record = self.read(session_id)
-        if record.state == "live":
-            msg = f"cannot expire live session {session_id}"
-            raise ValueError(msg)
         path = self._record_path(session_id)
-        path.unlink()
+        if not path.parent.is_dir():
+            msg = f"unknown session: {session_id}"
+            raise FileNotFoundError(msg)
+        with self._locked(path.parent):
+            if self.read(session_id).state == "live":
+                msg = f"cannot expire live session {session_id}"
+                raise ValueError(msg)
+            path.unlink()
+            (path.parent / _LOCK_FILE).unlink()
         path.parent.rmdir()
 
     def _apply(
@@ -219,9 +233,24 @@ class CliSessionStore:
         session_id: str,
         step: _Step,
     ) -> CliSessionRecord:
-        updated = step(self.read(session_id))
-        self._write(self._record_path(session_id), updated)
+        path = self._record_path(session_id)
+        if not path.parent.is_dir():
+            msg = f"unknown session: {session_id}"
+            raise FileNotFoundError(msg)
+        # Held across read, compute and write so a concurrent process cannot
+        # write back a stale state (e.g. revive a session another just ended).
+        with self._locked(path.parent):
+            updated = step(self.read(session_id))
+            self._write(path, updated)
         return updated
+
+    @contextmanager
+    def _locked(self, directory: Path) -> Generator[None]:
+        # flock is released by the OS when the process exits, so a killed
+        # holder can never wedge the session.
+        with (directory / _LOCK_FILE).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
 
     def _record_path(self, session_id: str) -> Path:
         # Validate before building any path so a hostile id cannot escape root.
