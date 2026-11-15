@@ -42,9 +42,10 @@ if TYPE_CHECKING:
 
 import biff.commands.talk as talk_commands
 from biff import commands
-from biff.cli_session import CliContext, cli_session
+from biff.cli_session import CliContext, cli_session, cli_session_host
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
+from biff.commands.session import SessionVerbs
 from biff.config import (
     find_git_root,
     is_enabled,
@@ -70,6 +71,7 @@ from biff.talk_types import MAX_BODY_LEN, AcceptOutcome, TalkNotification
 _json_output = False
 _quiet_output = False
 _user_override: str | None = None
+_session_ref: str | None = None
 
 
 def _print_json(data: object) -> None:
@@ -122,6 +124,8 @@ def _suppress_nats_noise() -> None:
 
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
+session_app = typer.Typer(help="Create, list, select and end named CLI sessions.")
+app.add_typer(session_app, name="session")
 
 
 def _versions() -> tuple[str, str | None]:
@@ -160,6 +164,15 @@ def main(
         str | None,
         typer.Option("--user", help="Identity override (e.g. for CI bots)."),
     ] = None,
+    session: Annotated[
+        str | None,
+        typer.Option(
+            "--session",
+            "-s",
+            envvar="BIFF_SESSION",
+            help="Run as this session (name or id). Never creates one.",
+        ),
+    ] = None,
     version_flag: Annotated[
         bool,
         typer.Option(
@@ -176,10 +189,11 @@ def main(
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive.")
 
-    global _json_output, _quiet_output, _user_override
+    global _json_output, _quiet_output, _user_override, _session_ref
     _json_output = json_flag
     _quiet_output = quiet
     _user_override = user
+    _session_ref = session or None
 
     from biff.logging_config import configure_logging
 
@@ -1034,7 +1048,11 @@ async def _repl() -> None:
     setup_readline(cmds)
 
     try:
-        async with cli_session(interactive=True, user_override=_user_override) as ctx:
+        async with cli_session(
+            interactive=True,
+            user_override=_user_override,
+            session_ref=_session_ref,
+        ) as ctx:
             print(f"biff {pkg_version('punt-biff')} — {ctx.user}:{ctx.tty_name}")
             print(f"Commands: {', '.join(cmds)}, talk, timestamps, exit")
             print()
@@ -1134,7 +1152,9 @@ def _run(
 
     async def _inner() -> None:
         try:
-            async with cli_session(user_override=_user_override) as ctx:
+            async with cli_session(
+                user_override=_user_override, session_ref=_session_ref
+            ) as ctx:
                 result = await coro_factory(ctx)
         except ValueError as exc:
             if _json_output:
@@ -1242,6 +1262,89 @@ def tty_cmd(
 def status() -> None:
     """Show connection state, session info, and pending messages."""
     _run(commands.status)
+
+
+# ---------------------------------------------------------------------------
+# Session verbs
+# ---------------------------------------------------------------------------
+
+
+def _run_session_verb(
+    verb: Callable[[SessionVerbs], Awaitable[CommandResult]],
+    *,
+    user: str | None = None,
+    repo: Path | None = None,
+) -> None:
+    """Run a ``session`` verb against the relay without attaching to a session."""
+
+    async def _inner() -> None:
+        try:
+            async with cli_session_host(
+                user_override=user or _user_override, start=repo
+            ) as handle:
+                result = await verb(SessionVerbs(handle.host))
+        except ValueError as exc:
+            if _json_output:
+                _print_json({"error": str(exc)})
+            else:
+                print(f"Error: {exc}", file=sys.stderr)
+            raise typer.Exit(code=1) from None
+        if _json_output:
+            _print_json(result.json_data)
+        elif result.error:
+            print(result.text, file=sys.stderr)
+        elif not _quiet_output:
+            print(result.text)
+        if result.error:
+            raise typer.Exit(code=1)
+
+    asyncio.run(_inner())
+
+
+@session_app.command("new")
+def session_new(
+    tty: Annotated[
+        str | None,
+        typer.Option("--tty", help="Exact session name; errors if taken."),
+    ] = None,
+    repo: Annotated[
+        Path | None,
+        typer.Option("--repo", help="Repo for the session (default: current)."),
+    ] = None,
+    as_user: Annotated[
+        str | None,
+        typer.Option("--as", help="Identity for this session only."),
+    ] = None,
+) -> None:
+    """Create a session and make it this repo's default."""
+    _run_session_verb(lambda verbs: verbs.new(tty), user=as_user, repo=repo)
+
+
+@session_app.command("ls")
+def session_ls(
+    all_flag: Annotated[
+        bool,
+        typer.Option("--all", help="Include ended sessions still retained."),
+    ] = False,
+) -> None:
+    """List this host's sessions."""
+    _run_session_verb(lambda verbs: verbs.ls(include_ended=all_flag))
+
+
+@session_app.command("use")
+def session_use(
+    name: Annotated[str, typer.Argument(help="Session name or id")],
+) -> None:
+    """Make a session this repo's default without attaching to it."""
+    _run_session_verb(lambda verbs: verbs.use(name))
+
+
+@session_app.command("end")
+def session_end(
+    name: Annotated[str, typer.Argument(help="Session name or id")],
+) -> None:
+    """End a session; its unread mail moves to your user mailbox."""
+    _run_session_verb(lambda verbs: verbs.end(name))
 
 
 # ---------------------------------------------------------------------------
@@ -1762,7 +1865,11 @@ async def _talk_interactive(to: str, opening: str) -> None:
     user_target, tty_target = parse_address(to)
 
     try:
-        async with cli_session(interactive=True, user_override=_user_override) as ctx:
+        async with cli_session(
+            interactive=True,
+            user_override=_user_override,
+            session_ref=_session_ref,
+        ) as ctx:
             if not isinstance(ctx.relay, NatsRelay):
                 print("Talk requires a NATS relay.")
                 return

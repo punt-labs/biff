@@ -11,6 +11,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -71,6 +72,7 @@ async def _fake_session(
     *,
     interactive: bool = False,
     user_override: str | None = None,
+    session_ref: str | None = None,
 ) -> AsyncGenerator[CliContext]:
     """Drop-in replacement for ``cli_session`` that needs no NATS."""
     yield _MOCK_CTX
@@ -96,7 +98,9 @@ class TestGlobalFlags:
         with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
             result = runner.invoke(app, ["--user", "github-actions", "who"])
         assert result.exit_code == 0
-        mock_sess.assert_called_once_with(user_override="github-actions")
+        mock_sess.assert_called_once_with(
+            user_override="github-actions", session_ref=None
+        )
         mock_who.assert_awaited_once()
 
 
@@ -942,3 +946,64 @@ class TestUninstallResilient:
         # never touched — it reflects the skipped plugin step.
         assert "plugin was not removed" in result.output
         assert "\nUninstalled.\n" not in result.output
+
+
+class TestSessionOption:
+    """``-s`` and ``BIFF_SESSION`` reach ``cli_session`` as ``session_ref``."""
+
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_dash_s_passes_the_ref(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(text="ok")
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            result = runner.invoke(app, ["-s", "main", "who"])
+        assert result.exit_code == 0
+        mock_sess.assert_called_once_with(user_override=None, session_ref="main")
+
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_env_var_is_equivalent(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(text="ok")
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            result = runner.invoke(app, ["who"], env={"BIFF_SESSION": "main"})
+        assert result.exit_code == 0
+        mock_sess.assert_called_once_with(user_override=None, session_ref="main")
+
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_flag_beats_env(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(text="ok")
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            runner.invoke(app, ["-s", "a", "who"], env={"BIFF_SESSION": "b"})
+        mock_sess.assert_called_once_with(user_override=None, session_ref="a")
+
+    @patch("biff.commands.who", new_callable=AsyncMock)
+    def test_absent_is_none(self, mock_who: AsyncMock) -> None:
+        mock_who.return_value = CommandResult(text="ok")
+        with patch("biff.__main__.cli_session", wraps=_fake_session) as mock_sess:
+            runner.invoke(app, ["who"], env={"BIFF_SESSION": ""})
+        mock_sess.assert_called_once_with(user_override=None, session_ref=None)
+
+    def test_bad_target_is_a_named_error_exit_1(self) -> None:
+        from biff.cli_session_select import SessionSelectionError
+
+        class _Boom:
+            def __call__(self, **_: object) -> Self:
+                return self
+
+            async def __aenter__(self) -> CliContext:
+                msg = "unknown session: nope"
+                raise SessionSelectionError(msg)
+
+            async def __aexit__(self, *_: object) -> None:
+                return None
+
+        with patch("biff.__main__.cli_session", new=_Boom()):
+            result = runner.invoke(app, ["-s", "nope", "who"])
+        assert result.exit_code == 1
+        assert "unknown session: nope" in result.output
+
+
+class TestSessionVerbsRegistered:
+    def test_help_lists_the_verbs(self) -> None:
+        result = runner.invoke(app, ["session", "--help"])
+        assert result.exit_code == 0
+        for verb in ("new", "ls", "use", "end"):
+            assert verb in result.output

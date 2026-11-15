@@ -342,6 +342,20 @@ kai:tty1 ▶ exit
 
 The shell logs your session in and out, keeps your presence current, and prints wall broadcasts and new-message alerts while you sit at the prompt. It has line editing, history (kept in `~/.punt-labs/biff/repl_history`) and tab completion. `timestamps on` / `timestamps off` adds a local `[HH:MM]` stamp to incoming talk messages for the current shell only.
 
+### Named sessions
+
+Commands from one shell share one durable session with one `ttyN`: the session, its presence row and its tty name outlive each `biff` process. A session unused for 8 hours goes dormant (name and inbox kept; the next command revives it), and a dormant session is removed after 3 days.
+
+```bash
+biff session new --tty main     # Create a session named "main" (errors if the name is taken)
+biff session ls                 # This host's sessions: name, user, repo, state, id
+biff session use main           # Make "main" this repo's default (no attach)
+biff session end main           # End it; unread mail moves to your user mailbox
+biff -s main write kai "hi"     # Run one command as session "main" (or set BIFF_SESSION)
+```
+
+Without `-s`, a command runs as the first of: `BIFF_SESSION`; the Claude Code session it is run from (`CLAUDE_CODE_SESSION_ID`, as a client of that session, creating nothing); this repo's default (`biff session use`, or the last `session new`); a fresh session. An explicit `-s` naming an unknown or ended session is an error and never creates one; an ended session is never revived, but `biff session new --tty <name>` may reuse the name.
+
 ## Setup
 
 Biff needs a git repo and a GitHub identity. It reads your username and display name from `gh auth`.
