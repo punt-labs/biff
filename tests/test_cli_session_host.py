@@ -11,7 +11,7 @@ from biff.cli_session_host import LEASE, RETENTION, SessionHost
 from biff.cli_session_pointer import CurrentPointer
 from biff.cli_session_select import SessionSelectionError, SessionSelector
 from biff.cli_session_store import CliSessionEndedError, CliSessionStore
-from biff.models import BiffConfig, Message
+from biff.models import BiffConfig, Message, UserSession
 from biff.relay import LocalRelay
 from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE, derive_routing_id
 from biff.session_routing import SessionRouting
@@ -124,6 +124,14 @@ class TestResolve:
     ) -> None:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "harness-1")
         host = _host(tmp_path)
+        await host.relay.update_session(
+            UserSession(
+                user="kai",
+                tty=SessionRouting("harness-1").routing_id,
+                tty_name="tty7",
+                repo="biff",
+            )
+        )
         attached = await host.resolve(None)
         assert attached.record is None
         assert attached.routing == SessionRouting("harness-1")
@@ -133,7 +141,7 @@ class TestResolve:
         # No CLI record, no pointer, no second presence row.
         assert host.selector.store.list() == ()
         assert host.selector.pointer.read(host.selector.repo_root) is None
-        assert await host.relay.get_sessions() == []
+        assert len(await host.relay.get_sessions()) == 1
 
     async def test_explicit_beats_harness(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -298,3 +306,60 @@ def _backdate(
         store.read(session_id), last_attached_at=last_attached_at
     )
     (store.root / session_id / "session.json").write_text(record.to_json())
+
+
+class TestKeyIsTheRecordsDerivedKey:
+    async def test_pointer_rung_resolves_to_the_records_own_key_every_time(
+        self, tmp_path: Path
+    ) -> None:
+        host = _host(tmp_path)
+        record = await host.create("demo1")
+        expected = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+
+        first = await host.resolve(None)
+        second = await host.resolve(None)
+
+        assert first.routing.session_key("kai") == expected
+        assert second.routing.session_key("kai") == expected
+        assert first.tty_name == second.tty_name == "demo1"
+        assert len(host.selector.store.list()) == 1
+
+    async def test_harness_session_with_no_row_for_this_user_falls_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Inside Claude Code the harness session is registered under the
+        # agent's identity; a CLI run as another user has no row to attach to.
+        # That is a missing target, so the pointer rung must take over.
+        host = _host(tmp_path)
+        record = await host.create("demo1")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "harness-1")
+
+        attached = await host.resolve(None)
+
+        assert attached.record is not None
+        assert attached.record.session_id == record.session_id
+        assert attached.tty_name == "demo1"
+        assert attached.routing.session_key("kai") == (
+            SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        )
+
+    async def test_harness_session_with_a_row_is_still_a_client(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        host = _host(tmp_path)
+        harness = SessionRouting("harness-1")
+        await host.relay.update_session(
+            UserSession(
+                user="kai",
+                tty=harness.routing_id,
+                tty_name="tty7",
+                repo="biff",
+            )
+        )
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "harness-1")
+
+        attached = await host.resolve(None)
+
+        assert attached.record is None
+        assert attached.tty_name == "tty7"
+        assert host.selector.store.list() == ()

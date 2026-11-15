@@ -66,8 +66,8 @@ class SessionHost:
         if ref is not None:
             return await self.attach(self.selector.explicit(ref))
         harness = SessionRouting.declared_by_harness()
-        if harness is not None:
-            return await self._client_of(harness)
+        if harness is not None and (client := await self._client_of(harness)):
+            return client
         pointed = self.selector.pointed()
         if pointed is not None:
             try:
@@ -183,16 +183,19 @@ class SessionHost:
             )
         )
 
-    async def _client_of(self, routing: SessionRouting) -> Attachment:
-        """Attach to a harness session as a client; create nothing."""
-        user = self.config.user
-        key = routing.session_key(user)
+    async def _client_of(self, routing: SessionRouting) -> Attachment | None:
+        """Attach to a harness session as a client; create nothing.
+
+        ``None`` when this user has no row for it (a different ``--user``, or
+        a session the harness never registered): the target is missing, so
+        the caller falls through to the next rung.
+        """
+        key = routing.session_key(self.config.user)
         row = await self.relay.get_session(key)
-        if row is not None:
-            await self.relay.heartbeat(key)
-            return Attachment(routing, row.tty_name, None)
-        hint = await self.relay.get_session_tty_hint(user, routing.routing_id)
-        return Attachment(routing, hint or "", None)
+        if row is None:
+            return None
+        await self.relay.heartbeat(key)
+        return Attachment(routing, row.tty_name, None)
 
     async def _release(self, record: CliSessionRecord) -> None:
         """Drain the inbox into the owner's mailbox, then free the name and row."""
