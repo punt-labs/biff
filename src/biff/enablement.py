@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from biff._stdlib import remove_enabled_marker, write_enabled_marker
 from biff.ci_workflow import deploy_ci_workflow, remove_ci_workflow
-from biff.claude_md import ClaudeMdImport
+from biff.claude_md import UNCLOSED_FENCE, ClaudeMdImport
 from biff.claude_permissions import PermissionChange, ProjectPermissions
 from biff.git_hooks import deploy_git_hooks, remove_git_hooks, resolve_hooks_dir
 
@@ -167,6 +167,13 @@ class RepoEnablement:
                 ci_workflow_changed=False,
                 git_hooks_changed=(),
                 git_hooks_resolved=False,
+            )
+        if self._guide_import().append_would_be_fenced():
+            return EnablementChange(
+                ci_workflow_changed=False,
+                git_hooks_changed=(),
+                git_hooks_resolved=True,
+                permissions=PermissionChange(error=UNCLOSED_FENCE),
             )
         permissions = ProjectPermissions(self._root).grant()
         if permissions.error:

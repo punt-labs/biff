@@ -28,9 +28,10 @@ from typing import TYPE_CHECKING, Self, final
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-__all__ = ["ClaudeMdImport"]
+__all__ = ["UNCLOSED_FENCE", "ClaudeMdImport"]
 
 _NEW_FILE_MODE = 0o644
+UNCLOSED_FENCE = "CLAUDE.md ends inside an unclosed code fence; close it first"
 
 
 @final
@@ -71,16 +72,34 @@ class ClaudeMdImport:
         """
         return self._present(self._read())
 
+    def append_would_be_fenced(self) -> bool:
+        """Return ``True`` when :meth:`register` would append into an open fence.
+
+        :meth:`register` appends at the end of the file, so an import added
+        after a fence that never closes would be inert while ``enable``
+        reported success. An import already present at top level is left
+        alone, so it never is. Callers check this before changing anything.
+        """
+        if not self._host.is_file():
+            return False
+        text = self._read()
+        open_at = self._scan_fences(self._physical_lines(text))[1]
+        return not self._present(text) and open_at is not None
+
     def register(self) -> bool:
         """Append the import line if absent. Return ``True`` if the file changed.
 
         Idempotent: a line already present (net of its terminator, top-level
         only) is a no-op, so re-running ``install`` never duplicates it.
+        Raises :class:`ValueError` instead of appending an inert line after a
+        fence that never closes.
         """
         with self._locked():
             text = self._read()
             if self._present(text):
                 return False
+            if self._scan_fences(self._physical_lines(text))[1] is not None:
+                raise ValueError(UNCLOSED_FENCE)
             self._write(self._appended(text))
             return True
 
@@ -165,15 +184,27 @@ class ClaudeMdImport:
 
     @classmethod
     def _fenced_ranges(cls, lines: list[str]) -> list[tuple[int, int]]:
-        """Return ``(open_idx, close_idx)`` index pairs of matched fenced blocks.
+        """Return ``(open_idx, close_idx)`` index pairs of fenced blocks.
+
+        A fence that never closes runs to the last line, as in CommonMark.
+        """
+        ranges, open_at = cls._scan_fences(lines)
+        if open_at is not None:
+            ranges.append((open_at, len(lines) - 1))
+        return ranges
+
+    @classmethod
+    def _scan_fences(cls, lines: list[str]) -> tuple[list[tuple[int, int]], int | None]:
+        """Return the matched fenced blocks and the index of an opener left open.
 
         A block opened by a run of *N* of a marker closes only on a later
         **same-marker** delimiter of length ``>= N`` (CommonMark); a mismatched
         marker or a shorter run is content, not a close, so an inner ``~~~`` in a
-        ```` ``` ```` block never toggles the state. An unterminated opener is
-        dropped (delimits nothing), so a dangling fence never swallows the rest
-        of the file. Blocks do not nest — once open, every line up to the
-        matching close is content.
+        ```` ``` ```` block never toggles the state. An opener that never
+        closes is returned separately: Claude Code's Markdown lexer treats it
+        as running to the end of the file, so a line after it is fenced.
+        Blocks do not nest — once open, every line up to the matching
+        close is content.
         """
         ranges: list[tuple[int, int]] = []
         open_at: int | None = None
@@ -187,17 +218,18 @@ class ClaudeMdImport:
             elif fence is not None and fence[0] == open_marker and fence[1] >= open_len:
                 ranges.append((open_at, i))
                 open_at = None
-        return ranges
+        return ranges, open_at
 
     @classmethod
     def _top_level_flags(cls, lines: list[str]) -> list[bool]:
         """Flag each line ``True`` when it is top-level (not in a code block).
 
-        A line is non-top-level when it lies inside a matched fenced block
-        (:meth:`_fenced_ranges`) or is itself an indented code-block line — a
-        tab or four or more leading spaces (§2.4). biff's own import line is
+        A line is non-top-level when it lies inside a fenced block
+        (:meth:`_fenced_ranges`, including one that never closes) or is
+        itself an indented code-block line — a tab or four or more leading
+        spaces (§2.4). biff's own import line is
         written at column 0 with no info string, so it is top-level by
-        construction unless it sits inside a genuine fenced block.
+        construction unless it sits inside a fenced block.
         """
         inside: set[int] = set()
         for open_idx, close_idx in cls._fenced_ranges(lines):
