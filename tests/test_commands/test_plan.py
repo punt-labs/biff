@@ -161,6 +161,14 @@ class TestPlanMarkerKeying:
         assert has_plan_marker(repo, "cli-abc123")
         assert not has_plan_marker(repo, None)
 
+    async def test_claude_session_wins_over_an_attached_cli_record(
+        self, ctx: CliContext, repo: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-sess")
+        await plan(replace(ctx, record_session_id="cli-abc123"), "both")
+        assert has_plan_marker(repo, "claude-sess")
+        assert not has_plan_marker(repo, "cli-abc123")
+
     async def test_harness_client_marker_keys_on_claude_session(
         self, ctx: CliContext, repo: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
