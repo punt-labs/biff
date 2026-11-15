@@ -1,5 +1,10 @@
 # Explicit OpenCode session pin (biff-51xp)
 
+> **SUPERSEDED (DES-064).** The single-session OpenCode MCP mode and its
+> `--ethos-session` / `--ethos-agent-id` flags on `biff mcp` have been
+> removed; `biff mcp` no longer accepts them. This document is kept for
+> historical reference only. See DESIGN.md DES-064 and the CHANGELOG.
+
 ## Decision
 
 The initial OpenCode pilot runs one Biff MCP process for one explicitly

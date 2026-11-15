@@ -105,7 +105,8 @@ Leader's call per direct-authoring rules; recommendation in parentheses:
   `docs/design-nats-push.md`. Keep `docs/coe-dual-session-companion.md` in
   place as history (its value is the COE).
 - Edit one reference each: `docs/biff_coordination_use_cases_v0.2.md`,
-  `docs/session-pinned-opencode.md`, `docs/coe-v1.11-release.md:37`
+  `docs/session-pinned-opencode.md` (since archived as
+  `docs/archive/session-pinned-opencode.md`), `docs/coe-v1.11-release.md:37`
   (historical table row, leave), `TESTING.md:240`.
 - `CHANGELOG.md`: historical entries stay. Add `[Unreleased]` entries (7.3).
 - `DESIGN.md`: see 6.
