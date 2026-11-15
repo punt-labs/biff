@@ -272,10 +272,11 @@ The plan gate is keyed by the harness `session_id` in the hook payload. A plan
 set through `biff plan` unlocks the gate only for the session the marker is
 keyed on.
 
-- Inside Claude Code (rung 3), `biff plan` keys its marker on
-  `CLAUDE_CODE_SESSION_ID`, as `sync_plan_marker` does today, and unlocks that
-  session's edit gate.
-- Outside Claude Code, `biff plan` keys the marker on the CLI session's id
+- When `CLAUDE_CODE_SESSION_ID` is present, `biff plan` keys its marker on it,
+  whichever rung resolved the attachment (an explicit `-s`, the pointer and
+  auto-create all attach a CLI record even inside Claude Code). The edit-gate
+  hook reads that id, so the plan unlocks that session's edit gate.
+- When it is absent, `biff plan` keys the marker on the CLI session's id
   (rungs 1, 2, 4, 5). No Claude session's gate ever reads it. This replaces
   today's fall-through to the shared marker bucket for a bare CLI invocation:
   the CLI always has an identity now, so the shared bucket remains only for an

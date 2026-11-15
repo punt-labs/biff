@@ -148,6 +148,7 @@ class SessionHost:
             tty_name=attached.tty_name,
             org_repos=org_repos,
             repo_root=repo_root,
+            record_session_id=None if record is None else record.session_id,
             rename_record=(
                 None
                 if record is None

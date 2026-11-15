@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
 from biff._formatting import TABLE_WIDTH, visible_width
 from biff.cli_context import CliContext
 from biff.commands.plan import plan
 from biff.formatting import _NO_PRINTABLE_TEXT, _NO_VISIBLE_CONTENT
+from biff.markers import has_plan_marker
 from biff.models import PLAN_MAX_LENGTH
 from biff.relay import LocalRelay
 
@@ -129,3 +137,48 @@ class TestPlan:
         session = await relay.get_session("kai:abc12345")
         assert session is not None
         assert session.plan == ""
+
+
+class TestPlanMarkerKeying:
+    """``biff plan`` keys the plan-gate marker on the attached session."""
+
+    @pytest.fixture()
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+        root = tmp_path / "repo"
+        root.mkdir()
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+            patch("biff.commands.plan.get_repo_common_root", return_value=str(root)),
+        ):
+            yield str(root)
+
+    async def test_cli_session_marker_keys_on_its_record_id(
+        self, ctx: CliContext, repo: str
+    ) -> None:
+        cli_ctx = replace(ctx, record_session_id="cli-abc123")
+        await plan(cli_ctx, "cli work")
+        assert has_plan_marker(repo, "cli-abc123")
+        assert not has_plan_marker(repo, None)
+
+    async def test_claude_session_wins_over_an_attached_cli_record(
+        self, ctx: CliContext, repo: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-sess")
+        await plan(replace(ctx, record_session_id="cli-abc123"), "both")
+        assert has_plan_marker(repo, "claude-sess")
+        assert not has_plan_marker(repo, "cli-abc123")
+
+    async def test_harness_client_marker_keys_on_claude_session(
+        self, ctx: CliContext, repo: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-sess")
+        await plan(ctx, "claude work")
+        assert has_plan_marker(repo, "claude-sess")
+        assert not has_plan_marker(repo, None)
+
+    async def test_no_session_at_all_uses_the_shared_bucket(
+        self, ctx: CliContext, repo: str
+    ) -> None:
+        await plan(ctx, "headless work")
+        assert has_plan_marker(repo, None)

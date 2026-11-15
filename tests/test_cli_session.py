@@ -343,3 +343,22 @@ class TestSessionPersistence:
 
         row = await relay.get_session(ctx.session_key)  # type: ignore[attr-defined]
         assert row is not None
+
+    @pytest.mark.anyio()
+    async def test_attached_cli_session_carries_its_record_id(
+        self, env: tuple[object, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        resolved, relay = env
+        with (
+            patch("biff.cli_session.load_cli_config", return_value=resolved),
+            patch("biff.cli_session.NatsRelay", return_value=relay),
+        ):
+            async with cli_session() as first:
+                pass
+            async with cli_session() as second:
+                pass
+
+        assert first.record_session_id is not None
+        assert first.record_session_id.startswith("cli-")
+        assert first.record_session_id == second.record_session_id

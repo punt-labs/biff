@@ -23,6 +23,9 @@ class CliContext:
     tty_name: str = ""
     org_repos: frozenset[str] = frozenset()
     repo_root: Path | None = None
+    # The stored CLI session's id; ``None`` for a client of a harness session.
+    # ``biff plan`` keys its plan-gate marker on it.
+    record_session_id: str | None = None
     # Renames the stored CLI session record; ``None`` for a client of a harness
     # session, which has no record of its own.
     rename_record: Callable[[str], Awaitable[None]] | None = None

@@ -31,13 +31,15 @@ def cli_session_id() -> str | None:
 def sync_plan_marker(message: str, session_id: str | None = None) -> None:
     """Write or clear the plan-gate marker for *session_id*.
 
-    The MCP tool passes the session the caller declared.  The CLI passes
-    nothing and uses :func:`cli_session_id`, so its marker is scoped to the
-    session that ran it: another session's edit gate never reads it, and that
-    session's SessionStart clears it.  With no session at all (headless) the
-    marker goes to the shared bucket, which only an identity-less payload
-    reads.  The root is resolved fresh on every call so a long-running
-    server and a one-shot CLI invocation agree with the hook.
+    The MCP tool passes the session the caller declared.  The CLI passes the
+    Claude Code session when :func:`cli_session_id` finds one (the edit-gate
+    hook reads that id), else its stored session's id, so its marker is scoped
+    to the session that ran it: another session's edit gate never reads it,
+    and that session's SessionStart clears it.  With no session at all
+    (headless) the marker goes to the shared bucket, which only an
+    identity-less payload reads.
+    The root is resolved fresh on every call so a long-running server and a
+    one-shot CLI invocation agree with the hook.
     """
     root = get_repo_common_root()
     identity = session_id if session_id is not None else cli_session_id()
@@ -56,7 +58,9 @@ async def plan(ctx: CliContext, message: str) -> CommandResult:
         error = f"Plan too long: {len(message)} characters (max {PLAN_MAX_LENGTH})"
         return CommandResult(text=error, json_data={"error": error}, error=True)
     await update_current_session(ctx, plan=message, plan_source="manual")
-    sync_plan_marker(message)
+    # The edit-gate hook keys on the harness session, so it wins whenever
+    # present, even with a CLI record attached (``-s``, pointer, auto-create).
+    sync_plan_marker(message, cli_session_id() or ctx.record_session_id)
     return CommandResult(
         text=format_talk_echo("Plan:", message),
         json_data={"plan": message},
