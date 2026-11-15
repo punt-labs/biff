@@ -8,11 +8,10 @@ args) and inline commands (``biff who``) use this for a proper session::
         result = await commands.who(ctx)
         print(result.text)
 
-The session is registered in KV on entry, assigned a ``ttyN`` name,
-writes a wtmp login event, and is cleaned up on exit (KV delete,
-wtmp logout).  Interactive mode adds a heartbeat loop.
-
-This replaces the old pseudo-ephemeral session with a 5-minute TTL.
+An invocation attaches to a named session (see ``cli_session_host``) and
+detaches on exit; the session, its relay row and its ``ttyN`` name outlive
+the process, so consecutive commands from one shell share one address.
+Interactive mode adds a heartbeat loop while attached.
 """
 
 from __future__ import annotations
@@ -22,21 +21,16 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
-from biff.config import load_cli_config
-from biff.models import BiffConfig, SessionEvent, UserSession
+from biff.cli_session_host import SessionHost
+from biff.cli_session_select import SessionSelector
+from biff.config import ResolvedConfig, load_cli_config
+from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.relay import Relay
 from biff.talk_state import TalkState
-from biff.tty import (
-    build_session_key,
-    claim_tty_name,
-    generate_tty,
-    get_hostname,
-    get_pwd,
-)
+from biff.tty import get_hostname, get_pwd
 
 logger = logging.getLogger(__name__)
 
@@ -106,86 +100,25 @@ async def _heartbeat_loop(
             logger.info("CLI heartbeat failed (transient); retrying", exc_info=True)
 
 
-async def _cli_session_cleanup(
-    relay: NatsRelay,
-    *,
-    user: str,
-    tty: str,
-    tty_name: str,
-    session_key: str,
-    session: UserSession | None,
-    registered: bool,
-    name_reserved: bool,
-    shutdown: asyncio.Event,
-    heartbeat_task: asyncio.Task[None] | None,
-    repo_name: str,
-) -> None:
-    """Clean up a CLI session: stop heartbeat, write logout, release name, close."""
-    shutdown.set()
-    if heartbeat_task is not None:
-        heartbeat_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await heartbeat_task
+@dataclass(frozen=True)
+class HostHandle:
+    """An open relay with the session host and config built on it."""
 
-    # Release TTY name reservation regardless of session registration state.
-    # claim_tty_name may succeed (writing a reservation) before update_session
-    # fails, so we must track reservation state independently.
-    if name_reserved and tty_name and not registered:
-        try:
-            await relay.release_tty_name(user, tty_name)
-        except Exception:
-            logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
-
-    if registered and session is not None:
-        logout_event = SessionEvent(
-            session_key=session_key,
-            event="logout",
-            user=user,
-            tty=tty,
-            tty_name=tty_name,
-            hostname=session.hostname,
-            pwd=session.pwd,
-            timestamp=datetime.now(UTC),
-            repo=repo_name,
-        )
-        try:
-            await relay.append_wtmp(logout_event)
-            await relay.flush()
-        except Exception:
-            logger.warning("Failed to write CLI wtmp logout", exc_info=True)
-
-        # Release TTY name reservation (DES-035).
-        if tty_name:
-            try:
-                await relay.release_tty_name(user, tty_name)
-            except Exception:
-                logger.warning("Failed to release TTY name %s", tty_name, exc_info=True)
-
-        try:
-            await relay.delete_session(session_key)
-        except Exception:
-            logger.warning(
-                "Failed to delete CLI session %s", session_key, exc_info=True
-            )
-
-    try:
-        await relay.close()
-    except Exception:
-        logger.warning("Failed to close CLI relay", exc_info=True)
+    host: SessionHost
+    resolved: ResolvedConfig
+    relay: NatsRelay
 
 
 @asynccontextmanager
-async def cli_session(
-    *, interactive: bool = False, user_override: str | None = None
-) -> AsyncGenerator[CliContext]:
-    """Provide a NATS relay + session with proper lifecycle.
+async def cli_session_host(
+    *, user_override: str | None = None, start: Path | None = None
+) -> AsyncGenerator[HostHandle]:
+    """Open the relay and a :class:`SessionHost` without attaching to a session.
 
-    On entry: connect, register session (KV), auto-assign ttyN,
-    write wtmp login event.  If *interactive*, start a heartbeat loop.
-
-    On exit: write wtmp logout event, delete session (KV), disconnect.
+    Used by the ``session`` verbs, which manage sessions rather than run as
+    one.  *start* picks the repo (default: the current directory's).
     """
-    resolved = load_cli_config(user_override=user_override)
+    resolved = load_cli_config(user_override=user_override, start=start)
     config = resolved.config
 
     if not config.relay_url:
@@ -203,103 +136,76 @@ async def cli_session(
         name=f"biff-cli-{config.user}",
         repo_name=config.repo_name,
     )
-
-    user = config.user
-    tty = generate_tty()
-    session_key = build_session_key(user, tty)
-    tty_name = ""
-    session: UserSession | None = None
-    registered = False
-    name_reserved = False
-    shutdown = asyncio.Event()
-    heartbeat_task: asyncio.Task[None] | None = None
-    ctx: CliContext | None = None
-
     try:
-        # Register session and auto-assign ttyN name (DES-035).
-        tty_name = await claim_tty_name(relay, user, session_key)
-        name_reserved = True
-
-        # Org discovery (DES-034): discover repos for configured orgs.
-        org_repos = frozenset[str]()
-        if config.orgs:
-            org_results: list[frozenset[str]] = list(
-                await asyncio.gather(
-                    *(relay.discover_repos_for_org(org) for org in config.orgs)
-                )
-            )
-            org_repos = frozenset[str]().union(*org_results)
-
-        # Both activity timestamps start identical: a session that has
-        # never invoked a tool reads idle as time-since-registration, its
-        # own meaningful start time.
-        registered_at = datetime.now(UTC)
-        session = UserSession(
-            user=user,
-            tty=tty,
-            tty_name=tty_name,
-            hostname=get_hostname(),
-            pwd=get_pwd(),
-            repo=config.repo_name,
-            kind=config.kind,
-            launched_by=config.launched_by,
-            owner_git=config.owner_git,
-            last_active=registered_at,
-            last_tool_at=registered_at,
-        )
-        await relay.update_session(session)
-        registered = True
-
-        # Write wtmp login event.
-        login_event = SessionEvent(
-            session_key=session_key,
-            event="login",
-            user=user,
-            tty=tty,
-            tty_name=tty_name,
-            hostname=session.hostname,
-            pwd=session.pwd,
-            timestamp=datetime.now(UTC),
-            repo=config.repo_name,
-        )
-        try:
-            await relay.append_wtmp(login_event)
-        except Exception:
-            logger.warning("Failed to write CLI wtmp login", exc_info=True)
-
-        if interactive:
-            heartbeat_task = asyncio.create_task(
-                _heartbeat_loop(relay, session_key, shutdown)
-            )
-
-        ctx = CliContext(
+        host = SessionHost(
             relay=relay,
             config=config,
-            session_key=session_key,
-            user=user,
-            tty=tty,
-            tty_name=tty_name,
-            org_repos=org_repos,
-            repo_root=resolved.repo_root,
+            selector=SessionSelector.from_resolved(resolved),
+            hostname=get_hostname(),
+            pwd=get_pwd(),
         )
-
-        yield ctx
+        await host.sweep()
+        yield HostHandle(host=host, resolved=resolved, relay=relay)
     finally:
-        # The tty command may have renamed the session (updating the
-        # frozen CliContext via object.__setattr__).  Use ctx.tty_name
-        # when available so cleanup releases the CURRENT name, not the
-        # stale original captured in the local ``tty_name``.
-        final_tty_name = ctx.tty_name if ctx is not None else tty_name
-        await _cli_session_cleanup(
-            relay,
-            user=user,
-            tty=tty,
-            tty_name=final_tty_name,
-            session_key=session_key,
-            session=session,
-            registered=registered,
-            name_reserved=name_reserved,
-            shutdown=shutdown,
-            heartbeat_task=heartbeat_task,
-            repo_name=config.repo_name,
-        )
+        try:
+            await relay.close()
+        except Exception:
+            logger.warning("Failed to close CLI relay", exc_info=True)
+
+
+@asynccontextmanager
+async def cli_session(
+    *,
+    interactive: bool = False,
+    user_override: str | None = None,
+    session_ref: str | None = None,
+) -> AsyncGenerator[CliContext]:
+    """Attach to a CLI session for the duration of one invocation.
+
+    *session_ref* is the explicit ``-s`` / ``BIFF_SESSION`` value (a tty name
+    or id); without it the session is the harness session, the repo's
+    pointed session, or a new one.  On exit the heartbeat stops and the relay
+    closes; the session's row and tty name are left in place.
+    """
+    shutdown = asyncio.Event()
+    heartbeat_task: asyncio.Task[None] | None = None
+    async with cli_session_host(user_override=user_override) as handle:
+        config = handle.resolved.config
+        try:
+            attached = await handle.host.resolve(session_ref)
+            session_key = attached.routing.session_key(config.user)
+
+            # Org discovery (DES-034): discover repos for configured orgs.
+            org_repos = frozenset[str]()
+            if config.orgs:
+                org_results: list[frozenset[str]] = list(
+                    await asyncio.gather(
+                        *(
+                            handle.relay.discover_repos_for_org(org)
+                            for org in config.orgs
+                        )
+                    )
+                )
+                org_repos = frozenset[str]().union(*org_results)
+
+            if interactive:
+                heartbeat_task = asyncio.create_task(
+                    _heartbeat_loop(handle.relay, session_key, shutdown)
+                )
+
+            yield CliContext(
+                relay=handle.relay,
+                config=config,
+                session_key=session_key,
+                user=config.user,
+                tty=attached.routing.routing_id,
+                tty_name=attached.tty_name,
+                org_repos=org_repos,
+                repo_root=handle.resolved.repo_root,
+            )
+        finally:
+            shutdown.set()
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task

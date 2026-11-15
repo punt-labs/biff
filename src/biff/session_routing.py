@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,16 @@ class SessionRouting:
                 f"{MAX_ID_LENGTH} characters, got {self.session_id!r}"
             )
             raise SessionIdError(msg)
+
+    @classmethod
+    def declared_by_harness(cls) -> SessionRouting | None:
+        """Return the session Claude Code declares in this process's environment.
+
+        ``None`` when ``CLAUDE_CODE_SESSION_ID`` is unset or outside the
+        identity charset.
+        """
+        value = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        return cls(value) if ID_RE.fullmatch(value) else None
 
     @property
     def routing_id(self) -> str:
