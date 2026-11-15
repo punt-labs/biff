@@ -30,31 +30,35 @@ __all__ = ["BIFF_RULES", "PermissionChange", "ProjectPermissions"]
 # Broad allow per surface with exact ask carve-outs (permissions.md §6): ask
 # beats allow, so the machine- and repo-mutating verbs keep prompting while new
 # safe commands, MCP tools and skills work without a rule update.
-# ``Bash(biff -*)`` asks for any global option before the verb, which would
-# otherwise slip ``biff --quiet uninstall`` past the verb rules. The
-# deterministic rule set: enable adds every missing member, disable removes
-# these exact values. A rule dropped from the set is no longer removed by
-# disable; there is no cleanup code for it (punt-kit#396).
+# Each mutating verb gets two rules, ``biff V`` and ``biff V:*``, covering the
+# bare verb and the verb with arguments. There is deliberately no rule for a
+# global option before the verb: a mid-pattern ``*`` matches any text, so no
+# glob can tell ``biff --quiet uninstall`` from ``biff --quiet wall enable``,
+# whose message merely names a verb. Read-only ``biff --version`` and
+# ``biff --help`` therefore fall through to the allow rule. The deterministic
+# rule set: enable adds every missing member, disable removes these exact
+# values. A rule dropped from the set is no longer removed by disable, unless
+# it is listed in ``_LEGACY_RULES``, which both enable and disable strip.
+_ASK_VERBS: Final = (
+    "install",
+    "uninstall",
+    "install-statusline",
+    "uninstall-statusline",
+    "enable",
+    "disable",
+    "serve",
+    "mcp",
+    "hook",
+)
 BIFF_RULES: Final[dict[str, tuple[str, ...]]] = {
     "allow": ("Bash(biff:*)", "mcp__plugin_biff_tty__*", "Skill(biff:*)"),
-    "ask": (
-        "Bash(biff -*)",
-        *(
-            f"Bash(biff {verb}:*)"
-            for verb in (
-                "install",
-                "uninstall",
-                "install-statusline",
-                "uninstall-statusline",
-                "enable",
-                "disable",
-                "serve",
-                "mcp",
-                "hook",
-            )
-        ),
+    "ask": tuple(
+        f"Bash(biff {verb}{suffix})" for verb in _ASK_VERBS for suffix in ("", ":*")
     ),
 }
+# Rules an earlier biff granted and no longer does. ``Bash(biff -*)`` matched
+# every command starting with ``biff -``, so ``biff --version`` prompted.
+_LEGACY_RULES: Final[dict[str, tuple[str, ...]]] = {"ask": ("Bash(biff -*)",)}
 
 _NEW_FILE_MODE: Final = 0o644
 _SETTINGS: Final = "settings.json"
@@ -105,13 +109,19 @@ class ProjectPermissions:
         return self
 
     def grant(self) -> PermissionChange:
-        """Append each missing biff rule; return the rules added."""
-        return self._update(BIFF_RULES, add=True)
+        """Append each missing biff rule and drop legacy ones; return the added."""
+        return self._update(BIFF_RULES, add=True, strip=_LEGACY_RULES)
 
     def revoke(self, rules: Iterable[str] | None = None) -> PermissionChange:
-        """Remove *rules* (default: every biff rule); return the rules removed."""
+        """Remove *rules* (default: every biff and legacy rule); return them."""
         if rules is None:
-            return self._update(BIFF_RULES, add=False)
+            return self._update(
+                {
+                    tier: (*owned, *_LEGACY_RULES.get(tier, ()))
+                    for tier, owned in BIFF_RULES.items()
+                },
+                add=False,
+            )
         selected = set(rules)
         return self._update(
             {
@@ -122,7 +132,11 @@ class ProjectPermissions:
         )
 
     def _update(
-        self, rules: dict[str, tuple[str, ...]], *, add: bool
+        self,
+        rules: dict[str, tuple[str, ...]],
+        *,
+        add: bool,
+        strip: dict[str, tuple[str, ...]] | None = None,
     ) -> PermissionChange:
         """Apply the grant or revoke under the lock, reporting any refusal."""
         if self._root.resolve() == Path.home().resolve():
@@ -140,7 +154,7 @@ class ProjectPermissions:
                     return PermissionChange()
                 try:
                     return PermissionChange(
-                        changed=_locked_apply(dir_fd, rules, add=add)
+                        changed=_locked_apply(dir_fd, rules, add=add, strip=strip or {})
                     )
                 finally:
                     os.close(dir_fd)
@@ -183,7 +197,11 @@ def _open_claude_dir(root_fd: int, *, create: bool) -> int | None:
 
 
 def _locked_apply(
-    dir_fd: int, rules: dict[str, tuple[str, ...]], *, add: bool
+    dir_fd: int,
+    rules: dict[str, tuple[str, ...]],
+    *,
+    add: bool,
+    strip: dict[str, tuple[str, ...]],
 ) -> tuple[str, ...]:
     """Run :func:`_apply` holding the shared lock in ``.claude``."""
     if not add and not _exists(dir_fd, _SETTINGS):
@@ -191,8 +209,8 @@ def _locked_apply(
     # Refuse a bad file before creating the lock, so a refusal leaves nothing
     # behind; the locked pass below re-validates.
     settings = _read(dir_fd)[0]
-    for tier in rules:
-        _rule_list(settings, tier)
+    for tier in (*rules, *strip):
+        _rule_list(settings, tier, create=False)
     try:
         lock = os.open(_LOCK, os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600, dir_fd=dir_fd)
     except OSError as exc:
@@ -202,7 +220,7 @@ def _locked_apply(
             msg = f".claude/{_LOCK} is not a regular file"
             raise ValueError(msg)
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _apply(dir_fd, rules, add=add)
+        return _apply(dir_fd, rules, add=add, strip=strip)
     finally:
         os.close(lock)
 
@@ -216,11 +234,25 @@ def _exists(dir_fd: int, name: str) -> bool:
 
 
 def _apply(
-    dir_fd: int, rules: dict[str, tuple[str, ...]], *, add: bool
+    dir_fd: int,
+    rules: dict[str, tuple[str, ...]],
+    *,
+    add: bool,
+    strip: dict[str, tuple[str, ...]],
 ) -> tuple[str, ...]:
-    """Edit each tier's list in place and write it back if it changed."""
+    """Edit each tier's list in place and write it back if it changed.
+
+    *strip* names legacy rules removed silently on a grant: they are not
+    reported in the result, which lists only what the caller asked for.
+    """
     settings, mode = _read(dir_fd)
     changed: tuple[str, ...] = ()
+    is_dirty = False
+    for tier, legacy in strip.items():
+        have = _rule_list(settings, tier, create=False)
+        kept = [rule for rule in have if rule not in legacy]
+        is_dirty = is_dirty or len(kept) != len(have)
+        have[:] = kept
     for tier, owned in rules.items():
         have = _rule_list(settings, tier, create=add)
         if add:
@@ -231,7 +263,7 @@ def _apply(
             removed = tuple(rule for rule in owned if rule in have)
             have[:] = [rule for rule in have if rule not in removed]
             changed += removed
-    if changed:
+    if changed or is_dirty:
         _write(dir_fd, json.dumps(settings, indent=2) + "\n", mode)
     return changed
 
