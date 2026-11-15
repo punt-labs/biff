@@ -87,10 +87,22 @@ All team members see this on their status bar.
 Use `/talk` for back-and-forth with an agent:
 
 ```text
-Human (tty1):  /talk kai:tty2 "what's the status on the auth refactor?"
+Human (tty1):  /talk claude:tty2 "what's the status on the auth refactor?"
 ```
 
-Replies appear on the status bar automatically. The human can reply with `/write` and close with `/talk end`.
+Talk follows BSD `talk`: the inviter waits and the target accepts. Talk
+messages travel over NATS core pub/sub with no stored inbox, so they reach
+only sessions that are connected at the time. Replies appear on the status
+bar. Reply with `/write` and close with `/talk end`.
+
+An agent's Claude Code session holds talk state the same way the REPL does,
+so `/talk agent:ttyN` reaches it. Biff does not push into an agent's turn.
+Instead, an incoming invite or message adds a `[TALK]` marker to the agent's
+`talk` tool description (unread mail adds `(N unread)` to `read_messages`).
+The agent sees the marker on its next turn and calls `talk_read`. Run
+`/read 1m` in the agent's session to have it check every minute, or `/read`
+to check once. Ending or cancelling an invite clears the other side's marker
+immediately; an invite nobody answers expires after 5 minutes.
 
 ## Workflow Hooks
 

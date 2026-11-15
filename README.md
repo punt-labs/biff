@@ -1,8 +1,6 @@
 # biff
 
-<img src="https://raw.githubusercontent.com/punt-labs/biff/main/docs/biff.png" alt="The original biff mail notification app" width="116" align="right">
-
-> Team communication for engineers who never leave the terminal.
+> Team messaging and presence commands for the terminal and Claude Code.
 
 [![License](https://img.shields.io/github/license/punt-labs/biff)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/biff/test.yml?label=CI)](https://github.com/punt-labs/biff/actions/workflows/test.yml)
@@ -10,7 +8,9 @@
 [![Python](https://img.shields.io/pypi/pyversions/punt-biff)](https://pypi.org/project/punt-biff/)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Named after the Berkeley dog whose 1980 mail notification program was part of the same BSD family as `talk`, `wall`, `finger`, `who`, and `mesg`. Biff resurrects the Unix communication vocabulary as MCP-native slash commands inside Claude Code.
+<img src="https://raw.githubusercontent.com/punt-labs/biff/main/docs/biff.png" alt="The original biff mail notification app" width="116" align="right">
+
+Biff gives a software team, and the coding agents working with it, the Unix communication commands `who`, `finger`, `write`, `talk`, `wall`, `mesg`, `last` and `.plan`. You use them as slash commands in Claude Code, as `biff` subcommands in any terminal, or in biff's interactive shell. Sessions on different machines see each other through a NATS relay (a message server); biff ships with a shared demo relay. The name comes from the 1980 Berkeley mail notification program, part of the same BSD family as `talk` and `wall`.
 
 **Platforms:** macOS, Linux
 
@@ -20,36 +20,50 @@ Named after the Berkeley dog whose 1980 mail notification program was part of th
 curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh | sh
 ```
 
-Restart Claude Code twice. Type `/who` to see your team.
+Restart Claude Code twice. Biff is off in every repo until you turn it on, so in your repo run:
 
-### CLI only (no Claude Code plugin)
+```text
+/biff enable
+```
 
-To install the biff CLI and MCP server without the Claude Code plugin --- for a
-non-Claude harness (Codex, Cursor, a plain terminal) or an org that blocks
-plugin installation --- pass `--no-plugin`:
+Then type `/who` to see your team.
+
+### CLI Only (No Claude Code Plugin)
+
+To install the biff CLI and MCP server without the Claude Code plugin (for another AI coding tool such as Codex or Cursor, a plain terminal, or an organization that blocks plugins), pass `--no-plugin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh | sh -s -- --no-plugin
 ```
 
-The `BIFF_NO_PLUGIN=1` environment variable does the same, for contexts that
-cannot pass arguments through the pipe:
+The `BIFF_NO_PLUGIN=1` environment variable does the same, for contexts that cannot pass arguments through the pipe:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh | BIFF_NO_PLUGIN=1 sh
 ```
 
-Missing `claude` or `git` auto-skips the plugin the same way. In CLI-only mode
-the plugin steps are skipped; everything else --- binary, PATH, and health
-check --- still runs. Add the plugin later with `claude plugin marketplace add
-punt-labs/claude-plugins` and `claude plugin install biff@punt-labs`.
+The installer also skips the plugin when `claude` or `git` is missing. Without the plugin it still installs the `biff` command, adds it to your PATH and runs the health check. To add the plugin later, run these two commands:
+
+```bash
+claude plugin marketplace add punt-labs/claude-plugins
+```
+
+```bash
+claude plugin install biff@punt-labs
+```
 
 <details>
 <summary>Manual install (if you already have uv)</summary>
 
 ```bash
 uv tool install punt-biff
+```
+
+```bash
 biff install
+```
+
+```bash
 biff doctor
 ```
 
@@ -60,8 +74,17 @@ biff doctor
 
 ```bash
 brew tap punt-labs/tap
+```
+
+```bash
 brew install punt-labs/tap/biff
+```
+
+```bash
 biff install
+```
+
+```bash
 biff doctor
 ```
 
@@ -72,8 +95,17 @@ biff doctor
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/biff/8eae0bd/install.sh -o install.sh
+```
+
+```bash
 shasum -a 256 install.sh
+```
+
+```bash
 cat install.sh
+```
+
+```bash
 sh install.sh
 ```
 
@@ -81,40 +113,36 @@ sh install.sh
 
 ## Features
 
-- **MCP-native** --- runs inside Claude Code as slash commands, no separate app
-- **Interactive REPL** --- `biff` launches a terminal client with readline, real-time notifications, and modal talk
-- **BSD vocabulary** --- `/who`, `/write`, `/talk`, `/wall` --- commands engineers already know
-- **NATS relay** --- cross-machine presence and messaging over encrypted connections
-- **Agent-first** --- agents show up in `/who` alongside humans, coordinate via `/plan` and `/write`
-- **Status bar** --- live unread count, wall broadcasts, talk messages --- wraps your existing status line
-- **Zero config** --- installs in one command, enables per-repo with `/biff enable` (a committed marker, on for the whole team)
+- **Claude Code slash commands** --- `/who`, `/write`, `/read`, `/talk`, `/wall` and the rest run inside Claude Code through biff's MCP server; there is no separate app
+- **CLI and interactive shell** --- every slash command has a `biff` subcommand; `biff` on its own starts a shell with history, tab completion and live notifications
+- **Cross-machine presence and messaging** --- sessions connect through a NATS relay over TLS
+- **Agents and humans in one list** --- agent sessions appear in `/who` next to people, set a `/plan`, and send and receive `/write` and `/talk`
+- **Status bar** --- an opt-in addition to your Claude Code status line showing unread count, wall broadcasts and talk messages
+- **Per-repo switch** --- `/biff enable` writes a committed marker file, so biff is on for everyone who clones the repo; a `.punt-labs/biff/config.yaml` file is optional
 
 ## What It Looks Like
 
-### See who's online
+### See Who's Online
 
 ```text
 > /who
 
-▶  NAME    TTY   IDLE  S  HOST       DIR                        PLAN
-   kai     tty1  0:03  +  m2-mb-air  /Users/kai/code/myapp      refactoring auth module
-   eric    tty2  1:22  +  m2-mb-air  /Users/eric/code/myapp     reviewing PR #47
-   priya   tty1  0:00  +  priya-mbp  /Users/priya/code/myapp    writing integration tests
+▶  NAME          K    MGR  REPO   IDLE  S  P  HOST
+   kai:tty1                myapp  0m    +  +  m2-mb-air
+   eric:tty2               myapp  1h    +  +  m2-mb-air
+   priya:tty1              myapp  0m    -  +  priya-mbp
+   claude:tty3   [A]  kai  myapp  3m    +  +  m2-mb-air
 ```
 
-`S` is message status: `+` means accepting messages, `-` means do not disturb.
+| Column | Meaning |
+|--------|---------|
+| `NAME` | Address to use with `/write` and `/talk` (`user:tty`) |
+| `K` | `[A]` marks an agent session; blank for people |
+| `MGR` | On agent rows, the person behind the agent (from `git config user.name`, or the OS user); hidden when no row has a value |
+| `S` | `+` accepting messages, `-` do not disturb (`/mesg n`) |
+| `P` | `+` the session has a plan; `/finger` shows it |
 
-On agent rows a `MGR` column (third, after `K`) names the human behind the agent: `git config user.name` in the session's repo, else the OS user, skipping any value equal to the agent's own identity. Human rows are blank and the column is hidden when no row has a value. It is computed when `/who` renders and stored nowhere. `/finger` adds `Launched by: <os user>`.
-
-```text
-> /who
-
-▶  NAME         K    MGR  REPO  IDLE  S  P  HOST     
-   jim:tty1               biff  0m    +  +  m2-mb-air
-   claude:tty2  [A]  jim  biff  3m    +  -  m2-mb-air
-```
-
-### Send a message
+### Send a Message
 
 ```text
 > /write kai "auth module looks good, just one nit on the error handling"
@@ -122,22 +150,22 @@ On agent rows a `MGR` column (third, after `K`) names the human behind the agent
 Message sent to kai.
 ```
 
-### Check your inbox
+### Check Your Inbox
 
 ```text
 > /read
 
 ▶  3 new messages
-   FROM   DATE              MESSAGE
-   kai    Sat Feb 15 14:01  hey, ready for review?
-   eric   Sat Feb 15 13:45  pushed the fix for the flaky test
-   priya  Sat Feb 15 12:30  can you look at the migration script?
+   FROM        DATE              MESSAGE
+   kai:tty1    Sat Feb 15 14:01  hey, ready for review?
+   eric:tty2   Sat Feb 15 13:45  pushed the fix for the flaky test
+   priya:tty1  Sat Feb 15 12:30  can you look at the migration script?
 ```
 
 <details>
 <summary>More examples: /finger, /plan, /last, /wall, /talk, /mesg</summary>
 
-### Check what someone is working on
+### Check What Someone Is Working On
 
 ```text
 > /finger kai
@@ -149,7 +177,7 @@ Message sent to kai.
     refactoring auth module
 ```
 
-When the repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`), `/finger` also shows the agent's role between the header and the on-since line (a `Roles:` block when it holds several):
+When the repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`), `/finger` also shows the agent's role (a `Roles:` block when it has several). For an agent, `Launched by:` names the OS user who started it:
 
 ```text
 > /finger claude
@@ -157,10 +185,11 @@ When the repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`), `/finger` a
 ▶  Login: claude [agent]                   Messages: on
    Role: coo (engineering) — reports to ceo (jfreeman)
    On since Sat Feb 15 14:01 (UTC) on tty2, idle 0:03
+   Launched by: kai
    No Plan.
 ```
 
-### Set your status
+### Set Your Status
 
 ```text
 > /plan "debugging the websocket reconnect logic"
@@ -168,7 +197,7 @@ When the repo has ethos team data (`.punt-labs/ethos/teams/*.yaml`), `/finger` a
 Plan: debugging the websocket reconnect logic
 ```
 
-Bead IDs auto-expand:
+A [beads](https://github.com/steveyegge/beads) issue ID expands to the issue title:
 
 ```text
 > /plan biff-ka4
@@ -176,41 +205,41 @@ Bead IDs auto-expand:
 Plan: biff-ka4: post-checkout hook: update plan from branch
 ```
 
-### Session history
+### Session History
 
 ```text
 > /last
 
-▶  NAME    TTY   HOST       LOGIN             LOGOUT            DURATION
-   kai     tty3  m2-mb-air  Sat Feb 22 14:01  still logged in   -
-   kai     tty2  m2-mb-air  Sat Feb 22 11:30  Sat Feb 22 13:58  2:28
-   eric    tty1  m2-mb-air  Sat Feb 22 09:15  Sat Feb 22 12:45  3:30
+▶  NAME       REPO   HOST       LOGIN             LOGOUT            DURATION
+   kai:tty3   myapp  m2-mb-air  Sat Feb 22 14:01  still logged in   -
+   kai:tty2   myapp  m2-mb-air  Sat Feb 22 11:30  Sat Feb 22 13:58  2:28
+   eric:tty1  myapp  m2-mb-air  Sat Feb 22 09:15  Sat Feb 22 12:45  3:30
 ```
 
-### Broadcast to the team
+### Broadcast to the Team
 
 ```text
 > /wall "release freeze --- do not push to main" 2h
 
-Wall posted (2h): release freeze --- do not push to main
+Wall posted (2h):
+   release freeze --- do not push to main
 ```
 
-Every teammate's status bar shows `WALL: release freeze` in bold red. Expires automatically.
+Teammates with the biff status bar installed see `WALL: release freeze` in bold red until the wall expires.
 
-### Talk in real time
+### Talk in Real Time
 
 ```text
 > /talk kai "can you review PR #42?"
 
-Waiting for kai to respond...
-Connected to kai. Type 'end' to return.
+Invite sent to kai. When they accept, talk_read shows replies.
 ```
 
-BSD-style two-phase handshake: the inviter waits, the target accepts. Messages are ephemeral (NATS core pub/sub, no durable inbox). Either side types `end` to hang up.
+Talk works like BSD `talk`: you send an invite, and the conversation starts when the other side accepts. Talk messages are not stored; they reach only a session that is connected at the time. Either side can end the conversation.
 
-**Agents receive talk too.** A Claude Code agent's session holds the same ephemeral talk state as the REPL, so you can `/talk agent:ttyN` and it will see your invite. Because biff is pull-based, an incoming invite or message surfaces by adding a `[TALK]` marker to the agent's `talk` tool description (unread mail adds `(N unread)` to `read_messages`); the agent notices the marker on its next turn and calls `talk_read` to see it. Run `/biff:read 1m` in the agent session to check on a cadence, or `/biff:read` to check now. Ending or cancelling an invite clears the other side's marker immediately; a stranded marker self-heals after 5 minutes.
+Agent sessions in Claude Code receive talk invites and messages too: `/talk claude:tty3` reaches an agent. Biff does not interrupt an agent; the agent sees the invite on its next turn. Run `/read 1m` in the agent's session to have it check every minute, or `/read` to check now. See [Agent Workflow](docs/AGENT_WORKFLOW.md#real-time-agent-conversation) for details.
 
-### Go do-not-disturb
+### Go Do-Not-Disturb
 
 ```text
 > /mesg n
@@ -218,45 +247,86 @@ BSD-style two-phase handshake: the inviter waits, the target accepts. Messages a
 is n
 ```
 
-Your status bar shows `(n)` instead of the unread count. Messages still accumulate --- `/mesg y` or `/read` reveals them.
+Your status bar shows `(n)` instead of the unread count. Messages still arrive; `/mesg y` or `/read` shows them.
 
 </details>
 
 ## Commands
 
-| Command | Origin | Purpose |
-|---------|--------|---------|
-| `/write user "text"` | BSD `write` | Send a message |
-| `/read` | BSD `from` | Check your inbox |
-| `/finger user` | BSD `finger` | Check what someone is working on |
+| Command | Origin | What it does |
+|---------|--------|--------------|
 | `/who` | BSD `who` | List active sessions |
-| `/last` | BSD `last` | Show session login/logout history |
-| `/plan "text"` | BSD `.plan` | Set your status |
-| `/tty "name"` | BSD `tty` | Name the current session |
-| `/talk user "msg"` | BSD `talk` | Start a real-time conversation |
-| `/wall "text"` | BSD `wall` | Broadcast to the team |
-| `/mesg y` \| `/mesg n` | BSD `mesg` | Control message reception |
-| `/biff enable` \| `/biff disable` | — | Turn biff on/off for this repo (writes the committed `.punt-labs/biff/enabled` marker + CI workflow and allows biff's read/messaging CLI subcommands, MCP tools and commands in `.claude/settings.json`; equivalent to the `biff enable` CLI) |
-| `/biff:read [duration]` | BSD `from` | Check inbox / set polling cadence: `<duration>` starts polling, `n` stops, `status` shows config, no-arg checks now |
+| `/finger user` | BSD `finger` | Show a user's sessions, status and plan |
+| `/write user "text"` | BSD `write` | Send a message |
+| `/read [duration \| n \| status]` | BSD `from` | Check your inbox; a duration such as `5m` checks on that interval, `n` stops, `status` shows the interval |
+| `/plan "text"` | BSD `.plan` | Set your status line |
+| `/tty name` | BSD `tty` | Name the current session |
+| `/last [user] [count]` | BSD `last` | Show session login/logout history |
+| `/wall "text" [duration]` | BSD `wall` | Broadcast to the team; `/wall clear` removes it |
+| `/talk user ["message"]` | BSD `talk` | Start a real-time conversation |
+| `/mesg y` \| `/mesg n` | BSD `mesg` | Accept or block messages |
+| `/biff enable` \| `/biff disable` | --- | Turn biff on or off for this repo (same as `biff enable` / `biff disable`) |
 
-## CLI
+Each command is also available with the plugin prefix, for example `/biff:read`.
 
-Every slash command has a matching `biff` CLI command. The CLI works outside Claude Code --- from any terminal, SSH session, or CI script.
+### CLI
 
-### Interactive REPL
+Every slash command has a matching `biff` subcommand. The CLI works outside Claude Code: in any terminal, SSH session or CI job.
 
-```bash
-biff                                       # Launch interactive REPL
-```
+| Command | What it does |
+|---------|--------------|
+| `biff` | Start the interactive shell |
+| `biff who` | List active sessions |
+| `biff finger kai` | Show what kai is working on |
+| `biff write kai "review the PR"` | Send a message |
+| `biff read` | Check your inbox |
+| `biff plan "debugging websocket reconnect"` | Set your status (`--clear` removes it) |
+| `biff last kai --count 10` | Session history, optionally filtered by user (default 25 entries) |
+| `biff wall "deploy freeze" --duration 2h` | Broadcast to the team |
+| `biff wall` | Show the active wall |
+| `biff wall --clear` | Remove the active wall |
+| `biff mesg off` | Go do-not-disturb (`on` to accept messages again; `y`/`n` also work) |
+| `biff tty dev` | Name this session `dev` |
+| `biff status` | Connection state and unread count |
+| `biff talk kai "can you review?"` | Real-time conversation |
+
+Setup and maintenance commands:
+
+| Command | What it does |
+|---------|--------------|
+| `biff install` | Install the Claude Code plugin for your user account; changes nothing in any repo |
+| `biff enable` | Turn biff on for the current repo (see [Setup](#setup)) |
+| `biff disable` | Turn biff off for the current repo and remove what `enable` added |
+| `biff doctor` | Check the installation |
+| `biff install-statusline` | Add biff to your Claude Code status line |
+| `biff uninstall-statusline` | Restore your original status line |
+| `biff uninstall` | Remove the plugin and this clone's biff git hooks |
+| `biff mcp` | Start the MCP server over stdio (the plugin runs this) |
+| `biff serve` | Start the MCP server over HTTP (default `127.0.0.1:8419`) |
+| `biff version` | Print the package version, and the plugin version if installed |
+
+Global flags go before the subcommand:
+
+| Flag | What it does |
+|------|--------------|
+| `--json` | Print JSON instead of text, e.g. `biff --json who` |
+| `--verbose`, `-v` | Debug logging to stderr |
+| `--quiet`, `-q` | Suppress command output |
+| `--user name` | Act as another identity, e.g. `biff --user github-actions wall "CI failed"` for a bot |
+| `--version` | Print the version and exit |
+
+### Interactive Shell
+
+Run `biff` with no arguments:
 
 ```text
-biff 1.14.1 — kai:tty1
+biff <version> — kai:tty1
 Commands: finger, last, mesg, plan, read, status, tty, wall, who, write, talk, timestamps, exit
 
 kai:tty1 ▶ who
-▶  NAME    TTY   IDLE  S  HOST       DIR              PLAN
-   kai     tty1  0:00  +  m2-mb-air  /code/myapp      debugging auth
-   eric    tty2  1:22  +  m2-mb-air  /code/myapp      reviewing PR #47
+▶  NAME       K  REPO   IDLE  S  P  HOST
+   kai:tty1      myapp  0m    +  +  m2-mb-air
+   eric:tty2     myapp  1h    +  +  m2-mb-air
 kai:tty1 ▶ timestamps on
 Timestamps on.
 kai:tty1 ▶ talk eric
@@ -270,95 +340,13 @@ Talk with eric:tty2 ended.
 kai:tty1 ▶ exit
 ```
 
-The REPL provides a proper session lifecycle (login/logout events, heartbeat, KV presence), readline (history, tab completion), and real-time notifications (wall broadcasts and message alerts appear while you're idle at the prompt). `biff` with no args is the primary mode; `biff who` is a shortcut for a one-command session.
-
-`timestamps on` / `timestamps off` toggles a local `[HH:MM]` stamp on incoming talk messages. It is a REPL-only display preference (off by default, not persisted across sessions).
-
-### Product commands
-
-```bash
-biff who                                   # List active sessions
-biff finger kai                           # Check what someone is working on
-biff write kai "review the PR"            # Send a message
-biff read                                  # Check your inbox
-biff plan "debugging websocket reconnect"  # Set your status
-biff last                                  # Session login/logout history
-biff last kai --count 10                  # Filter by user, limit results
-biff wall "deploy freeze" --duration 2h    # Broadcast to the team
-biff wall                                  # Read active wall
-biff wall --clear                          # Remove active wall
-biff mesg off                              # Go do-not-disturb
-biff mesg on                               # Accept messages again
-biff tty dev                               # Name this session "dev"
-biff status                                # Connection state + unread count
-biff talk kai "can you review?"           # Real-time conversation
-```
-
-### Admin commands
-
-```bash
-biff install                # Register the Claude Code plugin (machine scope; no guide, no CLAUDE.md writes)
-biff enable                 # Enable biff for this repo (marker, CI workflow, guide, .claude/settings.json rules)
-biff disable                # Disable biff for this repo (removes the marker + CI workflow)
-biff doctor                 # Check installation health
-biff mcp                    # Start MCP server (stdio, called by plugin)
-biff serve                  # Start MCP server (HTTP)
-biff uninstall              # Remove plugin, deregister the agent guide
-biff version                # Print package version (and plugin version if installed)
-```
-
-`biff --version` prints the same line without a subcommand.
-
-### Global flags
-
-For a single OpenCode session, `biff mcp --ethos-session <session-id>
---ethos-agent-id <session-id>` opts into exact Ethos participant resolution
-and matching MCP caller metadata. Both IDs must match an existing agent
-participant; no shared default is changed and no human presence is inferred
-from its parent. This mode cannot serve multiple OpenCode session IDs.
-See the [session-pinned pilot guide](docs/session-pinned-opencode.md).
-
-```bash
-biff --json who             # JSON array of sessions
-biff --json status          # JSON object with version, unread, wall
-biff --json read            # JSON array of messages
-biff --verbose who          # Debug logging to stderr
-biff --quiet write kai "msg"  # Suppress non-JSON output
-biff --user github-actions wall "CI failed"  # Identity override for bots
-biff --version              # Package version, plus plugin version when installed
-```
-
-Global flags (`--json`, `--verbose`, `--quiet`, `--user`) go before the
-subcommand. `--version` is eager — it prints and exits with no subcommand.
-
-### Library API
-
-Commands are also importable as pure async functions:
-
-```python
-from biff import commands, CliContext, CommandResult
-from biff.relay import LocalRelay
-
-relay = LocalRelay(data_dir)
-ctx = CliContext(
-    relay=relay, config=config, session_key="kai:abc123", user="kai", tty="abc123"
-)
-
-result: CommandResult = await commands.who(ctx)
-print(result.text)  # Human-readable output
-print(result.json_data)  # JSON-serializable data
-print(result.error)  # True if command failed
-```
-
-All 10 product commands (`who`, `finger`, `write`, `read`, `plan`, `last`, `wall`, `mesg`, `tty`, `status`) follow this pattern. See the [design log](DESIGN.md#des-022-library-api--command-extraction-via-humble-object-pattern) for architecture details.
+The shell logs your session in and out, keeps your presence current, and prints wall broadcasts and new-message alerts while you sit at the prompt. It has line editing, history (kept in `~/.punt-labs/biff/repl_history`) and tab completion. `timestamps on` / `timestamps off` adds a local `[HH:MM]` stamp to incoming talk messages for the current shell only.
 
 ## Setup
 
-Biff requires a git repo and a GitHub identity. Your username and display name are resolved automatically from `gh auth` --- no manual configuration needed.
+Biff needs a git repo and a GitHub identity. It reads your username and display name from `gh auth`.
 
-### Create `.punt-labs/biff/config.yaml`
-
-Commit `.punt-labs/biff/config.yaml` in your repo root (YAML format):
+Without a configuration file, biff uses the shared demo relay and finds peer repos in the GitHub organization that owns the repo's remote. Add a configuration file when you want a fixed team roster, your own relay, or a different set of peer repos. Commit it as `.punt-labs/biff/config.yaml`:
 
 ```yaml
 team:
@@ -368,71 +356,50 @@ relay:
   url: "tls://connect.ngs.global"
 
 peers:
-  orgs: ["my-org"]              # auto-discover repos in this GitHub org
-  repos: ["my-org/other-repo"]  # explicit peers (always visible)
+  orgs: ["my-org"]              # find repos with active sessions in this GitHub org
+  repos: ["my-org/other-repo"]  # repos that are always visible
 ```
 
-Per-user auth (a token, nkeys seed, or credentials path) goes in the
-gitignored `.punt-labs/biff/config.local.yaml` instead, never in the
-committed file — see [Installing](docs/INSTALLING.md) for the schema.
+The `peers:` key makes `/who`, `/write` and `/finger` reach sessions in other repos. `orgs` finds repos with active sessions; `repos` lists repos that are always visible. Both are optional.
 
-Biff ships with a shared demo relay so your team can start immediately. When you're ready for your own relay, see [relay configuration](docs/INSTALLING.md#relay-configuration). For CI, containers, or other headless invocations, five `BIFF_RELAY_*` environment variables can override the relay config for that process only — see [environment-variable relay overrides](docs/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd).
+Put per-user relay credentials (a token, NKeys seed or credentials file path) in the gitignored `.punt-labs/biff/config.local.yaml`, never in the committed file. See [Installing](docs/INSTALLING.md) for the schema, [relay configuration](docs/INSTALLING.md#relay-configuration) to run your own relay, and [environment-variable relay overrides](docs/INSTALLING.md#environment-variable-relay-overrides-ci-containers-systemd) for the five `BIFF_RELAY_*` variables used in CI and containers.
 
-The `[peers]` section enables cross-repo commands (`/who`, `/write`, `/finger`). `orgs` auto-discovers repos with active sessions; `repos` lists peers that are always visible. Both are optional.
+What the two setup commands change:
 
-`biff install` is machine-scoped setup: it registers the MCP server, installs slash commands, and enables the plugin. It deposits no agent guide and never touches any `CLAUDE.md`; it makes no repo-level changes. `biff enable` fully activates biff in the current repo in one verb — it writes the two committed artifacts that constitute enablement policy (the `.punt-labs/biff/enabled` marker and the `.github/workflows/biff-notify.yml` CI workflow), allows biff's CLI, MCP tools and commands in the repo's `.claude/settings.json`, with `ask` rules so its install, enable and other mutating verbs still prompt (printing each rule; biff never writes permission rules to `~/.claude/settings.json`), **and** deploys this clone's local, per-clone git hooks into `.git/hooks/` (never committed); it is exactly equivalent to `/biff enable` in Claude Code (`biff disable` / `/biff disable` remove all of it). The hooks are resolved worktree/`core.hooksPath`-aware and gate on the marker at runtime. Run `biff doctor` to verify everything is wired up. See [Installing](docs/INSTALLING.md) for the full guide.
+- **`biff install`** (once per machine) installs the biff Claude Code plugin for your user account. The plugin provides the MCP server, slash commands and Claude Code hooks. It changes nothing in any repo. If Claude Code is not installed, it reports a CLI-only install and stops.
+- **`biff enable`** (once per repo, same as `/biff enable`):
+  - writes `.punt-labs/biff/enabled` (the on switch), `.punt-labs/biff/CLAUDE.md` (a guide for agents) and `.github/workflows/biff-notify.yml` (a CI workflow); commit these
+  - adds an `@.punt-labs/biff/CLAUDE.md` import line to the repo's `CLAUDE.md`
+  - adds biff's permission rules to the repo's `.claude/settings.json`; biff commands that change settings still ask for your approval
+  - installs git hooks in this clone's `.git/hooks/` that update your plan on checkout and commit; the hooks are not committed, so each clone runs `biff enable` once
+
+  `biff disable` removes all of it.
+
+Run `biff doctor` to check the result. [Installing](docs/INSTALLING.md) has the full guide.
 
 ## Status Bar
 
-Biff appends to your existing Claude Code status line --- it never replaces it:
+`biff install-statusline` adds biff to the end of your existing Claude Code status line; it does not replace it. `biff uninstall-statusline` restores the original.
 
 ```text
 Line 1: your-existing-status | kai:tty1(3)
 Line 2: ▶ WALL: release freeze until 5pm
 ```
 
-Three states: `kai:tty1(0)` when caught up, **`kai:tty1(3)`** (bold yellow) with unreads, `kai:tty1(n)` when messages are off. Line 2 shows active `/talk` messages (bold yellow), wall broadcasts (bold red), or an idle marker.
+`kai:tty1(0)` means no unread messages, **`kai:tty1(3)`** (bold yellow) means three unread, and `kai:tty1(n)` means messages are off. Line 2 shows the latest `/talk` message (bold yellow), an active wall (bold red), or `▶` when there is nothing to show.
 
 ## Agents Welcome
 
-Because biff speaks MCP, it does not distinguish between human and agent sessions. An autonomous coding agent can `/plan` what it's working on, `/write` a human when it needs a decision, and show up in `/who` alongside everyone else.
+Biff treats an agent's Claude Code session like any other session. An agent can set a `/plan` for its current task, `/write` a person when it needs a decision, and appear in `/who` with everyone else.
 
-Biff coordinates hybrid teams across two planes:
-
-- **Logical plane (cross-machine):** `/plan` shows the task each agent is working on. `/who` shows all plans across all machines. This prevents duplicate work.
-- **Physical plane (same-machine):** `/who` shows host and directory per session. When two agents share the same machine and directory, they coordinate via `/write` and create git worktrees to work in isolation.
+- **Across machines:** `/who` lists every session's plan, so an agent or a person can see what others are working on before starting a task.
+- **On one machine:** `/who` and `/finger` show each session's host and directory. Agents sharing a machine and directory can agree on who does what with `/write` and use separate git worktrees.
 
 See [Agent Workflow](docs/AGENT_WORKFLOW.md) for patterns and examples.
 
 ## Vision
 
-Biff assumes the terminal is where you're already working — so that's where your team communication should be. Every command implies intent. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
-
-## Roadmap
-
-### Shipped
-
-- Presence: `/who`, `/finger`, `/plan`, `/tty`, `/last`
-- Messaging: `/write`, `/read`, `/mesg`
-- Broadcast: `/wall` with duration-based expiry
-- Real-time: `/talk` with two-phase handshake and mutual hangup
-- NATS relay for cross-machine communication
-- Per-repo enablement (`/biff enable`, a committed marker) with lazy connection management
-- Status bar with live unread count, wall, and talk display
-- Workflow hooks: plan auto-expand, session lifecycle, git integration
-- CLI parity: every MCP tool available as `biff <command>` with `--json` output
-- Interactive REPL: `biff` with readline, real-time notifications, modal talk
-- Library API: pure async functions for programmatic use and testing
-- Notification deferral: ≤2s latency for wall, talk, and messages in all states (active and napping) — message arrival is push-detected via a NATS wake poke (~200ms measured), not polled; `scripts/demo-push-vs-poll.sh` demonstrates the difference against the real relay image
-- Formal verification: Z specifications for talk and REPL, ProB model-checked
-
-### Next
-
-| Phase | What Ships |
-|-------|-----------|
-| **Security** | E2E encryption (NaCl/libsodium), GitHub identity and auth, per-repo NATS credentials |
-| **Real-time** | `/pair` for session sharing with explicit consent |
-| **Hosted relay** | Managed service with admin controls, audit logs, team isolation |
+Biff assumes the terminal is where you're already working, so that is where your team communication should be. There are no channels to monitor, no threads to catch up on, no emoji reactions to parse. Communication is pull-based: you decide when to engage.
 
 ## Documentation
 
@@ -440,32 +407,16 @@ Biff assumes the terminal is where you're already working — so that's where yo
 [Agent Workflow](docs/AGENT_WORKFLOW.md) |
 [Claude Setup](docs/CLAUDE_SETUP.md) |
 [FAQ](docs/FAQ.md) |
-[Troubleshooting](docs/TROUBLESHOOTING.md)
+[Troubleshooting](docs/TROUBLESHOOTING.md) |
+[Roadmap](docs/ROADMAP.md) |
+[Changelog](CHANGELOG.md)
 
+For contributors:
+[Contributing](CONTRIBUTING.md) |
+[Library API](docs/LIBRARY.md) |
 [Design Log](DESIGN.md) |
 [Installer Design](DESIGN-INSTALLER.md) |
-[Testing Guide](TESTING.md) |
-[Changelog](CHANGELOG.md) |
-[Contributing](CONTRIBUTING.md)
-
-## Development
-
-```bash
-uv sync --extra dev        # Install dependencies
-make check                 # Run all quality gates (lint, type, test)
-make test                  # Tests only (unit + integration)
-make lint                  # Lint and format check
-make format                # Auto-format code
-make help                  # List all targets
-```
-
-Everything the Claude Code plugin ships lives under `plugin/` — the manifest
-(`plugin/.claude-plugin/plugin.json`), the slash commands (`plugin/commands/`),
-and the hook dispatchers (`plugin/hooks/`). The marketplace installs that one
-directory via Claude Code's `git-subdir` source, so an install never fetches
-`src/`, `tests/`, or `docs/`. `${CLAUDE_PLUGIN_ROOT}` is therefore `plugin/`:
-to run a local change without releasing, point Claude Code at
-`claude --plugin-dir "$PWD/plugin"`.
+[Testing Guide](TESTING.md)
 
 ## License
 

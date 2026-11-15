@@ -326,7 +326,7 @@ If the discovery is interesting to external developers (plugin authors, MCP serv
 
 ### 4. Update prfaq.tex and README
 
-If the feature was on the roadmap, move it to "Shipped" in both `README.md` and `prfaq.tex`. Recompile the PDF. Features should never remain listed as "Next" after they ship.
+If the feature was on the roadmap, remove it from `docs/ROADMAP.md`, document it in `README.md` (which describes shipped features only), and update `prfaq.tex`. Recompile the PDF. Planned work never appears in the README.
 
 ### Checklist
 
