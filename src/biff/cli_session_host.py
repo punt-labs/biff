@@ -13,7 +13,7 @@ from biff.cli_session_store import (
     CliSessionEndedError,
     CliSessionRecord,
 )
-from biff.models import BiffConfig, SessionEvent, UserSession
+from biff.models import BiffConfig, Message, SessionEvent, UserSession
 from biff.relay import SESSION_TTL_SECONDS, Relay
 from biff.session_id import CLI_ROLE
 from biff.session_routing import SessionRouting
@@ -72,8 +72,9 @@ class SessionHost:
         if pointed is not None:
             try:
                 return await self.attach(pointed)
-            except CliSessionEndedError:
-                logger.info("pointed session %s ended; creating one", pointed.tty)
+            except (CliSessionEndedError, FileNotFoundError):
+                # Ended, or expired between the pointer read and the attach lock.
+                logger.info("pointed session %s unusable; creating one", pointed.tty)
         return await self.attach(await self.create())
 
     async def create(self, tty: str | None = None) -> CliSessionRecord:
@@ -207,14 +208,23 @@ class SessionHost:
         await self.relay.delete_session(key)
 
     async def _drain(self, user: str, key: str) -> None:
-        """Re-file every unread message for *key* into *user*'s mailbox.
+        """Move every unread message for *key* into *user*'s mailbox.
 
-        A message is in exactly one place afterwards.  If the mailbox write
-        fails part-way, the messages not yet moved go back to the session
-        inbox so nothing is lost, and the failure propagates.
+        Each message is delivered to the mailbox and only then marked read in
+        the session inbox, so a failure leaves a clean split: moved messages
+        are in the mailbox only, the rest are still in the session inbox, and
+        a retry finishes the job.
+
+        Relays differ in what ``fetch`` does.  ``LocalRelay`` leaves messages
+        in place, so the unmoved ones are simply still there.  The NATS relay
+        consumes them as it returns them, so once ``fetch`` has returned, the
+        in-memory list is the only copy; a hard crash (SIGKILL, power loss)
+        before the loop finishes loses the unmoved mail, and the Relay API
+        has no acknowledge-after-write to close that window.  A failure we can
+        catch is handled in :meth:`_restore`.
         """
         pending = await self.relay.fetch(key)
-        moved: list[uuid.UUID] = []
+        unmoved = list(pending)
         try:
             for message in pending:
                 await self.relay.deliver(
@@ -222,15 +232,25 @@ class SessionHost:
                         update={"id": uuid.uuid4(), "to_user": user, "read": False}
                     )
                 )
-                moved.append(message.id)
+                await self.relay.mark_read(key, [message.id])
+                unmoved.remove(message)
         except BaseException:
-            for message in pending:
-                if message.id not in moved:
-                    await self.relay.deliver(
-                        message.model_copy(update={"id": uuid.uuid4()})
-                    )
+            await self._restore(key, unmoved)
             raise
-        await self.relay.mark_read(key, moved)
+
+    async def _restore(self, key: str, unmoved: list[Message]) -> None:
+        """Put *unmoved* back in the session inbox if the relay consumed them.
+
+        A consuming relay no longer holds them after ``fetch``, so a probe
+        fetch finds none of their ids and they are re-delivered, along with
+        anything the probe itself consumed.  A non-consuming relay still
+        holds them and the probe finds their ids, so nothing is re-delivered.
+        """
+        probe = await self.relay.fetch(key)
+        if any(m.id in {u.id for u in unmoved} for m in probe):
+            return
+        for message in [*unmoved, *probe]:
+            await self.relay.deliver(message.model_copy(update={"id": uuid.uuid4()}))
 
     async def _wtmp(self, record: CliSessionRecord, event: str) -> None:
         try:

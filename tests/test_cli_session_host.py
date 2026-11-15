@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,7 +11,11 @@ import pytest
 from biff.cli_session_host import LEASE, RETENTION, SessionHost
 from biff.cli_session_pointer import CurrentPointer
 from biff.cli_session_select import SessionSelectionError, SessionSelector
-from biff.cli_session_store import CliSessionEndedError, CliSessionStore
+from biff.cli_session_store import (
+    CliSessionEndedError,
+    CliSessionRecord,
+    CliSessionStore,
+)
 from biff.models import BiffConfig, Message, UserSession
 from biff.relay import LocalRelay
 from biff.session_id import CLAUDE_CODE_ROLE, CLI_ROLE, derive_routing_id
@@ -300,8 +305,6 @@ class TestSweep:
 def _backdate(
     store: CliSessionStore, session_id: str, *, last_attached_at: datetime
 ) -> None:
-    import dataclasses
-
     record = dataclasses.replace(
         store.read(session_id), last_attached_at=last_attached_at
     )
@@ -363,3 +366,115 @@ class TestKeyIsTheRecordsDerivedKey:
         assert attached.record is None
         assert attached.tty_name == "tty7"
         assert host.selector.store.list() == ()
+
+
+class _FailingMailbox(LocalRelay):
+    """LocalRelay whose user-mailbox write fails on the Nth delivery."""
+
+    def __init__(self, data_dir: Path, *, fail_on: int) -> None:
+        super().__init__(data_dir)
+        self._fail_on = fail_on
+        self._mailbox_writes = 0
+
+    async def deliver(
+        self,
+        message: Message,
+        *,
+        sender_key: str = "",
+        target_repo: str | None = None,
+    ) -> None:
+        if ":" not in message.to_user:
+            self._mailbox_writes += 1
+            if self._mailbox_writes == self._fail_on:
+                msg = "mailbox write failed"
+                raise ConnectionError(msg)
+        await super().deliver(message, sender_key=sender_key, target_repo=target_repo)
+
+
+class _ConsumingFetch(_FailingMailbox):
+    """Models the NATS work queue: fetch removes what it returns."""
+
+    async def fetch(self, session_key: str) -> list[Message]:
+        unread = await super().fetch(session_key)
+        await self.mark_read(session_key, [m.id for m in unread])
+        return unread
+
+
+def _with_relay(host: SessionHost, relay: LocalRelay) -> SessionHost:
+    return dataclasses.replace(host, relay=relay)
+
+
+class TestDrainFailure:
+    @pytest.mark.parametrize("relay_cls", [_FailingMailbox, _ConsumingFetch])
+    async def test_failed_drain_neither_duplicates_nor_loses(
+        self, tmp_path: Path, relay_cls: type[_FailingMailbox]
+    ) -> None:
+        base = _host(tmp_path)
+        record = await base.create("alpha")
+        host = _with_relay(base, relay_cls(tmp_path / "relay", fail_on=2))
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        for body in ("one", "two", "three"):
+            await host.relay.deliver(Message(from_user="eric", to_user=key, body=body))
+
+        with pytest.raises(ConnectionError):
+            await host.end(record)
+
+        in_mailbox = [m.body for m in await host.relay.fetch_user_inbox("kai")]
+        in_session = [m.body for m in await host.relay.fetch(key)]
+        assert sorted(in_mailbox + in_session) == ["one", "three", "two"]
+        assert in_mailbox == ["one"]
+        # The session is not marked ended, so a retry can finish the drain.
+        assert host.selector.store.read(record.session_id).state == "live"
+
+    async def test_retry_after_a_failed_drain_completes_it(
+        self, tmp_path: Path
+    ) -> None:
+        base = _host(tmp_path)
+        record = await base.create("alpha")
+        flaky = _FailingMailbox(tmp_path / "relay", fail_on=2)
+        host = _with_relay(base, flaky)
+        key = SessionRouting(record.session_id, role=CLI_ROLE).session_key("kai")
+        for body in ("one", "two", "three"):
+            await host.relay.deliver(Message(from_user="eric", to_user=key, body=body))
+        with pytest.raises(ConnectionError):
+            await host.end(record)
+
+        await host.end(record)
+
+        assert sorted(m.body for m in await host.relay.fetch_user_inbox("kai")) == [
+            "one",
+            "three",
+            "two",
+        ]
+
+
+@dataclasses.dataclass(frozen=True)
+class _ExpiresOnAttach(CliSessionStore):
+    """Store whose pointed record vanishes between the pointer read and attach."""
+
+    doomed: str = ""
+
+    def attach(self, session_id: str, *, now: datetime) -> CliSessionRecord:
+        if session_id == self.doomed:
+            self.lapse(session_id)
+            self.expire(session_id)
+        return super().attach(session_id, now=now)
+
+
+class TestPointerRace:
+    async def test_pointed_record_removed_before_attach_creates_a_fresh_one(
+        self, tmp_path: Path
+    ) -> None:
+        base = _host(tmp_path)
+        gone = await base.create("alpha")
+        store = _ExpiresOnAttach(base.selector.store.root, gone.session_id)
+        racing = dataclasses.replace(base.selector, store=store)
+        host = dataclasses.replace(base, selector=racing)
+
+        attached = await host.resolve(None)
+
+        assert attached.record is not None
+        assert attached.record.session_id != gone.session_id
+        assert host.selector.pointer.read(host.selector.repo_root) == (
+            attached.record.session_id
+        )
