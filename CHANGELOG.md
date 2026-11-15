@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-11-15
+
 ### Added
 
 - Named CLI sessions. `biff session new [--tty NAME] [--repo PATH] [--as USER]`
