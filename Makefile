@@ -1,4 +1,4 @@
-.PHONY: help test lint type mdlint check format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
+.PHONY: help test lint type mdlint check check-oo report update-oo format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -19,6 +19,12 @@ mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
 
 check: lint type mdlint test ## Run all quality gates
+
+# OO ratchet not yet adopted here (tracked follow-up). These stubs exist so an
+# agent following the deployed .claude/rules/ (which reference them) does not hit
+# a missing target. They pass as no-ops until the real ratchet lands.
+check-oo report update-oo: ## OO ratchet — not yet adopted in this repo (no-op)
+	@echo "$@: OO ratchet not yet adopted in this repo; see the OO-adoption follow-up."
 
 PROBCLI ?= $(HOME)/Applications/ProB/probcli
 PROB_SETSIZE ?= 2
