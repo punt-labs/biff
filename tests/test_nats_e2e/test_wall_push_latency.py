@@ -34,7 +34,7 @@ from biff.models import BiffConfig, WallPost
 from biff.nats_relay import NatsRelay
 from biff.server.app import create_server
 from biff.server.state import create_state
-from biff.server.tools._descriptions import _reset_session, nap_interval_for
+from biff.server.tools._descriptions import _reset_session
 from biff.testing.caller import StampedClient
 
 if TYPE_CHECKING:
@@ -50,12 +50,25 @@ _TEST_REPO = "_test-wall-push-latency"
 _KAI_TTY = "aaaa00f2"
 _TRIALS = 3
 
-# A 0.3s active tick keeps the receiver polling fast enough to wait out in
-# a test. The receiver never naps (120s idle threshold), so the push poke —
-# not a scheduled tick — is what drives the sub-second detection measured
-# here; nap_interval_for is used only to size the per-trial wait bound.
-_POLL_INTERVAL = 0.3
-_TRIAL_TIMEOUT = nap_interval_for(_POLL_INTERVAL) * 2.0
+# The receiver's periodic poll interval is set deliberately HIGH — well above
+# the latency bound asserted below — so a scheduled tick cannot satisfy the
+# assertion. The only thing that can reconcile the wall in under a second is
+# the wall-notify wake poke, which interrupts the poll sleep immediately
+# (``wake_event`` cuts the tick regardless of the interval). If the poke path
+# were broken, detection would wait out this whole interval and the test would
+# fail — that isolation is the point (Copilot review on PR #542). A broken poke
+# must not be able to hide behind a fast poll cadence.
+_POLL_INTERVAL = 10.0
+
+# Detection must land well inside one poll interval to prove the poke, not the
+# tick, did the work. 2s leaves CI headroom while staying far below the 10s
+# cadence a scheduled tick would take.
+_PUSH_LATENCY_BOUND = 2.0
+
+# A per-trial wait longer than the poll interval, so a genuine miss (poke
+# broken) is reported as the -1.0 sentinel only after the scheduled tick has
+# also had its chance — distinguishing "poke failed" from "nothing works".
+_TRIAL_TIMEOUT = _POLL_INTERVAL * 1.5
 
 
 def _make_wall(body: str) -> WallPost:
@@ -208,9 +221,16 @@ class TestWallPushLatency:
         push_missed = sum(1 for t in push_latencies if t < 0)
         assert not push_missed, f"push missed {push_missed}/{_TRIALS} detections"
 
-        push_avg = sum(push_latencies) / len(push_latencies)
-        # Generous, CI-stable margin: the wall-notify poke resolves well
-        # under a second; 2s leaves headroom for a slow runner. The point
-        # is that it is bounded by network+processing time, not by the
-        # receiver's poll cadence.
-        assert push_avg < 2.0, f"push averaged {push_avg * 1000:.1f}ms, expected < 2s"
+        # EVERY trial must land inside the bound, not just the average: the
+        # receiver's poll interval is _POLL_INTERVAL (10s), so any trial that
+        # fell through to a scheduled tick instead of the poke would measure
+        # near 10s. Asserting each trial < _PUSH_LATENCY_BOUND (2s) means the
+        # wall-notify poke — the only thing that can wake the poller that fast —
+        # resolved every one. A broken poke cannot pass this.
+        worst = max(push_latencies)
+        assert worst < _PUSH_LATENCY_BOUND, (
+            f"slowest push trial was {worst * 1000:.1f}ms, expected < "
+            f"{_PUSH_LATENCY_BOUND * 1000:.0f}ms — a trial that slow means the "
+            f"wake poke missed and a scheduled {_POLL_INTERVAL:.0f}s tick "
+            f"reconciled it instead"
+        )
