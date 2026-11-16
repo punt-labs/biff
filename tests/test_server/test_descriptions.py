@@ -28,6 +28,7 @@ from biff.server.tools._descriptions import (
     _InboxPokeGate,
     _reconcile_inbox_notify_sub,
     _reconcile_talk_sub,
+    _reconcile_wall_notify_sub,
     _sync_unread_file,
     _talk_description,
     nap_interval_for,
@@ -35,6 +36,7 @@ from biff.server.tools._descriptions import (
     refresh_read_messages,
     subscribe_inbox_notify,
     subscribe_talk,
+    subscribe_wall_notify,
     talk_signal,
 )
 from biff.server.tools.wall import WALL_BASE_DESCRIPTION
@@ -1063,22 +1065,28 @@ class TestPollInbox:
 
         assert tool.description == WALL_BASE_DESCRIPTION
 
-    async def test_establishes_and_tears_down_both_subs(self, tmp_path: Path) -> None:
-        """poll_inbox opens talk AND inbox-notify SUBs, unsubscribes both on exit.
+    async def test_establishes_and_tears_down_all_subs(self, tmp_path: Path) -> None:
+        """poll_inbox opens talk, inbox-notify AND wall-notify SUBs and tears
+        all three down on exit.
 
-        DES-062: the second always-on SUB must be established alongside the
-        existing talk SUB and torn down the same way — proven here against a
-        mocked ``NatsRelay`` (LocalRelay, used by every other test in this
-        class, has no push mechanism at all — see
-        ``_relay_pushes_inbox_notify``).
+        DES-062 added the inbox-notify SUB alongside the talk SUB; PL-1104
+        added the wall-notify SUB the same way. Each must be established at
+        startup and unsubscribed on teardown — proven here against a mocked
+        ``NatsRelay`` (LocalRelay, used by every other test in this class, has
+        no push mechanism at all — see ``_relay_pushes_inbox_notify``).
         """
         nc = AsyncMock()
         talk_handle = AsyncMock()
         inbox_handle = AsyncMock()
+        wall_handle = AsyncMock()
 
         async def fake_subscribe(subject: str, *, cb: object) -> AsyncMock:
             del cb
-            return talk_handle if "talk" in subject else inbox_handle
+            if "talk" in subject:
+                return talk_handle
+            if "wallnotify" in subject:
+                return wall_handle
+            return inbox_handle
 
         nc.subscribe = AsyncMock(side_effect=fake_subscribe)
 
@@ -1088,6 +1096,9 @@ class TestPollInbox:
         relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
         relay.inbox_notify_subject = MagicMock(
             return_value="biff-dev._test-server.notify.kai"
+        )
+        relay.wall_notify_subject = MagicMock(
+            return_value="biff-dev._test-server.wallnotify"
         )
         relay.get_wall = AsyncMock(return_value=None)
         relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
@@ -1110,8 +1121,10 @@ class TestPollInbox:
         subjects = [c.args[0] for c in nc.subscribe.call_args_list]
         assert any("talk" in s for s in subjects)
         assert any(s.endswith("notify.kai") and "talk" not in s for s in subjects)
+        assert any(s.endswith("wallnotify") for s in subjects)
         talk_handle.unsubscribe.assert_awaited_once()
         inbox_handle.unsubscribe.assert_awaited_once()
+        wall_handle.unsubscribe.assert_awaited_once()
 
     async def test_disabled_interval_recovers_from_a_client_discard(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1151,6 +1164,9 @@ class TestPollInbox:
         relay.inbox_notify_subject = MagicMock(
             return_value="biff._test-server.notify.kai"
         )
+        relay.wall_notify_subject = MagicMock(
+            return_value="biff._test-server.wallnotify"
+        )
         relay.get_wall = AsyncMock(return_value=None)
         relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
 
@@ -1165,7 +1181,7 @@ class TestPollInbox:
         mcp = create_server(state)
         task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
-        assert subscribe_calls == 2  # talk + inbox-notify, startup bind
+        assert subscribe_calls == 3  # talk + inbox-notify + wall-notify, startup bind
 
         # A wedge teardown/give-up close, independent of this poller —
         # exactly what the heartbeat loop's own _force_reconnect does.
@@ -1176,7 +1192,7 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
 
-        assert subscribe_calls > 2  # reconcile ran and rebound both SUBs
+        assert subscribe_calls > 3  # reconcile ran and rebound all SUBs
 
     async def test_disabled_interval_fallback_skips_tick_work_with_no_real_event(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1204,6 +1220,9 @@ class TestPollInbox:
         relay.talk_notify_subject = MagicMock(return_value="biff.talk.notify.kai:tty1")
         relay.inbox_notify_subject = MagicMock(
             return_value="biff._test-server.notify.kai"
+        )
+        relay.wall_notify_subject = MagicMock(
+            return_value="biff._test-server.wallnotify"
         )
         relay.get_wall = AsyncMock(return_value=None)
         relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
@@ -1261,6 +1280,9 @@ class TestPollInbox:
         relay.inbox_notify_subject = MagicMock(
             return_value="biff._test-server.notify.kai"
         )
+        relay.wall_notify_subject = MagicMock(
+            return_value="biff._test-server.wallnotify"
+        )
         relay.get_wall = AsyncMock(return_value=None)
         relay.get_unread_summary = AsyncMock(return_value=UnreadSummary(count=0))
 
@@ -1275,7 +1297,7 @@ class TestPollInbox:
         mcp = create_server(state)
         task = asyncio.create_task(poll_inbox(mcp, state, interval=0))
         await asyncio.sleep(self._FAST_INTERVAL * 3)
-        assert subscribe_calls == 2  # talk + inbox-notify, startup bind
+        assert subscribe_calls == 3  # talk + inbox-notify + wall-notify, startup bind
         relay.get_wall.assert_not_awaited()  # steady state: nothing to recompute yet
 
         # A wedge teardown/give-up close, independent of this poller.
@@ -1286,7 +1308,7 @@ class TestPollInbox:
         with suppress(asyncio.CancelledError):
             await task
 
-        assert subscribe_calls > 2  # reconcile ran and rebound both SUBs
+        assert subscribe_calls > 3  # reconcile ran and rebound all SUBs
         relay.get_wall.assert_awaited()  # the rebind forced a real recompute
 
     async def test_cheap_nap_tick_reconciles_inbox_notify_generation_bump(
@@ -1952,6 +1974,133 @@ class TestSubscribeInboxNotify:
         assert sub is not None
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
         assert len(infos) == 1  # one recovery line
+
+
+class TestSubscribeWallNotify:
+    """``subscribe_wall_notify`` establishes the repo-scoped wall wake poke.
+
+    PL-1104: a wall post/clear had no push signal, so a peer only reconciled
+    its in-memory display queue on its own next poll tick — which a wedged
+    NATS connection delays for minutes. The fix adds a repo-scoped,
+    user-independent wake poke whose callback wakes the poller (which then
+    re-reads ``get_wall()`` on an unconditional tick and reconciles). These
+    tests pin the push path that nothing exercised before.
+    """
+
+    @staticmethod
+    def _nats_state(tmp_path: Path) -> tuple[ServerState, MagicMock]:
+        relay = MagicMock(spec=NatsRelay)
+        relay.get_nc = AsyncMock(side_effect=TimeoutError("wedged"))
+        relay.connection_generation = 1
+        relay.wall_notify_subject = MagicMock(
+            return_value="biff-dev._test-server.wallnotify"
+        )
+        state = create_state(
+            BiffConfig(user="kai", repo_name=_TEST_REPO),
+            tmp_path,
+            tty="tty1",
+            hostname="test-host",
+            pwd="/test",
+            relay=relay,
+        )
+        return state, relay
+
+    async def test_returns_none_for_non_nats_relay(self, state: ServerState) -> None:
+        """LocalRelay (the default test relay) has no push mechanism."""
+        result = await subscribe_wall_notify(state, _test_latch(), asyncio.Event())
+        assert result is None
+
+    async def test_subscribes_on_the_repo_scoped_subject(self, tmp_path: Path) -> None:
+        """The SUB binds the repo-scoped, user-independent wall subject."""
+        state, relay = self._nats_state(tmp_path)
+        relay.get_nc = AsyncMock(return_value=AsyncMock())
+        sub = await subscribe_wall_notify(state, _test_latch(), asyncio.Event())
+        assert sub is not None
+        assert sub.generation == 1
+        # Repo only — no user argument (a wall is a team broadcast, PL-1104).
+        relay.wall_notify_subject.assert_called_once_with("_test-server")
+
+    async def test_callback_wakes_without_marking_gate(self, tmp_path: Path) -> None:
+        """The callback wakes the poller out of nap and nothing else.
+
+        Unlike the inbox-notify callback it does NOT mark a poke gate: the
+        wall read in ``_active_tick`` is unconditional per tick, so waking the
+        tick is sufficient. Waking exits napping and resets the nap-poll clock
+        so the woken tick is not skipped as a cheap nap.
+        """
+        state, relay = self._nats_state(tmp_path)
+        nc = AsyncMock()
+        relay.get_nc = AsyncMock(return_value=nc)
+        wake_event = asyncio.Event()
+        state.activity.enter_nap()
+
+        await subscribe_wall_notify(state, _test_latch(), wake_event)
+        callback = nc.subscribe.call_args.kwargs["cb"]
+        await callback(object())
+
+        assert state.activity.napping is False  # wake() exited napping
+        assert wake_event.is_set()
+
+    async def test_failure_then_recovery_logs_once_each(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A NATS outage latches: one WARNING onset, one INFO recovery."""
+        state, relay = self._nats_state(tmp_path)
+        wake_event = asyncio.Event()
+        latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(_TALK_LOGGER))
+
+        with caplog.at_level(logging.DEBUG, logger=_TALK_LOGGER):
+            assert await subscribe_wall_notify(state, latch, wake_event) is None
+            assert await subscribe_wall_notify(state, latch, wake_event) is None
+
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1  # not one per tick
+
+            relay.get_nc = AsyncMock(return_value=AsyncMock())  # NATS recovers
+            sub = await subscribe_wall_notify(state, latch, wake_event)
+
+        assert sub is not None
+        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(infos) == 1  # one recovery line
+
+    async def test_reconcile_rebinds_on_generation_bump(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A client swap (generation bump) rebinds the wall-notify SUB.
+
+        Mirrors the talk/inbox reconcile: a background wedge teardown that
+        advances ``connection_generation`` past the SUB must trigger a
+        re-subscribe so the wall poke keeps reaching this session.
+        """
+        handle = AsyncMock()
+        current = SubscriptionBinding(handle, generation=2)
+        calls = 0
+
+        async def _sub(
+            _state: ServerState,
+            _latch: TalkNotifyLatch,
+            _wake_event: asyncio.Event,
+        ) -> SubscriptionBinding | None:
+            nonlocal calls
+            calls += 1
+            return SubscriptionBinding(AsyncMock(), 5)
+
+        monkeypatch.setattr(_descriptions, "subscribe_wall_notify", _sub)
+        monkeypatch.setattr(_descriptions, "_relay_generation", _fixed_generation(5))
+
+        result = await _reconcile_wall_notify_sub(
+            state,
+            current,
+            _test_latch(),
+            _InboxPokeGate(backstop_interval=1000.0),
+            asyncio.Event(),
+        )
+
+        assert result is not current
+        assert result is not None
+        assert result.generation == 5
+        assert calls == 1
+        handle.unsubscribe.assert_awaited_once()  # old SUB torn down
 
 
 class TestReconcileInboxNotifySub:

@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- `/wall` post and clear now reach idle peer sessions promptly. Wall changes
+  had no push signal, so a peer only reconciled its status bar on its own next
+  poll tick, which a wedged NATS connection delays for minutes — the operator
+  saw a cleared wall linger and had to clear it once per session. A wall change
+  now publishes a repo-scoped wake poke (mirroring the broadcast inbox-notify
+  poke) so every peer in the repo re-reads the wall and reconciles immediately.
+  The periodic poll tick remains the backstop if a poke is lost.
 - `biff enable` no longer makes read-only flag commands such as
   `biff --version` and `biff --help` prompt. The catch-all ask rule
   `Bash(biff -*)` is replaced by two rules per mutating verb (`biff V` and
