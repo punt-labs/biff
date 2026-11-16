@@ -167,8 +167,8 @@ the two is which inbox they watch.  Rather than duplicate $talkSubGen$,
 its invariant, and its liveness obligation for a second variable, this
 specification replaces $talkSubGen$ with $subGen$, a total function from a
 free type $SubKind$ --- introduced here with two constructors, $talk$ and
-$inboxNotify$, and since extended to a third, $kvWatch$ (see its own
-free-type declaration below) --- to the generation each is bound to.  The
+$inboxNotify$, and since extended to a third, $kvWatch$, and a fourth,
+$wallNotify$ (see its own free-type declaration below) --- to the generation each is bound to.  The
 invariant $talkSubGen \leq generation$ becomes $\forall k : SubKind @
 subGen(k) \leq generation$, quantified once over the family rather than
 restated per kind, and the stranding property becomes an obligation
@@ -182,8 +182,8 @@ instead of one schema per kind.  This is a generalisation, not a
 restructuring: setting $SubKind$ to a singleton $\{ talk \}$ recovers
 exactly the third invariant's state space, and the family was
 deliberately built to outlive its original two members --- its later
-extension to $kvWatch$ is that prediction already exercised once, not a
-hypothetical.  (A fourth constructor, for the dual-session
+extensions to $kvWatch$ and $wallNotify$ are that prediction already
+exercised twice, not a hypothetical.  (A constructor, for the dual-session
 companion's inbox SUB, once existed; the companion was removed, PL-231,
 and the constructor with it.)
 
@@ -226,14 +226,15 @@ times out; the cached handles are stale and must not be used.
 $closed$ is permanent shutdown --- no reconnection is possible.
 
 \begin{zed}
-  SubKind ::= talk | inboxNotify | kvWatch
+  SubKind ::= talk | inboxNotify | kvWatch | wallNotify
 \end{zed}
 
 $SubKind$ indexes the family of always-on core-NATS subscriptions the
 relay holds open for the life of the process: $talk$, the talk-inbox SUB
 (biff-9la); $inboxNotify$, the broadcast inbox-notify SUB for the
-session's own user (biff-5ex); and $kvWatch$, the sessions-KV watcher's
-consumer (below).  All three are the same class of resource --- bound to
+session's own user (biff-5ex); $kvWatch$, the sessions-KV watcher's
+consumer; and $wallNotify$, the broadcast wall wake poke (both below).
+All four are the same class of resource --- bound to
 the particular client that created them, replayed by nats-py's in-place
 reconnect, and orphaned by a force-reconnect that discards the client
 wholesale --- so the model tracks one generation-binding per kind rather
@@ -263,6 +264,28 @@ and ends the cycle when the generation advances, so the supervisor
 code meets; the frozen variant \texttt{nats-relay-kvwatch-noreconcile.tex}
 removes $Subscribe$ and $SubscribeRetry$ for this kind alone, which is the
 code as it was before the fix, and probcli returns a counterexample to it.
+
+$wallNotify$ is the fourth kind: the broadcast wall wake poke added for
+PL-1104.  A \texttt{/wall} post or clear had no push signal, so a peer
+session reconciled its status bar only on its own next poll tick, which a
+wedged NATS connection delays for minutes.  The fix publishes a one-byte
+message on a repo-scoped, user-independent subject
+(\texttt{wall\_notify\_subject}, \texttt{\{stream\_prefix\}.\{repo\}.wallnotify})
+after the authoritative KV write in \texttt{set\_wall} and
+\texttt{set\_wall\_for\_repo}, and every session holds an always-on,
+ungated SUB on that subject whose callback only wakes the poll loop.  It is
+a core-NATS subscription like the other three --- bound to the client that
+created it, orphaned wholesale by $ForceReconnect$, replayed by an in-place
+reconnect.  The relay's \texttt{subscribe\_wall\_notify} implements
+$Subscribe$ for this kind, and \texttt{\_reconcile\_wall\_notify\_sub}
+implements $SubscribeRetry$ and the re-subscribe on a
+connection-generation bump; the SUB is torn down on every exit path
+alongside the talk and inbox-notify SUBs.  The liveness obligation of
+\S\ref{sec:modelcheck}, instantiated at $k = wallNotify$, is the property
+the code meets: a wall change must reach every peer, not strand on a dead
+SUB.  No frozen counterexample variant is warranted: the obligation is
+the same formula as for $kvWatch$ and the existing negative controls
+already show it failing when $Subscribe$ is withheld from a kind.
 
 \begin{zed}
   ReqOutcome ::= reqOk | reqTimeout
@@ -1298,8 +1321,8 @@ SUB is bound to against the current connection generation and, for
 whichever kind $kind?$ differs, opens a fresh SUB of that kind on the live
 client and records the new binding.  One schema, indexed by $kind?$,
 covers the existing $talk$ reconciliation (\texttt{\_reconcile\_talk\_sub}),
-the biff-5ex $inboxNotify$ reconciliation, and the $kvWatch$
-watcher's re-subscribe, because $subGen(kind?) < generation$ is their common signature
+the biff-5ex $inboxNotify$ reconciliation, the $kvWatch$
+watcher's re-subscribe, and the $wallNotify$ reconciliation, because $subGen(kind?) < generation$ is their common signature
 regardless of kind.  This one operation covers three cases the code
 treats uniformly for each kind.  The \emph{initial} subscribe: after
 the first dial, $subGen(kind?) = 0 < generation = 1$, and the first tick
@@ -1314,9 +1337,10 @@ kind? \mapsto generation \}$ is the whole repair for that kind: it moves
 the connection from stranded to current for $kind?$ in a single step, and
 it is the transition the code must implement for the biff-9la fix
 ($kind? = talk$), its biff-5ex extension ($kind? = inboxNotify$), and the
-sessions-KV watcher ($kind? = kvWatch$) alike.  Every other component of $Connection$ is preserved, $subGen$'s
+sessions-KV watcher ($kind? = kvWatch$) and the wall wake poke
+($kind? = wallNotify$) alike.  Every other component of $Connection$ is preserved, $subGen$'s
 other kinds included; a re-subscribe of one kind touches that kind's SUB
-and nothing else --- the three kinds reconcile independently, one
+and nothing else --- the four kinds reconcile independently, one
 $Subscribe$ per stranded kind per tick, exactly as \texttt{poll\_inbox}
 calls \texttt{\_reconcile\_talk\_sub} and its $inboxNotify$ counterpart
 as separate calls, and the watcher supervisor re-subscribes $kvWatch$.
@@ -1604,7 +1628,7 @@ which is enabled in every connection state.
   namesProvisioned' = zfalse \\
   wtmpAvailable' = zfalse \\
   generation' = 0 \\
-  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, kvWatch \mapsto 0 \} \\
+  subGen' = \{ talk \mapsto 0, inboxNotify \mapsto 0, kvWatch \mapsto 0, wallNotify \mapsto 0 \} \\
   reconnectEpoch' = 0 \\
   spuriousTeardown' = zfalse \\
   epochPending' = zfalse \\
@@ -1617,7 +1641,7 @@ which is enabled in every connection state.
 
 The composed initial state, $Init$, is: $connState = disconnected$ with no
 handles and no always-on subscription of any kind ($subGen$ maps every
-$SubKind$, $kvWatch$ included, to $0$), an empty session store, and an
+$SubKind$, $kvWatch$ and $wallNotify$ included, to $0$), an empty session store, and an
 $idle$ watcher.  $Init$ is the sole initialisation schema and ranges over
 the whole $NatsRelayState$, so the model checker explores the $Connection$
 lifecycle, the session store and the $Watcher$ as one machine: the watcher
@@ -1772,12 +1796,13 @@ verified by model checking with probcli (\texttt{z-spec test}):
 
     CTL model checking is not itself parametric, so probcli checks the
     formula once per instance of $k$ rather than as a single quantified
-    query; all three instances are confirmed \textbf{TRUE}, $k = talk$
+    query; all four instances are confirmed \textbf{TRUE}, $k = talk$
     (the original biff-9la property, unchanged in substance), $k =
     inboxNotify$ (the biff-5ex obligation for a session's own user), and
     $k = kvWatch$ (the sessions-KV watcher, whose omission from the
-    family let a wedged watcher go undetected) --- and the restriction of
-    any of the three to
+    family let a wedged watcher go undetected), and $k = wallNotify$ (the
+    broadcast wall wake poke, PL-1104) --- and the restriction of
+    any of the four to
     $connState = connected$ is TRUE as well; only the terminal $closed$
     state, in which the connection is permanently shut down and carries
     no subscription obligation of any kind, is excluded.  The escape for
@@ -1848,21 +1873,21 @@ verified by model checking with probcli (\texttt{z-spec test}):
 %% root.  PROBCLI defaults to ~/Applications/ProB/probcli (the Makefile
 %% default); override it to point elsewhere.  probcli is not assumed to be
 %% on PATH.  Each run prints "CTL Formula TRUE." for the shipped spec.
-%% Measured on the three-kind model: 63,363 states / 591,031 transitions
-%% at DEFAULT_SETSIZE 1; 554,404 states / 6,314,917 transitions at
-%% DEFAULT_SETSIZE 2 (make prob SPEC=docs/nats-relay.tex PROB_SETSIZE=2).
+%% Measured on the four-kind model: 225,923 states / 2,245,335 transitions
+%% at DEFAULT_SETSIZE 1 (the three-kind model had 63,363 states / 591,031
+%% transitions; DEFAULT_SETSIZE 2 not re-measured for four kinds).
 %%
 %%   PROBCLI="${PROBCLI:-$HOME/Applications/ProB/probcli}"
 %%   P="-p DEFAULT_SETSIZE 1 -p MAXINT 4 -p MAX_INITIALISATIONS 100 \
 %%      -p MAX_OPERATIONS 5000 -model_check"
-%%   for K in talk inboxNotify kvWatch; do
+%%   for K in talk inboxNotify kvWatch wallNotify; do
 %%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
 %%       "AG({connState/=closed & subGen($K)<generation} => EF {subGen($K)=generation})"
 %%   done
 %%
-%% The restriction to connState = connected (same three kinds):
+%% The restriction to connState = connected (same four kinds):
 %%
-%%   for K in talk inboxNotify kvWatch; do
+%%   for K in talk inboxNotify kvWatch wallNotify; do
 %%     "$PROBCLI" docs/nats-relay.tex $P -ctlformula \
 %%       "AG({connState=connected & subGen($K)<generation} => EF {subGen($K)=generation})"
 %%   done
