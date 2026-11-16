@@ -88,6 +88,14 @@ _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
     recovery="Inbox-notify wake pokes recovered — re-subscribed",
 )
 
+_WALL_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
+    onset=(
+        "Wall-notify wake pokes are down — re-subscribe failing, retrying each tick"
+    ),
+    retry="Wall-notify re-subscribe still failing, will retry",
+    recovery="Wall-notify wake pokes recovered — re-subscribed",
+)
+
 # Captured eagerly during ``initialize`` (via SessionCaptureMiddleware)
 # and refreshed on every tool call (belt path) so the background poller
 # and NATS callbacks can send notifications outside a request context.
@@ -985,6 +993,71 @@ async def _reconcile_inbox_notify_sub(
     )
 
 
+async def subscribe_wall_notify(
+    state: ServerState,
+    latch: TalkNotifyLatch,
+    wake_event: asyncio.Event,
+) -> SubscriptionBinding | None:
+    """Establish an always-on wall-change notify subscription (PL-1104).
+
+    Started once at poller start (ungated), mirroring
+    :func:`subscribe_inbox_notify`.  The poke is repo-scoped and
+    user-independent — a wall is a team broadcast — so this binds to
+    ``wall_notify_subject(repo)``, the one subject every session in the
+    repo shares.  The payload-less poke's callback does exactly two
+    things: wakes the poller out of any nap (so its next tick runs
+    ``_active_tick`` rather than skipping as a cheap nap) and sets
+    *wake_event* so that tick fires without waiting out the sleep.  It
+    never refreshes or notifies directly — sending from a NATS callback
+    is unreliable (DES-020/DES-021).  The woken tick re-reads
+    ``get_wall()`` (unconditional, every tick) and reconciles the display
+    queue, which is what clears a stale wall on a peer.
+
+    No gate mark: the inbox poke gate governs the unread-count recompute
+    only; the wall read is already unconditional per tick, so waking the
+    tick is sufficient.  NATS-only.
+    """
+    from biff.nats_relay import NatsRelay  # noqa: PLC0415
+
+    if not isinstance(state.relay, NatsRelay):
+        return None
+    try:
+        nc = await state.relay.get_nc()
+        generation = state.relay.connection_generation
+        subject = state.relay.wall_notify_subject(state.config.repo_name)
+
+        async def _on_wall_notify_msg(_msg: object) -> None:
+            state.activity.wake()
+            wake_event.set()
+
+        handle = await nc.subscribe(  # pyright: ignore[reportUnknownMemberType]
+            subject, cb=_on_wall_notify_msg
+        )
+    except Exception:  # noqa: BLE001
+        latch.record_failure()
+        return None
+    latch.record_success()
+    return SubscriptionBinding(handle, generation)
+
+
+async def _reconcile_wall_notify_sub(
+    state: ServerState,
+    wall_notify_sub: SubscriptionBinding | None,
+    latch: TalkNotifyLatch,
+    gate: _InboxPokeGate,
+    wake_event: asyncio.Event,
+) -> SubscriptionBinding | None:
+    """Re-establish a wall-notify SUB when unbound or its client was replaced."""
+    return await _reconcile_always_on_sub(
+        wall_notify_sub,
+        _relay_generation(state),
+        lambda: subscribe_wall_notify(state, latch, wake_event),
+        state=state,
+        gate=gate,
+        wake_event=wake_event,
+    )
+
+
 async def _active_tick(
     mcp: FastMCP[ServerState],
     state: ServerState,
@@ -1217,8 +1290,10 @@ async def poll_inbox(
     wake_event = asyncio.Event()
     talk_latch = TalkNotifyLatch.for_resubscribe(logger)
     inbox_notify_latch = TalkNotifyLatch(logger, _INBOX_NOTIFY_RESUBSCRIBE_MESSAGES)
+    wall_notify_latch = TalkNotifyLatch(logger, _WALL_NOTIFY_RESUBSCRIBE_MESSAGES)
     talk_sub: SubscriptionBinding | None = None
     inbox_notify_sub: SubscriptionBinding | None = None
+    wall_notify_sub: SubscriptionBinding | None = None
 
     try:
         # Bound inside the try/finally, not before it: a cancellation
@@ -1230,6 +1305,9 @@ async def poll_inbox(
         talk_sub = await subscribe_talk(state, talk_latch, gate, wake_event)
         inbox_notify_sub = await subscribe_inbox_notify(
             state, inbox_notify_latch, gate, wake_event
+        )
+        wall_notify_sub = await subscribe_wall_notify(
+            state, wall_notify_latch, wake_event
         )
         while shutdown is None or not shutdown.is_set():
             outcome = await _sleep_or_wake(
@@ -1315,6 +1393,13 @@ async def poll_inbox(
                 gate,
                 wake_event,
             )
+            wall_notify_sub = await _reconcile_wall_notify_sub(
+                state,
+                wall_notify_sub,
+                wall_notify_latch,
+                gate,
+                wake_event,
+            )
     finally:
         # A hard cancel arriving while unsubscribing one SUB must not skip
         # the rest — each attempt is shielded from that specific
@@ -1325,7 +1410,7 @@ async def poll_inbox(
         # re-raise CancelledError": we are already inside the finally block
         # reacting to the original cancellation, and teardown must stay
         # bounded and complete rather than abandoning it partway through.
-        all_subs = (talk_sub, inbox_notify_sub)
+        all_subs = (talk_sub, inbox_notify_sub, wall_notify_sub)
         for sub in all_subs:
             if sub is not None:
                 with suppress(Exception, asyncio.CancelledError):

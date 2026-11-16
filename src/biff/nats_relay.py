@@ -1393,6 +1393,48 @@ class NatsRelay:
         self._validate_repo(repo)
         return f"{self._stream_prefix}.{repo}.notify.{user}"
 
+    def wall_notify_subject(self, repo: str) -> str:
+        """NATS core subject for a wall-change wake poke in *repo*.
+
+        Repo-scoped and **user-independent**, unlike
+        :meth:`inbox_notify_subject`'s per-user form: a wall is a team
+        broadcast, so a wall change must wake every session in the repo
+        regardless of which user owns it.  A wall poke names only the repo
+        (``{stream_prefix}.{repo}.wallnotify``); every session that can see
+        the repo subscribes to the same subject.
+
+        Stream-safe by the same discipline the inbox-notify subject
+        documents: the durable inbox stream filters on
+        ``{stream_prefix}.*.inbox.>`` and the wtmp stream on
+        ``{stream_prefix}.*.wtmp.>``.  This subject's third token is
+        ``wallnotify`` — neither ``inbox`` nor ``wtmp`` — so a poke
+        published here is never captured into either JetStream WORK_QUEUE
+        and left to rot in the shared budget.  It is a bare core-NATS
+        pub/sub subject with no JetStream retention at all.
+        """
+        self._validate_repo(repo)
+        return f"{self._stream_prefix}.{repo}.wallnotify"
+
+    async def _publish_wall_notification(self, repo: str) -> None:
+        """Publish a payload-less wake poke for a wall change in *repo*.
+
+        Mirrors :meth:`_publish_inbox_notification`'s error discipline:
+        resolves the client via :meth:`_live_nc_or_reconnect` and never
+        propagates a failure, since the KV write in :meth:`set_wall` /
+        :meth:`set_wall_for_repo` — the authoritative path — has already
+        succeeded by the time this runs.  The poke carries no payload; the
+        subscriber (``subscribe_wall_notify``) only wakes the poller, whose
+        next tick recomputes ``get_wall()`` and reconciles the display
+        queue.  Without it a peer waits for its own scheduled poll tick,
+        which a wedged connection can delay for minutes (PL-1104).
+        """
+        try:
+            nc = await self._live_nc_or_reconnect()
+            subject = self.wall_notify_subject(repo)
+            await nc.publish(subject, b"1")
+        except Exception:  # noqa: BLE001 — notification is best-effort
+            logger.debug("Wall notification failed for %s", repo)
+
     async def get_nc(self) -> NatsClient:
         """Return the raw NATS client, connecting if necessary.
 
@@ -2279,7 +2321,13 @@ class NatsRelay:
     # -- Wall (team broadcast) --
 
     async def set_wall(self, wall: WallPost | None) -> None:
-        """Set or clear the team wall in the sessions KV bucket."""
+        """Set or clear the team wall in the sessions KV bucket.
+
+        After the authoritative KV write, publishes a best-effort
+        wall-change wake poke (PL-1104) so peers in this repo reconcile
+        their display queue on their next woken tick instead of waiting
+        for a scheduled poll.
+        """
         _, kv = await self._ensure_connected()
         if wall is None:
             with suppress(KeyNotFoundError, BucketNotFoundError):
@@ -2288,6 +2336,7 @@ class NatsRelay:
             await self._tracked(
                 "kv.put", kv.put(self._wall_kv_key, wall.model_dump_json().encode())
             )
+        await self._publish_wall_notification(self._repo_name)
 
     async def get_wall(self, *, repo: str | None = None) -> WallPost | None:
         """Read the active wall, returning ``None`` if absent or expired.
@@ -2318,7 +2367,19 @@ class NatsRelay:
         return wall
 
     async def set_wall_for_repo(self, repo: str, wall: WallPost | None) -> None:
-        """Set or clear a wall for a specific repo (cross-repo broadcast)."""
+        """Set or clear a wall for a specific repo (cross-repo broadcast).
+
+        After the authoritative KV write, publishes a best-effort
+        wall-change wake poke (PL-1104) to *repo* so its peers reconcile
+        promptly rather than on their own scheduled poll tick.
+
+        *repo* is validated before it reaches either the KV key or the
+        poke subject: a repo carrying a ``.`` would otherwise expand the
+        ``{repo}.wall`` key into extra tokens (and the poke path validates
+        anyway, so an unvalidated key write beside a validated poke would
+        diverge — djb wire-safety review, PL-1104).
+        """
+        self._validate_repo(repo)
         _, kv = await self._ensure_connected()
         key = self.wall_kv_key(repo)
         if wall is None:
@@ -2326,3 +2387,4 @@ class NatsRelay:
                 await kv.delete(key)
         else:
             await kv.put(key, wall.model_dump_json().encode())
+        await self._publish_wall_notification(repo)
