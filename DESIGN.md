@@ -8185,8 +8185,8 @@ repo selection, live-holder precedence, and failed-delivery reporting.
 [`punt-oo-ratchet`](https://github.com/punt-labs/python-oo-ratchet) package
 enforces OO metrics, coupling/cohesion, and suppression counts.
 
-**Decision.** Depend on the PyPI release in the uv dev dependency group,
-allowing 0.1.x releases and locking the resolved version in `uv.lock`.
+**Decision.** Pin the PyPI release to 0.3.0 in the uv dev dependency group
+and lock it in `uv.lock`.
 Seed and track all three baselines for `src/biff/`. CI compares PRs with their
 merge base and checks pushes to `main` against its pre-push tip so a push
 containing several commits checks the whole change. CI does not write baselines.
@@ -8198,3 +8198,8 @@ is available.
 **Outcome.** `make check` and CI enforce the shared gates without adding a
 runtime dependency to Biff's wheel. Contributors refresh the committed
 baselines using `make update-oo update-coupling update-suppressions`.
+
+**0.3.0 update.** The audited OO refresh across all baselined files adopts
+code-only module sizes and excludes exceptions, enums, and dataclasses from
+the class count. The default fan-out limit increases from 7 to 10, retaining
+the CLI limit of 15. Suppression waivers stop applying once merged.

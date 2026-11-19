@@ -42,7 +42,7 @@ dev = [
 
 [dependency-groups]
 dev = [
-    "punt-oo-ratchet>=0.1,<0.2",
+    "punt-oo-ratchet==0.3.0",
     "pydoclint==0.12.0",
     "docstring-parser-fork==0.0.16",
     "markdown==3.11.3",
