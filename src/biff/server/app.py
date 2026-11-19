@@ -14,11 +14,14 @@ import sys
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from contextvars import Context
 from datetime import UTC, datetime
 from traceback import extract_tb
 from typing import TYPE_CHECKING
 
 from fastmcp.server.middleware import Middleware
+from mcp.shared.exceptions import MCPError
+from mcp.types import INTERNAL_ERROR
 
 from biff._stdlib import remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
@@ -139,13 +142,9 @@ class _SessionCaptureMiddleware(Middleware):
         call_next: CallNext[InitializeRequest, InitializeResult | None],
     ) -> InitializeResult | None:
         result = await call_next(context)
-        if context.fastmcp_context is not None:
-            try:
-                await _descriptions.handshake_delivery.capture_session(
-                    context.fastmcp_context.session
-                )
-            except RuntimeError:
-                logger.debug("Session not available during initialize")
+        if (ctx := context.fastmcp_context) is not None:
+            with suppress(RuntimeError):
+                await _descriptions.handshake_delivery.capture_session(ctx.session)
         return result
 
 
@@ -1256,6 +1255,8 @@ class _LiveSession:
             await asyncio.gather(*self.tasks, return_exceptions=True)
             self.tasks.clear()
             self.reaper = None
+            if isinstance(exc, Exception):
+                raise MCPError(INTERNAL_ERROR, "Internal server error") from None
             raise
         self.attached = True
 
@@ -1335,7 +1336,8 @@ class _LiveSession:
             interval=poll_interval,
             nap_interval=_descriptions.nap_interval_for(poll_interval),
         )
-        self.tasks.append(asyncio.create_task(poll))
+        # The poller outlives the requests that may start it.
+        self.tasks.append(asyncio.create_task(poll, context=Context()))
         self.reaper = asyncio.create_task(_reap_loop(state, self.shutdown))
         self.tasks.append(self.reaper)
         self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
@@ -1400,7 +1402,9 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         return live.call(mcp, state, caller)
 
     mcp.configure_transport(
-        state.tool_events, _SessionCaptureMiddleware(), accept_caller
+        state.tool_events,
+        _SessionCaptureMiddleware(),
+        accept_caller,
     )
     register_all_tools(mcp, state)
     return mcp

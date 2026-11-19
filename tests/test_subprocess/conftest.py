@@ -14,7 +14,7 @@ import pytest
 from fastmcp.client.transports import StdioTransport
 from mcp import Client as MCPClient, StdioServerParameters
 
-from biff.testing import RecordingClient, Transcript
+from biff.testing import NotificationTracker, RecordingClient, Transcript
 from biff.testing.caller import StampedClient
 
 if TYPE_CHECKING:
@@ -94,6 +94,20 @@ def modern_kai_client(shared_data_dir: Path) -> MCPClient:
     return MCPClient(
         StdioServerParameters(command=transport.command, args=transport.args)
     )
+
+
+@pytest.fixture
+async def legacy_kai_client(
+    shared_data_dir: Path,
+) -> AsyncIterator[tuple[Client[Any], NotificationTracker]]:
+    """Connect a handshake client whose server first attaches on a tool call."""
+    transport = _make_transport("kai", shared_data_dir)
+    transport.env = {"CLAUDE_CODE_SESSION_ID": ""}
+    tracker = NotificationTracker()
+    async with StampedClient(
+        transport, message_handler=tracker, mode="legacy"
+    ) as client:
+        yield client, tracker
 
 
 @pytest.fixture

@@ -8239,4 +8239,5 @@ transport selects the protocol before dispatching discovery.
 
 **Outcome.** Modern clients that opt in receive tool list changes while idle
 and re-list tools when reconnecting because the stream does not replay changes.
-Handshake clients continue to receive the standalone notification.
+Handshake clients continue to receive the standalone notification. The poller
+does not inherit request context, even when the first tool call starts it.

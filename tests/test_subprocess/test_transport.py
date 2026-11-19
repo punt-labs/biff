@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from fastmcp.client.client import CallToolResult
     from mcp import Client as MCPClient
 
+    from biff.testing import NotificationTracker
+
 pytestmark = pytest.mark.subprocess
 
 
@@ -192,6 +194,25 @@ class TestToolCallOverStdio:
 
 class TestCrossProcessState:
     """Two subprocesses share state through the same data directory."""
+
+    async def test_legacy_client_receives_mail_after_first_request(
+        self,
+        legacy_kai_client: tuple[Client[Any], NotificationTracker],
+        eric_client: Client[Any],
+    ) -> None:
+        client, tracker = legacy_kai_client
+        await client.call_tool("who", {})
+        before = tracker.tool_list_changed_count
+
+        await eric_client.call_tool("write", {"to": "kai", "message": "hello"})
+        async with asyncio.timeout(10):
+            while tracker.tool_list_changed_count == before:
+                await asyncio.sleep(0.05)
+
+        inbox = next(
+            tool for tool in await client.list_tools() if tool.name == "read_messages"
+        )
+        assert "1 unread" in (inbox.description or "")
 
     async def test_modern_subscriber_receives_background_mail_alert(
         self, modern_kai_client: MCPClient, eric_client: Client[Any]
