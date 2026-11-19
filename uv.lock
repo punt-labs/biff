@@ -996,11 +996,6 @@ wheels = [
 ]
 
 [[package]]
-name = "oo-ratchet"
-version = "0.1.0"
-source = { git = "https://github.com/punt-labs/python-oo-rachet?rev=cf6f8846888009e6fb739c8ec95a8240870369e7#cf6f8846888009e6fb739c8ec95a8240870369e7" }
-
-[[package]]
 name = "openapi-pydantic"
 version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1133,7 +1128,7 @@ lux = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "oo-ratchet" },
+    { name = "punt-oo-ratchet" },
 ]
 
 [package.metadata]
@@ -1163,7 +1158,7 @@ requires-dist = [
 provides-extras = ["lux", "dev"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "oo-ratchet", git = "https://github.com/punt-labs/python-oo-rachet?rev=cf6f8846888009e6fb739c8ec95a8240870369e7" }]
+dev = [{ name = "punt-oo-ratchet", specifier = ">=0.1,<0.2" }]
 
 [[package]]
 name = "punt-lux"
@@ -1184,6 +1179,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/56/4d/540a8a7600378dd711e60540126c17e9854a8a8e1d6a736c22f399fa2361/punt_lux-0.31.1.tar.gz", hash = "sha256:7c4b15ca98cfa487dbb4867f4fc16bb16c8f007b218c2c30caac08286183a73f", size = 1012788, upload-time = "2026-08-25T23:15:33.149Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/71/786cb5bd5c49e3aa7ab3dc85410bab04340ff3d5fbb6909a3097e6f359ef/punt_lux-0.31.1-py3-none-any.whl", hash = "sha256:ba55e6aad29680b1318de947afde926791209417645f3b133ce9e841176bd55e", size = 1364991, upload-time = "2026-08-25T23:15:31.287Z" },
+]
+
+[[package]]
+name = "punt-oo-ratchet"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/0a/cc2148b04fde951c0936b6eede2799dae16db7b5800d1b1f9da7a210c42e/punt_oo_ratchet-0.1.0.tar.gz", hash = "sha256:85ce780213eedacc590569fe2026ee9d4cd6952a4e501cc414627679dbf51331", size = 74203, upload-time = "2026-11-19T02:06:35.637Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/f7/4d68ce7c24fd01d44efb95450bf0b67c795b255f4858dc83cd61a8d0430d/punt_oo_ratchet-0.1.0-py3-none-any.whl", hash = "sha256:a25cb0008008c2bee014f831a5e67c298f17ae7dcead6149aba88c3734edd72a", size = 97205, upload-time = "2026-11-19T02:06:34.408Z" },
 ]
 
 [[package]]

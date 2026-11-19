@@ -47,10 +47,7 @@ dev = [
 ]
 
 [dependency-groups]
-dev = ["oo-ratchet"]
-
-[tool.uv.sources]
-oo-ratchet = { git = "https://github.com/punt-labs/python-oo-rachet", rev = "cf6f8846888009e6fb739c8ec95a8240870369e7" }
+dev = ["punt-oo-ratchet>=0.1,<0.2"]
 
 [project.scripts]
 biff = "biff.__main__:app"
