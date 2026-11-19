@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mcp.server.subscriptions import InMemorySubscriptionBus as NotificationBus
+
 from biff.models import BiffConfig
 from biff.nats_relay import NatsRelay
 from biff.relay import DormantRelay, LocalRelay, Relay
@@ -36,6 +38,7 @@ class ServerState:
     repo_common_root: Path
     activity: ActivityTracker = field(default_factory=ActivityTracker)
     display_queue: DisplayQueue = field(default_factory=DisplayQueue)
+    tool_events: NotificationBus = field(default_factory=NotificationBus, compare=False)
     tty: str = ""
     hostname: str = ""
     pwd: str = ""
@@ -117,8 +120,6 @@ class ServerState:
         org-discovered repos from ``NatsRelay.discover_repos_for_org()``
         (DES-034).
         """
-        if not self.org_repos:
-            return self.config.visible_repos
         return self.config.visible_repos | self.org_repos
 
 

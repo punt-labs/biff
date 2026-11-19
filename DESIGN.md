@@ -8203,3 +8203,18 @@ baselines using `make update-oo update-coupling update-suppressions`.
 code-only module sizes and excludes exceptions, enums, and dataclasses from
 the class count. The default fan-out limit increases from 7 to 10, retaining
 the CLI limit of 15. Suppression waivers stop applying once merged.
+
+## DES-079: Publish Tool List Changes to Modern MCP Subscribers
+
+MCP 2026-07-28 has no standalone connection channel for tool list
+changes. The server attaches a local MCP SDK subscription bus to
+`subscriptions/listen`; the same description-change gate publishes
+to it from tool handlers and the background poller. Modern clients
+opt in to the stream and re-list tools after reconnecting; the stream
+does not replay changes.
+
+The handshake notification and pending-retry behavior in DES-061
+and `docs/notification.tex` still apply to older clients. Modern
+request sessions must not replace the captured handshake session.
+Forcing a handshake after discovery is not viable: the transport has
+already selected the modern protocol before dispatching discovery.

@@ -6,15 +6,20 @@ and multiple subprocesses share state through the filesystem.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from mcp.shared.subscriptions import ToolsListChanged
 from mcp.types import TextContent
+
+from biff.testing.caller import DEFAULT_CALLER
 
 if TYPE_CHECKING:
     from fastmcp import Client
     from fastmcp.client.client import CallToolResult
+    from mcp import Client as MCPClient
 
 pytestmark = pytest.mark.subprocess
 
@@ -100,6 +105,42 @@ class TestToolCallOverStdio:
 
 class TestCrossProcessState:
     """Two subprocesses share state through the same data directory."""
+
+    async def test_modern_subscriber_receives_background_mail_alert(
+        self, modern_kai_client: MCPClient, eric_client: Client[Any]
+    ) -> None:
+        async with modern_kai_client as client:
+            result = await client.call_tool(
+                "plan", {"message": "online", "_caller": DEFAULT_CALLER}
+            )
+            assert not result.is_error
+            before = await client.list_tools()
+            inbox = next(tool for tool in before.tools if tool.name == "read_messages")
+            assert "1 unread" not in (inbox.description or "")
+            async with (
+                asyncio.timeout(10),
+                client.listen(tools_list_changed=True) as changes,
+            ):
+                assert changes.honored.tools_list_changed is True
+                await eric_client.call_tool("write", {"to": "kai", "message": "hello"})
+                assert isinstance(await anext(changes), ToolsListChanged)
+
+                tools = await client.list_tools()
+                inbox = next(
+                    tool for tool in tools.tools if tool.name == "read_messages"
+                )
+                assert "1 unread" in (inbox.description or "")
+
+                result = await client.call_tool(
+                    "read_messages", {"_caller": DEFAULT_CALLER}
+                )
+                assert not result.is_error
+                assert isinstance(await anext(changes), ToolsListChanged)
+                tools = await client.list_tools()
+                inbox = next(
+                    tool for tool in tools.tools if tool.name == "read_messages"
+                )
+                assert "1 unread" not in (inbox.description or "")
 
     async def test_plan_visible_across_processes(
         self,

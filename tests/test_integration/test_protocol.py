@@ -68,7 +68,7 @@ class TestSessionCapture:
 
         # No tool call has been made — only initialize has fired.
         # The middleware should have captured the session.
-        assert desc._session is not None
+        assert desc.handshake_delivery._session is not None
 
     async def test_suspenders_path_before_first_tool_call(
         self,
@@ -86,7 +86,7 @@ class TestSessionCapture:
         _, tracker = tracked_client
         before = tracker.tool_list_changed_count
         # Simulate what the poller does: send notification outside tool context
-        await desc.notify_tool_list_changed()
+        await desc.handshake_delivery.notify()
         await asyncio.sleep(0.05)
         assert tracker.tool_list_changed_count > before
 
@@ -426,8 +426,8 @@ class TestPendingNotifyRecoveryProtocol:
         mcp = create_server(state)
         try:
             async with StampedClient(FastMCPTransport(mcp), mode="legacy"):
-                assert _descriptions._session is not None
-                live_session = _descriptions._session
+                assert _descriptions.handshake_delivery._session is not None
+                live_session = _descriptions.handshake_delivery._session
 
                 await state.relay.deliver(
                     Message(from_user="eric", to_user=state.session_key, body="hi")
@@ -442,7 +442,7 @@ class TestPendingNotifyRecoveryProtocol:
                     AsyncMock(side_effect=RuntimeError("transport wedged")),
                 ):
                     await refresh_read_messages(mcp, state)
-                assert _descriptions._pending_notify
+                assert _descriptions.handshake_delivery._pending_notify
             # First client disconnects here; the drop above was never
             # delivered to it — nothing in this test asserts on that
             # client's tracker, because there is nothing more for it to see.
@@ -461,6 +461,6 @@ class TestPendingNotifyRecoveryProtocol:
                     "reconnect must flush the notification the first "
                     "client's session never received"
                 )
-                assert not _descriptions._pending_notify
+                assert not _descriptions.handshake_delivery._pending_notify
         finally:
             _reset_session()

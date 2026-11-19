@@ -17,8 +17,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppres
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastmcp import FastMCP
-from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.server.middleware import Middleware
 
 from biff._stdlib import remove_active_session, sentinel_dir
 from biff.models import SessionEvent, UserSession
@@ -26,23 +25,16 @@ from biff.models import SessionEvent, UserSession
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from fastmcp import FastMCP
+    from fastmcp.server.middleware import CallNext, MiddlewareContext
     from mcp.types import InitializeRequest, InitializeResult
 
 from biff.caller_identity import CallerIdentity
 from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
-from biff.server.caller_middleware import CallerIdentityMiddleware
+from biff.server.mcp_protocol import NotificationServer
 from biff.server.state import ServerState
-from biff.server.tools import register_all_tools
-from biff.server.tools._descriptions import (
-    capture_session,
-    get_tty_name,
-    nap_interval_for,
-    poll_inbox,
-    refresh_read_messages,
-    refresh_wall,
-    set_tty_name,
-)
+from biff.server.tools import _descriptions, register_all_tools
 from biff.session_lock import routing_lock
 from biff.session_registry import register_session, write_marker
 from biff.session_routing import ID_RE, SessionRouting
@@ -135,16 +127,9 @@ _TEARDOWN_STEP_TIMEOUT = 3.0
 
 
 class _SessionCaptureMiddleware(Middleware):
-    """Capture the MCP session during ``initialize``.
+    """Capture the handshake-era session before the first tool call.
 
-    Corresponds to the ``CaptureSession`` operation in the Z
-    specification (notification.tex §6).  Ensures the suspenders
-    notification path has a valid session reference before any
-    tool call or NATS subscription can fire.
-
-    The MCP session does not exist during the server lifespan
-    (it is created when the client sends ``initialize``), so
-    this middleware is the earliest possible capture point.
+    Corresponds to ``CaptureSession`` in the Z model (notification.tex).
     """
 
     async def on_initialize(
@@ -155,7 +140,9 @@ class _SessionCaptureMiddleware(Middleware):
         result = await call_next(context)
         if context.fastmcp_context is not None:
             try:
-                await capture_session(context.fastmcp_context.session)
+                await _descriptions.handshake_delivery.capture_session(
+                    context.fastmcp_context.session
+                )
             except RuntimeError:
                 logger.debug("Session not available during initialize")
         return result
@@ -673,7 +660,7 @@ async def _append_logout_event(state: ServerState) -> None:
         event="logout",
         user=state.config.user,
         tty=state.tty,
-        tty_name=get_tty_name(),
+        tty_name=_descriptions.get_tty_name(),
         hostname=state.hostname,
         pwd=state.pwd,
         timestamp=datetime.now(UTC),
@@ -837,7 +824,7 @@ async def _release_relay(state: ServerState) -> None:
             state,
             user=state.config.user,
             session_key=state.session_key,
-            tty_name=get_tty_name(),
+            tty_name=_descriptions.get_tty_name(),
         )
 
     async def close() -> None:
@@ -1277,7 +1264,7 @@ class _LiveSession:
         """Stop the attached session's tasks and release what it registered."""
         reaper = self.reaper
         tasks = [t for t in self.tasks if t is not reaper]
-        old_key, old_tty_name = state.session_key, get_tty_name()
+        old_key, old_tty_name = state.session_key, _descriptions.get_tty_name()
         if reaper is not None:
             reaper.cancel()
             await asyncio.gather(reaper, return_exceptions=True)
@@ -1322,7 +1309,7 @@ class _LiveSession:
             owner_git=state.config.owner_git,
             on_claim=self.registered_names.append,
         )
-        set_tty_name(final_name)
+        _descriptions.set_tty_name(final_name)
         state.talk.set_tty_name(final_name)
         # Written after register_session succeeds so "marker exists iff KV
         # row exists" holds under registration failure.
@@ -1333,8 +1320,8 @@ class _LiveSession:
         )
         logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
-        await refresh_read_messages(mcp, state)
-        await refresh_wall(mcp, state)
+        await _descriptions.refresh_read_messages(mcp, state)
+        await _descriptions.refresh_wall(mcp, state)
 
         # Reap sentinels FIRST so orphan detection sees clean KV state.
         await _reap_sentinels(state)
@@ -1347,12 +1334,12 @@ class _LiveSession:
         # depended on a periodic tick, only the periodic work does.
         self.tasks.append(
             asyncio.create_task(
-                poll_inbox(
+                _descriptions.poll_inbox(
                     mcp,
                     state,
                     shutdown=self.shutdown,
                     interval=poll_interval,
-                    nap_interval=nap_interval_for(poll_interval),
+                    nap_interval=_descriptions.nap_interval_for(poll_interval),
                 )
             )
         )
@@ -1383,7 +1370,7 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
             await live.start_declared(mcp, state)
             yield ctx
 
-    mcp: FastMCP[ServerState] = FastMCP(
+    mcp = NotificationServer[ServerState](
         "biff",
         instructions=(
             "Biff is a communication tool for software engineers. "
@@ -1414,13 +1401,13 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
         lifespan=lifespan,
     )
 
-    mcp.add_middleware(_SessionCaptureMiddleware())
-
     def accept_caller(
         caller: CallerIdentity,
     ) -> AbstractAsyncContextManager[None]:
         return live.call(mcp, state, caller)
 
-    mcp.add_middleware(CallerIdentityMiddleware(accept_caller))
+    mcp.configure_transport(
+        state.tool_events, _SessionCaptureMiddleware(), accept_caller
+    )
     register_all_tools(mcp, state)
     return mcp

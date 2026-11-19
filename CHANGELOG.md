@@ -4,8 +4,8 @@
 
 ### Changed
 
-- Exercise FastMCP 4's stateful handshake for push notifications and its
-  modern protocol's sanitized errors for failed session attachment.
+- Use FastMCP 4 and MCP 2.3. Under the modern protocol, failed session
+  attachment returns a sanitized internal error.
 - Enforce Google-style public Python docstrings and tracker-free code prose,
   and build a verified Python API reference with MkDocs.
 - `make check` and CI now enforce OO, coupling/cohesion, and suppression
@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- Background message alerts now reach modern MCP clients that subscribe to
+  tool list changes. Handshake-era clients still receive standalone alerts.
 - `/wall` post and clear now reach idle peer sessions promptly. Wall changes
   had no push signal, so a peer only reconciled its status bar on its own next
   poll tick, which a wedged NATS connection delays for minutes — the operator

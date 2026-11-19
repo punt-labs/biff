@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from fastmcp.client.transports import StdioTransport
+from mcp import Client as MCPClient, StdioServerParameters
 
 from biff.testing import RecordingClient, Transcript
 from biff.testing.caller import StampedClient
@@ -84,6 +85,15 @@ async def kai_client(shared_data_dir: Path) -> AsyncIterator[Client[Any]]:
     transport = _make_transport("kai", shared_data_dir)
     async with StampedClient(transport) as client:
         yield client
+
+
+@pytest.fixture
+def modern_kai_client(shared_data_dir: Path) -> MCPClient:
+    """Build a modern client to enter and exit in the same test task."""
+    transport = _make_transport("kai", shared_data_dir)
+    return MCPClient(
+        StdioServerParameters(command=transport.command, args=transport.args)
+    )
 
 
 @pytest.fixture

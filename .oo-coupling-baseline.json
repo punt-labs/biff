@@ -426,6 +426,13 @@
     "max_lcom": 0.222,
     "avg_lcom": 0.222
   },
+  "src/biff/server/mcp_protocol.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/server/state.py": {
     "efferent_coupling": 8.0,
     "public_names": 2.0,
@@ -449,7 +456,7 @@
   },
   "src/biff/server/tools/_descriptions.py": {
     "efferent_coupling": 8.0,
-    "public_names": 17.0,
+    "public_names": 16.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
