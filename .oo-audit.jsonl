@@ -1,2 +1,4 @@
 {"ts":"2026-11-19T00:39:16Z","commit":"649a152","source":"PL-1099","files_scored":97,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{},"removed":[]}
 {"ts":"2026-11-19T04:16:32Z","commit":"53c5365","source":null,"files_scored":97,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/biff/relay.py":{"avg_complexity":[1.77,1.75],"module_size":[698.0,678.0]}},"removed":[]}
+||||||| 53c5365
+{"ts":"2026-11-19T04:17:55Z","commit":"53c5365","source":null,"files_scored":97,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/biff/server/display_queue.py":{"avg_params":[0.73,0.67],"module_size":[185.0,162.0]}},"removed":[]}
