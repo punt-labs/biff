@@ -1,5 +1,8 @@
 .PHONY: help test lint type mdlint check check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions require-full-ratchet-source report format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
 
+ifneq ($(filter environment%,$(origin SRC)),)
+override undefine SRC
+endif
 SRC ?= src/biff/
 OO_BASE ?=
 COUPLING_BASE ?=
@@ -28,7 +31,7 @@ check: lint type mdlint test check-oo check-coupling check-suppressions ## Run a
 check-oo: ## Check the OO must-improve ratchet
 	uv run oo-ratchet oo "$(SRC)" --check $(OO_BASE)
 
-update-oo: ## Update the OO baseline for touched files
+update-oo: ## Update touched OO baseline entries in SRC
 	uv run oo-ratchet oo "$(SRC)" --update $(OO_BASE)
 
 check-coupling: ## Check for coupling and cohesion regressions
