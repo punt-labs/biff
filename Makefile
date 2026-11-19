@@ -1,6 +1,6 @@
-.PHONY: help test lint type mdlint check check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions report format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
+.PHONY: help test lint type mdlint check check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions require-full-ratchet-source report format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
 
-RATCHET_SRC := src/biff/
+SRC ?= src/biff/
 OO_BASE ?=
 COUPLING_BASE ?=
 SUPPRESSION_BASE ?=
@@ -26,22 +26,26 @@ mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)
 check: lint type mdlint test check-oo check-coupling check-suppressions ## Run all quality gates
 
 check-oo: ## Check the OO must-improve ratchet
-	uv run oo-ratchet oo $(RATCHET_SRC) --check $(OO_BASE)
+	uv run oo-ratchet oo "$(SRC)" --check $(OO_BASE)
 
 update-oo: ## Update the OO baseline for touched files
-	uv run oo-ratchet oo $(RATCHET_SRC) --update $(OO_BASE)
+	uv run oo-ratchet oo "$(SRC)" --update $(OO_BASE)
 
 check-coupling: ## Check for coupling and cohesion regressions
-	uv run oo-ratchet coupling $(RATCHET_SRC) --check $(COUPLING_BASE)
+	uv run oo-ratchet coupling "$(SRC)" --check $(COUPLING_BASE)
 
-update-coupling: ## Update the coupling baseline for touched files
-	uv run oo-ratchet coupling $(RATCHET_SRC) --update $(COUPLING_BASE)
+update-coupling: require-full-ratchet-source ## Update the coupling baseline with the full import graph
+	uv run oo-ratchet coupling "$(SRC)" --update $(COUPLING_BASE)
 
 check-suppressions: ## Check for new lint and type suppressions
-	uv run oo-ratchet suppressions $(RATCHET_SRC) --check $(SUPPRESSION_BASE)
+	uv run oo-ratchet suppressions "$(SRC)" --check $(SUPPRESSION_BASE)
 
-update-suppressions: ## Update the suppression baseline
-	uv run oo-ratchet suppressions $(RATCHET_SRC) --update
+update-suppressions: require-full-ratchet-source ## Update the suppression baseline for the full source tree
+	uv run oo-ratchet suppressions "$(SRC)" --update
+
+require-full-ratchet-source:
+	@test "$(abspath $(SRC))" = "$(abspath src/biff/)" || { \
+		echo "Baseline update requires SRC=src/biff/" >&2; exit 1; }
 
 report: ## Full quality report — not yet adopted (no-op)
 	@echo "$@: full quality report not yet adopted in this repo."
