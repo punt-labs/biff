@@ -8181,17 +8181,19 @@ repo selection, live-holder precedence, and failed-delivery reporting.
 
 ## DES-078: Adopt the Shared Python Ratchets
 
-**Context.** Biff's OO ratchet targets were stubs. The shared `oo-ratchet`
-package now enforces OO metrics, coupling/cohesion, and suppression counts.
+**Context.** Biff's OO ratchet targets were stubs. The shared
+[`punt-oo-ratchet`](https://github.com/punt-labs/python-oo-ratchet) package
+enforces OO metrics, coupling/cohesion, and suppression counts.
 
-**Decision.** Pin the merged package commit in the uv dev dependency group.
+**Decision.** Depend on the PyPI release in the uv dev dependency group,
+allowing 0.1.x releases and locking the resolved version in `uv.lock`.
 Seed and track all three baselines for `src/biff/`. CI compares PRs with their
 merge base and checks pushes to `main` against its pre-push tip so a push
 containing several commits checks the whole change. CI does not write baselines.
 
 **Alternatives.** Vendoring the ratchets would duplicate code and fixes across
-repos. A PyPI dependency or Git tag would be preferable once available; neither
-exists at adoption. The commit pin is reproducible in the meantime.
+repos. The PyPI release replaces the Git source now that a published package
+is available.
 
 **Outcome.** `make check` and CI enforce the shared gates without adding a
 runtime dependency to Biff's wheel. Contributors refresh the committed
