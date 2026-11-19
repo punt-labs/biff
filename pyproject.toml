@@ -17,7 +17,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "fastmcp>=3.0.0,<4",
+    "fastmcp>=3.0.0,<5",
     "pydantic>=2.0.0,<3",
     "typer>=0.15.0,<1",
     "nats-py[nkeys]>=2.13.1,<3",
