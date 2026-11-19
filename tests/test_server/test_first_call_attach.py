@@ -122,9 +122,11 @@ async def test_a_failed_attach_is_logged_with_the_session(
     async with StampedClient(
         FastMCPTransport(create_server(state)), caller=caller_for("sess-x")
     ) as client:
-        with caplog.at_level("ERROR", logger="biff.server.app"):
-            with pytest.raises(ToolError, match="relay down"):
-                await client.call_tool("who", {})
+        with (
+            caplog.at_level("ERROR", logger="biff.server.app"),
+            pytest.raises(ToolError, match="relay down"),
+        ):
+            await client.call_tool("who", {})
     assert any(
         "sess-x" in r.getMessage() and r.levelname == "ERROR" for r in caplog.records
     )
