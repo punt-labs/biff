@@ -19,18 +19,15 @@ command -v biff-hook >/dev/null 2>&1 || exit 0
 # ("Hook cancelled", issue #471). Return at once, and bound the detached call
 # with timeout when available so a wedged startup cannot leave a process
 # lingering. `timeout` (GNU coreutils) is optional — not on a clean macOS —
-# so degrade: gtimeout, then no timeout. The call's output is not consumed by
-# the model, but its stderr goes to the shared hook-errors log (as
-# pre-tool-gate.sh does) so a failed detached cleanup is still debuggable.
+# so degrade: gtimeout, then no timeout. The child configures its own durable
+# diagnostics; the model does not consume its stdout or stderr.
 if command -v timeout >/dev/null 2>&1; then
-    _BIFF_TIMEOUT="timeout 10"
+    _BIFF_TIMEOUT=(timeout 10)
 elif command -v gtimeout >/dev/null 2>&1; then
-    _BIFF_TIMEOUT="gtimeout 10"
+    _BIFF_TIMEOUT=(gtimeout 10)
 else
-    _BIFF_TIMEOUT=""
+    _BIFF_TIMEOUT=()
 fi
-_BIFF_LOG="$HOME/.punt-labs/biff/hook-errors.log"
-mkdir -p "$HOME/.punt-labs/biff" 2>/dev/null || true
-nohup bash -c "$_BIFF_TIMEOUT biff-hook claude-code session-end >/dev/null 2>>\"$_BIFF_LOG\"" >/dev/null 2>&1 &
+nohup "${_BIFF_TIMEOUT[@]}" biff-hook claude-code session-end </dev/null >/dev/null 2>&1 &
 disown 2>/dev/null || true
 exit 0

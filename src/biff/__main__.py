@@ -35,32 +35,27 @@ import typer
 from nats.errors import Error as NatsError
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
     from nats.aio.client import Client as NatsClient
-
-    from biff.server.state import ServerState
 
 import biff.commands.talk as talk_commands
 from biff import commands
+from biff._cli_runtime import configure_invocation, validate_repl_output
 from biff.cli_context import CliContext
 from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
 from biff.commands._session import update_current_session
 from biff.commands.session import SessionVerbs
-from biff.config import (
-    find_git_root,
-    is_enabled,
-    load_mcp_config,
-)
+from biff.config import find_git_root
 from biff.doctor import installed_plugin_version
 from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
 from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
-from biff.server.app import create_server
-from biff.server.state import create_state
+from biff.server.entrypoints import mcp, serve
 from biff.talk_latch import TalkNotifyLatch
 from biff.talk_types import MAX_BODY_LEN, AcceptOutcome, TalkNotification
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Global flags
@@ -106,25 +101,15 @@ def _install_eof_received_filter() -> None:
 
 
 def _suppress_nats_noise() -> None:
-    """Suppress nats.py noise common to all CLI invocations.
-
-    Floor ``biff.nats_relay`` at INFO, not ERROR.  The two handler levels
-    already split terminal from file — stderr shows WARNING+, the file records
-    INFO+ (logging_config).  Capping the logger at ERROR defeated that split:
-    it dropped every transient connection log (disconnect, reconnect, wedge,
-    error_cb) from the FILE too, while the one ERROR-level line (error_cb)
-    still cleared the stderr floor and dumped a traceback into the interactive
-    REPL.  At INFO the transient events — all demoted to INFO in
-    nats_relay — reach biff.log for diagnosis and stay off the terminal, while
-    genuine WARNING+ anomalies (malformed messages) still surface.
-    """
+    """Suppress upstream deprecation and known disconnect warnings."""
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="nats")
-    logging.getLogger("biff.nats_relay").setLevel(logging.INFO)
     _install_eof_received_filter()
 
 
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
+app.command()(serve)
+app.command()(mcp)
 session_app = typer.Typer(help="Create, list, select and end named CLI sessions.")
 app.add_typer(session_app, name="session")
 
@@ -174,6 +159,10 @@ def main(
             help="Run as this session (name or id). Never creates one.",
         ),
     ] = None,
+    no_telemetry: Annotated[
+        bool,
+        typer.Option("--no-telemetry", help="Disable usage capture for this process."),
+    ] = False,
     version_flag: Annotated[
         bool,
         typer.Option(
@@ -196,22 +185,11 @@ def main(
     _user_override = user
     _session_ref = session or None
 
-    from biff.logging_config import configure_logging
-
-    configure_logging(stderr_level="DEBUG" if verbose else "WARNING")
+    configure_invocation(ctx, verbose=verbose, no_telemetry=no_telemetry, user=user)
     _suppress_nats_noise()
 
     if ctx.invoked_subcommand is None:
-        unsupported: list[str] = []
-        if _json_output:
-            unsupported.append("--json")
-        if _quiet_output:
-            unsupported.append("--quiet")
-        if unsupported:
-            flags = " and ".join(unsupported)
-            verb = "is" if len(unsupported) == 1 else "are"
-            raise typer.BadParameter(f"{flags} {verb} not supported in REPL mode.")
-        # No subcommand → launch the REPL.
+        validate_repl_output(json_output=json_flag, quiet_output=quiet)
         asyncio.run(_repl())
 
 
@@ -296,7 +274,7 @@ async def _poll_notify(
         wall_post = await ctx.relay.get_wall()
         notes = notify.check(summary.count, wall_post)
     except Exception:
-        logging.getLogger(__name__).debug("Notify check failed", exc_info=True)
+        logger.debug("Notify check failed", exc_info=True)
 
     # Age out invites whose inviter never returned and never withdrew, mirroring
     # the server's _active_tick (notification.tex ExpirePendingInvite).  Without
@@ -326,7 +304,7 @@ async def _sync_notify(ctx: CliContext, notify: object) -> None:
         wall_post = await ctx.relay.get_wall()
         notify.sync(summary.count, wall_post)
     except Exception:  # noqa: BLE001
-        logging.getLogger(__name__).debug("Notify sync failed")
+        logger.debug("Notify sync failed")
 
 
 def _format_talk_lines(
@@ -679,7 +657,7 @@ async def _set_talk_plan(ctx: CliContext, display: str) -> None:
     try:
         await update_current_session(ctx, plan=f"talking to {display}")
     except Exception:
-        logging.getLogger(__name__).debug("Failed to set talk plan", exc_info=True)
+        logger.debug("Failed to set talk plan", exc_info=True)
 
 
 async def _clear_talk_plan(ctx: CliContext) -> None:
@@ -687,7 +665,7 @@ async def _clear_talk_plan(ctx: CliContext) -> None:
     try:
         await update_current_session(ctx, plan="")
     except Exception:
-        logging.getLogger(__name__).debug("Failed to clear talk plan", exc_info=True)
+        logger.debug("Failed to clear talk plan", exc_info=True)
 
 
 async def _withdraw_talk_invite(ctx: CliContext) -> None:
@@ -931,7 +909,7 @@ class _TalkSubscription:
         self._notify_event = notify_event
         self._handle = None
         self._generation = 0
-        self._latch = TalkNotifyLatch.for_resubscribe(logging.getLogger(__name__))
+        self._latch = TalkNotifyLatch.for_resubscribe(logger)
         return self
 
     async def establish(self) -> None:
@@ -1023,9 +1001,7 @@ class _ReplTalkSubscription(_TalkSubscription):
                     }
                     self._ctx.talk.receive(notification)
             except (json.JSONDecodeError, TypeError):
-                logging.getLogger(__name__).debug(
-                    "Failed to process talk notification", exc_info=True
-                )
+                logger.debug("Failed to process talk notification", exc_info=True)
         self._notify_event.set()
 
 
@@ -1361,101 +1337,6 @@ def version() -> None:
         _print_json({"version": ver, "plugin_version": plugin})
         return
     print(_version_line(ver, plugin))
-
-
-def _create_mcp_server(
-    *,
-    user: str | None,
-    data_dir: Path | None,
-    relay_url: str | None,
-    prefix: Path,
-) -> FastMCP[ServerState]:
-    """Shared config → state → server setup for serve/mcp."""
-    from biff.config import RELAY_URL_UNSET
-    from biff.statusline import UNREAD_DIR
-
-    resolved = load_mcp_config(
-        user_override=user,
-        data_dir_override=data_dir,
-        relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
-        prefix=prefix,
-    )
-    dormant = not is_enabled(resolved.repo_root)
-
-    # The session is unknown until the first call declares it: the SessionStart
-    # hook has already opened the durable record, and the server binds its
-    # routing key and unread file to the caller's session_id on that call.
-    config = resolved.config
-    state = create_state(
-        config,
-        resolved.data_dir,
-        unread_dir=UNREAD_DIR,
-        dormant=dormant,
-        repo_root=resolved.repo_root,
-        repo_common_root=resolved.repo_common_root,
-    )
-    return create_server(state)
-
-
-@app.command()
-def serve(
-    user: Annotated[
-        str | None,
-        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
-    ] = None,
-    data_dir: Annotated[
-        Path | None,
-        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
-    ] = None,
-    relay_url: Annotated[
-        str | None,
-        typer.Option(help="Relay URL override. Empty string forces local relay."),
-    ] = None,
-    prefix: Annotated[
-        Path,
-        typer.Option(help="Base path for data directory (default: /tmp)."),
-    ] = Path("/tmp"),  # noqa: S108
-    host: Annotated[str, typer.Option(help="HTTP host.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="HTTP port.")] = 8419,
-) -> None:
-    """Start the biff MCP server (HTTP transport)."""
-    server = _create_mcp_server(
-        user=user or _user_override,
-        data_dir=data_dir,
-        relay_url=relay_url,
-        prefix=prefix,
-    )
-    print(f"Starting biff MCP server on http://{host}:{port}")
-    server.run(transport="http", host=host, port=port)
-
-
-@app.command("mcp")
-def mcp_cmd(
-    user: Annotated[
-        str | None,
-        typer.Option(help="Your username. Auto-detected from GitHub CLI."),
-    ] = None,
-    data_dir: Annotated[
-        Path | None,
-        typer.Option(help="Data directory. Auto-computed as {prefix}/biff/{repo}."),
-    ] = None,
-    relay_url: Annotated[
-        str | None,
-        typer.Option(help="Relay URL override. Empty string forces local relay."),
-    ] = None,
-    prefix: Annotated[
-        Path,
-        typer.Option(help="Base path for data directory (default: /tmp)."),
-    ] = Path("/tmp"),  # noqa: S108
-) -> None:
-    """Start the biff MCP server (stdio transport)."""
-    server = _create_mcp_server(
-        user=user or _user_override,
-        data_dir=data_dir,
-        relay_url=relay_url,
-        prefix=prefix,
-    )
-    server.run(transport="stdio")
 
 
 @app.command("install-statusline")
@@ -1830,7 +1711,7 @@ async def _talk_converse(
     """
     from biff.models import Message
 
-    fetch_latch = TalkNotifyLatch.for_fetch(logging.getLogger(__name__))
+    fetch_latch = TalkNotifyLatch.for_fetch(logger)
     while True:
         try:
             await _talk_fetch_and_print(relay, session_key, user)

@@ -41,10 +41,7 @@ class TalkNotifyLatch:
     Talk health has two independent failure surfaces that a wedged relay can
     trip: re-establishing the always-on talk SUB (poller and REPL idle ticks)
     and reading the durable inbox on the standalone ``biff talk`` fetch tick.
-    Both retry every ~2s, so logging each failure at WARNING would flood the
-    CLI's WARNING stderr floor with a traceback per tick; logging every failure
-    at DEBUG would instead hide a *persistent* outage, because the CLI raises
-    the stderr handler to WARNING and DEBUG never reaches it.
+    Both retry every ~2s, so log one WARNING rather than flooding stderr.
 
     The resolution mirrors ``_ConnectionHealth``'s onset/recovery discipline:
     every failure logs at DEBUG (self-healing, per-attempt), the transition into
@@ -81,15 +78,12 @@ class TalkNotifyLatch:
         return cls(logger, _FETCH)
 
     def record_failure(self) -> None:
-        """Log a failure — WARNING on onset, DEBUG thereafter.
-
-        Call from within an ``except`` block so the log carries ``exc_info``.
-        """
+        """Log a failure — WARNING on onset, DEBUG thereafter."""
         if self._failing:
-            self._logger.debug(self._messages.retry, exc_info=True)
+            self._logger.debug(self._messages.retry)
             return
         self._failing = True
-        self._logger.warning(self._messages.onset, exc_info=True)
+        self._logger.warning(self._messages.onset)
 
     def record_success(self) -> None:
         """Log one INFO recovery on the first success after any failure."""

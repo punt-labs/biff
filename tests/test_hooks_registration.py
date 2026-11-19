@@ -154,6 +154,6 @@ class TestCallerStampingHook:
         text = (_HOOKS_DIR / "pre-tool-stamp.sh").read_text()
         assert "|| true" not in text
 
-    def test_script_creates_the_log_directory_before_redirecting(self) -> None:
+    def test_script_leaves_durable_logging_to_the_hook(self) -> None:
         text = (_HOOKS_DIR / "pre-tool-stamp.sh").read_text()
-        assert text.index("mkdir -p") < text.index("hook-errors.log")
+        assert "hook-errors.log" not in text

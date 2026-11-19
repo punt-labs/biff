@@ -90,15 +90,12 @@ async def deliver_with_retry(
             # string reaches the model / chat transcript verbatim
             # (/biff:write echoes it), and NatsRelay's own docstrings
             # already flag that exception text from this layer can embed
-            # transport URLs or raw frame content. The exception itself
-            # is logged server-side only.
+            # transport URLs or raw frame content. Log only its type.
             _log.warning(
-                "Message delivery to %s failed twice (delivered %d/%d parts): %s",
-                display,
+                "Message delivery failed twice (delivered %d/%d parts): %s",
                 delivered,
                 len(chunks),
-                exc,
-                exc_info=exc,
+                type(exc).__name__,
             )
             return Delivery(
                 text=(

@@ -77,8 +77,7 @@ async def _fetch_unread_with_retry(
         _log.warning(
             "read_messages could not check %s after retry: %s",
             ", ".join(pending),
-            last_exc,
-            exc_info=last_exc,
+            type(last_exc).__name__,
         )
         warning = (
             f"Could not check {', '.join(pending)} — failed twice. "
@@ -135,9 +134,8 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
             )
         except ValueError as exc:
             _log.warning(
-                "Write failed: %r (visible_repos=%s, sessions=%d)",
-                str(exc),
-                sorted(state.visible_repos),
+                "Write recipient could not be resolved (repos=%d, sessions=%d)",
+                len(state.visible_repos),
                 len(sessions),
             )
             return str(exc)

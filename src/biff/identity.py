@@ -143,8 +143,8 @@ def _read_identity_yaml(path: Path) -> dict[str, object] | None:
         return None
     try:
         raw: object = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        logger.warning("Failed to parse identity YAML %s: %s", path, exc)
+    except yaml.YAMLError:
+        logger.warning("Failed to parse identity YAML %r", path)
         return None
     if isinstance(raw, dict):
         return cast("dict[str, object]", raw)
@@ -262,10 +262,9 @@ def _scan_agent_logins(paths: tuple[Path, ...]) -> _AgentLoginScan:
         else:
             incomplete += 1
             logger.warning(
-                "Agent identity %s has a malformed 'github' field (got %r); "
+                "Agent identity %r has a malformed 'github' field; "
                 "it cannot be cross-checked against a resolved GitHub login",
                 path,
-                github,
             )
     if incomplete:
         logger.warning(
@@ -425,8 +424,7 @@ def _read_agent_handle(ethos_config: Path) -> str | None:
         return None
     if not _AGENT_HANDLE_RE.match(agent):
         logger.warning(
-            "Rejecting agent handle %r in %s: must match %s",
-            agent,
+            "Rejecting malformed agent handle in %r: must match %s",
             ethos_config,
             _AGENT_HANDLE_RE.pattern,
         )
