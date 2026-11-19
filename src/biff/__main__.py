@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 import biff.commands.talk as talk_commands
 from biff import commands
-from biff._cli_runtime import configure_invocation, validate_repl_output
+from biff._cli_runtime import CliInvocation
 from biff.cli_context import CliContext
 from biff.cli_session import cli_session, cli_session_host
 from biff.commands import CommandResult
@@ -51,7 +51,7 @@ from biff.formatting import format_talk_end, format_talk_line
 from biff.hook import hook_app
 from biff.nats_relay import NatsRelay
 from biff.repl_display import ReplDisplay
-from biff.server.entrypoints import mcp, serve
+from biff.server.entrypoints import McpServerOptions
 from biff.talk_latch import TalkNotifyLatch
 from biff.talk_types import MAX_BODY_LEN, AcceptOutcome, TalkNotification
 
@@ -108,8 +108,8 @@ def _suppress_nats_noise() -> None:
 
 app = typer.Typer(help="Biff: the dog that barked when messages arrived.")
 app.add_typer(hook_app, name="hook")
-app.command()(serve)
-app.command()(mcp)
+app.command()(McpServerOptions.serve)
+app.command()(McpServerOptions.mcp)
 session_app = typer.Typer(help="Create, list, select and end named CLI sessions.")
 app.add_typer(session_app, name="session")
 
@@ -185,11 +185,11 @@ def main(
     _user_override = user
     _session_ref = session or None
 
-    configure_invocation(ctx, verbose=verbose, no_telemetry=no_telemetry, user=user)
+    CliInvocation(verbose, no_telemetry, user).configure(ctx)
     _suppress_nats_noise()
 
     if ctx.invoked_subcommand is None:
-        validate_repl_output(json_output=json_flag, quiet_output=quiet)
+        CliInvocation.validate_repl_output(json_output=json_flag, quiet_output=quiet)
         asyncio.run(_repl())
 
 

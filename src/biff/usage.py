@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -73,26 +74,32 @@ _SCHEMAS = (
 )
 
 
-def open_usage(*, enabled: bool) -> Telemetry:
-    """Open the shared capture pipeline with Biff's closed schemas."""
-    return open_telemetry("biff", _SCHEMAS, TelemetryConfig(enabled=enabled))
+@dataclass(frozen=True, slots=True)
+class UsageCapture:
+    """Biff usage signals backed by a shared telemetry pipeline."""
+
+    telemetry: Telemetry
+
+    @classmethod
+    def open(cls, *, enabled: bool) -> UsageCapture:
+        """Open the shared capture pipeline with Biff's closed schemas."""
+        return cls(open_telemetry("biff", _SCHEMAS, TelemetryConfig(enabled=enabled)))
+
+    @staticmethod
+    def captures_cli_command(command: str) -> bool:
+        """Return whether a CLI command belongs to the usage schema."""
+        return command in _CLI_COMMANDS
+
+    def record_cli_invocation(self, command: str) -> None:
+        """Record a known top-level command without any invocation arguments."""
+        self.telemetry.event(_CLI_SIGNAL, _VERSION, command=command)
 
 
-def record_cli_invocation(usage: Telemetry, command: str) -> None:
-    """Record a known top-level command without any invocation arguments."""
-    usage.event(_CLI_SIGNAL, _VERSION, command=command)
-
-
-def captures_cli_command(command: str) -> bool:
-    """Return whether a CLI command belongs to the usage schema."""
-    return command in _CLI_COMMANDS
-
-
+@dataclass(frozen=True, slots=True)
 class McpUsageMiddleware(Middleware):
     """Observe known MCP calls without inspecting arguments or results."""
 
-    def __init__(self, usage: Telemetry) -> None:
-        self._usage = usage
+    usage: UsageCapture
 
     async def on_call_tool(
         self,
@@ -103,5 +110,5 @@ class McpUsageMiddleware(Middleware):
         tool = context.message.name
         if tool not in _MCP_TOOLS:
             return await call_next(context)
-        with self._usage.span(_MCP_SIGNAL, _VERSION, tool=tool):
+        with self.usage.telemetry.span(_MCP_SIGNAL, _VERSION, tool=tool):
             return await call_next(context)

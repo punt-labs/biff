@@ -25,6 +25,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/_cli_runtime.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.0,
+    "max_complexity": 5.0,
+    "avg_complexity": 4.33,
+    "module_size": 41.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/_formatting.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
@@ -47,6 +60,19 @@
     "module_size": 134.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/biff/_hook_runtime.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 4.0,
+    "avg_complexity": 2.33,
+    "module_size": 36.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -792,6 +818,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/server/entrypoints.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 3.5,
+    "max_complexity": 3.0,
+    "avg_complexity": 2.0,
+    "module_size": 90.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/server/state.py": {
     "method_ratio": 0.833,
     "encapsulation_ratio": 1.0,
@@ -1243,6 +1282,19 @@
     "module_size": 45.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/biff/usage.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.25,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.25,
+    "module_size": 92.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

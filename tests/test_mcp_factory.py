@@ -8,7 +8,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from biff.__main__ import app
-from biff.server.entrypoints import create_mcp_server
+from biff.server.entrypoints import McpServerOptions
 from biff.statusline import UNREAD_DIR
 
 
@@ -16,7 +16,9 @@ def test_factory_creates_an_unbound_state_with_the_unread_directory(
     tmp_path: Path,
 ) -> None:
     with patch("biff.server.entrypoints.create_server") as server:
-        create_mcp_server(user="rmh", data_dir=tmp_path, relay_url="", prefix=tmp_path)
+        McpServerOptions(
+            user="rmh", data_dir=tmp_path, relay_url="", prefix=tmp_path
+        ).create_server()
     state = server.call_args.args[0]
     assert state.is_bound is False
     assert state.unread_dir == UNREAD_DIR

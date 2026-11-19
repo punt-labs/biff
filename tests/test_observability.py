@@ -16,7 +16,7 @@ from biff.models import BiffConfig
 from biff.server.app import create_server
 from biff.server.state import create_state
 from biff.testing.caller import StampedClient
-from biff.usage import McpUsageMiddleware, open_usage
+from biff.usage import McpUsageMiddleware, UsageCapture
 
 
 @pytest.fixture
@@ -79,9 +79,10 @@ async def test_mcp_records_outcomes_without_protocol_content(usage_home: Path) -
     state = create_state(
         BiffConfig(user="rmh", repo_name="test"), usage_home, dormant=True
     )
-    usage = open_usage(enabled=True)
+    capture = UsageCapture.open(enabled=True)
+    usage = capture.telemetry
     server = create_server(state)
-    server.add_middleware(McpUsageMiddleware(usage))
+    server.add_middleware(McpUsageMiddleware(capture))
     try:
         async with StampedClient(server) as client:
             assert not (await client.call_tool("who")).is_error

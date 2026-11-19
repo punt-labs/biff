@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -39,73 +40,74 @@ _Prefix = Annotated[
 _DEFAULT_PREFIX = Path("/tmp")  # noqa: S108
 
 
-def create_mcp_server(
-    *, user: str | None, data_dir: Path | None, relay_url: str | None, prefix: Path
-) -> FastMCP[ServerState]:
-    """Resolve configuration and build an unbound MCP server."""
-    resolved = load_mcp_config(
-        user_override=user,
-        data_dir_override=data_dir,
-        relay_url_override=relay_url if relay_url is not None else RELAY_URL_UNSET,
-        prefix=prefix,
-    )
+@dataclass(frozen=True, slots=True)
+class McpServerOptions:
+    """The options and server construction shared by both transports."""
 
-    # SessionStart opens the durable record. The server binds its routing key
-    # and unread file to the caller's session when the call declares it.
-    state = create_state(
-        resolved.config,
-        resolved.data_dir,
-        unread_dir=UNREAD_DIR,
-        dormant=not is_enabled(resolved.repo_root),
-        repo_root=resolved.repo_root,
-        repo_common_root=resolved.repo_common_root,
-    )
-    return create_server(state)
+    user: str | None
+    data_dir: Path | None
+    relay_url: str | None
+    prefix: Path
 
+    def create_server(self, *, default_user: str | None = None) -> FastMCP[ServerState]:
+        """Resolve configuration and build an unbound MCP server."""
+        resolved = load_mcp_config(
+            user_override=self.user or default_user,
+            data_dir_override=self.data_dir,
+            relay_url_override=(
+                self.relay_url if self.relay_url is not None else RELAY_URL_UNSET
+            ),
+            prefix=self.prefix,
+        )
 
-def _observed_server(
-    ctx: typer.Context,
-    user: str | None,
-    data_dir: Path | None,
-    relay_url: str | None,
-    prefix: Path,
-) -> FastMCP[ServerState]:
-    invocation = ctx.find_object(McpInvocation)
-    server = create_mcp_server(
-        user=user or (invocation.user if invocation else None),
-        data_dir=data_dir,
-        relay_url=relay_url,
-        prefix=prefix,
-    )
-    if invocation is not None:
-        server.add_middleware(McpUsageMiddleware(invocation.usage))
-    return server
+        # SessionStart opens the durable record. The server binds its routing key
+        # and unread file to the caller's session when the call declares it.
+        state = create_state(
+            resolved.config,
+            resolved.data_dir,
+            unread_dir=UNREAD_DIR,
+            dormant=not is_enabled(resolved.repo_root),
+            repo_root=resolved.repo_root,
+            repo_common_root=resolved.repo_common_root,
+        )
+        return create_server(state)
 
+    def _observed_server(self, ctx: typer.Context) -> FastMCP[ServerState]:
+        invocation = ctx.find_object(McpInvocation)
+        server = self.create_server(
+            default_user=invocation.user if invocation else None
+        )
+        if invocation is not None:
+            server.add_middleware(McpUsageMiddleware(invocation.usage))
+        return server
 
-def serve(
-    ctx: typer.Context,
-    user: _User = None,
-    data_dir: _DataDir = None,
-    relay_url: _RelayUrl = None,
-    prefix: _Prefix = _DEFAULT_PREFIX,
-    host: Annotated[str, typer.Option(help="HTTP host.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="HTTP port.")] = 8419,
-) -> None:
-    """Start the biff MCP server (HTTP transport)."""
-    server = _observed_server(ctx, user, data_dir, relay_url, prefix)
-    logger.info("Starting Biff MCP server (HTTP): port=%d", port)
-    typer.echo(f"Starting biff MCP server on http://{host}:{port}")
-    server.run(transport="http", host=host, port=port)
+    @classmethod
+    def serve(
+        cls,
+        ctx: typer.Context,
+        user: _User = None,
+        data_dir: _DataDir = None,
+        relay_url: _RelayUrl = None,
+        prefix: _Prefix = _DEFAULT_PREFIX,
+        host: Annotated[str, typer.Option(help="HTTP host.")] = "127.0.0.1",
+        port: Annotated[int, typer.Option(help="HTTP port.")] = 8419,
+    ) -> None:
+        """Start the biff MCP server (HTTP transport)."""
+        server = cls(user, data_dir, relay_url, prefix)._observed_server(ctx)
+        logger.info("Starting Biff MCP server (HTTP): port=%d", port)
+        typer.echo(f"Starting biff MCP server on http://{host}:{port}")
+        server.run(transport="http", host=host, port=port)
 
-
-def mcp(
-    ctx: typer.Context,
-    user: _User = None,
-    data_dir: _DataDir = None,
-    relay_url: _RelayUrl = None,
-    prefix: _Prefix = _DEFAULT_PREFIX,
-) -> None:
-    """Start the biff MCP server (stdio transport)."""
-    server = _observed_server(ctx, user, data_dir, relay_url, prefix)
-    logger.info("Starting Biff MCP server (stdio)")
-    server.run(transport="stdio")
+    @classmethod
+    def mcp(
+        cls,
+        ctx: typer.Context,
+        user: _User = None,
+        data_dir: _DataDir = None,
+        relay_url: _RelayUrl = None,
+        prefix: _Prefix = _DEFAULT_PREFIX,
+    ) -> None:
+        """Start the biff MCP server (stdio transport)."""
+        server = cls(user, data_dir, relay_url, prefix)._observed_server(ctx)
+        logger.info("Starting Biff MCP server (stdio)")
+        server.run(transport="stdio")
