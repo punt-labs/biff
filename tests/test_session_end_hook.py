@@ -164,6 +164,7 @@ class TestSessionEndObservability:
         diagnostics = log.read_text()
         assert "Starting session cleanup: pid=" in diagnostics
         assert "Session cleanup failed: pid=" in diagnostics
+        assert "error=OSError" in diagnostics
         assert "stub boom" not in diagnostics
         assert not (home / ".punt-labs" / "biff" / "hook-errors.log").exists()
 

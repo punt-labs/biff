@@ -30,7 +30,7 @@ def main() -> None:
     logger.info("Starting session cleanup: pid=%d", pid)
     try:
         _dispatch()
-    except Exception:
-        logger.error("Session cleanup failed: pid=%d", pid)
+    except Exception as exc:
+        logger.error("Session cleanup failed: pid=%d error=%s", pid, type(exc).__name__)
         raise
     logger.info("Session cleanup finished: pid=%d", pid)

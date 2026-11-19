@@ -6,11 +6,16 @@ and multiple subprocesses share state through the filesystem.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from fastmcp.client.transports import StdioTransport
+from fastmcp.exceptions import ToolError
 from mcp.types import TextContent
+
+from biff.testing.caller import StampedClient
 
 if TYPE_CHECKING:
     from fastmcp import Client
@@ -67,6 +72,35 @@ class TestServerStartup:
 
 class TestToolCallOverStdio:
     """Tool calls round-trip correctly over the stdio wire protocol."""
+
+    async def test_invalid_arguments_stay_out_of_diagnostics(
+        self, tmp_path: Path
+    ) -> None:
+        transport = StdioTransport(
+            command=sys.executable,
+            args=[
+                "-m",
+                "biff",
+                "--no-telemetry",
+                "mcp",
+                "--user",
+                "kai",
+                "--data-dir",
+                str(tmp_path / "relay"),
+                "--relay-url",
+                "",
+            ],
+            env={"HOME": str(tmp_path)},
+        )
+        async with StampedClient(transport) as client:
+            with pytest.raises(ToolError, match="rejected-input"):
+                await client.call_tool(
+                    "finger", {"user": {"private": "rejected-input"}}
+                )
+
+        diagnostics = (tmp_path / ".punt-labs/biff/logs/biff.log").read_text()
+        assert "Starting Biff MCP server" in diagnostics
+        assert "rejected-input" not in diagnostics
 
     async def test_plan_returns_text(self, biff_client: Client[Any]) -> None:
         result = await biff_client.call_tool("plan", {"message": "testing stdio"})

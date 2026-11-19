@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,9 @@ def configure_invocation(
     command = ctx.invoked_subcommand or "repl"
     role = _ROLES.get(command, Role.CLI)
     configure_logging(role, stderr_level="DEBUG" if verbose else "WARNING")
+    if role is Role.MCP:
+        # FastMCP includes raw argument values in its validation logs.
+        logging.getLogger("fastmcp.server.server").disabled = True
     if role is not Role.MCP and not captures_cli_command(command):
         return
     usage = open_usage(enabled=not no_telemetry)

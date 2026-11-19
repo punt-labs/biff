@@ -1257,8 +1257,10 @@ class _LiveSession:
             return
         try:
             await self._register_and_start(mcp, state)
-        except BaseException:
-            logger.error("The bound MCP session could not be registered")
+        except BaseException as exc:
+            logger.error(
+                "The bound MCP session could not be registered: %s", type(exc).__name__
+            )
             for task in self.tasks:
                 task.cancel()
             await asyncio.gather(*self.tasks, return_exceptions=True)
