@@ -227,6 +227,7 @@ async def kai_latency(
     )
     mcp = create_server(state)
     async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
+        await client.call_tool("who", {})
         yield client, tracker, state
     _reset_session()
 
@@ -314,7 +315,8 @@ class TestLoadReduction:
 
         mcp = create_server(state)
         idle_seconds = _BACKSTOP * 2.2
-        async with StampedClient(FastMCPTransport(mcp)):
+        async with StampedClient(FastMCPTransport(mcp)) as client:
+            await client.call_tool("who", {})
             await asyncio.sleep(idle_seconds)
         _reset_session()
 
@@ -335,6 +337,7 @@ class TestLoadReduction:
             f"{len(call_times)} (backstop-only) "
             f"vs {old_style_calls:.0f} (old per-tick rate)"
         )
+        assert call_times, "the attached poller never checked unread counts"
         assert len(call_times) <= expected_ceiling, (
             f"{len(call_times)} calls exceeds backstop-only ceiling "
             f"{expected_ceiling} — recompute is running on every tick again"

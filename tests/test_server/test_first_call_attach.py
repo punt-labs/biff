@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
-from fastmcp.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
+from mcp.types import INTERNAL_ERROR
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
@@ -110,23 +112,28 @@ async def test_repoint_waits_for_an_in_flight_call_of_the_old_session(
     assert state.bound_session_id == "sess-2"
 
 
+@pytest.mark.parametrize("mode", ["2026-07-28", "legacy"])
 async def test_a_failed_attach_is_logged_without_session_content(
     state: ServerState,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    mode: Literal["2026-07-28", "legacy"],
 ) -> None:
     async def boom(*_a: object, **_k: object) -> None:
         raise RuntimeError("relay down")
 
     monkeypatch.setattr("biff.server.app._reap_sentinels", boom)
     async with StampedClient(
-        FastMCPTransport(create_server(state)), caller=caller_for("sess-x")
+        FastMCPTransport(create_server(state)), caller=caller_for("sess-x"), mode=mode
     ) as client:
         with (
             caplog.at_level("ERROR", logger="biff.server.app"),
-            pytest.raises(ToolError, match="relay down"),
+            pytest.raises(MCPError) as exc,
         ):
             await client.call_tool("who", {})
+    assert exc.value.code == INTERNAL_ERROR
+    assert exc.value.message == "Internal server error"
+    assert exc.value.data is None
     assert any(
         r.getMessage().startswith(
             "MCP session registration failed: RuntimeError at registration line "

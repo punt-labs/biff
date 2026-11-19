@@ -10,6 +10,7 @@ import os
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -2220,9 +2221,52 @@ class TestStartupNotificationRace:
 
         fake_session = MagicMock(spec=ServerSession)
         fake_session.send_tool_list_changed = AsyncMock()
-        await _descriptions.capture_session(fake_session)
+        await _descriptions.handshake_delivery.capture_session(fake_session)
 
         fake_session.send_tool_list_changed.assert_awaited_once()
+
+    async def test_modern_session_does_not_flush_legacy_notification(
+        self, state: ServerState
+    ) -> None:
+        """A modern session can't consume a pending handshake notification."""
+        from mcp.server.session import ServerSession
+
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+        await refresh_read_messages(create_server(state), state)
+
+        modern = MagicMock(spec=ServerSession, protocol_version="2026-07-28")
+        legacy = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        await _descriptions.handshake_delivery.capture_session(modern)
+        await _descriptions.handshake_delivery.capture_session(legacy)
+
+        modern.send_tool_list_changed.assert_not_awaited()
+        legacy.send_tool_list_changed.assert_awaited_once()
+
+    @pytest.mark.parametrize("stall", [False, True])
+    async def test_subscription_failure_does_not_block_handshake_alert(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch, stall: bool
+    ) -> None:
+        """A failed or stalled bus must not stop a refresh or its legacy alert."""
+        from mcp.server.session import ServerSession
+
+        async def fail_publish(_event: object) -> None:
+            if stall:
+                await asyncio.Event().wait()
+            raise RuntimeError("bus unavailable")
+
+        monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+        monkeypatch.setattr(state.tool_events, "publish", fail_publish)
+        session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        await _descriptions.handshake_delivery.capture_session(session)
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        assert await asyncio.wait_for(refresh_read_messages(mcp, state), timeout=1)
+        session.send_tool_list_changed.assert_awaited_once()
 
     async def test_poller_cannot_recover_lost_notification(
         self, state: ServerState
@@ -2246,7 +2290,7 @@ class TestStartupNotificationRace:
 
         fake_session = MagicMock(spec=ServerSession)
         fake_session.send_tool_list_changed = AsyncMock()
-        await _descriptions.capture_session(fake_session)
+        await _descriptions.handshake_delivery.capture_session(fake_session)
 
         fake_session.send_tool_list_changed.reset_mock()
         await refresh_read_messages(mcp, state)
@@ -2269,7 +2313,7 @@ class TestStartupNotificationRace:
 
         fake_session = MagicMock(spec=ServerSession)
         fake_session.send_tool_list_changed = AsyncMock()
-        await _descriptions.capture_session(fake_session)
+        await _descriptions.handshake_delivery.capture_session(fake_session)
 
         fake_session.send_tool_list_changed.assert_not_awaited()
 
@@ -2298,10 +2342,10 @@ class TestStartupNotificationRace:
         fake_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        await _descriptions.capture_session(fake_session)
+        await _descriptions.handshake_delivery.capture_session(fake_session)
 
-        assert _descriptions._session is None
-        assert _descriptions._pending_notify
+        assert _descriptions.handshake_delivery._session is None
+        assert _descriptions.handshake_delivery._pending_notify
 
 
 class TestMidSessionDropRecovery:
@@ -2329,7 +2373,7 @@ class TestMidSessionDropRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
 
         await refresh_read_messages(mcp, state)  # drops the notification
         dying_session.send_tool_list_changed.assert_awaited_once()
@@ -2337,22 +2381,22 @@ class TestMidSessionDropRecovery:
         # session reference cleared — nothing must observe
         # _pending_notify=True alongside a stale, still-set _session.
         # Read _session through an ``object``-typed local rather than
-        # comparing `_descriptions._session is None` directly: mypy
-        # narrows the direct `_descriptions._session = dying_session`
+        # comparing `_descriptions.handshake_delivery._session is None` directly: mypy
+        # narrows the direct `_descriptions.handshake_delivery._session = dying_session`
         # assignment above as persisting past the intervening await (it
         # does not know ``refresh_read_messages`` mutates that module
         # attribute), so a same-function `is None` comparison is deemed
         # statically unreachable and poisons every statement after it.
-        assert _descriptions._pending_notify
-        session_after_drop: object = _descriptions._session
+        assert _descriptions.handshake_delivery._pending_notify
+        session_after_drop: object = _descriptions.handshake_delivery._session
         assert session_after_drop is None
 
         reconnected = MagicMock(spec=ServerSession)
         reconnected.send_tool_list_changed = AsyncMock()
-        await _descriptions.capture_session(reconnected)
+        await _descriptions.handshake_delivery.capture_session(reconnected)
 
         reconnected.send_tool_list_changed.assert_awaited_once()
-        assert not _descriptions._pending_notify
+        assert not _descriptions.handshake_delivery._pending_notify
 
     async def test_drop_then_belt_tool_call_flushes(self, state: ServerState) -> None:
         """A suspenders send failure followed by an in-request (belt-path)
@@ -2371,15 +2415,15 @@ class TestMidSessionDropRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
 
         await refresh_read_messages(mcp, state)  # drops the notification
-        assert _descriptions._pending_notify
+        assert _descriptions.handshake_delivery._pending_notify
 
         sent: list[object] = []
 
         class _FakeContext:
-            session = object()
+            session = SimpleNamespace(protocol_version="2025-11-25")
 
             async def send_notification(self, notification: object) -> None:
                 sent.append(notification)
@@ -2389,12 +2433,12 @@ class TestMidSessionDropRecovery:
             "fastmcp.server.dependencies.get_context", lambda: _FakeContext()
         )
         try:
-            await _descriptions.notify_tool_list_changed()  # belt path fires
+            await _descriptions.handshake_delivery.notify()  # belt path fires
         finally:
             monkeypatch.undo()
 
         assert len(sent) == 1
-        assert not _descriptions._pending_notify
+        assert not _descriptions.handshake_delivery._pending_notify
 
     async def test_drop_then_suspenders_success_flushes(
         self, state: ServerState
@@ -2415,11 +2459,11 @@ class TestMidSessionDropRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
 
         await refresh_read_messages(mcp, state)  # drops the notification
-        assert _descriptions._pending_notify
-        session_after_drop: object = _descriptions._session
+        assert _descriptions.handshake_delivery._pending_notify
+        session_after_drop: object = _descriptions.handshake_delivery._session
         assert session_after_drop is None
 
         # A later suspenders send succeeds on its own terms — no request
@@ -2427,12 +2471,12 @@ class TestMidSessionDropRecovery:
         # session again.
         recovered = MagicMock(spec=ServerSession)
         recovered.send_tool_list_changed = AsyncMock()
-        _descriptions._session = recovered
+        _descriptions.handshake_delivery._session = recovered
 
-        await _descriptions.notify_tool_list_changed()
+        await _descriptions.handshake_delivery.notify()
 
         recovered.send_tool_list_changed.assert_awaited_once()
-        assert not _descriptions._pending_notify
+        assert not _descriptions.handshake_delivery._pending_notify
 
     async def test_belt_flush_does_not_double_send(self, state: ServerState) -> None:
         """The belt path's flush is folded into its own single send — a
@@ -2442,7 +2486,7 @@ class TestMidSessionDropRecovery:
         sent: list[object] = []
 
         class _FakeContext:
-            session = object()
+            session = SimpleNamespace(protocol_version="2025-11-25")
 
             async def send_notification(self, notification: object) -> None:
                 sent.append(notification)
@@ -2451,14 +2495,14 @@ class TestMidSessionDropRecovery:
         monkeypatch.setattr(
             "fastmcp.server.dependencies.get_context", lambda: _FakeContext()
         )
-        _descriptions._pending_notify = True
+        _descriptions.handshake_delivery._pending_notify = True
         try:
-            await _descriptions.notify_tool_list_changed()
+            await _descriptions.handshake_delivery.notify()
         finally:
             monkeypatch.undo()
 
         assert len(sent) == 1  # exactly one send, not two
-        assert not _descriptions._pending_notify
+        assert not _descriptions.handshake_delivery._pending_notify
 
     async def test_no_op_refresh_after_drop_leaves_pending_notify_set(
         self, state: ServerState
@@ -2483,10 +2527,10 @@ class TestMidSessionDropRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
 
         await refresh_read_messages(mcp, state)  # drops the notification
-        assert _descriptions._pending_notify
+        assert _descriptions.handshake_delivery._pending_notify
 
         dying_session.send_tool_list_changed.reset_mock()
         await refresh_read_messages(mcp, state)  # no-op: unread count unchanged
@@ -2494,7 +2538,7 @@ class TestMidSessionDropRecovery:
         # The change-gate skipped notify entirely — nothing was sent, and
         # nothing about the recorded drop moved.
         dying_session.send_tool_list_changed.assert_not_awaited()
-        assert _descriptions._pending_notify
+        assert _descriptions.handshake_delivery._pending_notify
 
     async def test_drop_then_genuine_belt_refresh_flushes(
         self, state: ServerState
@@ -2516,10 +2560,10 @@ class TestMidSessionDropRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
 
         await refresh_read_messages(mcp, state)  # drops the notification
-        assert _descriptions._pending_notify
+        assert _descriptions.handshake_delivery._pending_notify
 
         # Genuinely change the count/description — mark the message read,
         # exactly as the read_messages tool does — rather than synthesizing
@@ -2530,7 +2574,7 @@ class TestMidSessionDropRecovery:
         sent: list[object] = []
 
         class _FakeContext:
-            session = object()
+            session = SimpleNamespace(protocol_version="2025-11-25")
 
             async def send_notification(self, notification: object) -> None:
                 sent.append(notification)
@@ -2548,7 +2592,7 @@ class TestMidSessionDropRecovery:
         assert tool is not None
         assert tool.description == _READ_MESSAGES_BASE  # count genuinely dropped to 0
         assert len(sent) == 1  # description change's own send carries the flush
-        assert not _descriptions._pending_notify
+        assert not _descriptions.handshake_delivery._pending_notify
 
     async def test_concurrent_suspenders_fail_and_belt_send_do_not_clobber_pending(
         self, state: ServerState
@@ -2584,7 +2628,7 @@ class TestMidSessionDropRecovery:
         release_belt_send = asyncio.Event()
 
         class _SlowContext:
-            session = object()
+            session = SimpleNamespace(protocol_version="2025-11-25")
 
             async def send_notification(self, notification: object) -> None:
                 belt_send_started.set()
@@ -2593,7 +2637,7 @@ class TestMidSessionDropRecovery:
         belt_context = contextvars.copy_context()
         belt_context.run(_current_context.set, cast("Context", _SlowContext()))
         belt_task = asyncio.create_task(
-            _descriptions.notify_tool_list_changed(), context=belt_context
+            _descriptions.handshake_delivery.notify(), context=belt_context
         )
         await belt_send_started.wait()  # belt now holds _notify_lock, mid-send
 
@@ -2601,7 +2645,7 @@ class TestMidSessionDropRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
         suspenders_task = asyncio.create_task(refresh_read_messages(mcp, state))
         # Give the suspenders task every opportunity to run to completion
         # before releasing belt — a single scheduler turn is not enough
@@ -2624,8 +2668,8 @@ class TestMidSessionDropRecovery:
         # drop — the lock forces it to apply only after the belt's success
         # is durable, so it must win: not be silently clobbered back to
         # False by the belt send's own unconditional flush-clear.
-        assert _descriptions._pending_notify
-        session_after_race: object = _descriptions._session
+        assert _descriptions.handshake_delivery._pending_notify
+        session_after_race: object = _descriptions.handshake_delivery._session
         assert session_after_race is None
 
 
@@ -2663,28 +2707,30 @@ class TestNotifySendTimeout:
             await never_set.wait()
 
         wedged_session.send_tool_list_changed = AsyncMock(side_effect=_hang)
-        _descriptions._session = wedged_session
+        _descriptions.handshake_delivery._session = wedged_session
 
         # Wrapped in an outer wait_for as a safety net only: if the inner
         # timeout failed to bound the send, this call would hang forever
         # instead of failing the test with a clear timeout error.
-        await asyncio.wait_for(_descriptions.notify_tool_list_changed(), timeout=5.0)
+        await asyncio.wait_for(_descriptions.handshake_delivery.notify(), timeout=5.0)
 
         wedged_session.send_tool_list_changed.assert_awaited_once()
         # Re-armed exactly like a raised send failure — the timeout routes
         # into the same failure->re-arm path, not a new one.
-        assert _descriptions._pending_notify
-        session_after_timeout: object = _descriptions._session
+        assert _descriptions.handshake_delivery._pending_notify
+        session_after_timeout: object = _descriptions.handshake_delivery._session
         assert session_after_timeout is None  # dead/wedged session cleared
 
         # Prove the lock was released, not left held by the timed-out
         # send: it must not be locked, and a fresh notify (capture_session's
         # flush, since _pending_notify is set) must complete immediately
         # rather than blocking behind a wedged holder.
-        assert not _descriptions._notify_lock.locked()
+        assert not _descriptions.handshake_delivery._lock.locked()
         reconnected = MagicMock(spec=ServerSession)
         reconnected.send_tool_list_changed = AsyncMock()
-        await asyncio.wait_for(_descriptions.capture_session(reconnected), timeout=5.0)
+        await asyncio.wait_for(
+            _descriptions.handshake_delivery.capture_session(reconnected), timeout=5.0
+        )
 
         reconnected.send_tool_list_changed.assert_awaited_once()
-        assert not _descriptions._pending_notify
+        assert not _descriptions.handshake_delivery._pending_notify

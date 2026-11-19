@@ -6,6 +6,7 @@ and multiple subprocesses share state through the filesystem.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -17,13 +18,17 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastmcp.client.transports import StdioTransport
 from fastmcp.exceptions import ToolError
+from mcp.shared.subscriptions import ToolsListChanged
 from mcp.types import TextContent
 
-from biff.testing.caller import StampedClient
+from biff.testing.caller import DEFAULT_CALLER, StampedClient
 
 if TYPE_CHECKING:
     from fastmcp import Client
     from fastmcp.client.client import CallToolResult
+    from mcp import Client as MCPClient
+
+    from biff.testing import NotificationTracker
 
 pytestmark = pytest.mark.subprocess
 
@@ -122,7 +127,7 @@ class TestServerStartup:
     async def test_tools_have_input_schemas(self, biff_client: Client[Any]) -> None:
         tools = await biff_client.list_tools()
         for tool in tools:
-            assert tool.inputSchema is not None, f"{tool.name} has no schema"
+            assert tool.input_schema is not None, f"{tool.name} has no schema"
 
 
 class TestToolCallOverStdio:
@@ -189,6 +194,61 @@ class TestToolCallOverStdio:
 
 class TestCrossProcessState:
     """Two subprocesses share state through the same data directory."""
+
+    async def test_legacy_client_receives_mail_after_first_request(
+        self,
+        legacy_kai_client: tuple[Client[Any], NotificationTracker],
+        eric_client: Client[Any],
+    ) -> None:
+        client, tracker = legacy_kai_client
+        await client.call_tool("who", {})
+        before = tracker.tool_list_changed_count
+
+        await eric_client.call_tool("write", {"to": "kai", "message": "hello"})
+        async with asyncio.timeout(10):
+            while tracker.tool_list_changed_count == before:
+                await asyncio.sleep(0.05)
+
+        inbox = next(
+            tool for tool in await client.list_tools() if tool.name == "read_messages"
+        )
+        assert "1 unread" in (inbox.description or "")
+
+    async def test_modern_subscriber_receives_background_mail_alert(
+        self, modern_kai_client: MCPClient, eric_client: Client[Any]
+    ) -> None:
+        async with modern_kai_client as client:
+            result = await client.call_tool(
+                "plan", {"message": "online", "_caller": DEFAULT_CALLER}
+            )
+            assert not result.is_error
+            before = await client.list_tools()
+            inbox = next(tool for tool in before.tools if tool.name == "read_messages")
+            assert "1 unread" not in (inbox.description or "")
+            async with (
+                asyncio.timeout(10),
+                client.listen(tools_list_changed=True) as changes,
+            ):
+                assert changes.honored.tools_list_changed is True
+                await eric_client.call_tool("write", {"to": "kai", "message": "hello"})
+                assert isinstance(await anext(changes), ToolsListChanged)
+
+                tools = await client.list_tools()
+                inbox = next(
+                    tool for tool in tools.tools if tool.name == "read_messages"
+                )
+                assert "1 unread" in (inbox.description or "")
+
+                result = await client.call_tool(
+                    "read_messages", {"_caller": DEFAULT_CALLER}
+                )
+                assert not result.is_error
+                assert isinstance(await anext(changes), ToolsListChanged)
+                tools = await client.list_tools()
+                inbox = next(
+                    tool for tool in tools.tools if tool.name == "read_messages"
+                )
+                assert "1 unread" not in (inbox.description or "")
 
     async def test_plan_visible_across_processes(
         self,

@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Use FastMCP 4 and MCP 2.3. Failed session attachment returns a sanitized
+  internal error and logs only the error type and source line.
 - Use shared punt-observe diagnostics for the CLI, MCP server, and hooks,
   including detached cleanup. Private, redacted, process-safe rotating
   diagnostics now replace the separate shell hook error log.
@@ -28,6 +30,8 @@
 
 ### Fixed
 
+- Background message alerts now reach modern MCP clients that subscribe to
+  tool list changes. Handshake-era clients still receive standalone alerts.
 - `/wall` post and clear now reach idle peer sessions promptly. Wall changes
   had no push signal, so a peer only reconciled its status bar on its own next
   poll tick, which a wedged NATS connection delays for minutes — the operator

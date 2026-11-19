@@ -8222,3 +8222,22 @@ stderr. Usage-store failure does not fail tool calls. Checkout builds use a
 locked Git commit until the shared package is published; do not tag a Biff
 release that depends on `punt-observe` until the dependency is installable
 from the package index.
+
+---
+
+## DES-080: Publish Tool List Changes to Modern MCP Subscribers
+
+**Decision.** Attach a local MCP SDK subscription bus to
+`subscriptions/listen` for MCP 2026-07-28. The existing description-change
+gate publishes to it from both tool handlers and the background poller.
+Only handshake-era sessions participate in the notification and pending-retry
+behavior modeled in DES-061 and `docs/notification.tex`.
+
+**Alternatives.** Standalone notifications have no channel in MCP 2026-07-28.
+Rejecting discovery cannot force a handshake on the same connection: the
+transport selects the protocol before dispatching discovery.
+
+**Outcome.** Modern clients that opt in receive tool list changes while idle
+and re-list tools when reconnecting because the stream does not replay changes.
+Handshake clients continue to receive the standalone notification. The poller
+does not inherit request context, even when the first tool call starts it.

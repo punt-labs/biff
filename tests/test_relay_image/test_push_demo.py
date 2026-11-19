@@ -158,9 +158,8 @@ class TestPushVsPollDemo:
                 FastMCPTransport(mcp), message_handler=tracker
             ) as kai_raw:
                 kai = RecordingClient(client=kai_raw, transcript=transcript, user="kai")
+                await kai.call("read_messages")  # attach; baseline: "No new messages."
                 await asyncio.sleep(1.0)  # let the inbox-notify SUB get established
-
-                await kai.call("read_messages")  # baseline: "No new messages."
 
                 # -- push: real deliver(), JetStream + inbox-notify poke --
                 t_send = time.monotonic()

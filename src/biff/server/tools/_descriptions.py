@@ -22,9 +22,14 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING, NamedTuple, Protocol
+
+from mcp.shared.subscriptions import ToolsListChanged
+from mcp.types import ToolListChangedNotification
+from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
 from biff.formatting import sanitized_sender, terminal_safe
 from biff.models import UnreadSummary, WallPost
@@ -36,16 +41,16 @@ from biff.tty import format_address
 from biff.unread_file import write_unread_file
 
 
-class _Sentinel:
-    """Sentinel for distinguishing 'not provided' from ``None``."""
+class _WallLookup(Enum):
+    """Distinguish fetching the wall from a known empty wall."""
 
+    FETCH = auto()
 
-_SENTINEL = _Sentinel()
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
-    from fastmcp.server.context import Context
     from mcp.server.session import ServerSession
+    from mcp.server.subscriptions import SubscriptionBus
 
     from biff.server.state import ServerState
 
@@ -96,109 +101,83 @@ _WALL_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
     recovery="Wall-notify wake pokes recovered — re-subscribed",
 )
 
-# Captured eagerly during ``initialize`` (via SessionCaptureMiddleware)
-# and refreshed on every tool call (belt path) so the background poller
-# and NATS callbacks can send notifications outside a request context.
-# See notification.tex CaptureSession operation.
-_session: ServerSession | None = None
-
-# Set by notify_tool_list_changed() when a description changed with no
-# session yet available (the lifespan's pre-initialize window), so the
-# dropped notification is not lost — capture_session() flushes it once
-# the real session arrives.
-_pending_notify: bool = False
-
-# Serializes every read-decide-send-write critical section that touches
-# _session/_pending_notify across notify_tool_list_changed()'s two branches
-# and capture_session()'s flush. Real ``await`` points sit between the read
-# and the write at each site, so two of these can otherwise interleave —
-# e.g. a belt send completing after a suspenders failure has recorded a
-# drop, clobbering pendingNotify back to false and re-creating the
-# notifyLost-forever failure mode via a race instead of a direct code path
-# (notification.tex: the model treats each transition as atomic; the code
-# does not, without this lock). Neither guarded function calls the other
-# while holding the lock, so there is no re-entrancy or deadlock risk.
-#
-# Single-event-loop invariant: this module-global lock is instantiated once
-# at import time and never recreated. Since Python 3.10, asyncio.Lock() does
-# not bind to a loop at construction — it binds lazily to whichever loop is
-# running the first time it is awaited — so a "bound to a different event
-# loop" RuntimeError requires the process to run this lock across two
-# concurrently-alive loops, not merely to import the module before a loop
-# exists. biff's server has exactly one production entry point per process
-# (``serve()`` and ``mcp_cmd()`` in __main__.py), and each calls
-# FastMCP's ``server.run(...)`` exactly once, which owns a single
-# ``asyncio.run()`` for the process's lifetime. ``_reset_session()`` clears
-# ``_session``/``_pending_notify`` for test isolation but never touches this
-# lock or spawns a second loop — it is called only from test fixtures
-# (tests/conftest.py and friends), never from production code. If a future
-# change introduces a second production loop per process (e.g. a supervisor
-# that restarts the server in-process), this lock must be rebound to the new
-# loop at that point, not before.
-_notify_lock: asyncio.Lock = asyncio.Lock()
-
-# Bounds each individual send made while holding ``_notify_lock``. The Z
-# model (notification.tex, notification-race.tex) proves SAFETY — no lost
-# notification, no lost-update race — by treating every send as an atomic
-# step; it has no notion of a send that never returns. A wedged or
-# backpressured transport (client alive but not draining — a real
-# MCP-over-stdio failure mode) would otherwise hold this lock forever,
-# starving the poller and every belt-path tool call behind the same
-# unbounded ``await``. This timeout is the LIVENESS measure the atomic
-# model doesn't express, layered on top of it: a timeout is handled by the
-# same ``except Exception`` a send failure already hits (``TimeoutError``
-# subclasses ``OSError`` subclasses ``Exception``), so it re-arms
-# ``_pending_notify`` via the model's already-proven failure->re-arm
-# transition rather than a new, unverified code path. Mirrors
-# ``_TEARDOWN_STEP_TIMEOUT`` in server/app.py — same rationale, a bounded
-# best-effort step instead of an unbounded one.
-_NOTIFY_SEND_TIMEOUT: float = 3.0
+_NOTIFY_SEND_TIMEOUT = 3.0
 
 
-async def capture_session(session: ServerSession) -> None:
-    """Eagerly store the MCP session reference.
+async def _publish_tool_change(bus: SubscriptionBus) -> None:
+    try:
+        async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+            await bus.publish(ToolsListChanged())
+    except Exception:
+        logger.warning("Tool list subscription publish failed", exc_info=True)
 
-    Called from :class:`~biff.server.app._SessionCaptureMiddleware`
-    during ``initialize`` so the suspenders notification path is
-    available before any tool call or NATS subscription fires.
 
-    The belt path in :func:`notify_tool_list_changed` continues to
-    refresh the reference on every tool call, keeping it current
-    if the client reconnects.
+@dataclass
+class _HandshakeDelivery:
+    """Track legacy notification debt under one lock (DES-061)."""
 
-    If a description changed during the pre-initialize window (before
-    any session existed to notify), flushes that dropped notification
-    now via the newly captured session. A failed flush — the reconnected
-    session is itself already broken — re-arms ``_pending_notify`` rather
-    than consuming it: this function runs once per client ``initialize``,
-    so re-arming costs exactly one retry on the *next* reconnect or belt
-    call, not an infinite loop. Consuming the flag on a failed flush would
-    repeat root cause #1 (notification.tex sec:sessionloss) at this second
-    boundary — the drop would be silently forgotten instead of retried.
-    """
-    global _session, _pending_notify
-    async with _notify_lock:
-        _session = session
-        if not _pending_notify:
+    _session: ServerSession | None = None
+    _pending_notify: bool = False
+    # Hold across send and debt update so a concurrent success cannot erase a drop.
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def capture_session(self, session: ServerSession) -> None:
+        """Capture the handshake session and flush any notification owed."""
+        if session.protocol_version in MODERN_PROTOCOL_VERSIONS:
             return
+        async with self._lock:
+            self._session = session
+            if self._pending_notify:
+                await self._notify_standalone()
+
+    async def notify(self, bus: SubscriptionBus | None = None) -> None:
+        """Publish to modern subscribers and notify the handshake client.
+
+        Args:
+            bus: Server event bus, or None to send the handshake notification only.
+        """
+        if bus is not None:
+            await _publish_tool_change(bus)
+
+        from fastmcp.server.dependencies import get_context  # noqa: PLC0415
+
+        try:
+            ctx = get_context()
+        except RuntimeError:
+            ctx = None
+
+        if ctx is None:
+            async with self._lock:
+                await self._notify_standalone()
+        elif ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS:
+            async with self._lock:
+                try:
+                    async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                        await ctx.send_notification(ToolListChangedNotification())
+                except Exception:
+                    logger.warning("Tool list push failed in request", exc_info=True)
+                    self._pending_notify = True
+                else:
+                    self._pending_notify = False
+                self._session = ctx.session
+
+    async def _notify_standalone(self) -> None:
+        if self._session is None:
+            self._pending_notify = True
+            return
+
         try:
             async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                await session.send_tool_list_changed()
+                await self._session.send_tool_list_changed()
         except Exception:
-            # can't accept a notification at initialize time is broken
-            # (a wedged transport that never returns hits the timeout
-            # above and lands here too — see _NOTIFY_SEND_TIMEOUT); clear
-            # it so the background poller doesn't hammer a dead stream,
-            # and re-arm the pending flag so the next reconnect or belt
-            # call retries the flush instead of losing it.
-            logger.warning(
-                "Failed to flush pending tool list changed notification",
-                exc_info=True,
-            )
-            _session = None
-            _pending_notify = True
-            return
-        _pending_notify = False
+            logger.warning("Could not send standalone tool list change", exc_info=True)
+            self._session = None
+            self._pending_notify = True
+        else:
+            self._pending_notify = False
+
+
+handshake_delivery = _HandshakeDelivery()
 
 
 # Set by the ``tty`` tool so the unread file includes the session name.
@@ -242,139 +221,12 @@ def set_biff_enabled(*, enabled: bool) -> None:
 
 
 def _reset_session() -> None:
-    """Reset every module global — test isolation.
-
-    Clears the captured session, pending-notify flag, tty name,
-    biff_enabled flag, and the last-spoken wall key.  All five are
-    process globals set as a side effect of running a server
-    (``_SessionCaptureMiddleware`` captures ``_session`` on every client
-    ``initialize``); left unreset they leak stale state — e.g. a closed
-    session — into the next test's background poller and NATS callbacks,
-    so a later test fails only under certain orderings.
-    """
-    global _session, _pending_notify, _tty_name, _biff_enabled, _spoken_wall_key
-    _session = None
-    _pending_notify = False
+    """Reset process globals for test isolation."""
+    global handshake_delivery, _tty_name, _biff_enabled, _spoken_wall_key
+    handshake_delivery = _HandshakeDelivery()
     _tty_name = ""
     _biff_enabled = True
     _spoken_wall_key = ("", "")
-
-
-async def notify_tool_list_changed() -> None:
-    """Fire ``notifications/tools/list_changed`` via the best available path.
-
-    Belt path (inside a tool handler): queues the notification on the
-    FastMCP Context so it piggybacks on the tool response, and also
-    flushes any ``_pending_notify`` left behind by an earlier suspenders
-    failure — this call's own successful send already carries it, since
-    the client re-reads the whole tool list rather than just the
-    description that triggered this particular notify. Probing for a
-    context (``get_context()``) and sending on it are two independently
-    fallible steps with different meanings on failure, so they are caught
-    separately: ``get_context()`` raising ``RuntimeError`` legitimately
-    means "no request in flight" and falls through to the suspenders path
-    below. A raised ``send_notification`` is a different failure — a real
-    transport error (e.g. anyio's ``ClosedResourceError`` /
-    ``BrokenResourceError``, both plain ``Exception`` subclasses, not
-    ``RuntimeError``) — and is handled in its own best-effort ``except``
-    so it neither escapes unrecorded nor propagates into the calling tool
-    handler.
-
-    Suspenders path (background poller): sends directly on the stored
-    ServerSession when no request context is active. A send failure here
-    means the client's MCP transport died independently of NATS
-    connectivity — the dead session reference is cleared *and* the drop
-    is recorded as pending, so the next session recapture (reconnect) or
-    belt call flushes it. Losing the reference without recording the
-    drop is root cause #1 (notification.tex sec:sessionloss): the
-    change-gate on tool.description suppresses every later re-notify,
-    so an unrecorded drop is never recovered.
-
-    Pre-session path (before the client's ``initialize`` has been
-    captured): no session exists to notify on, so the notification would
-    otherwise be silently dropped. Records it as pending instead;
-    :func:`capture_session` flushes it once the real session arrives.
-
-    Every branch's read-decide-send-write sequence runs under
-    ``_notify_lock`` — see that lock's docstring for why an unguarded
-    ``await`` between the read and the write would let two branches
-    interleave and clobber ``_pending_notify``. Every locked send is
-    additionally bounded by ``_NOTIFY_SEND_TIMEOUT`` — see that constant's
-    docstring for why an unbounded send under this lock is a liveness
-    hazard the safety proof does not cover.
-    """
-    global _session, _pending_notify
-
-    # Belt path — inside a tool handler, Context is available. Only the
-    # context *probe* is RuntimeError-specific; a genuine send failure is
-    # handled below, inside the lock, alongside the state it must record.
-    from fastmcp.server.dependencies import get_context  # noqa: PLC0415
-    from mcp.types import ToolListChangedNotification  # noqa: PLC0415
-
-    ctx: Context | None
-    try:
-        ctx = get_context()
-    except RuntimeError:
-        ctx = None
-
-    if ctx is not None:
-        async with _notify_lock:
-            try:
-                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                    await ctx.send_notification(ToolListChangedNotification())
-            except Exception:
-                # suspenders except below: a transport error (or a wedged
-                # transport hitting the timeout — see _NOTIFY_SEND_TIMEOUT)
-                # on the belt send must not crash the calling tool handler,
-                # and the drop it represents must be recorded, not
-                # swallowed.
-                logger.warning(
-                    "Failed to send tool list changed notification (belt)",
-                    exc_info=True,
-                )
-                # Always update — the client may have reconnected with a
-                # new session — then re-arm so a later flush retries it.
-                _session = ctx.session
-                _pending_notify = True
-                return
-            # Flush exactly once: this send already covers the missed drop.
-            _session = ctx.session
-            _pending_notify = False
-        return
-
-    # Suspenders path — no request context, use stored session.
-    # Bare Exception matches FastMCP's own _flush_notifications pattern —
-    # notification delivery is best-effort and must never crash the poller.
-    async with _notify_lock:
-        if _session is not None:
-            try:
-                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                    await _session.send_tool_list_changed()
-            except Exception:
-                logger.warning(
-                    "Failed to send tool list changed notification",
-                    exc_info=True,
-                )
-                # Session is dead (or wedged past _NOTIFY_SEND_TIMEOUT) —
-                # clear it so the poller stops hammering a closed stream
-                # every tick, and record the drop so a later flush
-                # opportunity (session recapture or belt call) retries it.
-                _session = None
-                _pending_notify = True
-            else:
-                # PollTickNotifyOk (notification.tex, wake-poke invariant):
-                # a successful suspenders send also clears _pending_notify,
-                # on the same argument NotifyBelt's unconditional clear
-                # already rests on — the send just delivered the *current*
-                # tool description, which reflects every mutation up to
-                # this point, whichever site armed the flag. Withholding
-                # the clear here left a stale debt sitting on a drop this
-                # very send already discharged.
-                _pending_notify = False
-            return
-
-        # Pre-session path — no session captured yet, record the drop.
-        _pending_notify = True
 
 
 async def _sync_unread_file(
@@ -478,7 +330,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
             f"Check messages ({combined.count} unread). Marks all as read."
         )
     if tool.description != old_desc:
-        await notify_tool_list_changed()
+        await handshake_delivery.notify(state.tool_events)
     await _sync_unread_file(state, summary=combined)
     return True
 
@@ -487,7 +339,7 @@ async def refresh_wall(
     mcp: FastMCP[ServerState],
     state: ServerState,
     *,
-    wall: WallPost | _Sentinel | None = _SENTINEL,
+    wall: WallPost | _WallLookup | None = _WallLookup.FETCH,
 ) -> None:
     """Update the ``wall`` tool description and display queue.
 
@@ -509,7 +361,7 @@ async def refresh_wall(
     tool = await mcp.get_tool("wall")
     if tool is None:
         return
-    current = await state.relay.get_wall() if isinstance(wall, _Sentinel) else wall
+    current = await state.relay.get_wall() if isinstance(wall, _WallLookup) else wall
     old_desc = tool.description
     queue = state.display_queue
     if current is None:
@@ -544,7 +396,7 @@ async def refresh_wall(
             )
         )
     if tool.description != old_desc:
-        await notify_tool_list_changed()
+        await handshake_delivery.notify(state.tool_events)
         # Voice new walls via vox (L1 integration — no-op if vox absent).
         # Only speak when the wall CONTENT changes, not when the countdown
         # timer updates the description. The description changes every tick
@@ -656,7 +508,7 @@ async def refresh_talk(mcp: FastMCP[ServerState], state: ServerState) -> None:
     old_desc = tool.description
     tool.description = _talk_description(state.talk)
     if tool.description != old_desc:
-        await notify_tool_list_changed()
+        await handshake_delivery.notify(state.tool_events)
     await _sync_unread_file(state)
 
 

@@ -61,20 +61,15 @@ class TestDroppedMidSessionNotificationHasNoRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
 
         await refresh_read_messages(mcp, state)  # mutates description, then
         # calls notify_tool_list_changed(), which hits the suspenders path
         # and fails to send.
 
         dying_session.send_tool_list_changed.assert_awaited_once()
-        # Assert _pending_notify BEFORE _session is None: mypy's attribute
-        # narrowing treats the direct `_descriptions._session = dying_session`
-        # assignment above as persisting past the awaited call, so an `is
-        # None` check ordered first makes mypy consider the next statement
-        # unreachable. The reverse order type-checks cleanly.
-        assert _descriptions._pending_notify  # FAILS: never set on this path
-        assert _descriptions._session is None  # dead session correctly cleared
+        assert _descriptions.handshake_delivery._pending_notify
+        assert _descriptions.handshake_delivery._session is None
 
     async def test_reconnect_after_dropped_notification_flushes_once(
         self, state: ServerState
@@ -96,13 +91,13 @@ class TestDroppedMidSessionNotificationHasNoRecovery:
         dying_session.send_tool_list_changed = AsyncMock(
             side_effect=RuntimeError("transport closed")
         )
-        _descriptions._session = dying_session
+        _descriptions.handshake_delivery._session = dying_session
 
         await refresh_read_messages(mcp, state)  # drops the notification
 
         reconnected_session = MagicMock(spec=ServerSession)
         reconnected_session.send_tool_list_changed = AsyncMock()
-        await _descriptions.capture_session(reconnected_session)
+        await _descriptions.handshake_delivery.capture_session(reconnected_session)
 
         # FAILS: capture_session's early return (`if not _pending_notify:
         # return`) skips the flush, so the reconnected client never learns
