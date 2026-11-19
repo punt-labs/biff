@@ -97,12 +97,12 @@ lock-clean: ## Regenerate uv.lock without local overrides (for CI/release)
 	@if [ -f uv.toml ]; then \
 	    trap 'mv uv.toml.bak uv.toml 2>/dev/null' EXIT INT TERM; \
 	    mv uv.toml uv.toml.bak; \
-	    uv lock --upgrade-package punt-lux; status=$$?; \
+	    uv lock --upgrade-package punt-oo-ratchet; status=$$?; \
 	    mv uv.toml.bak uv.toml; \
 	    trap - EXIT INT TERM; \
 	    exit $$status; \
 	else \
-	    uv lock --upgrade-package punt-lux; \
+	    uv lock --upgrade-package punt-oo-ratchet; \
 	fi
 
 build: ## Build wheel and sdist
@@ -110,9 +110,9 @@ build: ## Build wheel and sdist
 	uv build
 	uvx twine check dist/*
 
-install: ## Build wheel and install as CLI tool (with lux support)
+install: ## Build wheel and install as CLI tool
 	uv build --wheel
-	uv tool install --force --find-links ../.depot --with "punt-lux>=0.15.1" dist/punt_biff-*.whl
+	uv tool install --force --find-links ../.depot dist/punt_biff-*.whl
 
 clean: ## Remove build artifacts
 	rm -rf dist/ .tmp/

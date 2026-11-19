@@ -10,6 +10,12 @@
   ratchets for biff's Python source.
 - Biff now installs the dev-only `punt-oo-ratchet` package from PyPI.
 
+### Removed
+
+- The `lux` optional extra (`punt-biff[lux]`) and the direct `rich` and
+  `pydantic-settings` dependencies. Nothing in biff imports them since the lux
+  applet was removed; `rich` still arrives through `typer`.
+
 ### Fixed
 
 - `/wall` post and clear now reach idle peer sessions promptly. Wall changes
