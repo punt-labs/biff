@@ -631,28 +631,6 @@ class LocalRelay:
                 self.delete_session_sync(session_key)
                 sentinel.unlink(missing_ok=True)
 
-    def remove_own_sentinel(self, session_key: str) -> None:
-        """Consume a predecessor's sentinel while the caller owns its pin lock."""
-        self._validate_session_key(session_key)
-        safe = session_key.replace(":", "-")
-        (self._data_dir / f"remove-{safe}").unlink(missing_ok=True)
-
-    def removal_sentinel_keys(self, routing_id: str) -> set[str]:
-        """Validated exact-key sentinels for a caller-owned routing identity."""
-        keys: set[str] = set()
-        for path in self._data_dir.glob("remove-*"):
-            try:
-                key = path.read_text().strip()
-                self._validate_session_key(key)
-            except (OSError, UnicodeError, ValueError):
-                continue
-            if (
-                key.partition(":")[2] == routing_id
-                and path.name == f"remove-{key.replace(':', '-')}"
-            ):
-                keys.add(key)
-        return keys
-
     # -- Session history (wtmp) --
 
     async def append_wtmp(self, event: SessionEvent) -> None:
