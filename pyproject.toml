@@ -68,7 +68,7 @@ build-backend = "uv_build"
 module-name = "biff"
 
 [tool.uv.sources]
-punt-observe = { git = "https://github.com/punt-labs/punt-observe", rev = "a90872cc20cf688dfd41aeb36c7120e63fc69849" }
+punt-observe = { git = "https://github.com/punt-labs/punt-observe", rev = "53e657555cab240795c850ea7f0e4dd77a8d98fc" }
 
 [tool.ruff]
 line-length = 88

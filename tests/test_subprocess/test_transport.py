@@ -65,8 +65,7 @@ for index in range(int(sys.argv[2])):
     for path in logs:
         assert path.stat().st_mode & 0o777 == 0o600
         size = path.stat().st_size
-        # The shared sink checks size before taking its shared append lock.
-        assert size <= rotation_bytes + (len(roles) - 1) * max_record_bytes
+        assert size <= rotation_bytes
         if path.name != "biff.log":
             assert size > rotation_bytes - max_record_bytes
         for line in path.read_text().splitlines():
