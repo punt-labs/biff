@@ -23,6 +23,7 @@ class ReplDisplay:
     __slots__ = ("_show_timestamps",)
 
     def __new__(cls) -> Self:
+        """Create display preferences with timestamps disabled."""
         self = super().__new__(cls)
         self._show_timestamps = False
         return self

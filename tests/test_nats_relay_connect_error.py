@@ -119,16 +119,15 @@ class TestConnectFailureRaisesRelayConnectError:
     async def test_connect_failure_error_has_no_chained_context(self) -> None:
         """RelayConnectError's __context__ is genuinely None, not merely hidden.
 
-        This is the structural fix, not display suppression: the redacted
+        This is structural isolation, not display suppression: the redacted
         error is raised only after the try/except/finally handling the raw
         nats.connect() failure has fully completed, so there is no
         "currently handled exception" left for Python to implicitly chain
-        onto. A prior implementation used `raise ... from None` from
-        *inside* the except clause, which left __context__ populated and
+        onto. Raising from inside the except clause, even with ``from None``,
+        would leave __context__ populated and
         walkable by anything that ignores __suppress_context__ (a
         debugger, an APM integration, traceback.format_exception(chain=True)
-        called explicitly) -- verified empirically that pattern still
-        exposed the original exception's traceback frame.
+        called explicitly), exposing the original traceback frame.
         """
         relay = NatsRelay(
             url="tls://relay.example.com:4222",
@@ -180,14 +179,10 @@ class TestAuthKwargsClearedOnConnectFailure:
 
     @pytest.mark.anyio()
     async def test_auth_kwargs_cleared_even_on_success(self) -> None:
-        """The finally block runs on the success path too -- no leftover dict.
+        """Clear the original authentication kwargs even when connecting succeeds.
 
-        Regression for PR #386 review round 2: the prior version of this
-        test asserted on ``connect.await_args.kwargs`` (the mock's own
-        captured copy), which stays populated regardless of whether
-        ``finally: auth_kwargs.clear()`` ever ran -- a regression dropping
-        that line would still pass. This holds a reference to the real
-        ``auth_kwargs`` dict object and asserts on it directly.
+        Inspect the original dict rather than the mock's captured keyword copy,
+        which cannot prove that the caller cleared its own credentials.
         """
         relay = NatsRelay(
             url="tls://relay.example.com:4222",

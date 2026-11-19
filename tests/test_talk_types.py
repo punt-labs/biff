@@ -191,11 +191,9 @@ class TestTalkNotification:
         assert n.ntype == "message"  # a real str is preserved
 
     def test_from_payload_bounds_key_user_half_like_from(self) -> None:
-        # `from` was clamped to MAX_FIELD_LEN (64) while from_key kept up to
-        # MAX_KEY_LEN (129), so a self-consistent invite with a 65-char handle
-        # had nfrom truncated to 64 but the key user-half left at 65 — failing
-        # PendingInvite's key_user==user check and silently dropping the invite.
-        # Both halves must be bounded to MAX_FIELD_LEN identically.
+        # Sender and key-user halves must share MAX_FIELD_LEN. Different bounds
+        # would make a self-consistent long invite fail key_user==user after
+        # truncation, silently dropping it.
         handle = "u" * (MAX_FIELD_LEN + 1)
         n = TalkNotification.from_payload(
             {

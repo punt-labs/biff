@@ -656,7 +656,7 @@ class TestDoTalk:
         ``talk`` peeks the pending invite, then awaits ``resolve_target``.
         The always-on talk subscription can supersede the invite (a newer
         session of the same user) during that await.  Accepting the stale
-        snapshot — or consuming whatever is now current — is a TOCTOU: the fix
+        snapshot — or consuming a replacement invite — is a TOCTOU: the handler
         re-peeks after the await and refuses when the invite changed (CR-3).
         """
         sessions = [

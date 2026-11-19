@@ -54,14 +54,27 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     async def wall(
         message: str = "", duration: str = "", clear: bool = False, repo: str = ""
     ) -> str:
-        """Post, read, or clear a team broadcast wall.
+        """Post, inspect, or clear a time-limited team broadcast.
 
-        Four modes:
+        Call without arguments to read the current wall; supply message to post,
+        or clear=True to remove it. Posts and clears update the local display
+        immediately and send relay writes in the background.
 
-        - ``wall(message="text")`` — post to all visible repos (default 1h TTL)
-        - ``wall(message="text", repo="punt-labs__vox")`` — post to one repo
-        - ``wall(clear=True)`` — remove the active wall from all visible repos
-        - ``wall()`` — show the current wall
+        Args:
+            duration: A duration such as '30m' or '2h'; empty defaults to one hour.
+            repo: A visible repository slug, such as punt-labs__vox. Empty sends
+                posts and clears to all visible repositories.
+
+        Returns:
+            The active wall or a local post/clear confirmation, not a guarantee
+            every peer received it. Invalid durations or unauthorized repositories
+            are reported in text. Messages are sanitized and limited to 512 characters.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         # Validate repo against visible_repos (authorization + injection guard)
         target_repo = _validate_target_repo(repo, state.visible_repos)

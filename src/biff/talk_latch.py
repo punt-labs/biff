@@ -63,6 +63,7 @@ class TalkNotifyLatch:
     _failing: bool
 
     def __new__(cls, logger: logging.Logger, messages: LatchMessages) -> Self:
+        """Create a healthy latch with the supplied logging messages."""
         self = super().__new__(cls)
         self._logger = logger
         self._messages = messages

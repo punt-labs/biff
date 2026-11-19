@@ -48,4 +48,5 @@ class NotificationTracker(MessageHandler):
         self,
         message: mcp_types.ToolListChangedNotification,  # noqa: ARG002
     ) -> None:
+        """Record when the server announces a tool-list change."""
         self._tool_list_changed_at.append(time.monotonic())

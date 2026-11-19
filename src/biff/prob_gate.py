@@ -141,6 +141,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the ProB gate and return a shell exit status."""
     args = parse_args(argv)
     args.log_dir.mkdir(parents=True, exist_ok=True)
     flags = [

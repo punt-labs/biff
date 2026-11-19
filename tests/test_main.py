@@ -312,7 +312,7 @@ class TestEnableCommand:
         assert result.exit_code == 0
         marker = repo / ".punt-labs" / "biff" / "enabled"
         assert marker.exists()
-        # No config.yaml created — enable no longer runs interactive init
+        # Enabling does not run interactive configuration.
         config_yaml = repo / ".punt-labs" / "biff" / "config.yaml"
         assert not config_yaml.exists()
 
@@ -842,8 +842,8 @@ class TestInstallLeavesRepoAlone:
         ) -> subprocess.CompletedProcess[bytes]:
             # install's only subprocess call is the marketplace plugin install
             # (`claude plugin install ... --scope user`, passed check=False); it
-            # no longer shells out to git (PL-994 removed the hook deploy). The
-            # stub ignores the call's kwargs — nothing is forwarded to a real
+            # does not deploy git hooks. The stub ignores the call's kwargs;
+            # nothing is forwarded to a real
             # command — so any other command is unexpected and fails loudly.
             if cmd[0] != "/usr/bin/claude":
                 raise AssertionError(f"unexpected subprocess call: {cmd!r}")

@@ -29,7 +29,22 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def last(user: str = "", count: int = 25) -> str:
-        """Show recent session history."""
+        """Inspect recent login and logout history.
+
+        Args:
+            user: Filter by username, optionally prefixed with @. Empty means all users.
+            count: Maximum displayed sessions, clamped to the range 1 through 100.
+
+        Returns:
+            Formatted session history, marking active sessions as still logged in,
+            or 'No session history.' when no events match.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
+        """
         await update_current_session(state)
         count = max(1, min(count, 100))
 

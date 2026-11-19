@@ -112,12 +112,10 @@ class TestRefreshReadMessages:
     async def test_relay_failure_does_not_crash_caller(
         self, state: ServerState
     ) -> None:
-        """A relay hiccup here must never crash the primary tool call that
-        called this as a best-effort side-channel update. Review finding:
-        surfaced by a test where read_messages() had already successfully
-        fetched and rendered real messages, and this side-channel call
-        raising on its own separate relay call would have discarded that
-        already-good result with an unhandled exception.
+        """A best-effort display update must preserve the primary tool result.
+
+        A separate relay request for the status file must not discard messages
+        already fetched and rendered by read_messages().
         """
         mcp = create_server(state)
 
@@ -218,12 +216,10 @@ class TestUnreadFile:
     async def test_get_session_failure_does_not_crash_caller(
         self, state_with_path: ServerState
     ) -> None:
-        """Bugbot review finding: refresh_read_messages' own guard around
-        get_unread_summary did not cover this function's own get_session
-        call for the plan field — a relay hiccup there could still crash
-        the caller's already-succeeded primary result. get_unread_summary
-        succeeds here; only get_session fails, isolating this specific
-        call site from the one already covered by another test.
+        """Keep a successful primary result when the plan-field lookup fails.
+
+        Only get_session fails; get_unread_summary succeeds to isolate the
+        plan lookup from the independent unread-summary guard.
         """
         mcp = create_server(state_with_path)
 
@@ -254,8 +250,8 @@ class TestUnreadFile:
         """``unread-nudge.sh`` uses ``server_pid`` to detect when a
         ``.json`` was written by a different server process than whichever
         process last updated its ``.nudged`` sidecar (PID reuse after an
-        unclean kill, or a same-PID subprocess restart) — Bugbot finding
-        hwquR. The field must be this process's actual ``os.getpid()``,
+        unclean kill, or a same-PID subprocess restart). The field must be this
+        process's actual ``os.getpid()``,
         not a placeholder.
         """
         path = tmp_path / "unread.json"
@@ -698,7 +694,7 @@ class TestPollInbox:
         skip that is safe for a NATS-backed relay (push covers detection
         instead) would otherwise disable ``/write`` detection for the rest
         of the session's life, not merely delay it, since nothing else
-        would ever set ``wake_event`` (Bugbot finding hwr7W).
+        would ever set ``wake_event``.
         """
         assert not isinstance(state_with_path.relay, NatsRelay)
         monkeypatch.setattr(
@@ -786,16 +782,10 @@ class TestPollInbox:
     async def test_cancellation_between_initial_subscribes_unsubscribes_talk(
         self, state_with_path: ServerState, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A cancellation landing between the two initial subscribe() calls
-        must not leak the already-established talk SUB.
+        """Clean up the talk subscription if the inbox subscription is cancelled.
 
-        Before this fix, both initial subscribes ran BEFORE the
-        ``try/finally`` that unsubscribes on exit. A cancellation arriving
-        after ``subscribe_talk()`` returned but while
-        ``subscribe_inbox_notify()``'s own await was still in flight escaped
-        the function before ``talk_sub`` was ever bound inside the
-        protected block, so the finally's teardown loop never saw it and
-        the live SUB was orphaned.
+        The teardown guard must cover both awaits so a cancellation between them
+        cannot orphan an established subscription.
         """
         talk_unsubscribe = AsyncMock()
         talk_binding = SubscriptionBinding(MagicMock(unsubscribe=talk_unsubscribe), 0)
@@ -914,8 +904,8 @@ class TestPollInbox:
         moment the rebind happens, that ``_safe_tick`` had not yet run (the
         cheap-nap skip held for that same tick).
 
-        ``_reconcile_always_on_sub`` now also wakes the tracker on any
-        rebind (Bugbot finding hwr7z) — deliberately: a SUB re-established
+        ``_reconcile_always_on_sub`` wakes the tracker on any
+        rebind — deliberately: a SUB re-established
         after an orphaned window may have missed a poke with no replay, so
         the very next tick must recompute for real rather than staying
         napped indefinitely. That un-nap is expected to let subsequent
@@ -1066,14 +1056,10 @@ class TestPollInbox:
         assert tool.description == WALL_BASE_DESCRIPTION
 
     async def test_establishes_and_tears_down_all_subs(self, tmp_path: Path) -> None:
-        """poll_inbox opens talk, inbox-notify AND wall-notify SUBs and tears
-        all three down on exit.
+        """Open talk, inbox-notify, and wall-notify subscriptions together.
 
-        DES-062 added the inbox-notify SUB alongside the talk SUB; PL-1104
-        added the wall-notify SUB the same way. Each must be established at
-        startup and unsubscribed on teardown — proven here against a mocked
-        ``NatsRelay`` (LocalRelay, used by every other test in this class, has
-        no push mechanism at all — see ``_relay_pushes_inbox_notify``).
+        Each subscription must be established at startup and unsubscribed on
+        teardown, including subscriptions unavailable on the local relay.
         """
         nc = AsyncMock()
         talk_handle = AsyncMock()
@@ -1257,7 +1243,7 @@ class TestPollInbox:
         has no replay. At a disabled interval, nothing else would ever
         trigger ``get_unread_summary`` again after such a rebind, so a
         message that arrived during the gap would stay undetected
-        forever, not just delayed (Bugbot finding hwr7z).
+        forever, not just delayed.
         """
         monkeypatch.setattr(
             _descriptions, "_DISABLED_POLLER_FALLBACK_INTERVAL", self._FAST_INTERVAL
@@ -1550,10 +1536,7 @@ class TestInboxPokeGate:
     """Poke-gated recompute with a periodic backstop (DES-062)."""
 
     def test_starts_poked_forces_initial_recompute(self) -> None:
-        """A fresh gate recomputes on its first check — no poke needed.
-
-        Replaces the old ``last_count = -1`` "force initial refresh" idiom.
-        """
+        """Recompute on the first check without requiring an incoming poke."""
         gate = _InboxPokeGate(backstop_interval=1000.0)
         assert gate.claim() is True
 
@@ -1710,13 +1693,11 @@ class TestActiveTickGateOrderingProperties:
 
 class TestTargetedMessageMarksInboxGate:
     """A targeted (``user:tty``) message's wake poke must mark the shared
-    inbox gate, not just wake the poller — the regression this pins
-    permanently. Drives the exact frame ``_publish_talk_notification``
+    inbox gate, not just wake the poller. Drive the frame ``_publish_talk_notification``
     publishes for a targeted message through the real ``subscribe_talk``
-    callback (mirroring the original repro's setup exactly), then asserts
-    the FIXED behavior: the next active tick recomputes and the
+    callback, then assert that the next active tick recomputes and the
     description shows the unread count. A test that called ``gate.mark()``
-    by hand instead would pass on both the broken and the fixed code — it
+    by hand instead would bypass the callback — it
     would prove nothing about whether the callback itself marks the gate.
     """
 
@@ -1782,16 +1763,10 @@ class TestTargetedMessageMarksInboxGate:
 
 
 class TestTalkCallbackPreservesWireTypes:
-    """The talk-SUB callback must not stringify decoded JSON values before
-    ``TalkNotification.from_payload`` type-guards them.
+    """Preserve decoded JSON types until TalkNotification validates them.
 
-    Before this fix, the callback's dict comprehension ran ``str(v)`` on
-    every decoded value, so by the time ``from_payload``'s ``_trusted()``
-    checked ``isinstance(value, str)`` every value already *was* a str —
-    the guard against non-str JSON types (forged ``null``, numbers, nested
-    structures) was unreachable. A forged ``{"body": null}`` became
-    ``str(None)`` == ``"None"``, which passed the (defeated) guard and
-    rendered as if the sender had actually typed the word "None".
+    Stringifying values first would bypass the string guard: a forged null body
+    would become the apparently legitimate message 'None'.
     """
 
     async def test_forged_null_body_does_not_render_as_the_string_none(
@@ -1977,14 +1952,10 @@ class TestSubscribeInboxNotify:
 
 
 class TestSubscribeWallNotify:
-    """``subscribe_wall_notify`` establishes the repo-scoped wall wake poke.
+    """Check that wall changes wake the poller through a repo-scoped poke.
 
-    PL-1104: a wall post/clear had no push signal, so a peer only reconciled
-    its in-memory display queue on its own next poll tick — which a wedged
-    NATS connection delays for minutes. The fix adds a repo-scoped,
-    user-independent wake poke whose callback wakes the poller (which then
-    re-reads ``get_wall()`` on an unconditional tick and reconciles). These
-    tests pin the push path that nothing exercised before.
+    The signal is user-independent because the wall is a team broadcast.
+    Without it, a peer must wait for its next scheduled tick.
     """
 
     @staticmethod
@@ -2017,7 +1988,7 @@ class TestSubscribeWallNotify:
         sub = await subscribe_wall_notify(state, _test_latch(), asyncio.Event())
         assert sub is not None
         assert sub.generation == 1
-        # Repo only — no user argument (a wall is a team broadcast, PL-1104).
+        # Repo only — no user argument (a wall is a team broadcast).
         relay.wall_notify_subject.assert_called_once_with("_test-server")
 
     async def test_callback_wakes_without_marking_gate(self, tmp_path: Path) -> None:
@@ -2334,14 +2305,11 @@ class TestStartupNotificationRace:
 
 
 class TestMidSessionDropRecovery:
-    """A mid-session suspenders drop must be recorded and flushed, never lost.
+    """Record and flush mid-session notification drops.
 
-    notification.tex sec:sessionloss: the suspenders send-failure path
-    (``PollTickNotifyFail``) must set ``pendingNotify`` rather than merely
-    clearing the dead session, and the belt path (``NotifyBelt``) must flush
-    any such pending notify on its own next successful send. Regression
-    coverage for the fix, alongside the empirical repro in
-    ``test_notify_reliability_repro.py`` (kept passing unchanged).
+    PollTickNotifyFail must set pendingNotify, not merely clear the dead session.
+    NotifyBelt must flush the pending update on its next successful send. This
+    covers the session-loss model alongside test_notify_reliability_repro.py.
     """
 
     async def test_drop_then_reconnect_flushes(self, state: ServerState) -> None:
@@ -2431,16 +2399,10 @@ class TestMidSessionDropRecovery:
     async def test_drop_then_suspenders_success_flushes(
         self, state: ServerState
     ) -> None:
-        """A suspenders send failure followed by a LATER SUCCESSFUL suspenders
-        send flushes the earlier drop too (biff-6vuv).
+        """Flush a pending drop on a successful same-site notification retry.
 
-        ``PollTickNotifyOk`` now clears ``pendingNotify`` unconditionally,
-        the same argument ``NotifyBelt`` already rests on: the send that
-        just succeeded delivered the *current* description, so whatever
-        drop was recorded earlier — by this site or another — is
-        discharged. Before the amendment, this suspenders-only recovery
-        path did not exist: the drop had to wait for a belt call or a
-        reconnect (``capture_session``), never a same-site retry.
+        The successful send delivered the current description, discharging any
+        pending drop without needing a belt call or reconnect.
         """
         from mcp.server.session import ServerSession
 

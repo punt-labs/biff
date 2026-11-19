@@ -441,8 +441,7 @@ async def _run_kv_watch(
 ) -> None:
     """Run a single KV watch cycle until shutdown.
 
-    Stays alive during napping — the NATS connection is no longer
-    released on idle.  This ensures wall changes and session events
+    Keep the NATS connection alive during napping so wall changes and session events
     are detected in real-time regardless of activity state.
 
     The watch is the ``kvWatch`` kind of ``SubKind`` in ``nats-relay.tex``
@@ -824,8 +823,7 @@ async def _delete_released_session(state: ServerState, session_key: str) -> None
             # its now-stale sentinel must not abort the rest of teardown
             # (relay.close) -- the next reaper tick
             # re-processing an already-deleted session is harmless, unlike
-            # skipping the steps still queued after this one (Cursor
-            # Bugbot, Medium).
+            # skipping the steps still queued after this one.
             logger.warning(
                 "Failed to remove sentinel for %s", session_key, exc_info=True
             )
@@ -856,10 +854,8 @@ def _remove_unread_files(unread_path: Path | None) -> None:
 
     ``plugin/hooks/unread-nudge.sh`` tracks the last-nudged count in a
     sibling ``.nudged`` file keyed to this same path's stem. Removing only
-    the JSON (the original shutdown behavior) left the sidecar behind: a
-    reused PID starting a fresh session could inherit a stale sidecar whose
-    leftover count happened to match its own first real count, silently
-    suppressing the nudge that should fire for it (Bugbot finding hfTNp).
+    the JSON would let a reused PID inherit a stale sidecar whose count
+    matches its first real count, silently suppressing the initial nudge.
     """
     if unread_path is None:
         return
@@ -877,27 +873,24 @@ def _remove_unread_files(unread_path: Path | None) -> None:
 def _write_reap_fallback_sentinels(state: ServerState) -> None:
     """Write reap-fallback sentinels before the best-effort NATS teardown.
 
-    Every step of that teardown is now bounded (``_TEARDOWN_STEP_TIMEOUT``)
-    and can abort partway through a wedged connection.  Before
-    this, only the signal-triggered shutdown path
-    (``_active_lifespan._signal_handler``) wrote a sentinel first — normal
-    shutdown had no equivalent, so a timed-out ``delete_session`` here
-    silently orphaned the KV row: no logout event, no sentinel, no reaper
-    coverage.  Written unconditionally and removed by :func:`_release_session`
+    Every teardown step is bounded (``_TEARDOWN_STEP_TIMEOUT``) and can abort
+    partway through a wedged connection. Write a sentinel unconditionally so
+    a timed-out delete_session cannot orphan the KV row without reaper coverage.
+    The sentinel is removed by :func:`_release_session`
     only once its session's KV row is actually deleted, so a healthy
     shutdown leaves nothing behind for the reaper to redundantly process.
     """
     # (OSError, RuntimeError): matches the signal handler's tuple for the
     # same helper -- sentinel_dir() -> biff_data_dir() calls Path.home()
     # fresh on every call, which raises RuntimeError (not OSError) when
-    # HOME is unset (Cursor Bugbot, Low).
+    # HOME is unset.
     try:
         _write_sentinel(state.config.repo_name, state.session_key)
     except (OSError, RuntimeError):
         # This sentinel is the only durable signal that a timed-out
         # teardown below needs reaping -- unlike the signal handler's sync
         # cleanup, this path is not itself a signal handler, so logging is
-        # safe here (Copilot).
+        # safe here.
         logger.warning(
             "Failed to write reap-fallback sentinel for %s",
             state.session_key,
@@ -918,14 +911,12 @@ async def _lifespan_cleanup(
     it any earlier races the still-ticking ``_reap_loop``, which treats any
     sentinel matching this session's own key as a prior incarnation and
     discards it unreaped -- consuming the fallback before a
-    later timed-out ``_release_relay`` ever needs it (Cursor Bugbot, High).
+    later timed-out ``_release_relay`` ever needs it.
     ``reaper.cancel()`` interrupts an in-flight NATS call immediately
     rather than waiting on it, so this step is bounded regardless of what
     the reaper happened to be doing -- unlike routing it through the
     logout/teardown awaits below, which sit inside FastMCP's 5s disconnect
-    budget and would reopen the same race from the other side (Cursor
-    Bugbot, High, on an earlier version of this fix that moved the write
-    after those awaits instead).
+    budget and would reopen the same race from the other side.
 
     Logout is written next, before closing anything else -- the MCP
     subprocess may be killed at any moment after Claude Code closes
@@ -944,7 +935,7 @@ async def _lifespan_cleanup(
         # CancelledError -- letting it propagate would skip the sentinel
         # write and _release_relay below, same as _shutdown_tasks's
         # gather(..., return_exceptions=True) already protects the other
-        # background tasks against (Cursor Bugbot, High).
+        # background tasks against.
         logger.warning("Reaper task failed during shutdown", exc_info=True)
     # Drain vox background tasks so child process waiters complete
     # before the event loop closes.  Without this, SIGCHLD fires
@@ -1095,11 +1086,8 @@ async def _running_lifespan(
                     b"biff: signal cleanup: sentinel write failed\n",
                 )
             )
-        # Relay-agnostic, like the sentinel writes above: a hard SIGTERM/
-        # SIGINT/SIGHUP kill previously skipped this entirely (only the
-        # normal lifespan-teardown path called it), leaving both the
-        # unread-status JSON and its unread-nudge.sh ``.nudged`` sidecar
-        # on disk after this session ends (Cursor Bugbot finding hwquR).
+        # Signal cleanup must remove both the unread-status JSON and the
+        # unread-nudge.sh sidecar even when lifespan teardown cannot run.
         steps.append(
             (
                 lambda: _remove_unread_files(state.unread_path),
@@ -1381,7 +1369,6 @@ def create_server(state: ServerState) -> FastMCP[ServerState]:
     Starts a background inbox poller that keeps the tool description
     and status file in sync with incoming messages.
     """
-
     live = _LiveSession()
 
     @asynccontextmanager

@@ -338,17 +338,10 @@ def _wait_for_unread_json(home: Path, timeout: float = _STARTUP_TIMEOUT) -> Path
     "sig", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP], ids=lambda s: s.name
 )
 class TestSignalRemovesUnreadFiles:
-    """A caught signal must remove the unread-status JSON and its
-    ``unread-nudge.sh`` ``.nudged`` sidecar, not just the sentinel.
+    """Remove unread JSON and nudge sidecars on caught termination signals.
 
-    Before this fix, ``_signal_handler``'s cleanup steps did not include
-    ``_remove_unread_files`` at all -- only the normal (non-signal)
-    lifespan-teardown path called it. A hard SIGTERM/SIGINT/SIGHUP kill
-    left both files behind; if the PID this session's files are keyed by
-    was later reused by an unrelated session, that session could inherit
-    a stale ``.nudged`` sidecar whose leftover count happened to match its
-    own first real count, silently suppressing the nudge that should fire
-    for it (Cursor Bugbot finding hwquR).
+    A reused PID must not inherit a sidecar whose matching count suppresses the
+    new session's first nudge. Signal and normal lifespan cleanup both remove it.
     """
 
     def test_unread_files_removed_after_signal(

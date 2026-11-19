@@ -22,10 +22,9 @@ class SessionHandleStore:
     ``SessionRouting`` has already checked ``session_id`` against
     ``[A-Za-z0-9_-]+``, so it is safe as a path component.
 
-    Nothing at runtime reads this yet.  It is the engine-session handle
-    store of the caller-identity standard (section 4.2.4), written now so a
-    layer-2 engine session and the SessionEnd handoff have a handle to find;
-    it is intentional forward wiring, not dead state.
+    The file reserves a stable lookup location for engine-session handles
+    and SessionEnd handoffs (caller-identity standard, section 4.2.4).
+    Runtime readers are not required to consume it.
     """
 
     root: Path

@@ -1,4 +1,4 @@
-"""Scale stress test against hosted NATS (Synadia Cloud).
+r"""Scale stress test against hosted NATS (Synadia Cloud).
 
 Tests biff's relay layer under concurrent load using real NATS
 connections to the production cloud infrastructure.
@@ -19,9 +19,9 @@ Synadia Cloud account limits (Biff / NGS / biff-default)::
 
 With DES-015 (count-only unread summaries), the steady-state
 JetStream consumer footprint is 0 per user, so the
-consumers-per-stream limit (500) is no longer the primary
-capacity bottleneck.  The 300 connection limit is now the
-main constraint.  The stress test validates that biff operates
+consumers-per-stream limit (500) is not the primary
+capacity bottleneck. The 300 connection limit is the main constraint.
+The stress test validates that biff operates
 correctly at scale and cleans up after itself.
 """
 
@@ -1042,7 +1042,7 @@ class TestAccountCapacity:
     """Discover and document the real capacity of the Synadia Cloud account.
 
     With DES-015 (count-only unread summaries), steady-state is
-    0 consumers per active user.  The consumer limit no longer
+    0 consumers per active user.  The consumer limit does not
     constrains concurrency — only connections do (300 limit).
     """
 

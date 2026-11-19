@@ -51,6 +51,11 @@ class ClaudeMdImport:
     _lock_path: Path
 
     def __new__(cls, host_path: Path, import_line: str) -> Self:
+        """Create an import manager for the selected CLAUDE.md file.
+
+        Raises:
+            ValueError: The import line is empty, multiline, or not an @ import.
+        """
         cls._validate(import_line)
         self = super().__new__(cls)
         self._host = host_path
@@ -256,7 +261,7 @@ class ClaudeMdImport:
 
     @staticmethod
     def _detect_eol(text: str) -> str:
-        """Return the host file's EOL convention, defaulting to ``\\n``."""
+        r"""Return the host file's EOL convention, defaulting to ``\\n``."""
         crlf = text.find("\r\n")
         lf = text.find("\n")
         cr = text.find("\r")

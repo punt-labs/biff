@@ -59,7 +59,7 @@ class TestTalkEndRefreshesActivity:
         # ``last_tool_at`` past ``backdated``, so asserting only
         # ``> backdated`` would pass even if talk_end's own
         # ``update_current_session`` call were deleted -- it would prove
-        # nothing about the fix under test. Capture ``before`` immediately
+        # nothing about the acceptance behavior. Capture ``before`` immediately
         # before the call under test and require ``last_tool_at`` to have
         # advanced past THAT point.
         before = datetime.now(UTC)

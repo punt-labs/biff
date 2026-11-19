@@ -523,7 +523,7 @@ class NatsRelay:
         # ``_open_connection`` bumps it; the connection callbacks capture the
         # value in force at their registration and no-op when it no longer
         # matches, so a superseded client's late callback cannot mutate state
-        # for the live connection (Bugbot: stale-callback race).
+        # for the live connection.
         self._generation = 0
         # Per-client counter of nats-py's *transparent* same-object reconnects
         # (``reconnected_cb``).  Where ``_generation`` counts fresh dials,
@@ -603,7 +603,7 @@ class NatsRelay:
         ``_connect_lock`` is the one that actually matters, closing a race
         :meth:`close` also serializes on the same lock to win: whichever
         of a concurrent ``close()``/``_ensure_connected()`` pair acquires
-        the lock first now runs to completion before the other proceeds,
+        the lock first runs to completion before the other proceeds,
         so a reconnect that was already in flight when ``close()`` arrives
         finishes and is torn down cleanly by ``close()`` afterward, while
         a reconnect that arrives after (or blocks behind) ``close()`` sees
@@ -772,7 +772,7 @@ class NatsRelay:
         client and the next dial stores a fresh one, the old client's callbacks
         keep firing asynchronously; the generation check makes each a no-op so
         a superseded client can never null ``self._nc`` or the handles of the
-        live connection (Bugbot: stale-callback race).
+        live connection.
         """
 
         async def _on_disconnect() -> None:
@@ -898,7 +898,7 @@ class NatsRelay:
             # Capture this dial's generation.  A callback belongs to the
             # current client only while ``self._generation`` still equals the
             # value it closed over; a superseded client's late callback finds a
-            # newer generation and no-ops (Bugbot: stale-callback race).
+            # newer generation and no-ops.
             self._generation += 1
             # A fresh client has undergone no in-place reconnects; reset the
             # epoch so it counts reconnects on *this* client only (nats-relay.tex
@@ -1426,7 +1426,7 @@ class NatsRelay:
         subscriber (``subscribe_wall_notify``) only wakes the poller, whose
         next tick recomputes ``get_wall()`` and reconciles the display
         queue.  Without it a peer waits for its own scheduled poll tick,
-        which a wedged connection can delay for minutes (PL-1104).
+        which a wedged connection can delay for minutes.
         """
         try:
             nc = await self._live_nc_or_reconnect()
@@ -1545,7 +1545,7 @@ class NatsRelay:
         client, not JetStream/KV provisioning — but after a client rebuild
         (``_force_reconnect``/``_on_closed`` clear ``self._nc``), reading
         ``self._nc`` directly and bailing on ``None`` silently no-ops
-        instead of reconnecting (biff-1f2).  Checking the cached client
+        instead of reconnecting.  Checking the cached client
         first and only calling :meth:`get_nc` (``_ensure_connected``
         underneath) when it is actually gone or closed avoids forcing a
         full reconnect/re-provisioning cycle on every publish when the
@@ -1615,8 +1615,7 @@ class NatsRelay:
         :meth:`_live_nc_or_reconnect` rather than reading ``self._nc``
         directly, so a poke issued right after a client rebuild (the
         cached client discarded, not yet re-dialed) reconnects and still
-        publishes instead of silently no-opping on the stale reference
-        (biff-1f2).
+        publishes instead of silently no-opping on the stale reference.
         """
         if ":" not in to_user:
             return
@@ -1644,8 +1643,8 @@ class NatsRelay:
         """Publish a payload-less wake poke for a broadcast message (DES-062).
 
         Mirrors :meth:`_publish_talk_notification`'s error discipline
-        exactly: resolves the client via :meth:`_live_nc_or_reconnect`
-        (rebuild-robust — biff-1f2) and never propagates a failure, since
+        exactly: resolve the client via :meth:`_live_nc_or_reconnect` and never
+        propagate a failure, since
         the JetStream delivery in :meth:`deliver` — the critical path —
         has already succeeded by the time this runs.  The poke carries no
         payload; the subscriber (``subscribe_inbox_notify``) only wakes the
@@ -1813,11 +1812,10 @@ class NatsRelay:
         # Re-anchor to the current connection: the first _tracked's await
         # may have let a concurrent loop rebuild self._nc, leaving `js`
         # stale.  Fast path returns cached handles, so `owner = self._nc` at
-        # _tracked entry matches the connection this awaitable runs on
-        # (code-reviewer + alex-chen: residual two-_tracked race).  Kept OUT of
-        # the try below so a slow-path rebuild raising BucketNotFoundError (a
+        # _tracked entry matches the connection this awaitable runs on.
+        # Keep this outside the try so a rebuild raising BucketNotFoundError (a
         # NotFoundError subclass) surfaces as a provisioning failure instead of
-        # being swallowed into a tty_count-only undercount (silent-failure-hunter).
+        # being swallowed into a tty_count-only undercount.
         js, _ = await self._ensure_connected()
         try:
             user_info = await self._tracked(
@@ -1909,7 +1907,7 @@ class NatsRelay:
         # concurrent loop rebuild self._nc, leaving `kv` stale.  Fast path
         # returns cached handles, so `owner = self._nc` at _tracked entry
         # matches the connection this awaitable runs on — and the put runs on a
-        # live handle (code-reviewer + alex-chen: residual two-_tracked race).
+        # live handle.
         _, kv = await self._ensure_connected()
         await self._tracked(
             "kv.put", kv.put(kv_key, updated.model_dump_json().encode())
@@ -2324,7 +2322,7 @@ class NatsRelay:
         """Set or clear the team wall in the sessions KV bucket.
 
         After the authoritative KV write, publishes a best-effort
-        wall-change wake poke (PL-1104) so peers in this repo reconcile
+        wall-change wake poke so peers in this repo reconcile
         their display queue on their next woken tick instead of waiting
         for a scheduled poll.
         """
@@ -2355,7 +2353,7 @@ class NatsRelay:
             return None
         if wall.is_expired:
             # Re-resolve the handle immediately before use (the same
-            # freshness discipline _tracked callers follow, biff-1f2): the
+            # freshness discipline _tracked callers follow): the
             # ``kv.get`` above is a genuine ``await``, during which a
             # concurrent wedge teardown could have discarded the client the
             # outer ``kv`` is bound to, stranding this delete on a closed
@@ -2370,14 +2368,14 @@ class NatsRelay:
         """Set or clear a wall for a specific repo (cross-repo broadcast).
 
         After the authoritative KV write, publishes a best-effort
-        wall-change wake poke (PL-1104) to *repo* so its peers reconcile
+        wall-change wake poke to *repo* so its peers reconcile
         promptly rather than on their own scheduled poll tick.
 
         *repo* is validated before it reaches either the KV key or the
         poke subject: a repo carrying a ``.`` would otherwise expand the
         ``{repo}.wall`` key into extra tokens (and the poke path validates
         anyway, so an unvalidated key write beside a validated poke would
-        diverge — djb wire-safety review, PL-1104).
+        diverge).
         """
         self._validate_repo(repo)
         _, kv = await self._ensure_connected()

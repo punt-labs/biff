@@ -54,6 +54,7 @@ class EthosTeams:
     def __new__(
         cls, teams: Iterable[tuple[Mapping[str, str], Mapping[str, str], str]]
     ) -> Self:
+        """Copy the team role graphs for deterministic identity lookup."""
         self = super().__new__(cls)
         self._teams = tuple(
             (dict(roles), dict(edges), name) for roles, edges, name in teams

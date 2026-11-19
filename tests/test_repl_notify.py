@@ -268,13 +268,7 @@ class TestNotifyState:
             assert visible_width(rendered_line) <= TABLE_WIDTH
 
     def test_wall_control_only_body_renders_fallback(self) -> None:
-        """A control-only wall post shows the explicit fallback, not silence.
-
-        Mirrors ``TestFormatWallStatusLine.test_control_only_body_renders_fallback``
-        — before this fix, ``terminal_safe`` stripped the body to nothing and
-        the banner rendered as ``WALL kai: (1h remaining)`` with no hint the
-        poster's message was dropped.
-        """
+        """Render a fallback when terminal sanitization removes the whole body."""
         state = NotifyState()
         wall = WallPost(
             text="\x00\x1b\x07",

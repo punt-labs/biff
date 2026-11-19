@@ -89,13 +89,7 @@ class TestReadMessagesCount:
         assert summary == "No new messages."
 
     def test_could_not_check_mail_is_not_reported_as_zero_new(self) -> None:
-        """A failure must not render like a confirmed-empty inbox.
-
-        Before this branch, a persistent-failure result would have fallen
-        into the counting branch and, matching no '^▶' lines, reported
-        '0 new' — indistinguishable in the panel from a genuinely empty
-        inbox. It must instead be surfaced as a failure.
-        """
+        """Surface an inbox failure rather than reporting zero new messages."""
         response = (
             "Could not check mail — failed twice (nats: timeout). "
             "Inbox state unknown, not confirmed empty."
@@ -143,7 +137,7 @@ class TestWhoCount:
 
         Continuation lines share ROW_PREFIX but never contain "stopped
         responding" themselves -- a line-by-line filter on that phrase alone
-        would miss them (Cursor Bugbot, Medium).
+        would miss them.
         """
         response = (
             "▶  NAME  IDLE\n"

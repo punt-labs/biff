@@ -31,7 +31,20 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def who() -> str:
-        """List all sessions with idle time."""
+        """Find teammates and session addresses in visible repositories.
+
+        Call without arguments to inspect live sessions, idle times, and plans.
+
+        Returns:
+            A presence table, or 'No sessions.' when none are live. A footnote
+            identifies stale sessions awaiting cleanup when applicable.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
+        """
         await update_current_session(state)
         await refresh_read_messages(mcp, state)
         sessions = await state.relay.get_sessions_for_repos(state.visible_repos)

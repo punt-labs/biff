@@ -58,7 +58,7 @@ class StampedClient(Client[Any]):  # pyright: ignore[reportMissingTypeArgument]
 
 
 def caller_for(session_id: str) -> dict[str, str]:
-    """A main-thread ``_caller`` declaring *session_id*."""
+    """Build a main-thread ``_caller`` declaring *session_id*."""
     return {"session_id": session_id, "agent_id": "4242"}
 
 

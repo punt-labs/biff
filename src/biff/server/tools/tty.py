@@ -34,14 +34,21 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def tty(name: str = "") -> str:
-        """Set a human-readable name for this session.
+        """Name the current session for use in teammate addresses.
 
-        If *name* is omitted, auto-assigns the next ``ttyN``.
-        Names are limited to 20 characters.
+        Args:
+            name: A unique name of at most 20 characters. An empty value claims
+                the next available ttyN name.
 
-        Output echoes the name::
+        Returns:
+            'TTY: <name>' on success, or an error for an invalid, occupied, or
+            unclaimable name. Successful renames update presence and talk hints.
 
-            TTY: tty3
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         name = name.strip()
 

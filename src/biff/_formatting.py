@@ -173,7 +173,7 @@ _WORD_OR_WHITESPACE_RE = re.compile(r"\S+|\s+")
 
 
 def _break_long_word(word: str, width: int) -> list[str]:
-    """Split *word* into chunks no wider than *width* terminal cells.
+    r"""Split *word* into chunks no wider than *width* terminal cells.
 
     A single unbroken run of wide glyphs (e.g. CJK with no spaces) is the
     case ``textwrap.wrap``'s code-point-based ``break_long_words`` gets
@@ -300,7 +300,7 @@ def _render_rows(
 
 
 def format_table(specs: list[ColumnSpec], rows: list[list[str]]) -> str:
-    """Render a constrained-width table with header and data rows.
+    r"""Render a constrained-width table with header and data rows.
 
     The table fits within :data:`TABLE_WIDTH` (80) columns.  Fixed
     columns grow to their content width.  The single variable column

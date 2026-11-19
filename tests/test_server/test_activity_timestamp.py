@@ -1,17 +1,8 @@
-"""Regression tests: displayed idle vs heartbeat.
+"""Display user idle time independently of heartbeat liveness.
 
-The IDLE column in ``/who`` and the ``idle H:MM`` field in ``/finger`` used
-to be computed from ``UserSession.last_active`` — the same field the
-background heartbeat rewrites to ``now()`` on every tick regardless of
-whether anything happened.  Every live session's displayed idle time could
-therefore never read as more than 0-1 minutes, no matter how long it had
-actually sat unused.
-
-``last_tool_at`` is the fix: a second timestamp written only by
-``update_current_session`` (reached from every ``track_activity``-decorated
-tool body) on a real tool invocation.  These tests exercise the fix at the
-display layer — the same ``format_who``/``format_finger`` functions the
-tools call — so they demonstrate the actual bug, not just a model field.
+Heartbeat updates last_active on every tick, while tool invocations update
+last_tool_at. Exercise the formatters used by who and finger so an inactive
+but live session shows its real idle time.
 """
 
 from __future__ import annotations

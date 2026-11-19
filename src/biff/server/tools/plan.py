@@ -42,20 +42,28 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         message: str,
         source: Literal["manual", "auto"] = "manual",
     ) -> str:
-        """Update the current user's ``.plan`` file.
+        """Publish a short one-line status visible in who and finger.
 
-        Bead IDs (e.g. ``biff-ka4``) are auto-expanded to include
-        the issue title if ``bd`` is available::
+        Use this for what you are working on, not a task list. Bare task identifiers
+        are expanded to their titles when the local tracker CLI is available.
 
-            Plan: biff-ka4: post-checkout hook: update plan from branch
+        Args:
+            message: A short status; empty clears the current plan.
+            source: Hooks use 'auto'; explicit user updates use 'manual'. Automatic
+                updates cannot overwrite a nonempty manual plan.
 
-        The *source* parameter controls overwrite priority.
-        Hooks pass ``"auto"``; manual ``/plan`` calls use the
-        default ``"manual"``.  Auto plans cannot overwrite manual
-        plans — the user's intentional plan takes precedence.
+        Returns:
+            The published plan, a notice preserving a manual plan, or an error
+            explaining the maximum length when the expanded message is too long.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         # Marker write/clear is a thin wrapper around the same shared
-        # function the CLI's `plan` command calls (PL-PA-3) — see
+        # function the CLI's `plan` command calls — see
         # commands/plan.py's `sync_plan_marker` docstring.
         from biff.commands.plan import sync_plan_marker  # noqa: PLC0415
 

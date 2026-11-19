@@ -159,7 +159,7 @@ class TestHalfOpenWedgeRecovery:
     request raises ``nats: timeout``.  nats-py's default keepalive
     (ping_interval=120s, max_outstanding_pings=2) only declares such a
     connection dead after ~240s — during which the poller and heartbeat
-    crash-loop with no recovery.  The fix tunes keepalive so detection
+    crash-loop with no recovery. Bounded keepalive ensures detection
     happens in ~60-80s, firing nats-py's own reconnect + handle invalidation.
     """
 
@@ -176,8 +176,8 @@ class TestHalfOpenWedgeRecovery:
     async def test_connect_uses_bounded_keepalive(self) -> None:
         """Detection latency must be far below the 240s nats-py default.
 
-        nats-py's ping timer cannot be advanced in a unit test, so the fix
-        is verified at its source: the keepalive parameters passed to
+        nats-py's ping timer cannot be advanced in a unit test, so verify
+        the budget directly through the keepalive parameters passed to
         ``nats.connect``.  ``ping_interval * max_outstanding_pings`` (~60s)
         is the base detection budget; the real trip is up to one interval
         higher (~80s) because nats-py fires when the count *exceeds* the
@@ -479,7 +479,7 @@ class TestReconnectEpochGuard:
 
     @pytest.mark.anyio()
     async def test_flush_window_teardown_then_late_cb_heals(self) -> None:
-        # Flush-window race (djb, wire review): nats-py's transparent reconnect
+        # Flush-window race: nats-py's transparent reconnect
         # is not atomic — it brings the socket up (is_connected True) and only
         # later fires reconnected_cb (the epoch bump).  A force-teardown that
         # re-checks under the lock in that window reads is_connected True and
@@ -684,8 +684,7 @@ class TestSequentialTrackedRebuildRace:
     second request must run its awaitable on the *fresh* handle — not on the
     stale one captured earlier.  Otherwise ``owner = self._nc`` reads the fresh
     client while the awaitable runs on the stale one, so a stale-handle timeout
-    is misattributed to the healthy client and force-reconnects it
-    (code-reviewer + alex-chen: residual two-``_tracked`` race).
+    is misattributed to the healthy client and force-reconnects it.
     """
 
     @pytest.mark.anyio()
@@ -736,7 +735,7 @@ class TestSequentialTrackedRebuildRace:
         new_js.stream_info = _fresh_stream_info
         relay._js = stale_js
 
-        # With the fix the second op re-anchors to new_js and completes; without
+        # The second op re-anchors to new_js and completes; without
         # it, the stale-handle timeout force-reconnects the healthy new client.
         await relay.get_unread_summary("kai:tty1")
 
@@ -874,7 +873,7 @@ class TestCallbackGenerationGuard:
     wedged client and the next ``_ensure_connected`` dials a fresh one, so the
     OLD client's callbacks can still fire asynchronously.  A per-connection
     generation token makes a stale callback a no-op — it must never clear the
-    handles of the LIVE connection (Bugbot Medium).
+    handles of the LIVE connection.
     """
 
     @staticmethod

@@ -39,17 +39,23 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         auth: str = "",
         local: bool = False,  # noqa: FBT001, FBT002
     ) -> str:
-        """Configure the relay URL. Restart required.
+        """Configure the relay for subsequent Claude Code sessions.
 
-        Parameters
-        ----------
-        url:
-            Relay URL (must start with ``tls://``, ``nats://``,
-            ``ws://``, or ``wss://``).
-        auth:
-            Optional path to a credentials file.
-        local:
-            Write to ``config.local.yaml`` instead of ``config.yaml``.
+        Use this to switch relay servers; restart Claude Code after saving.
+        Shared config is tracked, so authentication can only be saved locally.
+
+        Args:
+            url: Start with tls://, nats://, ws://, or wss://.
+            auth: Optional path to a credentials file; requires local=True.
+            local: Write config.local.yaml rather than the shared config.yaml.
+
+        Returns:
+            A save confirmation and restart reminder, or an error for an invalid
+            scheme, shared credentials, or a missing repository.
+
+        Raises:
+            OSError: Configuration or gitignore cannot be written.
+            SystemExit: The existing shared YAML configuration is malformed.
         """
         repo_root = state.repo_root
         if repo_root is None:

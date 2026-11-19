@@ -156,18 +156,13 @@ def _check_user_commands(commands_dir: Path | None = None) -> CheckResult:
 
 
 def _resolve_relay_config() -> tuple[str, RelayAuth | None, bool]:
-    """Resolve relay URL, auth, and TLS handshake mode without user identity.
+    """Resolve relay settings without requiring user identity.
 
-    Delegates to :func:`biff.config.resolve_relay_config`, the same
-    file+env resolution chain :func:`biff.config._load_base_config` uses
-    (config.yaml -> config.local.yaml -> ``BIFF_RELAY_*`` env vars -> the
-    demo relay fallback), so ``biff doctor`` reports the same relay
-    ``wall`` actually connects to -- including under env overrides.
-    Previously this was a second, independent relay-config reader that PR
-    #383 had to hand-patch by hand once already when
-    ``tls_handshake_first`` was added; a source of truth with an
-    un-audited second reader goes stale silently
-    (docs/relay-env-overrides.md Sec 1).
+    Delegate to the CLI's file and environment resolution chain so doctor
+    reports the relay commands actually connect to.
+
+    Raises:
+        SystemExit: Shared YAML is malformed or relay overrides are invalid.
     """
     return resolve_relay_config(find_git_root())
 

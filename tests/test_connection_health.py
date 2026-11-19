@@ -173,7 +173,7 @@ class TestWedgeOnsetRecovery:
         assert health.consecutive_timeouts == 0
 
     def test_total_timeouts_counts_even_on_superseded_client(self) -> None:
-        # Review finding: record_timeout() is only reached when
+        # record_timeout() is only reached when
         # _tracked's owner check passes (this connection's own wedge
         # episode). A timeout on a client _tracked has already superseded
         # still re-raises to the caller as a real timeout, so

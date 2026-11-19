@@ -1,4 +1,4 @@
-"""Behavioral tests for ``plugin/hooks/session-end.sh`` (issue #471).
+"""Behavioral tests for ``plugin/hooks/session-end.sh``.
 
 The SessionEnd dispatcher makes a network call to the biff relay
 (``biff-hook claude-code session-end``) that normally takes several seconds
@@ -102,7 +102,7 @@ def _run_hook(repo: Path, env: dict[str, str]) -> float:
 
 
 class TestSessionEndDetaches:
-    """The dispatcher must not block the exit on the relay call (#471)."""
+    """The dispatcher must not block the exit on the relay call."""
 
     def test_parent_returns_before_slow_hook_finishes(self, tmp_path: Path) -> None:
         """The script returns well before the slow biff-hook stub completes."""
@@ -138,7 +138,7 @@ class TestSessionEndDetaches:
 
 
 class TestSessionEndObservability:
-    """A failed detached cleanup must still leave a breadcrumb (#471 review)."""
+    """A failed detached cleanup must still leave a breadcrumb."""
 
     def test_failed_detached_call_is_logged(self, tmp_path: Path) -> None:
         """biff-hook's stderr goes to ~/.punt-labs/biff/hook-errors.log.

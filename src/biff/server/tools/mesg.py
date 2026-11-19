@@ -29,11 +29,19 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def mesg(enabled: bool) -> str:  # noqa: FBT001
-        """Toggle message reception for the current user.
+        """Control whether this session accepts messages.
 
-        Output mimics BSD ``mesg(1)``::
+        Use enabled=True to accept messages or False to block them. This changes
+        the session's availability, not repository-wide enablement.
 
-            is y
+        Returns:
+            BSD-style confirmation: 'is y' for enabled or 'is n' for disabled.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         set_biff_enabled(enabled=enabled)
         await update_current_session(state, biff_enabled=enabled)

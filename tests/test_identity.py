@@ -337,14 +337,10 @@ class TestReadIdentityYaml:
 
 
 class TestEthosSubmoduleDeclared:
-    """Direct coverage of the ``.gitmodules`` classification helper.
+    """Distinguish an absent .gitmodules file from an unreadable one.
 
-    ``_ethos_submodule_declared`` used to fold "confirmed absent" and
-    "exists but unreadable/undecodable" into a single ``False`` return --
-    the exact bug class DES-053 exists to close, reintroduced one
-    function later. These tests exercise the helper in isolation so that
-    regression coverage does not depend on threading through
-    ``_known_agent_github_logins`` and ``load_cli_config``.
+    An ambiguous declaration must fail closed rather than authorize an agent
+    login through an incomplete identity registry.
     """
 
     def test_no_gitmodules_file_is_absent(self, tmp_path: Path) -> None:
@@ -365,7 +361,7 @@ class TestEthosSubmoduleDeclared:
     def test_gitmodules_with_crlf_line_endings_is_declared(
         self, tmp_path: Path
     ) -> None:
-        """A ``.gitmodules`` checked out with CRLF line endings (Windows,
+        r"""A ``.gitmodules`` checked out with CRLF line endings (Windows,
         or ``core.autocrlf=true``) must still match. The declaration
         regex's trailing ``[ \\t]*$`` does not, on its own, consume a
         ``\\r`` sitting immediately before the ``\\n`` -- a plausible
@@ -402,10 +398,9 @@ class TestEthosSubmoduleDeclared:
     def test_invalid_utf8_gitmodules_is_unverifiable_with_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """``UnicodeDecodeError`` is not an ``OSError`` subclass -- a bare
-        ``except OSError`` does not catch it at all, so a corrupted
-        ``.gitmodules`` would previously propagate uncaught through
-        ``_known_agent_github_logins`` and crash the CLI.
+        """Handle undecodable .gitmodules content as an ambiguous declaration.
+
+        UnicodeDecodeError is not an OSError subclass, so both need handling.
         """
         (tmp_path / ".gitmodules").write_bytes(b"\xff\xfe not valid utf-8\n")
         with caplog.at_level(logging.WARNING, logger=_IDENTITY_LOGGER):
@@ -546,13 +541,7 @@ class TestKnownAgentGithubLogins:
     def test_corrupted_bot_identity_file_not_silently_trusted(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Regression for a live-reproduced gap: the bot's OWN
-        identity file being corrupted (chmod 000) must not silently zero
-        out the known-agent set. The scan must report itself incomplete
-        (so callers refuse to trust an unverifiable GitHub login instead
-        of treating "empty set" as "definitely not a bot") and must log a
-        warning -- not fail with zero trace, as it did before this fix.
-        """
+        """Reject unverifiable agent identities and log the reason."""
         path = _write_identity_yaml(
             tmp_path, "claude", "kind: agent\ngithub: claude-puntlabs\n"
         )
@@ -717,7 +706,7 @@ class TestResolveAgentIdentityFromDisk:
 
         The resolved handle must always equal the validated ``agent``
         string derived from the filename, not the YAML's ``handle``
-        field.  Regression test for PR #243 review finding.
+        field.
         """
         _write_ethos_yaml(tmp_path, "agent: claude\n")
         _write_identity_yaml(

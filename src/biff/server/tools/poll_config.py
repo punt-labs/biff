@@ -93,7 +93,6 @@ _DISABLE_RESPONSE_LOCAL = (
 
 def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     """Register poll configuration tools."""
-
     nats_backed = isinstance(state.relay, NatsRelay)
     description = (
         _SET_POLL_INTERVAL_DESCRIPTION_NATS
@@ -103,7 +102,20 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
 
     @mcp.tool(name="set_poll_interval", description=description)
     async def set_poll_interval(interval: str) -> str:
-        """Persist the poll interval to config.local.yaml. Restart required."""
+        """Save the background polling cadence for the next server start.
+
+        Args:
+            interval: A positive duration such as '2s' or '5m', or 'n' to disable
+                periodic work. NATS push subscriptions remain active; filesystem
+                relays use a fallback poll because they have no push mechanism.
+
+        Returns:
+            A confirmation and restart reminder, or an invalid-interval notice.
+            Without a repository the response is returned but no file is saved.
+
+        Raises:
+            OSError: The local configuration or gitignore cannot be written.
+        """
         parsed = _parse_interval(interval)
         if parsed is not None and parsed < 0:
             return (
@@ -120,8 +132,7 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
                 existing["poll_interval"] = parsed
             write_yaml_config(repo_root, existing, local=True)
             # config.local.yaml is per-user; keep it out of git even when a
-            # user only ever ran `biff enable` (which no longer touches the
-            # gitignore) and then set a poll interval.
+            # user has not run interactive configuration.
             ensure_gitignore_yaml(repo_root)
 
         if parsed is None:
@@ -137,14 +148,14 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         description="Show the current poll interval and whether polling is active.",
     )
     async def get_poll_status() -> str:
-        """Return current polling configuration.
+        """Inspect the current polling cadence and relay timeout counters.
 
-        Appends a cumulative relay-timeout count when the relay is NATS-backed
-        and at least one request has been attempted. A silent client-side
-        retry (see the ``/biff:read`` command prompt)
-        would otherwise make relay timeouts unmeasurable to a caller — this
-        line is the server-side record a caller or operator can check instead
-        of relying on which timeouts happened to be noticed.
+        Call without arguments to diagnose the running server, not pending config
+        changes. Read in-memory state only; this does not issue a relay request.
+
+        Returns:
+            Whether periodic polling is enabled and its interval. For NATS, append
+            cumulative timeouts and attempted requests when any have been made.
         """
         interval = state.config.poll_interval
         if interval <= 0:

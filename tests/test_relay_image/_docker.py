@@ -93,7 +93,7 @@ class DockerRelay:
     ) -> RelayContainer:
         """Start ``image`` with a real token-bearing ``nats.conf`` mounted.
 
-        ``entrypoint.sh``'s auth guard (PR #376) refuses to start with no
+        ``entrypoint.sh``'s auth guard refuses to start with no
         mounted config, an authless one, or the literal placeholder token --
         a real random *token* is required to get a running container at
         all. Waits for the container's own ``HEALTHCHECK`` to report

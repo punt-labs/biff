@@ -45,8 +45,7 @@ def vox_binary() -> str | None:
 def _probe_once_support(binary: str) -> bool:
     """Feature-detect whether ``vox unmute`` accepts ``--once``.
 
-    Cached per session. punt-vox added ``--once <seconds>`` in PR #171;
-    older binaries (including the current PyPI release) reject the flag
+    Cached per session. Binaries without ``--once <seconds>`` support reject the flag
     with ``No such option: --once`` and exit non-zero. Since
     ``speak_fire_and_forget`` does not inspect returncode, passing the
     flag unconditionally would turn audio off entirely on old vox. Probe
@@ -95,7 +94,7 @@ WALL_DEFAULT_VIBES = "[alert] [serious]"
 # Wall broadcasts fan out to N Claude Code sessions in the same repo and
 # each session spawns ``vox unmute`` with identical text. Without dedup,
 # the user hears the same sentence N times. ``vox unmute --once <seconds>``
-# (added in punt-vox PR #171) asks voxd to skip the play if the same text
+# asks voxd to skip the play if the same text
 # was spoken within the window. 600 s (10 min) is short enough that a
 # deliberately *repeated* wall (same text, re-posted later) plays again,
 # and long enough to absorb the full fan-out plus any stragglers from a

@@ -1,4 +1,4 @@
-"""Docker demo: push beats poll for broadcast message detection (biff-5ex).
+"""Docker demo: push beats poll for broadcast message detection.
 
 Runs the same A/B measurement as ``tests/test_nats_e2e/test_push_vs_poll_latency.py``
 end to end against the real ``ghcr.io/punt-labs/biff-relay`` container built
@@ -176,7 +176,7 @@ class TestPushVsPollDemo:
                 push_latency = t_recv - t_send
                 await kai.call("read_messages")  # drains, records the delivered text
 
-                # -- poll: JetStream publish only, no poke (pre-biff-5ex shape) --
+                # -- poll: JetStream publish only, no poke (poll-only path) --
                 await asyncio.sleep(_SYNC_PAUSE)  # let the backstop clock reset first
                 t_send = time.monotonic()
                 await _publish_broadcast_without_poke(

@@ -1,23 +1,9 @@
-"""End-to-end latency proof for the wall wake poke (PL-1104).
+"""Measure wall-notify wake-poke latency against a real NATS server.
 
-Proves PL-1104's claim against a real NATS server: a wall posted through
-:meth:`NatsRelay.set_wall` — which publishes the wall-notify wake poke on
-top of the authoritative KV write — reconciles a *separate* MCP server's
-``wall`` tool description in well under a second, across repeated trials,
-with no unrelated activity to wake the peer.
-
-The sender is a bare relay; the receiver is a full MCP server with its own
-poller. Measured end to end: ``set_wall`` -> wall-notify poke -> receiver's
-poller wakes and ticks -> ``refresh_wall`` mutates the ``wall`` tool
-description to carry ``[WALL]`` -> this test's ``list_tools()`` observes it.
-
-Before PL-1104 the receiver had no such signal: it noticed a wall change
-only on its own next scheduled ``get_wall()`` tick (seconds, or minutes
-behind a wedged connection). The sub-second detection measured here is only
-possible because the poke wires the sender's write to the receiver's poller.
-
-Mirrors ``test_push_vs_poll_latency.py`` (the mail-path counterpart):
-``_TRIALS`` and the ``-1.0`` timeout sentinel.
+A bare sender relay writes the authoritative wall and publishes its poke.
+A separate MCP server must wake its poller and update the wall tool
+description before its next scheduled tick, without unrelated activity.
+Repeat trials distinguish push delivery from periodic reconciliation.
 """
 
 from __future__ import annotations
@@ -56,7 +42,7 @@ _TRIALS = 3
 # the wall-notify wake poke, which interrupts the poll sleep immediately
 # (``wake_event`` cuts the tick regardless of the interval). If the poke path
 # were broken, detection would wait out this whole interval and the test would
-# fail — that isolation is the point (Copilot review on PR #542). A broken poke
+# fail — that isolation is the point (latency isolation). A broken poke
 # must not be able to hide behind a fast poll cadence.
 _POLL_INTERVAL = 10.0
 
@@ -186,18 +172,10 @@ async def wall_sender_relay(nats_server: str) -> AsyncIterator[NatsRelay]:
 
 
 class TestWallPushLatency:
-    """End-to-end proof against real NATS: a pushed wall reaches a peer fast.
+    """Check that a pushed wall reaches a separate MCP server promptly.
 
-    This is PL-1104's claim exercised through the real code path — a wall
-    written via :meth:`NatsRelay.set_wall` (which publishes the wall-notify
-    wake poke) reconciles a *separate* MCP server's ``wall`` tool
-    description in well under a second, across repeated trials, with no
-    unrelated activity to wake the peer.
-
-    The sub-second detection is only possible because the wake poke wires
-    the sender's ``set_wall`` to the receiver's poller. Before PL-1104 the
-    receiver had no such signal and only noticed a wall change on its own
-    next scheduled tick (seconds, or minutes behind a wedged connection).
+    The wall-notify poke must wake the peer before its next scheduled tick,
+    without unrelated activity, across repeated trials.
     """
 
     async def test_pushed_wall_reaches_peer_promptly(

@@ -58,10 +58,8 @@ class TestSessionCapture:
     ) -> None:
         """Session reference is captured during initialize, not first tool call.
 
-        Before the fix, _session was None until the first tool call's belt
-        path captured it.  The SessionCaptureMiddleware now captures it
-        during on_initialize, corresponding to the CaptureSession operation
-        in notification.tex §6.
+        SessionCaptureMiddleware captures it during on_initialize, corresponding
+        to CaptureSession in notification.tex §6, so push works without a request.
         """
         import biff.server.tools._descriptions as desc
 
@@ -75,9 +73,8 @@ class TestSessionCapture:
     ) -> None:
         """Suspenders notification works before any tool call.
 
-        Calls notify_tool_list_changed() outside tool context.  Before the
-        fix, this was a no-op (session None).  After the fix, the stored
-        session from on_initialize is used.
+        Call notify_tool_list_changed() outside tool context to exercise the
+        stored session captured during on_initialize.
         """
         import asyncio
 

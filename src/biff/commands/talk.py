@@ -1,13 +1,11 @@
 """Shared talk orchestration — one kernel, two front-ends.
 
 The MCP ``talk``/``talk_end`` tools and the REPL modal loop both drive the same
-ephemeral :class:`~biff.talk_state.TalkState`.  Before this module the accept /
-invite / send / end decision logic was copied into both, and the copies drifted
-(a trigger wired twice).  Every state-changing talk action now lives
-here as a pure async function returning
+ephemeral :class:`~biff.talk_state.TalkState`. Each state-changing talk action
+is an async function returning
 :class:`~biff.commands._result.CommandResult`; the MCP tool wraps each call with
 a ``refresh_talk`` description push, and the REPL wraps them in its interactive
-prompt/plan/modal-loop shell (PL-PA-3, DES-022).
+prompt/plan/modal-loop shell (DES-022).
 
 The functions never touch the MCP description cache or the REPL prompt — those
 are front-end concerns.  They mutate the shared ``TalkState`` and publish
@@ -48,19 +46,29 @@ class TalkContext(Protocol):
     """
 
     @property
-    def talk(self) -> TalkState: ...
+    def talk(self) -> TalkState:
+        """Return the held conversation state."""
+        ...
 
     @property
-    def relay(self) -> Relay: ...
+    def relay(self) -> Relay:
+        """Return the session relay."""
+        ...
 
     @property
-    def config(self) -> BiffConfig: ...
+    def config(self) -> BiffConfig:
+        """Return the session configuration."""
+        ...
 
     @property
-    def session_key(self) -> str: ...
+    def session_key(self) -> str:
+        """Return the caller's composite routing key."""
+        ...
 
     @property
-    def visible_repos(self) -> frozenset[str]: ...
+    def visible_repos(self) -> frozenset[str]:
+        """Return the repositories visible to the caller."""
+        ...
 
 
 async def resolve_target(
@@ -71,6 +79,13 @@ async def resolve_target(
     Talk is session-scoped (DES-043): the address must name a live session.
     ``resolve_talk_target`` maps a ``user:tty`` (or friendly ``tty_name``) to the
     peer's identity key, refusing a bare user or the caller's own session.
+
+    Raises:
+        ValueError: The target is offline, ambiguous, invalid, or the caller.
+        OSError: Relay presence cannot be read.
+        ConnectionError: The network relay cannot establish a connection.
+        TimeoutError: The presence query exceeds its deadline.
+        nats.errors.Error: The NATS presence query fails.
     """
     all_sessions = await ctx.relay.get_sessions_for_repos(ctx.visible_repos)
     if not any(s.user == user for s in all_sessions):

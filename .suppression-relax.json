@@ -1,0 +1,14 @@
+[
+  {
+    "file": "tests/test_python_docs.py",
+    "ceiling": 1,
+    "justify": "Checker regression tests intentionally run the gate as a subprocess with controlled temporary source files; scoped S603 allowance mirrors the reference adoption.",
+    "added_at": "2026-11-19T04:29:13Z"
+  },
+  {
+    "file": "tools/check_python_docs.py",
+    "ceiling": 3,
+    "justify": "Documentation gate intentionally invokes pydoclint from the active environment and prints diagnostics; ported CLI requires narrowly scoped T20, S603, and S607 allowances.",
+    "added_at": "2026-11-19T04:29:13Z"
+  }
+]

@@ -141,6 +141,7 @@ class RepoEnablement:
     _root: Path
 
     def __new__(cls, repo_root: Path) -> Self:
+        """Create an enablement manager for the repository."""
         self = super().__new__(cls)
         self._root = repo_root
         return self

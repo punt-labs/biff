@@ -630,15 +630,9 @@ class TestLoadCliConfig:
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """End-to-end regression for a live-reproduced bot-identity gap.
+        """Fall back to the OS user with a warning for unreadable agent identities.
 
-        The bot's own identity file (the one that would prove
-        ``claude-puntlabs`` is a bot, not a human) is unreadable --
-        chmod 000. Before this fix, the scan silently came back empty
-        and the CLI resolved ``claude-puntlabs`` as if it were a
-        legitimate human GitHub login, with zero log output. Now the
-        CLI refuses to trust an identity it cannot verify, falls back
-        to the OS user, and the fallback is accompanied by a warning.
+        An unreadable registration cannot prove the GitHub login belongs to a human.
         """
         repo = _setup_repo_with_yaml(tmp_path)
         _write_bot_identity_fixture(repo)
@@ -679,15 +673,9 @@ class TestLoadCliConfig:
     def test_uninitialized_ethos_submodule_falls_back_to_os_user(
         self, _mock_gh: object, _mock_os: object, tmp_path: Path
     ) -> None:
-        """Regression for the live-reproduced gap in this exact worktree.
+        """Reject unverifiable identities when a declared registry is absent.
 
-        ``.gitmodules`` declares the ethos submodule but it was never
-        checked out, so ``.punt-labs/ethos/identities/`` doesn't exist --
-        there is no identity file to find the bot's registration in.
-        Before this fix, that missing directory was folded into
-        "confirmed no bots" and the resolved bot login was trusted
-        outright. It must instead be treated as unverifiable and rejected,
-        exactly like a corrupted identity file.
+        A missing identities directory is not proof that no agent logins exist.
         """
         repo = _setup_repo_with_yaml(tmp_path)
         write_gitmodules_ethos(repo)
@@ -1065,14 +1053,10 @@ class TestApplyEnvRelayOverrides:
     def test_url_and_token_together_reset_stale_tls_handshake_first(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """PR #386 review finding (bug 1): URL + auth set together must still
-        reset a stale file-resolved tls_handshake_first=True.
+        """Reset file-resolved TLS handshake mode when URL and auth are both set.
 
-        This is precisely the docs/relay-env-overrides.md Sec 7 CI shape --
-        BIFF_RELAY_URL and BIFF_RELAY_TOKEN set in the same env: block.
-        Before the fix, the reset only fired when no auth var accompanied
-        the URL change, so a stale flag would silently leak onto whatever
-        new relay BIFF_RELAY_URL now points at.
+        The CI configuration in docs/relay-env-overrides.md sets both variables;
+        neither URL-only nor combined overrides may inherit another relay's TLS mode.
         """
         monkeypatch.setenv("BIFF_RELAY_URL", "tls://from-env:4222")
         monkeypatch.setenv("BIFF_RELAY_TOKEN", "from-env-token")
@@ -1099,7 +1083,7 @@ class TestApplyEnvRelayOverrides:
     def test_auth_only_no_url_fails_fast_instead_of_demo_relay(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """PR #386 review finding (bug 2): an auth-only override with no
+        """an auth-only override with no
         resolved relay URL must raise, not silently resolve to the demo
         relay via _apply_demo_relay_default -- this is the exact CI
         misconfiguration shape (missing/typo'd vars.BIFF_RELAY_URL) that
@@ -1123,8 +1107,9 @@ class TestApplyEnvRelayOverrides:
     def test_tls_handshake_first_explicit_false_is_distinguishable_from_unset(
         self, monkeypatch: pytest.MonkeyPatch, value: str
     ) -> None:
-        """PR #386 review finding (bug 1b): an explicit 'false' must reset a
-        stale True from the file layer -- and must be logged as fired,
+        """An explicit 'false' must reset True from the file layer.
+
+        It must be logged as fired,
         proving it is a distinct code path from "unset" (which also
         resolves to False but never appends to the fired list).
         """
@@ -1205,10 +1190,8 @@ class TestApplyEnvRelayOverridesIntegration:
     ) -> None:
         """A relay committed only in config.local.yaml does not close the gate.
 
-        Regression for PR #386 review round 2: gating on the merged
-        relay_url (which includes config.local.yaml) blocked env overrides
-        for any developer with a personal relay entry, not just repos with
-        a team-committed relay.url in the shared config.yaml.
+        Only a team-committed relay.url in shared config.yaml closes the gate;
+        a developer's personal relay entry must not prevent env overrides.
         """
         (tmp_path / ".git").mkdir()
         biff_dir = tmp_path / ".punt-labs" / "biff"
@@ -1226,7 +1209,7 @@ class TestApplyEnvRelayOverridesIntegration:
     ) -> None:
         """allow_env_override in config.local.yaml never opens a shared gate.
 
-        Regression for PR #386 review round 2: the opt-in bit must come
+        The opt-in bit must come
         from the shared config.yaml alone. A gitignored config.local.yaml
         setting relay.allow_env_override: true must not authorize ambient
         env vars to override the team's committed relay -- that decision

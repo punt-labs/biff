@@ -41,25 +41,12 @@ _TTY, _USER = (
 async def _fetch_unread_with_retry(
     state: ServerState,
 ) -> tuple[_UnreadFetch, str | None]:
-    """Fetch unread messages, retrying only the inboxes that failed.
+    """Fetch unread messages, retrying only inboxes that failed.
 
-    Returns ``(fetched, warning)``. Each of the two inboxes is
-    fetched independently and retried at most once on its own — NEVER as
-    part of restarting the whole batch. ``NatsRelay.fetch``/
-    ``fetch_user_inbox`` ack (destructively delete) messages from the
-    stream as a side effect of a successful pull; retrying the whole batch
-    after one inbox already succeeded would re-fetch an inbox that has
-    nothing left to return, silently discarding the messages the first
-    attempt already pulled (review finding on this branch — the retry
-    added to make a timeout distinguishable from a confirmed-empty
-    inbox introduced a worse, silent data-loss failure mode of its own).
-
-    An inbox still failing after its own retry is named in ``warning``
-    rather than rendered as empty; its slot in ``fetched`` stays empty
-    because nothing was lost there — nothing was successfully acked from
-    it either. ``fetched`` always reflects every inbox that DID succeed,
-    even when another inbox's warning is also present, so a partial
-    failure never costs the caller messages that were already pulled.
+    Each successful NATS pull destructively acknowledges messages. Retrying
+    that inbox would lose its first result, so retain successful batches and
+    retry only failed inboxes once. Return both fetched batches and a warning
+    naming any inbox still unavailable, rather than misreporting it as empty.
     """
     steps: dict[str, Callable[[], Coroutine[Any, Any, list[Message]]]] = {
         _TTY: lambda: state.relay.fetch(state.session_key),
@@ -113,10 +100,22 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def write(to: str, message: str) -> str:
-        """Send a message to another user's inbox, like BSD ``write(1)``.
+        """Deliver a durable message to a teammate.
 
-        ``user`` broadcasts to all sessions of that user.
-        ``user:tty`` targets a specific session.
+        Args:
+            to: A bare username broadcasts to their shared inbox; user:tty targets
+                a session. An @ prefix is optional.
+            message: Text split into bounded chunks when needed.
+
+        Returns:
+            Confirmed delivery details, an addressing error, or an explicit failure
+            after one retry. Delivery failures are not reported as success.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         await update_current_session(state)
         try:
@@ -163,17 +162,22 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def read_messages() -> str:
-        """Retrieve unread messages and mark them as read.
+        """Consume unread durable messages for the current session.
 
-        Merges the per-user broadcast mailbox and the per-TTY targeted
-        inbox into a single chronological view.  POP semantics apply
-        independently to each — the first session to ``/read`` consumes
-        broadcast messages.
+        Call without arguments after an inbox notification. Merge the targeted
+        session inbox and shared user inbox in chronological order. The first
+        session to read consumes broadcast messages; they are not replayed.
 
-        Output mimics BSD ``from(1)``::
+        Returns:
+            Formatted messages or 'No new messages.'. A failed inbox is retried
+            once, then named in a warning alongside any successful inbox results;
+            a failed fetch is never described as a confirmed-empty inbox.
 
-            From kai  Sun Feb 15 14:01  hey, ready for review?
-            From eric Sun Feb 15 13:45  pushed the fix
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         await update_current_session(state)
         session_key = state.session_key

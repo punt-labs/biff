@@ -41,16 +41,10 @@ def test_nested_sessions_get_distinct_unread_paths(tmp_path: Path) -> None:
 
 
 def test_unread_path_carries_no_process_component(tmp_path: Path) -> None:
-    # Regression guard for the local-plugin process-tree divergence (PL-276):
-    # the MCP server and the status line walked up to *different* claude PIDs, so
-    # the server wrote one unread file and the status line read another (the
-    # status bar showed bare "biff"). The fix is that the filename is a pure
-    # function of the harness-declared session_id with NO process component —
-    # then any two processes bearing the same session_id resolve the same file.
-    # Asserting exact equality to "{session_id}.json" is what makes this guard
-    # fail if a PID (os.getpid(), the old topmost-ancestor PID, etc.) were ever
-    # mixed back into the name; a two-SessionRouting-in-one-process check would
-    # not, since both would observe the same PID (Qodo finding on this PR).
+    # The server and status line can have different process ancestry. The
+    # filename must depend only on the harness-declared session_id so they
+    # resolve the same file. Exact equality rejects any process component;
+    # two SessionRouting instances in one process would not detect one.
     sid = "one-session-two-processes"
     assert SessionRouting(sid).unread_path(tmp_path) == tmp_path / f"{sid}.json"
     assert SessionRouting(sid).unread_path(tmp_path).name == f"{sid}.json"

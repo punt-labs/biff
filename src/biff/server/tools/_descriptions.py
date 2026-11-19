@@ -362,7 +362,7 @@ async def notify_tool_list_changed() -> None:
                 _session = None
                 _pending_notify = True
             else:
-                # PollTickNotifyOk (notification.tex, biff-6vuv amendment):
+                # PollTickNotifyOk (notification.tex, wake-poke invariant):
                 # a successful suspenders send also clears _pending_notify,
                 # on the same argument NotifyBelt's unconditional clear
                 # already rests on — the send just delivered the *current*
@@ -398,9 +398,8 @@ async def _sync_unread_file(
     external convenience for the Claude Code status bar, not something
     any of those primary operations depend on. A relay hiccup fetching
     the summary or session for it must not crash the caller's
-    already-succeeded result (Bugbot review finding: refresh_read_messages'
-    own guard around get_unread_summary did not cover this function's own
-    relay calls).
+    already-succeeded result. Each relay call here needs its own guard,
+    independently of the primary operation's error handling.
     """
     if state.unread_path is None:
         return
@@ -457,8 +456,7 @@ async def refresh_read_messages(mcp: FastMCP[ServerState], state: ServerState) -
     uses this to re-mark the poke gate on a transient failure: the gate's
     own clear-before-refresh already happened, and without this signal a
     dropped relay call would freeze the count until the next backstop
-    tick instead of retrying on the very next one, as the old
-    unconditional per-tick poll always did. ``tool is None`` is a
+    tick instead of retrying on the very next one. ``tool is None`` is a
     precondition failure, not a fetch outcome — no relay call was ever
     attempted, so it reports success (there is nothing for a retry to fix).
     """
@@ -630,7 +628,7 @@ def _talk_description(talk: TalkState) -> str:
 
 
 def talk_signal(talk: TalkState) -> tuple[tuple[str, ...], int, str]:
-    """A cheap change key for the held talk state (pending, queued, phase).
+    """Return a change key for the held talk state (pending, queued, phase).
 
     The pending element is each invite's session key, not a bare count, so a
     same-count churn — one inviter's session superseded by another's within a
@@ -733,7 +731,7 @@ class _InboxPokeGate:
     :meth:`claim` is true when a poke has arrived since the last
     recompute, OR when *backstop_interval* has elapsed since the last
     recompute regardless of any poke — the dropped-poke insurance that
-    keeps biff-5ex's at-most-once core-NATS pokes safe (a lost poke costs
+    keeps the at-most-once core-NATS pokes safe (a lost poke costs
     at most one backstop interval of latency, never a stalled unread
     count). It clears the poke and resets the clock in the same
     synchronous step as the check, *before* the caller's own ``await`` on
@@ -998,7 +996,7 @@ async def subscribe_wall_notify(
     latch: TalkNotifyLatch,
     wake_event: asyncio.Event,
 ) -> SubscriptionBinding | None:
-    """Establish an always-on wall-change notify subscription (PL-1104).
+    """Establish an always-on wall-change notify subscription.
 
     Started once at poller start (ungated), mirroring
     :func:`subscribe_inbox_notify`.  The poke is repo-scoped and
@@ -1076,7 +1074,7 @@ async def _active_tick(
     does its own fetch and its own change-gated notify, so there is
     nothing left for this tick to fetch redundantly. A relay with no push
     mechanism (``LocalRelay``) falls back to the plain count-comparison
-    gate this replaced, via *last_count* — see
+    gate via *last_count* — see
     :func:`_relay_pushes_inbox_notify`.
 
     Returns updated ``(count, wall_key, talk_signal)`` tracking state.
@@ -1181,8 +1179,7 @@ async def _sleep_or_wake(
     """Sleep up to *interval*, returning early on a wake or shutdown signal.
 
     Distinguishing :attr:`_WakeOutcome.EVENT` from
-    :attr:`_WakeOutcome.TIMEOUT` (rather than collapsing both into "not
-    shutdown," as an earlier version did) lets the caller tell "there is
+    :attr:`_WakeOutcome.TIMEOUT` lets the caller tell "there is
     real activity to react to" apart from "nothing happened, this was
     just the liveness backstop" — see ``poll_inbox``'s own use, which
     must not run its periodic tick work on a bare disabled-interval
@@ -1279,8 +1276,7 @@ async def poll_inbox(
     talk frame on this session's own subject flows into the shared
     ``TalkState``; a wake poke (message notification riding the talk
     subject) additionally marks the poke gate so a targeted message's
-    detection is not silently deferred to the backstop the way only
-    broadcast pokes used to mark it.
+    detection is not silently deferred to the backstop.
     """
     tracker = state.activity
     last_count = -1  # Force initial refresh (LocalRelay fallback path only)
@@ -1296,12 +1292,8 @@ async def poll_inbox(
     wall_notify_sub: SubscriptionBinding | None = None
 
     try:
-        # Bound inside the try/finally, not before it: a cancellation
-        # landing between subscribe_talk() returning and
-        # subscribe_inbox_notify()'s own await used to escape before either
-        # binding var was assigned outside this block, so the finally's
-        # unsubscribe loop below never saw the talk SUB it had just
-        # established and leaked it (Copilot finding hb4tE).
+        # Bind each subscription inside the cleanup scope so cancellation
+        # during the next await cannot leak an established subscription.
         talk_sub = await subscribe_talk(state, talk_latch, gate, wake_event)
         inbox_notify_sub = await subscribe_inbox_notify(
             state, inbox_notify_latch, gate, wake_event
@@ -1329,12 +1321,12 @@ async def poll_inbox(
             # a push mechanism (_relay_pushes_inbox_notify): DES-062's whole
             # premise is that disabling the interval is safe because the
             # always-on SUBs' pokes (or _reconcile_always_on_sub's own
-            # rebind-triggered wake, see finding hwr7z) drive detection
+            # rebind-triggered wake) drive detection
             # instead. A filesystem-backed LocalRelay has no push mechanism
             # of any kind — wake_event never fires from anything but this
             # same fallback timer — so skipping tick work on every TIMEOUT
             # would silently disable /write detection for the rest of the
-            # session's life, not just delay it (Bugbot finding hwr7W). For
+            # session's life, not just delay it. For
             # a non-push relay the fallback IS the only detection mechanism,
             # so every wake must run tick work regardless of outcome kind.
             run_tick_work = not (

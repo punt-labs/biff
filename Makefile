@@ -14,13 +14,27 @@ help: ## Show available targets
 test: ## Run tests (unit + integration)
 	uv run pytest
 
-lint: ## Lint and format check (ruff + shellcheck)
+lint: check-comments check-docstrings ## Lint and format check (ruff + shellcheck)
 	uv run ruff check .
 	uv run ruff format --check .
 	shellcheck plugin/hooks/*.sh install.sh scripts/*.sh
 
+check-comments: ## Reject commented-out code and tracker references in Python prose
+	uv run ruff check --select ERA001 src tests tools scripts
+	uv run python tools/check_python_docs.py comments src tests tools scripts
+
+check-docstrings: ## Check public Python docstrings and documented argument names
+	uv run ruff check --select D,D401 --ignore D105,D107,D417 src/
+	uv run python tools/check_python_docs.py docstrings src/
+
+build-api-docs: ## Build and verify the generated Python API reference
+	uv run --group docs mkdocs build --strict
+	uv run python tools/check_python_docs.py api .tmp/api-site/objects.inv
+
+.PHONY: check-comments check-docstrings build-api-docs
+
 type: ## Type check with mypy and pyright
-	uv run mypy src/ tests/
+	uv run mypy src/ tests/ tools/
 	uv run pyright
 
 mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)

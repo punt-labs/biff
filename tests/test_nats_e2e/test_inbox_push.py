@@ -1,11 +1,7 @@
-"""NATS E2E tests for broadcast-message push notifications (biff-5ex, DES-062).
+"""Exercise broadcast-message push notifications against real NATS.
 
-Exercises the full always-on chain for a broadcast (bare-user) message:
-  deliver() -> inbox-notify poke -> subscribe_inbox_notify callback ->
-  poller wake -> refresh_read_messages -> notify_tool_list_changed
-
-Two MCP servers (kai and eric) backed by NatsRelay via FastMCPTransport.
-Mirrors ``test_talk_push.py``'s structure for the analogous always-on SUB.
+Verify the always-on subscription chain wakes a separate MCP server and
+refreshes its unread description without waiting for the periodic poll.
 """
 
 from __future__ import annotations
@@ -61,13 +57,9 @@ async def _wait_for_read_messages_description(
 async def _publish_broadcast_without_poke(
     nats_server: str, *, repo: str, to_user: str, from_user: str, body: str
 ) -> None:
-    """Publish a broadcast message straight to JetStream, bypassing the poke.
+    """Publish directly to the durable inbox without a notification poke.
 
-    Simulates a pre-biff-5ex sender (or any client that only knows the
-    durable-inbox subject): the message lands in the durable inbox exactly
-    as ``deliver()`` would land it, but no wake poke is published — the
-    only way the recipient's poller can find it is the nap_interval
-    backstop (DES-062 §2/§3), not the push path.
+    Use this to isolate the periodic backstop from push-driven detection.
     """
     nc = await nats_lib.connect(nats_server)  # pyright: ignore[reportUnknownMemberType]
     try:
@@ -314,12 +306,9 @@ class TestTargetedPushNotification:
 
 
 class TestPollerAtDisabledInterval:
-    """``poll_interval<=0`` still hosts the always-on SUBs and detects a poke.
+    """Keep push detection running when the periodic cadence is disabled.
 
-    Proves the poller task always runs (``app.py``'s lifespan no longer
-    skips creating it at interval<=0) and that push detection survives
-    disabling the periodic cadence entirely — the scenario
-    ``set_poll_interval``'s ``n`` response now claims works.
+    The always-on subscriptions must be hosted even when poll_interval is zero.
     """
 
     async def test_disabled_interval_still_detects_a_broadcast_poke(

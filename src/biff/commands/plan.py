@@ -17,7 +17,7 @@ from biff.session_routing import ID_RE
 
 
 def cli_session_id() -> str | None:
-    """The session Claude Code declares to a CLI process, or ``None``.
+    """Return the session Claude Code declares, or None when absent.
 
     Claude Code sets ``CLAUDE_CODE_SESSION_ID`` in the environment of each
     Bash tool call.  It is the harness stating the session, read only by the

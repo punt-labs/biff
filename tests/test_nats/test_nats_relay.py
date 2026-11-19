@@ -48,7 +48,7 @@ class TestDeliver:
     async def test_redelivering_same_message_id_is_deduplicated(
         self, relay: NatsRelay
     ) -> None:
-        """Review finding: a retry that reuses the same Message
+        """A retry that reuses the same Message
         (same id) must not create a second copy if the original publish
         actually landed and only its ack was lost. deliver() sets
         Nats-Msg-Id to message.id, so JetStream's own dedup window catches
@@ -482,15 +482,10 @@ class TestCrossRelay:
 
 
 class TestPublishRebuildRobustness:
-    """biff-1f2: notification/poke publishes and the wall expiry delete
-    reconnect after a client rebuild instead of silently no-opping on a
-    handle bound to the discarded client.
+    """Check notification publishes and wall expiry after a client rebuild.
 
-    ``_force_reconnect``/``_on_closed`` clear ``self._nc`` (and, on a fresh
-    dial, ``self._js``/``self._kv``/``self._names_kv`` alongside it) so the
-    next relay call redials.  Before biff-1f2, the two wake-poke publishes
-    read ``self._nc`` directly and bailed out on ``None`` instead of
-    triggering that redial themselves.
+    Clearing the cached connection must trigger a redial, not silently
+    skip a publish or reuse a KV handle bound to the discarded client.
     """
 
     @staticmethod
@@ -576,12 +571,10 @@ class TestPublishRebuildRobustness:
     async def test_wall_expiry_delete_uses_a_freshly_resolved_handle(
         self, relay: NatsRelay
     ) -> None:
-        """The expiry delete re-resolves the handle instead of reusing the fetch's.
+        """Reacquire the KV handle between fetching an expired wall and deleting it.
 
-        Proven by counting ``_ensure_connected`` calls: the fix calls it
-        once for the ``kv.get`` fetch and once more, immediately before the
-        delete — reusing the first call's handle across that ``await`` is
-        exactly the staleness bug biff-1f2 closes.
+        Count connection checks to ensure a client rebuild across the fetch await
+        cannot leave the delete bound to the discarded client.
         """
         now = datetime.now(UTC)
         expired = WallPost(
@@ -626,14 +619,10 @@ class TestLiveNcOrReconnectBounds:
     async def test_slow_reconnect_does_not_block_a_poke_publish(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The durable regression, against the public surface a caller
-        actually uses (not ``_live_nc_or_reconnect`` directly): a hung
-        dial is bounded by ``_NOTIFY_RECONNECT_TIMEOUT``, not the much
-        larger ``_CONNECT_PROVISION_TIMEOUT`` the unwrapped ``get_nc()``
-        fall-through used to be subject to, so the best-effort poke
-        publish itself returns promptly and does not raise — mirrors
-        the original repro's own surface (``_publish_inbox_notification``,
-        not the private helper underneath it).
+        """Bound reconnect attempts on best-effort notification publishes.
+
+        A discarded client must redial within _NOTIFY_RECONNECT_TIMEOUT rather
+        than the full provisioning deadline; an outage must not block the caller.
         """
         monkeypatch.setattr(nats_relay_module, "_NOTIFY_RECONNECT_TIMEOUT", 0.05)
 
@@ -756,7 +745,7 @@ class TestValidateUserRejectsColon:
         """The disjointness the docstring claims, proven directly: a
         broadcast poke subject for a forged ``user:tty`` can never equal a
         real talk-notify subject for that same session, because
-        constructing the poke subject now raises before it can collide.
+        constructing the poke subject raises before it can collide.
         """
         relay = NatsRelay()
         talk_subject = relay.talk_notify_subject("kai:tty1")
@@ -805,19 +794,10 @@ class TestBroadcastPokeCarriesTargetRepo:
 
 
 class TestCloseRaceWithReconnect:
-    """``close()`` racing a blocked reconnect must never leave a client
-    installed that nothing will ever close again.
+    """Serialize terminal close and reconnect on the same connection lock.
 
-    Before this fix, ``close()`` did not take ``_connect_lock`` at all —
-    a reconnect that was mid-dial when ``close()`` ran could still finish
-    afterward and overwrite the ``None`` ``close()`` had just set,
-    resurrecting a connection outside the terminal-close contract.
-    ``close()`` now serializes on the same lock ``_ensure_connected``
-    holds: whichever acquires it first runs to completion before the
-    other proceeds, so the in-flight reconnect either finishes and is
-    torn down cleanly by ``close()`` right after, or never starts at all
-    because ``close()`` won the race and ``_ensure_connected`` sees
-    ``_closed`` set inside the lock.
+    An in-flight reconnect must finish before close tears it down, or observe
+    the closed flag and never start. No client may be installed after close.
     """
 
     async def test_close_during_blocked_reconnect_installs_no_client(self) -> None:
@@ -891,15 +871,10 @@ class TestCloseRaceWithReconnect:
 
 
 class TestOpenConnectionCancellationSafety:
-    """A cancellation landing while ``_provision`` is in flight must not
-    skip ``_open_connection``'s cleanup.
+    """Close uninstalled clients when cancellation interrupts provisioning.
 
-    Before this fix, the cleanup ``except`` clause caught only
-    ``Exception`` — but ``asyncio.CancelledError`` is a ``BaseException``
-    (Python 3.8+), so an outer cancellation (e.g. ``_live_nc_or_reconnect``'s
-    bounding ``asyncio.timeout()``) landing mid-``_provision`` skipped the
-    clause entirely: the dialed client was never closed, never installed on
-    ``self._nc``, and so was leaked — neither owned nor reachable.
+    CancelledError is a BaseException, so cleanup limited to Exception would
+    leak a dialed client that is neither installed nor otherwise reachable.
     """
 
     async def test_cancellation_during_provision_closes_the_dialed_client(
@@ -947,19 +922,10 @@ class TestOpenConnectionCancellationSafety:
 
 
 class TestDisconnectRaceWithReconnect:
-    """``disconnect()`` racing a blocked reconnect must not let the
-    reconnect silently resurrect the connection ``disconnect()`` just
-    reported as torn down.
+    """Serialize disconnect and reconnect on the same connection lock.
 
-    Before this fix, ``disconnect()`` did not take ``_connect_lock`` at
-    all — it could observe ``self._nc`` as ``None``, decide there was
-    nothing to tear down, and return, while a reconnect that was already
-    blocked mid-dial (waiting on the lock for an unrelated reason) then
-    finished and installed a fresh client moments later, leaving the
-    relay connected again right after ``disconnect()`` returned.
-    ``disconnect()`` now serialises on the same lock ``_ensure_connected``
-    holds, so whichever of the two runs first completes before the other
-    proceeds.
+    The operation holding the lock finishes first, so a reconnect blocked mid-dial
+    cannot install an orphaned client after disconnect reports teardown complete.
     """
 
     async def test_disconnect_during_blocked_reconnect_tears_down_installed_client(
