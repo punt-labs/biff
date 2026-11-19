@@ -115,6 +115,8 @@ class _HandshakeDelivery:
 
     async def capture_session(self, session: ServerSession) -> None:
         """Capture the handshake session and flush any notification owed."""
+        if session.protocol_version in MODERN_PROTOCOL_VERSIONS:
+            return
         async with self._lock:
             self._session = session
             if self._pending_notify:
@@ -136,23 +138,20 @@ class _HandshakeDelivery:
         except RuntimeError:
             ctx = None
 
-        if ctx is not None and ctx.session.protocol_version in MODERN_PROTOCOL_VERSIONS:
-            return
-        async with self._lock:
-            if ctx is None:
+        if ctx is None:
+            async with self._lock:
                 await self._notify_standalone()
-                return
-            try:
-                async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
-                    await ctx.send_notification(ToolListChangedNotification())
-            except Exception:
-                logger.warning(
-                    "Could not notify tool list change within request", exc_info=True
-                )
-                self._pending_notify = True
-            else:
-                self._pending_notify = False
-            self._session = ctx.session
+        elif ctx.session.protocol_version not in MODERN_PROTOCOL_VERSIONS:
+            async with self._lock:
+                try:
+                    async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+                        await ctx.send_notification(ToolListChangedNotification())
+                except Exception:
+                    logger.warning("Tool list push failed in request", exc_info=True)
+                    self._pending_notify = True
+                else:
+                    self._pending_notify = False
+                self._session = ctx.session
 
     async def _notify_standalone(self) -> None:
         if self._session is None:

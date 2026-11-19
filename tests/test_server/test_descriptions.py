@@ -2225,6 +2225,25 @@ class TestStartupNotificationRace:
 
         fake_session.send_tool_list_changed.assert_awaited_once()
 
+    async def test_modern_session_does_not_flush_legacy_notification(
+        self, state: ServerState
+    ) -> None:
+        """A modern session can't consume a pending handshake notification."""
+        from mcp.server.session import ServerSession
+
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+        await refresh_read_messages(create_server(state), state)
+
+        modern = MagicMock(spec=ServerSession, protocol_version="2026-07-28")
+        legacy = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        await _descriptions.handshake_delivery.capture_session(modern)
+        await _descriptions.handshake_delivery.capture_session(legacy)
+
+        modern.send_tool_list_changed.assert_not_awaited()
+        legacy.send_tool_list_changed.assert_awaited_once()
+
     async def test_poller_cannot_recover_lost_notification(
         self, state: ServerState
     ) -> None:

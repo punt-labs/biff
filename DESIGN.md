@@ -8206,15 +8206,16 @@ the CLI limit of 15. Suppression waivers stop applying once merged.
 
 ## DES-079: Publish Tool List Changes to Modern MCP Subscribers
 
-MCP 2026-07-28 has no standalone connection channel for tool list
-changes. The server attaches a local MCP SDK subscription bus to
-`subscriptions/listen`; the same description-change gate publishes
-to it from tool handlers and the background poller. Modern clients
-opt in to the stream and re-list tools after reconnecting; the stream
-does not replay changes.
+**Decision.** Attach a local MCP SDK subscription bus to
+`subscriptions/listen` for MCP 2026-07-28. The existing description-change
+gate publishes to it from both tool handlers and the background poller.
+Only handshake-era sessions participate in the notification and pending-retry
+behavior modeled in DES-061 and `docs/notification.tex`.
 
-The handshake notification and pending-retry behavior in DES-061
-and `docs/notification.tex` still apply to older clients. Modern
-request sessions must not replace the captured handshake session.
-Forcing a handshake after discovery is not viable: the transport has
-already selected the modern protocol before dispatching discovery.
+**Alternatives.** Standalone notifications have no channel in MCP 2026-07-28.
+Rejecting discovery cannot force a handshake on the same connection: the
+transport selects the protocol before dispatching discovery.
+
+**Outcome.** Modern clients that opt in receive tool list changes while idle
+and re-list tools when reconnecting because the stream does not replay changes.
+Handshake clients continue to receive the standalone notification.
