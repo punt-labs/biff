@@ -84,9 +84,7 @@ class InboxDrain:
                 )
             except Exception:
                 failed.append(message.id)
-                logger.error(
-                    "could not restore message %s to %s", message.id, key, exc_info=True
-                )
+                logger.exception("Could not restore message %s", message.id)
         if failed:
             logger.error("%d message(s) lost from %s; see the log", len(failed), key)
 

@@ -172,10 +172,10 @@ class TestGetRepoCommonRootLogging:
         assert records[0].levelno == logging.WARNING
         assert "timed out" in records[0].getMessage()
 
-    def test_nonzero_exit_logs_stderr(
+    def test_nonzero_exit_logs_metadata_only(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Non-zero git exit is warned with git's own ``stderr`` for triage."""
+        """A non-zero git exit logs metadata without copying subprocess stderr."""
         not_a_repo = tmp_path / "not-a-repo"
         not_a_repo.mkdir()
 
@@ -187,7 +187,7 @@ class TestGetRepoCommonRootLogging:
         assert records[0].levelno == logging.WARNING
         msg = records[0].getMessage()
         assert "git rev-parse exited" in msg
-        assert "not a git repository" in msg.lower()
+        assert "not a git repository" not in msg.lower()
 
     def test_os_error_logs_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

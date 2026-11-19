@@ -8204,7 +8204,28 @@ code-only module sizes and excludes exceptions, enums, and dataclasses from
 the class count. The default fan-out limit increases from 7 to 10, retaining
 the CLI limit of 15. Suppression waivers stop applying once merged.
 
-## DES-079: Publish Tool List Changes to Modern MCP Subscribers
+---
+
+## DES-079: Share Diagnostics and Keep Usage Local
+
+**Decision.** Configure Biff's CLI, MCP transports, hooks, and detached cleanup
+through `punt-observe`. Keep diagnostics in its private redacted rotating sink.
+Record only versioned, allowlisted CLI and MCP usage in a separate local
+SQLite store with 90-day retention, off switches, and no network exporter.
+
+**Alternatives.** Biff-owned log handlers duplicate rotation and privacy
+logic. Shell stderr redirects create a second unbounded sink. Collecting
+raw invocations or sending usage off-machine is not needed to count usage.
+
+**Outcome.** Hook and MCP diagnostics no longer depend on a host retaining
+stderr. Usage-store failure does not fail tool calls. Checkout builds use a
+locked Git commit until the shared package is published; do not tag a Biff
+release that depends on `punt-observe` until the dependency is installable
+from the package index.
+
+---
+
+## DES-080: Publish Tool List Changes to Modern MCP Subscribers
 
 **Decision.** Attach a local MCP SDK subscription bus to
 `subscriptions/listen` for MCP 2026-07-28. The existing description-change

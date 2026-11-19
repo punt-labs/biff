@@ -241,8 +241,7 @@ def _log_skipped_shared_plan(root: str, identities: tuple[str | None, ...]) -> N
     if None not in identities and has_plan_marker(root, None):
         logger.info(
             "plan gate: a plan exists in the shared bucket but was skipped for "
-            "identified session %s; run /plan from this session to set its own",
-            identities[-1],
+            "an identified session; run /plan from this session to set its own"
         )
 
 
@@ -298,6 +297,7 @@ def handle_pre_tool_use(data: dict[str, object]) -> dict[str, object] | None:
     identities = _identity_candidates(data)
     if not _has_any_plan_marker(root, identities):
         _log_skipped_shared_plan(root, identities)
+        logger.warning("Plan gate denied edit: no plan for this session")
         return _pre_tool_use_deny(
             "Blocked: editing files requires a plan. "
             "Run /plan <what you're working on>, then retry the edit."

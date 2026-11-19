@@ -4,7 +4,7 @@ The ``biff`` CLI (``__main__.py``) imports the entire application:
 nats, pydantic, fastmcp, typer, server, commands — ~4.7s of module
 load before a single line of handler code runs.
 
-This module is the entry point for ``biff-hook``, which imports only
+This module is the dispatcher for ``biff-hook``, which imports only
 ``biff.hook`` (typer + stdlib) and dispatches directly to handler
 functions.  Hook handlers use lazy imports from ``biff._stdlib``
 (stdlib-only) and ``biff.markers`` (stdlib-only), avoiding the full

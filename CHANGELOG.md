@@ -6,6 +6,13 @@
 
 - Use FastMCP 4 and MCP 2.3. Under the modern protocol, failed session
   attachment returns a sanitized internal error.
+- Use shared punt-observe diagnostics for the CLI, MCP server, and hooks,
+  including detached cleanup. Private, redacted, process-safe rotating
+  diagnostics now replace the separate shell hook error log.
+- Capture allowlisted CLI and MCP usage locally for 90 days without
+  collecting command inputs or sending usage data over the network.
+  Disable capture with `--no-telemetry`, `BIFF_TELEMETRY=off`, or
+  `PUNT_TELEMETRY=off`.
 - Enforce Google-style public Python docstrings and tracker-free code prose,
   and build a verified Python API reference with MkDocs.
 - `make check` and CI now enforce OO, coupling/cohesion, and suppression

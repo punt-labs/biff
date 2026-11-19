@@ -163,10 +163,9 @@ def get_repo_common_root(cwd: str | None = None) -> str:
         return ""
     if result.returncode != 0:
         logger.warning(
-            "git rev-parse exited %d; repo-common-root unresolved (cwd=%s, stderr=%s)",
+            "git rev-parse exited %d; repo-common-root unresolved (cwd=%r)",
             result.returncode,
             cwd,
-            result.stderr.strip(),
         )
         return ""
     common_dir = Path(result.stdout.strip())

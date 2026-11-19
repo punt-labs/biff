@@ -15,9 +15,9 @@ from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from punt_observe.logging import Role
 from typer.testing import CliRunner
 
-from biff import logging_config
 from biff.__main__ import _suppress_nats_noise, app
 from biff.claude_md import ClaudeMdImport
 from biff.cli_context import CliContext
@@ -188,9 +188,9 @@ class TestInstalledPluginVersion:
 class TestServeCommand:
     """``biff serve`` is HTTP-only; ``biff mcp`` is stdio-only."""
 
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
+    @patch("biff.server.entrypoints.create_server")
+    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_http_default(
         self,
         _mock_config: MagicMock,
@@ -205,9 +205,9 @@ class TestServeCommand:
             transport="http", host="127.0.0.1", port=8419
         )
 
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
+    @patch("biff.server.entrypoints.create_server")
+    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_custom_host_port(
         self,
         _mock_config: MagicMock,
@@ -225,9 +225,9 @@ class TestServeCommand:
             transport="http", host="192.168.1.1", port=9000
         )
 
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
+    @patch("biff.server.entrypoints.create_server")
+    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_user_override(
         self,
         mock_config: MagicMock,
@@ -244,9 +244,9 @@ class TestServeCommand:
 class TestMcpCommand:
     """``biff mcp`` starts the MCP server with stdio transport."""
 
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
+    @patch("biff.server.entrypoints.create_server")
+    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_stdio_transport(
         self,
         _mock_config: MagicMock,
@@ -259,9 +259,9 @@ class TestMcpCommand:
         assert result.exit_code == 0
         mock_mcp.run.assert_called_once_with(transport="stdio")
 
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
+    @patch("biff.server.entrypoints.create_server")
+    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_data_dir_override(
         self,
         mock_config: MagicMock,
@@ -273,9 +273,9 @@ class TestMcpCommand:
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["data_dir_override"] == Path("/custom/dir")
 
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
+    @patch("biff.server.entrypoints.create_server")
+    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_passes_prefix(
         self,
         mock_config: MagicMock,
@@ -287,9 +287,9 @@ class TestMcpCommand:
         call_kwargs = mock_config.call_args.kwargs
         assert call_kwargs["prefix"] == Path("/var/spool")
 
-    @patch("biff.__main__.create_server")
-    @patch("biff.__main__.create_state")
-    @patch("biff.__main__.load_mcp_config", return_value=_RESOLVED)
+    @patch("biff.server.entrypoints.create_server")
+    @patch("biff.server.entrypoints.create_state")
+    @patch("biff.server.entrypoints.load_mcp_config", return_value=_RESOLVED)
     def test_no_user_delegates_to_config(
         self,
         mock_config: MagicMock,
@@ -679,9 +679,8 @@ class TestNatsErrorStaysOffTerminal:
     def test_transient_error_is_file_only_not_stderr(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        log_file = tmp_path / "biff.log"
-        monkeypatch.setattr(logging_config, "_LOG_DIR", tmp_path)
-        monkeypatch.setattr(logging_config, "_LOG_FILE", log_file)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        log_file = tmp_path / ".punt-labs" / "biff" / "logs" / "biff.log"
 
         # dictConfig resolves ext://sys.stderr at configure time — capture it.
         captured_stderr = io.StringIO()
@@ -691,7 +690,7 @@ class TestNatsErrorStaysOffTerminal:
         saved_handlers = root.handlers[:]
         saved_level = root.level
         try:
-            configure_logging(stderr_level="WARNING")  # the REPL's floor
+            configure_logging(Role.CLI, stderr_level="WARNING")  # the REPL's floor
             _suppress_nats_noise()
 
             relay = NatsRelay(url="tls://fake:4222", repo_name="test")
@@ -723,11 +722,14 @@ class TestNatsErrorStaysOffTerminal:
         assert "Traceback" not in stderr_text
         assert "Operation timed out" not in stderr_text
 
-        # biff.log keeps the full record AND the traceback for diagnosis.
+        # The durable sink keeps a single escaped record, including the traceback.
         file_text = log_file.read_text(encoding="utf-8")
+        assert log_file.parent.stat().st_mode & 0o777 == 0o700
+        assert log_file.stat().st_mode & 0o777 == 0o600
         assert "NATS error" in file_text
         assert "Traceback" in file_text
         assert "Operation timed out" in file_text
+        assert len(file_text.splitlines()) == 1
 
 
 class TestInstallWritesNoGuide:

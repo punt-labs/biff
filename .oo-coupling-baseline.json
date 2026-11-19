@@ -8,10 +8,17 @@
   },
   "src/biff/__main__.py": {
     "efferent_coupling": 16.0,
-    "public_names": 29.0,
+    "public_names": 28.0,
     "circular_imports": 0.0,
     "max_lcom": 0.533,
     "avg_lcom": 0.267
+  },
+  "src/biff/_cli_runtime.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/biff/_formatting.py": {
     "efferent_coupling": 0.0,
@@ -20,8 +27,22 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/biff/_hook_dispatch.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/_hook_entry.py": {
     "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/_hook_runtime.py": {
+    "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -426,6 +447,13 @@
     "max_lcom": 0.222,
     "avg_lcom": 0.222
   },
+  "src/biff/server/entrypoints.py": {
+    "efferent_coupling": 6.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/biff/server/mcp_protocol.py": {
     "efferent_coupling": 1.0,
     "public_names": 1.0,
@@ -673,6 +701,13 @@
   },
   "src/biff/unread_file.py": {
     "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/biff/usage.py": {
+    "efferent_coupling": 0.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,

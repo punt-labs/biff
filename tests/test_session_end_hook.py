@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -68,15 +69,20 @@ def _slow_biff_hook_on_path(bin_dir: Path, *, sentinel: Path) -> dict[str, str]:
 
 
 def _failing_biff_hook_on_path(bin_dir: Path, *, home: Path) -> dict[str, str]:
-    """A ``biff-hook`` stub that fails fast and writes to stderr.
+    """Run the real hook entry point with an injected cleanup failure.
 
-    Used to prove the detached call's stderr is still captured in the shared
-    hook-errors log. ``HOME`` is pointed at *home* so the log lands in the
-    sandbox, not the real one.
+    Point ``HOME`` at the sandbox to exercise the child's private sink.
     """
     bin_dir.mkdir(parents=True, exist_ok=True)
     stub = bin_dir / "biff-hook"
-    stub.write_text('#!/usr/bin/env bash\necho "stub boom" >&2\nexit 1\n')
+    stub.write_text(
+        f"#!{sys.executable}\n"
+        "from unittest.mock import patch\n"
+        "from biff._hook_runtime import main\n"
+        "with patch('biff.hook.handle_session_end',\n"
+        "           side_effect=OSError('stub boom')):\n"
+        "    main()\n"
+    )
     stub.chmod(0o755)
     home.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -141,27 +147,27 @@ class TestSessionEndObservability:
     """A failed detached cleanup must still leave a breadcrumb."""
 
     def test_failed_detached_call_is_logged(self, tmp_path: Path) -> None:
-        """biff-hook's stderr goes to ~/.punt-labs/biff/hook-errors.log.
-
-        Detaching sent the call to the background; without capturing stderr a
-        failed cleanup would be invisible. The hook routes it to the same log
-        pre-tool-gate.sh uses, so a failure is still debuggable.
-        """
+        """The child records a cleanup failure despite stderr being discarded."""
         repo = _enabled_repo(tmp_path / "repo")
         home = tmp_path / "home"
         env = _failing_biff_hook_on_path(tmp_path / "bin", home=home)
 
         _run_hook(repo, env)
 
-        log = home / ".punt-labs" / "biff" / "hook-errors.log"
+        log = home / ".punt-labs" / "biff" / "logs" / "biff.log"
         deadline = time.monotonic() + _STUB_SLEEP
         while time.monotonic() < deadline:
-            if log.exists() and "stub boom" in log.read_text():
+            if log.exists() and "Session cleanup failed" in log.read_text():
                 break
             time.sleep(0.05)
-        assert log.exists() and "stub boom" in log.read_text(), (
-            "the failed detached cleanup left no trace in hook-errors.log"
-        )
+        assert log.exists(), "the detached child left no durable diagnostic"
+        diagnostics = log.read_text()
+        assert "Starting session cleanup: pid=" in diagnostics
+        assert "Session cleanup failed: pid=" in diagnostics
+        assert "error=OSError" in diagnostics
+        assert "at biff._hook_entry._cc_session_end:" in diagnostics
+        assert "stub boom" not in diagnostics
+        assert not (home / ".punt-labs" / "biff" / "hook-errors.log").exists()
 
 
 class TestSessionEndGatesUnchanged:

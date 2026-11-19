@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from datetime import UTC, datetime
+from traceback import extract_tb
 from typing import TYPE_CHECKING
 
 from fastmcp.server.middleware import Middleware
@@ -1244,13 +1245,11 @@ class _LiveSession:
             return
         try:
             await self._register_and_start(mcp, state)
-        except BaseException:
+        except BaseException as exc:
             logger.error(
-                "attaching session %s (key %s) failed; the server is bound but "
-                "not registered",
-                routing.session_id,
-                state.session_key,
-                exc_info=True,
+                "MCP session registration failed: %s at registration line %s",
+                type(exc).__name__,
+                extract_tb(exc.__traceback__, limit=2)[-1].lineno,
             )
             for task in self.tasks:
                 task.cancel()
@@ -1296,6 +1295,7 @@ class _LiveSession:
         # Claim-then-write (DES-035): reserve the TTY name first, then write
         # the KV row once with ``tty_name`` populated.  ``register_session``
         # is get-or-create: the SessionStart hook may have written the row.
+        repo = state.config.repo_name
         _, final_name = await register_session(
             state.relay,
             state.config.user,
@@ -1304,7 +1304,7 @@ class _LiveSession:
             kind=state.config.kind,
             hostname=state.hostname,
             pwd=state.pwd,
-            repo=state.config.repo_name,
+            repo=repo,
             launched_by=state.config.launched_by,
             owner_git=state.config.owner_git,
             on_claim=self.registered_names.append,
@@ -1313,11 +1313,7 @@ class _LiveSession:
         state.talk.set_tty_name(final_name)
         # Written after register_session succeeds so "marker exists iff KV
         # row exists" holds under registration failure.
-        write_marker(
-            state.config.repo_name,
-            state.session_key,
-            str(state.repo_common_root),
-        )
+        write_marker(repo, state.session_key, str(state.repo_common_root))
         logger.info("Session ready: %s (%s)", state.session_key, final_name)
 
         await _descriptions.refresh_read_messages(mcp, state)
@@ -1332,17 +1328,14 @@ class _LiveSession:
         poll_interval = state.config.poll_interval
         # Always on, even at poll_interval <= 0: the always-on SUBs never
         # depended on a periodic tick, only the periodic work does.
-        self.tasks.append(
-            asyncio.create_task(
-                _descriptions.poll_inbox(
-                    mcp,
-                    state,
-                    shutdown=self.shutdown,
-                    interval=poll_interval,
-                    nap_interval=_descriptions.nap_interval_for(poll_interval),
-                )
-            )
+        poll = _descriptions.poll_inbox(
+            mcp,
+            state,
+            shutdown=self.shutdown,
+            interval=poll_interval,
+            nap_interval=_descriptions.nap_interval_for(poll_interval),
         )
+        self.tasks.append(asyncio.create_task(poll))
         self.reaper = asyncio.create_task(_reap_loop(state, self.shutdown))
         self.tasks.append(self.reaper)
         self.tasks.append(asyncio.create_task(_heartbeat_loop(state, self.shutdown)))
