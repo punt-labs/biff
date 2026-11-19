@@ -97,18 +97,6 @@ class DisplayQueue:
             self._slot_start = self._clock()
         return True
 
-    def remove_by_source_key(self, source_key: str) -> bool:
-        """Remove the item with the given ``source_key``.
-
-        Returns ``True`` if found and removed.  Adjusts the current
-        index to maintain the rotation invariant.
-        """
-        for i, item in enumerate(self._items):
-            if item.source_key == source_key:
-                self._remove_at(i)
-                return True
-        return False
-
     def remove_by_kind(self, kind: Literal["wall", "talk"]) -> None:
         """Remove all items of the given kind.
 
@@ -177,22 +165,6 @@ class DisplayQueue:
 
         self._slot_start = self._clock()
         return True
-
-    def force_to_front(self, source_key: str) -> bool:
-        """Move the item with ``source_key`` to the current display slot.
-
-        Used when a new talk message arrives — it should be shown
-        immediately rather than waiting for the current item to
-        finish its turn.
-
-        Returns ``True`` if found and moved, ``False`` if not found.
-        """
-        for i, item in enumerate(self._items):
-            if item.source_key == source_key:
-                self._current_index = i
-                self._slot_start = self._clock()
-                return True
-        return False
 
     def snapshot(self) -> list[DisplayItem]:
         """Return a shallow copy of the queue with expired items removed."""
