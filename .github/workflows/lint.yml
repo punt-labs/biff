@@ -50,8 +50,10 @@ jobs:
             OO_BASE="${OO_ARGS}" COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}"
       - name: Ratchets (main, post-merge tripwire)
         if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          BASE_ARGS="--base-ref HEAD~1 --require-base --tripwire"
+          BASE_ARGS="--base-ref ${BEFORE_SHA} --require-base --tripwire"
           make check-oo check-coupling check-suppressions \
             OO_BASE="${BASE_ARGS} --allow-no-improvement" \
             COUPLING_BASE="${BASE_ARGS}" SUPPRESSION_BASE="${BASE_ARGS}"

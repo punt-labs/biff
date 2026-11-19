@@ -8176,3 +8176,23 @@ instead of bouncing; the sender is told it went to the mailbox, not the exact
 session. The resolver is shared, so the CLI and MCP write paths cannot drift.
 Verified: `make check` green; TDD red→green for same-repo forward, cross-repo
 repo selection, live-holder precedence, and failed-delivery reporting.
+
+---
+
+## DES-078: Adopt the Shared Python Ratchets
+
+**Context.** Biff's OO ratchet targets were stubs. The shared `oo-ratchet`
+package now enforces OO metrics, coupling/cohesion, and suppression counts.
+
+**Decision.** Pin the merged package commit in the uv dev dependency group.
+Seed and track all three baselines for `src/biff/`. CI compares PRs with their
+merge base and checks pushes to `main` against its pre-push tip so a push
+containing several commits checks the whole change. CI does not write baselines.
+
+**Alternatives.** Vendoring the ratchets would duplicate code and fixes across
+repos. A PyPI dependency or Git tag would be preferable once available; neither
+exists at adoption. The commit pin is reproducible in the meantime.
+
+**Outcome.** `make check` and CI enforce the shared gates without adding a
+runtime dependency to Biff's wheel. Contributors refresh the committed
+baselines using `make update-oo update-coupling update-suppressions`.
