@@ -1084,11 +1084,6 @@ class NatsRelay:
             logger.info("Legacy stream cleanup failed", exc_info=True)
 
     @property
-    def wtmp_available(self) -> bool:
-        """Whether the wtmp stream was successfully provisioned."""
-        return self._wtmp_available
-
-    @property
     def total_attempts(self) -> int:
         """Cumulative tracked-request attempts since server start."""
         return self._health.total_attempts
