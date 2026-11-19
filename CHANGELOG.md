@@ -9,6 +9,9 @@
 - `make check` and CI now enforce OO, coupling/cohesion, and suppression
   ratchets for biff's Python source.
 - Biff now installs the dev-only `punt-oo-ratchet` package from PyPI.
+- Pin `punt-oo-ratchet` to 0.3.0 and refresh the audited OO baseline for
+  code-only module sizes and the narrower class count. The default fan-out
+  limit is now 10 internal imports, and merged suppression waivers retire.
 
 ### Removed
 
