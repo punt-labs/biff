@@ -39,14 +39,6 @@ class TestEmpty:
         q = DisplayQueue()
         assert q.snapshot() == []
 
-    def test_force_to_front_returns_false(self) -> None:
-        q = DisplayQueue()
-        assert q.force_to_front("nonexistent") is False
-
-    def test_remove_by_source_key_returns_false(self) -> None:
-        q = DisplayQueue()
-        assert q.remove_by_source_key("nonexistent") is False
-
     def test_remove_by_kind_does_not_crash(self) -> None:
         q = DisplayQueue()
         q.remove_by_kind("wall")  # no-op on empty queue
@@ -87,38 +79,6 @@ class TestAdd:
         assert q.current() is item
 
 
-class TestRemoveBySourceKey:
-    def test_removes_matching_item(self) -> None:
-        q = DisplayQueue()
-        q.add(_wall(key="a"))
-        q.add(_wall(key="b"))
-        assert q.remove_by_source_key("a") is True
-        assert len(q.snapshot()) == 1
-        assert q.snapshot()[0].source_key == "b"
-
-    def test_returns_false_for_nonexistent(self) -> None:
-        q = DisplayQueue()
-        q.add(_wall(key="a"))
-        assert q.remove_by_source_key("z") is False
-
-    def test_adjusts_cursor_when_removing_before_current(self) -> None:
-        q = DisplayQueue(turn_duration=0.0)
-        q.add(_wall(key="a"))
-        q.add(_wall(key="b"))
-        q.add(_wall(key="c"))
-        # Advance to index 1 ("b")
-        q.advance_if_due()
-        item = q.current()
-        assert item is not None
-        assert item.source_key == "b"
-        # Remove "a" (index 0, before cursor)
-        q.remove_by_source_key("a")
-        # Cursor should still point to "b"
-        item = q.current()
-        assert item is not None
-        assert item.source_key == "b"
-
-
 class TestRemoveByKind:
     def test_removes_all_matching(self) -> None:
         q = DisplayQueue()
@@ -147,10 +107,10 @@ class TestRemoveByKind:
         assert q.snapshot() == []
 
     def test_cursor_on_removed_item_falls_to_next(self) -> None:
-        q = DisplayQueue(turn_duration=3600.0)
+        q = DisplayQueue(turn_duration=0.0)
         q.add(_wall(key="w1"))
         q.add(_talk(key="t1"))
-        q.force_to_front("t1")  # cursor now at index 1 (talk item)
+        q.advance_if_due()  # cursor now at index 1 (talk item)
         item = q.current()
         assert item is not None
         assert item.source_key == "t1"
@@ -252,44 +212,6 @@ class TestRotation:
         item = q.current()
         assert item is not None
         assert item.source_key == "w1"
-
-
-class TestForceToFront:
-    def test_changes_current_item(self) -> None:
-        q = DisplayQueue(turn_duration=3600.0)
-        q.add(_wall(key="w1"))
-        q.add(_talk(key="t1"))
-        item = q.current()
-        assert item is not None
-        assert item.source_key == "w1"
-        q.force_to_front("t1")
-        item = q.current()
-        assert item is not None
-        assert item.source_key == "t1"
-
-    def test_returns_false_when_not_found(self) -> None:
-        q = DisplayQueue()
-        q.add(_wall(key="w1"))
-        assert q.force_to_front("nonexistent") is False
-
-    def test_resets_slot_timer(self) -> None:
-        clock = _FakeClock()
-        q = DisplayQueue(turn_duration=5.0, clock=clock)
-        q.add(_wall(key="w1"))
-        q.add(_talk(key="t1"))
-        # Advance past the turn duration so the slot is expired
-        clock.advance(6.0)
-        assert q.advance_if_due() is True
-        # Force talk to front — slot timer resets
-        q.force_to_front("t1")
-        item = q.current()
-        assert item is not None
-        assert item.source_key == "t1"
-        # Slot timer was reset, so advance should NOT fire yet
-        assert q.advance_if_due() is False
-        # Advance past the turn duration again — now it fires
-        clock.advance(5.1)
-        assert q.advance_if_due() is True
 
 
 class TestTimingIntegration:
