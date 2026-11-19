@@ -359,9 +359,10 @@ class TestSkippedSharedPlanIsDiagnosable:
                 )
         assert result is not None  # decision unchanged: still denied
         assert any(
-            "skewed-session" in r.getMessage() and "shared" in r.getMessage()
+            "identified session" in r.getMessage() and "shared" in r.getMessage()
             for r in caplog.records
         )
+        assert "skewed-session" not in caplog.text
 
     def test_no_log_without_a_shared_marker(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

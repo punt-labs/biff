@@ -18,6 +18,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+@pytest.fixture(autouse=True, name="_disable_usage_capture")
+def disable_usage_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never write usage to the operator's store from ordinary tests."""
+    monkeypatch.setenv("PUNT_TELEMETRY", "off")
+
+
 @pytest.fixture(autouse=True)
 def _confine_git_walk(  # pyright: ignore[reportUnusedFunction]
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

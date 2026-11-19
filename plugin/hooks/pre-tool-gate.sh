@@ -17,4 +17,4 @@ if [[ -d "$BIFF_ACTIVE" ]]; then
 else
     exit 0
 fi
-biff-hook claude-code pre-tool-use 2>>"$HOME/.punt-labs/biff/hook-errors.log" || true
+biff-hook claude-code pre-tool-use || true

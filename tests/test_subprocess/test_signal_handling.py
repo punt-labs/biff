@@ -33,7 +33,7 @@ from biff._stdlib import get_repo_slug, sanitize_repo_name
 pytestmark = pytest.mark.subprocess
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_STARTUP_MARKER = "Starting MCP server"
+_STARTUP_MARKER = "biff.server.app: Visible repos:"
 _STARTUP_TIMEOUT = 15.0
 _GRACE_PERIOD = 5.0
 
@@ -71,30 +71,17 @@ def _start_stderr_pump(proc: subprocess.Popen[str]) -> queue.Queue[str | None]:
     return lines
 
 
-def _wait_for_startup(
-    proc: subprocess.Popen[str], lines: queue.Queue[str | None]
-) -> None:
-    """Block until the server has passed through active-lifespan startup.
-
-    ``_active_lifespan`` -- which registers the signal handlers under test
-    -- runs to completion before FastMCP logs this line (the lifespan context
-    manager is entered before the stdio transport starts), so waiting for it
-    is both correct and far faster than a fixed sleep.  *lines* is the queue
-    a background thread (:func:`_start_stderr_pump`) is already draining
-    ``proc.stderr`` into.
-    """
+def _wait_for_startup(proc: subprocess.Popen[str], diagnostics: Path) -> None:
+    """Wait for the durable diagnostic written after signal registration."""
     deadline = time.monotonic() + _STARTUP_TIMEOUT
     while time.monotonic() < deadline:
-        try:
-            line = lines.get(timeout=max(deadline - time.monotonic(), 0))
-        except queue.Empty:
-            break
-        if line is None:
+        if proc.poll() is not None:
             raise AssertionError(
                 f"server exited during startup with code {proc.returncode}"
             )
-        if _STARTUP_MARKER in line:
+        if diagnostics.exists() and _STARTUP_MARKER in diagnostics.read_text():
             return
+        time.sleep(0.05)
     raise AssertionError(f"server did not start within {_STARTUP_TIMEOUT}s")
 
 
@@ -181,8 +168,8 @@ def active_server(tmp_path: Path) -> Generator[ActiveServer]:
         text=True,
     )
     lines = _start_stderr_pump(proc)
-    _wait_for_startup(proc, lines)
     try:
+        _wait_for_startup(proc, home / ".punt-labs" / "biff" / "logs" / "biff.log")
         yield ActiveServer(proc, home, lines)
     finally:
         if proc.poll() is None:

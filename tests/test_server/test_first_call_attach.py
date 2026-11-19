@@ -110,7 +110,7 @@ async def test_repoint_waits_for_an_in_flight_call_of_the_old_session(
     assert state.bound_session_id == "sess-2"
 
 
-async def test_a_failed_attach_is_logged_with_the_session(
+async def test_a_failed_attach_is_logged_without_session_content(
     state: ServerState,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -128,5 +128,11 @@ async def test_a_failed_attach_is_logged_with_the_session(
         ):
             await client.call_tool("who", {})
     assert any(
-        "sess-x" in r.getMessage() and r.levelname == "ERROR" for r in caplog.records
+        r.getMessage().startswith(
+            "MCP session registration failed: RuntimeError at registration line "
+        )
+        and r.levelname == "ERROR"
+        for r in caplog.records
     )
+    assert "sess-x" not in caplog.text
+    assert "relay down" not in caplog.text

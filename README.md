@@ -313,7 +313,25 @@ Global flags go before the subcommand:
 | `--verbose`, `-v` | Debug logging to stderr |
 | `--quiet`, `-q` | Suppress command output |
 | `--user name` | Act as another identity, e.g. `biff --user github-actions wall "CI failed"` for a bot |
+| `--no-telemetry` | Disable local usage capture for this invocation |
 | `--version` | Print the version and exit |
+
+### Diagnostics and usage
+
+The CLI (including the REPL and status line), MCP server (stdio or HTTP),
+and hooks (including detached SessionEnd cleanup) write diagnostics to the
+same private file, `~/.punt-labs/biff/logs/biff.log`. The file records INFO
+and above and rotates at 5 MiB with five backups. Terminal diagnostics go to
+stderr (WARNING and above by default); MCP stdio stdout is for protocol
+messages only. Biff no longer writes a separate `hook-errors.log`.
+
+Local usage capture is on by default. It records supported CLI command
+names and MCP tool names, durations and protocol outcomes in a separate
+private SQLite store, `~/.punt-labs/biff/telemetry.db`, for 90 days. It
+does not record command arguments, tool results, identities, or messages,
+and Biff does not send usage data over the network. Set `PUNT_TELEMETRY=off`
+or `BIFF_TELEMETRY=off`, or pass `biff --no-telemetry <command>` to disable
+capture. Any off switch wins.
 
 ### Interactive Shell
 
