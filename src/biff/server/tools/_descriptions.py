@@ -104,6 +104,14 @@ _WALL_NOTIFY_RESUBSCRIBE_MESSAGES = LatchMessages(
 _NOTIFY_SEND_TIMEOUT = 3.0
 
 
+async def _publish_tool_change(bus: SubscriptionBus) -> None:
+    try:
+        async with asyncio.timeout(_NOTIFY_SEND_TIMEOUT):
+            await bus.publish(ToolsListChanged())
+    except Exception:
+        logger.warning("Tool list subscription publish failed", exc_info=True)
+
+
 @dataclass
 class _HandshakeDelivery:
     """Track legacy notification debt under one lock (DES-061)."""
@@ -129,7 +137,7 @@ class _HandshakeDelivery:
             bus: Server event bus, or None to send the handshake notification only.
         """
         if bus is not None:
-            await bus.publish(ToolsListChanged())
+            await _publish_tool_change(bus)
 
         from fastmcp.server.dependencies import get_context  # noqa: PLC0415
 

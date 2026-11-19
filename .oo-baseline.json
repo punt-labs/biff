@@ -845,14 +845,14 @@
     "future_annotations": 1.0
   },
   "src/biff/server/tools/_descriptions.py": {
-    "method_ratio": 0.212,
+    "method_ratio": 0.206,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.11,
+    "avg_params": 2.08,
     "max_complexity": 14.0,
-    "avg_complexity": 3.31,
-    "module_size": 622.0,
+    "avg_complexity": 3.27,
+    "module_size": 628.0,
     "classes_per_module": 2.0,
-    "class_to_func_ratio": 0.161,
+    "class_to_func_ratio": 0.156,
     "init_violations": 1.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

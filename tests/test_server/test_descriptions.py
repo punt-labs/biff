@@ -2244,6 +2244,30 @@ class TestStartupNotificationRace:
         modern.send_tool_list_changed.assert_not_awaited()
         legacy.send_tool_list_changed.assert_awaited_once()
 
+    @pytest.mark.parametrize("stall", [False, True])
+    async def test_subscription_failure_does_not_block_handshake_alert(
+        self, state: ServerState, monkeypatch: pytest.MonkeyPatch, stall: bool
+    ) -> None:
+        """A failed or stalled bus must not stop a refresh or its legacy alert."""
+        from mcp.server.session import ServerSession
+
+        async def fail_publish(_event: object) -> None:
+            if stall:
+                await asyncio.Event().wait()
+            raise RuntimeError("bus unavailable")
+
+        monkeypatch.setattr(_descriptions, "_NOTIFY_SEND_TIMEOUT", 0.05)
+        monkeypatch.setattr(state.tool_events, "publish", fail_publish)
+        session = MagicMock(spec=ServerSession, protocol_version="2025-11-25")
+        await _descriptions.handshake_delivery.capture_session(session)
+        mcp = create_server(state)
+        await state.relay.deliver(
+            Message(from_user="eric", to_user=_KAI_SESSION, body="hello")
+        )
+
+        assert await asyncio.wait_for(refresh_read_messages(mcp, state), timeout=1)
+        session.send_tool_list_changed.assert_awaited_once()
+
     async def test_poller_cannot_recover_lost_notification(
         self, state: ServerState
     ) -> None:
