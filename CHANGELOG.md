@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Exercise FastMCP 4's stateful handshake for push notifications and its
+  modern protocol's sanitized errors for failed session attachment.
 - Enforce Google-style public Python docstrings and tracker-free code prose,
   and build a verified Python API reference with MkDocs.
 - `make check` and CI now enforce OO, coupling/cohesion, and suppression

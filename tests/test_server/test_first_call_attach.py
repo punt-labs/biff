@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
-from fastmcp.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
+from mcp.types import INTERNAL_ERROR
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
@@ -122,9 +123,12 @@ async def test_a_failed_attach_is_logged_with_the_session(
     async with StampedClient(
         FastMCPTransport(create_server(state)), caller=caller_for("sess-x")
     ) as client:
-        with caplog.at_level("ERROR", logger="biff.server.app"):
-            with pytest.raises(ToolError, match="relay down"):
-                await client.call_tool("who", {})
+        with (
+            caplog.at_level("ERROR", logger="biff.server.app"),
+            pytest.raises(MCPError) as exc,
+        ):
+            await client.call_tool("who", {})
+    assert exc.value.code == INTERNAL_ERROR
     assert any(
         "sess-x" in r.getMessage() and r.levelname == "ERROR" for r in caplog.records
     )

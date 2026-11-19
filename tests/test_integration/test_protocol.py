@@ -37,7 +37,10 @@ async def tracked_client(
     _reset_session()
     tracker = NotificationTracker()
     mcp = create_server(state)
-    async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
+    # These tests exercise the initialize handshake and its unsolicited back-channel.
+    async with StampedClient(
+        FastMCPTransport(mcp), message_handler=tracker, mode="legacy"
+    ) as client:
         yield client, tracker
     _reset_session()
 
@@ -121,7 +124,7 @@ class TestToolListing:
     async def test_tools_have_input_schemas(self, biff_client: Client[Any]) -> None:
         tools = await biff_client.list_tools()
         for tool in tools:
-            assert tool.inputSchema is not None, f"{tool.name} has no schema"
+            assert tool.input_schema is not None, f"{tool.name} has no schema"
 
 
 class TestAlwaysLoadMeta:
@@ -422,7 +425,7 @@ class TestPendingNotifyRecoveryProtocol:
         _reset_session()
         mcp = create_server(state)
         try:
-            async with StampedClient(FastMCPTransport(mcp)):
+            async with StampedClient(FastMCPTransport(mcp), mode="legacy"):
                 assert _descriptions._session is not None
                 live_session = _descriptions._session
 
@@ -445,7 +448,9 @@ class TestPendingNotifyRecoveryProtocol:
             # client's tracker, because there is nothing more for it to see.
 
             tracker = NotificationTracker()
-            async with StampedClient(FastMCPTransport(mcp), message_handler=tracker):
+            async with StampedClient(
+                FastMCPTransport(mcp), message_handler=tracker, mode="legacy"
+            ):
                 # A genuine reconnect: on_initialize -> capture_session()
                 # sees _pending_notify still set and flushes it on the
                 # freshly captured session — observed here as a real

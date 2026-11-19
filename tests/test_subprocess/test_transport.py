@@ -62,7 +62,7 @@ class TestServerStartup:
     async def test_tools_have_input_schemas(self, biff_client: Client[Any]) -> None:
         tools = await biff_client.list_tools()
         for tool in tools:
-            assert tool.inputSchema is not None, f"{tool.name} has no schema"
+            assert tool.input_schema is not None, f"{tool.name} has no schema"
 
 
 class TestToolCallOverStdio:

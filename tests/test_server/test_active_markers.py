@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
-from fastmcp.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
+from mcp.types import INTERNAL_ERROR
 
 from biff.models import BiffConfig
 from biff.server.app import create_server
@@ -74,8 +75,9 @@ class TestActiveMarkers:
 
         mcp = create_server(state)
         async with StampedClient(FastMCPTransport(mcp)) as client:
-            with pytest.raises(ToolError, match="simulated claim failure"):
+            with pytest.raises(MCPError) as exc:
                 await client.call_tool("who", {})
+        assert exc.value.code == INTERNAL_ERROR
 
         assert not list(active_root.glob("*")), (
             "no marker may exist when register_session fails"
