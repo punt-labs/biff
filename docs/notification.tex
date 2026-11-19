@@ -40,6 +40,13 @@ independent channels: the MCP protocol (fast, tool-list-changed
 notification) and a filesystem status file (slow, polled by the status
 bar command).
 
+The MCP delivery transitions below model standalone notifications for
+clients that perform the legacy initialization handshake. Biff does
+not capture MCP 2026-07-28 sessions for standalone delivery. Those
+clients receive tool-list changes on an opt-in
+\texttt{subscriptions/listen} stream instead. The stream has no replay;
+clients should list tools again after reconnecting.
+
 The notification pipeline has a ``belt and suspenders'' design: tool
 handlers fire notifications via the MCP request context (belt path),
 while a background poller fires them via a stored

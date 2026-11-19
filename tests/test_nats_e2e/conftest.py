@@ -146,7 +146,10 @@ async def kai_tracked(
         config, shared_data_dir / "kai", tty=_KAI_TTY, hostname="test-host", pwd="/test"
     )
     mcp = create_server(state)
-    async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
+    async with StampedClient(
+        FastMCPTransport(mcp), message_handler=tracker, mode="legacy"
+    ) as client:
+        await client.call_tool("who", {})
         yield client, tracker, state
     _reset_session()
 
@@ -166,5 +169,8 @@ async def eric_tracked(
         pwd="/test",
     )
     mcp = create_server(state)
-    async with StampedClient(FastMCPTransport(mcp), message_handler=tracker) as client:
+    async with StampedClient(
+        FastMCPTransport(mcp), message_handler=tracker, mode="legacy"
+    ) as client:
+        await client.call_tool("who", {})
         yield client, tracker, state

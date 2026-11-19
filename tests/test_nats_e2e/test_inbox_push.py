@@ -239,6 +239,7 @@ async def kai_fast_backstop(
     )
     mcp = create_server(state)
     async with StampedClient(FastMCPTransport(mcp)) as client:
+        await client.call_tool("who", {})
         yield client, state
 
 
@@ -338,8 +339,10 @@ class TestPollerAtDisabledInterval:
 
         async with (
             StampedClient(FastMCPTransport(kai_mcp)) as kai_client,
-            StampedClient(FastMCPTransport(eric_mcp)),
+            StampedClient(FastMCPTransport(eric_mcp)) as eric_client,
         ):
+            await kai_client.call_tool("who", {})
+            await eric_client.call_tool("who", {})
             await asyncio.sleep(1.0)  # let the poller establish its SUBs
 
             await eric_state.relay.deliver(
