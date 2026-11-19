@@ -6,7 +6,11 @@ and multiple subprocesses share state through the filesystem.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +26,58 @@ if TYPE_CHECKING:
     from fastmcp.client.client import CallToolResult
 
 pytestmark = pytest.mark.subprocess
+
+
+def test_diagnostics_rotate_with_concurrent_process_roles(tmp_path: Path) -> None:
+    roles = ("cli", "mcp", "hook")
+    records_per_writer = 420
+    payload = "word " * 1000 + "end"
+    writer = """
+import logging
+import sys
+from punt_observe.logging import Role
+from biff.logging_config import configure_logging
+
+configure_logging(Role(sys.argv[1]))
+logger = logging.getLogger('biff.rotation')
+for index in range(int(sys.argv[2])):
+    logger.info('%s:%d %s', sys.argv[1], index, sys.argv[3])
+"""
+
+    def run(role: str) -> None:
+        subprocess.run(  # noqa: S603
+            [sys.executable, "-c", writer, role, str(records_per_writer), payload],
+            env={**os.environ, "HOME": str(tmp_path)},
+            check=True,
+            timeout=30,
+        )
+
+    with ThreadPoolExecutor(max_workers=len(roles)) as pool:
+        list(pool.map(run, roles))
+
+    directory = tmp_path / ".punt-labs" / "biff" / "logs"
+    assert directory.stat().st_mode & 0o777 == 0o700
+    logs = [p for p in directory.glob("biff.log*") if not p.name.endswith(".lock")]
+    assert 2 <= len(logs) <= 6
+    rotation_bytes = 5 * 1024 * 1024
+    max_record_bytes = len(payload.encode()) + 100
+    seen: Counter[str] = Counter()
+    for path in logs:
+        assert path.stat().st_mode & 0o777 == 0o600
+        size = path.stat().st_size
+        # The shared sink checks size before taking its shared append lock.
+        assert size <= rotation_bytes + (len(roles) - 1) * max_record_bytes
+        if path.name != "biff.log":
+            assert size > rotation_bytes - max_record_bytes
+        for line in path.read_text().splitlines():
+            header, record = line.split(" biff.rotation: ")
+            assert header.endswith("[INFO]")
+            key, body = record.split(" ", 1)
+            assert body == payload
+            seen[key] += 1
+    assert seen == Counter(
+        f"{role}:{index}" for role in roles for index in range(records_per_writer)
+    )
 
 
 def _text(result: CallToolResult) -> str:

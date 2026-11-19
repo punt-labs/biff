@@ -128,7 +128,9 @@ async def test_a_failed_attach_is_logged_without_session_content(
         ):
             await client.call_tool("who", {})
     assert any(
-        r.getMessage() == "MCP session registration failed: RuntimeError"
+        r.getMessage().startswith(
+            "MCP session registration failed: RuntimeError at registration line "
+        )
         and r.levelname == "ERROR"
         for r in caplog.records
     )

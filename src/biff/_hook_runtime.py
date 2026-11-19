@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import logging
-import os
 import sys
 from dataclasses import dataclass
 
 from punt_observe.logging import LoggingSetupError, Role
 
-from biff._hook_entry import main as _dispatch
+from biff._hook_dispatch import HookDispatch
 from biff.logging_config import configure_logging
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,22 +29,7 @@ class HookInvocation:
         except LoggingSetupError as exc:
             # A diagnostic outage must not bypass the edit gate or caller stamping.
             sys.stderr.write(f"biff-hook: {exc}\n")
-        if self.detached:
-            self._run_detached()
-        else:
-            _dispatch()
-
-    def _run_detached(self) -> None:
-        pid = os.getpid()
-        logger.info("Starting session cleanup: pid=%d", pid)
-        try:
-            _dispatch()
-        except Exception as exc:
-            logger.error(
-                "Session cleanup failed: pid=%d error=%s", pid, type(exc).__name__
-            )
-            raise
-        logger.info("Session cleanup finished: pid=%d", pid)
+        HookDispatch.run(detached=self.detached)
 
 
 main = HookInvocation.main
