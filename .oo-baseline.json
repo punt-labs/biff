@@ -1185,10 +1185,10 @@
   "src/biff/testing/notifications.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.25,
+    "avg_params": 0.33,
     "max_complexity": 1.0,
     "avg_complexity": 1.0,
-    "module_size": 38.0,
+    "module_size": 23.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 1.0,
