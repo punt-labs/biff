@@ -1,4 +1,9 @@
-.PHONY: help test lint type mdlint check check-oo report update-oo format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
+.PHONY: help test lint type mdlint check check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions report format build install clean depot lock-clean fuzz prob prob-session prfaq clean-tex
+
+RATCHET_SRC := src/biff/
+OO_BASE ?=
+COUPLING_BASE ?=
+SUPPRESSION_BASE ?=
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -18,13 +23,28 @@ type: ## Type check with mypy and pyright
 mdlint: ## Lint markdown files (matches .github/workflows/docs.yml)
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
 
-check: lint type mdlint test ## Run all quality gates
+check: lint type mdlint test check-oo check-coupling check-suppressions ## Run all quality gates
 
-# OO ratchet not yet adopted here (tracked follow-up). These stubs exist so an
-# agent following the deployed .claude/rules/ (which reference them) does not hit
-# a missing target. They pass as no-ops until the real ratchet lands.
-check-oo report update-oo: ## OO ratchet — not yet adopted in this repo (no-op)
-	@echo "$@: OO ratchet not yet adopted in this repo; see the OO-adoption follow-up."
+check-oo: ## Check the OO must-improve ratchet
+	uv run oo-ratchet oo $(RATCHET_SRC) --check $(OO_BASE)
+
+update-oo: ## Update the OO baseline for touched files
+	uv run oo-ratchet oo $(RATCHET_SRC) --update $(OO_BASE)
+
+check-coupling: ## Check for coupling and cohesion regressions
+	uv run oo-ratchet coupling $(RATCHET_SRC) --check $(COUPLING_BASE)
+
+update-coupling: ## Update the coupling baseline for touched files
+	uv run oo-ratchet coupling $(RATCHET_SRC) --update $(COUPLING_BASE)
+
+check-suppressions: ## Check for new lint and type suppressions
+	uv run oo-ratchet suppressions $(RATCHET_SRC) --check $(SUPPRESSION_BASE)
+
+update-suppressions: ## Update the suppression baseline
+	uv run oo-ratchet suppressions $(RATCHET_SRC) --update
+
+report: ## Full quality report — not yet adopted (no-op)
+	@echo "$@: full quality report not yet adopted in this repo."
 
 PROBCLI ?= $(HOME)/Applications/ProB/probcli
 PROB_SETSIZE ?= 2

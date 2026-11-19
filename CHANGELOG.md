@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `make check` and CI now enforce OO, coupling/cohesion, and suppression
+  ratchets for biff's Python source.
+
 ### Fixed
 
 - `/wall` post and clear now reach idle peer sessions promptly. Wall changes
