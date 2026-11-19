@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import ast
 import io
+import os
 import re
 import subprocess
 import sys
 import tokenize
 import zlib
+from importlib.metadata import version
 from pathlib import Path
 
 from docstring_parser import DocstringStyle, ParseError, parse
@@ -227,8 +229,17 @@ def _check_docstrings(source: Path) -> list[str]:
     files = _python_files(source)
     if not files:
         return [f"No Python source files found: {source}"]
+    # FastMCP's parser and pydoclint's fork share the docstring_parser namespace.
     result = subprocess.run(
         [
+            "uv",
+            "tool",
+            "run",
+            "--quiet",
+            "--from",
+            f"pydoclint=={version('pydoclint')}",
+            "--with",
+            f"docstring-parser-fork=={version('docstring-parser-fork')}",
             "pydoclint",
             "--config",
             "pyproject.toml",
@@ -243,6 +254,7 @@ def _check_docstrings(source: Path) -> list[str]:
         stderr=subprocess.STDOUT,
         text=True,
         check=False,
+        env={**os.environ, "RUST_LOG": "error"},
     )
     findings = doclint_findings(result.returncode, result.stdout)
     if not findings:

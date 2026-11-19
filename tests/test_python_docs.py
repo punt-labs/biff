@@ -7,6 +7,7 @@ import sys
 import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
@@ -199,7 +200,7 @@ def test_missing_executable_fails_gate(
     path.write_text('"""A module."""\n', encoding="utf-8")
     result = _run_doclint(path)
     assert result.returncode == 1
-    assert "pydoclint" in result.stderr
+    assert "uv" in result.stderr
 
 
 def test_doclint_checks_paths_containing_tox(tmp_path: Path) -> None:
@@ -403,6 +404,41 @@ async def f() -> str:
         ["example.py", "5"],
         ["example.py", "6"],
     ]
+
+
+@pytest.mark.parametrize(("returncode", "output"), [(0, ""), (2, "broken tool")])
+def test_doclint_uses_isolated_pinned_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    returncode: int,
+    output: str,
+) -> None:
+    path = tmp_path / "example.py"
+    path.write_text('"""Example module."""\n', encoding="utf-8")
+    runner = Mock(return_value=subprocess.CompletedProcess([], returncode, output))
+    monkeypatch.setattr(subprocess, "run", runner)
+    monkeypatch.setattr(
+        "tools.check_python_docs.version",
+        {"pydoclint": "1.2.3", "docstring-parser-fork": "4.5.6"}.__getitem__,
+    )
+    monkeypatch.setattr(sys, "argv", [str(_TOOL), "docstrings", str(path)])
+
+    assert main() == int(bool(returncode))
+    assert runner.call_args.args[0][:9] == [
+        "uv",
+        "tool",
+        "run",
+        "--quiet",
+        "--from",
+        "pydoclint==1.2.3",
+        "--with",
+        "docstring-parser-fork==4.5.6",
+        "pydoclint",
+    ]
+    assert runner.call_args.args[0][-1] == str(path.resolve())
+    assert runner.call_args.kwargs["env"]["RUST_LOG"] == "error"
+    assert ("broken tool" in capsys.readouterr().err) == bool(returncode)
 
 
 def test_missing_api_directive_is_detected() -> None:
