@@ -90,7 +90,7 @@ class TestIsEnabled:
             assert is_enabled(tmp_path) is False
 
     def test_legacy_yaml_key_does_not_enable(self, tmp_path: Path) -> None:
-        """The retired ``enabled:`` yaml key no longer turns biff on."""
+        """Ignore the legacy ``enabled:`` YAML key when deciding enablement."""
         biff_dir = tmp_path / ".punt-labs" / "biff"
         biff_dir.mkdir(parents=True)
         (biff_dir / "config.local.yaml").write_text("enabled: true\n")

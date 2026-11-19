@@ -43,6 +43,11 @@ class CallerIdentityMiddleware(Middleware):
         context: MiddlewareContext[CallToolRequestParams],
         call_next: CallNext[CallToolRequestParams, ToolResult],
     ) -> ToolResult:
+        """Validate caller identity and dispatch the tool within its session.
+
+        Raises:
+            ToolError: The caller identity is missing or malformed, or the tool fails.
+        """
         arguments = context.message.arguments
         if arguments is None or CALLER_KEY not in arguments:
             raise ToolError(_UNIDENTIFIED)

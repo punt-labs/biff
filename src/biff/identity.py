@@ -106,10 +106,7 @@ def _read_text_or_fail_closed(path: Path) -> str | _Unreadable | None:
     Three outcomes, not two. Collapsing "confirmed absent"
     (``FileNotFoundError``) and "exists but unreadable" (any other
     ``OSError``, or ``UnicodeDecodeError`` on invalid UTF-8) into a single
-    ``None`` is the exact bug this helper exists to make structurally hard
-    to repeat -- see DES-053's amendment history in ``DESIGN.md``, where
-    that collapse was fixed once in :func:`_read_identity_yaml` and then
-    reintroduced from scratch in what is now :func:`_ethos_submodule_declared`.
+    ``None`` would authorize identities from an unverifiable registry.
 
     Returns ``None`` only for ``FileNotFoundError`` -- the one case safe to
     treat as "nothing to see here." Returns :class:`_Unreadable` for every

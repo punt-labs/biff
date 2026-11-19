@@ -1,4 +1,4 @@
-"""Hosted NATS: talk routes on identity alone, verified on the real relay.
+r"""Hosted NATS: talk routes on identity alone, verified on the real relay.
 
 The ``-m nats_hosted`` suite exercises presence and messaging against a real hosted
 NATS server; this module extends it to *talk*, the one subsystem whose routing
@@ -75,8 +75,8 @@ _STREAM_PREFIX = "biff-dev"
 # deterministic within a run (computed once at import).
 _SALT = uuid4().hex[:8]
 
-# Same organization (org-alpha), two repositories — repo-keyed routing used to
-# mis-route this pair.  The org/repo lives only in each relay's configuration; it
+# Same organization (org-alpha), two repositories. The org/repo lives
+# only in each relay's configuration; it
 # never enters the identity-only subject.
 _KAI_BIFF = f"htkai{_SALT}:htkaibiff{_SALT}"
 _ERIC_VOX = f"hteric{_SALT}:htericvox{_SALT}"
@@ -121,7 +121,7 @@ async def alpha_vox_relay(
 
     A different repository of the *same* org as :func:`alpha_biff_relay`, so a
     talk between the two crosses a repository boundary but not an org boundary —
-    the exact pair repo-keyed routing used to strand.
+    a case requiring identity-only subjects rather than repository routing.
     """
     relay = NatsRelay(
         url=hosted_nats_url,

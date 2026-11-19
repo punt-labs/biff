@@ -165,7 +165,7 @@ def _pre_tool_use_deny(reason: str) -> dict[str, object]:
 
 
 def _has_active_session() -> bool:
-    """True if any biff MCP server session is active."""
+    """Check whether any biff MCP server session is active."""
     from biff._stdlib import active_dir  # noqa: PLC0415
 
     adir = active_dir()
@@ -223,7 +223,7 @@ def _identity_candidates(data: dict[str, object]) -> tuple[str | None, ...]:
 
 
 def _has_any_plan_marker(root: str, identities: tuple[str | None, ...]) -> bool:
-    """True when *root* has a plan marker for *any* identity in the list."""
+    """Check whether *root* has a plan marker for any listed identity."""
     from biff.markers import has_plan_marker  # noqa: PLC0415
 
     return any(has_plan_marker(root, identity) for identity in identities)
@@ -456,7 +456,7 @@ _BEAD_BRANCH_RE = re.compile(r"\b[a-z]+-[a-z0-9]{2,4}\b")
 def _expand_branch_plan(branch: str) -> str:
     """Build a plan string from a branch name.
 
-    If the branch contains a bead ID (e.g. ``biff-ka4``), resolve
+    If the branch contains a task identifier, resolve
     the title.  Otherwise return the branch name as-is, prefixed
     with ``→`` to indicate automatic provenance.
     """
@@ -658,13 +658,12 @@ def _detect_collisions(data: dict[str, object] | None = None) -> list[str]:
     Reads ``~/.punt-labs/biff/active/`` files and returns session keys whose
     repo_name matches AND whose worktree_root matches (or is absent,
     which conservatively counts as a collision).  ``worktree_root``
-    comparison is a plain string match — the *current* side is now the
+    comparison is a plain string match — the current side is the
     repo-common-root, so two sessions in *different* linked worktrees of
     the same repo are treated as one coordination unit, matching
-    ``_hint_dir()``'s scope.  A stored row from before this change (which
-    recorded the nearest worktree toplevel, not the common root) legitimately
-    stops matching for a worktree session specifically — a known, narrower
-    residual gap tracked alongside the wall-marker one in DESIGN.md.
+    ``_hint_dir()``'s scope. A stored row containing the nearest worktree
+    toplevel instead of the common root cannot match a linked worktree's
+    common-root coordinate.
 
     Returns an empty list when there is no git root or no active dir.
     """

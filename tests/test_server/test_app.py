@@ -210,17 +210,16 @@ class TestWriteSentinelRuntimeError:
 
 class TestLifespanCleanupSentinelOrdering:
     """The reap-fallback sentinel must be written after the reaper stops
-    ticking, but before any network-bound teardown step that could hang.
+       ticking, but before any network-bound teardown step that could hang.
 
-    Writing it before the reaper stops races ``_reap_sentinels``, which
-    treats any sentinel matching this session's own key as a prior
-    incarnation and discards it unreaped -- consuming the
-    fallback before a later timed-out ``_release_relay`` ever needs it
-    (Cursor Bugbot, High). Writing it only after the logout/task-shutdown
-    awaits reopens the same failure from the other side: those awaits sit
-    inside FastMCP's cancellable disconnect budget, so a cancellation
-    before they complete would again leave no sentinel at all (Cursor
-    Bugbot, High, on an earlier version of this fix).
+       Writing it before the reaper stops races ``_reap_sentinels``, which
+       treats any sentinel matching this session's own key as a prior
+       incarnation and discards it unreaped -- consuming the
+       fallback before a later timed-out ``_release_relay`` ever needs it
+    . Writing it only after the logout/task-shutdown
+       awaits reopens the same failure from the other side: those awaits sit
+       inside FastMCP's cancellable disconnect budget, so a cancellation
+       before they complete would again leave no sentinel at all.
     """
 
     async def test_sentinel_written_between_reaper_stop_and_logout(
@@ -274,7 +273,7 @@ class TestReleaseSessionSentinelRemovalDoesNotAbort:
     """A failure removing the now-stale sentinel must not skip the rest of
     teardown (``relay.close()``) -- the row itself is
     already gone, so re-processing it on the next reaper tick is harmless,
-    unlike losing steps still queued after this one (Cursor Bugbot, Medium).
+    unlike losing steps still queued after this one.
     """
 
     async def test_oserror_removing_sentinel_does_not_propagate(
@@ -303,8 +302,7 @@ class TestLifespanCleanupSurvivesFailedReaper:
     cancelled; a bare ``await reaper`` re-raises that stored exception,
     skipping the sentinel write and ``_release_relay`` -- the exact
     failure mode ``_shutdown_tasks``'s ``gather(..., return_exceptions=True)``
-    already protects the other background tasks against (Cursor Bugbot,
-    High).
+    already protects the other background tasks against.
     """
 
     async def test_reaper_runtime_error_does_not_abort_cleanup(
@@ -354,14 +352,10 @@ class TestLifespanCleanupSurvivesFailedReaper:
 
 
 class TestRemoveUnreadFiles:
-    """``_remove_unread_files`` deletes both the unread-status JSON and its
-    ``unread-nudge.sh`` ``.nudged`` sidecar.
+    """Delete unread JSON and nudge sidecars together.
 
-    Before this fix, both cleanup call sites removed only the JSON, leaving
-    the sidecar behind -- a reused PID starting a fresh session could
-    inherit a stale sidecar whose leftover count happened to match its own
-    first real count, silently suppressing the nudge that should fire for
-    it (Bugbot finding hfTNp).
+    Leaving a sidecar would let a reused PID inherit a matching count and silently
+    suppress the new session's first nudge.
     """
 
     def test_removes_both_files_when_present(self, tmp_path: Path) -> None:

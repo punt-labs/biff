@@ -32,11 +32,22 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def finger(user: str) -> str:
-        """Query session and presence info for one or more users.
+        """Inspect a teammate's sessions, availability, and current plan.
 
-        Accepts space-separated addresses: ``user1 user2 user3``.
-        Each address can be ``user`` (all sessions) or ``user:tty``
-        (specific session).
+        Args:
+            user: Space-separated addresses. Use a bare user for all their sessions
+                or user:tty to select one session; an @ prefix is optional.
+
+        Returns:
+            Presence blocks for matching live sessions. Missing users or sessions
+            are described in text; an empty input produces no blocks.
+
+        Raises:
+            ValueError: An address is malformed.
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         await update_current_session(state)
         await refresh_read_messages(mcp, state)

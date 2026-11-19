@@ -4,7 +4,7 @@ Builds and runs the real ``ghcr.io/punt-labs/biff-relay`` image from this
 checkout's ``docker/`` directory -- see ``_docker.py`` for the mechanics.
 Unlike ``tests/test_nats_e2e/``'s bare ``nats-server`` (no Docker, no auth),
 this tier exercises ``entrypoint.sh``, the config-file selection, and the
-auth-refusal guard PR #376 added.
+auth-refusal guard .
 """
 
 from __future__ import annotations

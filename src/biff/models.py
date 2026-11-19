@@ -133,9 +133,8 @@ class UserSession(BaseModel):
     tool invocation (``update_current_session``) — it answers
     "when did someone last actually do something", and is what the
     presence surfaces (``/who`` IDLE, ``/finger`` idle) display.
-    Conflating the two made every live session's displayed idle time
-    read as 0-1 minutes no matter how long it had actually sat unused,
-    since the heartbeat kept the single shared field perpetually fresh.
+    Conflating the two would make an inactive session appear freshly active
+    because the heartbeat keeps last_active perpetually fresh.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
@@ -183,18 +182,10 @@ class UserSession(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _backfill_last_tool_at(cls, data: object) -> object:
-        """Fall back ``last_tool_at`` to ``last_active`` for records written
-        before this field existed.
+        """Backfill a missing last_tool_at from the record's last_active value.
 
-        A KV/JSONL row written by a server that predates this field carries
-        no ``last_tool_at`` key at all.  The field's own ``default_factory``
-        would fill that gap with ``now()`` — exactly the bug this field
-        exists to fix, since a long-dead session would then read as freshly
-        active.  The record's own ``last_active`` is the best available
-        approximation of when it was last touched, so backfill from that
-        instead of the field default.  A genuinely fresh construction (no
-        ``last_active`` in the input either) falls through to both fields'
-        own ``default_factory`` — the correct "session just started" value.
+        Using the field default would make an old stored session appear freshly
+        active. Fresh constructions without either timestamp use both defaults.
         """
         if not isinstance(data, dict):
             return data
@@ -209,7 +200,7 @@ class UserSession(BaseModel):
         return _ensure_utc(v)
 
     def is_live(self, *, now: datetime, ttl_seconds: float) -> bool:
-        """True if the last heartbeat is recent enough to consider live.
+        """Check whether the last heartbeat is recent enough to consider live.
 
         A running server heartbeats on a fixed interval, refreshing
         ``last_active``.  A session whose last heartbeat is older than
@@ -267,8 +258,7 @@ class RelayConnectError(ConnectionError):
     the talk/REPL path already catch ``(NatsError, TimeoutError, OSError)``
     around calls that indirectly redial through ``_ensure_connected()``.
     Raising a bare ``Exception`` subclass here would silently fall through
-    those handlers and crash a loop that used to absorb the failure and
-    keep going.
+    those handlers instead of allowing the loop to recover.
     """
 
 
@@ -386,12 +376,11 @@ class WallPost(BaseModel):
 
 
 class UnreadSummary(BaseModel):
-    """Summary of unread messages for dynamic tool descriptions.
+    """Summarize unread counts for dynamic tool descriptions.
 
-    Count-only (DES-015): no message preview.  The count drives the
-    ``read_messages`` tool description (``"2 unread"``) and the
-    ``tools/list_changed`` notification.  Eliminating the preview
-    removed the last consumer-creating operation from the polling path.
+    Count-only (DES-015): no message preview. The count drives the read_messages
+    description and tools/list_changed notification without creating consumers
+    on the polling path.
     """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)

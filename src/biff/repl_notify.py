@@ -77,7 +77,7 @@ class NotifyState:
 
 
 def _format_wall_banner(from_user: str, text: str, remaining: str) -> str:
-    """Render the between-prompt wall banner, wrapped to table width.
+    r"""Render the between-prompt wall banner, wrapped to table width.
 
     Shares :func:`biff.formatting.format_wall_status_line`'s wrap treatment
     — wall text can run up to 512 chars and is potentially CJK/emoji-heavy,

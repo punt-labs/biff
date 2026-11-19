@@ -2,8 +2,8 @@
 
 Exercises what tests/test_nats_e2e/ (bare nats-server, no Docker, no auth)
 and tests/test_hosted_nats/ (Synadia Cloud) cannot reach: entrypoint.sh's
-config-file selection, the loopback monitor bind, the auth-refusal guard
-PR #376 added, and JetStream persistence across a real container restart.
+config-file selection, the loopback monitor bind, the auth-refusal guard,
+and JetStream persistence across a real container restart.
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ class TestJetStreamPersistence:
 
 
 class TestAuthGuard:
-    """entrypoint.sh's exit-1 refusal (PR #376), not just Dockerfile parsing."""
+    """entrypoint.sh's exit-1 refusal, not just Dockerfile parsing."""
 
     def test_refuses_start_without_auth_block(
         self, relay_driver: DockerRelay, relay_image: str, tmp_path: Path

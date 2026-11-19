@@ -42,7 +42,7 @@ _SETUP_UV_LINE = re.compile(
 # The ``# vX.Y.Z`` version comment Dependabot writes beside the pin.  It is the
 # ordering key: a deployed pin is preserved only when its version is at least
 # the template's, so a genuine forward bump is kept but an *older* or broken
-# pin biff previously shipped is repaired to the template on the next enable.
+# deployed pin is repaired to the template on the next enable.
 # Preserving every SHA unconditionally would strand a consumer on a bad pin
 # biff itself distributed, defeating the template's role as the repair path.
 _SETUP_UV_VERSION = re.compile(r"#\s*v(\d+)\.(\d+)\.(\d+)\b")
@@ -78,6 +78,7 @@ class NotifyWorkflow:
     _root: Path
 
     def __new__(cls, repo_root: Path) -> Self:
+        """Create a workflow manager rooted at the repository."""
         self = super().__new__(cls)
         self._root = repo_root
         return self
@@ -108,7 +109,7 @@ class NotifyWorkflow:
         repo with no deployed file, or none carrying a SHA pin, keeps the
         template's default.  A deployed pin is preserved only when its
         ``# vX.Y.Z`` version is at least the template's: a genuine forward bump
-        is kept, but an older or broken pin biff previously shipped is repaired
+        is kept, but an older or broken deployed pin is repaired
         to the template rather than stranded.  Everything else in the render
         stays deterministic.
         """
@@ -135,7 +136,7 @@ class NotifyWorkflow:
 
     @staticmethod
     def _deployed_pin_is_newer(deployed: str, template: str) -> bool:
-        """True when ``deployed``'s ``# vX.Y.Z`` version is >= ``template``'s.
+        """Check whether the deployed version meets or exceeds the template version.
 
         A deployed pin with no parseable version comment is not treated as
         newer: biff cannot prove it is a forward Dependabot bump, so the

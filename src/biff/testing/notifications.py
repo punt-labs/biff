@@ -30,4 +30,5 @@ class NotificationTracker(MessageHandler):
         self,
         message: mcp_types.ToolListChangedNotification,  # noqa: ARG002
     ) -> None:
+        """Record a tool-list change notification."""
         self._tool_list_changed_count += 1

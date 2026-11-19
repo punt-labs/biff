@@ -1,11 +1,8 @@
-"""Active-session marker file tests.
+"""Check the active-session marker invariant.
 
-``write_active_session`` drops a file under ``~/.punt-labs/biff/active/``
-so the SessionEnd hook can find running sessions on shutdown.  The
-marker write used to be wrapped in ``with suppress(OSError)``
-and silently skipped when it failed; a v1.8.0 defect on PID 983529
-showed a KV row with no corresponding marker file.  These tests pin the
-marker invariant.
+SessionEnd discovers running sessions through files under
+~/.punt-labs/biff/active/. A registered session must have a marker;
+failed registration must not leave an orphan marker.
 """
 
 from __future__ import annotations

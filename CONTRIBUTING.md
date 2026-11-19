@@ -16,7 +16,7 @@ Thank you for your interest in contributing to biff. This guide covers what you 
 ```bash
 git clone https://github.com/punt-labs/biff.git
 cd biff
-uv sync --all-extras
+uv sync --all-extras --all-groups
 ```
 
 **If you work on biff with Claude Code**, note that this repo's `.envrc`
@@ -114,6 +114,28 @@ see [TESTING.md](TESTING.md) for the full tier list, markers, and what each
 one requires. New features should have tests at tiers 1-2 minimum.
 
 ## Code Standards
+
+### Python comments and API documentation
+
+Comments explain non-obvious reasons, invariants, and constraints rather than
+repeating the code. Do not leave commented-out code or narrate edits, reviews,
+or past implementations in comments or docstrings. Keep tracker references in
+commits and the issue tracker, not Python prose.
+
+Document public modules, classes, functions, and methods under `src/` in Google
+style with an imperative summary. Tests and private names are exempt, except
+that every registered MCP tool needs a fuller contract: when to use it, how to
+supply inputs, what the result means, and errors to expect. Keep types in
+signatures. Include `Args:` only for non-obvious parameters, `Returns:` or
+`Yields:` only for meaningful result semantics, and `Raises:` for exceptions
+callers can handle, including propagated exceptions. Omit empty sections.
+
+Run the prose gates with `make check-comments check-docstrings`; both are part
+of `make lint`. Build and verify the
+[Python API reference](docs/api-reference/index.md) with `make build-api-docs`.
+Open `.tmp/api-site/index.html` to read the generated reference.
+
+### Implementation conventions
 
 - **`from __future__ import annotations`** in every Python file.
 - **Full type annotations** on every function signature. No `Any`.

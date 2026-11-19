@@ -30,7 +30,7 @@ def _make_nats_state(tmp_path: Path, *, poll_interval: float = 2.0) -> ServerSta
     """A state whose relay is NATS-backed (never dials — no server needed).
 
     ``set_poll_interval``'s push-oriented description/response text is only
-    accurate for a NATS-backed relay (Bugbot finding hgKjk); tests that
+    accurate for a NATS-backed relay; tests that
     assert on that text must use this, not the default ``_make_state``
     (filesystem-backed ``LocalRelay``, which has no push mechanism at all).
     """
@@ -73,7 +73,7 @@ class TestSetPollInterval:
     async def test_disable_response_states_push_still_works(
         self, tmp_path: Path
     ) -> None:
-        """The poller task always runs now — the ``n`` response must say push
+        """The poller task always runs — the ``n`` response must say push
         detection survives, and must name what actually degrades (wall
         render, invite expiry, backstop, wedge detection), not claim
         everything still works uniformly.
@@ -95,7 +95,7 @@ class TestSetPollInterval:
         the NATS-backed response does (that would be false), but it must
         also not claim detection stops entirely: ``poll_inbox``'s
         disabled-interval fallback tick still runs full tick work for a
-        non-push relay (Bugbot finding hwr7W), so detection degrades to a
+        non-push relay, so detection degrades to a
         fixed ~30s poll rather than disappearing.
         """
         state = _make_state(tmp_path)  # default: LocalRelay
@@ -137,16 +137,16 @@ class TestSetPollInterval:
 
 
 class TestSetPollIntervalDescription:
-    """The tool description is repointed to the post-biff-5ex semantics.
+    """The tool description explains push-driven semantics.
 
-    Message and talk arrival are push-driven now — the description must no
-    longer claim this interval governs how fast they arrive, and must
+    Message and talk arrival are push-driven. The description must not claim
+    this interval governs how fast they arrive, and must
     instead name what it still governs: wall-countdown cadence, stale
     talk-invite expiry, the unread backstop, and the wedge-detection window.
 
     All of this is NATS-relay-specific: ``_relay_pushes_inbox_notify`` is
-    ``NatsRelay``-only, so every assertion here uses a NATS-backed state
-    (Bugbot finding hgKjk) — see ``TestSetPollIntervalDescriptionLocalRelay``
+    ``NatsRelay``-only, so every assertion here uses a NATS-backed state. See
+    ``TestSetPollIntervalDescriptionLocalRelay``
     for the filesystem-backed wording.
     """
 
@@ -190,7 +190,7 @@ class TestSetPollIntervalDescription:
     async def test_description_states_push_survives_disabling(
         self, tmp_path: Path
     ) -> None:
-        """The poller task now always runs — the description must say push
+        """The poller task always runs — the description must say push
         detection keeps working even when the interval is disabled, not
         just that push is real-time "regardless of this value" in the
         abstract while n silently amputated it.
@@ -205,16 +205,15 @@ class TestSetPollIntervalDescription:
 
 class TestSetPollIntervalDescriptionLocalRelay:
     """A filesystem-backed relay has no push mechanism at all — the
-    description must not claim NATS push semantics for it (Bugbot finding
-    hgKjk).
+    description must not claim NATS push semantics for it.
     """
 
     async def test_description_does_not_claim_push_survives_disabling(
         self, tmp_path: Path
     ) -> None:
-        """Detection does keep working here (via a fallback poll, Bugbot
-        finding hwr7W) — but never by claiming *push* survives, since this
-        relay has none at all.
+        """Detection keeps working via a fallback poll, not by claiming push survives.
+
+        This relay has no push mechanism.
         """
         state = _make_state(tmp_path)  # default: LocalRelay
         mcp = create_server(state)
@@ -238,7 +237,7 @@ class TestSetPollIntervalDescriptionLocalRelay:
         self, tmp_path: Path
     ) -> None:
         """Disabling must be described as degrading to a fallback poll, not
-        as stopping detection entirely (Bugbot finding hwr7W)."""
+        as stopping detection entirely."""
         state = _make_state(tmp_path)
         mcp = create_server(state)
         tool = await mcp.get_tool("set_poll_interval")

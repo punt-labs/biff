@@ -117,7 +117,7 @@ async def register_session(
     # cycles.  Self-release is skipped when the stale name matches the
     # newly claimed one.
     #
-    # Ownership check (PR #215 round 3): only release when the reservation
+    # Ownership check: only release when the reservation
     # is still owned by *our* session_key.  If another live session has
     # reclaimed the name since the crashed owner wrote the stale row, we
     # must not revoke their reservation.  Use the authoritative *user*

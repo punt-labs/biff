@@ -1,8 +1,8 @@
-"""Strip the legacy user-scope ``@``-import that older releases wrote.
+"""Strip the legacy user-scope ``@``-import on uninstall.
 
 ``tool-enable-disable.md`` §2.6: there is no user-scope import, and ``install``
-never writes ``~/.claude/CLAUDE.md``. A previous release did write
-``@~/.punt-labs/biff/CLAUDE.md`` there, so ``uninstall`` removes that line and
+never writes ``~/.claude/CLAUDE.md``. If the file contains
+``@~/.punt-labs/biff/CLAUDE.md``, ``uninstall`` removes that line and
 leaves any deposited guide file dormant (§2.9 — do not delete what this run did
 not create).
 """
@@ -35,6 +35,7 @@ class UserScope:
     _host: Path
 
     def __new__(cls, *, host_claude_md: Path | None = None) -> Self:
+        """Create a host configuration manager for the selected file."""
         self = super().__new__(cls)
         self._host = host_claude_md or (Path.home() / ".claude" / "CLAUDE.md")
         return self

@@ -72,9 +72,7 @@ class ResolvedConfig:
     # so per-worktree write-through (config yaml, enabled marker) keeps the
     # nearest-worktree semantics.
     # Required: ``_load_base_config`` always resolves it (falling back to
-    # ``repo_root`` when ``get_repo_common_root`` returns ``""``), so the
-    # optional-with-``None`` shape had no reachable ``None`` branch and
-    # forced every reader into a dead ``else ""`` guard.
+    # ``repo_root`` when ``get_repo_common_root`` returns ``""``).
     repo_common_root: Path
     repo_root: Path | None = None
 
@@ -92,7 +90,9 @@ def load_yaml(path: Path) -> dict[str, object]:
 
     Catches ``OSError`` (permissions, TOCTOU race) and
     ``UnicodeDecodeError`` (invalid text encoding), returning ``{}``.
-    Lets ``yaml.YAMLError`` propagate so callers can decide severity.
+
+    Raises:
+        yaml.YAMLError: The file contains malformed YAML.
     """
     try:
         raw: object = yaml.safe_load(path.read_text())
@@ -104,7 +104,11 @@ def load_yaml(path: Path) -> dict[str, object]:
 
 
 def load_yaml_config(repo_root: Path) -> dict[str, object]:
-    """Read ``.punt-labs/biff/config.yaml``, return dict or ``{}``."""
+    """Read shared YAML config, returning an empty mapping when absent.
+
+    Raises:
+        SystemExit: Its YAML is malformed.
+    """
     path = yaml_config_dir(repo_root) / "config.yaml"
     if not path.exists():
         return {}
@@ -610,20 +614,17 @@ def _resolve_relay_fields(cf: _ConfigFields) -> tuple[str, RelayAuth | None, boo
 
 
 def resolve_relay_config(repo_root: Path | None) -> tuple[str, RelayAuth | None, bool]:
-    """Resolve relay URL, auth, and TLS handshake mode for *repo_root*.
+    """Resolve relay URL, auth, and TLS handshake mode for the repository.
 
-    Single source of truth for the file+env resolution chain --
-    ``config.yaml`` < ``config.local.yaml`` < ``BIFF_RELAY_*`` env vars <
-    the demo relay fallback. Shared by :func:`_load_base_config` and
-    :func:`biff.doctor._resolve_relay_config` so ``biff doctor`` reports
-    the same relay ``wall`` actually connects to, including under env
-    overrides -- ``doctor.py`` previously duplicated this chain
-    independently, which PR #383 had to hand-patch by hand once already
-    when ``tls_handshake_first`` was added (docs/relay-env-overrides.md
-    Sec 1).
+    Share the file and environment resolution chain with the CLI and doctor
+    so diagnostics report the relay commands actually connect to.
 
-    *repo_root* may be ``None`` (not inside a git repo) -- resolves to
-    the demo relay fallback in that case, same as zero-config mode.
+    Args:
+        repo_root: Use zero-config defaults when None.
+
+    Raises:
+        SystemExit: Shared YAML is malformed or relay environment overrides
+            are incomplete or invalid.
     """
     cf = _resolve_config_fields(repo_root) if repo_root is not None else _ConfigFields()
     return _resolve_relay_fields(cf)
@@ -763,8 +764,9 @@ def load_mcp_config(
     ``ethos whoami`` subprocess race on ``claude --resume`` (spec
     invariant 9).
 
-    Raises :class:`SystemExit` for the same conditions as
-    :func:`_load_base_config`, plus when no identity source succeeds.
+    Raises:
+        SystemExit: No repository or identity can be resolved, shared config
+            is malformed, or relay environment overrides are invalid.
     """
     base = _load_base_config(
         data_dir_override=data_dir_override,
@@ -793,14 +795,13 @@ def load_cli_config(
     ``user_override`` -> :func:`get_github_identity` -> :func:`get_os_user`.
 
     The CLI runs in the user's shell -- a human at the terminal. CLI
-    sessions identify as the human, never the agent. This is the
-    pre-spec behavior with the now-deleted ``get_ethos_identity()``
-    step removed (spec § 1.1). A GitHub login matching a known
+    sessions identify as the human, never the agent. A GitHub login matching a known
     ``kind: agent`` identity is rejected even when ``get_github_identity``
     resolves one -- see :func:`biff.identity.resolve_human_identity` (DES-053).
 
-    Raises :class:`SystemExit` for the same conditions as
-    :func:`_load_base_config`, plus when no identity source succeeds.
+    Raises:
+        SystemExit: No repository or human identity can be resolved, shared
+            config is malformed, or relay environment overrides are invalid.
     """
     base = _load_base_config(
         data_dir_override=data_dir_override,

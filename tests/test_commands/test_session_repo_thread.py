@@ -1,16 +1,8 @@
-"""Regression tests: CLI session fallback repo/ttyN drift.
+"""Keep CLI session repo, pwd, and tty names consistent.
 
-Before this, the CLI fallback in ``plan``/``mesg``/``tty`` independently
-rebuilt a missing session record from the calling process's environment
-and omitted ``repo`` (defaulting to ``""``), while ``plan``/``mesg``
-additionally hardcoded ``tty_name="cli"``, discarding the claimed ttyN.
-``/who`` renders ``session.repo``; ``/finger`` renders ``session.pwd`` --
-two independent fields on the same record -- and a later reader
-backfilling ``repo`` from a DIFFERENT process's config left ``repo`` and
-``pwd`` disagreeing about which repo the session belonged to.
-``biff.commands._session.update_current_session`` is now the single
-construction path, so both fields come from the process actually
-writing the record.
+The shared session helper must construct fallback presence from the writing
+process's configuration, preserving its claimed ttyN. Both who (repo) and
+finger (pwd) must describe the same repository.
 """
 
 from __future__ import annotations
@@ -50,7 +42,7 @@ class TestFallbackThreadsRepoAndTtyName:
     ) -> None:
         """The rebuild carries launched_by from ctx.config, so a long-lived
         REPL whose row is rebuilt mid-run (reaper/TTL/manual delete) keeps
-        its /who launching user instead of silently dropping it (PL-231)."""
+        its /who launching user instead of silently dropping it."""
         ctx = CliContext(
             relay=relay,
             config=BiffConfig(user="kai", repo_name="biff", launched_by="jim"),

@@ -213,7 +213,7 @@ def enabled_marker_path(repo_root: Path) -> Path:
 
 
 def biff_on_path() -> bool:
-    """True when the ``biff`` CLI is installed and resolvable on ``PATH``.
+    """Check whether the ``biff`` CLI is resolvable on ``PATH``.
 
     Guards the "no stale enabled tools" invariant (§2.11): a contributor
     who clones a marker-enabled repo without biff installed must get a
@@ -223,7 +223,7 @@ def biff_on_path() -> bool:
 
 
 def is_enabled(repo_root: Path | None) -> bool:
-    """True when biff is enabled for the repo.
+    """Check whether biff is enabled for the repo.
 
     Enabled ⟺ the committed marker ``.punt-labs/biff/enabled`` is a
     **regular file** (not a symlink) AND the ``biff`` CLI is on
@@ -274,7 +274,7 @@ def ensure_real_dir(base: Path, target: Path) -> None:
 
 
 def is_regular_file(path: Path) -> bool:
-    """True only for a real regular file -- never a symlink or a directory.
+    """Accept only a regular file, never a symlink or directory.
 
     ``Path.is_file()`` follows symlinks, so a symlinked hook or workflow path
     would report ``True`` and any read/write/remove would operate on the link's

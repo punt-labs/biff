@@ -129,79 +129,121 @@ class Relay(Protocol):
         *,
         sender_key: str = "",
         target_repo: str | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Deliver a message to the addressed user or session."""
+        ...
 
-    async def fetch(self, session_key: str) -> list[Message]: ...
+    async def fetch(self, session_key: str) -> list[Message]:
+        """Return unread messages from the targeted session inbox."""
+        ...
 
-    async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None: ...
+    async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None:
+        """Acknowledge the selected session messages."""
+        ...
 
-    async def get_unread_summary(self, session_key: str) -> UnreadSummary: ...
+    async def get_unread_summary(self, session_key: str) -> UnreadSummary:
+        """Return the unread count for a session."""
+        ...
 
     # -- Messages (user inbox) --
 
-    async def fetch_user_inbox(self, user: str) -> list[Message]: ...
+    async def fetch_user_inbox(self, user: str) -> list[Message]:
+        """Return unread broadcast messages from the shared user inbox."""
+        ...
 
-    async def mark_read_user_inbox(
-        self, user: str, ids: Sequence[uuid.UUID]
-    ) -> None: ...
+    async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
+        """Acknowledge the selected broadcast messages."""
+        ...
 
-    async def get_user_unread_count(self, user: str) -> int: ...
+    async def get_user_unread_count(self, user: str) -> int:
+        """Return the number of unread broadcast messages."""
+        ...
 
     # -- Presence --
 
-    async def update_session(self, session: UserSession) -> None: ...
+    async def update_session(self, session: UserSession) -> None:
+        """Store the current presence record for a session."""
+        ...
 
-    async def get_session(self, session_key: str) -> UserSession | None: ...
+    async def get_session(self, session_key: str) -> UserSession | None:
+        """Return the session record, or None if it is absent."""
+        ...
 
-    async def get_sessions_for_user(self, user: str) -> list[UserSession]: ...
+    async def get_sessions_for_user(self, user: str) -> list[UserSession]:
+        """Return the user's registered sessions."""
+        ...
 
-    async def heartbeat(self, session_key: str) -> None: ...
+    async def heartbeat(self, session_key: str) -> None:
+        """Refresh the session liveness timestamp."""
+        ...
 
-    async def get_sessions(self) -> list[UserSession]: ...
+    async def get_sessions(self) -> list[UserSession]:
+        """Return registered sessions visible to this relay."""
+        ...
 
-    async def get_sessions_for_repos(
-        self, repos: frozenset[str]
-    ) -> list[UserSession]: ...
+    async def get_sessions_for_repos(self, repos: frozenset[str]) -> list[UserSession]:
+        """Return sessions in the selected repositories."""
+        ...
 
-    async def delete_session(self, session_key: str) -> None: ...
+    async def delete_session(self, session_key: str) -> None:
+        """Remove a session from presence."""
+        ...
 
     # -- Session history (wtmp) --
 
-    async def append_wtmp(self, event: SessionEvent) -> None: ...
+    async def append_wtmp(self, event: SessionEvent) -> None:
+        """Append a login or logout event to session history."""
+        ...
 
     async def get_wtmp(
         self, *, user: str | None = None, count: int = 25
-    ) -> list[SessionEvent]: ...
+    ) -> list[SessionEvent]:
+        """Return recent session events, optionally filtered by user."""
+        ...
 
     # -- Wall (team broadcast) --
 
-    async def set_wall(self, wall: WallPost | None) -> None: ...
+    async def set_wall(self, wall: WallPost | None) -> None:
+        """Store the team wall post, or clear it when given None."""
+        ...
 
-    async def get_wall(self, *, repo: str | None = None) -> WallPost | None: ...
+    async def get_wall(self, *, repo: str | None = None) -> WallPost | None:
+        """Return the active wall post, or None when it is absent."""
+        ...
 
     # -- TTY name reservation (DES-035) --
 
-    async def reserve_tty_name(
-        self, user: str, name: str, session_key: str
-    ) -> bool: ...
+    async def reserve_tty_name(self, user: str, name: str, session_key: str) -> bool:
+        """Claim a name for a session and report whether it succeeded."""
+        ...
 
-    async def release_tty_name(self, user: str, name: str) -> None: ...
+    async def release_tty_name(self, user: str, name: str) -> None:
+        """Release the user's reserved name."""
+        ...
 
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
-    ) -> None: ...
+    ) -> None:
+        """Refresh the name reservation held by a session."""
+        ...
 
-    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None: ...
+    async def get_tty_reservation_owner(self, user: str, name: str) -> str | None:
+        """Return the owning session key, or None if unreserved."""
+        ...
 
-    async def list_reserved_names(self, user: str) -> list[str]: ...
+    async def list_reserved_names(self, user: str) -> list[str]:
+        """Return the user's reserved session names."""
+        ...
 
     # -- session_id -> last tty-name hint (resume reclaim) --
 
-    async def get_session_tty_hint(self, user: str, session_id: str) -> str | None: ...
+    async def get_session_tty_hint(self, user: str, session_id: str) -> str | None:
+        """Return the session's last name hint, or None if absent."""
+        ...
 
-    async def set_session_tty_hint(
-        self, user: str, session_id: str, name: str
-    ) -> None: ...
+    async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
+        """Store a name hint for a resumed session."""
+        ...
 
     # -- Lifecycle --
 
@@ -209,7 +251,9 @@ class Relay(Protocol):
         """Release the connection temporarily.  Next relay call reconnects."""
         ...
 
-    async def close(self) -> None: ...
+    async def close(self) -> None:
+        """Do nothing while disabled."""
+        ...
 
 
 class DormantRelay:
@@ -227,52 +271,60 @@ class DormantRelay:
         sender_key: str = "",
         target_repo: str | None = None,
     ) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def fetch(self, session_key: str) -> list[Message]:  # noqa: ARG002 — Protocol impl
+        """Return no targeted messages while disabled."""
         return []
 
     async def mark_read(self, session_key: str, ids: Sequence[uuid.UUID]) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def get_unread_summary(self, session_key: str) -> UnreadSummary:  # noqa: ARG002
+        """Return an empty result while disabled."""
         return UnreadSummary()
 
     async def fetch_user_inbox(self, user: str) -> list[Message]:  # noqa: ARG002
+        """Return an empty result while disabled."""
         return []
 
     async def mark_read_user_inbox(self, user: str, ids: Sequence[uuid.UUID]) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def get_user_unread_count(self, user: str) -> int:  # noqa: ARG002
+        """Return an empty result while disabled."""
         return 0
 
     async def update_session(self, session: UserSession) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def get_session(self, session_key: str) -> UserSession | None:  # noqa: ARG002
+        """Return no session while disabled."""
         return None
 
     async def get_sessions_for_user(self, user: str) -> list[UserSession]:  # noqa: ARG002
+        """Return an empty result while disabled."""
         return []
 
     async def heartbeat(self, session_key: str) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def get_sessions(self) -> list[UserSession]:
+        """Return an empty result while disabled."""
         return []
 
     async def get_sessions_for_repos(
         self,
         repos: frozenset[str],  # noqa: ARG002
     ) -> list[UserSession]:
+        """Return an empty result while disabled."""
         return []
 
     async def delete_session(self, session_key: str) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def append_wtmp(self, event: SessionEvent) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def get_wtmp(
         self,
@@ -280,12 +332,14 @@ class DormantRelay:
         user: str | None = None,  # noqa: ARG002
         count: int = 25,  # noqa: ARG002
     ) -> list[SessionEvent]:
+        """Return an empty result while disabled."""
         return []
 
     async def set_wall(self, wall: WallPost | None) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def get_wall(self, *, repo: str | None = None) -> WallPost | None:  # noqa: ARG002
+        """Return an empty result while disabled."""
         return None
 
     async def reserve_tty_name(
@@ -294,24 +348,27 @@ class DormantRelay:
         name: str,  # noqa: ARG002
         session_key: str,  # noqa: ARG002
     ) -> bool:
+        """Accept the reservation without storing it while disabled."""
         return True
 
     async def release_tty_name(self, user: str, name: str) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def refresh_tty_reservation(
         self, user: str, name: str, session_key: str
     ) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def get_tty_reservation_owner(
         self,
         user: str,  # noqa: ARG002
         name: str,  # noqa: ARG002
     ) -> str | None:
+        """Return an empty result while disabled."""
         return None
 
     async def list_reserved_names(self, user: str) -> list[str]:  # noqa: ARG002
+        """Return an empty result while disabled."""
         return []
 
     async def get_session_tty_hint(
@@ -319,16 +376,17 @@ class DormantRelay:
         user: str,  # noqa: ARG002
         session_id: str,  # noqa: ARG002
     ) -> str | None:
+        """Return an empty result while disabled."""
         return None
 
     async def set_session_tty_hint(self, user: str, session_id: str, name: str) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def disconnect(self) -> None:
-        pass
+        """Do nothing while disabled."""
 
     async def close(self) -> None:
-        pass
+        """Do nothing while disabled."""
 
 
 class LocalRelay:

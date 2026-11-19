@@ -1,17 +1,8 @@
-"""Regression tests for the plan-gate marker scoping fix.
+"""Test repository-common plan-marker scoping against real git worktrees.
 
-Each class reproduces one of the design's documented real-world occurrences
-against a real git repo (main checkout + linked worktree), not a mock of
-git, and shows the fix closes it:
-
-- ``TestWorktreeVsMainRootMismatch`` -- a session in a
-  linked worktree and the MCP writer resolved different absolute paths.
-- ``TestSubagentCwdDiffersFromAmbientCwd`` -- a dispatched subagent's hook
-  subprocess inherits its outer session's ambient cwd, not its own.
-- ``TestConcurrentSessionStartDoesNotClearSibling`` -- one session's
-  ``SessionStart`` wiping every concurrent session's marker.
-- ``TestCliOnlyPlanSatisfiesGate`` -- PL-PA-3 (a CLI-only session's ``biff
-  plan`` never wrote the marker the gate reads).
+Writers and readers must share the common-root bucket, subagents must use their
+declared working directory, concurrent session starts must preserve sibling
+markers, and CLI-only plan updates must satisfy the edit gate.
 """
 
 from __future__ import annotations
@@ -57,14 +48,7 @@ class TestWorktreeVsMainRootMismatch:
     def test_marker_written_from_worktree_visible_from_main(
         self, tmp_path: Path
     ) -> None:
-        """A marker written using the worktree's own root reads back from main.
-
-        Before the fix, the writer resolved ``--show-toplevel`` from the
-        worktree (its own nearest root) while a main-rooted reader resolved
-        a *different* nearest root -- two different hash buckets, so the
-        main-rooted reader saw no marker at all.  Both sides now resolve
-        the shared repo-common-root.
-        """
+        """A worktree writer and main-rooted reader share the common-root bucket."""
         from biff._stdlib import get_repo_common_root
 
         main = _make_repo(tmp_path / "main")
@@ -132,7 +116,9 @@ class TestSubagentCwdDiffersFromAmbientCwd:
                 # repo), which has no marker for sub-sid.
                 result = handle_pre_tool_use({"session_id": "sub-sid"})
 
-        assert result is not None  # denied -- proves the fix is load-bearing
+        assert (
+            result is not None
+        )  # denied -- proves the gate enforces the marker requirement
 
 
 class TestConcurrentSessionStartDoesNotClearSibling:
@@ -154,15 +140,10 @@ class TestConcurrentSessionStartDoesNotClearSibling:
 
 
 class TestCliOnlyPlanSatisfiesGate:
-    """PL-PA-3: a CLI-only 'biff plan' now satisfies the gate it advertises.
+    """A CLI-only plan update writes the marker consumed by the edit gate.
 
-    Before this fix, ``commands/plan.py``'s ``plan()`` (the function
-    ``biff plan`` calls) updated only the relay session -- it never wrote
-    the marker file the ``PreToolUse`` gate reads.  Every ethos-mission
-    worker in this org is a CLI-only session (no MCP tools): running
-    ``biff plan "..."`` reported success while the gate kept denying every
-    subsequent edit -- impossible to reproduce as a passing test before
-    this fix, because the marker write path did not exist.
+    CLI workers do not have MCP tools, so successful relay updates must also
+    make their plan visible to PreToolUse.
     """
 
     async def test_cli_plan_then_hook_allows_edit(
@@ -227,17 +208,9 @@ class TestCliOnlyPlanSatisfiesGate:
 
 
 class TestUnresolvedRootDoesNotWedge:
-    """biff-ecl / PL-240: a transient git failure must not deny every edit.
+    """Allow edits when a transient git failure leaves the root unresolved.
 
-    When ``get_repo_common_root`` returns ``""`` (git unavailable, timed
-    out, or a cwd that is briefly not a repo), the gate cannot know *which*
-    repo's plan to consult -- every unresolved root collapses onto the one
-    shared ``default`` bucket. Reading that bucket and denying turns a
-    bookkeeping outage into a block on the whole editing surface, and (via
-    the shared bucket) lets one repo's plan satisfy another's gate. With no
-    resolvable repo the gate has no marker store to reason about, so it
-    allows -- the same graceful escape hatch as "no active session" -- and
-    the ``hook-errors.log`` warning from ``hint_dir`` records the cause.
+    A missing repository root must not accidentally match every file path.
     """
 
     def test_empty_root_allows_rather_than_denies(self, tmp_path: Path) -> None:
@@ -254,7 +227,7 @@ class TestUnresolvedRootDoesNotWedge:
 
         Paired with the empty-root case: with a *resolved* root and no plan
         marker for any of this caller's identities, the gate still denies.
-        This pins that the fix suppresses the edit requirement only when the
+        This pins that the marker suppresses the edit requirement only when the
         root is unresolvable, never when it resolves to a real repo with no
         plan.
         """

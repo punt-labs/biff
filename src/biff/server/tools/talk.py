@@ -59,7 +59,7 @@ def format_talk_messages(messages: list[Message]) -> str:
 
     Reuses :func:`format_talk_line`'s wrap/hang-indent treatment instead of
     embedding each up-to-512-char, potentially CJK/emoji-heavy body on one
-    unbounded line — the same defect class fixed for who/read/wall/finger.
+    unbounded line so terminal output stays within its wrap budget.
     """
     lines: list[str] = []
     for m in messages:
@@ -172,13 +172,26 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def talk(to: str, message: str = "") -> str:
-        """Accept an invite, send a message, or invite a teammate to talk.
+        """Invite a teammate, accept their invitation, or send a talk message.
 
-        ``to`` is an address like ``user`` or ``user:tty``.  If that user
-        already invited you, this accepts (completing their handshake) and
-        sends *message* as the opening line.  If you are already connected,
-        *message* is sent.  Otherwise this sends an invite.  All frames are
-        ephemeral — no durable inbox.  Use ``talk_read`` to see replies.
+        Use this for ephemeral conversation rather than durable inbox delivery.
+        An existing invitation from the recipient is accepted; an active connection
+        sends the message; otherwise an invitation is sent. Use talk_read for replies.
+
+        Args:
+            to: A username or user:tty address, optionally prefixed with @. Use a
+                specific session when a username has multiple possible targets.
+            message: Optional opening line or a line to send on an active conversation.
+
+        Returns:
+            An invitation, acceptance, or send confirmation. Unsupported relays,
+            invalid or ambiguous targets, and publish failures are reported in text.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."
@@ -196,12 +209,22 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def talk_read() -> str:
-        """Drain and return the held ephemeral talk state.
+        """Read pending talk invitations and consume queued talk messages.
 
-        Returns who wants to talk (with the accept hint) plus any queued
-        messages.  Reads from the server-held ``TalkState`` — never the
-        durable inbox — so an unsolicited invite is surfaced even to a
-        fresh agent.
+        Call without arguments after a talk notification. Read the server-held
+        ephemeral state, never the durable inbox. Include session-specific accept
+        hints for pending invitations; consumed messages are not replayed.
+
+        Returns:
+            Invitations, messages, and hangups, or 'No pending talk activity.'.
+            Unsupported relays and unconfirmed mutual-invite accepts are reported
+            in text rather than silently presenting a connected conversation.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
         """
         if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."
@@ -220,7 +243,25 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     )
     @track_activity(state)
     async def talk_listen(timeout: int = 30) -> str:
-        """Block until the held talk state has activity or *timeout* expires."""
+        """Wait for talk traffic before consuming the pending state.
+
+        Use this in agent-to-agent flows instead of repeatedly calling talk_read.
+        An open but empty conversation does not count as pending traffic.
+
+        Args:
+            timeout: Maximum wait in seconds; nonpositive values drain immediately.
+
+        Returns:
+            The same invitation/message/hangup view as talk_read. An elapsed timeout
+            returns the empty-activity notice, not an exception. Unsupported relays
+            and unconfirmed mutual-invite accepts are reported in text.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
+        """
         if not isinstance(state.relay, NatsRelay):
             return "Talk requires a NATS relay connection."
         await update_current_session(state)
@@ -240,7 +281,21 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
     @mcp.tool(name="talk_end", description="End the current talk session.")
     @track_activity(state)
     async def talk_end() -> str:
-        """Close the active talk session, sending an end frame if connected."""
+        """End the active conversation or cancel a pending outgoing invitation.
+
+        Call without arguments when finished talking. Send an ephemeral end frame
+        when connected and refresh the advertised local conversation state.
+
+        Returns:
+            A close/cancel confirmation, a no-active-conversation notice, or a
+            relay/publish error reported by the shared talk action.
+
+        Raises:
+            OSError: Local relay storage cannot be accessed.
+            ConnectionError: The network relay cannot establish a connection.
+            TimeoutError: A relay operation exceeds its deadline.
+            nats.errors.Error: A NATS request or connection fails.
+        """
         await update_current_session(state)
         result = await talk_commands.end_or_cancel(state)
         await refresh_talk(mcp, state)

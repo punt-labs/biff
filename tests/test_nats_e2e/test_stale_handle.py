@@ -1,9 +1,7 @@
-"""Regression test for DES-029: stale JetStream/KV handle recovery.
+"""Recover cached JetStream/KV handles after a TCP connection drops.
 
-Simulates the exact failure mode where the TCP connection drops but cached
-``_js`` and ``_kv`` handles remain non-None.  Before the fix, the fast path
-in ``_ensure_connected()`` would return these stale handles, causing
-``ConnectionClosedError`` on the next tool call.
+Non-None handles alone do not establish liveness: returning stale handles
+would raise ConnectionClosedError on the next tool call.
 """
 
 from __future__ import annotations

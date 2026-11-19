@@ -42,7 +42,7 @@ from biff.testing.caller import StampedClient
 pytestmark = pytest.mark.nats_local
 
 # Same organization, two repositories (sanitized ``owner__repo``): repo-keyed
-# routing used to mis-route this pair.
+# routing must preserve delivery across this repository boundary.
 _KAI_REPO = "punt-labs__biff"
 _ERIC_REPO = "punt-labs__vox"
 

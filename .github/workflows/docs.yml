@@ -18,4 +18,8 @@ jobs:
       - uses: DavidAnson/markdownlint-cli2-action@be0d5f2f1eea9d35d0b41a9e8ab7208968b09cf5 # v22
         with:
           globs: "**/*.md"
-
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --group docs
+      - run: make build-api-docs

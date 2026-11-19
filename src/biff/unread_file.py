@@ -49,7 +49,7 @@ def write_unread_file(
     needs (a caught signal already removes both files via
     ``_remove_unread_files``; nothing catches SIGKILL, so PID reuse after
     an unclean kill can otherwise leave a sidecar a later, unrelated
-    session inherits, Cursor Bugbot finding hwquR). A same-session
+    session inherits). A same-session
     subprocess restart also changes this value and so also resets the
     sidecar — a redundant re-nudge for an unchanged count, not a silently
     suppressed one, which is the safe direction to err.

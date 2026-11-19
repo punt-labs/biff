@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Enforce Google-style public Python docstrings and tracker-free code prose,
+  and build a verified Python API reference with MkDocs.
 - `make check` and CI now enforce OO, coupling/cohesion, and suppression
   ratchets for biff's Python source.
 - Biff now installs the dev-only `punt-oo-ratchet` package from PyPI.

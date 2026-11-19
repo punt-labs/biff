@@ -56,8 +56,8 @@ BIFF_RULES: Final[dict[str, tuple[str, ...]]] = {
         f"Bash(biff {verb}{suffix})" for verb in _ASK_VERBS for suffix in ("", ":*")
     ),
 }
-# Rules an earlier biff granted and no longer does. ``Bash(biff -*)`` matched
-# every command starting with ``biff -``, so ``biff --version`` prompted.
+# Strip overbroad rules during both enable and disable: ``Bash(biff -*)``
+# matches read-only commands such as ``biff --version``.
 _LEGACY_RULES: Final[dict[str, tuple[str, ...]]] = {"ask": ("Bash(biff -*)",)}
 
 _NEW_FILE_MODE: Final = 0o644
@@ -104,6 +104,7 @@ class ProjectPermissions:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Create a permission manager for the repository."""
         self = super().__new__(cls)
         self._root = root
         return self

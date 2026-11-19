@@ -49,7 +49,7 @@ def track_activity(
     [Callable[_P, Awaitable[str]]],
     Callable[_P, Awaitable[str]],
 ]:
-    """Decorator: guard on enablement, then record the call and run.
+    """Guard on enablement, then record the call and run.
 
     When *state* is dormant (biff disabled for this repo), the wrapped
     tool returns :data:`_DISABLED_NOTICE` without running its body or

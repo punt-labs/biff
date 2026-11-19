@@ -1,25 +1,8 @@
-"""Comparative demonstration: push vs. poll for broadcast message detection.
+"""Compare push-driven broadcast detection with the periodic backstop.
 
-Proves DES-062's measurable claim (biff-5ex) with an A/B lever on the
-SENDER side only — the receiving MCP server (``kai``) runs the same,
-honest code in both arms:
-
-* **poll** trials publish a broadcast message straight to JetStream via
-  the relay's own handle, bypassing :meth:`NatsRelay.deliver`'s wake
-  poke entirely — exactly what the pre-biff-5ex ``deliver()`` did.  The
-  receiver's poller then has no poke to react to, so ``kai``'s unread
-  count only advances on the poke-gated backstop tick
-  (``_InboxPokeGate``, ``_descriptions.py``).
-* **push** trials go through the real :meth:`NatsRelay.deliver`, which
-  publishes to JetStream *and* the inbox-notify wake poke on top.
-
-Both arms are measured end to end: JetStream publish -> (poke, poll
-arm has none) -> poller tick -> ``refresh_read_messages`` mutates the
-``read_messages`` tool description -> ``notifications/tools/list_changed``
-reaches this test's ``NotificationTracker``.
-
-Mirrors ``test_notification_latency.py``'s pattern: ``_TRIALS``, the
-``-1.0`` timeout sentinel, and a printed side-by-side comparison table.
+Push trials use relay delivery, including its notification poke. Poll
+trials publish directly to JetStream without a poke, so the receiver can
+only discover them on a backstop tick.
 """
 
 from __future__ import annotations
@@ -91,10 +74,8 @@ async def _publish_broadcast_without_poke(
 ) -> None:
     """Publish a broadcast message straight to JetStream, bypassing the poke.
 
-    This is exactly what ``NatsRelay.deliver()``'s broadcast branch did
-    before biff-5ex: the message lands in the durable inbox, but no wake
-    poke is published, so the only way a poller can find it is the
-    ``_InboxPokeGate`` backstop.
+    The message lands in the durable inbox without a wake poke, so the poller
+    must discover it through the ``_InboxPokeGate`` backstop.
 
     Uses ``sender``'s own JetStream context and subject-naming method
     (private, white-box access — mirrors ``test_inbox_push.py``'s
@@ -305,16 +286,9 @@ class TestLoadReduction:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """With no arrivals, ``get_unread_summary`` is called by the backstop only.
+        """Query unread counts only on the backstop when no messages arrive.
 
-        Before biff-5ex, ``_active_tick`` called ``get_unread_summary``
-        unconditionally on every active tick (one ``stream_info``
-        round-trip per ``poll_interval``). The poke-gated backstop
-        (``_InboxPokeGate``) replaces that with a call only on the
-        initial tick and every ``nap_interval`` thereafter — this test
-        counts the real calls made to the relay's own method (not log
-        parsing) and checks that count against the backstop-only
-        expectation, not the old per-tick one.
+        Idle poll ticks must not issue a stream_info round trip on every interval.
         """
         _reset_session()
         config = BiffConfig(

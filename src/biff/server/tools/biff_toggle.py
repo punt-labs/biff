@@ -40,15 +40,20 @@ def register(mcp: FastMCP[ServerState], state: ServerState) -> None:
         ),
     )
     async def biff(action: Literal["enable", "disable"]) -> str:
-        """Enable or disable biff for the current repository.
+        """Enable or disable Biff for the current repository.
 
-        Enable fully activates this clone; disable deactivates it.  Writes
-        (enable) or removes (disable) the two committed enablement artifacts
-        -- the marker ``.punt-labs/biff/enabled`` and the CI notify workflow
-        ``.github/workflows/biff-notify.yml`` -- plus this clone's local
-        ``.git/hooks`` biff dispatchers.  Commit the tracked files via a PR
-        for the change to take effect for every contributor.  Returns
-        guidance to restart Claude Code.
+        Use action='enable' to activate this clone or 'disable' to deactivate it.
+        Update the committed marker, notify workflow, agent guide import, and
+        permissions, plus this clone's local git hooks. Commit tracked changes
+        to apply repository policy to teammates; local hooks remain per-clone.
+
+        Returns:
+            A change report and restart guidance. Missing repositories, unresolved
+            hook directories, and permission-edit failures are reported in text.
+
+        Raises:
+            OSError: An enablement artifact cannot be read, written, or removed.
+            ValueError: The bundled workflow template cannot be rendered safely.
         """
         repo_root = state.repo_root
         if repo_root is None:

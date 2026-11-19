@@ -11,7 +11,7 @@ def _stripped_code(path: Path) -> str:
 
     A naive ``line.partition("#")`` treats any ``#`` as a comment
     delimiter, even one inside a quoted string — e.g. ``git commit -m
-    "release (#123)" --no-verify`` would have the ``--no-verify`` half
+    "release notes" --no-verify`` would have the ``--no-verify`` half
     dropped as "comment", producing a false negative. ``shlex.split``
     with ``comments=True`` tokenizes each line respecting quotes, so a
     ``#`` only starts a comment outside quotes.
@@ -34,15 +34,9 @@ def _stripped_code(path: Path) -> str:
 
 
 def test_release_scripts_never_bypass_git_hooks() -> None:
-    """No release-path script may pass ``--no-verify`` to git.
+    """Reject hook bypass flags in executable release-script lines.
 
-    The org CLAUDE.md bans ``--no-verify`` outright. ``release-plugin.sh``
-    previously carried it on the "prepare plugin for release" commit; this
-    test greps both release-path scripts so a reintroduction fails
-    immediately, not on the next release. Comments in the target scripts
-    are stripped before scanning, so prose describing the ban (e.g. in
-    ``restore-dev-plugin.sh``'s CONTRACT comment) does not trigger a
-    false positive.
+    Comments are excluded so explanatory prose can name the forbidden flag.
     """
     root = Path(__file__).parent.parent
     targets = [

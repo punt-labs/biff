@@ -325,11 +325,10 @@ class TestPollAccept:
         """Consent boundary, symmetric with ``test_foreign_accept_discarded``.
 
         The mutual-glare auto-accept tiebreak is guarded by the same session-key
-        scrutiny (#279) as the accept branch: an ``invite`` whose ``from_key`` is
+        scrutiny as the accept branch: an ``invite`` whose ``from_key`` is
         not the invited session's key cannot trigger auto-accept, even though our
-        key is lexicographically higher.  A prior fix widened the set of
-        legitimate invite emitters, so a forged mutual-invite must be rejected
-        here exactly as a forged accept is — it becomes a third-party banner,
+        key is lexicographically higher.  A forged mutual-invite must be rejected
+        exactly as a forged accept is — it becomes a third-party banner,
         never a connect.
         """
         # A forged key BELOW ours: the ``my_key > partner_key`` tiebreak alone

@@ -303,12 +303,7 @@ class TestCheckRelay:
     def test_messages_never_embed_userinfo(
         self, mock_config: object, _mock_conn: object
     ) -> None:
-        """A credential-bearing relay URL never reaches the operator verbatim.
-
-        Regression for PR #386 review: doctor's success/failure messages
-        previously formatted the raw, potentially credential-bearing
-        relay_url directly.
-        """
+        """Keep credential-bearing relay URLs out of operator-facing diagnostics."""
         mock_config.return_value = (  # type: ignore[attr-defined]
             "tls://opuser:opsecret@relay.example.com:4222",
             None,

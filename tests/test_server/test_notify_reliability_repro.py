@@ -1,19 +1,9 @@
-"""Reproduction of the dropped-notification-with-no-recovery defect.
+"""Recover a dropped notification when no request context is active.
 
-``notify_tool_list_changed``'s suspenders path (``_descriptions.py``) sends
-directly on the stored ``_session`` when no request context is active. When
-that send raises — a dead or reconnecting stream — the current code clears
-``_session`` and returns *without* recording ``_pending_notify``. The tool
-description was already mutated by the caller before the notify call, so
-every later ``refresh_*`` sees no description change and never calls
-``notify_tool_list_changed`` again. The dropped notification is never
-retried, and a subsequent session recapture (reconnect) has nothing to
-flush, because ``capture_session`` only flushes when ``_pending_notify`` is
-set. Net effect: the client's cached tool list silently goes stale forever.
-
-These tests assert the desired behavior — a dropped mid-session
-notification is retried or flushed on the next opportunity — and are
-expected to fail against the current implementation.
+The stored-session path must record a pending update on send failure. Tool
+descriptions may already be current, so a later refresh cannot be relied on
+to notice a change and retry. A subsequent send or session recapture must
+flush the pending update so the client cache converges to the server state.
 """
 
 from __future__ import annotations

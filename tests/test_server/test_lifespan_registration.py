@@ -256,15 +256,10 @@ class TestOrgReposRefresh:
     async def test_throttled_within_interval(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A second call inside the throttle window makes no relay call.
+        """Suppress the relay call, not just the state update, within the throttle.
 
-        This non-critical, stale-tolerant call was running on
-        every 60s heartbeat tick and accounted for 70% of captured relay
-        timeouts, tripping the shared connection's wedge-detection
-        reconnect on behalf of unrelated user-facing calls. Throttling it
-        to a slower cadence is the fix — this test is the guarantee that
-        the throttle actually suppresses the relay call, not just the
-        state update.
+        Presence checks are stale-tolerant and must not consume a request on every
+        heartbeat tick, contributing avoidable timeouts to wedge detection.
         """
         from unittest.mock import AsyncMock
 

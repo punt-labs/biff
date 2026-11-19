@@ -718,10 +718,8 @@ class TestSendMessageTool:
     ) -> None:
         """The message is in the recipient's inbox before write() returns.
 
-        The prior fire-and-forget design could return "Message sent" before
-        the background delivery task had even run — a caller inspecting the
-        inbox immediately after write() returned could observe it still
-        empty. Delivery is now awaited, so this is no longer racy.
+        Awaiting delivery makes immediate inbox inspection deterministic;
+        a queued background task would not establish this guarantee.
         """
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
         fn = await _get_tool_fn(state, "write")
@@ -762,10 +760,8 @@ class TestSendMessageTool:
     ) -> None:
         """A persistent failure must not read as success.
 
-        The prior fire-and-forget design would have returned "Message
-        sent" here regardless — the failure reached only a background log
-        line. It must now be visibly distinguishable from success, and the
-        message must not silently appear delivered when it was not.
+        A failure must be visible to the caller, not only in a background log.
+        No message may appear delivered when it was not.
         """
         await state.relay.update_session(UserSession(user="eric", tty=_ERIC_TTY))
 
@@ -872,22 +868,10 @@ class TestCheckMessagesTool:
     async def test_successful_inbox_never_refetched_or_lost_on_sibling_failure(
         self, state: ServerState
     ) -> None:
-        """HIGH-severity review finding, fixed here: a naive whole-batch
-        retry would re-call fetch() on the tty inbox even though it
-        already succeeded. On NatsRelay, fetch() destructively acks
-        (deletes) messages from the stream as a side effect of a
-        successful pull — a second call for the same reason a retry would
-        make returns nothing, silently discarding the messages the first
-        call already returned. The fix retries only the inbox that
-        actually failed (fetch_user_inbox here), never the one that
-        already succeeded (fetch).
+        """Keep successful inbox results when the sibling inbox needs a retry.
 
-        Exercises _fetch_unread_with_retry directly rather than through
-        the full read_messages tool: the tool's own downstream
-        refresh_read_messages() call legitimately calls fetch() again
-        afterwards (for the unrelated tool-description unread count), so
-        a call count taken at the read_messages level can't isolate
-        whether THIS function's own retry re-fetched the succeeded inbox.
+        A successful fetch destructively acknowledges its messages, so retrying
+        that inbox would discard the first result and silently lose messages.
         """
         from biff.server.tools.messaging import _fetch_unread_with_retry
 

@@ -41,7 +41,14 @@ dev = [
 ]
 
 [dependency-groups]
-dev = ["punt-oo-ratchet>=0.1,<0.2"]
+dev = [
+    "punt-oo-ratchet>=0.1,<0.2",
+    "pydoclint==0.12.0",
+    "docstring-parser-fork==0.0.16",
+    "markdown==3.11.3",
+    "types-markdown>=3.10,<4",
+]
+docs = ["mkdocs>=1.6.1", "mkdocstrings[python]>=1.0.8"]
 
 [project.scripts]
 biff = "biff.__main__:app"
@@ -104,6 +111,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"tools/check_python_docs.py" = ["T20", "S603", "S607"]
+"tests/test_python_docs.py" = ["S603"]
 "tests/*" = ["S101", "S105", "S106", "S108", "T20", "SLF001", "ARG", "FBT", "PLC0415", "A002"]
 "src/biff/__main__.py" = ["T20", "FBT", "PLC0415"]
 "src/biff/cli_session.py" = ["T20"]
@@ -119,6 +128,16 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pydoclint]
+style = "google"
+arg-type-hints-in-docstring = false
+skip-checking-short-docstrings = false
+allow-init-docstring = true
+check-style-mismatch = true
 
 [tool.ruff.lint.isort]
 known-first-party = ["biff"]
@@ -149,7 +168,8 @@ disallow_incomplete_defs = false
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
-include = ["src", "tests"]
+include = ["src", "tests", "tools"]
+extraPaths = ["."]
 
 [[tool.pyright.executionEnvironments]]
 root = "src/biff/server/tools"

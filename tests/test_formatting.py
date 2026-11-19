@@ -262,8 +262,7 @@ class TestFormatFinger:
     def test_giant_user_kind_and_display_name_render_bounded(self) -> None:
         # UserSession.user/kind/display_name have no max_length on the
         # wire, and fmt_cell pads its column to width but never truncates
-        # — an unbounded field previously rendered one unbounded Login:
-        # line, however long the user/kind/display_name.
+        # — wrapping must bound the Login line even for very long fields.
         session = UserSession(
             user="u" * 10_000,
             tty="abcd1234",
@@ -565,9 +564,8 @@ class TestFormatWallStatusLine:
     def test_unbroken_body_suffix_never_overflows_table_width(self) -> None:
         # An unbroken run (no spaces to break at) hard-wraps to chunks that
         # exactly fill the wrap budget. Appending " (remaining)" to the last
-        # chunk AFTER wrap_cells had already chosen line breaks (the old
-        # logic) pushed that line past TABLE_WIDTH — the suffix must be
-        # reserved out of the budget up front instead.
+        # chunk after choosing line breaks would exceed TABLE_WIDTH; reserve it
+        # out of the budget up front instead.
         now = datetime.now(UTC)
         prefix_width = visible_width("wall: kai: ")
         body_width = TABLE_WIDTH - prefix_width
@@ -831,7 +829,7 @@ class TestTerminalSafe:
 
 
 class TestRenderSanitization:
-    """Remote terminal escapes are neutralized at every render site.
+    r"""Remote terminal escapes are neutralized at every render site.
 
     Each render path is fed a relay-sourced field carrying a screen-clear
     (`\\x1b[2J`) and assert the raw escape never reaches the output.
