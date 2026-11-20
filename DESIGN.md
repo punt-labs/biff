@@ -8218,10 +8218,7 @@ logic. Shell stderr redirects create a second unbounded sink. Collecting
 raw invocations or sending usage off-machine is not needed to count usage.
 
 **Outcome.** Hook and MCP diagnostics no longer depend on a host retaining
-stderr. Usage-store failure does not fail tool calls. Checkout builds use a
-locked Git commit until the shared package is published; do not tag a Biff
-release that depends on `punt-observe` until the dependency is installable
-from the package index.
+stderr. Usage-store failure does not fail tool calls.
 
 ---
 

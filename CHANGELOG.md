@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Install `punt-observe==0.1.0` from PyPI instead of a Git checkout.
 - Use FastMCP 4 and MCP 2.3. Failed session attachment returns a sanitized
   internal error and logs only the error type and source line.
 - Use shared punt-observe diagnostics for the CLI, MCP server, and hooks,
