@@ -316,6 +316,12 @@ Global flags go before the subcommand:
 | `--no-telemetry` | Disable local usage capture for this invocation |
 | `--version` | Print the version and exit |
 
+On a Devin VM, GitHub may not return a user for its integration credentials.
+Run `biff --user devin who` (and pass `--user devin` to other biff commands)
+to use the team handle instead of the VM's OS username. GitHub remotes
+rewritten through Devin's Git proxy still use the GitHub owner and repo for
+presence and peer discovery.
+
 ### Diagnostics and usage
 
 The CLI (including the REPL and status line), MCP server (stdio or HTTP),

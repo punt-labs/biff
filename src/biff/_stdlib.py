@@ -33,8 +33,12 @@ def find_git_root(start: Path | None = None) -> Path | None:
     return None
 
 
-_SLUG_SCP_RE = re.compile(r"^[^@]+@[^:]+:(.+?)(?:\.git)?$")
-_SLUG_URL_RE = re.compile(r"^(?:https?|ssh)://[^/]+(?::\d+)?/(.+?)(?:\.git)?$")
+_SLUG_RE = re.compile(
+    r"(?:https://git-manager\.devin\.ai/proxy/github\.com/"
+    r"|(?:https?|ssh)://"
+    r"(?!(?:[^/@]+@)?(?i:git-manager\.devin\.ai)(?::\d+)?/proxy/)[^/]+/"
+    r"|[^@/]+@[^:/]+:)([^/]+/[^/]+)"
+)
 
 
 def _parse_repo_slug(url: str) -> str | None:
@@ -42,16 +46,11 @@ def _parse_repo_slug(url: str) -> str | None:
 
     Supports scp-style SSH (``git@host:owner/repo``), scheme-based SSH
     (``ssh://git@host/owner/repo``, with optional port), and HTTPS.
-    Returns ``None`` for URLs that don't match or have nested paths
-    (e.g. ``gitlab.com/group/sub/repo``).
+    The Devin Git proxy's GitHub route is treated as the underlying HTTPS
+    remote. Other nested paths (e.g. ``gitlab.com/group/sub/repo``) are rejected.
     """
-    for pattern in (_SLUG_SCP_RE, _SLUG_URL_RE):
-        m = pattern.match(url)
-        if m:
-            slug = m.group(1)
-            if slug.count("/") == 1:
-                return slug
-    return None
+    match = _SLUG_RE.fullmatch(url.removesuffix(".git"))
+    return match[1] if match else None
 
 
 def get_repo_slug(repo_root: Path) -> str | None:
