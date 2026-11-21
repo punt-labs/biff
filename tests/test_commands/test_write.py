@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from biff.cli_context import CliContext
 from biff.commands._messaging import Delivery
 from biff.commands.write import write
-from biff.models import UserSession
+from biff.models import BiffConfig, SessionEvent, UserSession
 from biff.relay import LocalRelay
-from biff.server.tools._session import resolve_write_target
+from biff.server.tools._write_target import WriteRouter
+
+from ._relay import WtmpRelay
 
 
 class TestWrite:
@@ -188,12 +191,10 @@ class TestForwardReport:
         assert "delivered to eric's mailbox" in result.text
 
     def test_failed_delivery_is_not_reported_as_forwarded(self) -> None:
-        target = resolve_write_target(
+        target = WriteRouter(local_repo="", visible_repos=set()).resolve(
             [UserSession(user="eric", tty="aa", tty_name="tty1")],
             "eric",
             "tty9",
-            local_repo="",
-            visible_repos=set(),
         )
         failed = Delivery(text="Could not deliver to eric", ok=False, parts=1)
         assert target.report(failed) == "Could not deliver to eric"
@@ -204,12 +205,12 @@ class TestResolveWriteTarget:
         # The recipient restarted into repo-b; a mailbox forward sent from
         # repo-a must be published to repo-b, where they poll.
         sessions = [UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-b")]
-        target = resolve_write_target(
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve(
             sessions,
             "eric",
             "tty9",
-            local_repo="repo-a",
-            visible_repos={"repo-a", "repo-b"},
         )
         assert target.forwarded
         assert target.target_repo == "repo-b"
@@ -219,12 +220,12 @@ class TestResolveWriteTarget:
             UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-a"),
             UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
         ]
-        target = resolve_write_target(
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve(
             sessions,
             "eric",
             "tty9",
-            local_repo="repo-a",
-            visible_repos={"repo-a", "repo-b"},
         )
         assert target.target_repo is None
 
@@ -233,12 +234,12 @@ class TestResolveWriteTarget:
             UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-c"),
             UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
         ]
-        target = resolve_write_target(
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b", "repo-c"}
+        ).resolve(
             sessions,
             "eric",
             "tty9",
-            local_repo="repo-a",
-            visible_repos={"repo-a", "repo-b", "repo-c"},
         )
         assert target.target_repo == "repo-b"
 
@@ -256,12 +257,12 @@ class TestResolveWriteTarget:
             ),
             UserSession(user="eric", tty="bb", tty_name="tty2", repo="repo-b"),
         ]
-        target = resolve_write_target(
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve(
             sessions,
             "eric",
             "tty9",
-            local_repo="repo-a",
-            visible_repos={"repo-a", "repo-b"},
         )
         assert target.target_repo == "repo-b"
 
@@ -283,11 +284,100 @@ class TestResolveWriteTarget:
                 last_active=stale,
             ),
         ]
-        target = resolve_write_target(
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b", "repo-c"}
+        ).resolve(
             sessions,
             "eric",
             "tty9",
-            local_repo="repo-a",
-            visible_repos={"repo-a", "repo-b", "repo-c"},
         )
         assert target.target_repo == "repo-b"
+
+    def test_forward_goes_to_addressed_repo_over_live_repo(self) -> None:
+        # The named session ran in repo-b and ended; the user is still live
+        # in repo-a.  The forward must reach repo-b, the repo addressed.
+        sessions = [UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-a")]
+        target = WriteRouter(
+            local_repo="repo-c", visible_repos={"repo-a", "repo-b", "repo-c"}
+        ).resolve(
+            sessions,
+            "eric",
+            "qa",
+            addressed_repo="repo-b",
+        )
+        assert target.forwarded
+        assert target.target_repo == "repo-b"
+        assert "eric's mailbox in repo-b" in target.notice
+
+    def test_forward_to_addressed_repo_needs_no_session_row(self) -> None:
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve(
+            [],
+            "eric",
+            "qa",
+            addressed_repo="repo-a",
+        )
+        assert target.forwarded
+        assert target.target_repo is None
+
+    def test_invisible_addressed_repo_falls_back_to_present_repo(self) -> None:
+        sessions = [UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-b")]
+        target = WriteRouter(
+            local_repo="repo-a", visible_repos={"repo-a", "repo-b"}
+        ).resolve(
+            sessions,
+            "eric",
+            "qa",
+            addressed_repo="repo-secret",
+        )
+        assert target.target_repo == "repo-b"
+
+
+class TestWriteToEndedNamedSession:
+    """A write to an ended named session reaches the repo it ran in."""
+
+    @staticmethod
+    async def _ended_qa_session(relay: WtmpRelay) -> None:
+        # eric is live in repo-a; his named session "qa" ran in repo-b
+        # and has ended, leaving only its wtmp history.
+        await relay.update_session(
+            UserSession(user="eric", tty="aa", tty_name="tty1", repo="repo-a")
+        )
+        await relay.append_wtmp(
+            SessionEvent(
+                session_key="eric:bb",
+                event="logout",
+                user="eric",
+                tty="bb",
+                tty_name="qa",
+                repo="repo-b",
+            )
+        )
+
+    async def test_target_is_ended_sessions_repo(self, tmp_path: Path) -> None:
+        relay = WtmpRelay(tmp_path)
+        await self._ended_qa_session(relay)
+        target = await WriteRouter(
+            local_repo="repo-c", visible_repos=frozenset({"repo-a", "repo-b", "repo-c"})
+        ).find(relay, "eric", "qa")
+        assert target.forwarded
+        assert target.relay_key == "eric"
+        assert target.target_repo == "repo-b"
+
+    async def test_write_reports_ended_sessions_repo(self, tmp_path: Path) -> None:
+        relay = WtmpRelay(tmp_path)
+        await self._ended_qa_session(relay)
+        ctx = CliContext(
+            relay=relay,
+            config=BiffConfig(
+                user="kai", repo_name="repo-c", peers=("repo-a", "repo-b")
+            ),
+            session_key="kai:abc12345",
+            user="kai",
+            tty="abc12345",
+        )
+        result = await write(ctx, "@eric:qa", "hello")
+        assert not result.error
+        assert "qa has no active session" in result.text
+        assert "eric's mailbox in repo-b" in result.text
