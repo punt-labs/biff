@@ -394,8 +394,6 @@ def is_lux_enabled(repo_root: Path | None = None) -> bool:
     if repo_root is None:
         return False
     config = repo_root / ".punt-labs" / "lux.md"
-    if not config.is_file():
-        return False
     try:
         text = config.read_text()
         # Parse YAML frontmatter: ---\ndisplay: "y"\n---

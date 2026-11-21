@@ -1718,6 +1718,13 @@ class TestIsLuxEnabled:
 
             assert _is_lux_enabled() is False
 
+    def test_lux_config_is_directory(self, tmp_path: Path) -> None:
+        (tmp_path / ".punt-labs" / "lux.md").mkdir(parents=True)
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
     def test_lux_no_frontmatter(self, tmp_path: Path) -> None:
         """Config file without --- frontmatter delimiters."""
         lux_dir = tmp_path / ".punt-labs"
