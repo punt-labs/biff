@@ -955,16 +955,18 @@ async def _active_lifespan(
 
 async def _startup_cleanup(
     state: ServerState,
-    registered_names: list[str],
-    startup_tasks: list[asyncio.Task[None]],
+    live: _LiveSession,
+    *,
+    close_relay: bool = True,
 ) -> None:
     """Unwind resources acquired before the lifespan could yield."""
+    registered_names, startup_tasks = live.registered_names, live.tasks
     for task in startup_tasks:
         task.cancel()
     await asyncio.gather(*startup_tasks, return_exceptions=True)
 
     async def close() -> None:
-        if state.owns_relay:
+        if close_relay and state.owns_relay:
             await RelayLifecycle.close(state, _TEARDOWN_STEP_TIMEOUT)
 
     steps: list[Callable[[], Awaitable[None]]] = [
@@ -1131,9 +1133,7 @@ async def _running_lifespan(
                 )
             )
         else:
-            await _finish_cleanup(
-                _startup_cleanup(state, live.registered_names, live.tasks)
-            )
+            await _finish_cleanup(_startup_cleanup(state, live))
 
 
 class _LiveSession:
@@ -1231,12 +1231,11 @@ class _LiveSession:
                 type(exc).__name__,
                 extract_tb(exc.__traceback__, limit=2)[-1].lineno,
             )
-            for task in self.tasks:
-                task.cancel()
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+            await _startup_cleanup(state, self, close_relay=False)
             self.tasks.clear()
+            self.registered_names.clear()
             self.reaper = None
-            if isinstance(exc, RelayConnectError):
+            if isinstance(exc, (RelayConnectError, TimeoutError)):
                 raise
             if isinstance(exc, Exception):
                 raise MCPError(INTERNAL_ERROR, "Internal server error") from None

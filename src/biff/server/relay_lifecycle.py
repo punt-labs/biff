@@ -29,7 +29,7 @@ class RelayLifecycle:
         """Allow MCP discovery even when initial session registration fails."""
         try:
             yield
-        except RelayConnectError:
+        except (RelayConnectError, TimeoutError):
             logger.warning("Relay connection failed during startup")
 
     @staticmethod
@@ -38,7 +38,7 @@ class RelayLifecycle:
         """Translate relay attachment failures into safe protocol errors."""
         try:
             yield
-        except RelayConnectError:
+        except (RelayConnectError, TimeoutError):
             raise MCPError(INTERNAL_ERROR, "Relay connection failed") from None
 
     @staticmethod

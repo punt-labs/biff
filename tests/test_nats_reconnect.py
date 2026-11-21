@@ -195,6 +195,7 @@ class TestHalfOpenWedgeRecovery:
         detection = kwargs["ping_interval"] * kwargs["max_outstanding_pings"]
         assert detection <= 90, f"wedge detection {detection}s exceeds 90s budget"
         assert kwargs["max_reconnect_attempts"] == 1
+        assert kwargs["connect_timeout"] == 5
         assert kwargs["allow_reconnect"] is False
         assert isinstance(relay._nc, MagicMock)
         relay._nc.options.update.assert_called_once_with(

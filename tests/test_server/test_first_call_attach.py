@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Literal
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastmcp.client.transports import FastMCPTransport
+from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR
 
-from biff.models import BiffConfig
+from biff.models import BiffConfig, RelayConnectError
+from biff.nats_relay import NatsRelay
+from biff.server import app
 from biff.server.app import create_server
 from biff.server.state import ServerState, create_state
 from biff.session_routing import SessionRouting
@@ -143,3 +147,57 @@ async def test_a_failed_attach_is_logged_without_session_content(
     )
     assert "sess-x" not in caplog.text
     assert "relay down" not in caplog.text
+
+
+@pytest.mark.parametrize("stage", ["update_session", "after_registration"])
+@pytest.mark.parametrize("failure", [RelayConnectError, TimeoutError])
+async def test_failed_startup_rolls_back_and_can_retry(
+    state: ServerState,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    failure: type[Exception],
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-retry")
+    failed = AsyncMock(
+        side_effect=failure("private relay detail"),
+        wraps=state.relay.update_session
+        if stage == "update_session"
+        else app._reap_sentinels,
+    )
+    target = (
+        patch.object(state.relay, "update_session", failed)
+        if stage == "update_session"
+        else patch("biff.server.app._reap_sentinels", failed)
+    )
+    with target:
+        async with StampedClient(
+            FastMCPTransport(create_server(state)), caller=caller_for("sess-retry")
+        ) as client:
+            assert await client.list_tools()
+            assert await state.relay.get_sessions() == []
+            assert await state.relay.list_reserved_names("kai") == []
+            failed.side_effect = None
+            await client.call_tool("who", {})
+            assert len(await state.relay.get_sessions()) == 1
+
+
+async def test_attached_tool_failure_reports_relay_error(state: ServerState) -> None:
+    relay = NatsRelay("nats://localhost:4222")
+
+    async def redial(_repos: object) -> None:
+        await relay._dial()
+
+    async with StampedClient(
+        FastMCPTransport(create_server(state)), caller=caller_for("sess-tool")
+    ) as client:
+        await client.call_tool("who", {})
+        with (
+            patch("nats.connect", AsyncMock(side_effect=OSError("private detail"))),
+            patch.object(
+                state.relay,
+                "get_sessions_for_repos",
+                AsyncMock(side_effect=redial),
+            ),
+            pytest.raises(ToolError, match="Relay connection failed"),
+        ):
+            await client.call_tool("who", {})

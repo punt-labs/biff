@@ -1590,8 +1590,8 @@ frequency" (30s instead of 2s) but the NATS connection stays open.  This preserv
 
 ### Initial Dial Failure (2026-11-21)
 
-Infinite reconnect applies only after a connection succeeds. Each fresh dial
-disables reconnect during authentication, uses a one-second connection timeout,
+**Decision:** Infinite reconnect applies only after a connection succeeds. Each fresh dial
+disables reconnect during authentication, uses a five-second connection timeout,
 and permits at most two transport attempts without backoff. This also bounds
 nats-py's server-selection loop when DNS or TCP fails before authentication.
 After success, the client resumes infinite reconnect, two-second backoff, and
@@ -1602,7 +1602,17 @@ lifespan: initialization and tool discovery remain available. A subsequent tool
 call retries attachment and returns a sanitized relay connection failure if the
 relay is still unavailable. Org discovery remains best-effort. Registration and
 local marker publication share one lifecycle boundary so failed attachment does
-not publish a marker for a session that never registered.
+not publish a marker for a session that never registered. Failed attachment
+unwinds partial registration before allowing another attempt.
+
+**Alternatives:** Keeping infinite initial retries blocks stdio before it can
+answer initialize. Treating only authorization errors as terminal leaves
+unreachable servers hanging. Moving all registration into the background adds
+concurrent attachment state without solving tool-call error reporting.
+
+**Outcome:** Discovery remains usable during relay outages and subsequent tool
+calls can recover. Five seconds per transport attempt tolerates internet TLS
+latency without inheriting the established client's unlimited retry policy.
 
 ### Why Not Keep Connection Conservation
 

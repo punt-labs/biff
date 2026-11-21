@@ -87,6 +87,7 @@ _CONSUMER_INACTIVE_THRESHOLD = 300.0  # 5 min — dead sessions auto-expire
 _CONNECT_PROVISION_TIMEOUT = 20.0  # bound JetStream/KV provisioning so a
 # disconnected connection can't hold _connect_lock forever and wedge every
 # relay caller
+_INITIAL_CONNECT_TIMEOUT = 5
 _TEARDOWN_TIMEOUT = 5.0  # bound nc.close()'s wait_closed() so a half-open socket
 # can't hold _connect_lock (taken by _force_reconnect) and freeze the poller
 # and heartbeat; the client is being discarded, so abandoning it is safe
@@ -545,9 +546,7 @@ class NatsRelay:
 
     def _auth_kwargs(self) -> dict[str, str]:
         """Build authentication keyword arguments for ``nats.connect()``."""
-        if self._auth is None:
-            return {}
-        return self._auth.as_nats_kwargs()
+        return self._auth.as_nats_kwargs() if self._auth is not None else {}
 
     def _tls_kwargs(self) -> dict[str, bool]:
         """Build TLS keyword arguments for ``nats.connect()``.
@@ -863,7 +862,7 @@ class NatsRelay:
                 max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
                 max_reconnect_attempts=1,
                 reconnect_time_wait=0,
-                connect_timeout=1,
+                connect_timeout=_INITIAL_CONNECT_TIMEOUT,
                 allow_reconnect=False,
                 **self._connection_callbacks(self._generation),
                 **auth_kwargs,
@@ -884,9 +883,9 @@ class NatsRelay:
         if error_kind is not None or nc is None:
             host = sanitize_relay_url(self._url)
             logger.warning(
-                "failed to connect to relay %s: %s", host, error_kind or "unknown"
+                "Relay connection failed %s: %s", host, error_kind or "unknown"
             )
-            raise RelayConnectError(f"failed to connect to relay: {host}")
+            raise RelayConnectError(f"Relay connection failed: {host}")
         return nc
 
     async def _open_connection(self) -> tuple[JetStreamContext, KeyValue]:
