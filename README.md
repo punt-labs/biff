@@ -423,10 +423,15 @@ MCP installation environment to
 `MCP_BIFF_RELAY_TOKEN: secret:org:MCP_BIFF_RELAY_TOKEN`. The MCP config maps
 that secret placeholder to `BIFF_RELAY_TOKEN`; empty or unexpanded values
 are unset rather than sent to the relay. Never put a token value in files.
-The launcher uses installed biff 1.23.0 or newer, otherwise requests
-`punt-biff>=1.23.0` through `uvx` (or `uv tool run`), falling back to plain
+After installing the plugin, open **Customize > MCPs > From plugins > biff >
+Connect** and save the relay token as `MCP_BIFF_RELAY_TOKEN`. Devin fills
+plugin MCP placeholders only from values saved on that plugin installation.
+The launcher uses installed biff 1.24.0 or newer, otherwise requests
+`punt-biff>=1.24.0` through `uvx` (or `uv tool run`), falling back to plain
 `biff` only when neither runner exists. Install uv or a current biff first.
 It supplies a fresh session ID when absent so startup can register presence.
+Explicit `biff mcp --user devin` binds unstamped tool calls to that same session;
+stamped calls keep their declared caller and malformed stamps are refused.
 
 The plugin provides a long-lived MCP server, who/read/write/wall skills,
 and an always-on five-minute mail polling rule. Its session-start hook

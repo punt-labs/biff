@@ -245,7 +245,7 @@ def test_launcher_repo_selection(tmp_path: Path, choice: str) -> None:
     bin_dir.mkdir()
     binary = bin_dir / "biff"
     binary.write_text(
-        '#!/bin/sh\nif [ "$1" = version ]; then echo "biff 1.23.0"; exit; fi\n'
+        '#!/bin/sh\nif [ "$1" = version ]; then echo "biff 1.24.0"; exit; fi\n'
         'pwd\nprintf "%s\\n" "$@"\n'
     )
     binary.chmod(0o755)
@@ -273,11 +273,10 @@ def test_launcher_repo_selection(tmp_path: Path, choice: str) -> None:
 @pytest.mark.parametrize(
     ("version", "runner", "prefix"),
     [
-        ("1.23.0", "uvx", []),
         ("1.24.0", "uvx", []),
         ("2.0.0", "uvx", []),
-        ("1.19.0", "uvx", ["--from", "punt-biff>=1.23.0", "biff"]),
-        ("0.99.0", "uv", ["tool", "run", "--from", "punt-biff>=1.23.0", "biff"]),
+        ("1.23.0", "uvx", ["--from", "punt-biff>=1.24.0", "biff"]),
+        ("1.19.0", "uv", ["tool", "run", "--from", "punt-biff>=1.24.0", "biff"]),
         ("unavailable", "", []),
     ],
 )

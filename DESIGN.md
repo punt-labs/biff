@@ -8245,3 +8245,26 @@ transport selects the protocol before dispatching discovery.
 and re-list tools when reconnecting because the stream does not replay changes.
 Handshake clients continue to receive the standalone notification. The poller
 does not inherit request context, even when the first tool call starts it.
+
+---
+
+## DES-081: Explicit Process Caller for Unstamped Stdio Harnesses
+
+**Decision.** Explicit `biff mcp --user <handle>` opts a single-session stdio process
+into a fixed caller built once from the validated startup
+`CLAUDE_CODE_SESSION_ID` and the resolved biff user as `agent_id`. Both fields
+pass `CallerIdentity.from_wire`. An absent or empty session ID gets a fresh
+UUID; malformed nonempty session IDs and invalid user handles fail launch.
+The same caller session registers startup presence
+and routes unstamped calls, even if the environment subsequently changes.
+
+**Boundary.** This narrowly amends DES-064 for harnesses such as Devin that
+cannot stamp tool arguments. The default is off, HTTP does not expose the
+behavior, explicit caller stamps retain precedence, and malformed stamps are
+always refused. This declares routing identity; it is not authentication.
+
+**Delivery.** The Devin launcher supplies a session ID and explicit user.
+It requires installed biff 1.24.0 or newer, otherwise requests
+`punt-biff>=1.24.0` through uv. Unit middleware and factory checks plus
+RecordingClient integration tests cover refusal without opt-in and
+who/write/read round trips on the startup presence session with opt-in.

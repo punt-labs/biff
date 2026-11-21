@@ -13,5 +13,7 @@ until push delivery replaces it.
 The org admin must bind `MCP_BIFF_RELAY_TOKEN` on this plugin's MCP
 installation. The launcher maps that placeholder to the relay token,
 discards empty or unexpanded values, supplies a startup session ID, and
-prefers biff 1.23.0 or newer (using uv when the installed binary is older).
+requires biff 1.24.0 or newer (using uv when the installed binary is older).
+Explicit `biff mcp --user devin` binds unstamped calls to the same fixed
+startup session as presence.
 Never print or persist the token.

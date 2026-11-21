@@ -6,6 +6,11 @@
 
 - A self-contained Devin plugin with a biff MCP server, local repository
   bootstrap, team mail polling rule, and who/read/write/wall skills.
+- `biff mcp --user <handle>` explicitly binds unstamped tool calls to the
+  startup session and resolved user for harnesses without caller stamping.
+  An absent startup session ID gets a fresh UUID; invalid IDs fail launch.
+  Plain `biff mcp` and HTTP retain strict stamping, and malformed caller
+  stamps remain refused. Devin launchers require biff 1.24.0 or newer.
 
 ### Changed
 
