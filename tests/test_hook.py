@@ -1692,10 +1692,10 @@ class TestIsLuxEnabled:
     """Unit tests for _is_lux_enabled() YAML frontmatter parsing."""
 
     def test_lux_enabled(self, tmp_path: Path) -> None:
-        """Standard .lux/config.md with display: "y"."""
-        lux_dir = tmp_path / ".lux"
+        """Standard .punt-labs/lux.md with display: "y"."""
+        lux_dir = tmp_path / ".punt-labs"
         lux_dir.mkdir()
-        (lux_dir / "config.md").write_text('---\ndisplay: "y"\n---\n')
+        (lux_dir / "lux.md").write_text('---\ndisplay: "y"\n---\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
@@ -1703,16 +1703,23 @@ class TestIsLuxEnabled:
 
     def test_lux_disabled(self, tmp_path: Path) -> None:
         """display: "n" means lux is off."""
-        lux_dir = tmp_path / ".lux"
+        lux_dir = tmp_path / ".punt-labs"
         lux_dir.mkdir()
-        (lux_dir / "config.md").write_text('---\ndisplay: "n"\n---\n')
+        (lux_dir / "lux.md").write_text('---\ndisplay: "n"\n---\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False
 
     def test_lux_no_config_file(self, tmp_path: Path) -> None:
-        """No .lux/config.md means lux is off."""
+        """No .punt-labs/lux.md means lux is off."""
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_config_is_directory(self, tmp_path: Path) -> None:
+        (tmp_path / ".punt-labs" / "lux.md").mkdir(parents=True)
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
@@ -1720,9 +1727,9 @@ class TestIsLuxEnabled:
 
     def test_lux_no_frontmatter(self, tmp_path: Path) -> None:
         """Config file without --- frontmatter delimiters."""
-        lux_dir = tmp_path / ".lux"
+        lux_dir = tmp_path / ".punt-labs"
         lux_dir.mkdir()
-        (lux_dir / "config.md").write_text('display: "y"\n')
+        (lux_dir / "lux.md").write_text('display: "y"\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
@@ -1730,9 +1737,9 @@ class TestIsLuxEnabled:
 
     def test_lux_missing_closing_delimiter(self, tmp_path: Path) -> None:
         """Frontmatter with opening --- but no closing ---."""
-        lux_dir = tmp_path / ".lux"
+        lux_dir = tmp_path / ".punt-labs"
         lux_dir.mkdir()
-        (lux_dir / "config.md").write_text('---\ndisplay: "y"\n')
+        (lux_dir / "lux.md").write_text('---\ndisplay: "y"\n')
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
@@ -1740,9 +1747,9 @@ class TestIsLuxEnabled:
 
     def test_lux_unquoted_value(self, tmp_path: Path) -> None:
         """display: y without quotes should still work."""
-        lux_dir = tmp_path / ".lux"
+        lux_dir = tmp_path / ".punt-labs"
         lux_dir.mkdir()
-        (lux_dir / "config.md").write_text("---\ndisplay: y\n---\n")
+        (lux_dir / "lux.md").write_text("---\ndisplay: y\n---\n")
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
@@ -1750,9 +1757,9 @@ class TestIsLuxEnabled:
 
     def test_lux_single_quoted_value(self, tmp_path: Path) -> None:
         """display: \'y\' with single quotes."""
-        lux_dir = tmp_path / ".lux"
+        lux_dir = tmp_path / ".punt-labs"
         lux_dir.mkdir()
-        (lux_dir / "config.md").write_text("---\ndisplay: 'y'\n---\n")
+        (lux_dir / "lux.md").write_text("---\ndisplay: 'y'\n---\n")
         with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
@@ -1761,6 +1768,44 @@ class TestIsLuxEnabled:
     def test_lux_no_git_root(self) -> None:
         """No git root means lux is off."""
         with patch("biff._stdlib.find_git_root", return_value=None):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    @pytest.mark.parametrize("content", ["", "---\n---\n"])
+    def test_lux_empty_config(self, tmp_path: Path, content: str) -> None:
+        lux_dir = tmp_path / ".punt-labs"
+        lux_dir.mkdir()
+        (lux_dir / "lux.md").write_text(content)
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    def test_lux_unreadable_config(self, tmp_path: Path) -> None:
+        lux_dir = tmp_path / ".punt-labs"
+        lux_dir.mkdir()
+        (lux_dir / "lux.md").write_text('---\ndisplay: "y"\n---\n')
+        with (
+            patch("biff._stdlib.find_git_root", return_value=tmp_path),
+            patch.object(Path, "read_text", side_effect=OSError("unreadable")),
+        ):
+            from biff.hook import _is_lux_enabled
+
+            assert _is_lux_enabled() is False
+
+    @pytest.mark.parametrize("canonical", [None, "n"])
+    def test_lux_ignores_legacy_config(
+        self, tmp_path: Path, canonical: str | None
+    ) -> None:
+        legacy = tmp_path / ".lux"
+        legacy.mkdir()
+        (legacy / "config.md").write_text('---\ndisplay: "y"\n---\n')
+        if canonical is not None:
+            lux_dir = tmp_path / ".punt-labs"
+            lux_dir.mkdir()
+            (lux_dir / "lux.md").write_text(f'---\ndisplay: "{canonical}"\n---\n')
+        with patch("biff._stdlib.find_git_root", return_value=tmp_path):
             from biff.hook import _is_lux_enabled
 
             assert _is_lux_enabled() is False

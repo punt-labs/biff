@@ -10,7 +10,6 @@
 .env*.local
 !.env.example
 .envrc.local
-.biff.local
 .claude/settings.local.json
 .claude/settings.local.*
 .claude/mcp.local.json

@@ -41,16 +41,22 @@ class TestHasVox:
     """L0 sentinel check."""
 
     def test_present(self, tmp_path: Path) -> None:
-        vox_dir = tmp_path / ".vox"
-        vox_dir.mkdir()
-        (vox_dir / "config.md").write_text("---\nvoice: lily\n---\n")
+        vox_dir = tmp_path / ".punt-labs" / "vox"
+        vox_dir.mkdir(parents=True)
+        (vox_dir / "vox.md").write_text("---\nvoice: lily\n---\n")
         assert has_vox(tmp_path) is True
 
     def test_absent(self, tmp_path: Path) -> None:
         assert has_vox(tmp_path) is False
 
     def test_dir_exists_but_no_config(self, tmp_path: Path) -> None:
-        (tmp_path / ".vox").mkdir()
+        (tmp_path / ".punt-labs" / "vox").mkdir(parents=True)
+        assert has_vox(tmp_path) is False
+
+    def test_legacy_config_is_ignored(self, tmp_path: Path) -> None:
+        vox_dir = tmp_path / ".vox"
+        vox_dir.mkdir()
+        (vox_dir / "config.md").write_text("---\nvoice: lily\n---\n")
         assert has_vox(tmp_path) is False
 
 

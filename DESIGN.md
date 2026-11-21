@@ -3534,7 +3534,7 @@ The biff lux applet follows the lux-975 (GitHub widget) pattern:
 - `find_session_key()` walks to the topmost `claude` ancestor PID. This PID
   keys both `session-data/{pid}.json` (written by the statusline hook) and
   the applet's data reads.
-- `is_lux_enabled()` reads `.lux/config.md` from `find_git_root()`. Both
+- `is_lux_enabled()` reads `.punt-labs/lux.md` from `find_git_root()`. Both
   biff and lux repos have `display: "y"`.
 
 ### Open issue

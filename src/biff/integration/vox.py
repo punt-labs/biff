@@ -27,7 +27,7 @@ _vox_once_supported: bool | object = _UNCHECKED
 def has_vox(repo_root: Path | None = None) -> bool:
     """L0: Check whether vox is configured in this repo."""
     root = repo_root or Path.cwd()
-    return (root / ".vox" / "config.md").is_file()
+    return (root / ".punt-labs" / "vox" / "vox.md").is_file()
 
 
 def vox_binary() -> str | None:
