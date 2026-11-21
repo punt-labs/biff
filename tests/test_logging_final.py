@@ -286,7 +286,7 @@ async def test_initial_dial_reports_recovery_once(
     callbacks = relay._connection_callbacks(relay._generation)
     caplog.set_level(logging.INFO, logger="biff.nats_relay")
     await callbacks["error_cb"](ConnectionRefusedError("private-error"))
-    with patch("biff.nats_relay.nats.connect", new=AsyncMock()):
+    with patch("nats.aio.client.Client.connect", new=AsyncMock()):
         await relay._dial()
         await relay._dial()
     assert caplog.messages == [

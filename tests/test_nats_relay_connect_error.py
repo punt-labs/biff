@@ -12,11 +12,13 @@ marker, no real server).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from nats.errors import Error as NatsError
 
 from biff.models import RelayAuth, RelayConnectError
 from biff.nats_relay import NatsRelay
@@ -31,6 +33,62 @@ def _fake_nc() -> MagicMock:
 
 class TestConnectFailureRaisesRelayConnectError:
     @pytest.mark.anyio()
+    async def test_rejected_handshake_closes_transport(self) -> None:
+        closed = asyncio.Event()
+        peers: list[asyncio.StreamWriter] = []
+
+        async def reject(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            peers.append(writer)
+            writer.write(b'INFO {"server_id":"test","auth_required":true}\r\n')
+            await writer.drain()
+            await reader.readline()
+            writer.write(b"-ERR 'Authorization Violation'\r\n")
+            await writer.drain()
+            await reader.read()
+            closed.set()
+            writer.close()
+            await writer.wait_closed()
+
+        async with await asyncio.start_server(reject, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            relay = NatsRelay(url=f"nats://127.0.0.1:{port}", repo_name="test")
+            try:
+                with pytest.raises(RelayConnectError):
+                    await relay._dial()
+                await asyncio.wait_for(closed.wait(), timeout=0.5)
+            finally:
+                for peer in peers:
+                    peer.close()
+                    await peer.wait_closed()
+
+    @pytest.mark.anyio()
+    async def test_initial_auth_rejection_is_terminal_and_redacted(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        relay = NatsRelay(url="nats://localhost:4222", repo_name="test")
+        rejected = AsyncMock(side_effect=NatsError("Authorization Violation private"))
+        with (
+            patch("nats.aio.client.Client._select_next_server", AsyncMock()),
+            patch("nats.aio.client.Client._process_connect_init", rejected),
+            pytest.raises(RelayConnectError),
+        ):
+            await asyncio.wait_for(relay._ensure_connected(), timeout=0.5)
+        assert rejected.await_count == 1
+        assert "private" not in caplog.text
+
+    @pytest.mark.anyio()
+    async def test_initial_unreachable_dial_does_not_retry_forever(self) -> None:
+        relay = NatsRelay(url="nats://localhost:4222", repo_name="test")
+        refused = AsyncMock(side_effect=ConnectionRefusedError("private-token"))
+        with (
+            patch("nats.aio.transport.TcpTransport.connect", refused),
+            pytest.raises(RelayConnectError),
+        ):
+            await asyncio.wait_for(relay._ensure_connected(), timeout=0.5)
+
+    @pytest.mark.anyio()
     async def test_refused_retries_log_only_concise_exception_types(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -41,13 +99,12 @@ class TestConnectFailureRaisesRelayConnectError:
         caplog.set_level(logging.DEBUG, logger="biff.nats_relay")
         with (
             patch("nats.aio.transport.TcpTransport.connect", refused),
-            patch("biff.nats_relay._MAX_RECONNECT_ATTEMPTS", 2),
             patch("biff.nats_relay._RECONNECT_TIME_WAIT", 0),
             pytest.raises(RelayConnectError),
         ):
             await relay._ensure_connected()
 
-        assert refused.await_count == 3
+        assert refused.await_count == 2
         retries = [r for r in caplog.records if "NATS error" in r.getMessage()]
         assert len(retries) == refused.await_count
         assert all(
@@ -58,11 +115,10 @@ class TestConnectFailureRaisesRelayConnectError:
         assert [r.levelno for r in retries] == [
             logging.INFO,
             logging.DEBUG,
-            logging.DEBUG,
         ]
         assert [
             r.getMessage() for r in caplog.records if "outcome=failed" in r.message
-        ] == ["NATS connection outcome=failed failures=3 error=NoServersError"]
+        ] == ["NATS connection outcome=failed failures=2 error=NoServersError"]
         assert all(r.exc_info is None for r in caplog.records)
         assert "private" not in caplog.text
         assert "Traceback" not in caplog.text
@@ -76,7 +132,7 @@ class TestConnectFailureRaisesRelayConnectError:
         )
         connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
         with (
-            patch("biff.nats_relay.nats.connect", connect),
+            patch("nats.aio.client.Client.connect", connect),
             pytest.raises(RelayConnectError, match=re.escape("relay.example.com:4222")),
         ):
             await relay._ensure_connected()
@@ -89,7 +145,7 @@ class TestConnectFailureRaisesRelayConnectError:
             repo_name="test",
         )
         connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("nats.aio.client.Client.connect", connect):
             try:
                 await relay._ensure_connected()
             except RelayConnectError as exc:
@@ -110,7 +166,7 @@ class TestConnectFailureRaisesRelayConnectError:
             repo_name="test",
         )
         connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("nats.aio.client.Client.connect", connect):
             try:
                 await relay._ensure_connected()
             except RelayConnectError as exc:
@@ -128,7 +184,7 @@ class TestConnectFailureRaisesRelayConnectError:
             repo_name="test",
         )
         connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("nats.aio.client.Client.connect", connect):
             with pytest.raises(RelayConnectError) as exc_info:
                 await relay._ensure_connected()
             assert type(exc_info.value) is RelayConnectError
@@ -145,7 +201,7 @@ class TestConnectFailureRaisesRelayConnectError:
         """
         relay = NatsRelay(url="tls://relay.example.com:4222", repo_name="test")
         connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
-        with patch("biff.nats_relay.nats.connect", connect):
+        with patch("nats.aio.client.Client.connect", connect):
             try:
                 await relay._ensure_connected()
             except (TimeoutError, OSError) as exc:
@@ -174,7 +230,7 @@ class TestConnectFailureRaisesRelayConnectError:
         )
         connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
         with (
-            patch("biff.nats_relay.nats.connect", connect),
+            patch("nats.aio.client.Client.connect", connect),
             pytest.raises(RelayConnectError) as exc_info,
         ):
             await relay._ensure_connected()
@@ -206,7 +262,7 @@ class TestAuthKwargsClearedOnConnectFailure:
         )
         connect = AsyncMock(side_effect=TimeoutError("nats: timeout"))
         with (
-            patch("biff.nats_relay.nats.connect", connect),
+            patch("nats.aio.client.Client.connect", connect),
             pytest.raises(RelayConnectError),
         ):
             await relay._ensure_connected()
@@ -234,8 +290,9 @@ class TestAuthKwargsClearedOnConnectFailure:
         relay._auth_kwargs = MagicMock(  # type: ignore[method-assign]
             return_value=held_auth_kwargs
         )
-        connect = AsyncMock(return_value=_fake_nc())
-        with patch("biff.nats_relay.nats.connect", connect):
+        nc = _fake_nc()
+        connect = nc.connect = AsyncMock()
+        with patch("biff.nats_relay.NatsClient", return_value=nc):
             await relay._ensure_connected()
 
         assert connect.await_args is not None

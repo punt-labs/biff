@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-11-21
+
 ### Added
 
 - A self-contained Devin plugin with a biff MCP server, local repository
@@ -52,6 +54,9 @@
   and an INFO recovery or terminal outcome, without exception content.
 - Log visible repository counts instead of names, and omit checkout paths
   from missing-origin ethos diagnostics.
+- Keep MCP initialization and tool discovery available when relay authentication
+  fails or the relay is unreachable. Initial dials fail promptly with sanitized
+  errors; established connections still reconnect indefinitely after disconnects.
 - Include safe operation, failed step, exception class, and source location in
   talk hangup, withdrawal, auto-accept, and connected-send failure diagnostics.
   Keep these diagnostics in the durable INFO log without interrupting the REPL.

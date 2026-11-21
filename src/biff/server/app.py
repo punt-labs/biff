@@ -24,7 +24,7 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR
 
 from biff._stdlib import remove_active_session, sentinel_dir
-from biff.models import SessionEvent, UserSession
+from biff.models import RelayConnectError, SessionEvent, UserSession
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -38,10 +38,10 @@ from biff.nats_relay import RESERVED_KV_NAMESPACES, NatsRelay
 from biff.relay import PRESENCE_LIVENESS_SECONDS, LocalRelay
 from biff.server.caller_policy import CallerPolicy
 from biff.server.mcp_protocol import NotificationServer
+from biff.server.relay_lifecycle import RelayLifecycle
 from biff.server.state import ServerState
 from biff.server.tools import _descriptions, register_all_tools
 from biff.session_lock import routing_lock
-from biff.session_registry import register_session, write_marker
 from biff.tty import build_session_key
 
 logger = logging.getLogger(__name__)
@@ -819,10 +819,7 @@ async def _release_relay(state: ServerState) -> None:
         )
 
     async def close() -> None:
-        try:
-            await asyncio.wait_for(state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT)
-        except Exception:
-            logger.warning("Failed to close relay", exc_info=True)
+        await RelayLifecycle.close(state, _TEARDOWN_STEP_TIMEOUT)
 
     await _run_cleanup_steps([primary, close])
 
@@ -958,22 +955,19 @@ async def _active_lifespan(
 
 async def _startup_cleanup(
     state: ServerState,
-    registered_names: list[str],
-    startup_tasks: list[asyncio.Task[None]],
+    live: _LiveSession,
+    *,
+    close_relay: bool = True,
 ) -> None:
     """Unwind resources acquired before the lifespan could yield."""
+    registered_names, startup_tasks = live.registered_names, live.tasks
     for task in startup_tasks:
         task.cancel()
     await asyncio.gather(*startup_tasks, return_exceptions=True)
 
     async def close() -> None:
-        if state.owns_relay:
-            try:
-                await asyncio.wait_for(
-                    state.relay.close(), timeout=_TEARDOWN_STEP_TIMEOUT
-                )
-            except Exception:
-                logger.warning("Failed to close startup relay", exc_info=True)
+        if close_relay and state.owns_relay:
+            await RelayLifecycle.close(state, _TEARDOWN_STEP_TIMEOUT)
 
     steps: list[Callable[[], Awaitable[None]]] = [
         lambda: _cleanup_action(lambda: _remove_unread_files(state.unread_path))
@@ -1132,9 +1126,7 @@ async def _running_lifespan(
                 )
             )
         else:
-            await _finish_cleanup(
-                _startup_cleanup(state, live.registered_names, live.tasks)
-            )
+            await _finish_cleanup(_startup_cleanup(state, live))
 
 
 class _LiveSession:
@@ -1199,8 +1191,9 @@ class _LiveSession:
         """
         async with self._gate:
             startup = policy.startup()
-        async with startup:
-            pass
+        with RelayLifecycle.startup():
+            async with startup:
+                pass
 
     async def attach(
         self,
@@ -1227,11 +1220,12 @@ class _LiveSession:
                 type(exc).__name__,
                 extract_tb(exc.__traceback__, limit=2)[-1].lineno,
             )
-            for task in self.tasks:
-                task.cancel()
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+            await _startup_cleanup(state, self, close_relay=False)
             self.tasks.clear()
+            self.registered_names.clear()
             self.reaper = None
+            if isinstance(exc, (RelayConnectError, TimeoutError)):
+                raise
             if isinstance(exc, Exception):
                 raise MCPError(INTERNAL_ERROR, "Internal server error") from None
             raise
@@ -1270,28 +1264,9 @@ class _LiveSession:
     async def _register_and_start(
         self, mcp: FastMCP[ServerState], state: ServerState
     ) -> None:
-        # Claim-then-write (DES-035): reserve the TTY name first, then write
-        # the KV row once with ``tty_name`` populated.  ``register_session``
-        # is get-or-create: the SessionStart hook may have written the row.
-        repo = state.config.repo_name
-        _, final_name = await register_session(
-            state.relay,
-            state.config.user,
-            state.tty,
-            display_name=state.config.display_name,
-            kind=state.config.kind,
-            hostname=state.hostname,
-            pwd=state.pwd,
-            repo=repo,
-            launched_by=state.config.launched_by,
-            owner_git=state.config.owner_git,
-            on_claim=self.registered_names.append,
-        )
+        final_name = await RelayLifecycle.register(state, self.registered_names.append)
         _descriptions.set_tty_name(final_name)
         state.talk.set_tty_name(final_name)
-        # Written after register_session succeeds so "marker exists iff KV
-        # row exists" holds under registration failure.
-        write_marker(repo, state.session_key, str(state.repo_common_root))
         logger.info("Session ready: %s (%s)", state.tty, final_name)
 
         await _descriptions.refresh_read_messages(mcp, state)
@@ -1345,7 +1320,7 @@ def create_server(
                 _remove_unread_files(state.unread_path)
             return
         async with _active_lifespan(state, live) as ctx:
-            await live.start_declared(policy)
+            await live.start_declared(startup_policy)
             yield ctx
 
     mcp = NotificationServer[ServerState](
@@ -1384,7 +1359,10 @@ def create_server(
     ) -> AbstractAsyncContextManager[None]:
         return live.call(mcp, state, caller)
 
-    policy = CallerPolicy(accept_caller, default_caller)
+    startup_policy = CallerPolicy(accept_caller, default_caller)
+    policy = CallerPolicy(
+        lambda caller: RelayLifecycle.tool_call(accept_caller(caller)), default_caller
+    )
     mcp.configure_transport(state.tool_events, _SessionCaptureMiddleware(), policy)
     register_all_tools(mcp, state)
     return mcp
