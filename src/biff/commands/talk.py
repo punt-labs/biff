@@ -205,7 +205,7 @@ async def send_line(
     try:
         await ctx.talk.send_message(to_key=to_key, body=message)
     except (NatsError, TimeoutError, OSError) as exc:
-        logger.warning("talk send failed: %s", publish_failure(exc))
+        logger.info("talk send failed: %s", publish_failure(exc))
         return CommandResult(
             text=f"Could not reach {display} — message not sent; try again.",
             error=True,
