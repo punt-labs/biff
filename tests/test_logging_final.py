@@ -7,11 +7,12 @@ import signal
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import uvicorn
 from fastmcp import FastMCP
+from nats.js.errors import KeyNotFoundError
 from punt_observe.logging import Role
 from typer.testing import CliRunner
 
@@ -293,3 +294,47 @@ async def test_initial_dial_reports_recovery_once(
         "NATS error (transient, auto-recovering): ConnectionRefusedError",
         "NATS connection outcome=recovered failures=1 error=ConnectionRefusedError",
     ]
+
+
+@pytest.mark.parametrize("response", ["ok", "missing", "failed", "stale"])
+async def test_tracked_traffic_rearms_error_episode_only_for_current_liveness(
+    response: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    relay = NatsRelay(url="nats://localhost:4222", repo_name="private-repo")
+    relay._nc = MagicMock()
+    callbacks = relay._connection_callbacks(relay._generation)
+    caplog.set_level(logging.DEBUG, logger="biff.nats_relay")
+    for _ in range(2):
+        await callbacks["error_cb"](TimeoutError("private-error"))
+
+    async def traffic() -> str:
+        if response == "stale":
+            relay._nc = MagicMock()
+        if response == "missing":
+            raise KeyNotFoundError
+        if response == "failed":
+            raise RuntimeError("private-error")
+        return "private-payload"
+
+    if response in {"missing", "failed"}:
+        error = KeyNotFoundError if response == "missing" else RuntimeError
+        with pytest.raises(error):
+            await relay._tracked("kv.get", traffic())
+    else:
+        assert await relay._tracked("kv.get", traffic()) == "private-payload"
+    recovered = response in {"ok", "missing"}
+    outcomes = [r.message for r in caplog.records if "outcome=" in r.message]
+    assert outcomes == (
+        ["NATS connection outcome=recovered failures=2 error=TimeoutError"]
+        if recovered
+        else []
+    )
+    await callbacks["error_cb"](TimeoutError("private-new-error"))
+    errors = [r for r in caplog.records if "NATS error" in r.message]
+    assert [r.levelno for r in errors] == [
+        logging.INFO,
+        logging.DEBUG,
+        logging.INFO if recovered else logging.DEBUG,
+    ]
+    assert "private" not in caplog.text
+    assert all(r.exc_info is None for r in caplog.records)

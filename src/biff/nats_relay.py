@@ -690,9 +690,11 @@ class NatsRelay:
             # errors (NoRespondersError, connection faults) as success.
             if self._nc is owner:
                 self._health.record_success()
+                self._setup.finish("recovered")
             raise
         if self._nc is owner:
             self._health.record_success()
+            self._setup.finish("recovered")
         return result
 
     async def _force_reconnect(self, gate_epoch: int) -> None:
@@ -1248,9 +1250,7 @@ class NatsRelay:
         parts = sender_key.split(":", maxsplit=1)
         if len(parts) != 2 or not parts[0] or not parts[1]:
             return ""
-        if parts[0] != from_user:
-            return ""
-        return sender_key
+        return sender_key if parts[0] == from_user else ""
 
     def _subject_for_key(
         self, session_key: str, *, target_repo: str | None = None
