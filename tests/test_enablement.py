@@ -293,7 +293,7 @@ class TestPermissions:
         def boom(_root: Path) -> None:
             raise OSError(28, "No space left on device")
 
-        monkeypatch.setattr(enablement, "write_enabled_marker", boom)
+        monkeypatch.setattr("biff._enablement_artifacts.write_enabled_marker", boom)
         with pytest.raises(OSError, match="No space"):
             RepoEnablement(tmp_path).enable()
         allow = json.loads(settings.read_text())["permissions"]["allow"]

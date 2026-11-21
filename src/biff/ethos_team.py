@@ -107,7 +107,7 @@ class EthosTeams:
             return cls(())
         slug = get_repo_slug(repo_root)
         if slug is None:
-            logger.warning("No origin slug for %s; ethos roles unavailable", repo_root)
+            logger.warning("No origin slug; operation=ethos reason=missing_origin")
             return cls(())
         return cls.from_repo(repo_root, slug)
 

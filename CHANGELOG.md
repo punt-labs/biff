@@ -47,6 +47,13 @@
 
 ### Fixed
 
+- Record private durable INFO outcomes for `biff enable` and `biff disable`,
+  including unchanged configurations and fixed labels for changed artifacts.
+  HTTP MCP graceful shutdown start and completion now reach the durable log.
+- Bound relay retry diagnostics to one INFO onset per outage, DEBUG repeats,
+  and an INFO recovery or terminal outcome, without exception content.
+- Log visible repository counts instead of names, and omit checkout paths
+  from missing-origin ethos diagnostics.
 - Keep MCP initialization and tool discovery available when relay authentication
   fails or the relay is unreachable. Initial dials fail promptly with sanitized
   errors; established connections still reconnect indefinitely after disconnects.

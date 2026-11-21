@@ -96,7 +96,7 @@ class TestConnectFailureRaisesRelayConnectError:
         refused = AsyncMock(
             side_effect=ConnectionRefusedError("private-login private-session")
         )
-        caplog.set_level(logging.INFO, logger="biff.nats_relay")
+        caplog.set_level(logging.DEBUG, logger="biff.nats_relay")
         with (
             patch("nats.aio.transport.TcpTransport.connect", refused),
             patch("biff.nats_relay._RECONNECT_TIME_WAIT", 0),
@@ -105,13 +105,20 @@ class TestConnectFailureRaisesRelayConnectError:
             await relay._ensure_connected()
 
         assert refused.await_count == 2
-        retries = [r for r in caplog.records if r.levelno == logging.INFO]
+        retries = [r for r in caplog.records if "NATS error" in r.getMessage()]
         assert len(retries) == refused.await_count
         assert all(
             r.getMessage()
             == "NATS error (transient, auto-recovering): ConnectionRefusedError"
             for r in retries
         )
+        assert [r.levelno for r in retries] == [
+            logging.INFO,
+            logging.DEBUG,
+        ]
+        assert [
+            r.getMessage() for r in caplog.records if "outcome=failed" in r.message
+        ] == ["NATS connection outcome=failed failures=2 error=NoServersError"]
         assert all(r.exc_info is None for r in caplog.records)
         assert "private" not in caplog.text
         assert "Traceback" not in caplog.text
