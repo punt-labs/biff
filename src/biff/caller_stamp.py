@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
 from biff.session_routing import ID_RE
+
+_logger = logging.getLogger(__name__)
 
 # Every name Claude Code gives biff's server: plugin, -dev plugin, direct.
 BIFF_TOOL_RE = re.compile(r"mcp__(plugin_biff(-dev)?_)?tty__.*")
@@ -38,6 +41,7 @@ def _live_ancestors() -> frozenset[int]:
 
 
 def _deny(reason: str) -> dict[str, object]:
+    _logger.warning("Caller stamping denied: caller identity unavailable")
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -85,15 +89,12 @@ class CallerStamper:
                 f"biff stamping hook could not read the payload for {tool}: "
                 "tool_input is not an object"
             )
-        fields = cast("dict[str, object]", args)
         caller = self._caller(payload)
         if isinstance(caller, str):
             return _deny(
                 f"biff stamping hook could not identify the caller of {tool}: {caller}"
             )
-        updated: dict[str, object] = {k: v for k, v in fields.items() if k != "_caller"}
-        updated["_caller"] = caller
-        return _updated(updated)
+        return _updated({**cast("dict[str, object]", args), "_caller": caller})
 
     def _caller(self, payload: dict[str, object]) -> dict[str, str] | str:
         """Return the ``_caller`` to stamp, or the reason it cannot be known."""

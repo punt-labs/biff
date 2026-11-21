@@ -12,6 +12,7 @@ marker, no real server).
 
 from __future__ import annotations
 
+import logging
 import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +30,35 @@ def _fake_nc() -> MagicMock:
 
 
 class TestConnectFailureRaisesRelayConnectError:
+    @pytest.mark.anyio()
+    async def test_refused_retries_log_only_concise_exception_types(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        relay = NatsRelay(url="nats://localhost:4222", repo_name="test")
+        refused = AsyncMock(
+            side_effect=ConnectionRefusedError("private-login private-session")
+        )
+        caplog.set_level(logging.INFO, logger="biff.nats_relay")
+        with (
+            patch("nats.aio.transport.TcpTransport.connect", refused),
+            patch("biff.nats_relay._MAX_RECONNECT_ATTEMPTS", 2),
+            patch("biff.nats_relay._RECONNECT_TIME_WAIT", 0),
+            pytest.raises(RelayConnectError),
+        ):
+            await relay._ensure_connected()
+
+        assert refused.await_count == 3
+        retries = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(retries) == refused.await_count
+        assert all(
+            r.getMessage()
+            == "NATS error (transient, auto-recovering): ConnectionRefusedError"
+            for r in retries
+        )
+        assert all(r.exc_info is None for r in caplog.records)
+        assert "private" not in caplog.text
+        assert "Traceback" not in caplog.text
+
     @pytest.mark.anyio()
     async def test_connect_failure_raises_redacted_error(self) -> None:
         relay = NatsRelay(

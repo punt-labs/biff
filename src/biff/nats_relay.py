@@ -825,10 +825,10 @@ class NatsRelay:
                 # self-heals without a restart.  At ERROR they cleared the
                 # CLI's WARNING stderr floor and dumped a traceback into the
                 # interactive REPL; at INFO they reach biff.log
-                # only.  exc_info keeps the full traceback for diagnosis; %r
-                # keeps the cause visible for message-less errors.
+                # only. Retry callbacks log only the exception type, never
+                # repeated tracebacks or potentially identifying error text.
                 logger.info(
-                    "NATS error (transient, auto-recovering): %r", exc, exc_info=exc
+                    "NATS error (transient, auto-recovering): %s", type(exc).__name__
                 )
 
         return {
