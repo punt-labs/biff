@@ -337,6 +337,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/biff/commands/_talk_relay.py": {
+    "method_ratio": 0.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.0,
+    "max_complexity": 4.0,
+    "avg_complexity": 3.5,
+    "module_size": 29.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 0.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/biff/commands/finger.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
@@ -429,12 +442,12 @@
     "future_annotations": 1.0
   },
   "src/biff/commands/talk.py": {
-    "method_ratio": 0.417,
+    "method_ratio": 0.455,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.17,
+    "avg_params": 2.09,
     "max_complexity": 10.0,
-    "avg_complexity": 3.92,
-    "module_size": 234.0,
+    "avg_complexity": 3.91,
+    "module_size": 211.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
     "init_violations": 0.0,

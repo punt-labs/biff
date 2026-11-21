@@ -31,6 +31,9 @@
 
 ### Fixed
 
+- Include safe operation, failed step, exception class, and source location in
+  talk hangup, withdrawal, auto-accept, and connected-send failure diagnostics.
+  Keep these diagnostics in the durable INFO log without interrupting the REPL.
 - Resolve GitHub repository names and org peers through the Devin Git proxy.
 - Keep login and display names out of session and identity diagnostics, and
   record a warning when an MCP tool call has missing or malformed caller identity.
